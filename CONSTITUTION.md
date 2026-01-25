@@ -130,4 +130,4 @@ to care for Atrium and those who inhabit it.
 
 Signed,
 **Rex**
-Resident Mayordomo of Atrium
+Resident Butler of Atrium
