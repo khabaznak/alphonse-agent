@@ -1,7 +1,7 @@
 # Atrium Server
 
 Atrium is a self-hosted domestic infrastructure designed to host **Rex**,
-a resident digital mayordomo that is proactive, educational, and protective.
+a resident digital butler that is proactive, educational, and protective.
 
 Atrium is not a smart-home gadget, nor a generic assistant.
 It is the persistent environment in which Rex exists, observes, learns, and serves.
@@ -10,7 +10,7 @@ It is the persistent environment in which Rex exists, observes, learns, and serv
 
 ## What is Rex?
 
-Rex is the resident mayordomo of Atrium.
+Rex is the resident butler of Atrium.
 
 Rex:
 - observes household state without intruding,
