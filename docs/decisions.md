@@ -52,3 +52,19 @@ It avoids command-and-control dynamics.
 - Stateless request/response bot
 
 **Status:** Accepted
+
+---
+
+## Decision 004 — Ollama for Local Inference
+
+**Decision:** Use Ollama as the local LLM runtime for Rex reasoning.
+
+**Rationale:**
+Ollama better leverages Apple Silicon performance and provides a reliable
+local chat interface.
+
+**Alternatives Considered:**
+- LocalAI runtime
+- Cloud-hosted inference
+
+**Status:** Accepted

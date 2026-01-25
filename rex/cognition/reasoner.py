@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
-from rex.cognition.providers.localai import LocalAIClient
+from rex.cognition.providers.ollama import OllamaClient
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -49,7 +49,7 @@ def build_reasoning_prompt(payload: ReasoningInput) -> str:
 
 
 class Reasoner:
-    def __init__(self, client: LocalAIClient):
+    def __init__(self, client: OllamaClient):
         self._client = client
 
     def reason(self, instruction: str, snapshot: dict) -> str:
@@ -65,12 +65,12 @@ def interpret_status(payload: ReasoningInput, llm_call: Callable[[str], str]) ->
     return llm_call(prompt)
 
 
-def interpret_status_with_localai(
+def interpret_status_with_ollama(
     payload: ReasoningInput,
-    client: LocalAIClient | None = None,
+    client: OllamaClient | None = None,
 ) -> str:
-    local_client = client or LocalAIClient()
-    return local_client.complete(
+    ollama_client = client or OllamaClient()
+    return ollama_client.complete(
         system_prompt=build_system_prompt(),
         user_prompt=build_user_prompt(payload),
     )

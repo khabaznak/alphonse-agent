@@ -1,5 +1,5 @@
 from core.context.awareness import get_awareness_snapshot
-from rex.cognition.providers.localai import LocalAIClient
+from rex.cognition.providers.ollama import OllamaClient
 
 
 STATUS_SYSTEM_PROMPT = (
@@ -13,7 +13,7 @@ STATUS_SYSTEM_PROMPT = (
 
 def reason_about_status():
     snapshot = get_awareness_snapshot()
-    client = LocalAIClient()
+    client = OllamaClient()
 
     message = client.complete(
         system_prompt=STATUS_SYSTEM_PROMPT,
