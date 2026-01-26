@@ -45,7 +45,7 @@ class FamilyEventUpdate(BaseModel):
 
 class PushDeviceUpsert(BaseModel):
     owner_id: str
-    token: str
+    token: dict | str
     platform: str = "android"
     active: bool = True
 

@@ -25,14 +25,14 @@ def list_push_devices(limit: int = 200) -> list[dict[str, Any]]:
     return _handle_response(response)
 
 
-def list_device_tokens(
+def list_active_push_devices(
     target_group: str | None = None,
     platforms: list[str] | None = None,
-) -> list[str]:
+) -> list[dict[str, Any]]:
     query = (
         get_supabase_client()
         .table("push_devices")
-        .select("token")
+        .select("*")
         .eq("active", True)
     )
     if target_group and target_group != "all":
@@ -40,13 +40,7 @@ def list_device_tokens(
     if platforms:
         query = query.in_("platform", platforms)
     response = query.execute()
-    data = _handle_response(response)
-    tokens = []
-    for row in data:
-        token = row.get("token")
-        if isinstance(token, str) and token:
-            tokens.append(token)
-    return tokens
+    return _handle_response(response)
 
 
 def deactivate_push_device(device_id: str) -> dict[str, Any]:

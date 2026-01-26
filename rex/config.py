@@ -36,6 +36,11 @@ DEFAULT_CONFIG = {
         "fcm": {
             "credentials_env": "FCM_CREDENTIALS_JSON",
         },
+        "webpush": {
+            "vapid_private_key_env": "VAPID_PRIVATE_KEY",
+            "vapid_public_key_env": "VAPID_PUBLIC_KEY",
+            "vapid_email_env": "VAPID_EMAIL",
+        },
     },
 }
 

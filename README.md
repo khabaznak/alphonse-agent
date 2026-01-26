@@ -116,6 +116,9 @@ Set these environment variables (see `.env.example`):
 - `SUPABASE_SERVICE_ROLE_KEY` (preferred) or `SUPABASE_ANON_KEY`
 - `ATRIUM_WEBHOOK_SECRET` (optional; required for webhook auth)
 - `FCM_CREDENTIALS_JSON` (Firebase service account JSON, for push notifications)
+- `VAPID_PRIVATE_KEY` (Web Push private key)
+- `VAPID_PUBLIC_KEY` (Web Push public key)
+- `VAPID_EMAIL` (Web Push contact email)
 
 API endpoints:
 
@@ -129,6 +132,7 @@ API endpoints:
 - `DELETE /api/push-devices/{id}`
 
 `/api/push-devices` accepts `platform` values like `android` or `web`.
+For web push, send the subscription object as `token`.
 
 Webhook auth (optional): if `ATRIUM_WEBHOOK_SECRET` is set, include the
 `X-Atrium-Webhook-Secret` header in webhook requests.

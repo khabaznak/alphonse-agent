@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sys
 import time
+import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import logging
@@ -16,13 +17,14 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 logger = logging.getLogger("atrium.worker")
 
 from core.integrations.fcm import send_push_notification
+from core.integrations.webpush import send_web_push
 from core.repositories.family_events import (
     create_family_event,
     list_due_family_events,
     list_next_family_events,
     update_family_event,
 )
-from core.repositories.push_devices import list_device_tokens
+from core.repositories.push_devices import list_active_push_devices
 from rex.config import load_rex_config
 
 
@@ -91,9 +93,18 @@ def process_due_events(now: datetime, overdue_minutes: int) -> bool:
         title = event.get("title", "Notification")
         description = event.get("description") or ""
         target_group = event.get("target_group") or "all"
-        tokens = list_device_tokens(target_group, platforms=["android", "web"])
+        devices = list_active_push_devices(target_group, platforms=["android", "web"])
+        android_tokens = []
+        web_subscriptions = []
+        for device in devices:
+            platform = device.get("platform")
+            token = device.get("token")
+            if platform == "android" and isinstance(token, str):
+                android_tokens.append(token)
+            elif platform == "web" and token:
+                web_subscriptions.append(token)
 
-        if not tokens:
+        if not android_tokens and not web_subscriptions:
             logger.warning("No device tokens available for event %s", event_id)
             update_family_event(
                 event_id,
@@ -105,12 +116,22 @@ def process_due_events(now: datetime, overdue_minutes: int) -> bool:
             continue
 
         try:
-            success_count = send_push_notification(
-                tokens,
-                title,
-                description,
-                data={"event_id": event_id},
-            )
+            success_count = 0
+            if android_tokens:
+                success_count += send_push_notification(
+                    android_tokens,
+                    title,
+                    description,
+                    data={"event_id": event_id},
+                )
+            for subscription in web_subscriptions:
+                send_web_push(
+                    _normalize_web_subscription(subscription),
+                    title,
+                    description,
+                    data={"event_id": event_id},
+                )
+                success_count += 1
             update_family_event(event_id, {"execution_status": "executed"})
             logger.info("Event %s executed (sent=%s)", event_id, success_count)
         except Exception as exc:  # noqa: BLE001
@@ -173,6 +194,17 @@ def _schedule_next_occurrence(event: dict, event_datetime: datetime) -> None:
         "error_msg": None,
     }
     create_family_event(payload)
+
+
+def _normalize_web_subscription(value):
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except json.JSONDecodeError as exc:
+            raise ValueError("Invalid web push subscription JSON.") from exc
+    raise ValueError("Unsupported web push subscription format.")
 
 
 if __name__ == "__main__":
