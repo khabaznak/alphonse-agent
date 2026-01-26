@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+
+{% block content %}
+  <main>
+    <header>
+      <div>
+        <h1>Rex</h1>
+        <div class="subtitle">Atrium presence</div>
+      </div>
+      <div class="subtitle">Minimal UI · HTMX</div>
+    </header>
+
+    <section class="panel">
+      <h2>Current State</h2>
+      <div class="actions">
+        <button
+          hx-get="/status/fragment"
+          hx-target="#status-panel"
+          hx-swap="innerHTML"
+          hx-indicator="#status-indicator"
+        >
+          Refresh status
+        </button>
+        <div id="status-indicator" class="indicator" hidden>Listening…</div>
+      </div>
+      <div
+        id="status-panel"
+        hx-get="/status/fragment"
+        hx-trigger="load"
+        hx-swap="innerHTML"
+        hx-indicator="#status-indicator"
+      >
+        <p class="status-message">Gathering status…</p>
+      </div>
+    </section>
+  </main>
+{% endblock %}

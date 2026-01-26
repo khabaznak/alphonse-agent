@@ -1,0 +1,10 @@
+<p class="status-message">{{ message }}</p>
+<dl>
+  {% for group_name, group_data in snapshot.items() %}
+    <div class="soft"><strong>{{ group_name|capitalize }}</strong></div>
+    {% for key, value in group_data.items() %}
+      <dt>{{ key.replace("_", " ") }}</dt>
+      <dd>{{ value }}</dd>
+    {% endfor %}
+  {% endfor %}
+</dl>

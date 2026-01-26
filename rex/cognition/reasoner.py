@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Protocol
 
 from rex.cognition.providers.ollama import OllamaClient
 
@@ -22,6 +22,10 @@ REFERENCE_FILES = (
 @dataclass(frozen=True)
 class ReasoningInput:
     snapshot: dict
+
+
+class LLMClient(Protocol):
+    def complete(self, system_prompt: str, user_prompt: str) -> str: ...
 
 
 def build_system_prompt() -> str:
@@ -49,7 +53,7 @@ def build_reasoning_prompt(payload: ReasoningInput) -> str:
 
 
 class Reasoner:
-    def __init__(self, client: OllamaClient):
+    def __init__(self, client: LLMClient):
         self._client = client
 
     def reason(self, instruction: str, snapshot: dict) -> str:
@@ -67,10 +71,10 @@ def interpret_status(payload: ReasoningInput, llm_call: Callable[[str], str]) ->
 
 def interpret_status_with_ollama(
     payload: ReasoningInput,
-    client: OllamaClient | None = None,
+    client: LLMClient | None = None,
 ) -> str:
-    ollama_client = client or OllamaClient()
-    return ollama_client.complete(
+    provider_client = client or OllamaClient()
+    return provider_client.complete(
         system_prompt=build_system_prompt(),
         user_prompt=build_user_prompt(payload),
     )

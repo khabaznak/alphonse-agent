@@ -58,6 +58,13 @@ Key files:
 - `README.md` — This document
 - `docs/` — Design notes, vision, and long-term ideas
 
+Configuration lives in `config/rex.yaml`. The `mode` controls which inference
+provider Rex uses:
+
+- `test` uses Ollama locally.
+- `production` uses an online provider (OpenAI by default) and expects an
+  `OPENAI_API_KEY` environment variable.
+
 Code will be introduced incrementally once identity and boundaries are clearly defined.
 
 ---
@@ -70,6 +77,24 @@ The current focus is:
 - defining identity,
 - establishing ethical and behavioral constraints,
 - and creating a stable base for future capabilities.
+
+---
+
+## Configuration
+
+`config/rex.yaml` controls runtime behavior. The key switch is `mode`:
+
+```yaml
+mode: test
+
+providers:
+  test:
+    type: ollama
+  production:
+    type: openai
+```
+
+In `production`, set `OPENAI_API_KEY` for the OpenAI provider.
 
 ---
 

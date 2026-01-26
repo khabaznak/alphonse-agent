@@ -1,0 +1,17 @@
+mode: test
+
+providers:
+  test:
+    type: ollama
+    ollama:
+      base_url: http://localhost:11434
+      model: mistral:7b-instruct
+      timeout: 120
+
+  production:
+    type: openai
+    openai:
+      base_url: https://api.openai.com/v1
+      model: gpt-4o-mini
+      api_key_env: OPENAI_API_KEY
+      timeout: 60
