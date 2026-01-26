@@ -5,6 +5,7 @@ from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
+from interfaces.http.routes.api import router as api_router
 from rex.cognition.status_reasoning import reason_about_status
 
 app = FastAPI(
@@ -22,11 +23,26 @@ app.mount(
     name="static",
 )
 
+app.include_router(api_router)
+
 @app.get("/", response_class=HTMLResponse)
 def index(request: Request):
+    top_nav_links = [
+        {"label": "Rex", "href": "/", "active": True},
+        {"label": "Status JSON", "href": "/status"},
+    ]
+    side_nav_links = [
+        {"label": "Current State", "href": "#current-state", "active": True},
+        {"label": "Diagnostics", "href": "#diagnostics"},
+        {"label": "Presence Log", "href": "#presence-log"},
+    ]
     return templates.TemplateResponse(
         "rex.html",
-        {"request": request},
+        {
+            "request": request,
+            "top_nav_links": top_nav_links,
+            "side_nav_links": side_nav_links,
+        },
     )
 
 
