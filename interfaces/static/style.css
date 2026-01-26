@@ -145,6 +145,96 @@ h1 {
   color: #fff;
 }
 
+.table-wrap {
+  width: 100%;
+  overflow-x: auto;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: "IBM Plex Sans", "Trebuchet MS", sans-serif;
+  font-size: 0.95rem;
+}
+
+th,
+td {
+  text-align: left;
+  padding: 10px 12px;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.08);
+}
+
+thead th {
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  font-size: 0.7rem;
+  color: rgba(0, 0, 0, 0.5);
+}
+
+.card {
+  border-radius: 14px;
+  background: var(--accent-soft);
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.card-title {
+  font-size: 1.1rem;
+  font-weight: 600;
+}
+
+.card-meta {
+  font-family: "IBM Plex Sans", "Trebuchet MS", sans-serif;
+  font-size: 0.85rem;
+  color: rgba(0, 0, 0, 0.6);
+}
+
+.card-body {
+  margin: 0;
+}
+
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 16px;
+  font-family: "IBM Plex Sans", "Trebuchet MS", sans-serif;
+}
+
+.form-grid label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.16em;
+  color: rgba(0, 0, 0, 0.55);
+}
+
+.form-grid input,
+.form-grid select,
+.form-grid textarea {
+  border-radius: 10px;
+  border: 1px solid rgba(0, 0, 0, 0.15);
+  padding: 10px 12px;
+  font-family: "IBM Plex Sans", "Trebuchet MS", sans-serif;
+  font-size: 0.95rem;
+}
+
+.form-full {
+  grid-column: 1 / -1;
+}
+
+.form-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.form-grid button {
+  width: fit-content;
+}
+
 .panel {
   background: #fff;
   border-radius: 18px;
@@ -156,6 +246,10 @@ h1 {
 .panel h2 {
   margin: 0 0 12px;
   font-size: 1.5rem;
+}
+
+.panel + .panel {
+  margin-top: 16px;
 }
 
 .status-message {
@@ -254,6 +348,10 @@ dd {
 
   .sidebar {
     position: static;
+  }
+
+  .form-actions {
+    justify-content: stretch;
   }
 
   dl {
