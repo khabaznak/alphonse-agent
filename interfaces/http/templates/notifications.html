@@ -1,0 +1,199 @@
+{% extends "base.html" %}
+
+{% block title %}Notifications — Atrium{% endblock %}
+
+{% block content %}
+  <main class="app-shell">
+    {% include "partials/top_nav.html" %}
+    <div class="shell-body">
+      {% include "partials/sidebar_nav.html" %}
+      <section class="content">
+        <div class="section-header">
+          <div class="subtitle">Agentic notifications</div>
+        </div>
+
+        <section class="panel" id="execution-target">
+          <h2>Execution Target</h2>
+          {% if due_notification %}
+            <div class="card">
+              <div class="card-title">{{ due_notification.title }}</div>
+              <div class="card-meta">
+                Scheduled: {{ due_notification.event_datetime }}
+              </div>
+              <div class="card-meta">
+                Owner: {{ owner_lookup.get(due_notification.owner_id, "Unknown") }}
+              </div>
+              {% if due_notification.description %}
+                <p class="card-body">{{ due_notification.description }}</p>
+              {% endif %}
+              <div class="card-meta">Target group: {{ due_notification.target_group or "all" }}</div>
+              {% if due_notification.recurrence %}
+                <div class="card-meta">Recurrence: {{ due_notification.recurrence }}</div>
+              {% endif %}
+            </div>
+          {% else %}
+            <p class="status-message">No past-due, unexecuted notifications.</p>
+          {% endif %}
+        </section>
+
+        <section class="panel" id="pending-queue">
+          <h2>Pending Queue</h2>
+          {% if pending_notifications %}
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Title</th>
+                    <th>Scheduled</th>
+                    <th>Owner</th>
+                    <th>Target</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {% for notification in pending_notifications %}
+                    <tr>
+                      <td>{{ notification.title }}</td>
+                      <td>{{ notification.event_datetime }}</td>
+                      <td>{{ owner_lookup.get(notification.owner_id, "Unknown") }}</td>
+                      <td>{{ notification.target_group or "all" }}</td>
+                    </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+          {% else %}
+            <p class="status-message">No pending notifications.</p>
+          {% endif %}
+        </section>
+
+        <section class="panel" id="all-notifications">
+          <h2>All Notifications</h2>
+          {% if all_notifications %}
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Title</th>
+                    <th>Scheduled</th>
+                    <th>Owner</th>
+                    <th>Executed</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {% for notification in all_notifications %}
+                    <tr>
+                      <td>{{ notification.title }}</td>
+                      <td>{{ notification.event_datetime }}</td>
+                      <td>{{ owner_lookup.get(notification.owner_id, "Unknown") }}</td>
+                      <td>{{ notification.sent_at or "—" }}</td>
+                      <td>
+                        <a class="nav-link" href="/notifications?edit_id={{ notification.id }}">
+                          Edit
+                        </a>
+                      </td>
+                    </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+          {% else %}
+            <p class="status-message">No notifications yet.</p>
+          {% endif %}
+        </section>
+
+        <section class="panel" id="edit-notification">
+          <h2>Edit Notification</h2>
+          {% if edit_notification %}
+            <form class="form-grid" method="post" action="/notifications/{{ edit_notification.id }}">
+              <label>
+                Owner ID
+                <select name="owner_id" required>
+                  <option value="" disabled{% if not edit_notification.owner_id %} selected{% endif %}>
+                    Select owner
+                  </option>
+                  {% for member in family_members %}
+                    <option
+                      value="{{ member.id }}"
+                      {% if edit_notification.owner_id == member.id %}selected{% endif %}
+                    >
+                      {{ member.name }} ({{ member.role }})
+                    </option>
+                  {% endfor %}
+                </select>
+              </label>
+              <label>
+                Title
+                <input type="text" name="title" value="{{ edit_notification.title or '' }}" required>
+              </label>
+              <label>
+                Scheduled for
+                <input
+                  type="datetime-local"
+                  name="event_datetime"
+                  value="{{ format_dt_local(edit_notification.event_datetime) }}"
+                  required
+                >
+              </label>
+              <label>
+                Target group
+                <input type="text" name="target_group" value="{{ edit_notification.target_group or 'all' }}">
+              </label>
+              <label>
+                Recurrence
+                <input type="text" name="recurrence" value="{{ edit_notification.recurrence or '' }}">
+              </label>
+              <label class="form-full">
+                Description
+                <textarea name="description" rows="4">{{ edit_notification.description or '' }}</textarea>
+              </label>
+              <div class="form-actions form-full">
+                <button type="submit">Save changes</button>
+              </div>
+            </form>
+          {% else %}
+            <p class="status-message">Select a notification from the table to edit.</p>
+          {% endif %}
+        </section>
+
+        <section class="panel" id="create-notification">
+          <h2>Create Notification</h2>
+          <form class="form-grid" method="post" action="/notifications">
+            <label>
+              Owner ID
+              <select name="owner_id" required>
+                <option value="" disabled selected>Select owner</option>
+                {% for member in family_members %}
+                  <option value="{{ member.id }}">{{ member.name }} ({{ member.role }})</option>
+                {% endfor %}
+              </select>
+            </label>
+            <label>
+              Title
+              <input type="text" name="title" required>
+            </label>
+            <label>
+              Scheduled for
+              <input type="datetime-local" name="event_datetime" required>
+            </label>
+            <label>
+              Target group
+              <input type="text" name="target_group" value="all">
+            </label>
+            <label>
+              Recurrence
+              <input type="text" name="recurrence">
+            </label>
+            <label class="form-full">
+              Description
+              <textarea name="description" rows="4"></textarea>
+            </label>
+            <div class="form-actions form-full">
+              <button type="submit">Create notification</button>
+            </div>
+          </form>
+        </section>
+      </section>
+    </div>
+  </main>
+{% endblock %}
