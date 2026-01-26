@@ -108,6 +108,28 @@ In `production`, set `OPENAI_API_KEY` for the OpenAI provider.
 
 ---
 
+## Supabase Integration
+
+Set these environment variables (see `.env.example`):
+
+- `SUPABASE_URL`
+- `SUPABASE_SERVICE_ROLE_KEY` (preferred) or `SUPABASE_ANON_KEY`
+- `ATRIUM_WEBHOOK_SECRET` (optional; required for webhook auth)
+
+API endpoints:
+
+- `POST /api/family-events`
+- `GET /api/family-events`
+- `GET /api/family-events/{id}`
+- `PATCH /api/family-events/{id}`
+- `DELETE /api/family-events/{id}`
+- `POST /api/webhooks/family-events`
+
+Webhook auth (optional): if `ATRIUM_WEBHOOK_SECRET` is set, include the
+`X-Atrium-Webhook-Secret` header in webhook requests.
+
+---
+
 ## Philosophy
 
 Atrium is built with the belief that:

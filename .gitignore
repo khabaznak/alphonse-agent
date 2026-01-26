@@ -43,3 +43,7 @@ dist/
 *.egg-info/
 .tox/
 .nox/
+
+# Env files
+.env
+.env.*
