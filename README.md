@@ -80,6 +80,16 @@ The current focus is:
 
 ---
 
+## Running Locally
+
+Expose Atrium to the local network with:
+
+```bash
+uvicorn interfaces.http.main:app --host 0.0.0.0 --port 8000
+```
+
+---
+
 ## Configuration
 
 `config/rex.yaml` controls runtime behavior. The key switch is `mode`:

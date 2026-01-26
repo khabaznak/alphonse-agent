@@ -1,6 +1,7 @@
 from core.context.awareness import get_awareness_snapshot
 from rex.cognition.providers.ollama import OllamaClient
 from rex.cognition.providers.openai import OpenAIClient
+from rex.cognition.reasoner import build_system_prompt
 from rex.config import load_rex_config
 
 
@@ -18,9 +19,10 @@ def reason_about_status():
     config = load_rex_config()
     client = _build_client(config)
 
+    system_prompt = _build_system_prompt(config)
     message = client.complete(
-        system_prompt=STATUS_SYSTEM_PROMPT,
-        user_prompt=str(snapshot),
+        system_prompt=system_prompt,
+        user_prompt=_build_user_prompt(snapshot),
     )
 
     return message, snapshot
@@ -47,3 +49,15 @@ def _build_client(config: dict):
         model=settings.get("model", "mistral:7b-instruct"),
         timeout=settings.get("timeout", 120),
     )
+
+
+def _build_system_prompt(config: dict) -> str:
+    mode = str(config.get("mode", "test")).lower()
+    if mode == "test":
+        return build_system_prompt()
+
+    return STATUS_SYSTEM_PROMPT
+
+
+def _build_user_prompt(snapshot: dict) -> str:
+    return f"{STATUS_SYSTEM_PROMPT}\n\n{snapshot}"

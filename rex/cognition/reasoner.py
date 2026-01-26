@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Callable, Protocol
 
 from rex.cognition.providers.ollama import OllamaClient
+from rex.config import load_rex_config
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -17,6 +18,12 @@ REFERENCE_FILES = (
     PROJECT_ROOT / "docs" / "philosophy.md",
     PROJECT_ROOT / "docs" / "decisions.md",
 )
+SUMMARY_FILES = {
+    PROJECT_ROOT / "CONSTITUTION.md": PROJECT_ROOT / "CONSTITUTION.summary.md",
+    PROJECT_ROOT / "rex" / "identity.md": PROJECT_ROOT / "rex" / "identity.summary.md",
+    PROJECT_ROOT / "rex" / "tone.md": PROJECT_ROOT / "rex" / "tone.summary.md",
+    PROJECT_ROOT / "rex" / "startup.md": PROJECT_ROOT / "rex" / "startup.summary.md",
+}
 
 
 @dataclass(frozen=True)
@@ -29,7 +36,7 @@ class LLMClient(Protocol):
 
 
 def build_system_prompt() -> str:
-    references = "\n\n".join(_read_reference_file(path) for path in REFERENCE_FILES)
+    references = _load_reference_material()
     return (
         "You are Rex, the resident mayordomo of Atrium. "
         "Use the constitution and guiding documents to respond with composure, "
@@ -85,3 +92,19 @@ def _read_reference_file(path: Path) -> str:
         return path.read_text(encoding="utf-8").strip()
     except FileNotFoundError:
         return f"[Missing file: {path.name}]"
+
+
+def _load_reference_material() -> str:
+    config = load_rex_config()
+    mode = str(config.get("mode", "test")).lower()
+    if mode == "test":
+        return "\n\n".join(_read_reference_file(_summary_path(path)) for path in REFERENCE_FILES)
+
+    return "\n\n".join(_read_reference_file(path) for path in REFERENCE_FILES)
+
+
+def _summary_path(path: Path) -> Path:
+    summary = SUMMARY_FILES.get(path)
+    if summary and summary.exists():
+        return summary
+    return path
