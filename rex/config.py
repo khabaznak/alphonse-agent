@@ -28,6 +28,15 @@ DEFAULT_CONFIG = {
             },
         },
     },
+    "notifications": {
+        "overdue_minutes": 30,
+    },
+    "push": {
+        "provider": "fcm",
+        "fcm": {
+            "credentials_env": "FCM_CREDENTIALS_JSON",
+        },
+    },
 }
 
 

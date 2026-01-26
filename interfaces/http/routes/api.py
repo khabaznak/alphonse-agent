@@ -11,9 +11,11 @@ from core.repositories.family_events import (
     list_family_events,
     update_family_event,
 )
+from core.repositories.push_devices import deactivate_push_device, upsert_push_device
 
 
 router = APIRouter(prefix="/api", tags=["family-events"])
+trigger_router = APIRouter(prefix="/api/worker", tags=["worker"])
 
 
 class FamilyEventCreate(BaseModel):
@@ -26,6 +28,7 @@ class FamilyEventCreate(BaseModel):
     push_payload: dict | None = None
     sent_at: datetime | None = None
     error_msg: str | None = None
+    execution_status: str | None = "pending"
 
 
 class FamilyEventUpdate(BaseModel):
@@ -37,6 +40,14 @@ class FamilyEventUpdate(BaseModel):
     push_payload: dict | None = None
     sent_at: datetime | None = None
     error_msg: str | None = None
+    execution_status: str | None = None
+
+
+class PushDeviceUpsert(BaseModel):
+    owner_id: str
+    token: str
+    platform: str = "android"
+    active: bool = True
 
 
 @router.get("/family-events")
@@ -81,6 +92,24 @@ def ingest_family_event(
     _assert_webhook_secret(x_atrium_webhook_secret)
     event = create_family_event(payload.model_dump())
     return {"status": "accepted", "event": event}
+
+
+@router.post("/push-devices", status_code=201)
+def register_push_device(payload: PushDeviceUpsert):
+    return upsert_push_device(payload.model_dump())
+
+
+@router.delete("/push-devices/{device_id}")
+def remove_push_device(device_id: str):
+    return deactivate_push_device(device_id)
+
+
+@trigger_router.post("/notifications/refresh", status_code=202)
+def trigger_notifications_refresh(
+    x_atrium_webhook_secret: str | None = Header(default=None),
+):
+    _assert_webhook_secret(x_atrium_webhook_secret)
+    return {"status": "accepted"}
 
 
 def _assert_webhook_secret(received: str | None) -> None:

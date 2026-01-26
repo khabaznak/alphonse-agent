@@ -115,6 +115,7 @@ Set these environment variables (see `.env.example`):
 - `SUPABASE_URL`
 - `SUPABASE_SERVICE_ROLE_KEY` (preferred) or `SUPABASE_ANON_KEY`
 - `ATRIUM_WEBHOOK_SECRET` (optional; required for webhook auth)
+- `FCM_CREDENTIALS_JSON` (Firebase service account JSON, for push notifications)
 
 API endpoints:
 
@@ -124,9 +125,21 @@ API endpoints:
 - `PATCH /api/family-events/{id}`
 - `DELETE /api/family-events/{id}`
 - `POST /api/webhooks/family-events`
+- `POST /api/push-devices`
+- `DELETE /api/push-devices/{id}`
 
 Webhook auth (optional): if `ATRIUM_WEBHOOK_SECRET` is set, include the
 `X-Atrium-Webhook-Secret` header in webhook requests.
+
+---
+
+## Notification Worker
+
+Run the separate notification worker to dispatch due events:
+
+```bash
+python workers/notification_worker.py
+```
 
 ---
 

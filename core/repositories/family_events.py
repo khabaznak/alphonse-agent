@@ -26,6 +26,35 @@ def list_family_events(limit: int = 50) -> list[dict[str, Any]]:
     return _handle_response(response)
 
 
+def list_due_family_events(now_iso: str, limit: int = 200) -> list[dict[str, Any]]:
+    response = (
+        get_supabase_client()
+        .table("family_events")
+        .select("*")
+        .lte("event_datetime", now_iso)
+        .is_("sent_at", "null")
+        .eq("execution_status", "pending")
+        .order("event_datetime", desc=False)
+        .limit(limit)
+        .execute()
+    )
+    return _handle_response(response)
+
+
+def list_next_family_events(now_iso: str, limit: int = 1) -> list[dict[str, Any]]:
+    response = (
+        get_supabase_client()
+        .table("family_events")
+        .select("*")
+        .gt("event_datetime", now_iso)
+        .eq("execution_status", "pending")
+        .order("event_datetime", desc=False)
+        .limit(limit)
+        .execute()
+    )
+    return _handle_response(response)
+
+
 def get_family_event(event_id: str) -> dict[str, Any] | None:
     response = (
         get_supabase_client()
