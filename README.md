@@ -120,6 +120,12 @@ Set these environment variables (see `.env.example`):
 - `VAPID_PUBLIC_KEY` (Web Push public key)
 - `VAPID_EMAIL` (Web Push contact email)
 
+Generate VAPID keys with:
+
+```bash
+python scripts/generate_vapid_keys.py
+```
+
 API endpoints:
 
 - `POST /api/family-events`
@@ -133,6 +139,8 @@ API endpoints:
 
 `/api/push-devices` accepts `platform` values like `android` or `web`.
 For web push, send the subscription object as `token`.
+
+`owner_id` for push devices references the `family` table.
 
 Webhook auth (optional): if `ATRIUM_WEBHOOK_SECRET` is set, include the
 `X-Atrium-Webhook-Secret` header in webhook requests.

@@ -1,13 +1,15 @@
+import json
 from typing import Any
 
 from core.integrations.supabase import get_supabase_client
 
 
 def upsert_push_device(payload: dict[str, Any]) -> dict[str, Any]:
+    normalized = _normalize_payload(payload)
     response = (
         get_supabase_client()
         .table("push_devices")
-        .upsert(payload)
+        .upsert(normalized)
         .execute()
     )
     data = _handle_response(response)
@@ -53,6 +55,14 @@ def deactivate_push_device(device_id: str) -> dict[str, Any]:
     )
     data = _handle_response(response)
     return data[0] if data else {}
+
+
+def _normalize_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    normalized = dict(payload)
+    token = normalized.get("token")
+    if isinstance(token, dict):
+        normalized["token"] = json.dumps(token)
+    return normalized
 
 
 def _handle_response(response) -> list[dict[str, Any]]:

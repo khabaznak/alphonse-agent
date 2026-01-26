@@ -1,8 +1,10 @@
 from datetime import datetime
+import os
 from pathlib import Path
 
+from dotenv import load_dotenv
 from fastapi import FastAPI, Form, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -19,9 +21,12 @@ from core.repositories.family import (
     list_family_members,
     update_family_member,
 )
+from core.repositories.push_devices import list_push_devices
 from interfaces.http.routes.api import router as api_router, trigger_router
 from rex.cognition.notification_reasoning import reason_about_execution_target
 from rex.cognition.status_reasoning import reason_about_status
+
+load_dotenv()
 
 app = FastAPI(
     title="Atrium",
@@ -38,6 +43,7 @@ app.mount(
     name="static",
 )
 
+
 app.include_router(api_router)
 app.include_router(trigger_router)
 
@@ -47,6 +53,7 @@ def _top_nav_links(active: str) -> list[dict[str, str | bool]]:
         {"label": "Rex", "href": "/", "active": active == "rex"},
         {"label": "Notifications", "href": "/notifications", "active": active == "notifications"},
         {"label": "Family", "href": "/family", "active": active == "family"},
+        {"label": "Push Test", "href": "/push-test", "active": active == "push-test"},
         {"label": "Status JSON", "href": "/status"},
     ]
 
@@ -66,10 +73,16 @@ def _side_nav_links(page: str) -> list[dict[str, str | bool]]:
             {"label": "Edit Member", "href": "#edit-member"},
             {"label": "Create Member", "href": "#create-member"},
         ]
+    if page == "push-test":
+        return [
+            {"label": "Setup", "href": "#push-setup"},
+            {"label": "Register", "href": "#push-register"},
+        ]
     return [
         {"label": "Current State", "href": "#current-state", "active": True},
         {"label": "Notifications", "href": "/notifications"},
         {"label": "Family", "href": "/family"},
+        {"label": "Push Test", "href": "/push-test"},
         {"label": "Diagnostics", "href": "#diagnostics"},
         {"label": "Presence Log", "href": "#presence-log"},
     ]
@@ -301,3 +314,27 @@ def update_family(
     }
     update_family_member(member_id, payload)
     return RedirectResponse(f"/family?edit_id={member_id}", status_code=303)
+
+
+@app.get("/push-test", response_class=HTMLResponse)
+def push_test(request: Request):
+    public_key = os.getenv("VAPID_PUBLIC_KEY", "")
+    family_members = list_family_members(limit=200)
+    devices = list_push_devices(limit=200)
+    return templates.TemplateResponse(
+        "push_test.html",
+        {
+            "request": request,
+            "top_nav_links": _top_nav_links("push-test"),
+            "side_nav_links": _side_nav_links("push-test"),
+            "vapid_public_key": public_key,
+            "family_members": family_members,
+            "devices": devices,
+        },
+    )
+
+
+@app.get("/webpush-sw.js")
+def webpush_service_worker():
+    sw_path = BASE_DIR.parent / "static" / "webpush-sw.js"
+    return FileResponse(sw_path)

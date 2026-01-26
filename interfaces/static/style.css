@@ -258,6 +258,15 @@ thead th {
   margin-top: 16px;
 }
 
+.code-block {
+  background: #0f1618;
+  color: #e3ece8;
+  padding: 12px;
+  border-radius: 10px;
+  font-size: 0.85rem;
+  overflow-x: auto;
+}
+
 .status-message {
   font-size: 1.2rem;
   line-height: 1.5;

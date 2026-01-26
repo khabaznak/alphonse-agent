@@ -1,0 +1,162 @@
+{% extends "base.html" %}
+
+{% block title %}Push Test — Atrium{% endblock %}
+
+{% block content %}
+  <main class="app-shell">
+    {% include "partials/top_nav.html" %}
+    <div class="shell-body">
+      {% include "partials/sidebar_nav.html" %}
+      <section class="content">
+        <div class="section-header">
+          <div class="subtitle">Web push test</div>
+        </div>
+
+        <section class="panel" id="push-setup">
+          <h2>Setup</h2>
+          <p class="status-message">
+            This page registers a web push subscription and stores it as a
+            <code>platform=web</code> device in Supabase.
+          </p>
+          {% if not vapid_public_key %}
+            <p class="status-message">Missing VAPID_PUBLIC_KEY in the environment.</p>
+          {% endif %}
+        </section>
+
+        <section class="panel" id="push-register">
+          <h2>Register Subscription</h2>
+          <form class="form-grid" onsubmit="return false;">
+            <label>
+              Owner
+              <select id="owner-id" required>
+                <option value="" disabled selected>Select owner</option>
+                {% for member in family_members %}
+                  <option value="{{ member.id }}">
+                    {{ member.name }} ({{ member.role }})
+                  </option>
+                {% endfor %}
+              </select>
+            </label>
+            <label>
+              Owner ID (manual)
+              <input type="text" id="owner-id-manual" placeholder="owner uuid">
+            </label>
+            <div class="form-actions form-full">
+              <button id="register-btn" type="button">Register web push</button>
+            </div>
+          </form>
+          <pre id="push-status" class="code-block"></pre>
+        </section>
+
+        <section class="panel" id="push-devices">
+          <h2>Registered Devices</h2>
+          {% if devices %}
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Owner</th>
+                    <th>Platform</th>
+                    <th>Active</th>
+                    <th>Created</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {% for device in devices %}
+                    <tr>
+                      <td>{{ device.owner_id }}</td>
+                      <td>{{ device.platform }}</td>
+                      <td>{{ "yes" if device.active else "no" }}</td>
+                      <td>{{ device.created_at or "—" }}</td>
+                    </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+          {% else %}
+            <p class="status-message">No registered devices yet.</p>
+          {% endif %}
+        </section>
+      </section>
+    </div>
+  </main>
+
+  <script>
+    const vapidPublicKey = "{{ vapid_public_key }}";
+    const statusEl = document.getElementById("push-status");
+    const registerBtn = document.getElementById("register-btn");
+
+    function setStatus(message) {
+      statusEl.textContent = message;
+    }
+
+    function urlBase64ToUint8Array(base64String) {
+      const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
+      const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
+      const rawData = atob(base64);
+      const outputArray = new Uint8Array(rawData.length);
+      for (let i = 0; i < rawData.length; ++i) {
+        outputArray[i] = rawData.charCodeAt(i);
+      }
+      return outputArray;
+    }
+
+    async function registerPush() {
+      if (!vapidPublicKey) {
+        setStatus("Missing VAPID public key. Set VAPID_PUBLIC_KEY and reload.");
+        return;
+      }
+
+      if (!("serviceWorker" in navigator)) {
+        setStatus("Service workers are not supported in this browser.");
+        return;
+      }
+
+      const dropdownValue = document.getElementById("owner-id").value.trim();
+      const manualValue = document.getElementById("owner-id-manual").value.trim();
+      const ownerId = manualValue || dropdownValue;
+      if (!ownerId) {
+        setStatus("Owner ID is required.");
+        return;
+      }
+
+      try {
+        const permission = await Notification.requestPermission();
+        if (permission !== "granted") {
+          setStatus("Notification permission was not granted.");
+          return;
+        }
+
+        const registration = await navigator.serviceWorker.register("/webpush-sw.js");
+        const subscription = await registration.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: urlBase64ToUint8Array(vapidPublicKey),
+        });
+
+        const response = await fetch("/api/push-devices", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            owner_id: ownerId,
+            token: subscription,
+            platform: "web",
+            active: true,
+          }),
+        });
+
+        if (!response.ok) {
+          const text = await response.text();
+          setStatus("Failed to register: " + text);
+          return;
+        }
+
+        const data = await response.json();
+        setStatus("Subscription registered. Device ID: " + data.id);
+      } catch (error) {
+        setStatus("Registration error: " + error);
+      }
+    }
+
+    registerBtn.addEventListener("click", registerPush);
+  </script>
+{% endblock %}
