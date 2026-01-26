@@ -128,6 +128,8 @@ API endpoints:
 - `POST /api/push-devices`
 - `DELETE /api/push-devices/{id}`
 
+`/api/push-devices` accepts `platform` values like `android` or `web`.
+
 Webhook auth (optional): if `ATRIUM_WEBHOOK_SECRET` is set, include the
 `X-Atrium-Webhook-Secret` header in webhook requests.
 

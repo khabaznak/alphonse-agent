@@ -91,7 +91,7 @@ def process_due_events(now: datetime, overdue_minutes: int) -> bool:
         title = event.get("title", "Notification")
         description = event.get("description") or ""
         target_group = event.get("target_group") or "all"
-        tokens = list_device_tokens(target_group)
+        tokens = list_device_tokens(target_group, platforms=["android", "web"])
 
         if not tokens:
             logger.warning("No device tokens available for event %s", event_id)
