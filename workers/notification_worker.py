@@ -4,12 +4,16 @@ import sys
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+import logging
 
 from dateutil.rrule import rrulestr
 from dotenv import load_dotenv
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.append(str(PROJECT_ROOT))
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+logger = logging.getLogger("atrium.worker")
 
 from core.integrations.fcm import send_push_notification
 from core.repositories.family_events import (
@@ -26,6 +30,7 @@ def main() -> None:
     load_dotenv()
     config = load_rex_config()
     overdue_minutes = int(config.get("notifications", {}).get("overdue_minutes", 30))
+    logger.info("Worker started (overdue_minutes=%s)", overdue_minutes)
     while True:
         now = datetime.now(timezone.utc)
         processed_any = process_due_events(now, overdue_minutes)
@@ -34,15 +39,18 @@ def main() -> None:
 
         next_event = fetch_next_event(now)
         if not next_event:
+            logger.info("No pending events. Sleeping 30s.")
             time.sleep(30)
             continue
 
         next_time = _parse_event_datetime(next_event.get("event_datetime"))
         if not next_time:
+            logger.warning("Next event missing valid event_datetime: %s", next_event.get("id"))
             time.sleep(30)
             continue
 
         sleep_seconds = max(5, (next_time - now).total_seconds())
+        logger.info("Sleeping %.0fs until next event", sleep_seconds)
         time.sleep(sleep_seconds)
 
 
@@ -56,9 +64,11 @@ def process_due_events(now: datetime, overdue_minutes: int) -> bool:
         event_id = event.get("id")
         event_datetime = _parse_event_datetime(event.get("event_datetime"))
         if not event_id or not event_datetime:
+            logger.warning("Skipping event with missing id/date: %s", event)
             continue
 
         if event_datetime < cutoff:
+            logger.info("Skipping overdue event %s (scheduled %s)", event_id, event_datetime)
             update_family_event(
                 event_id,
                 {
@@ -76,12 +86,15 @@ def process_due_events(now: datetime, overdue_minutes: int) -> bool:
             },
         )
 
+        logger.info("Executing event %s (%s)", event_id, event.get("title"))
+
         title = event.get("title", "Notification")
         description = event.get("description") or ""
         target_group = event.get("target_group") or "all"
         tokens = list_device_tokens(target_group)
 
         if not tokens:
+            logger.warning("No device tokens available for event %s", event_id)
             update_family_event(
                 event_id,
                 {
@@ -92,9 +105,16 @@ def process_due_events(now: datetime, overdue_minutes: int) -> bool:
             continue
 
         try:
-            send_push_notification(tokens, title, description, data={"event_id": event_id})
+            success_count = send_push_notification(
+                tokens,
+                title,
+                description,
+                data={"event_id": event_id},
+            )
             update_family_event(event_id, {"execution_status": "executed"})
+            logger.info("Event %s executed (sent=%s)", event_id, success_count)
         except Exception as exc:  # noqa: BLE001
+            logger.exception("Event %s failed: %s", event_id, exc)
             update_family_event(
                 event_id,
                 {
@@ -105,6 +125,7 @@ def process_due_events(now: datetime, overdue_minutes: int) -> bool:
             continue
 
         if event.get("recurrence"):
+            logger.info("Scheduling next occurrence for %s", event_id)
             _schedule_next_occurrence(event, event_datetime)
 
     return True

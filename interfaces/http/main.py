@@ -20,6 +20,7 @@ from core.repositories.family import (
     update_family_member,
 )
 from interfaces.http.routes.api import router as api_router, trigger_router
+from rex.cognition.notification_reasoning import reason_about_execution_target
 from rex.cognition.status_reasoning import reason_about_status
 
 app = FastAPI(
@@ -182,6 +183,11 @@ def notifications(request: Request, edit_id: str | None = None):
         for member in family_members
     }
 
+    execution_interpretation = reason_about_execution_target(
+        due_notification,
+        owner_lookup.get(due_notification.get("owner_id")) if due_notification else None,
+    )
+
     return templates.TemplateResponse(
         "notifications.html",
         {
@@ -189,6 +195,7 @@ def notifications(request: Request, edit_id: str | None = None):
             "top_nav_links": _top_nav_links("notifications"),
             "side_nav_links": _side_nav_links("notifications"),
             "due_notification": due_notification,
+            "execution_interpretation": execution_interpretation,
             "pending_notifications": pending_notifications,
             "all_notifications": all_notifications,
             "edit_notification": edit_notification,
