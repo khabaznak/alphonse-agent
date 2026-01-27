@@ -35,7 +35,23 @@ def list_unexecuted_notifications(limit: int = 100) -> list[dict[str, Any]]:
         .table(TABLE_NAME)
         .select("*")
         .is_("sent_at", "null")
+        .or_(
+            "execution_status.is.null,execution_status.eq.pending,execution_status.eq.overdue"
+        )
         .order("event_datetime", desc=False)
+        .limit(limit)
+        .execute()
+    )
+    return _handle_response(response)
+
+
+def list_notifications_since(since_iso: str, limit: int = 200) -> list[dict[str, Any]]:
+    response = (
+        get_supabase_client()
+        .table(TABLE_NAME)
+        .select("*")
+        .gte("event_datetime", since_iso)
+        .order("event_datetime", desc=True)
         .limit(limit)
         .execute()
     )

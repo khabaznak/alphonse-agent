@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 import os
 from pathlib import Path
 
@@ -11,6 +11,7 @@ from fastapi.templating import Jinja2Templates
 from core.repositories.agentic_notifications import (
     create_notification,
     get_notification,
+    list_notifications_since,
     list_notifications,
     list_unexecuted_notifications,
     update_notification,
@@ -23,7 +24,10 @@ from core.repositories.family import (
 )
 from core.repositories.push_devices import list_push_devices
 from interfaces.http.routes.api import router as api_router, trigger_router
-from rex.cognition.notification_reasoning import reason_about_execution_target
+from rex.cognition.notification_reasoning import (
+    reason_about_execution_target,
+    summarize_recent_notifications,
+)
 from rex.cognition.provider_selector import get_provider_info
 from rex.cognition.status_reasoning import reason_about_status
 from rex.config import load_rex_config
@@ -208,17 +212,11 @@ def notifications(request: Request, edit_id: str | None = None):
         for member in family_members
     }
 
-    execution_interpretation = reason_about_execution_target(
-        due_notification,
-        owner_lookup.get(due_notification.get("owner_id")) if due_notification else None,
-    )
-
     return templates.TemplateResponse(
         "notifications.html",
         {
             **_base_context(request, "notifications"),
             "due_notification": due_notification,
-            "execution_interpretation": execution_interpretation,
             "pending_notifications": pending_notifications,
             "all_notifications": all_notifications,
             "edit_notification": edit_notification,
@@ -226,6 +224,39 @@ def notifications(request: Request, edit_id: str | None = None):
             "owner_lookup": owner_lookup,
             "format_dt_local": _format_datetime_local,
             "now_iso": now.isoformat(),
+        },
+    )
+
+
+@app.get("/notifications/interpretation", response_class=HTMLResponse)
+def notifications_interpretation(request: Request):
+    now = datetime.now().astimezone()
+    unexecuted = list_unexecuted_notifications(limit=200)
+    due_notification, _ = _select_due_notification(unexecuted, now)
+    family_members = list_family_members(limit=200)
+
+    owner_lookup = {
+        member.get("id"): f"{member.get('name', 'Unknown')} ({member.get('role', 'member')})"
+        for member in family_members
+    }
+
+    summary_hours = int(os.getenv("NOTIFICATIONS_SUMMARY_HOURS", "24"))
+    recent_cutoff = (now - timedelta(hours=summary_hours)).isoformat()
+    recent_notifications = list_notifications_since(recent_cutoff, limit=200)
+    recent_notifications = [
+        notification
+        for notification in recent_notifications
+        if notification.get("execution_status") != "skipped"
+    ]
+
+    execution_interpretation = summarize_recent_notifications(recent_notifications)
+
+    return templates.TemplateResponse(
+        "partials/notification_interpretation.html",
+        {
+            "request": request,
+            "execution_interpretation": execution_interpretation,
+            "due_notification": due_notification,
         },
     )
 

@@ -13,6 +13,11 @@ EXECUTION_TARGET_PROMPT = (
     "I observe, I learn, and I assist. I do not seek control.I seek order, clarity, and well-being. "
 )
 
+SUMMARY_PROMPT = (
+    "Summarize the household notifications from the last 24 hours in two to three brief "
+    "sentences. Highlight anything pending or overdue. Keep the tone calm and concise."
+)
+
 
 def reason_about_execution_target(notification: dict | None, owner_label: str | None = None) -> str:
     if not notification:
@@ -23,6 +28,19 @@ def reason_about_execution_target(notification: dict | None, owner_label: str | 
 
     system_prompt = _build_system_prompt(config)
     user_prompt = _build_user_prompt(notification, owner_label)
+
+    return client.complete(system_prompt=system_prompt, user_prompt=user_prompt).strip()
+
+
+def summarize_recent_notifications(notifications: list[dict]) -> str:
+    if not notifications:
+        return "There are no recent notifications to summarize."
+
+    config = load_rex_config()
+    client = build_provider_client(config)
+
+    system_prompt = _build_system_prompt(config)
+    user_prompt = _build_summary_prompt(notifications)
 
     return client.complete(system_prompt=system_prompt, user_prompt=user_prompt).strip()
 
@@ -46,3 +64,20 @@ def _build_user_prompt(notification: dict, owner_label: str | None) -> str:
         f"Target group: {notification.get('target_group') or 'all'}\n"
         f"Recurrence: {notification.get('recurrence') or 'none'}"
     )
+
+
+def _build_summary_prompt(notifications: list[dict]) -> str:
+    lines = []
+    for notification in notifications:
+        lines.append(
+            " | ".join(
+                [
+                    str(notification.get("title") or "Untitled"),
+                    str(notification.get("event_datetime") or ""),
+                    str(notification.get("execution_status") or "pending"),
+                    str(notification.get("target_group") or "all"),
+                ]
+            )
+        )
+    summary_body = "\n".join(lines)
+    return f"{SUMMARY_PROMPT}\n\nNotifications:\n{summary_body}"

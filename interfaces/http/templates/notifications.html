@@ -14,11 +14,23 @@
 
         <section class="panel" id="execution-target">
           <h2>Execution Target</h2>
-          {% if due_notification %}
+          <div
+            id="execution-interpretation"
+            hx-get="/notifications/interpretation"
+            hx-trigger="load, every 20s"
+            hx-target="#execution-interpretation"
+            hx-swap="outerHTML"
+            hx-indicator="#execution-interpretation-indicator"
+          >
             <div class="card card-interpretation">
-              <div class="card-meta">Rex interpretation</div>
-              <div class="card-body">{{ execution_interpretation }}</div>
+              <div class="card-meta">Rex summary</div>
+              <div class="card-body">Fetching summary...</div>
+              <div id="execution-interpretation-indicator" class="indicator" hidden>
+                Thinking...
+              </div>
             </div>
+          </div>
+          {% if due_notification %}
             <div class="card">
               <div class="card-title">{{ due_notification.title }}</div>
               <div class="card-meta">
@@ -36,7 +48,7 @@
               {% endif %}
             </div>
           {% else %}
-            <p class="status-message">No past-due, unexecuted notifications.</p>
+            <p class="status-message">No pending or overdue notifications.</p>
           {% endif %}
         </section>
 
