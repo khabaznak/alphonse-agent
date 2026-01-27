@@ -47,3 +47,8 @@ dist/
 # Env files
 .env
 .env.*
+
+# WhatsApp CLI store
+integrations/whatsapp/store/
+store/*
+!store/.gitkeep
