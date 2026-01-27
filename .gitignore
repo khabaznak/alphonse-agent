@@ -48,6 +48,9 @@ dist/
 .env
 .env.*
 
+# Local sqlite data
+data/*.db
+
 # WhatsApp CLI store
 integrations/whatsapp/store/
 store/*
