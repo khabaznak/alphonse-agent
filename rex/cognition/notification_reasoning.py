@@ -19,7 +19,11 @@ SUMMARY_PROMPT = (
 )
 
 
-def reason_about_execution_target(notification: dict | None, owner_label: str | None = None) -> str:
+def reason_about_execution_target(
+    notification: dict | None,
+    owner_label: str | None = None,
+    tz_name: str | None = None,
+) -> str:
     if not notification:
         return "No execution target is due at the moment."
 
@@ -27,12 +31,12 @@ def reason_about_execution_target(notification: dict | None, owner_label: str | 
     client = build_provider_client(config)
 
     system_prompt = _build_system_prompt(config)
-    user_prompt = _build_user_prompt(notification, owner_label)
+    user_prompt = _build_user_prompt(notification, owner_label, tz_name)
 
     return client.complete(system_prompt=system_prompt, user_prompt=user_prompt).strip()
 
 
-def summarize_recent_notifications(notifications: list[dict]) -> str:
+def summarize_recent_notifications(notifications: list[dict], tz_name: str | None = None) -> str:
     if not notifications:
         return "There are no recent notifications to summarize."
 
@@ -40,7 +44,7 @@ def summarize_recent_notifications(notifications: list[dict]) -> str:
     client = build_provider_client(config)
 
     system_prompt = _build_system_prompt(config)
-    user_prompt = _build_summary_prompt(notifications)
+    user_prompt = _build_summary_prompt(notifications, tz_name)
 
     return client.complete(system_prompt=system_prompt, user_prompt=user_prompt).strip()
 
@@ -52,28 +56,34 @@ def _build_system_prompt(config: dict) -> str:
     return EXECUTION_TARGET_PROMPT
 
 
-def _build_user_prompt(notification: dict, owner_label: str | None) -> str:
+def _build_user_prompt(
+    notification: dict,
+    owner_label: str | None,
+    tz_name: str | None,
+) -> str:
     owner_text = owner_label or "Unknown"
+    local_time = _format_local_time(notification.get("event_datetime"), tz_name)
     return (
         f"{EXECUTION_TARGET_PROMPT}\n\n"
         "Execution target:\n"
         f"Title: {notification.get('title')}\n"
         f"Description: {notification.get('description') or ''}\n"
-        f"Scheduled: {notification.get('event_datetime')}\n"
+        f"Scheduled (local): {local_time}\n"
         f"Owner: {owner_text}\n"
         f"Target group: {notification.get('target_group') or 'all'}\n"
         f"Recurrence: {notification.get('recurrence') or 'none'}"
     )
 
 
-def _build_summary_prompt(notifications: list[dict]) -> str:
+def _build_summary_prompt(notifications: list[dict], tz_name: str | None) -> str:
     lines = []
     for notification in notifications:
+        local_time = _format_local_time(notification.get("event_datetime"), tz_name)
         lines.append(
             " | ".join(
                 [
                     str(notification.get("title") or "Untitled"),
-                    str(notification.get("event_datetime") or ""),
+                    local_time,
                     str(notification.get("execution_status") or "pending"),
                     str(notification.get("target_group") or "all"),
                 ]
@@ -81,3 +91,20 @@ def _build_summary_prompt(notifications: list[dict]) -> str:
         )
     summary_body = "\n".join(lines)
     return f"{SUMMARY_PROMPT}\n\nNotifications:\n{summary_body}"
+
+
+def _format_local_time(value: str | None, tz_name: str | None) -> str:
+    if not value:
+        return ""
+    try:
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+
+        parsed = datetime.fromisoformat(value)
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=ZoneInfo("UTC"))
+        if tz_name:
+            parsed = parsed.astimezone(ZoneInfo(tz_name))
+        return parsed.strftime("%B %d, %Y %I:%M %p %Z")
+    except Exception:
+        return value

@@ -69,7 +69,7 @@
                   {% for notification in pending_notifications %}
                     <tr>
                       <td>{{ notification.title }}</td>
-                      <td>{{ notification.event_datetime }}</td>
+                      <td>{{ format_dt_local(notification.event_datetime) }}</td>
                       <td>{{ owner_lookup.get(notification.owner_id, "Unknown") }}</td>
                       <td>{{ notification.target_group or "all" }}</td>
                     </tr>
@@ -101,7 +101,7 @@
                   {% for notification in all_notifications %}
                     <tr>
                       <td>{{ notification.title }}</td>
-                      <td>{{ notification.event_datetime }}</td>
+                      <td>{{ format_dt_local(notification.event_datetime) }}</td>
                       <td>{{ owner_lookup.get(notification.owner_id, "Unknown") }}</td>
                       <td>{{ notification.sent_at or "—" }}</td>
                       <td>{{ notification.execution_status or "pending" }}</td>

@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import os
 from pathlib import Path
 
@@ -23,6 +23,15 @@ from core.repositories.family import (
     update_family_member,
 )
 from core.repositories.push_devices import list_push_devices
+from core.settings_store import (
+    create_setting,
+    delete_setting,
+    get_setting,
+    get_timezone,
+    init_db,
+    list_settings,
+    update_setting,
+)
 from interfaces.http.routes.api import router as api_router, trigger_router
 from rex.cognition.notification_reasoning import (
     reason_about_execution_target,
@@ -33,6 +42,7 @@ from rex.cognition.status_reasoning import reason_about_status
 from rex.config import load_rex_config
 
 load_dotenv()
+init_db()
 
 app = FastAPI(
     title="Atrium",
@@ -60,6 +70,7 @@ def _top_nav_links(active: str) -> list[dict[str, str | bool]]:
         {"label": "Notifications", "href": "/notifications", "active": active == "notifications"},
         {"label": "Family", "href": "/family", "active": active == "family"},
         {"label": "Push Test", "href": "/push-test", "active": active == "push-test"},
+        {"label": "Settings", "href": "/settings", "active": active == "settings"},
         {"label": "Status JSON", "href": "/status"},
     ]
 
@@ -84,11 +95,17 @@ def _side_nav_links(page: str) -> list[dict[str, str | bool]]:
             {"label": "Setup", "href": "#push-setup"},
             {"label": "Register", "href": "#push-register"},
         ]
+    if page == "settings":
+        return [
+            {"label": "Settings List", "href": "#settings-list"},
+            {"label": "Create Setting", "href": "#create-setting"},
+        ]
     return [
         {"label": "Current State", "href": "#current-state", "active": True},
         {"label": "Notifications", "href": "/notifications"},
         {"label": "Family", "href": "/family"},
         {"label": "Push Test", "href": "/push-test"},
+        {"label": "Settings", "href": "/settings"},
         {"label": "Diagnostics", "href": "#diagnostics"},
         {"label": "Presence Log", "href": "#presence-log"},
     ]
@@ -122,7 +139,7 @@ def _normalize_datetime(value: str) -> str:
     if not parsed:
         return value
     if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=datetime.now().astimezone().tzinfo)
+        parsed = parsed.replace(tzinfo=_local_timezone())
     return parsed.isoformat()
 
 
@@ -130,41 +147,58 @@ def _format_datetime_local(value: str | None) -> str:
     parsed = _parse_iso_datetime(value)
     if not parsed:
         return ""
-    if parsed.tzinfo:
-        parsed = parsed.astimezone()
+    parsed = _to_local(parsed)
     return parsed.strftime("%Y-%m-%dT%H:%M")
 
 
 def _format_date_local(value: str | None) -> str:
     parsed = _parse_iso_datetime(value)
     if parsed:
-        return parsed.strftime("%Y-%m-%d")
+        return _to_local(parsed).strftime("%Y-%m-%d")
     if value:
         return value[:10]
     return ""
 
 
-def _select_due_notification(
+def _local_timezone():
+    tz_name = get_timezone()
+    try:
+        from zoneinfo import ZoneInfo
+
+        return ZoneInfo(tz_name)
+    except Exception:
+        return datetime.now().astimezone().tzinfo
+
+
+def _to_local(parsed: datetime) -> datetime:
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(_local_timezone())
+
+
+def _select_target_notification(
     notifications: list[dict[str, str | None]],
     now: datetime,
 ) -> tuple[dict[str, str | None] | None, list[dict[str, str | None]]]:
-    due = None
-    due_time = None
+    target = None
+    target_delta = None
     for notification in notifications:
         event_datetime = _parse_iso_datetime(
             notification.get("event_datetime")  # type: ignore[arg-type]
         )
         if not event_datetime:
             continue
-        if event_datetime <= now and (due_time is None or event_datetime > due_time):
-            due = notification
-            due_time = event_datetime
+        delta = abs((event_datetime - now).total_seconds())
+        if target_delta is None or delta < target_delta:
+            target = notification
+            target_delta = delta
+
     pending = []
     for notification in notifications:
-        if due and notification.get("id") == due.get("id"):
+        if target and notification.get("id") == target.get("id"):
             continue
         pending.append(notification)
-    return due, pending
+    return target, pending
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -202,7 +236,7 @@ def get_status():
 def notifications(request: Request, edit_id: str | None = None):
     now = datetime.now().astimezone()
     unexecuted = list_unexecuted_notifications(limit=200)
-    due_notification, pending_notifications = _select_due_notification(unexecuted, now)
+    due_notification, pending_notifications = _select_target_notification(unexecuted, now)
     all_notifications = list_notifications(limit=200)
     edit_notification = get_notification(edit_id) if edit_id else None
     family_members = list_family_members(limit=200)
@@ -232,7 +266,7 @@ def notifications(request: Request, edit_id: str | None = None):
 def notifications_interpretation(request: Request):
     now = datetime.now().astimezone()
     unexecuted = list_unexecuted_notifications(limit=200)
-    due_notification, _ = _select_due_notification(unexecuted, now)
+    due_notification, _ = _select_target_notification(unexecuted, now)
     family_members = list_family_members(limit=200)
 
     owner_lookup = {
@@ -249,7 +283,16 @@ def notifications_interpretation(request: Request):
         if notification.get("execution_status") != "skipped"
     ]
 
-    execution_interpretation = summarize_recent_notifications(recent_notifications)
+    tz_name = get_timezone()
+
+    if due_notification:
+        execution_interpretation = reason_about_execution_target(
+            due_notification,
+            owner_lookup.get(due_notification.get("owner_id")) if due_notification else None,
+            tz_name,
+        )
+    else:
+        execution_interpretation = summarize_recent_notifications(recent_notifications, tz_name)
 
     return templates.TemplateResponse(
         "partials/notification_interpretation.html",
@@ -376,3 +419,113 @@ def push_test(request: Request):
 def webpush_service_worker():
     sw_path = BASE_DIR.parent / "static" / "webpush-sw.js"
     return FileResponse(sw_path)
+
+
+@app.get("/settings", response_class=HTMLResponse)
+def settings(request: Request):
+    return templates.TemplateResponse(
+        "settings.html",
+        {
+            **_base_context(request, "settings"),
+        },
+    )
+
+
+@app.get("/settings/table", response_class=HTMLResponse)
+def settings_table(request: Request):
+    return templates.TemplateResponse(
+        "partials/settings_table.html",
+        {
+            "request": request,
+            "settings": list_settings(),
+        },
+    )
+
+
+@app.get("/settings/form", response_class=HTMLResponse)
+def settings_form(request: Request):
+    return templates.TemplateResponse(
+        "partials/settings_form.html",
+        {
+            "request": request,
+            "setting": None,
+        },
+    )
+
+
+@app.get("/settings/{setting_id}/form", response_class=HTMLResponse)
+def settings_form_edit(request: Request, setting_id: int):
+    return templates.TemplateResponse(
+        "partials/settings_form.html",
+        {
+            "request": request,
+            "setting": get_setting(setting_id),
+        },
+    )
+
+
+@app.post("/settings", response_class=HTMLResponse)
+def create_settings(
+    request: Request,
+    name: str = Form(...),
+    description: str = Form(""),
+    schema: str = Form(""),
+    config: str = Form("{}"),
+):
+    create_setting(
+        {
+            "name": name.strip(),
+            "description": description.strip() or None,
+            "schema": schema.strip() or None,
+            "config": config.strip() or "{}",
+        }
+    )
+    return templates.TemplateResponse(
+        "partials/settings_table.html",
+        {
+            "request": request,
+            "settings": list_settings(),
+        },
+        headers={"HX-Trigger": "settings-updated"},
+    )
+
+
+@app.post("/settings/{setting_id}", response_class=HTMLResponse)
+def update_settings(
+    request: Request,
+    setting_id: int,
+    name: str = Form(...),
+    description: str = Form(""),
+    schema: str = Form(""),
+    config: str = Form("{}"),
+):
+    update_setting(
+        setting_id,
+        {
+            "name": name.strip(),
+            "description": description.strip() or None,
+            "schema": schema.strip() or None,
+            "config": config.strip() or "{}",
+        },
+    )
+    return templates.TemplateResponse(
+        "partials/settings_table.html",
+        {
+            "request": request,
+            "settings": list_settings(),
+        },
+        headers={"HX-Trigger": "settings-updated"},
+    )
+
+
+@app.post("/settings/{setting_id}/delete", response_class=HTMLResponse)
+def delete_settings(request: Request, setting_id: int):
+    delete_setting(setting_id)
+    return templates.TemplateResponse(
+        "partials/settings_table.html",
+        {
+            "request": request,
+            "settings": list_settings(),
+        },
+        headers={"HX-Trigger": "settings-updated"},
+    )
