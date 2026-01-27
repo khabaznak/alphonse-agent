@@ -32,6 +32,8 @@ from core.repositories.family_events import (
     update_family_event,
 )
 from core.repositories.push_devices import list_active_push_devices
+from core.settings_store import get_timezone
+from rex.cognition.notification_reasoning import reason_about_execution_target
 from rex.config import load_rex_config
 
 
@@ -104,8 +106,9 @@ def process_due_events(now: datetime, overdue_minutes: int) -> bool:
 
         logger.info("Executing event %s (%s)", event_id, event.get("title"))
 
-        title = event.get("title", "Notification")
-        description = event.get("description") or ""
+        title = "Rex"
+        tz_name = get_timezone()
+        description = reason_about_execution_target(event, None, tz_name)
         target_group = event.get("target_group") or "all"
         resolved_target = _resolve_target_group(target_group, event.get("owner_id"))
 
