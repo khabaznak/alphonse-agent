@@ -23,3 +23,23 @@ def build_provider_client(config: dict):
         model=settings.get("model", "mistral:7b-instruct"),
         timeout=settings.get("timeout", 120),
     )
+
+
+def get_provider_info(config: dict) -> dict:
+    mode = str(config.get("mode", "test")).lower()
+    providers = config.get("providers", {})
+    provider_config = providers.get(mode, {})
+    provider_type = provider_config.get("type", "ollama")
+
+    if provider_type == "openai":
+        settings = provider_config.get("openai", {})
+        model = settings.get("model", "gpt-4o-mini")
+    else:
+        settings = provider_config.get("ollama", {})
+        model = settings.get("model", "mistral:7b-instruct")
+
+    return {
+        "mode": mode,
+        "provider": provider_type,
+        "model": model,
+    }

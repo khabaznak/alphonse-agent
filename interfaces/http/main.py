@@ -24,7 +24,9 @@ from core.repositories.family import (
 from core.repositories.push_devices import list_push_devices
 from interfaces.http.routes.api import router as api_router, trigger_router
 from rex.cognition.notification_reasoning import reason_about_execution_target
+from rex.cognition.provider_selector import get_provider_info
 from rex.cognition.status_reasoning import reason_about_status
+from rex.config import load_rex_config
 
 load_dotenv()
 
@@ -86,6 +88,20 @@ def _side_nav_links(page: str) -> list[dict[str, str | bool]]:
         {"label": "Diagnostics", "href": "#diagnostics"},
         {"label": "Presence Log", "href": "#presence-log"},
     ]
+
+
+def _model_status() -> str:
+    info = get_provider_info(load_rex_config())
+    return f"{info['mode']} · {info['provider']} / {info['model']}"
+
+
+def _base_context(request: Request, page: str) -> dict:
+    return {
+        "request": request,
+        "top_nav_links": _top_nav_links(page),
+        "side_nav_links": _side_nav_links(page),
+        "model_status": _model_status(),
+    }
 
 
 def _parse_iso_datetime(value: str | None) -> datetime | None:
@@ -151,11 +167,7 @@ def _select_due_notification(
 def index(request: Request):
     return templates.TemplateResponse(
         "rex.html",
-        {
-            "request": request,
-            "top_nav_links": _top_nav_links("rex"),
-            "side_nav_links": _side_nav_links("rex"),
-        },
+        _base_context(request, "rex"),
     )
 
 
@@ -204,9 +216,7 @@ def notifications(request: Request, edit_id: str | None = None):
     return templates.TemplateResponse(
         "notifications.html",
         {
-            "request": request,
-            "top_nav_links": _top_nav_links("notifications"),
-            "side_nav_links": _side_nav_links("notifications"),
+            **_base_context(request, "notifications"),
             "due_notification": due_notification,
             "execution_interpretation": execution_interpretation,
             "pending_notifications": pending_notifications,
@@ -273,9 +283,7 @@ def family(request: Request, edit_id: str | None = None):
     return templates.TemplateResponse(
         "family.html",
         {
-            "request": request,
-            "top_nav_links": _top_nav_links("family"),
-            "side_nav_links": _side_nav_links("family"),
+            **_base_context(request, "family"),
             "members": members,
             "edit_member": edit_member,
             "format_date_local": _format_date_local,
@@ -324,9 +332,7 @@ def push_test(request: Request):
     return templates.TemplateResponse(
         "push_test.html",
         {
-            "request": request,
-            "top_nav_links": _top_nav_links("push-test"),
-            "side_nav_links": _side_nav_links("push-test"),
+            **_base_context(request, "push-test"),
             "vapid_public_key": public_key,
             "family_members": family_members,
             "devices": devices,

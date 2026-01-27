@@ -1,7 +1,12 @@
 <nav class="topbar" aria-label="Primary">
   <div class="brand">
     <div class="brand-title">Rex</div>
-    <div class="brand-subtitle">Atrium presence</div>
+    <div class="brand-subtitle">
+      Atrium presence
+      {% if model_status %}
+        <span class="model-status">{{ model_status }}</span>
+      {% endif %}
+    </div>
   </div>
   <div class="topbar-links">
     {% for link in top_nav_links %}
