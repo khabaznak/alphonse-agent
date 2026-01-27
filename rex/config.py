@@ -30,6 +30,7 @@ DEFAULT_CONFIG = {
     },
     "notifications": {
         "overdue_minutes": 30,
+        "executing_timeout_minutes": 5,
     },
     "push": {
         "provider": "fcm",

@@ -3,9 +3,11 @@ from __future__ import annotations
 import sys
 import time
 import json
+import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import logging
+import re
 
 from dateutil.rrule import rrulestr
 from dotenv import load_dotenv
@@ -16,12 +18,17 @@ sys.path.append(str(PROJECT_ROOT))
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("atrium.worker")
 
+UUID_PATTERN = re.compile(
+    r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+)
+
 from core.integrations.fcm import send_push_notification
 from core.integrations.webpush import send_web_push
 from core.repositories.family_events import (
     create_family_event,
     list_due_family_events,
     list_next_family_events,
+    list_stuck_executing_events,
     update_family_event,
 )
 from core.repositories.push_devices import list_active_push_devices
@@ -32,9 +39,13 @@ def main() -> None:
     load_dotenv()
     config = load_rex_config()
     overdue_minutes = int(config.get("notifications", {}).get("overdue_minutes", 30))
+    executing_timeout = int(
+        config.get("notifications", {}).get("executing_timeout_minutes", 5)
+    )
     logger.info("Worker started (overdue_minutes=%s)", overdue_minutes)
     while True:
         now = datetime.now(timezone.utc)
+        _reset_stuck_executing(now, executing_timeout)
         processed_any = process_due_events(now, overdue_minutes)
         if processed_any:
             continue
@@ -69,6 +80,9 @@ def process_due_events(now: datetime, overdue_minutes: int) -> bool:
             logger.warning("Skipping event with missing id/date: %s", event)
             continue
 
+        if event_datetime < now and event.get("execution_status") != "overdue":
+            update_family_event(event_id, {"execution_status": "overdue"})
+
         if event_datetime < cutoff:
             logger.info("Skipping overdue event %s (scheduled %s)", event_id, event_datetime)
             update_family_event(
@@ -93,7 +107,21 @@ def process_due_events(now: datetime, overdue_minutes: int) -> bool:
         title = event.get("title", "Notification")
         description = event.get("description") or ""
         target_group = event.get("target_group") or "all"
-        devices = list_active_push_devices(target_group, platforms=["android", "web"])
+        resolved_target = _resolve_target_group(target_group, event.get("owner_id"))
+
+        try:
+            devices = list_active_push_devices(resolved_target, platforms=["android", "web"])
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Failed to load devices for event %s: %s", event_id, exc)
+            update_family_event(
+                event_id,
+                {
+                    "execution_status": "pending",
+                    "error_msg": str(exc),
+                    "sent_at": None,
+                },
+            )
+            continue
         android_tokens = []
         web_subscriptions = []
         for device in devices:
@@ -109,11 +137,16 @@ def process_due_events(now: datetime, overdue_minutes: int) -> bool:
             update_family_event(
                 event_id,
                 {
-                    "execution_status": "failed",
+                    "execution_status": "pending",
                     "error_msg": "No device tokens available.",
+                    "sent_at": None,
                 },
             )
             continue
+
+        if web_subscriptions and not _webpush_enabled():
+            logger.warning("Web push disabled; missing VAPID configuration.")
+            web_subscriptions = []
 
         try:
             success_count = 0
@@ -139,17 +172,41 @@ def process_due_events(now: datetime, overdue_minutes: int) -> bool:
             update_family_event(
                 event_id,
                 {
-                    "execution_status": "failed",
+                    "execution_status": "pending",
                     "error_msg": str(exc),
+                    "sent_at": None,
                 },
             )
             continue
 
         if event.get("recurrence"):
             logger.info("Scheduling next occurrence for %s", event_id)
-            _schedule_next_occurrence(event, event_datetime)
+            try:
+                _schedule_next_occurrence(event, event_datetime)
+            except ValueError as exc:
+                logger.warning("Skipping invalid recurrence for %s: %s", event_id, exc)
+                update_family_event(event_id, {"error_msg": str(exc)})
 
     return True
+
+
+def _reset_stuck_executing(now: datetime, timeout_minutes: int) -> None:
+    cutoff = now - timedelta(minutes=timeout_minutes)
+    stuck = list_stuck_executing_events(cutoff.isoformat(), limit=200)
+    if not stuck:
+        return
+    for event in stuck:
+        event_id = event.get("id")
+        if not event_id:
+            continue
+        logger.warning("Resetting stuck event %s to pending", event_id)
+        update_family_event(
+            event_id,
+            {
+                "execution_status": "pending",
+                "sent_at": None,
+            },
+        )
 
 
 def fetch_next_event(now: datetime) -> dict | None:
@@ -175,6 +232,9 @@ def _schedule_next_occurrence(event: dict, event_datetime: datetime) -> None:
     recurrence = event.get("recurrence")
     if not recurrence:
         return
+
+    if not _looks_like_rrule(recurrence):
+        raise ValueError("Invalid recurrence rule.")
 
     rule = rrulestr(recurrence, dtstart=event_datetime)
     next_occurrence = rule.after(datetime.now(timezone.utc), inc=False)
@@ -205,6 +265,26 @@ def _normalize_web_subscription(value):
         except json.JSONDecodeError as exc:
             raise ValueError("Invalid web push subscription JSON.") from exc
     raise ValueError("Unsupported web push subscription format.")
+
+
+def _looks_like_rrule(recurrence: str) -> bool:
+    return "=" in recurrence
+
+
+def _webpush_enabled() -> bool:
+    return bool(
+        os.getenv("VAPID_PRIVATE_KEY")
+        and os.getenv("VAPID_PUBLIC_KEY")
+        and os.getenv("VAPID_EMAIL")
+    )
+
+
+def _resolve_target_group(target_group: str, owner_id: str | None) -> str | None:
+    if target_group == "all":
+        return None
+    if UUID_PATTERN.match(target_group):
+        return target_group
+    return owner_id
 
 
 if __name__ == "__main__":

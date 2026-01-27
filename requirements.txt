@@ -10,3 +10,4 @@ firebase-admin==6.6.0
 python-dateutil==2.9.0.post0
 python-dotenv==1.0.1
 pywebpush==1.14.0
+cryptography==45.0.6

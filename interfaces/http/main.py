@@ -246,6 +246,7 @@ def create_notifications(
         "event_datetime": _normalize_datetime(event_datetime),
         "target_group": target_group or "all",
         "recurrence": recurrence or None,
+        "execution_status": "pending",
     }
     created = create_notification(payload)
     notification_id = created.get("id")

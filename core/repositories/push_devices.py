@@ -9,7 +9,7 @@ def upsert_push_device(payload: dict[str, Any]) -> dict[str, Any]:
     response = (
         get_supabase_client()
         .table("push_devices")
-        .upsert(normalized)
+        .upsert(normalized, on_conflict="token")
         .execute()
     )
     data = _handle_response(response)

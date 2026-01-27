@@ -81,6 +81,7 @@
                     <th>Scheduled</th>
                     <th>Owner</th>
                     <th>Executed</th>
+                    <th>Status</th>
                     <th>Actions</th>
                   </tr>
                 </thead>
@@ -91,6 +92,7 @@
                       <td>{{ notification.event_datetime }}</td>
                       <td>{{ owner_lookup.get(notification.owner_id, "Unknown") }}</td>
                       <td>{{ notification.sent_at or "—" }}</td>
+                      <td>{{ notification.execution_status or "pending" }}</td>
                       <td>
                         <a class="nav-link" href="/notifications?edit_id={{ notification.id }}">
                           Edit

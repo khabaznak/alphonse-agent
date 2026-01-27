@@ -33,7 +33,9 @@ def list_due_family_events(now_iso: str, limit: int = 200) -> list[dict[str, Any
         .select("*")
         .lte("event_datetime", now_iso)
         .is_("sent_at", "null")
-        .eq("execution_status", "pending")
+        .or_(
+            "execution_status.is.null,execution_status.eq.pending,execution_status.eq.overdue"
+        )
         .order("event_datetime", desc=False)
         .limit(limit)
         .execute()
@@ -49,6 +51,20 @@ def list_next_family_events(now_iso: str, limit: int = 1) -> list[dict[str, Any]
         .gt("event_datetime", now_iso)
         .eq("execution_status", "pending")
         .order("event_datetime", desc=False)
+        .limit(limit)
+        .execute()
+    )
+    return _handle_response(response)
+
+
+def list_stuck_executing_events(cutoff_iso: str, limit: int = 200) -> list[dict[str, Any]]:
+    response = (
+        get_supabase_client()
+        .table("family_events")
+        .select("*")
+        .eq("execution_status", "executing")
+        .lte("sent_at", cutoff_iso)
+        .order("sent_at", desc=False)
         .limit(limit)
         .execute()
     )
