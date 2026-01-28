@@ -47,6 +47,7 @@ dist/
 # Env files
 .env
 .env.*
+!rex/agent/.env.example
 
 # Local sqlite data
 data/*.db
