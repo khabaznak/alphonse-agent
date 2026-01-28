@@ -17,6 +17,35 @@
 - From repo root: `python -m rex.agent.main`
 - From `rex/agent/`: `PYTHONPATH=../.. python -m rex.agent.main`
 
+## Actions, Intentions, Extremities
+
+Rex separates decision logic from communication.
+
+- **Actions** execute pure logic and return an `ActionResult` describing intent.
+- **Intentions** represent semantic goals (e.g., notify the household).
+- **Narration** optionally explains an intention in human language.
+- **Extremities** are IO endpoints that manifest intentions (push, logs, etc.).
+
+### Example flow
+
+Doorbell pressed while user sleeping:
+
+1. Signal: `doorbell_pressed`
+2. FSM: transitions to `household_sleeping`
+3. Action: decides to `NOTIFY_HOUSEHOLD` with `urgency=high`
+4. Intention: `NOTIFY_HOUSEHOLD` payload includes who/where
+5. Narration: optionally produces a calm message
+6. Extremity: push notification delivers the message
+
+### Cognitive mapping
+
+- Signals = stimuli
+- FSM = nervous system
+- Actions = motor planning
+- Intentions = semantic goals
+- Narration = social cognition
+- Extremities = physical expression
+
 ## How to add a new Sense
 
 1) Create a new module under `rex/senses/` that subclasses `Sense`.
