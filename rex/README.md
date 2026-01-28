@@ -16,3 +16,49 @@
 
 - From repo root: `python -m rex.agent.main`
 - From `rex/agent/`: `PYTHONPATH=../.. python -m rex.agent.main`
+
+## How to add a new Sense
+
+1) Create a new module under `rex/senses/` that subclasses `Sense`.
+2) Define `key`, `name`, `source_type`, and `signals`.
+3) Implement a background producer with `start()` and `stop()` that emits to the `Bus`.
+4) Run `python rex/nervous_system/migrate.py` and `python rex/nervous_system/seed.py` or call `register_senses()` and `register_signals()` to register metadata.
+
+Minimal example:
+
+```python
+from __future__ import annotations
+
+import threading
+import time
+
+from rex.senses.base import Sense, SignalSpec
+from rex.senses.bus import Bus, Signal
+
+
+class ExampleSense(Sense):
+    key = "example"
+    name = "Example Sense"
+    source_type = "service"
+    signals = [
+        SignalSpec(key="example_pulse", name="Example Pulse"),
+    ]
+
+    def __init__(self) -> None:
+        self._stop_event = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    def start(self, bus: Bus) -> None:
+        def run() -> None:
+            while not self._stop_event.is_set():
+                bus.emit(Signal(type="example_pulse", source=self.key))
+                time.sleep(5)
+
+        self._thread = threading.Thread(target=run, daemon=True)
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop_event.set()
+        if self._thread:
+            self._thread.join(timeout=2)
+```

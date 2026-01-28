@@ -33,6 +33,22 @@ CREATE TABLE IF NOT EXISTS signals (
 ) STRICT;
 
 ----------------------------------------------------------------------
+-- 2.5) SENSES (ADMIN/OBSERVABILITY ONLY)
+----------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS senses (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  key           TEXT NOT NULL UNIQUE,
+  name          TEXT NOT NULL,
+  description   TEXT,
+  source_type   TEXT NOT NULL,
+  enabled       INTEGER NOT NULL DEFAULT 1,
+  owner         TEXT,
+  created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at    TEXT NOT NULL DEFAULT (datetime('now')),
+  CHECK (enabled IN (0,1))
+) STRICT;
+
+----------------------------------------------------------------------
 -- 3) TRANSITIONS
 ----------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS transitions (

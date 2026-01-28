@@ -7,10 +7,15 @@ VALUES
   ('acting', 'Acting', 'Executing actions', 0, 1),
   ('shutdown', 'Shutdown', 'Terminal state', 1, 1);
 
+INSERT OR IGNORE INTO senses (key, name, description, source_type, enabled, owner)
+VALUES
+  ('system', 'System', 'Core system impulses', 'system', 1, NULL),
+  ('intent', 'Intent Detector', 'Interprets incoming intents', 'service', 1, NULL);
+
 INSERT OR IGNORE INTO signals (key, name, source, description, is_enabled)
 VALUES
   ('time_tick', 'Time Tick', 'system', 'Periodic tick signal', 1),
-  ('intent_received', 'Intent Received', 'sense', 'New intent detected', 1),
+  ('intent_received', 'Intent Received', 'intent', 'New intent detected', 1),
   ('shutdown_requested', 'Shutdown Requested', 'system', 'Shutdown requested', 1);
 
 INSERT OR IGNORE INTO transitions (

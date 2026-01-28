@@ -9,6 +9,8 @@ from dotenv import load_dotenv
 from rex.agent.heart import Heart, HeartConfig
 from rex.nervous_system.ddfsm import DDFSM, DDFSMConfig
 from rex.senses.bus import Bus
+from rex.senses.manager import SenseManager
+from rex.senses.registry import register_senses, register_signals
 
 
 def load_env() -> None:
@@ -50,8 +52,17 @@ def main() -> None:
     # Signal bus is in-memory transport only.
     bus = Bus()
 
+    register_senses(str(db_path))
+    register_signals(str(db_path))
+
+    sense_manager = SenseManager(db_path=str(db_path), bus=bus)
+    sense_manager.start()
+
     heart = load_heart(config, bus, ddfsm)
-    heart.run()
+    try:
+        heart.run()
+    finally:
+        sense_manager.stop()
 
 
 if __name__ == "__main__":
