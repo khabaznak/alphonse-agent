@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
 
 from rex.nervous_system.ddfsm import CurrentState, DDFSM
 from rex.senses.bus import Bus
@@ -63,8 +64,8 @@ class Heart:
 
     def tick(self) -> None:
         """One iteration of the heart loop."""
-        # Placeholder for future work.
-        return None
+        now = datetime.now(tz=timezone.utc).isoformat()
+        print(f"{now} tick tack!")
 
     def stop(self) -> None:
         self.signal = SHUTDOWN

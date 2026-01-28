@@ -18,7 +18,7 @@ def load_env() -> None:
 
 
 def resolve_nervous_system_db_path() -> Path:
-    default_path = Path(__file__).resolve().parent.parent / "nervous_system" / "nerve-db.sqlite"
+    default_path = Path(__file__).resolve().parent.parent / "nervous_system" / "nerve-db"
     configured = os.getenv("NERVE_DB_PATH")
     if not configured:
         return default_path
@@ -37,9 +37,14 @@ def main() -> None:
 
     # Resolve once; used across Rex components.
     db_path = resolve_nervous_system_db_path()
+    tick_raw = os.getenv("HEART_TICK_SECONDS", "5")
+    try:
+        tick_seconds = float(tick_raw)
+    except ValueError:
+        tick_seconds = 5.0
 
     # Config / nervous system
-    config = HeartConfig(nervous_system_db_path=str(db_path))
+    config = HeartConfig(nervous_system_db_path=str(db_path), tick_seconds=tick_seconds)
     ddfsm = DDFSM(DDFSMConfig(db_path=str(db_path)))
 
     # Signal bus is in-memory transport only.

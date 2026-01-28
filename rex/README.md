@@ -10,3 +10,8 @@
 
 - Apply schema: `python rex/nervous_system/migrate.py`
 - Seed data: `python rex/nervous_system/seed.py`
+
+## Running Rex
+
+- From repo root: `python -m rex.agent.main`
+- From `rex/agent/`: `PYTHONPATH=../.. python -m rex.agent.main`
