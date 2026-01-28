@@ -18,7 +18,7 @@ def load_env() -> None:
 
 
 def resolve_nervous_system_db_path() -> Path:
-    default_path = Path(__file__).resolve().parent.parent / "nervous_system" / "nerve-db"
+    default_path = Path(__file__).resolve().parent.parent / "nervous_system" / "db" / "nerve-db"
     configured = os.getenv("NERVE_DB_PATH")
     if not configured:
         return default_path

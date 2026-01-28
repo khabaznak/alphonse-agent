@@ -32,6 +32,24 @@ from core.settings_store import (
     list_settings,
     update_setting,
 )
+from core.nerve_store import (
+    create_signal,
+    create_state,
+    create_transition,
+    delete_signal,
+    delete_state,
+    delete_transition,
+    get_signal,
+    get_state,
+    get_transition,
+    list_signal_queue,
+    list_signals,
+    list_states,
+    list_transitions,
+    update_signal,
+    update_state,
+    update_transition,
+)
 from interfaces.http.routes.api import router as api_router, trigger_router
 from rex.cognition.notification_reasoning import (
     reason_about_execution_target,
@@ -73,6 +91,7 @@ def _top_nav_links(active: str) -> list[dict[str, str | bool]]:
         {"label": "Family", "href": "/family", "active": active == "family"},
         {"label": "Push Test", "href": "/push-test", "active": active == "push-test"},
         {"label": "Settings", "href": "/settings", "active": active == "settings"},
+        {"label": "Nerve DB", "href": "/nerve/signals", "active": active.startswith("nerve")},
         {"label": "Status JSON", "href": "/status"},
     ]
 
@@ -102,12 +121,20 @@ def _side_nav_links(page: str) -> list[dict[str, str | bool]]:
             {"label": "Settings List", "href": "#settings-list"},
             {"label": "Create Setting", "href": "#create-setting"},
         ]
+    if page.startswith("nerve"):
+        return [
+            {"label": "Signals", "href": "/nerve/signals"},
+            {"label": "States", "href": "/nerve/states"},
+            {"label": "Transitions", "href": "/nerve/transitions"},
+            {"label": "Signal Queue", "href": "/nerve/queue"},
+        ]
     return [
         {"label": "Current State", "href": "#current-state", "active": True},
         {"label": "Notifications", "href": "/notifications"},
         {"label": "Family", "href": "/family"},
         {"label": "Push Test", "href": "/push-test"},
         {"label": "Settings", "href": "/settings"},
+        {"label": "Nerve DB", "href": "/nerve/signals"},
         {"label": "Diagnostics", "href": "#diagnostics"},
         {"label": "Presence Log", "href": "#presence-log"},
     ]
@@ -176,6 +203,21 @@ def _to_local(parsed: datetime) -> datetime:
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
     return parsed.astimezone(_local_timezone())
+
+
+def _as_int(value: str | None, default: int = 0) -> int:
+    if value is None or value == "":
+        return default
+    try:
+        return int(value)
+    except ValueError:
+        return default
+
+
+def _as_bool(value: str | None, default: int = 0) -> int:
+    if value is None:
+        return default
+    return 1 if value.lower() in {"1", "true", "on", "yes"} else 0
 
 
 def _select_target_notification(

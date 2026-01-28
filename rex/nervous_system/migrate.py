@@ -8,7 +8,7 @@ from pathlib import Path
 
 
 def default_db_path() -> Path:
-    return Path(__file__).resolve().parent / "nerve-db"
+    return Path(__file__).resolve().parent / "db" / "nerve-db"
 
 
 def apply_schema(db_path: Path) -> None:
