@@ -1,0 +1,34 @@
+<div id="nerve-queue-table">
+  {% if queue %}
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Signal</th>
+            <th>Type</th>
+            <th>Source</th>
+            <th>Created</th>
+            <th>Processed</th>
+            <th>Error</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for item in queue %}
+            <tr>
+              <td>{{ item.id }}</td>
+              <td>{{ item.signal_id }}</td>
+              <td>{{ item.signal_type }}</td>
+              <td>{{ item.source or "—" }}</td>
+              <td>{{ item.created_at }}</td>
+              <td>{{ item.processed_at or "—" }}</td>
+              <td>{{ item.error or "—" }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <p class="status-message">Signal queue is empty.</p>
+  {% endif %}
+</div>

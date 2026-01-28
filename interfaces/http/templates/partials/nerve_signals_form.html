@@ -1,0 +1,32 @@
+<div id="nerve-signals-form">
+  <form
+    class="form-grid"
+    hx-post="{% if signal %}/nerve/signals/{{ signal.id }}{% else %}/nerve/signals{% endif %}"
+    hx-target="#nerve-signals-table"
+    hx-swap="outerHTML"
+  >
+    <label>
+      Key
+      <input type="text" name="key" value="{{ signal.key if signal else '' }}" required>
+    </label>
+    <label>
+      Name
+      <input type="text" name="name" value="{{ signal.name if signal else '' }}" required>
+    </label>
+    <label>
+      Source
+      <input type="text" name="source" value="{{ signal.source if signal else 'system' }}" required>
+    </label>
+    <label class="form-full">
+      Description
+      <textarea name="description" rows="3">{{ signal.description if signal else '' }}</textarea>
+    </label>
+    <label>
+      Enabled
+      <input type="checkbox" name="is_enabled" {% if signal and signal.is_enabled %}checked{% elif not signal %}checked{% endif %}>
+    </label>
+    <div class="form-actions form-full">
+      <button type="submit">{% if signal %}Save signal{% else %}Create signal{% endif %}</button>
+    </div>
+  </form>
+</div>

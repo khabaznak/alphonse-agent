@@ -1,0 +1,49 @@
+<div id="nerve-signals-table">
+  {% if signals %}
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Key</th>
+            <th>Name</th>
+            <th>Source</th>
+            <th>Enabled</th>
+            <th>Updated</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for signal in signals %}
+            <tr>
+              <td>{{ signal.key }}</td>
+              <td>{{ signal.name }}</td>
+              <td>{{ signal.source }}</td>
+              <td>{{ "yes" if signal.is_enabled else "no" }}</td>
+              <td>{{ signal.updated_at }}</td>
+              <td>
+                <button
+                  class="nav-link"
+                  hx-get="/nerve/signals/{{ signal.id }}/form"
+                  hx-target="#nerve-signals-form"
+                  hx-swap="outerHTML"
+                >
+                  Edit
+                </button>
+                <button
+                  class="nav-link"
+                  hx-post="/nerve/signals/{{ signal.id }}/delete"
+                  hx-target="#nerve-signals-table"
+                  hx-swap="outerHTML"
+                >
+                  Delete
+                </button>
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <p class="status-message">No signals defined.</p>
+  {% endif %}
+</div>

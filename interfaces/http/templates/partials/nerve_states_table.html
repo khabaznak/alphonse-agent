@@ -1,0 +1,49 @@
+<div id="nerve-states-table">
+  {% if states %}
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Key</th>
+            <th>Name</th>
+            <th>Terminal</th>
+            <th>Enabled</th>
+            <th>Updated</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for state in states %}
+            <tr>
+              <td>{{ state.key }}</td>
+              <td>{{ state.name }}</td>
+              <td>{{ "yes" if state.is_terminal else "no" }}</td>
+              <td>{{ "yes" if state.is_enabled else "no" }}</td>
+              <td>{{ state.updated_at }}</td>
+              <td>
+                <button
+                  class="nav-link"
+                  hx-get="/nerve/states/{{ state.id }}/form"
+                  hx-target="#nerve-states-form"
+                  hx-swap="outerHTML"
+                >
+                  Edit
+                </button>
+                <button
+                  class="nav-link"
+                  hx-post="/nerve/states/{{ state.id }}/delete"
+                  hx-target="#nerve-states-table"
+                  hx-swap="outerHTML"
+                >
+                  Delete
+                </button>
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <p class="status-message">No states defined.</p>
+  {% endif %}
+</div>

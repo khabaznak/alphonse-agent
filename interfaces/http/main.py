@@ -569,3 +569,371 @@ def delete_settings(request: Request, setting_id: int):
         },
         headers={"HX-Trigger": "settings-updated"},
     )
+
+
+@app.get("/nerve/signals", response_class=HTMLResponse)
+def nerve_signals(request: Request):
+    return templates.TemplateResponse(
+        "nerve_signals.html",
+        {
+            **_base_context(request, "nerve-signals"),
+        },
+    )
+
+
+@app.get("/nerve/signals/table", response_class=HTMLResponse)
+def nerve_signals_table(request: Request):
+    return templates.TemplateResponse(
+        "partials/nerve_signals_table.html",
+        {
+            "request": request,
+            "signals": list_signals(),
+        },
+    )
+
+
+@app.get("/nerve/signals/form", response_class=HTMLResponse)
+def nerve_signals_form(request: Request):
+    return templates.TemplateResponse(
+        "partials/nerve_signals_form.html",
+        {
+            "request": request,
+            "signal": None,
+        },
+    )
+
+
+@app.get("/nerve/signals/{signal_id}/form", response_class=HTMLResponse)
+def nerve_signals_form_edit(request: Request, signal_id: int):
+    return templates.TemplateResponse(
+        "partials/nerve_signals_form.html",
+        {
+            "request": request,
+            "signal": get_signal(signal_id),
+        },
+    )
+
+
+@app.post("/nerve/signals", response_class=HTMLResponse)
+def create_nerve_signal(
+    request: Request,
+    key: str = Form(...),
+    name: str = Form(...),
+    source: str = Form("system"),
+    description: str = Form(""),
+    is_enabled: str | None = Form(None),
+):
+    create_signal(
+        {
+            "key": key.strip(),
+            "name": name.strip(),
+            "source": source.strip() or "system",
+            "description": description.strip() or None,
+            "is_enabled": _as_bool(is_enabled, 1),
+        }
+    )
+    return templates.TemplateResponse(
+        "partials/nerve_signals_table.html",
+        {
+            "request": request,
+            "signals": list_signals(),
+        },
+        headers={"HX-Trigger": "nerve-signals-updated"},
+    )
+
+
+@app.post("/nerve/signals/{signal_id}", response_class=HTMLResponse)
+def update_nerve_signal(
+    request: Request,
+    signal_id: int,
+    key: str = Form(...),
+    name: str = Form(...),
+    source: str = Form("system"),
+    description: str = Form(""),
+    is_enabled: str | None = Form(None),
+):
+    update_signal(
+        signal_id,
+        {
+            "key": key.strip(),
+            "name": name.strip(),
+            "source": source.strip() or "system",
+            "description": description.strip() or None,
+            "is_enabled": _as_bool(is_enabled, 1),
+        },
+    )
+    return templates.TemplateResponse(
+        "partials/nerve_signals_table.html",
+        {
+            "request": request,
+            "signals": list_signals(),
+        },
+        headers={"HX-Trigger": "nerve-signals-updated"},
+    )
+
+
+@app.post("/nerve/signals/{signal_id}/delete", response_class=HTMLResponse)
+def delete_nerve_signal(request: Request, signal_id: int):
+    delete_signal(signal_id)
+    return templates.TemplateResponse(
+        "partials/nerve_signals_table.html",
+        {
+            "request": request,
+            "signals": list_signals(),
+        },
+        headers={"HX-Trigger": "nerve-signals-updated"},
+    )
+
+
+@app.get("/nerve/states", response_class=HTMLResponse)
+def nerve_states(request: Request):
+    return templates.TemplateResponse(
+        "nerve_states.html",
+        {
+            **_base_context(request, "nerve-states"),
+        },
+    )
+
+
+@app.get("/nerve/states/table", response_class=HTMLResponse)
+def nerve_states_table(request: Request):
+    return templates.TemplateResponse(
+        "partials/nerve_states_table.html",
+        {
+            "request": request,
+            "states": list_states(),
+        },
+    )
+
+
+@app.get("/nerve/states/form", response_class=HTMLResponse)
+def nerve_states_form(request: Request):
+    return templates.TemplateResponse(
+        "partials/nerve_states_form.html",
+        {
+            "request": request,
+            "state": None,
+        },
+    )
+
+
+@app.get("/nerve/states/{state_id}/form", response_class=HTMLResponse)
+def nerve_states_form_edit(request: Request, state_id: int):
+    return templates.TemplateResponse(
+        "partials/nerve_states_form.html",
+        {
+            "request": request,
+            "state": get_state(state_id),
+        },
+    )
+
+
+@app.post("/nerve/states", response_class=HTMLResponse)
+def create_nerve_state(
+    request: Request,
+    key: str = Form(...),
+    name: str = Form(...),
+    description: str = Form(""),
+    is_terminal: str | None = Form(None),
+    is_enabled: str | None = Form(None),
+):
+    create_state(
+        {
+            "key": key.strip(),
+            "name": name.strip(),
+            "description": description.strip() or None,
+            "is_terminal": _as_bool(is_terminal, 0),
+            "is_enabled": _as_bool(is_enabled, 1),
+        }
+    )
+    return templates.TemplateResponse(
+        "partials/nerve_states_table.html",
+        {
+            "request": request,
+            "states": list_states(),
+        },
+        headers={"HX-Trigger": "nerve-states-updated"},
+    )
+
+
+@app.post("/nerve/states/{state_id}", response_class=HTMLResponse)
+def update_nerve_state(
+    request: Request,
+    state_id: int,
+    key: str = Form(...),
+    name: str = Form(...),
+    description: str = Form(""),
+    is_terminal: str | None = Form(None),
+    is_enabled: str | None = Form(None),
+):
+    update_state(
+        state_id,
+        {
+            "key": key.strip(),
+            "name": name.strip(),
+            "description": description.strip() or None,
+            "is_terminal": _as_bool(is_terminal, 0),
+            "is_enabled": _as_bool(is_enabled, 1),
+        },
+    )
+    return templates.TemplateResponse(
+        "partials/nerve_states_table.html",
+        {
+            "request": request,
+            "states": list_states(),
+        },
+        headers={"HX-Trigger": "nerve-states-updated"},
+    )
+
+
+@app.post("/nerve/states/{state_id}/delete", response_class=HTMLResponse)
+def delete_nerve_state(request: Request, state_id: int):
+    delete_state(state_id)
+    return templates.TemplateResponse(
+        "partials/nerve_states_table.html",
+        {
+            "request": request,
+            "states": list_states(),
+        },
+        headers={"HX-Trigger": "nerve-states-updated"},
+    )
+
+
+@app.get("/nerve/transitions", response_class=HTMLResponse)
+def nerve_transitions(request: Request):
+    return templates.TemplateResponse(
+        "nerve_transitions.html",
+        {
+            **_base_context(request, "nerve-transitions"),
+        },
+    )
+
+
+@app.get("/nerve/transitions/table", response_class=HTMLResponse)
+def nerve_transitions_table(request: Request):
+    signals = list_signals()
+    states = list_states()
+    signal_lookup = {signal["id"]: signal for signal in signals}
+    state_lookup = {state["id"]: state for state in states}
+    return templates.TemplateResponse(
+        "partials/nerve_transitions_table.html",
+        {
+            "request": request,
+            "transitions": list_transitions(),
+            "signal_lookup": signal_lookup,
+            "state_lookup": state_lookup,
+        },
+    )
+
+
+@app.get("/nerve/transitions/form", response_class=HTMLResponse)
+def nerve_transitions_form(request: Request):
+    return templates.TemplateResponse(
+        "partials/nerve_transitions_form.html",
+        {
+            "request": request,
+            "transition": None,
+            "signals": list_signals(),
+            "states": list_states(),
+        },
+    )
+
+
+@app.get("/nerve/transitions/{transition_id}/form", response_class=HTMLResponse)
+def nerve_transitions_form_edit(request: Request, transition_id: int):
+    return templates.TemplateResponse(
+        "partials/nerve_transitions_form.html",
+        {
+            "request": request,
+            "transition": get_transition(transition_id),
+            "signals": list_signals(),
+            "states": list_states(),
+        },
+    )
+
+
+@app.post("/nerve/transitions", response_class=HTMLResponse)
+def create_nerve_transition(
+    request: Request,
+    state_id: str = Form(...),
+    signal_id: str = Form(...),
+    next_state_id: str = Form(...),
+    priority: str = Form("100"),
+    is_enabled: str | None = Form(None),
+    guard_key: str = Form(""),
+    action_key: str = Form(""),
+    match_any_state: str | None = Form(None),
+    notes: str = Form(""),
+):
+    create_transition(
+        {
+            "state_id": _as_int(state_id),
+            "signal_id": _as_int(signal_id),
+            "next_state_id": _as_int(next_state_id),
+            "priority": _as_int(priority, 100),
+            "is_enabled": _as_bool(is_enabled, 1),
+            "guard_key": guard_key.strip() or None,
+            "action_key": action_key.strip() or None,
+            "match_any_state": _as_bool(match_any_state, 0),
+            "notes": notes.strip() or None,
+        }
+    )
+    return nerve_transitions_table(request)
+
+
+@app.post("/nerve/transitions/{transition_id}", response_class=HTMLResponse)
+def update_nerve_transition(
+    request: Request,
+    transition_id: int,
+    state_id: str = Form(...),
+    signal_id: str = Form(...),
+    next_state_id: str = Form(...),
+    priority: str = Form("100"),
+    is_enabled: str | None = Form(None),
+    guard_key: str = Form(""),
+    action_key: str = Form(""),
+    match_any_state: str | None = Form(None),
+    notes: str = Form(""),
+):
+    update_transition(
+        transition_id,
+        {
+            "state_id": _as_int(state_id),
+            "signal_id": _as_int(signal_id),
+            "next_state_id": _as_int(next_state_id),
+            "priority": _as_int(priority, 100),
+            "is_enabled": _as_bool(is_enabled, 1),
+            "guard_key": guard_key.strip() or None,
+            "action_key": action_key.strip() or None,
+            "match_any_state": _as_bool(match_any_state, 0),
+            "notes": notes.strip() or None,
+        },
+    )
+    return nerve_transitions_table(request)
+
+
+@app.post("/nerve/transitions/{transition_id}/delete", response_class=HTMLResponse)
+def delete_nerve_transition(request: Request, transition_id: int):
+    delete_transition(transition_id)
+    return nerve_transitions_table(request)
+
+
+@app.get("/nerve/queue", response_class=HTMLResponse)
+def nerve_queue(request: Request):
+    return templates.TemplateResponse(
+        "nerve_queue.html",
+        {
+            **_base_context(request, "nerve-queue"),
+        },
+    )
+
+
+@app.get("/nerve/queue/table", response_class=HTMLResponse)
+def nerve_queue_table(request: Request):
+    return templates.TemplateResponse(
+        "partials/nerve_queue_table.html",
+        {
+            "request": request,
+            "queue": list_signal_queue(),
+        },
+    )
