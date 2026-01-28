@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from rex.agent.runtime import get_runtime
+from rex.agent.intent_pipeline import IntentPipeline, build_default_pipeline
 from rex.nervous_system.ddfsm import CurrentState, DDFSM
 from rex.senses.bus import Bus
 
@@ -29,6 +30,7 @@ class Heart:
         ddfsm: DDFSM,
         state: CurrentState | None = None,
         ctx: object | None = None,
+        pipeline: IntentPipeline | None = None,
     ) -> None:
         self.config = config or HeartConfig()
         self.bus = bus
@@ -38,6 +40,7 @@ class Heart:
         self.signal = RUNNING
         self._runtime = get_runtime()
         self._runtime.update_state(self.state.id, self.state.key, self.state.name)
+        self.pipeline = pipeline or build_default_pipeline()
 
     def run(self) -> None:
         """Run the vital loop until a shutdown is requested or received.
@@ -56,6 +59,15 @@ class Heart:
                 break
             outcome = self.ddfsm.handle(self.state, signal, self.ctx)
             if outcome:
+                self.pipeline.handle(
+                    outcome.action_key,
+                    {
+                        "state": self.state,
+                        "signal": signal,
+                        "outcome": outcome,
+                        "ctx": self.ctx,
+                    },
+                )
                 next_id = getattr(outcome, "next_state_id", None) or getattr(outcome, "id", None) or self.state.id
                 next_key = getattr(outcome, "next_state_key", None) or getattr(outcome, "key", None) or self.state.key
                 next_name = getattr(outcome, "next_state_name", None) or getattr(outcome, "name", None) or self.state.name
