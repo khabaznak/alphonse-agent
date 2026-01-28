@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
+from rex.agent.runtime import get_runtime
 from rex.nervous_system.ddfsm import CurrentState, DDFSM
 from rex.senses.bus import Bus
 
@@ -35,6 +36,8 @@ class Heart:
         self.state = state or CurrentState(id=self.config.initial_state_id)
         self.ctx = ctx
         self.signal = RUNNING
+        self._runtime = get_runtime()
+        self._runtime.update_state(self.state.id, self.state.key, self.state.name)
 
     def run(self) -> None:
         """Run the vital loop until a shutdown is requested or received.
@@ -48,6 +51,7 @@ class Heart:
                 # Heartbeat / housekeeping tick when no signals arrive.
                 self.tick()
                 continue
+            self._runtime.update_signal(signal.type, signal.source)
             if signal.type == SHUTDOWN:
                 break
             outcome = self.ddfsm.handle(self.state, signal, self.ctx)
@@ -61,11 +65,13 @@ class Heart:
                     key=next_key,
                     name=next_name,
                 )
+                self._runtime.update_state(self.state.id, self.state.key, self.state.name)
 
     def tick(self) -> None:
         """One iteration of the heart loop."""
         now = datetime.now(tz=timezone.utc).isoformat()
         print(f"{now} tick tack!")
+        self._runtime.update_tick()
 
     def stop(self) -> None:
         self.signal = SHUTDOWN

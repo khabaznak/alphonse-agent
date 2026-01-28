@@ -40,6 +40,7 @@ from rex.cognition.notification_reasoning import (
 from rex.cognition.provider_selector import get_provider_info
 from rex.cognition.status_reasoning import reason_about_status
 from rex.config import load_rex_config
+from rex.extremities.interfaces.http.agent_status import router as rex_status_router
 
 load_dotenv()
 init_db()
@@ -62,6 +63,7 @@ app.mount(
 
 app.include_router(api_router)
 app.include_router(trigger_router)
+app.include_router(rex_status_router)
 
 
 def _top_nav_links(active: str) -> list[dict[str, str | bool]]:
