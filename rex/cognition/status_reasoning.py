@@ -1,4 +1,6 @@
-from core.context.awareness import get_awareness_snapshot
+import json
+import os
+from urllib import request
 from rex.cognition.provider_selector import build_provider_client
 from rex.cognition.reasoner import build_system_prompt
 from rex.config import load_rex_config
@@ -13,8 +15,19 @@ STATUS_SYSTEM_PROMPT = (
 )
 
 
+def _fetch_runtime_status() -> dict:
+    base_url = os.getenv("ATRIUM_HTTP_BASE_URL", "http://localhost:8000")
+    url = f"{base_url.rstrip('/')}/agent/status"
+    try:
+        with request.urlopen(url, timeout=2) as response:
+            payload = response.read().decode("utf-8")
+            return json.loads(payload)
+    except Exception:
+        return {"runtime": None, "error": "status_unavailable"}
+
+
 def reason_about_status():
-    snapshot = get_awareness_snapshot()
+    snapshot = _fetch_runtime_status()
     config = load_rex_config()
     client = build_provider_client(config)
 

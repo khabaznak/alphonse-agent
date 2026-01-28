@@ -1,10 +1,31 @@
 <p class="status-message">{{ message }}</p>
+{% set runtime = snapshot.get("runtime", {}) %}
 <dl>
-  {% for group_name, group_data in snapshot.items() %}
-    <div class="soft"><strong>{{ group_name|capitalize }}</strong></div>
-    {% for key, value in group_data.items() %}
-      <dt>{{ key.replace("_", " ") }}</dt>
-      <dd>{{ value }}</dd>
-    {% endfor %}
-  {% endfor %}
+  <div class="soft"><strong>Runtime</strong></div>
+  <dt>uptime seconds</dt>
+  <dd>{{ runtime.get("uptime_seconds") or "—" }}</dd>
+
+  <dt>tick count</dt>
+  <dd>{{ runtime.get("tick_count") or 0 }}</dd>
+
+  <dt>last tick at</dt>
+  <dd>{{ runtime.get("last_tick_at") or "—" }}</dd>
+
+  {% set current_state = runtime.get("current_state", {}) %}
+  <div class="soft"><strong>Current state</strong></div>
+  <dt>id</dt>
+  <dd>{{ current_state.get("id") or "—" }}</dd>
+  <dt>key</dt>
+  <dd>{{ current_state.get("key") or "—" }}</dd>
+  <dt>name</dt>
+  <dd>{{ current_state.get("name") or "—" }}</dd>
+
+  {% set last_signal = runtime.get("last_signal", {}) %}
+  <div class="soft"><strong>Last signal</strong></div>
+  <dt>type</dt>
+  <dd>{{ last_signal.get("type") or "—" }}</dd>
+  <dt>source</dt>
+  <dd>{{ last_signal.get("source") or "—" }}</dd>
+  <dt>ts</dt>
+  <dd>{{ last_signal.get("ts") or "—" }}</dd>
 </dl>

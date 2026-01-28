@@ -38,8 +38,8 @@ from rex.cognition.notification_reasoning import (
     summarize_recent_notifications,
 )
 from rex.cognition.provider_selector import get_provider_info
-from rex.cognition.status_reasoning import reason_about_status
 from rex.config import load_rex_config
+from rex.cognition.status_reasoning import reason_about_status
 from rex.extremities.interfaces.http.agent_status import router as rex_status_router
 
 load_dotenv()
@@ -219,7 +219,7 @@ def get_status_fragment(request: Request):
         {
             "request": request,
             "message": message.strip(),
-            "snapshot": snapshot,
+            "snapshot": {"runtime": snapshot},
         },
     )
 
@@ -227,11 +227,7 @@ def get_status_fragment(request: Request):
 @app.get("/status")
 def get_status():
     message, snapshot = reason_about_status()
-
-    return {
-        "message": message,
-        "awareness": snapshot
-    }
+    return {"message": message, "runtime": snapshot}
 
 
 @app.get("/notifications", response_class=HTMLResponse)
