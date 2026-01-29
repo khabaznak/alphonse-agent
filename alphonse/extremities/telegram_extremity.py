@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 import time
@@ -12,6 +11,9 @@ from typing import Any
 from alphonse.agent.runtime import get_runtime
 from alphonse.cognition.providers.ollama import OllamaClient
 from alphonse.extremities.interfaces.integrations.telegram.telegram_adapter import TelegramAdapter
+from alphonse.interpretation.interpreter import MessageInterpreter
+from alphonse.interpretation.models import MessageEvent, RoutingDecision
+from alphonse.interpretation.registry import build_default_registry
 from alphonse.senses.bus import Signal
 
 logger = logging.getLogger(__name__)
@@ -32,15 +34,6 @@ class IncomingMessage:
     timestamp: float
     channel: str = "telegram"
     message_id: int | None = None
-
-
-@dataclass(frozen=True)
-class SkillResult:
-    skill: str
-    args: dict[str, Any]
-    confidence: float
-    needs_clarification: bool
-    clarifying_question: str | None
 
 
 def build_telegram_extremity_from_env() -> "TelegramExtremity | None":
@@ -70,6 +63,9 @@ class TelegramExtremity:
     def __init__(self, settings: TelegramSettings) -> None:
         self._settings = settings
         self._running = False
+        registry = build_default_registry()
+        self._interpreter = MessageInterpreter(registry, _build_ollama_client())
+        self._registry = registry
         adapter_config: dict[str, Any] = {
             "bot_token": settings.bot_token,
             "poll_interval_sec": settings.poll_interval_sec,
@@ -122,86 +118,39 @@ class TelegramExtremity:
             logger.exception("Telegram message handling failed: %s", exc)
 
     def _handle_message(self, message: IncomingMessage) -> None:
-        result = self._route_message(message)
-        response_text = self._format_result(result, message)
+        decision = self._interpret_message(message)
+        response_text = self._format_decision(decision, message)
         if not response_text:
             return
         self._send_message(message.chat_id, response_text)
 
-    def _route_message(self, message: IncomingMessage) -> SkillResult:
-        text_lower = message.text.lower()
-        if "status" in text_lower:
-            return SkillResult(
-                skill="system.status",
-                args={},
-                confidence=1.0,
-                needs_clarification=False,
-                clarifying_question=None,
-            )
-        if "joke" in text_lower:
-            return SkillResult(
-                skill="system.joke",
-                args={},
-                confidence=1.0,
-                needs_clarification=False,
-                clarifying_question=None,
-            )
-
-        interpretation = self._interpret_message(message.text)
-        if interpretation is None:
-            return SkillResult(
-                skill="conversation.echo",
-                args={},
-                confidence=0.0,
-                needs_clarification=False,
-                clarifying_question=None,
-            )
-
-        return SkillResult(
-            skill=str(interpretation.get("skill") or "conversation.echo"),
-            args=dict(interpretation.get("args") or {}),
-            confidence=float(interpretation.get("confidence") or 0.0),
-            needs_clarification=bool(interpretation.get("needs_clarification", False)),
-            clarifying_question=interpretation.get("clarifying_question"),
+    def _interpret_message(self, message: IncomingMessage) -> RoutingDecision:
+        event = MessageEvent(
+            text=message.text,
+            user_id=message.user_id,
+            channel=message.channel,
+            timestamp=message.timestamp,
+            metadata={
+                "chat_id": message.chat_id,
+                "message_id": message.message_id,
+            },
         )
+        return self._interpreter.interpret(event)
 
-    def _format_result(self, result: SkillResult, message: IncomingMessage) -> str:
-        if result.needs_clarification and result.clarifying_question:
-            return result.clarifying_question
+    def _format_decision(self, decision: RoutingDecision, message: IncomingMessage) -> str:
+        if decision.needs_clarification:
+            return decision.clarifying_question or "Could you clarify what you need?"
 
-        if result.skill == "system.status":
+        if decision.skill == "system.status":
             return self._llm_status()
-        if result.skill == "system.joke":
+        if decision.skill == "system.joke":
             return self._llm_joke()
-        if result.skill == "conversation.echo":
+        if decision.skill == "system.help":
+            return self._format_help()
+        if decision.skill == "conversation.echo":
             return f"Echo: {message.text}"
 
         return f"Echo: {message.text}"
-
-    def _interpret_message(self, text: str) -> dict[str, Any] | None:
-        client = _build_ollama_client()
-        system_prompt = (
-            "You are Alphonse, a calm and restrained domestic presence. "
-            "Classify the message into a skill and return JSON only. "
-            "Do not include code fences or extra text.\n\n"
-            "Schema:\n"
-            '{"skill": "system.status", "args": {}, "confidence": 0.82, '
-            '"needs_clarification": false, "clarifying_question": null}\n\n'
-            "Skills:\n"
-            "- system.status: household status request\n"
-            "- system.joke: user wants a gentle joke\n"
-            "- conversation.echo: fallback for simple acknowledgement\n"
-        )
-        user_prompt = f"Message: {text}" 
-        try:
-            content = client.complete(system_prompt=system_prompt, user_prompt=user_prompt)
-            parsed = _parse_json(str(content))
-            if not parsed:
-                logger.warning("Telegram LLM returned invalid JSON")
-            return parsed
-        except Exception as exc:
-            logger.warning("Telegram LLM interpretation failed: %s", exc)
-            return None
 
     def _llm_status(self) -> str:
         runtime = get_runtime().snapshot()
@@ -256,6 +205,19 @@ class TelegramExtremity:
 
         return "Here is a gentle joke: Why did the scarecrow get promoted? Because he was outstanding in his field."
 
+    def _format_help(self) -> str:
+        lines = ["Available commands:"]
+        for skill in sorted(self._registry.list_skills(), key=lambda item: item.key):
+            if skill.key == "conversation.echo":
+                continue
+            aliases = [alias for alias in skill.aliases if alias and not alias.startswith("/")]
+            alias_text = ", ".join(sorted(set(aliases)))
+            if alias_text:
+                lines.append(f"- {skill.key}: {alias_text}")
+            else:
+                lines.append(f"- {skill.key}")
+        return "\n".join(lines)
+
     def _send_message(self, chat_id: int, text: str) -> None:
         self._adapter.handle_action(
             {
@@ -278,21 +240,6 @@ def _build_ollama_client() -> OllamaClient:
         model=model,
         timeout=timeout_seconds,
     )
-
-
-def _parse_json(text: str) -> dict[str, Any] | None:
-    candidate = text.strip()
-    if candidate.startswith("```"):
-        candidate = candidate.strip("`")
-        if candidate.startswith("json"):
-            candidate = candidate[4:].strip()
-    try:
-        parsed = json.loads(candidate)
-    except json.JSONDecodeError:
-        return None
-    if not isinstance(parsed, dict):
-        return None
-    return parsed
 
 
 def _parse_allowed_chat_ids(primary: str | None, fallback: str | None) -> set[int] | None:
