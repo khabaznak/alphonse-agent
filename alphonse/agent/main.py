@@ -13,6 +13,7 @@ from alphonse.senses.bus import Bus
 from alphonse.senses.manager import SenseManager
 from alphonse.senses.registry import register_senses, register_signals
 from alphonse.extremities.telegram_extremity import build_telegram_extremity_from_env
+from alphonse.infrastructure.api_server import ApiServer
 
 
 def load_env() -> None:
@@ -61,6 +62,10 @@ def main() -> None:
     sense_manager = SenseManager(db_path=str(db_path), bus=bus)
     sense_manager.start()
 
+    api_server = _build_api_server()
+    if api_server:
+        api_server.start()
+
     telegram_extremity = build_telegram_extremity_from_env()
     if telegram_extremity:
         telegram_extremity.start()
@@ -71,7 +76,27 @@ def main() -> None:
     finally:
         if telegram_extremity:
             telegram_extremity.stop()
+        if api_server:
+            api_server.stop()
         sense_manager.stop()
+
+
+def _build_api_server() -> ApiServer | None:
+    enabled = os.getenv("ALPHONSE_ENABLE_API", "true").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    if not enabled:
+        return None
+    host = os.getenv("ALPHONSE_API_HOST", "0.0.0.0")
+    port_raw = os.getenv("ALPHONSE_API_PORT", "8001")
+    try:
+        port = int(port_raw)
+    except ValueError:
+        port = 8001
+    return ApiServer(host=host, port=port)
 
 
 if __name__ == "__main__":

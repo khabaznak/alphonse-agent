@@ -1,6 +1,9 @@
 from datetime import datetime, timedelta, timezone
+import json
 import os
 from pathlib import Path
+import time
+from urllib import request
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, Form, Request
@@ -57,8 +60,6 @@ from alphonse.cognition.notification_reasoning import (
 )
 from alphonse.cognition.provider_selector import get_provider_info
 from alphonse.config import load_alphonse_config
-from alphonse.cognition.status_reasoning import reason_about_status
-from alphonse.extremities.interfaces.http.agent_status import router as alphonse_status_router
 
 load_dotenv()
 init_db()
@@ -81,7 +82,6 @@ app.mount(
 
 app.include_router(api_router)
 app.include_router(trigger_router)
-app.include_router(alphonse_status_router)
 
 
 def _top_nav_links(active: str) -> list[dict[str, str | bool]]:
@@ -143,6 +143,40 @@ def _side_nav_links(page: str) -> list[dict[str, str | bool]]:
 def _model_status() -> str:
     info = get_provider_info(load_alphonse_config())
     return f"{info['mode']} · {info['provider']} / {info['model']}"
+
+
+def _alphonse_api_base() -> str:
+    base = os.getenv("ALPHONSE_API_BASE_URL", "http://localhost:8001")
+    return base.rstrip("/")
+
+
+def _fetch_alphonse_status() -> dict[str, object]:
+    url = f"{_alphonse_api_base()}/agent/status"
+    try:
+        with request.urlopen(url, timeout=3) as response:
+            payload = response.read().decode("utf-8")
+            return json.loads(payload)
+    except Exception:
+        return {"runtime": None, "error": "status_unavailable"}
+
+
+def _fetch_alphonse_message(text: str) -> dict[str, object]:
+    url = f"{_alphonse_api_base()}/agent/message"
+    body = json.dumps(
+        {
+            "text": text,
+            "channel": "webui",
+            "timestamp": time.time(),
+        }
+    ).encode("utf-8")
+    req = request.Request(url, data=body, method="POST")
+    req.add_header("Content-Type", "application/json")
+    try:
+        with request.urlopen(req, timeout=5) as response:
+            payload = response.read().decode("utf-8")
+            return json.loads(payload)
+    except Exception:
+        return {"response": "Alphonse is unavailable.", "decision": None}
 
 
 def _base_context(request: Request, page: str) -> dict:
@@ -255,7 +289,9 @@ def index(request: Request):
 
 @app.get("/status/fragment", response_class=HTMLResponse)
 def get_status_fragment(request: Request):
-    message, snapshot = reason_about_status()
+    result = _fetch_alphonse_message("status")
+    snapshot = _fetch_alphonse_status()
+    message = str(result.get("response") or "Alphonse is unavailable.")
     return templates.TemplateResponse(
         "partials/status.html",
         {
@@ -268,8 +304,9 @@ def get_status_fragment(request: Request):
 
 @app.get("/status")
 def get_status():
-    message, snapshot = reason_about_status()
-    return {"message": message, "runtime": snapshot}
+    result = _fetch_alphonse_message("status")
+    snapshot = _fetch_alphonse_status()
+    return {"message": result.get("response"), "runtime": snapshot}
 
 
 @app.get("/notifications", response_class=HTMLResponse)
