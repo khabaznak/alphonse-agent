@@ -15,7 +15,10 @@ Set env vars:
 - `TELEGRAM_BOT_TOKEN`
 - `TELEGRAM_ALLOWED_CHAT_ID` (optional)
 
-Run:
-- `python -m alphonse.run_telegram_echo_heart`
+Run with the main entrypoint:
+- `ALPHONSE_ENABLE_TELEGRAM=true python -m alphonse.agent.main`
+
+Legacy test harness:
+- `ALPHONSE_ENABLE_TELEGRAM=true python scripts/run_telegram_echo_heart.py`
 
 Send a message to the bot and it will echo back.

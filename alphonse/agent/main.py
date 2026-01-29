@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import logging
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -11,6 +12,7 @@ from alphonse.nervous_system.ddfsm import DDFSM, DDFSMConfig
 from alphonse.senses.bus import Bus
 from alphonse.senses.manager import SenseManager
 from alphonse.senses.registry import register_senses, register_signals
+from alphonse.extremities.telegram_extremity import build_telegram_extremity_from_env
 
 
 def load_env() -> None:
@@ -36,6 +38,7 @@ def load_heart(config: HeartConfig, bus: Bus, ddfsm: DDFSM) -> Heart:
 
 def main() -> None:
     load_env()
+    logging.basicConfig(level=logging.INFO)
 
     # Resolve once; used across Alphonse components.
     db_path = resolve_nervous_system_db_path()
@@ -58,10 +61,16 @@ def main() -> None:
     sense_manager = SenseManager(db_path=str(db_path), bus=bus)
     sense_manager.start()
 
+    telegram_extremity = build_telegram_extremity_from_env()
+    if telegram_extremity:
+        telegram_extremity.start()
+
     heart = load_heart(config, bus, ddfsm)
     try:
         heart.run()
     finally:
+        if telegram_extremity:
+            telegram_extremity.stop()
         sense_manager.stop()
 
 
