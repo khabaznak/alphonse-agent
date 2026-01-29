@@ -1,5 +1,5 @@
 ## Project scope
-- Atrium is a FastAPI service that exposes Rex status over HTTP and a minimal HTMX UI.
+- Atrium is a FastAPI service that exposes Alphonse status over HTTP and a minimal HTMX UI.
 
 ## Local setup
 - Run the server with `uvicorn interfaces.http.main:app --reload`.
@@ -12,4 +12,4 @@
 ## Repo layout
 - `interfaces/http/` holds the web entrypoints.
 - `core/context/` provides time + system context snapshots.
-- `rex/` contains cognition, voice, and persona assets.
+- `alphonse/` contains cognition, voice, and persona assets.

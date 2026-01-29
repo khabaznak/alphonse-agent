@@ -5,9 +5,9 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.append(str(PROJECT_ROOT))
 
-from rex.cognition.providers.ollama import OllamaClient
-from rex.cognition.reasoner import REFERENCE_FILES, SUMMARY_PATH
-from rex.config import load_rex_config
+from alphonse.cognition.providers.ollama import OllamaClient
+from alphonse.cognition.reasoner import REFERENCE_FILES, SUMMARY_PATH
+from alphonse.config import load_alphonse_config
 
 
 SYSTEM_PROMPT = (
@@ -18,7 +18,7 @@ SYSTEM_PROMPT = (
 
 
 def main() -> None:
-    config = load_rex_config()
+    config = load_alphonse_config()
     provider_settings = (
         config.get("providers", {})
         .get("test", {})

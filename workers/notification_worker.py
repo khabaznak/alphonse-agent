@@ -33,13 +33,13 @@ from core.repositories.family_events import (
 )
 from core.repositories.push_devices import list_active_push_devices
 from core.settings_store import get_timezone
-from rex.cognition.notification_reasoning import reason_about_execution_target
-from rex.config import load_rex_config
+from alphonse.cognition.notification_reasoning import reason_about_execution_target
+from alphonse.config import load_alphonse_config
 
 
 def main() -> None:
     load_dotenv()
-    config = load_rex_config()
+    config = load_alphonse_config()
     overdue_minutes = int(config.get("notifications", {}).get("overdue_minutes", 30))
     executing_timeout = int(
         config.get("notifications", {}).get("executing_timeout_minutes", 5)
@@ -106,7 +106,7 @@ def process_due_events(now: datetime, overdue_minutes: int) -> bool:
 
         logger.info("Executing event %s (%s)", event_id, event.get("title"))
 
-        title = "Rex"
+        title = "Alphonse"
         tz_name = get_timezone()
         description = reason_about_execution_target(event, None, tz_name)
         target_group = event.get("target_group") or "all"

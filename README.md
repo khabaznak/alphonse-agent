@@ -1,24 +1,24 @@
 # Atrium Server
 
-Atrium is a self-hosted domestic infrastructure designed to host **Rex**,
+Atrium is a self-hosted domestic infrastructure designed to host **Alphonse**,
 a resident digital butler that is proactive, educational, and protective.
 
 Atrium is not a smart-home gadget, nor a generic assistant.
-It is the persistent environment in which Rex exists, observes, learns, and serves.
+It is the persistent environment in which Alphonse exists, observes, learns, and serves.
 
 ---
 
-## What is Rex?
+## What is Alphonse?
 
-Rex is the resident butler of Atrium.
+Alphonse is the resident butler of Atrium.
 
-Rex:
+Alphonse:
 - observes household state without intruding,
 - provides context before advice,
 - educates through opportunity,
 - protects by detecting anomalies, not by enforcing behavior.
 
-Rex is governed by an explicit constitution that defines his role, limits, tone,
+Alphonse is governed by an explicit constitution that defines his role, limits, tone,
 and ethical orientation.
 
 ---
@@ -50,16 +50,16 @@ Atrium is not:
 
 ## Repository Structure
 
-This repository hosts the **Atrium Server**, the core environment where Rex lives.
+This repository hosts the **Atrium Server**, the core environment where Alphonse lives.
 
 Key files:
 
-- `CONSTITUTION.md` — Rex’s founding charter and behavioral contract
+- `CONSTITUTION.md` — Alphonse’s founding charter and behavioral contract
 - `README.md` — This document
 - `docs/` — Design notes, vision, and long-term ideas
 
-Configuration lives in `config/rex.yaml`. The `mode` controls which inference
-provider Rex uses:
+Configuration lives in `config/alphonse.yaml`. The `mode` controls which inference
+provider Alphonse uses:
 
 - `test` uses Ollama locally.
 - `production` uses an online provider (OpenAI by default) and expects an
@@ -92,7 +92,7 @@ uvicorn interfaces.http.main:app --host 0.0.0.0 --port 8000
 
 ## Configuration
 
-`config/rex.yaml` controls runtime behavior. The key switch is `mode`:
+`config/alphonse.yaml` controls runtime behavior. The key switch is `mode`:
 
 ```yaml
 mode: test

@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any
 
 
-DEFAULT_NERVE_DB = "rex/nervous_system/db/nerve-db"
+DEFAULT_NERVE_DB = "alphonse/nervous_system/db/nerve-db"
 
 
 def list_signals(limit: int = 200) -> list[dict[str, Any]]:

@@ -51,14 +51,14 @@ from core.nerve_store import (
     update_transition,
 )
 from interfaces.http.routes.api import router as api_router, trigger_router
-from rex.cognition.notification_reasoning import (
+from alphonse.cognition.notification_reasoning import (
     reason_about_execution_target,
     summarize_recent_notifications,
 )
-from rex.cognition.provider_selector import get_provider_info
-from rex.config import load_rex_config
-from rex.cognition.status_reasoning import reason_about_status
-from rex.extremities.interfaces.http.agent_status import router as rex_status_router
+from alphonse.cognition.provider_selector import get_provider_info
+from alphonse.config import load_alphonse_config
+from alphonse.cognition.status_reasoning import reason_about_status
+from alphonse.extremities.interfaces.http.agent_status import router as alphonse_status_router
 
 load_dotenv()
 init_db()
@@ -81,12 +81,12 @@ app.mount(
 
 app.include_router(api_router)
 app.include_router(trigger_router)
-app.include_router(rex_status_router)
+app.include_router(alphonse_status_router)
 
 
 def _top_nav_links(active: str) -> list[dict[str, str | bool]]:
     return [
-        {"label": "Rex", "href": "/", "active": active == "rex"},
+        {"label": "Alphonse", "href": "/", "active": active == "alphonse"},
         {"label": "Notifications", "href": "/notifications", "active": active == "notifications"},
         {"label": "Family", "href": "/family", "active": active == "family"},
         {"label": "Push Test", "href": "/push-test", "active": active == "push-test"},
@@ -141,7 +141,7 @@ def _side_nav_links(page: str) -> list[dict[str, str | bool]]:
 
 
 def _model_status() -> str:
-    info = get_provider_info(load_rex_config())
+    info = get_provider_info(load_alphonse_config())
     return f"{info['mode']} · {info['provider']} / {info['model']}"
 
 
@@ -248,8 +248,8 @@ def _select_target_notification(
 @app.get("/", response_class=HTMLResponse)
 def index(request: Request):
     return templates.TemplateResponse(
-        "rex.html",
-        _base_context(request, "rex"),
+        "alphonse.html",
+        _base_context(request, "alphonse"),
     )
 
 

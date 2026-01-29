@@ -177,7 +177,7 @@ def _seed_timezone(conn: sqlite3.Connection) -> None:
         """,
         (
             "timezone",
-            "Local timezone for Rex interpretations",
+            "Local timezone for Alphonse interpretations",
             schema,
             config,
             now,

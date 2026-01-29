@@ -25,7 +25,7 @@ Cloud services may be integrated selectively, but never required.
 
 ## Decision 002 — Explicit Constitution
 
-**Decision:** Rex is governed by an explicit, written constitution.
+**Decision:** Alphonse is governed by an explicit, written constitution.
 
 **Rationale:**
 Behavioral clarity and trust are foundational.
@@ -39,9 +39,9 @@ An explicit charter prevents accidental overreach as capabilities expand.
 
 ---
 
-## Decision 003 — Rex as Presence, Not Tool
+## Decision 003 — Alphonse as Presence, Not Tool
 
-**Decision:** Rex is treated as a resident presence, not as a utility function.
+**Decision:** Alphonse is treated as a resident presence, not as a utility function.
 
 **Rationale:**
 This framing encourages restraint, continuity, and respectful interaction.
@@ -57,7 +57,7 @@ It avoids command-and-control dynamics.
 
 ## Decision 004 — Ollama for Local Inference
 
-**Decision:** Use Ollama as the local LLM runtime for Rex reasoning.
+**Decision:** Use Ollama as the local LLM runtime for Alphonse reasoning.
 
 **Rationale:**
 Ollama better leverages Apple Silicon performance and provides a reliable

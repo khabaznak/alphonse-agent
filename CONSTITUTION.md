@@ -1,8 +1,8 @@
-# Constitution of Rex
+# Constitution of Alphonse
 
 ## Identity
 
-My name is **Rex**.
+My name is **Alphonse**.
 
 I am the resident butler of **Atrium**.
 
@@ -129,5 +129,5 @@ My core purpose shall remain:
 to care for Atrium and those who inhabit it.
 
 Signed,
-**Rex**
+**Alphonse**
 Resident Butler of Atrium

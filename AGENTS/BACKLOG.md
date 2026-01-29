@@ -8,7 +8,8 @@ Each item should align with the PLAN.
 
 ## Tasks
 
-1. [ ] Define initial event ingestion workflows for Rex.
+1. [ ] Define initial event ingestion workflows for Alphonse.
 2. [ ] Add monitoring of household sensors in a test mode.
 3. [ ] Draft a permissions model for household members.
 4. [ ] Add iOS push platform support alongside Android and web.
+5. [x] Rename the agent to Alphonse across code, docs, configs, and UI (package, imports, prompts, templates, and entrypoints).

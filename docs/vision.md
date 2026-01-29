@@ -24,22 +24,22 @@ that understands the rhythm of the household.
 
 ---
 
-## Rex as a Resident Presence
+## Alphonse as a Resident Presence
 
-Rex is not a tool that runs inside Atrium.
-Rex is the resident presence that inhabits it.
+Alphonse is not a tool that runs inside Atrium.
+Alphonse is the resident presence that inhabits it.
 
 Atrium provides:
 - continuity,
 - memory,
 - and interfaces.
 
-Rex provides:
+Alphonse provides:
 - judgment,
 - tone,
 - and interaction.
 
-This separation allows Rex to evolve without destabilizing the home.
+This separation allows Alphonse to evolve without destabilizing the home.
 
 ---
 
@@ -92,7 +92,7 @@ Atrium is interface-agnostic.
 Text, voice, mobile apps, and physical controls are considered extensions,
 not core dependencies.
 
-The household should never depend on a single interface to interact with Rex.
+The household should never depend on a single interface to interact with Alphonse.
 
 ---
 

@@ -47,8 +47,8 @@ dist/
 # Env files
 .env
 .env.*
-!rex/agent/.env.example
-rex/nervous_system/db/
+!alphonse/agent/.env.example
+alphonse/nervous_system/db/
 
 # Local sqlite data
 data/*.db
