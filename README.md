@@ -57,6 +57,8 @@ Key files:
 - `CONSTITUTION.md` — Alphonse’s founding charter and behavioral contract
 - `README.md` — This document
 - `docs/` — Design notes, vision, and long-term ideas
+- `docs/architecture.md` — Alphonse architecture and boundaries
+- `docs/refactor_roadmap.md` — Cleanup and separation roadmap
 
 Configuration lives in `config/alphonse.yaml`. The `mode` controls which inference
 provider Alphonse uses:
