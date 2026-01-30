@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import logging
 
 from alphonse.agent.runtime import get_runtime
 from alphonse.agent.intent_pipeline import IntentPipeline, build_default_pipeline
@@ -13,12 +14,15 @@ from alphonse.senses.bus import Bus
 SHUTDOWN = "SHUTDOWN"
 RUNNING = "RUNNING"
 
+logger = logging.getLogger(__name__)
+
 
 @dataclass
 class HeartConfig:
     tick_seconds: float = 0.1
     nervous_system_db_path: str | None = None
     initial_state_id: int = 1
+    disable_ticks: bool = False
 
 
 class Heart:
@@ -81,8 +85,10 @@ class Heart:
 
     def tick(self) -> None:
         """One iteration of the heart loop."""
+        if self.config.disable_ticks:
+            return
         now = datetime.now(tz=timezone.utc).isoformat()
-        print(f"{now} tick tack!")
+        logger.debug("%s tick tack!", now)
         self._runtime.update_tick()
 
     def stop(self) -> None:

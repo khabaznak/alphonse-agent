@@ -52,6 +52,9 @@ alphonse/nervous_system/db/
 
 # Local sqlite data
 data/*.db
+alphonse/nervous_system/db/
+nervous_system/
+**/nerve-db*
 
 # WhatsApp CLI store
 integrations/whatsapp/store/

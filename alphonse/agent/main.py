@@ -40,13 +40,23 @@ def main() -> None:
     # Resolve once; used across Alphonse components.
     db_path = resolve_nervous_system_db_path()
     tick_raw = os.getenv("HEART_TICK_SECONDS", "5")
+    disable_ticks = os.getenv("HEART_DISABLE_TICK", "false").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
     try:
         tick_seconds = float(tick_raw)
     except ValueError:
         tick_seconds = 5.0
 
     # Config / nervous system
-    config = HeartConfig(nervous_system_db_path=str(db_path), tick_seconds=tick_seconds)
+    config = HeartConfig(
+        nervous_system_db_path=str(db_path),
+        tick_seconds=tick_seconds,
+        disable_ticks=disable_ticks,
+    )
     ddfsm = DDFSM(DDFSMConfig(db_path=str(db_path)))
 
     apply_schema(db_path)
