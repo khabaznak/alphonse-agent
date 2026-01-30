@@ -1,13 +1,24 @@
 from __future__ import annotations
 
+import json
 import logging
 import os
+import sqlite3
+import uuid
 from dataclasses import dataclass
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
+from typing import Any
+
+from dateutil.parser import isoparse, parse as parse_datetime
+from dateutil.rrule import rrulestr
 
 from alphonse.agent.runtime import get_runtime
 from alphonse.cognition.providers.ollama import OllamaClient
 from alphonse.interpretation.models import MessageEvent, RoutingDecision
 from alphonse.interpretation.registry import SkillRegistry
+from alphonse.nervous_system.paths import resolve_nervous_system_db_path
+from core.settings_store import get_timezone
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +39,8 @@ class SkillExecutor:
             return self._joke_response()
         if decision.skill == "system.help":
             return self._format_help()
+        if decision.skill == "schedule.timed_signal":
+            return self._schedule_timed_signal(decision, message)
         if decision.skill == "conversation.echo":
             return f"Echo: {message.text}"
 
@@ -97,6 +110,21 @@ class SkillExecutor:
                 lines.append(f"- {skill.key}")
         return "\n".join(lines)
 
+    def _schedule_timed_signal(self, decision: RoutingDecision, message: MessageEvent) -> str:
+        try:
+            record = _build_timed_signal_record(decision, message)
+        except ValueError as exc:
+            return f"Unable to schedule: {exc}"
+
+        try:
+            _insert_timed_signal(record)
+        except Exception as exc:
+            logger.warning("Failed to insert timed signal: %s", exc)
+            return "Unable to schedule the timed signal right now."
+
+        when_text = record["next_trigger_at"] or record["trigger_at"]
+        return f"Scheduled {record['signal_type']} for {when_text}."
+
 
 def build_ollama_client() -> OllamaClient:
     base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
@@ -116,3 +144,156 @@ def _parse_float(raw: str | None, default: float) -> float:
         return float(raw)
     except ValueError:
         return default
+
+
+def _build_timed_signal_record(decision: RoutingDecision, message: MessageEvent) -> dict[str, Any]:
+    args = decision.args
+    signal_type = _normalize_signal_type(args.get("signal_type"))
+    payload = _normalize_payload(args.get("payload"))
+
+    trigger_at_raw = args.get("trigger_at")
+    if not isinstance(trigger_at_raw, str) or not trigger_at_raw.strip():
+        raise ValueError("trigger_at is required")
+
+    tz_name = _normalize_timezone(args.get("timezone"))
+    trigger_at = _parse_datetime(trigger_at_raw, tz_name)
+    trigger_at_utc = trigger_at.astimezone(timezone.utc)
+
+    rrule_raw = args.get("rrule")
+    rrule_value = str(rrule_raw).strip() if isinstance(rrule_raw, str) and rrule_raw.strip() else None
+    next_trigger_at = None
+    if rrule_value:
+        next_trigger_at = _next_occurrence(rrule_value, trigger_at, tz_name)
+        if next_trigger_at is None:
+            raise ValueError("rrule has no future occurrences")
+
+    return {
+        "id": str(uuid.uuid4()),
+        "trigger_at": trigger_at_utc.isoformat(),
+        "next_trigger_at": next_trigger_at.isoformat() if next_trigger_at else None,
+        "rrule": rrule_value,
+        "timezone": tz_name,
+        "status": "pending",
+        "signal_type": signal_type,
+        "payload": payload,
+        "target": _as_optional_str(args.get("target")) or _as_optional_str(message.metadata.get("target")),
+        "origin": _as_optional_str(args.get("origin")) or message.channel,
+        "correlation_id": _as_optional_str(args.get("correlation_id")),
+    }
+
+
+def _insert_timed_signal(record: dict[str, Any]) -> None:
+    db_path = resolve_nervous_system_db_path()
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO timed_signals
+              (id, trigger_at, next_trigger_at, rrule, timezone, status, signal_type, payload, target, origin, correlation_id)
+            VALUES
+              (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                record["id"],
+                record["trigger_at"],
+                record["next_trigger_at"],
+                record["rrule"],
+                record["timezone"],
+                record["status"],
+                record["signal_type"],
+                json.dumps(record["payload"]),
+                record["target"],
+                record["origin"],
+                record["correlation_id"],
+            ),
+        )
+        conn.commit()
+
+
+def _normalize_signal_type(value: object | None) -> str:
+    allowed = {"reminder", "execute", "routine", "custom"}
+    if not value:
+        return "custom"
+    signal_type = str(value).strip().lower()
+    if signal_type in allowed:
+        return signal_type
+    tokens = _tokenize_signal_type(signal_type)
+    for token in tokens:
+        if token in allowed:
+            return token
+    raise ValueError("signal_type must be reminder, execute, routine, or custom")
+
+
+def _normalize_payload(value: object | None) -> dict[str, Any]:
+    if value is None:
+        return {}
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        raw = value.strip()
+        if not raw:
+            return {}
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            return {"message": raw}
+        if isinstance(parsed, dict):
+            return parsed
+        return {"message": raw}
+    raise ValueError("payload must be an object")
+
+
+def _tokenize_signal_type(value: str) -> list[str]:
+    tokens: list[str] = []
+    current = []
+    for char in value:
+        if char.isalpha():
+            current.append(char)
+        else:
+            if current:
+                tokens.append("".join(current))
+                current = []
+    if current:
+        tokens.append("".join(current))
+    return tokens
+
+
+def _normalize_timezone(value: object | None) -> str:
+    if isinstance(value, str) and value.strip():
+        tz_name = value.strip()
+    else:
+        tz_name = get_timezone()
+    try:
+        ZoneInfo(tz_name)
+    except Exception as exc:
+        raise ValueError(f"invalid timezone: {tz_name}") from exc
+    return tz_name
+
+
+def _parse_datetime(value: str, tz_name: str) -> datetime:
+    tzinfo = ZoneInfo(tz_name)
+    try:
+        parsed = isoparse(value)
+    except ValueError:
+        fallback = datetime.now(tz=tzinfo)
+        parsed = parse_datetime(value, default=fallback, fuzzy=True)
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=tzinfo)
+    return parsed
+
+
+def _next_occurrence(rrule_value: str, start: datetime, tz_name: str) -> datetime | None:
+    tzinfo = ZoneInfo(tz_name)
+    dtstart = start.astimezone(tzinfo)
+    rule = rrulestr(rrule_value, dtstart=dtstart)
+    candidate = rule.after(datetime.now(tz=tzinfo), inc=True)
+    if candidate is None:
+        return None
+    if candidate.tzinfo is None:
+        candidate = candidate.replace(tzinfo=tzinfo)
+    return candidate.astimezone(timezone.utc)
+
+
+def _as_optional_str(value: object | None) -> str | None:
+    if value is None:
+        return None
+    return str(value)

@@ -35,9 +35,12 @@ class MessageInterpreter:
 
         deterministic = self._registry.match_alias(normalized)
         if deterministic:
+            args = self._extract_args(message)
+            if not self._validate_args(deterministic.key, args):
+                return self._clarify(self._config.clarification_prompt)
             return RoutingDecision(
                 skill=deterministic.key,
-                args={},
+                args=args,
                 confidence=1.0,
                 needs_clarification=False,
                 clarifying_question=None,
@@ -84,7 +87,9 @@ class MessageInterpreter:
 
     def _build_system_prompt(self) -> str:
         skills = self._registry.list_skills()
-        skill_lines = "\n".join(f"- {skill.key}: {skill.description}" for skill in skills)
+        skill_lines = "\n".join(
+            _format_skill_line(skill.key, skill.description, skill.arg_schema) for skill in skills
+        )
         return (
             "You are Alphonse, a calm and restrained domestic presence. "
             "Choose exactly one skill from the list and respond with JSON only. "
@@ -103,6 +108,12 @@ class MessageInterpreter:
             return True
         allowed_keys = set(skill.arg_schema.keys())
         return set(args.keys()).issubset(allowed_keys)
+
+    def _extract_args(self, message: MessageEvent) -> dict[str, Any]:
+        args = message.metadata.get("args")
+        if isinstance(args, dict):
+            return args
+        return {}
 
     def _clarify(self, prompt: str) -> RoutingDecision:
         return RoutingDecision(
@@ -128,3 +139,10 @@ def _parse_json(text: str) -> dict[str, Any] | None:
     if not isinstance(parsed, dict):
         return None
     return parsed
+
+
+def _format_skill_line(key: str, description: str, arg_schema: dict[str, Any] | None) -> str:
+    if not arg_schema:
+        return f"- {key}: {description}"
+    args = ", ".join(sorted(arg_schema.keys()))
+    return f"- {key}: {description} (args: {args})"

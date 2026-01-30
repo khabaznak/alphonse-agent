@@ -7,7 +7,7 @@ from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 
-DB_DEFAULT_PATH = "data/atrium.db"
+DB_DEFAULT_PATH = "alphonse/nervous_system/db/nerve-db"
 
 
 def init_db() -> None:
@@ -68,15 +68,15 @@ def get_setting_by_name(name: str) -> dict[str, Any] | None:
 def get_timezone() -> str:
     setting = get_setting_by_name("timezone")
     if not setting:
-        return "UTC"
+        return _local_timezone()
     config = _parse_json(setting.get("config"))
     tz_name = config.get("tz") if isinstance(config, dict) else None
     if not isinstance(tz_name, str):
-        return "UTC"
+        return _local_timezone()
     try:
         ZoneInfo(tz_name)
     except ZoneInfoNotFoundError:
-        return "UTC"
+        return _local_timezone()
     return tz_name
 
 
@@ -136,7 +136,7 @@ def delete_setting(setting_id: int) -> None:
 
 
 def _get_connection() -> sqlite3.Connection:
-    path = Path(os.getenv("ATRIUM_DB_PATH", DB_DEFAULT_PATH))
+    path = Path(os.getenv("NERVE_DB_PATH", DB_DEFAULT_PATH))
     path.parent.mkdir(parents=True, exist_ok=True)
     return sqlite3.connect(path)
 
@@ -162,7 +162,7 @@ def _seed_timezone(conn: sqlite3.Connection) -> None:
     if cursor.fetchone():
         return
     now = _timestamp()
-    config = json.dumps({"tz": "America/Chicago"})
+    config = json.dumps({"tz": "America/Mexico_City"})
     schema = json.dumps(
         {
             "type": "object",
@@ -189,6 +189,13 @@ def _seed_timezone(conn: sqlite3.Connection) -> None:
 
 def _timestamp() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _local_timezone() -> str:
+    tzinfo = datetime.now().astimezone().tzinfo
+    if tzinfo is not None and hasattr(tzinfo, "key"):
+        return str(tzinfo.key)
+    return "UTC"
 
 
 def _parse_json(value: str | None) -> dict[str, Any] | None:

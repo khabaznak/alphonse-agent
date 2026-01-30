@@ -62,6 +62,21 @@ def build_default_registry() -> SkillRegistry:
                 aliases=["help", "commands", "/help"],
             ),
             SkillDefinition(
+                key="schedule.timed_signal",
+                description="Schedule a timed signal with trigger_at or rrule and timezone",
+                aliases=["schedule", "remind me", "reminder", "routine"],
+                arg_schema={
+                    "signal_type": "string",
+                    "payload": "object",
+                    "trigger_at": "string",
+                    "rrule": "string",
+                    "timezone": "string",
+                    "target": "string",
+                    "origin": "string",
+                    "correlation_id": "string",
+                },
+            ),
+            SkillDefinition(
                 key="conversation.echo",
                 description="Echo back a short acknowledgement",
                 aliases=["echo"],

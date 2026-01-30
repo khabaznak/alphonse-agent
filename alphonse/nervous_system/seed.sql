@@ -16,7 +16,8 @@ INSERT OR IGNORE INTO signals (key, name, source, description, is_enabled)
 VALUES
   ('time_tick', 'Time Tick', 'system', 'Periodic tick signal', 1),
   ('intent_received', 'Intent Received', 'intent', 'New intent detected', 1),
-  ('shutdown_requested', 'Shutdown Requested', 'system', 'Shutdown requested', 1);
+  ('shutdown_requested', 'Shutdown Requested', 'system', 'Shutdown requested', 1),
+  ('timed_signal_due', 'Timed Signal Due', 'system', 'Scheduled signal ready', 1);
 
 INSERT OR IGNORE INTO transitions (
   state_id,
@@ -120,3 +121,28 @@ SELECT
 FROM states s1
 JOIN signals sig ON sig.key = 'shutdown_requested'
 JOIN states s2 ON s2.key = 'shutdown';
+
+INSERT OR IGNORE INTO transitions (
+  state_id,
+  signal_id,
+  next_state_id,
+  priority,
+  is_enabled,
+  guard_key,
+  action_key,
+  match_any_state,
+  notes
+)
+SELECT
+  s1.id,
+  sig.id,
+  s2.id,
+  20,
+  1,
+  NULL,
+  'system_reminder',
+  1,
+  'timed signal reminder'
+FROM states s1
+JOIN signals sig ON sig.key = 'timed_signal_due'
+JOIN states s2 ON s2.key = 'observing';

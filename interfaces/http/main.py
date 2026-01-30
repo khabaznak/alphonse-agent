@@ -11,14 +11,6 @@ from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from core.repositories.agentic_notifications import (
-    create_notification,
-    get_notification,
-    list_notifications_since,
-    list_notifications,
-    list_unexecuted_notifications,
-    update_notification,
-)
 from core.repositories.family import (
     create_family_member,
     get_family_member,
@@ -54,10 +46,6 @@ from core.nerve_store import (
     update_transition,
 )
 from interfaces.http.routes.api import router as api_router, trigger_router
-from alphonse.cognition.notification_reasoning import (
-    reason_about_execution_target,
-    summarize_recent_notifications,
-)
 from alphonse.cognition.provider_selector import get_provider_info
 from alphonse.config import load_alphonse_config
 
@@ -87,7 +75,7 @@ app.include_router(trigger_router)
 def _top_nav_links(active: str) -> list[dict[str, str | bool]]:
     return [
         {"label": "Alphonse", "href": "/", "active": active == "alphonse"},
-        {"label": "Notifications", "href": "/notifications", "active": active == "notifications"},
+        {"label": "Timed Signals", "href": "/timed-signals", "active": active == "timed-signals"},
         {"label": "Family", "href": "/family", "active": active == "family"},
         {"label": "Push Test", "href": "/push-test", "active": active == "push-test"},
         {"label": "Settings", "href": "/settings", "active": active == "settings"},
@@ -97,13 +85,10 @@ def _top_nav_links(active: str) -> list[dict[str, str | bool]]:
 
 
 def _side_nav_links(page: str) -> list[dict[str, str | bool]]:
-    if page == "notifications":
+    if page == "timed-signals":
         return [
-            {"label": "Execution Target", "href": "#execution-target"},
-            {"label": "Pending Queue", "href": "#pending-queue"},
-            {"label": "All Notifications", "href": "#all-notifications"},
-            {"label": "Edit Notification", "href": "#edit-notification"},
-            {"label": "Create Notification", "href": "#create-notification"},
+            {"label": "Scheduled", "href": "#timed-signals"},
+            {"label": "Create", "href": "#create-timed-signal"},
         ]
     if page == "family":
         return [
@@ -130,7 +115,7 @@ def _side_nav_links(page: str) -> list[dict[str, str | bool]]:
         ]
     return [
         {"label": "Current State", "href": "#current-state", "active": True},
-        {"label": "Notifications", "href": "/notifications"},
+        {"label": "Timed Signals", "href": "/timed-signals"},
         {"label": "Family", "href": "/family"},
         {"label": "Push Test", "href": "/push-test"},
         {"label": "Settings", "href": "/settings"},
@@ -165,6 +150,37 @@ def _fetch_alphonse_message(text: str) -> dict[str, object]:
     body = json.dumps(
         {
             "text": text,
+            "channel": "webui",
+            "timestamp": time.time(),
+        }
+    ).encode("utf-8")
+    req = request.Request(url, data=body, method="POST")
+    req.add_header("Content-Type", "application/json")
+    try:
+        with request.urlopen(req, timeout=5) as response:
+            payload = response.read().decode("utf-8")
+            return json.loads(payload)
+    except Exception:
+        return {"response": "Alphonse is unavailable.", "decision": None}
+
+
+def _fetch_alphonse_timed_signals() -> list[dict[str, object]]:
+    url = f"{_alphonse_api_base()}/agent/timed-signals"
+    try:
+        with request.urlopen(url, timeout=5) as response:
+            payload = response.read().decode("utf-8")
+            data = json.loads(payload)
+            return data.get("timed_signals", [])
+    except Exception:
+        return []
+
+
+def _post_alphonse_message(text: str, args: dict[str, object] | None = None) -> dict[str, object]:
+    url = f"{_alphonse_api_base()}/agent/message"
+    body = json.dumps(
+        {
+            "text": text,
+            "args": args or {},
             "channel": "webui",
             "timestamp": time.time(),
         }
@@ -309,122 +325,51 @@ def get_status():
     return {"message": result.get("response"), "runtime": snapshot}
 
 
-@app.get("/notifications", response_class=HTMLResponse)
-def notifications(request: Request, edit_id: str | None = None):
-    now = datetime.now().astimezone()
-    unexecuted = list_unexecuted_notifications(limit=200)
-    due_notification, pending_notifications = _select_target_notification(unexecuted, now)
-    all_notifications = list_notifications(limit=200)
-    edit_notification = get_notification(edit_id) if edit_id else None
-    family_members = list_family_members(limit=200)
+@app.get("/notifications")
+def notifications_redirect():
+    return RedirectResponse("/timed-signals", status_code=303)
 
-    owner_lookup = {
-        member.get("id"): f"{member.get('name', 'Unknown')} ({member.get('role', 'member')})"
-        for member in family_members
-    }
 
+@app.get("/timed-signals", response_class=HTMLResponse)
+def timed_signals(request: Request):
+    timed_signals = _fetch_alphonse_timed_signals()
     return templates.TemplateResponse(
-        "notifications.html",
+        "timed_signals.html",
         {
-            **_base_context(request, "notifications"),
-            "due_notification": due_notification,
-            "pending_notifications": pending_notifications,
-            "all_notifications": all_notifications,
-            "edit_notification": edit_notification,
-            "family_members": family_members,
-            "owner_lookup": owner_lookup,
+            **_base_context(request, "timed-signals"),
+            "timed_signals": timed_signals,
             "format_dt_local": _format_datetime_local,
-            "now_iso": now.isoformat(),
         },
     )
 
 
-@app.get("/notifications/interpretation", response_class=HTMLResponse)
-def notifications_interpretation(request: Request):
-    now = datetime.now().astimezone()
-    unexecuted = list_unexecuted_notifications(limit=200)
-    due_notification, _ = _select_target_notification(unexecuted, now)
-    family_members = list_family_members(limit=200)
-
-    owner_lookup = {
-        member.get("id"): f"{member.get('name', 'Unknown')} ({member.get('role', 'member')})"
-        for member in family_members
-    }
-
-    summary_hours = int(os.getenv("NOTIFICATIONS_SUMMARY_HOURS", "24"))
-    recent_cutoff = (now - timedelta(hours=summary_hours)).isoformat()
-    recent_notifications = list_notifications_since(recent_cutoff, limit=200)
-    recent_notifications = [
-        notification
-        for notification in recent_notifications
-        if notification.get("execution_status") != "skipped"
-    ]
-
-    tz_name = get_timezone()
-
-    if due_notification:
-        execution_interpretation = reason_about_execution_target(
-            due_notification,
-            owner_lookup.get(due_notification.get("owner_id")) if due_notification else None,
-            tz_name,
-        )
-    else:
-        execution_interpretation = summarize_recent_notifications(recent_notifications, tz_name)
-
-    return templates.TemplateResponse(
-        "partials/notification_interpretation.html",
-        {
-            "request": request,
-            "execution_interpretation": execution_interpretation,
-            "due_notification": due_notification,
-        },
-    )
-
-
-@app.post("/notifications")
-def create_notifications(
-    owner_id: str = Form(...),
-    title: str = Form(...),
-    description: str = Form(""),
-    event_datetime: str = Form(...),
-    target_group: str = Form("all"),
-    recurrence: str = Form(""),
+@app.post("/timed-signals")
+def create_timed_signal(
+    signal_type: str = Form(...),
+    trigger_at: str = Form(...),
+    rrule: str = Form(""),
+    timezone: str = Form(""),
+    target: str = Form(""),
+    origin: str = Form("webui"),
+    correlation_id: str = Form(""),
+    payload: str = Form("{}"),
 ):
-    payload = {
-        "owner_id": owner_id,
-        "title": title,
-        "description": description or None,
-        "event_datetime": _normalize_datetime(event_datetime),
-        "target_group": target_group or "all",
-        "recurrence": recurrence or None,
-        "execution_status": "pending",
+    try:
+        payload_data = json.loads(payload) if payload.strip() else {}
+    except json.JSONDecodeError:
+        payload_data = {}
+    args = {
+        "signal_type": signal_type,
+        "payload": payload_data,
+        "trigger_at": trigger_at,
+        "rrule": rrule or None,
+        "timezone": timezone or None,
+        "target": target or None,
+        "origin": origin or None,
+        "correlation_id": correlation_id or None,
     }
-    created = create_notification(payload)
-    notification_id = created.get("id")
-    location = f"/notifications?edit_id={notification_id}" if notification_id else "/notifications"
-    return RedirectResponse(location, status_code=303)
-
-
-@app.post("/notifications/{notification_id}")
-def update_notifications(
-    notification_id: str,
-    owner_id: str = Form(...),
-    title: str = Form(...),
-    description: str = Form(""),
-    event_datetime: str = Form(...),
-    target_group: str = Form("all"),
-    recurrence: str = Form(""),
-):
-    payload = {
-        "owner_id": owner_id,
-        "title": title,
-        "description": description or None,
-        "event_datetime": _normalize_datetime(event_datetime),
-        "target_group": target_group or "all",
-        "recurrence": recurrence or None,
-    }
-    update_notification(notification_id, payload)
-    return RedirectResponse(f"/notifications?edit_id={notification_id}", status_code=303)
+    _post_alphonse_message("schedule", args)
+    return RedirectResponse("/timed-signals", status_code=303)
 
 
 @app.get("/family", response_class=HTMLResponse)

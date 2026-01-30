@@ -11,6 +11,7 @@ from alphonse.interpretation.interpreter import MessageInterpreter
 from alphonse.interpretation.models import MessageEvent, RoutingDecision
 from alphonse.interpretation.registry import build_default_registry
 from alphonse.interpretation.skills import SkillExecutor, build_ollama_client
+from alphonse.nervous_system.timed_store import list_timed_signals
 
 app = FastAPI(title="Alphonse API", version="0.1.0")
 
@@ -28,13 +29,17 @@ def agent_status() -> dict[str, object]:
 @app.post("/agent/message")
 def agent_message(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
     text = str(payload.get("text", "")).strip()
+    args = payload.get("args")
     timestamp = payload.get("timestamp")
     event = MessageEvent(
         text=text,
         user_id=_as_optional_str(payload.get("user_id")),
         channel=str(payload.get("channel") or "webui"),
         timestamp=float(timestamp) if timestamp is not None else time.time(),
-        metadata=dict(payload.get("metadata") or {}),
+        metadata={
+            **dict(payload.get("metadata") or {}),
+            **({"args": args} if isinstance(args, dict) else {}),
+        },
     )
     decision = _INTERPRETER.interpret(event)
     response = _EXECUTOR.respond(decision, event)
@@ -42,6 +47,11 @@ def agent_message(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
         "decision": _decision_dict(decision),
         "response": response,
     }
+
+
+@app.get("/agent/timed-signals")
+def timed_signals(limit: int = 200) -> dict[str, Any]:
+    return {"timed_signals": list_timed_signals(limit=limit)}
 
 
 def _decision_dict(decision: RoutingDecision) -> dict[str, Any]:

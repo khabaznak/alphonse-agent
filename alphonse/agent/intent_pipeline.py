@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from alphonse.actions.registry import ActionRegistry
 from alphonse.actions.models import ActionResult
 from alphonse.extremities.notification import NotificationExtremity
+from alphonse.actions.system_reminder import SystemReminderAction
 from alphonse.extremities.registry import ExtremityRegistry
 from alphonse.mediation.narrator import Narrator
 from alphonse.mediation.policy import NarrationPolicy
@@ -36,6 +37,7 @@ class IntentPipeline:
 
 def build_default_pipeline() -> IntentPipeline:
     actions = ActionRegistry()
+    actions.register("system_reminder", lambda _: SystemReminderAction())
     extremities = ExtremityRegistry()
     extremities.register(NotificationExtremity())
     return IntentPipeline(

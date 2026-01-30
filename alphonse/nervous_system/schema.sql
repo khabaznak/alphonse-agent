@@ -49,6 +49,26 @@ CREATE TABLE IF NOT EXISTS senses (
 ) STRICT;
 
 ----------------------------------------------------------------------
+-- 2.6) TIMED SIGNALS
+----------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS timed_signals (
+  id              TEXT PRIMARY KEY,
+  trigger_at      TEXT NOT NULL,
+  next_trigger_at TEXT,
+  rrule           TEXT,
+  timezone        TEXT,
+  status          TEXT NOT NULL DEFAULT 'pending',
+  signal_type     TEXT NOT NULL,
+  payload         TEXT,
+  target          TEXT,
+  origin          TEXT,
+  correlation_id  TEXT,
+  created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at      TEXT NOT NULL DEFAULT (datetime('now')),
+  CHECK (status IN ('pending', 'dispatched', 'skipped', 'cancelled'))
+) STRICT;
+
+----------------------------------------------------------------------
 -- 3) TRANSITIONS
 ----------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS transitions (
