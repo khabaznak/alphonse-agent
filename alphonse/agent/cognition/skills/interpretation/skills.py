@@ -187,6 +187,8 @@ def _build_timed_signal_record(decision: RoutingDecision, message: MessageEvent)
         "status": "pending",
         "fired_at": None,
         "attempt_count": 0,
+        "attempts": 0,
+        "last_error": None,
         "signal_type": signal_type,
         "payload": payload,
         "target": _as_optional_str(args.get("target")) or _as_optional_str(message.metadata.get("target")),
@@ -201,9 +203,9 @@ def _insert_timed_signal(record: dict[str, Any]) -> None:
         conn.execute(
             """
             INSERT INTO timed_signals
-              (id, trigger_at, next_trigger_at, rrule, timezone, status, fired_at, attempt_count, signal_type, payload, target, origin, correlation_id)
+              (id, trigger_at, next_trigger_at, rrule, timezone, status, fired_at, attempt_count, attempts, last_error, signal_type, payload, target, origin, correlation_id)
             VALUES
-              (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 record["id"],
@@ -214,6 +216,8 @@ def _insert_timed_signal(record: dict[str, Any]) -> None:
                 record["status"],
                 record["fired_at"],
                 record["attempt_count"],
+                record.get("attempts", record["attempt_count"]),
+                record.get("last_error"),
                 record["signal_type"],
                 json.dumps(record["payload"]),
                 record["target"],

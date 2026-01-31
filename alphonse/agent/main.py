@@ -17,6 +17,7 @@ from alphonse.infrastructure.api_gateway import gateway
 from alphonse.infrastructure.api_exchange import ApiExchange
 from alphonse.agent.nervous_system.paths import resolve_nervous_system_db_path
 from alphonse.agent.nervous_system.migrate import apply_schema
+from alphonse.agent.nervous_system.seed import apply_seed
 from alphonse.agent.core.settings_store import init_db as init_settings_db
 
 
@@ -46,6 +47,7 @@ def main() -> None:
     ddfsm = DDFSM(DDFSMConfig(db_path=str(db_path)))
 
     apply_schema(db_path)
+    apply_seed(db_path)
 
     # Signal bus is in-memory transport only.
     bus = Bus()

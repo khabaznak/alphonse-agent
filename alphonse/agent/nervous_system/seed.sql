@@ -26,7 +26,8 @@ VALUES
   ('api.message_received', 'API Message Received', 'api', 'Incoming API message', 1),
   ('api.status_requested', 'API Status Requested', 'api', 'API status request', 1),
   ('api.timed_signals_requested', 'API Timed Signals Requested', 'api', 'API timed signals request', 1),
-  ('timer.fired', 'Timer Fired', 'timer', 'Scheduled timer fired', 1);
+  ('timer.fired', 'Timer Fired', 'timer', 'Scheduled timer fired', 1),
+  ('timed_signal.fired', 'Timed Signal Fired', 'timer', 'Scheduled timed signal fired', 1);
 
 INSERT OR IGNORE INTO transitions (
   state_id,
@@ -201,6 +202,31 @@ SELECT
   'timer fired'
 FROM states s1
 JOIN signals sig ON sig.key = 'timer.fired'
+JOIN states s2 ON s2.key = 'idle';
+
+INSERT OR IGNORE INTO transitions (
+  state_id,
+  signal_id,
+  next_state_id,
+  priority,
+  is_enabled,
+  guard_key,
+  action_key,
+  match_any_state,
+  notes
+)
+SELECT
+  s1.id,
+  sig.id,
+  s2.id,
+  20,
+  1,
+  NULL,
+  'handle_timer_fired',
+  1,
+  'timed signal fired'
+FROM states s1
+JOIN signals sig ON sig.key = 'timed_signal.fired'
 JOIN states s2 ON s2.key = 'idle';
 
 INSERT OR IGNORE INTO transitions (

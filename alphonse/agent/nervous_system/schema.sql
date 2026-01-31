@@ -60,6 +60,8 @@ CREATE TABLE IF NOT EXISTS timed_signals (
   status          TEXT NOT NULL DEFAULT 'pending',
   fired_at        TEXT,
   attempt_count   INTEGER NOT NULL DEFAULT 0,
+  attempts        INTEGER NOT NULL DEFAULT 0,
+  last_error      TEXT,
   signal_type     TEXT NOT NULL,
   payload         TEXT,
   target          TEXT,
@@ -67,7 +69,7 @@ CREATE TABLE IF NOT EXISTS timed_signals (
   correlation_id  TEXT,
   created_at      TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at      TEXT NOT NULL DEFAULT (datetime('now')),
-  CHECK (status IN ('pending', 'fired', 'cancelled', 'error'))
+  CHECK (status IN ('pending', 'processing', 'fired', 'failed', 'cancelled', 'error', 'skipped', 'dispatched'))
 ) STRICT;
 
 ----------------------------------------------------------------------

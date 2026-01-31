@@ -21,10 +21,10 @@ def insert_timed_signal_from_plan(plan: CreateReminderPlan) -> None:
         conn.execute(
             """
             INSERT INTO timed_signals
-              (id, trigger_at, next_trigger_at, rrule, timezone, status, fired_at, attempt_count,
+              (id, trigger_at, next_trigger_at, rrule, timezone, status, fired_at, attempt_count, attempts, last_error,
                signal_type, payload, target, origin, correlation_id)
             VALUES
-              (?, ?, ?, ?, ?, 'pending', NULL, 0, ?, ?, ?, ?, ?)
+              (?, ?, ?, ?, ?, 'pending', NULL, 0, 0, NULL, ?, ?, ?, ?, ?)
             """,
             (
                 plan.plan_id,

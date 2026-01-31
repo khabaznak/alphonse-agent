@@ -133,7 +133,10 @@ def _intent_node(llm_client: OllamaClient | None):
 def _slot_fill_node(state: CortexState) -> dict[str, Any]:
     if state.get("intent") != "schedule_reminder":
         return {}
-    slots = dict(state.get("slots") or {})
+    if state.get("pending_intent") != "schedule_reminder":
+        slots: dict[str, Any] = {}
+    else:
+        slots = dict(state.get("slots") or {})
     text = state.get("last_user_message", "")
     reminder_text = slots.get("reminder_text")
     trigger_time = slots.get("trigger_time")

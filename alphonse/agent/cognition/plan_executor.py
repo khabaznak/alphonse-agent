@@ -18,6 +18,7 @@ from alphonse.agent.extremities.cli_extremity import CliExtremity
 from alphonse.agent.extremities.registry import ExtremityRegistry
 from alphonse.agent.extremities.scheduler_extremity import schedule_reminder
 from alphonse.agent.extremities.telegram_notification import TelegramNotificationExtremity
+from alphonse.agent.policy.engine import PolicyDecision, PolicyEngine
 
 logger = logging.getLogger(__name__)
 
@@ -36,9 +37,11 @@ class PlanExecutor:
         *,
         coordinator: DeliveryCoordinator | None = None,
         extremities: ExtremityRegistry | None = None,
+        policy_engine: PolicyEngine | None = None,
     ) -> None:
         self._coordinator = coordinator or build_default_coordinator()
         self._extremities = extremities or _build_default_extremities()
+        self._policy = policy_engine or PolicyEngine()
 
     def execute(self, plans: list[CortexPlan], context: dict, exec_context: PlanExecutionContext) -> None:
         for plan in plans:
@@ -54,6 +57,16 @@ class PlanExecutor:
                 self._dispatch_error(exec_context, context)
 
     def _execute_plan(self, plan: CortexPlan, context: dict, exec_context: PlanExecutionContext) -> None:
+        decision = self._policy.approve_plan(plan, exec_context)
+        if not decision.allowed:
+            logger.warning(
+                "executor policy denied plan_id=%s plan_type=%s reason=%s",
+                plan.plan_id,
+                plan.plan_type,
+                decision.reason,
+            )
+            self._dispatch_policy_rejection(decision, context, exec_context, plan)
+            return
         if plan.plan_type == PlanType.COMMUNICATE:
             payload = CommunicatePayload.model_validate(plan.payload)
             self._execute_communicate(plan, payload, context, exec_context)
@@ -158,6 +171,31 @@ class PlanExecutor:
     def _dispatch_error(self, exec_context: PlanExecutionContext, context: dict) -> None:
         payload = _message_payload(
             "Lo siento, tuve un problema al procesar la solicitud.",
+            exec_context.channel_type,
+            exec_context.channel_target,
+            exec_context,
+        )
+        action = ActionResult(intention_key="MESSAGE_READY", payload=payload, urgency="normal")
+        delivery = self._coordinator.deliver(action, context)
+        if delivery:
+            self._extremities.dispatch(delivery, None)
+
+    def _dispatch_policy_rejection(
+        self,
+        decision: PolicyDecision,
+        context: dict,
+        exec_context: PlanExecutionContext,
+        plan: CortexPlan,
+    ) -> None:
+        if exec_context.channel_type in {"telegram", "cli", "api"} and not exec_context.channel_target:
+            logger.warning(
+                "executor policy denial could not notify plan_id=%s reason=missing_target",
+                plan.plan_id,
+            )
+            return
+        message = "No estoy autorizado para programar ese recordatorio."
+        payload = _message_payload(
+            message,
             exec_context.channel_type,
             exec_context.channel_target,
             exec_context,

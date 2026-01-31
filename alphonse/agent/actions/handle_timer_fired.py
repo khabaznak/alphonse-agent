@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from alphonse.agent.actions.base import Action
 from alphonse.agent.actions.models import ActionResult
 from alphonse.agent.cognition.skills.command_plans import CreateReminderPlan, parse_command_plan
+
+
+logger = logging.getLogger(__name__)
 
 
 class HandleTimerFiredAction(Action):
@@ -13,6 +17,12 @@ class HandleTimerFiredAction(Action):
     def execute(self, context: dict) -> ActionResult:
         signal = context.get("signal")
         payload = getattr(signal, "payload", {}) if signal else {}
+        logger.info(
+            "HandleTimerFiredAction invoked signal_id=%s timed_signal_id=%s correlation_id=%s",
+            getattr(signal, "id", None),
+            payload.get("timed_signal_id"),
+            getattr(signal, "correlation_id", None),
+        )
         plan = _extract_plan(payload)
         message = _message_from_plan(plan, payload)
         correlation_id = _correlation_id(payload, signal, plan)

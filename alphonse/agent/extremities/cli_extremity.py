@@ -21,4 +21,5 @@ class CliExtremity(Extremity):
         payload = result.payload
         message = narration or payload.get("message") or ""
         if message:
+            logger.info("CLI notify text_len=%s correlation_id=%s", len(str(message)), payload.get("correlation_id"))
             print(message)

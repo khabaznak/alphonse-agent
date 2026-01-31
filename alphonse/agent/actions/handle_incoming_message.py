@@ -53,6 +53,12 @@ class HandleIncomingMessageAction(Action):
         state = _build_cortex_state(stored_state, incoming, correlation_id)
         llm_client = _build_llm_client()
         result = invoke_cortex(state, text, llm_client=llm_client)
+        logger.info(
+            "HandleIncomingMessageAction cortex_result reply_len=%s plans=%s correlation_id=%s",
+            len(str(result.reply_text or "")),
+            len(result.plans or []),
+            incoming.correlation_id,
+        )
         save_state(chat_key, result.cognition_state)
         executor = PlanExecutor()
         exec_context = PlanExecutionContext(
@@ -92,7 +98,8 @@ def _resolve_address(channel_type: str, payload: dict) -> str | None:
         chat_id = payload.get("chat_id")
         return str(chat_id) if chat_id is not None else None
     if channel_type == "cli":
-        return "cli"
+        chat_id = payload.get("chat_id")
+        return str(chat_id) if chat_id is not None else "cli"
     if channel_type == "api":
         return "api"
     target = payload.get("target")

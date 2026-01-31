@@ -90,6 +90,54 @@ Expose Atrium to the local network with:
 uvicorn interfaces.http.main:app --host 0.0.0.0 --port 8000
 ```
 
+## Timed Signals / Scheduler
+
+TimedSignals fire via the Timer sense and the heart loop. You can run them
+in-process (with `alphonse.agent.main`) or as a dedicated loop via the CLI.
+
+### Run Telegram bot + scheduler (single process)
+
+```bash
+export TELEGRAM_BOT_TOKEN=...
+export TELEGRAM_ALLOWED_CHAT_IDS=123456789
+python -m alphonse.agent.main
+```
+
+### CLI harness (local testing)
+
+Send a message into the same cortex pipeline as Telegram:
+
+```bash
+python -m alphonse.agent.cli say "Recuérdame hacer ejercicio en 1 min" --chat-id local --channel cli
+```
+
+Run the dispatcher loop (separate process):
+
+```bash
+python -m alphonse.agent.cli run-scheduler
+```
+
+Check timed signal status:
+
+```bash
+python -m alphonse.agent.cli status
+```
+
+### Acceptance milestones (must pass)
+
+Marker 1 — TimedSignals end-to-end
+- Telegram: "Recuérdame irme a bañar en 1 min" schedules, then reminder arrives after 1 minute (3/3)
+- CLI: schedule reminder for 1 min, then CLI prints reminder (3/3)
+
+Marker 2 — No amnesia in clarifications
+- User: "Recuérdame bañarme" → Assistant: "¿Cuándo?" → User: "en 10 min" → schedules successfully (Telegram + CLI)
+
+Marker 3 — Plan schema stable
+- Cortex returns structured result (`reply_text` + plan(s)) and logs show it
+
+Marker 4 — Policy hook
+- Only configured Telegram chat IDs can schedule reminders
+
 ---
 
 ## LangGraph Cortex

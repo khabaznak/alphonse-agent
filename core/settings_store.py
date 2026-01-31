@@ -4,6 +4,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
+from alphonse.config import settings
 
 _SETTINGS: dict[str, dict[str, Any]] = {}
 
@@ -56,13 +57,13 @@ def delete_setting(setting_id: str) -> dict[str, Any] | None:
 def get_timezone() -> str:
     setting = get_setting_by_name("timezone")
     if not setting:
-        return _local_timezone()
+        return settings.get_timezone()
     config = setting.get("config")
     if isinstance(config, dict):
         tz_name = config.get("tz")
         if isinstance(tz_name, str) and tz_name:
             return tz_name
-    return _local_timezone()
+    return settings.get_timezone()
 
 
 def _timestamp() -> str:
@@ -73,4 +74,4 @@ def _local_timezone() -> str:
     tzinfo = datetime.now().astimezone().tzinfo
     if tzinfo is not None and hasattr(tzinfo, "key"):
         return str(tzinfo.key)
-    return "UTC"
+    return settings.get_timezone()

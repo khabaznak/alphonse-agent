@@ -1,14 +1,20 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 from typing import Any
 
 import dateparser
 
 from alphonse.agent.cognition.providers.ollama import OllamaClient
+from alphonse.config import settings
+
+
+logger = logging.getLogger(__name__)
 
 
 INTENTS = {
@@ -64,22 +70,29 @@ def extract_reminder_text(text: str) -> str | None:
 
 
 def parse_trigger_time(text: str, timezone: str) -> str | None:
-    relative = _parse_relative_minutes(text, timezone)
+    tz_name = timezone or settings.get_timezone()
+    now = datetime.now(tz=ZoneInfo(tz_name))
+    logger.info("intent parse_trigger_time input=%s timezone=%s now=%s", text, tz_name, now.isoformat())
+    relative = _parse_relative_minutes(text, now)
     if relative:
-        return relative
-    explicit = _parse_explicit_time(text, timezone)
+        logger.info("intent parse_trigger_time matched=relative expression=%s trigger_at=%s", relative[0], relative[1])
+        return relative[1]
+    explicit = _parse_explicit_time(text, now)
     if explicit:
-        return explicit
+        logger.info("intent parse_trigger_time matched=explicit expression=%s trigger_at=%s", explicit[0], explicit[1])
+        return explicit[1]
     parsed = dateparser.parse(
         text,
         settings={
-            "TIMEZONE": timezone,
+            "TIMEZONE": tz_name,
             "RETURN_AS_TIMEZONE_AWARE": True,
             "PREFER_DATES_FROM": "future",
         },
     )
     if parsed:
+        logger.info("intent parse_trigger_time matched=dateparser trigger_at=%s", parsed.isoformat())
         return parsed.isoformat()
+    logger.info("intent parse_trigger_time matched=none")
     return None
 
 
@@ -116,16 +129,16 @@ def _contains_reminder_intent(text: str) -> bool:
     return bool(verbs)
 
 
-def _parse_relative_minutes(text: str, timezone: str) -> str | None:
+def _parse_relative_minutes(text: str, now: datetime) -> tuple[str, str] | None:
     match = re.search(r"\b(en|in)\s+(\d+)\s*(min|minuto|minutos|minutes?)\b", text, re.IGNORECASE)
     if not match:
         return None
     minutes = int(match.group(2))
-    now = datetime.now().astimezone()
-    return (now + timedelta(minutes=minutes)).isoformat()
+    expression = match.group(0)
+    return expression, (now + timedelta(minutes=minutes)).isoformat()
 
 
-def _parse_explicit_time(text: str, timezone: str) -> str | None:
+def _parse_explicit_time(text: str, now: datetime) -> tuple[str, str] | None:
     match = re.search(r"\b(a las|at)\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b", text, re.IGNORECASE)
     if not match:
         return None
@@ -136,11 +149,11 @@ def _parse_explicit_time(text: str, timezone: str) -> str | None:
         hour += 12
     if meridiem == "am" and hour == 12:
         hour = 0
-    now = datetime.now().astimezone()
+    expression = match.group(0)
     candidate = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
     if candidate < now:
         candidate = candidate + timedelta(days=1)
-    return candidate.isoformat()
+    return expression, candidate.isoformat()
 
 
 def _extract_reminder_verbs(text: str) -> list[str]:
