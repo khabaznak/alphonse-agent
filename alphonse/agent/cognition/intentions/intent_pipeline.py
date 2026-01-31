@@ -7,10 +7,12 @@ import traceback
 from alphonse.agent.actions.registry import ActionRegistry
 from alphonse.agent.actions.models import ActionResult
 from alphonse.agent.actions.system_reminder import SystemReminderAction
+from alphonse.agent.actions.handle_incoming_message import HandleIncomingMessageAction
 from alphonse.agent.actions.handle_message import HandleMessageAction
 from alphonse.agent.actions.handle_status import HandleStatusAction
 from alphonse.agent.actions.handle_timed_signals import HandleTimedSignalsAction
 from alphonse.agent.actions.handle_action_failure import HandleActionFailure
+from alphonse.agent.actions.handle_timer_fired import HandleTimerFiredAction
 from alphonse.agent.extremities.notification import NotificationExtremity
 from alphonse.agent.extremities.telegram_notification import TelegramNotificationExtremity
 from alphonse.agent.extremities.api_extremity import ApiExtremity
@@ -68,10 +70,12 @@ def build_default_pipeline() -> IntentPipeline:
 def build_default_pipeline_with_bus(bus: Bus) -> IntentPipeline:
     actions = ActionRegistry()
     actions.register("system_reminder", lambda _: SystemReminderAction())
+    actions.register("handle_incoming_message", lambda _: HandleIncomingMessageAction())
     actions.register("handle_message", lambda _: HandleMessageAction())
     actions.register("handle_status", lambda _: HandleStatusAction())
     actions.register("handle_timed_signals", lambda _: HandleTimedSignalsAction())
     actions.register("handle_action_failure", lambda _: HandleActionFailure())
+    actions.register("handle_timer_fired", lambda _: HandleTimerFiredAction())
     extremities = ExtremityRegistry()
     extremities.register(NotificationExtremity())
     extremities.register(TelegramNotificationExtremity())

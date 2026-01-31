@@ -64,7 +64,6 @@ class SkillExecutor:
             f"{system_prompt}\n\n"
             "Runtime snapshot:\n"
             f"- Uptime: {uptime}s\n"
-            f"- Heartbeat ticks: {runtime.get('tick_count', 0)}\n"
             f"- Last signal type: {last_signal_type}\n"
             f"- Last signal at: {last_signal_at}\n"
         )

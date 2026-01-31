@@ -22,10 +22,8 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class HeartConfig:
-    tick_seconds: float = 0.1
     nervous_system_db_path: str | None = None
     initial_state_id: int = 1
-    disable_ticks: bool = False
 
 
 class Heart:
@@ -51,16 +49,9 @@ class Heart:
 
     def run(self) -> None:
         """Run the vital loop until a shutdown is requested or received.
-
-        The heart blocks on the signal bus with a timeout. When the timeout
-        expires with no signals, `tick()` is called for housekeeping.
         """
         while self.signal != SHUTDOWN:
-            signal = self.bus.get(timeout=self.config.tick_seconds)
-            if signal is None:
-                # Heartbeat / housekeeping tick when no signals arrive.
-                self.tick()
-                continue
+            signal = self.bus.get(timeout=None)
             self._runtime.update_signal(signal.type, signal.source)
             if signal.type == SHUTDOWN:
                 break
@@ -85,14 +76,6 @@ class Heart:
                     name=next_name,
                 )
                 self._runtime.update_state(self.state.id, self.state.key, self.state.name)
-
-    def tick(self) -> None:
-        """One iteration of the heart loop."""
-        if self.config.disable_ticks:
-            return
-        now = datetime.now(tz=timezone.utc).isoformat()
-        logger.debug("%s tick tack!", now)
-        self._runtime.update_tick()
 
     def stop(self) -> None:
         self.signal = SHUTDOWN
