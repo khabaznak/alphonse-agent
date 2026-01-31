@@ -5,8 +5,9 @@ from typing import Any
 
 import yaml
 
+from . import settings
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_CONFIG = {
     "mode": "test",
     "providers": {
@@ -71,3 +72,6 @@ def _merge_dicts(defaults: dict[str, Any], override: dict[str, Any]) -> dict[str
             merged[key] = value
 
     return merged
+
+
+__all__ = ["load_alphonse_config", "settings"]
