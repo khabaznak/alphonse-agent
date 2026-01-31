@@ -92,6 +92,20 @@ uvicorn interfaces.http.main:app --host 0.0.0.0 --port 8000
 
 ---
 
+## LangGraph Cortex
+
+Alphonse's conversation orchestration runs in `alphonse/agent/cortex/graph.py`.
+Session state is persisted per chat in SQLite using the `cortex_sessions` table
+inside the nerve DB.
+
+To add a new intent:
+
+1. Update `alphonse/agent/cortex/intent.py` with classification and slot logic.
+2. Add a response or execution path in `alphonse/agent/cortex/graph.py`.
+3. Wire any new tools in `alphonse/agent/extremities/`.
+
+---
+
 ## Configuration
 
 `config/alphonse.yaml` controls runtime behavior. The key switch is `mode`:

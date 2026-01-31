@@ -146,6 +146,15 @@ CREATE TABLE IF NOT EXISTS plan_instances (
 ) STRICT;
 
 ----------------------------------------------------------------------
+-- 2.8) CORTEX SESSIONS
+----------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS cortex_sessions (
+  chat_id     TEXT PRIMARY KEY,
+  state_json  TEXT NOT NULL,
+  updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
+) STRICT;
+
+----------------------------------------------------------------------
 -- 2.7.1) TELEGRAM UPDATES
 ----------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS telegram_updates (
