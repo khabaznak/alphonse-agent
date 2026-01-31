@@ -37,6 +37,8 @@ class CommandInterpreterSkill:
     def interpret(self, text: str, context: CommandInterpreterContext) -> CommandPlan | None:
         candidate = self._interpret_with_llm(text, context)
         if candidate is None:
+            if _is_greeting(text):
+                return self._greeting_plan(text, context)
             return None
         normalized = self._merge_base_fields(candidate, text, context)
         try:
