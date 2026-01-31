@@ -1,0 +1,67 @@
+<div id="identity-prefs-form">
+  <form class="form-grid" hx-post="{% if prefs %}/identity/prefs/{{ prefs.prefs_id }}{% else %}/identity/prefs{% endif %}" hx-target="#identity-prefs-table" hx-swap="outerHTML">
+    <label>
+      Prefs ID
+      <input type="text" name="prefs_id" value="{{ prefs.prefs_id if prefs else '' }}" {% if prefs %}readonly{% endif %} required>
+    </label>
+    <label>
+      Scope Type
+      <input type="text" name="scope_type" value="{{ prefs.scope_type if prefs else 'person' }}" required>
+    </label>
+    <label>
+      Scope ID
+      <input type="text" name="scope_id" value="{{ prefs.scope_id if prefs else '' }}" required>
+    </label>
+    <label>
+      Language
+      <input type="text" name="language_preference" value="{{ prefs.language_preference if prefs else '' }}">
+    </label>
+    <label>
+      Tone
+      <input type="text" name="tone" value="{{ prefs.tone if prefs else '' }}">
+    </label>
+    <label>
+      Formality
+      <input type="text" name="formality" value="{{ prefs.formality if prefs else '' }}">
+    </label>
+    <label>
+      Emoji
+      <input type="text" name="emoji" value="{{ prefs.emoji if prefs else '' }}">
+    </label>
+    <label>
+      Verbosity Cap
+      <input type="text" name="verbosity_cap" value="{{ prefs.verbosity_cap if prefs else '' }}">
+    </label>
+    <label>
+      Quiet Start
+      <input type="number" name="quiet_hours_start" value="{{ prefs.quiet_hours_start if prefs else '' }}" min="0" max="23">
+    </label>
+    <label>
+      Quiet End
+      <input type="number" name="quiet_hours_end" value="{{ prefs.quiet_hours_end if prefs else '' }}" min="0" max="23">
+    </label>
+    <label>
+      Allow Push
+      <input type="checkbox" name="allow_push" {% if prefs and prefs.allow_push %}checked{% endif %}>
+    </label>
+    <label>
+      Allow Telegram
+      <input type="checkbox" name="allow_telegram" {% if prefs and prefs.allow_telegram %}checked{% elif not prefs %}checked{% endif %}>
+    </label>
+    <label>
+      Allow Web
+      <input type="checkbox" name="allow_web" {% if prefs and prefs.allow_web %}checked{% elif not prefs %}checked{% endif %}>
+    </label>
+    <label>
+      Allow CLI
+      <input type="checkbox" name="allow_cli" {% if prefs and prefs.allow_cli %}checked{% elif not prefs %}checked{% endif %}>
+    </label>
+    <label>
+      Model Budget Policy
+      <input type="text" name="model_budget_policy" value="{{ prefs.model_budget_policy if prefs else '' }}">
+    </label>
+    <div class="form-actions form-full">
+      <button type="submit">{% if prefs %}Save preference{% else %}Create preference{% endif %}</button>
+    </div>
+  </form>
+</div>

@@ -1,0 +1,19 @@
+<div id="identity-presence-form">
+  <form class="form-grid" hx-post="/identity/presence" hx-target="#identity-presence-table" hx-swap="outerHTML">
+    <label>
+      Person ID
+      <input type="text" name="person_id" value="{{ presence.person_id if presence else '' }}" required>
+    </label>
+    <label>
+      In Meeting
+      <input type="checkbox" name="in_meeting" {% if presence and presence.in_meeting %}checked{% endif %}>
+    </label>
+    <label class="form-full">
+      Location Hint
+      <input type="text" name="location_hint" value="{{ presence.location_hint if presence else '' }}">
+    </label>
+    <div class="form-actions form-full">
+      <button type="submit">Update presence</button>
+    </div>
+  </form>
+</div>

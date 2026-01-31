@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+
+{% block title %}Presence — Identity{% endblock %}
+
+{% block content %}
+  <main class="app-shell">
+    {% include "partials/top_nav.html" %}
+    <div class="shell-body">
+      {% include "partials/sidebar_nav.html" %}
+      <section class="content">
+        <div class="section-header">
+          <div class="subtitle">Presence</div>
+        </div>
+
+        <section class="panel" id="presence-list">
+          <h2>Presence</h2>
+          <div id="identity-presence-table" hx-get="/identity/presence/table" hx-trigger="load, identity-presence-updated from:body" hx-swap="outerHTML">
+            <p class="status-message">Loading presence...</p>
+          </div>
+        </section>
+
+        <section class="panel" id="create-presence">
+          <h2>Update Presence</h2>
+          <div id="identity-presence-form" hx-get="/identity/presence/form" hx-trigger="load, identity-presence-updated from:body" hx-swap="outerHTML"></div>
+        </section>
+      </section>
+    </div>
+  </main>
+{% endblock %}

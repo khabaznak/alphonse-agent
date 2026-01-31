@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+
+{% block title %}Groups — Identity{% endblock %}
+
+{% block content %}
+  <main class="app-shell">
+    {% include "partials/top_nav.html" %}
+    <div class="shell-body">
+      {% include "partials/sidebar_nav.html" %}
+      <section class="content">
+        <div class="section-header">
+          <div class="subtitle">Groups</div>
+        </div>
+
+        <section class="panel" id="groups-list">
+          <h2>Groups</h2>
+          <div id="identity-groups-table" hx-get="/identity/groups/table" hx-trigger="load, identity-groups-updated from:body" hx-swap="outerHTML">
+            <p class="status-message">Loading groups...</p>
+          </div>
+        </section>
+
+        <section class="panel" id="create-group">
+          <h2>Create Group</h2>
+          <div id="identity-groups-form" hx-get="/identity/groups/form" hx-trigger="load, identity-groups-updated from:body" hx-swap="outerHTML"></div>
+        </section>
+      </section>
+    </div>
+  </main>
+{% endblock %}

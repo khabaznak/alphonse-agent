@@ -1,0 +1,50 @@
+<div id="identity-prefs-table">
+  {% if prefs %}
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Scope</th>
+            <th>Language</th>
+            <th>Tone</th>
+            <th>Formality</th>
+            <th>Quiet Hours</th>
+            <th>Channels</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for pref in prefs %}
+            <tr>
+              <td>{{ pref.prefs_id }}</td>
+              <td>{{ pref.scope_type }}:{{ pref.scope_id }}</td>
+              <td>{{ pref.language_preference or "—" }}</td>
+              <td>{{ pref.tone or "—" }}</td>
+              <td>{{ pref.formality or "—" }}</td>
+              <td>
+                {% if pref.quiet_hours_start is not none %}
+                  {{ pref.quiet_hours_start }}-{{ pref.quiet_hours_end }}
+                {% else %}
+                  —
+                {% endif %}
+              </td>
+              <td>
+                {% if pref.allow_telegram %}tg{% endif %}
+                {% if pref.allow_web %} web{% endif %}
+                {% if pref.allow_cli %} cli{% endif %}
+                {% if pref.allow_push %} push{% endif %}
+              </td>
+              <td>
+                <button class="nav-link" hx-get="/identity/prefs/{{ pref.prefs_id }}/form" hx-target="#identity-prefs-form" hx-swap="outerHTML">Edit</button>
+                <button class="nav-link" hx-post="/identity/prefs/{{ pref.prefs_id }}/delete" hx-target="#identity-prefs-table" hx-swap="outerHTML">Delete</button>
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <p class="status-message">No preferences defined.</p>
+  {% endif %}
+</div>

@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+
+{% block title %}Preferences — Identity{% endblock %}
+
+{% block content %}
+  <main class="app-shell">
+    {% include "partials/top_nav.html" %}
+    <div class="shell-body">
+      {% include "partials/sidebar_nav.html" %}
+      <section class="content">
+        <div class="section-header">
+          <div class="subtitle">Communication Preferences</div>
+        </div>
+
+        <section class="panel" id="prefs-list">
+          <h2>Preferences</h2>
+          <div id="identity-prefs-table" hx-get="/identity/prefs/table" hx-trigger="load, identity-prefs-updated from:body" hx-swap="outerHTML">
+            <p class="status-message">Loading preferences...</p>
+          </div>
+        </section>
+
+        <section class="panel" id="create-prefs">
+          <h2>Create Preference</h2>
+          <div id="identity-prefs-form" hx-get="/identity/prefs/form" hx-trigger="load, identity-prefs-updated from:body" hx-swap="outerHTML"></div>
+        </section>
+      </section>
+    </div>
+  </main>
+{% endblock %}

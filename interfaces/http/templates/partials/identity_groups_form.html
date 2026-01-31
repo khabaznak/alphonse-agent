@@ -1,0 +1,19 @@
+<div id="identity-groups-form">
+  <form class="form-grid" hx-post="{% if group %}/identity/groups/{{ group.group_id }}{% else %}/identity/groups{% endif %}" hx-target="#identity-groups-table" hx-swap="outerHTML">
+    <label>
+      Group ID
+      <input type="text" name="group_id" value="{{ group.group_id if group else '' }}" {% if group %}readonly{% endif %} required>
+    </label>
+    <label>
+      Name
+      <input type="text" name="name" value="{{ group.name if group else '' }}" required>
+    </label>
+    <label>
+      Active
+      <input type="checkbox" name="is_active" {% if group and group.is_active %}checked{% elif not group %}checked{% endif %}>
+    </label>
+    <div class="form-actions form-full">
+      <button type="submit">{% if group %}Save group{% else %}Create group{% endif %}</button>
+    </div>
+  </form>
+</div>

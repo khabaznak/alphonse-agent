@@ -27,6 +27,31 @@ from core.settings_store import (
     list_settings,
     update_setting,
 )
+from core.identity_store import (
+    create_channel,
+    create_group,
+    create_person,
+    create_prefs,
+    delete_channel,
+    delete_group,
+    delete_person,
+    delete_prefs,
+    get_channel,
+    get_group,
+    get_person,
+    get_prefs,
+    get_presence,
+    list_channels,
+    list_groups,
+    list_persons,
+    list_prefs,
+    list_presence,
+    update_channel,
+    update_group,
+    update_person,
+    update_prefs,
+    upsert_presence,
+)
 from core.nerve_store import (
     create_signal,
     create_sense,
@@ -87,6 +112,7 @@ def _top_nav_links(active: str) -> list[dict[str, str | bool]]:
         {"label": "Push Test", "href": "/push-test", "active": active == "push-test"},
         {"label": "Settings", "href": "/settings", "active": active == "settings"},
         {"label": "Nerve DB", "href": "/nerve/signals", "active": active.startswith("nerve")},
+        {"label": "Identity", "href": "/identity/persons", "active": active.startswith("identity")},
         {"label": "Status JSON", "href": "/status"},
     ]
 
@@ -122,6 +148,14 @@ def _side_nav_links(page: str) -> list[dict[str, str | bool]]:
             {"label": "FSM Inspector", "href": "/nerve/inspector"},
             {"label": "Trace", "href": "/nerve/trace"},
             {"label": "Signal Queue", "href": "/nerve/queue"},
+        ]
+    if page.startswith("identity"):
+        return [
+            {"label": "Persons", "href": "/identity/persons"},
+            {"label": "Groups", "href": "/identity/groups"},
+            {"label": "Channels", "href": "/identity/channels"},
+            {"label": "Prefs", "href": "/identity/prefs"},
+            {"label": "Presence", "href": "/identity/presence"},
         ]
     return [
         {"label": "Current State", "href": "#current-state", "active": True},
@@ -1088,3 +1122,463 @@ def nerve_inspector_resolve(
             "resolved": resolved,
         },
     )
+
+
+@app.get("/identity/persons", response_class=HTMLResponse)
+def identity_persons(request: Request):
+    return templates.TemplateResponse(
+        "identity_persons.html",
+        {
+            **_base_context(request, "identity-persons"),
+        },
+    )
+
+
+@app.get("/identity/persons/table", response_class=HTMLResponse)
+def identity_persons_table(request: Request):
+    return templates.TemplateResponse(
+        "partials/identity_persons_table.html",
+        {
+            "request": request,
+            "persons": list_persons(),
+        },
+    )
+
+
+@app.get("/identity/persons/form", response_class=HTMLResponse)
+def identity_persons_form(request: Request):
+    return templates.TemplateResponse(
+        "partials/identity_persons_form.html",
+        {
+            "request": request,
+            "person": None,
+        },
+    )
+
+
+@app.get("/identity/persons/{person_id}/form", response_class=HTMLResponse)
+def identity_persons_form_edit(request: Request, person_id: str):
+    return templates.TemplateResponse(
+        "partials/identity_persons_form.html",
+        {
+            "request": request,
+            "person": get_person(person_id),
+        },
+    )
+
+
+@app.post("/identity/persons", response_class=HTMLResponse)
+def create_identity_person(
+    request: Request,
+    person_id: str = Form(...),
+    display_name: str = Form(...),
+    relationship: str = Form(""),
+    timezone: str = Form(""),
+    is_active: str | None = Form(None),
+):
+    create_person(
+        {
+            "person_id": person_id.strip(),
+            "display_name": display_name.strip(),
+            "relationship": relationship.strip() or None,
+            "timezone": timezone.strip() or None,
+            "is_active": _as_bool(is_active, 1),
+        }
+    )
+    return identity_persons_table(request)
+
+
+@app.post("/identity/persons/{person_id}", response_class=HTMLResponse)
+def update_identity_person(
+    request: Request,
+    person_id: str,
+    display_name: str = Form(...),
+    relationship: str = Form(""),
+    timezone: str = Form(""),
+    is_active: str | None = Form(None),
+):
+    update_person(
+        person_id,
+        {
+            "display_name": display_name.strip(),
+            "relationship": relationship.strip() or None,
+            "timezone": timezone.strip() or None,
+            "is_active": _as_bool(is_active, 1),
+        },
+    )
+    return identity_persons_table(request)
+
+
+@app.post("/identity/persons/{person_id}/delete", response_class=HTMLResponse)
+def delete_identity_person(request: Request, person_id: str):
+    delete_person(person_id)
+    return identity_persons_table(request)
+
+
+@app.get("/identity/groups", response_class=HTMLResponse)
+def identity_groups(request: Request):
+    return templates.TemplateResponse(
+        "identity_groups.html",
+        {
+            **_base_context(request, "identity-groups"),
+        },
+    )
+
+
+@app.get("/identity/groups/table", response_class=HTMLResponse)
+def identity_groups_table(request: Request):
+    return templates.TemplateResponse(
+        "partials/identity_groups_table.html",
+        {
+            "request": request,
+            "groups": list_groups(),
+        },
+    )
+
+
+@app.get("/identity/groups/form", response_class=HTMLResponse)
+def identity_groups_form(request: Request):
+    return templates.TemplateResponse(
+        "partials/identity_groups_form.html",
+        {
+            "request": request,
+            "group": None,
+        },
+    )
+
+
+@app.get("/identity/groups/{group_id}/form", response_class=HTMLResponse)
+def identity_groups_form_edit(request: Request, group_id: str):
+    return templates.TemplateResponse(
+        "partials/identity_groups_form.html",
+        {
+            "request": request,
+            "group": get_group(group_id),
+        },
+    )
+
+
+@app.post("/identity/groups", response_class=HTMLResponse)
+def create_identity_group(
+    request: Request,
+    group_id: str = Form(...),
+    name: str = Form(...),
+    is_active: str | None = Form(None),
+):
+    create_group(
+        {
+            "group_id": group_id.strip(),
+            "name": name.strip(),
+            "is_active": _as_bool(is_active, 1),
+        }
+    )
+    return identity_groups_table(request)
+
+
+@app.post("/identity/groups/{group_id}", response_class=HTMLResponse)
+def update_identity_group(
+    request: Request,
+    group_id: str,
+    name: str = Form(...),
+    is_active: str | None = Form(None),
+):
+    update_group(
+        group_id,
+        {
+            "name": name.strip(),
+            "is_active": _as_bool(is_active, 1),
+        },
+    )
+    return identity_groups_table(request)
+
+
+@app.post("/identity/groups/{group_id}/delete", response_class=HTMLResponse)
+def delete_identity_group(request: Request, group_id: str):
+    delete_group(group_id)
+    return identity_groups_table(request)
+
+
+@app.get("/identity/channels", response_class=HTMLResponse)
+def identity_channels(request: Request):
+    return templates.TemplateResponse(
+        "identity_channels.html",
+        {
+            **_base_context(request, "identity-channels"),
+        },
+    )
+
+
+@app.get("/identity/channels/table", response_class=HTMLResponse)
+def identity_channels_table(request: Request):
+    return templates.TemplateResponse(
+        "partials/identity_channels_table.html",
+        {
+            "request": request,
+            "channels": list_channels(),
+        },
+    )
+
+
+@app.get("/identity/channels/form", response_class=HTMLResponse)
+def identity_channels_form(request: Request):
+    return templates.TemplateResponse(
+        "partials/identity_channels_form.html",
+        {
+            "request": request,
+            "channel": None,
+        },
+    )
+
+
+@app.get("/identity/channels/{channel_id}/form", response_class=HTMLResponse)
+def identity_channels_form_edit(request: Request, channel_id: str):
+    return templates.TemplateResponse(
+        "partials/identity_channels_form.html",
+        {
+            "request": request,
+            "channel": get_channel(channel_id),
+        },
+    )
+
+
+@app.post("/identity/channels", response_class=HTMLResponse)
+def create_identity_channel(
+    request: Request,
+    channel_id: str = Form(...),
+    channel_type: str = Form(...),
+    person_id: str = Form(""),
+    address: str = Form(...),
+    priority: int = Form(100),
+    is_enabled: str | None = Form(None),
+):
+    create_channel(
+        {
+            "channel_id": channel_id.strip(),
+            "channel_type": channel_type.strip(),
+            "person_id": person_id.strip() or None,
+            "address": address.strip(),
+            "priority": priority,
+            "is_enabled": _as_bool(is_enabled, 1),
+        }
+    )
+    return identity_channels_table(request)
+
+
+@app.post("/identity/channels/{channel_id}", response_class=HTMLResponse)
+def update_identity_channel(
+    request: Request,
+    channel_id: str,
+    channel_type: str = Form(...),
+    person_id: str = Form(""),
+    address: str = Form(...),
+    priority: int = Form(100),
+    is_enabled: str | None = Form(None),
+):
+    update_channel(
+        channel_id,
+        {
+            "channel_type": channel_type.strip(),
+            "person_id": person_id.strip() or None,
+            "address": address.strip(),
+            "priority": priority,
+            "is_enabled": _as_bool(is_enabled, 1),
+        },
+    )
+    return identity_channels_table(request)
+
+
+@app.post("/identity/channels/{channel_id}/delete", response_class=HTMLResponse)
+def delete_identity_channel(request: Request, channel_id: str):
+    delete_channel(channel_id)
+    return identity_channels_table(request)
+
+
+@app.get("/identity/prefs", response_class=HTMLResponse)
+def identity_prefs(request: Request):
+    return templates.TemplateResponse(
+        "identity_prefs.html",
+        {
+            **_base_context(request, "identity-prefs"),
+        },
+    )
+
+
+@app.get("/identity/prefs/table", response_class=HTMLResponse)
+def identity_prefs_table(request: Request):
+    return templates.TemplateResponse(
+        "partials/identity_prefs_table.html",
+        {
+            "request": request,
+            "prefs": list_prefs(),
+        },
+    )
+
+
+@app.get("/identity/prefs/form", response_class=HTMLResponse)
+def identity_prefs_form(request: Request):
+    return templates.TemplateResponse(
+        "partials/identity_prefs_form.html",
+        {
+            "request": request,
+            "prefs": None,
+        },
+    )
+
+
+@app.get("/identity/prefs/{prefs_id}/form", response_class=HTMLResponse)
+def identity_prefs_form_edit(request: Request, prefs_id: str):
+    return templates.TemplateResponse(
+        "partials/identity_prefs_form.html",
+        {
+            "request": request,
+            "prefs": get_prefs(prefs_id),
+        },
+    )
+
+
+@app.post("/identity/prefs", response_class=HTMLResponse)
+def create_identity_prefs(
+    request: Request,
+    prefs_id: str = Form(...),
+    scope_type: str = Form("person"),
+    scope_id: str = Form(...),
+    language_preference: str = Form(""),
+    tone: str = Form(""),
+    formality: str = Form(""),
+    emoji: str = Form(""),
+    verbosity_cap: str = Form(""),
+    quiet_hours_start: str = Form(""),
+    quiet_hours_end: str = Form(""),
+    allow_push: str | None = Form(None),
+    allow_telegram: str | None = Form(None),
+    allow_web: str | None = Form(None),
+    allow_cli: str | None = Form(None),
+    model_budget_policy: str = Form(""),
+):
+    create_prefs(
+        {
+            "prefs_id": prefs_id.strip(),
+            "scope_type": scope_type.strip(),
+            "scope_id": scope_id.strip(),
+            "language_preference": language_preference.strip() or None,
+            "tone": tone.strip() or None,
+            "formality": formality.strip() or None,
+            "emoji": emoji.strip() or None,
+            "verbosity_cap": verbosity_cap.strip() or None,
+            "quiet_hours_start": int(quiet_hours_start) if quiet_hours_start else None,
+            "quiet_hours_end": int(quiet_hours_end) if quiet_hours_end else None,
+            "allow_push": _as_bool(allow_push, 1),
+            "allow_telegram": _as_bool(allow_telegram, 1),
+            "allow_web": _as_bool(allow_web, 1),
+            "allow_cli": _as_bool(allow_cli, 1),
+            "model_budget_policy": model_budget_policy.strip() or None,
+        }
+    )
+    return identity_prefs_table(request)
+
+
+@app.post("/identity/prefs/{prefs_id}", response_class=HTMLResponse)
+def update_identity_prefs(
+    request: Request,
+    prefs_id: str,
+    scope_type: str = Form("person"),
+    scope_id: str = Form(...),
+    language_preference: str = Form(""),
+    tone: str = Form(""),
+    formality: str = Form(""),
+    emoji: str = Form(""),
+    verbosity_cap: str = Form(""),
+    quiet_hours_start: str = Form(""),
+    quiet_hours_end: str = Form(""),
+    allow_push: str | None = Form(None),
+    allow_telegram: str | None = Form(None),
+    allow_web: str | None = Form(None),
+    allow_cli: str | None = Form(None),
+    model_budget_policy: str = Form(""),
+):
+    update_prefs(
+        prefs_id,
+        {
+            "scope_type": scope_type.strip(),
+            "scope_id": scope_id.strip(),
+            "language_preference": language_preference.strip() or None,
+            "tone": tone.strip() or None,
+            "formality": formality.strip() or None,
+            "emoji": emoji.strip() or None,
+            "verbosity_cap": verbosity_cap.strip() or None,
+            "quiet_hours_start": int(quiet_hours_start) if quiet_hours_start else None,
+            "quiet_hours_end": int(quiet_hours_end) if quiet_hours_end else None,
+            "allow_push": _as_bool(allow_push, 1),
+            "allow_telegram": _as_bool(allow_telegram, 1),
+            "allow_web": _as_bool(allow_web, 1),
+            "allow_cli": _as_bool(allow_cli, 1),
+            "model_budget_policy": model_budget_policy.strip() or None,
+        },
+    )
+    return identity_prefs_table(request)
+
+
+@app.post("/identity/prefs/{prefs_id}/delete", response_class=HTMLResponse)
+def delete_identity_prefs(request: Request, prefs_id: str):
+    delete_prefs(prefs_id)
+    return identity_prefs_table(request)
+
+
+@app.get("/identity/presence", response_class=HTMLResponse)
+def identity_presence(request: Request):
+    return templates.TemplateResponse(
+        "identity_presence.html",
+        {
+            **_base_context(request, "identity-presence"),
+        },
+    )
+
+
+@app.get("/identity/presence/table", response_class=HTMLResponse)
+def identity_presence_table(request: Request):
+    return templates.TemplateResponse(
+        "partials/identity_presence_table.html",
+        {
+            "request": request,
+            "presence": list_presence(),
+        },
+    )
+
+
+@app.get("/identity/presence/form", response_class=HTMLResponse)
+def identity_presence_form(request: Request):
+    return templates.TemplateResponse(
+        "partials/identity_presence_form.html",
+        {
+            "request": request,
+            "presence": None,
+        },
+    )
+
+
+@app.get("/identity/presence/{person_id}/form", response_class=HTMLResponse)
+def identity_presence_form_edit(request: Request, person_id: str):
+    return templates.TemplateResponse(
+        "partials/identity_presence_form.html",
+        {
+            "request": request,
+            "presence": get_presence(person_id),
+        },
+    )
+
+
+@app.post("/identity/presence", response_class=HTMLResponse)
+def upsert_identity_presence(
+    request: Request,
+    person_id: str = Form(...),
+    in_meeting: str | None = Form(None),
+    location_hint: str = Form(""),
+):
+    upsert_presence(
+        {
+            "person_id": person_id.strip(),
+            "in_meeting": _as_bool(in_meeting, 0),
+            "location_hint": location_hint.strip() or None,
+        }
+    )
+    return identity_presence_table(request)

@@ -1,0 +1,31 @@
+<div id="identity-channels-form">
+  <form class="form-grid" hx-post="{% if channel %}/identity/channels/{{ channel.channel_id }}{% else %}/identity/channels{% endif %}" hx-target="#identity-channels-table" hx-swap="outerHTML">
+    <label>
+      Channel ID
+      <input type="text" name="channel_id" value="{{ channel.channel_id if channel else '' }}" {% if channel %}readonly{% endif %} required>
+    </label>
+    <label>
+      Channel Type
+      <input type="text" name="channel_type" value="{{ channel.channel_type if channel else '' }}" required>
+    </label>
+    <label>
+      Person ID
+      <input type="text" name="person_id" value="{{ channel.person_id if channel else '' }}">
+    </label>
+    <label>
+      Address
+      <input type="text" name="address" value="{{ channel.address if channel else '' }}" required>
+    </label>
+    <label>
+      Priority
+      <input type="number" name="priority" value="{{ channel.priority if channel else 100 }}" min="0">
+    </label>
+    <label>
+      Enabled
+      <input type="checkbox" name="is_enabled" {% if channel and channel.is_enabled %}checked{% elif not channel %}checked{% endif %}>
+    </label>
+    <div class="form-actions form-full">
+      <button type="submit">{% if channel %}Save channel{% else %}Create channel{% endif %}</button>
+    </div>
+  </form>
+</div>

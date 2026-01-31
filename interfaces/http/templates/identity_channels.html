@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+
+{% block title %}Channels — Identity{% endblock %}
+
+{% block content %}
+  <main class="app-shell">
+    {% include "partials/top_nav.html" %}
+    <div class="shell-body">
+      {% include "partials/sidebar_nav.html" %}
+      <section class="content">
+        <div class="section-header">
+          <div class="subtitle">Channels</div>
+        </div>
+
+        <section class="panel" id="channels-list">
+          <h2>Channels</h2>
+          <div id="identity-channels-table" hx-get="/identity/channels/table" hx-trigger="load, identity-channels-updated from:body" hx-swap="outerHTML">
+            <p class="status-message">Loading channels...</p>
+          </div>
+        </section>
+
+        <section class="panel" id="create-channel">
+          <h2>Create Channel</h2>
+          <div id="identity-channels-form" hx-get="/identity/channels/form" hx-trigger="load, identity-channels-updated from:body" hx-swap="outerHTML"></div>
+        </section>
+      </section>
+    </div>
+  </main>
+{% endblock %}
