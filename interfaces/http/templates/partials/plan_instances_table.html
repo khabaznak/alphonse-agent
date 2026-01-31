@@ -1,0 +1,61 @@
+<div id="plan-instances-table">
+  <form class="form-grid" hx-get="/admin/plans/instances/table" hx-target="#plan-instances-table" hx-swap="outerHTML">
+    <label>
+      Correlation ID
+      <input type="text" name="correlation_id" value="{{ correlation_id }}">
+    </label>
+    <div class="form-actions">
+      <button type="submit">Filter</button>
+    </div>
+  </form>
+  {% if plan_instances %}
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Plan ID</th>
+            <th>Kind</th>
+            <th>Version</th>
+            <th>Status</th>
+            <th>Correlation</th>
+            <th>Actor</th>
+            <th>Channel</th>
+            <th>Confidence</th>
+            <th>Created</th>
+            <th>Payload</th>
+            <th>Evidence</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for plan in plan_instances %}
+            <tr>
+              <td>{{ plan.plan_id }}</td>
+              <td>{{ plan.plan_kind }}</td>
+              <td>{{ plan.plan_version }}</td>
+              <td>{{ plan.status }}</td>
+              <td>{{ plan.correlation_id or "" }}</td>
+              <td>{{ plan.actor_person_id or "" }}</td>
+              <td>{{ plan.source_channel_type }} {{ plan.source_channel_target or "" }}</td>
+              <td>{{ plan.intent_confidence }}</td>
+              <td>{{ plan.created_at }}</td>
+              <td>
+                <details>
+                  <summary>View</summary>
+                  <pre>{{ plan.payload }}</pre>
+                </details>
+              </td>
+              <td>
+                <details>
+                  <summary>View</summary>
+                  <pre>{{ plan.intent_evidence }}</pre>
+                </details>
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <p class="status-message">No plan instances recorded.</p>
+  {% endif %}
+</div>

@@ -1,29 +1,41 @@
 from __future__ import annotations
 
 import json
+import re
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
-import re
 from typing import Any
 
 from alphonse.agent.cognition.providers.ollama import OllamaClient
 from alphonse.agent.cognition.skills.command_plans import (
+    Actor,
+    ActorChannel,
     CommandPlan,
+    CreateReminderPayload,
     CreateReminderPlan,
+    GreetingPayload,
     GreetingPlan,
+    IntentEvidence,
     ReminderDelivery,
     ReminderMessage,
     ReminderSchedule,
+    SendMessagePayload,
     SendMessagePlan,
+    TargetRef,
+    UnknownPayload,
     UnknownPlan,
-    parse_plan,
+    parse_command_plan,
+    PersonRef,
 )
+from alphonse.agent.cognition.skills.plan_registry import list_enabled_plan_specs
 
 
 @dataclass(frozen=True)
 class CommandInterpreterContext:
-    created_by: str | None
+    actor_person_id: str | None
+    channel_type: str
+    channel_target: str
     source: str
     correlation_id: str
     timezone: str
@@ -34,139 +46,94 @@ class CommandInterpreterSkill:
     def __init__(self, llm_client: OllamaClient) -> None:
         self._llm_client = llm_client
 
-    def interpret(self, text: str, context: CommandInterpreterContext) -> CommandPlan | None:
+    def interpret(self, text: str, context: CommandInterpreterContext) -> CommandPlan:
         candidate = self._interpret_with_llm(text, context)
         if candidate is None:
             if _is_greeting(text):
                 return self._greeting_plan(text, context)
-            return None
-        normalized = self._merge_base_fields(candidate, text, context)
-        try:
-            plan = parse_plan(normalized)
-        except Exception:
-            return self._unknown_plan(text, context, question=None)
-        if isinstance(plan, CreateReminderPlan) and not _should_accept_reminder(plan):
-            return self._unknown_plan(text, context, question=None)
-        if (isinstance(plan, GreetingPlan) or _is_greeting(text)) and not _should_accept_reminder(plan):
-            return self._greeting_plan(text, context)
-        return plan
+            return self._unknown_plan(text, context, reason="llm_unavailable")
 
-    def _interpret_with_llm(
-        self, text: str, context: CommandInterpreterContext
-    ) -> dict[str, Any] | None:
-        prompt = self._build_prompt(text, context)
+        plan_kind = str(candidate.get("plan_kind") or candidate.get("kind") or "unknown").strip()
+        plan_version = int(candidate.get("plan_version") or 1)
+        payload = candidate.get("payload") if isinstance(candidate.get("payload"), dict) else {}
+        intent_confidence = _as_float(candidate.get("intent_confidence"), default=0.5)
+        requires_confirmation = bool(candidate.get("requires_confirmation", False))
+        questions = candidate.get("questions") if isinstance(candidate.get("questions"), list) else []
+
+        if _is_greeting(text):
+            return self._greeting_plan(text, context)
+
+        if not _is_enabled_plan(plan_kind, plan_version):
+            return self._unknown_plan(text, context, reason="unsupported_kind")
+
+        evidence = _build_intent_evidence(text)
+        base = _build_base_plan(
+            plan_kind=plan_kind,
+            plan_version=plan_version,
+            context=context,
+            intent_confidence=intent_confidence,
+            requires_confirmation=requires_confirmation,
+            questions=questions,
+            evidence=evidence,
+            original_text=text,
+        )
+
+        plan_data = _merge_payload(plan_kind, payload, text, context, evidence, base)
+        try:
+            return parse_command_plan(plan_data)
+        except Exception:
+            return self._unknown_plan(text, context, reason="invalid_plan")
+
+    def _interpret_with_llm(self, text: str, context: CommandInterpreterContext) -> dict[str, Any] | None:
+        prompt = self._build_prompt(context)
         try:
             content = self._llm_client.complete(system_prompt=prompt, user_prompt=text)
         except Exception:
             return None
         return _parse_json(str(content))
 
-    def _merge_base_fields(
-        self, raw: dict[str, Any], text: str, context: CommandInterpreterContext
-    ) -> dict[str, Any]:
-        kind = raw.get("kind")
-        evidence = _build_intent_evidence(text)
-        base = {
-            "plan_id": str(uuid.uuid4()),
-            "version": 1,
-            "created_at": datetime.utcnow().isoformat(),
-            "created_by": context.created_by,
-            "source": context.source,
-            "correlation_id": context.correlation_id,
-            "original_text": text,
-            "kind": kind,
-        }
-        if kind == "create_reminder":
-            schedule = raw.get("schedule") if isinstance(raw.get("schedule"), dict) else {}
-            message = raw.get("message") if isinstance(raw.get("message"), dict) else {}
-            delivery = raw.get("delivery") if isinstance(raw.get("delivery"), dict) else {}
-            base.update(
-                {
-                    "target_person_id": raw.get("target_person_id"),
-                    "schedule": {
-                        "timezone": schedule.get("timezone") or context.timezone,
-                        "trigger_at": schedule.get("trigger_at"),
-                        "rrule": schedule.get("rrule"),
-                    },
-                    "message": {
-                        "language": message.get("language") or context.language,
-                        "text": message.get("text") or text,
-                    },
-                    "delivery": {
-                        "preferred_channel_type": delivery.get("preferred_channel_type")
-                        or context.source,
-                        "priority": delivery.get("priority") or "normal",
-                    },
-                    "intent_evidence": evidence,
-                }
-            )
-            return base
-        if kind == "send_message":
-            message = raw.get("message") if isinstance(raw.get("message"), dict) else {}
-            base.update(
-                {
-                    "target_person_id": raw.get("target_person_id"),
-                    "message": {
-                        "language": message.get("language") or context.language,
-                        "text": message.get("text") or text,
-                    },
-                    "channel_type": raw.get("channel_type") or context.source,
-                }
-            )
-            return base
-        if kind == "greeting":
-            base.update({"language": context.language})
-            return base
-        if kind == "unknown":
-            base.update({"question": raw.get("question")})
-            return base
-        return {
-            **base,
-            "kind": "unknown",
-            "question": None,
-        }
-
-    def _build_prompt(self, text: str, context: CommandInterpreterContext) -> str:
+    def _build_prompt(self, context: CommandInterpreterContext) -> str:
+        specs = list_enabled_plan_specs()
+        lines = ["Available plan kinds:"]
+        for spec in specs:
+            example = spec.example or "{}"
+            lines.append(f"- {spec.plan_kind}@{spec.plan_version}: example {example}")
         return (
             "You are Alphonse. Output strict JSON only. "
-            "Choose exactly one kind: create_reminder, send_message, unknown. "
-            "If unknown, include a short clarifying question. "
-            "Schema examples:\n"
-            "{\"kind\":\"create_reminder\",\"target_person_id\":null,"
-            "\"schedule\":{\"timezone\":\"UTC\",\"trigger_at\":\"2026-01-31T08:00:00Z\",\"rrule\":null},"
-            "\"message\":{\"language\":\"es\",\"text\":\"take medicine\"},"
-            "\"delivery\":{\"preferred_channel_type\":\"telegram\",\"priority\":\"normal\"}}\n"
-            "{\"kind\":\"send_message\",\"target_person_id\":null,"
-            "\"message\":{\"language\":\"es\",\"text\":\"hello\"},\"channel_type\":\"telegram\"}\n"
-            "{\"kind\":\"unknown\",\"question\":\"Que deseas que haga con ese mensaje?\"}\n"
-            f"Timezone: {context.timezone}. Language: {context.language}."
+            "Return one plan with fields: plan_kind, plan_version, payload, intent_confidence, "
+            "requires_confirmation, questions. No prose.\n"
+            + "\n".join(lines)
         )
 
-    def _unknown_plan(self, text: str, context: CommandInterpreterContext, question: str | None) -> UnknownPlan:
-        return UnknownPlan(
-            plan_id=str(uuid.uuid4()),
-            kind="unknown",
-            version=1,
-            created_at=datetime.utcnow().isoformat(),
-            created_by=context.created_by,
-            source=context.source,
-            correlation_id=context.correlation_id,
+    def _unknown_plan(self, text: str, context: CommandInterpreterContext, reason: str) -> UnknownPlan:
+        base = _build_base_plan(
+            plan_kind="unknown",
+            plan_version=1,
+            context=context,
+            intent_confidence=0.2,
+            requires_confirmation=False,
+            questions=["¿Puedes aclarar qué necesitas?"],
+            evidence=_build_intent_evidence(text),
             original_text=text,
-            question=question,
         )
+        payload = UnknownPayload(user_text=text, reason=reason, suggestions=[])
+        data = {**base, "payload": payload.model_dump()}
+        return UnknownPlan.model_validate(data)
 
     def _greeting_plan(self, text: str, context: CommandInterpreterContext) -> GreetingPlan:
-        return GreetingPlan(
-            plan_id=str(uuid.uuid4()),
-            kind="greeting",
-            version=1,
-            created_at=datetime.utcnow().isoformat(),
-            created_by=context.created_by,
-            source=context.source,
-            correlation_id=context.correlation_id,
+        base = _build_base_plan(
+            plan_kind="greeting",
+            plan_version=1,
+            context=context,
+            intent_confidence=0.3,
+            requires_confirmation=False,
+            questions=[],
+            evidence=_build_intent_evidence(text),
             original_text=text,
-            language=context.language,
         )
+        payload = GreetingPayload(language=context.language, text=None)
+        data = {**base, "payload": payload.model_dump()}
+        return GreetingPlan.model_validate(data)
 
 
 def build_default_command_interpreter() -> CommandInterpreterSkill:
@@ -194,15 +161,112 @@ def _parse_json(text: str) -> dict[str, Any] | None:
     return None
 
 
-def _should_accept_reminder(plan: CreateReminderPlan | GreetingPlan) -> bool:
-    if not isinstance(plan, CreateReminderPlan):
-        return False
-    evidence = plan.intent_evidence
-    if evidence.score >= 0.6:
-        return True
-    if evidence.reminder_verbs or evidence.time_hints:
-        return True
-    return False
+def _build_base_plan(
+    *,
+    plan_kind: str,
+    plan_version: int,
+    context: CommandInterpreterContext,
+    intent_confidence: float,
+    requires_confirmation: bool,
+    questions: list[str],
+    evidence: dict[str, Any],
+    original_text: str,
+) -> dict[str, Any]:
+    actor = Actor(
+        person_id=context.actor_person_id,
+        channel=ActorChannel(type=context.channel_type, target=context.channel_target),
+    )
+    return {
+        "plan_kind": plan_kind,
+        "plan_version": plan_version,
+        "plan_id": str(uuid.uuid4()),
+        "correlation_id": context.correlation_id,
+        "created_at": datetime.utcnow().isoformat(),
+        "source": context.source,
+        "actor": actor.model_dump(),
+        "intent_confidence": intent_confidence,
+        "requires_confirmation": requires_confirmation,
+        "questions": questions,
+        "intent_evidence": evidence,
+        "payload": {},
+        "metadata": None,
+        "original_text": original_text,
+    }
+
+
+def _merge_payload(
+    plan_kind: str,
+    payload: dict[str, Any],
+    text: str,
+    context: CommandInterpreterContext,
+    evidence: dict[str, Any],
+    base: dict[str, Any],
+) -> dict[str, Any]:
+    if plan_kind == "create_reminder":
+        schedule = payload.get("schedule") if isinstance(payload.get("schedule"), dict) else {}
+        message = payload.get("message") if isinstance(payload.get("message"), dict) else {}
+        delivery = payload.get("delivery") if isinstance(payload.get("delivery"), dict) else {}
+        target = payload.get("target") if isinstance(payload.get("target"), dict) else {}
+        person_ref = target.get("person_ref") if isinstance(target.get("person_ref"), dict) else {}
+        data = CreateReminderPayload(
+            target=TargetRef(
+                person_ref=PersonRef(
+                    kind=str(person_ref.get("kind") or "person_id"),
+                    id=person_ref.get("id"),
+                    name=person_ref.get("name"),
+                )
+            ),
+            schedule=ReminderSchedule(
+                timezone=schedule.get("timezone") or context.timezone,
+                trigger_at=schedule.get("trigger_at"),
+                rrule=schedule.get("rrule"),
+                time_of_day=schedule.get("time_of_day"),
+            ),
+            message=ReminderMessage(
+                language=message.get("language") or context.language,
+                text=message.get("text") or text,
+            ),
+            delivery=ReminderDelivery(
+                channel_type=delivery.get("channel_type") or context.channel_type,
+                priority=delivery.get("priority"),
+            )
+            if delivery
+            else None,
+            idempotency_key=payload.get("idempotency_key"),
+        )
+        return {**base, "payload": data.model_dump(), "intent_evidence": evidence}
+    if plan_kind == "send_message":
+        target = payload.get("target") if isinstance(payload.get("target"), dict) else {}
+        person_ref = target.get("person_ref") if isinstance(target.get("person_ref"), dict) else {}
+        message = payload.get("message") if isinstance(payload.get("message"), dict) else {}
+        delivery = payload.get("delivery") if isinstance(payload.get("delivery"), dict) else {}
+        data = SendMessagePayload(
+            target=TargetRef(
+                person_ref=PersonRef(
+                    kind=str(person_ref.get("kind") or "person_id"),
+                    id=person_ref.get("id"),
+                    name=person_ref.get("name"),
+                )
+            ),
+            message=ReminderMessage(
+                language=message.get("language") or context.language,
+                text=message.get("text") or text,
+            ),
+            delivery=ReminderDelivery(
+                channel_type=delivery.get("channel_type") or context.channel_type,
+                priority=delivery.get("priority"),
+            )
+            if delivery
+            else None,
+        )
+        return {**base, "payload": data.model_dump(), "intent_evidence": evidence}
+    if plan_kind == "greeting":
+        data = GreetingPayload(language=context.language, text=None)
+        return {**base, "payload": data.model_dump(), "intent_evidence": evidence}
+    if plan_kind == "unknown":
+        data = UnknownPayload(user_text=text, reason="unspecified", suggestions=[])
+        return {**base, "payload": data.model_dump(), "intent_evidence": evidence}
+    return {**base, "plan_kind": "unknown"}
 
 
 def _build_intent_evidence(text: str) -> dict[str, Any]:
@@ -220,8 +284,18 @@ def _build_intent_evidence(text: str) -> dict[str, Any]:
 
 def _extract_reminder_verbs(text: str) -> list[str]:
     lowered = text.lower()
-    matches = []
-    for token in ("remind", "reminder", "recordar", "recuerda", "recuerdame", "recuérdame", "recordatorio"):
+    matches: list[str] = []
+    for token in (
+        "remind",
+        "reminder",
+        "recordar",
+        "recuerda",
+        "recuerdale",
+        "recuérdale",
+        "recuerdame",
+        "recuérdame",
+        "recordatorio",
+    ):
         if token in lowered:
             matches.append(token)
     return matches
@@ -229,7 +303,7 @@ def _extract_reminder_verbs(text: str) -> list[str]:
 
 def _extract_time_hints(text: str) -> list[str]:
     lowered = text.lower()
-    hints = []
+    hints: list[str] = []
     for token in ("today", "tomorrow", "tonight", "hoy", "manana", "mañana", "cada", "daily"):
         if token in lowered:
             hints.append(token)
@@ -240,7 +314,7 @@ def _extract_time_hints(text: str) -> list[str]:
 
 def _extract_quoted_spans(text: str) -> list[str]:
     matches = re.findall(r"“([^”]+)”|\"([^\"]+)\"|'([^']+)'", text)
-    spans = []
+    spans: list[str] = []
     for match in matches:
         for item in match:
             if item:
@@ -259,9 +333,23 @@ def _score_evidence(reminder_verbs: list[str], time_hints: list[str], quoted_spa
     return min(score, 1.0)
 
 
+def _as_float(value: object | None, default: float) -> float:
+    if value is None:
+        return default
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
 def _is_greeting(text: str) -> bool:
     lowered = text.lower().strip()
     return any(
         lowered.startswith(token)
         for token in ("hola", "hello", "hi", "buenos", "buenas", "hey")
     )
+
+
+def _is_enabled_plan(plan_kind: str, plan_version: int) -> bool:
+    specs = list_enabled_plan_specs()
+    return any(spec.plan_kind == plan_kind and spec.plan_version == plan_version for spec in specs)

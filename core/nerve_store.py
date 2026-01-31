@@ -45,6 +45,46 @@ def list_trace(limit: int = 200) -> list[dict[str, Any]]:
     )
 
 
+def list_plan_kinds(limit: int = 200) -> list[dict[str, Any]]:
+    return _fetch_all("SELECT * FROM plan_kinds ORDER BY plan_kind ASC LIMIT ?", (limit,))
+
+
+def list_plan_kind_versions(plan_kind: str | None = None, limit: int = 200) -> list[dict[str, Any]]:
+    if plan_kind:
+        return _fetch_all(
+            "SELECT * FROM plan_kind_versions WHERE plan_kind = ? ORDER BY plan_version ASC LIMIT ?",
+            (plan_kind, limit),
+        )
+    return _fetch_all(
+        "SELECT * FROM plan_kind_versions ORDER BY plan_kind ASC, plan_version ASC LIMIT ?",
+        (limit,),
+    )
+
+
+def list_plan_executors(limit: int = 200) -> list[dict[str, Any]]:
+    return _fetch_all(
+        "SELECT * FROM plan_executors ORDER BY plan_kind ASC, plan_version ASC LIMIT ?",
+        (limit,),
+    )
+
+
+def list_plan_instances(limit: int = 200, correlation_id: str | None = None) -> list[dict[str, Any]]:
+    if correlation_id:
+        return _fetch_all(
+            """
+            SELECT * FROM plan_instances
+            WHERE correlation_id = ?
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            (correlation_id, limit),
+        )
+    return _fetch_all(
+        "SELECT * FROM plan_instances ORDER BY created_at DESC LIMIT ?",
+        (limit,),
+    )
+
+
 def get_signal(signal_id: str) -> dict[str, Any] | None:
     return _fetch_one("SELECT * FROM signals WHERE id = ?", (signal_id,))
 
@@ -59,6 +99,24 @@ def get_transition(transition_id: str) -> dict[str, Any] | None:
 
 def get_sense(sense_id: str) -> dict[str, Any] | None:
     return _fetch_one("SELECT * FROM senses WHERE id = ?", (sense_id,))
+
+
+def get_plan_kind(plan_kind: str) -> dict[str, Any] | None:
+    return _fetch_one("SELECT * FROM plan_kinds WHERE plan_kind = ?", (plan_kind,))
+
+
+def get_plan_kind_version(plan_kind: str, plan_version: int) -> dict[str, Any] | None:
+    return _fetch_one(
+        "SELECT * FROM plan_kind_versions WHERE plan_kind = ? AND plan_version = ?",
+        (plan_kind, plan_version),
+    )
+
+
+def get_plan_executor(plan_kind: str, plan_version: int) -> dict[str, Any] | None:
+    return _fetch_one(
+        "SELECT * FROM plan_executors WHERE plan_kind = ? AND plan_version = ?",
+        (plan_kind, plan_version),
+    )
 
 
 def create_signal(payload: dict[str, Any]) -> dict[str, Any]:
@@ -130,6 +188,54 @@ def create_sense(payload: dict[str, Any]) -> dict[str, Any]:
             payload.get("source_type"),
             _bool(payload.get("enabled", True)),
             payload.get("owner"),
+        ),
+    )
+    return payload
+
+
+def create_plan_kind(payload: dict[str, Any]) -> dict[str, Any]:
+    _execute(
+        """
+        INSERT INTO plan_kinds (plan_kind, description, is_enabled)
+        VALUES (?, ?, ?)
+        """,
+        (
+            payload.get("plan_kind"),
+            payload.get("description"),
+            _bool(payload.get("is_enabled", True)),
+        ),
+    )
+    return payload
+
+
+def create_plan_kind_version(payload: dict[str, Any]) -> dict[str, Any]:
+    _execute(
+        """
+        INSERT INTO plan_kind_versions (plan_kind, plan_version, json_schema, example, is_deprecated)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        (
+            payload.get("plan_kind"),
+            payload.get("plan_version"),
+            payload.get("json_schema"),
+            payload.get("example"),
+            _bool(payload.get("is_deprecated", False)),
+        ),
+    )
+    return payload
+
+
+def create_plan_executor(payload: dict[str, Any]) -> dict[str, Any]:
+    _execute(
+        """
+        INSERT INTO plan_executors (plan_kind, plan_version, executor_key, min_agent_version)
+        VALUES (?, ?, ?, ?)
+        """,
+        (
+            payload.get("plan_kind"),
+            payload.get("plan_version"),
+            payload.get("executor_key"),
+            payload.get("min_agent_version"),
         ),
     )
     return payload
@@ -217,6 +323,57 @@ def update_sense(sense_id: str, payload: dict[str, Any]) -> dict[str, Any] | Non
     return get_sense(sense_id)
 
 
+def update_plan_kind(plan_kind: str, payload: dict[str, Any]) -> dict[str, Any] | None:
+    _execute(
+        """
+        UPDATE plan_kinds
+        SET description = ?, is_enabled = ?, created_at = created_at
+        WHERE plan_kind = ?
+        """,
+        (
+            payload.get("description"),
+            _bool(payload.get("is_enabled", True)),
+            plan_kind,
+        ),
+    )
+    return get_plan_kind(plan_kind)
+
+
+def update_plan_kind_version(plan_kind: str, plan_version: int, payload: dict[str, Any]) -> dict[str, Any] | None:
+    _execute(
+        """
+        UPDATE plan_kind_versions
+        SET json_schema = ?, example = ?, is_deprecated = ?, created_at = created_at
+        WHERE plan_kind = ? AND plan_version = ?
+        """,
+        (
+            payload.get("json_schema"),
+            payload.get("example"),
+            _bool(payload.get("is_deprecated", False)),
+            plan_kind,
+            plan_version,
+        ),
+    )
+    return get_plan_kind_version(plan_kind, plan_version)
+
+
+def update_plan_executor(plan_kind: str, plan_version: int, payload: dict[str, Any]) -> dict[str, Any] | None:
+    _execute(
+        """
+        UPDATE plan_executors
+        SET executor_key = ?, min_agent_version = ?
+        WHERE plan_kind = ? AND plan_version = ?
+        """,
+        (
+            payload.get("executor_key"),
+            payload.get("min_agent_version"),
+            plan_kind,
+            plan_version,
+        ),
+    )
+    return get_plan_executor(plan_kind, plan_version)
+
+
 def delete_signal(signal_id: str) -> dict[str, Any] | None:
     return _delete("signals", signal_id)
 
@@ -231,6 +388,36 @@ def delete_transition(transition_id: str) -> dict[str, Any] | None:
 
 def delete_sense(sense_id: str) -> dict[str, Any] | None:
     return _delete("senses", sense_id)
+
+
+def delete_plan_kind(plan_kind: str) -> dict[str, Any] | None:
+    record = get_plan_kind(plan_kind)
+    if not record:
+        return None
+    _execute("DELETE FROM plan_kinds WHERE plan_kind = ?", (plan_kind,))
+    return record
+
+
+def delete_plan_kind_version(plan_kind: str, plan_version: int) -> dict[str, Any] | None:
+    record = get_plan_kind_version(plan_kind, plan_version)
+    if not record:
+        return None
+    _execute(
+        "DELETE FROM plan_kind_versions WHERE plan_kind = ? AND plan_version = ?",
+        (plan_kind, plan_version),
+    )
+    return record
+
+
+def delete_plan_executor(plan_kind: str, plan_version: int) -> dict[str, Any] | None:
+    record = get_plan_executor(plan_kind, plan_version)
+    if not record:
+        return None
+    _execute(
+        "DELETE FROM plan_executors WHERE plan_kind = ? AND plan_version = ?",
+        (plan_kind, plan_version),
+    )
+    return record
 
 
 def resolve_transition(state_id: int, signal_id: int) -> dict[str, Any] | None:

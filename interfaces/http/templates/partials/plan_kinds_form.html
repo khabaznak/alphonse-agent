@@ -1,0 +1,19 @@
+<div id="plan-kinds-form">
+  <form class="form-grid" hx-post="{% if plan_kind %}/admin/plans/kinds/{{ plan_kind.plan_kind }}{% else %}/admin/plans/kinds{% endif %}" hx-target="#plan-kinds-table" hx-swap="outerHTML">
+    <label>
+      Plan Kind
+      <input type="text" name="plan_kind" value="{{ plan_kind.plan_kind if plan_kind else '' }}" {% if plan_kind %}readonly{% endif %} required>
+    </label>
+    <label>
+      Description
+      <input type="text" name="description" value="{{ plan_kind.description if plan_kind else '' }}">
+    </label>
+    <label>
+      Enabled
+      <input type="checkbox" name="is_enabled" {% if plan_kind and plan_kind.is_enabled %}checked{% elif not plan_kind %}checked{% endif %}>
+    </label>
+    <div class="form-actions form-full">
+      <button type="submit">{% if plan_kind %}Save plan kind{% else %}Create plan kind{% endif %}</button>
+    </div>
+  </form>
+</div>

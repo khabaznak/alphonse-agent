@@ -53,18 +53,31 @@ from core.identity_store import (
     upsert_presence,
 )
 from core.nerve_store import (
+    create_plan_executor,
+    create_plan_kind,
+    create_plan_kind_version,
     create_signal,
     create_sense,
     create_state,
     create_transition,
+    delete_plan_executor,
+    delete_plan_kind,
+    delete_plan_kind_version,
     delete_signal,
     delete_sense,
     delete_state,
     delete_transition,
+    get_plan_executor,
+    get_plan_kind,
+    get_plan_kind_version,
     get_signal,
     get_sense,
     get_state,
     get_transition,
+    list_plan_executors,
+    list_plan_instances,
+    list_plan_kind_versions,
+    list_plan_kinds,
     list_signal_queue,
     list_signals,
     list_senses,
@@ -72,6 +85,9 @@ from core.nerve_store import (
     list_trace,
     list_transitions,
     resolve_transition,
+    update_plan_executor,
+    update_plan_kind,
+    update_plan_kind_version,
     update_signal,
     update_sense,
     update_state,
@@ -112,6 +128,7 @@ def _top_nav_links(active: str) -> list[dict[str, str | bool]]:
         {"label": "Push Test", "href": "/push-test", "active": active == "push-test"},
         {"label": "Settings", "href": "/settings", "active": active == "settings"},
         {"label": "Nerve DB", "href": "/nerve/signals", "active": active.startswith("nerve")},
+        {"label": "Plans", "href": "/admin/plans", "active": active == "admin-plans"},
         {"label": "Identity", "href": "/identity/persons", "active": active.startswith("identity")},
         {"label": "Status JSON", "href": "/status"},
     ]
@@ -156,6 +173,13 @@ def _side_nav_links(page: str) -> list[dict[str, str | bool]]:
             {"label": "Channels", "href": "/identity/channels"},
             {"label": "Prefs", "href": "/identity/prefs"},
             {"label": "Presence", "href": "/identity/presence"},
+        ]
+    if page == "admin-plans":
+        return [
+            {"label": "Plan Kinds", "href": "#plan-kinds"},
+            {"label": "Plan Versions", "href": "#plan-versions"},
+            {"label": "Plan Executors", "href": "#plan-executors"},
+            {"label": "Plan Instances", "href": "#plan-instances"},
         ]
     return [
         {"label": "Current State", "href": "#current-state", "active": True},
@@ -1120,6 +1144,259 @@ def nerve_inspector_resolve(
             "signals": list_signals(),
             "states": list_states(),
             "resolved": resolved,
+        },
+    )
+
+
+@app.get("/admin/plans", response_class=HTMLResponse)
+def admin_plans(request: Request):
+    return templates.TemplateResponse(
+        "admin_plans.html",
+        {
+            **_base_context(request, "admin-plans"),
+        },
+    )
+
+
+@app.get("/admin/plans/kinds/table", response_class=HTMLResponse)
+def plan_kinds_table(request: Request):
+    return templates.TemplateResponse(
+        "partials/plan_kinds_table.html",
+        {
+            "request": request,
+            "plan_kinds": list_plan_kinds(),
+        },
+    )
+
+
+@app.get("/admin/plans/kinds/form", response_class=HTMLResponse)
+def plan_kinds_form(request: Request):
+    return templates.TemplateResponse(
+        "partials/plan_kinds_form.html",
+        {
+            "request": request,
+            "plan_kind": None,
+        },
+    )
+
+
+@app.get("/admin/plans/kinds/{plan_kind}/form", response_class=HTMLResponse)
+def plan_kinds_form_edit(request: Request, plan_kind: str):
+    return templates.TemplateResponse(
+        "partials/plan_kinds_form.html",
+        {
+            "request": request,
+            "plan_kind": get_plan_kind(plan_kind),
+        },
+    )
+
+
+@app.post("/admin/plans/kinds", response_class=HTMLResponse)
+def create_plan_kind_view(
+    request: Request,
+    plan_kind: str = Form(...),
+    description: str = Form(""),
+    is_enabled: str | None = Form(None),
+):
+    create_plan_kind(
+        {
+            "plan_kind": plan_kind.strip(),
+            "description": description.strip() or None,
+            "is_enabled": _as_bool(is_enabled, 1),
+        }
+    )
+    return plan_kinds_table(request)
+
+
+@app.post("/admin/plans/kinds/{plan_kind}", response_class=HTMLResponse)
+def update_plan_kind_view(
+    request: Request,
+    plan_kind: str,
+    description: str = Form(""),
+    is_enabled: str | None = Form(None),
+):
+    update_plan_kind(
+        plan_kind,
+        {
+            "description": description.strip() or None,
+            "is_enabled": _as_bool(is_enabled, 1),
+        },
+    )
+    return plan_kinds_table(request)
+
+
+@app.post("/admin/plans/kinds/{plan_kind}/delete", response_class=HTMLResponse)
+def delete_plan_kind_view(request: Request, plan_kind: str):
+    delete_plan_kind(plan_kind)
+    return plan_kinds_table(request)
+
+
+@app.get("/admin/plans/versions/table", response_class=HTMLResponse)
+def plan_versions_table(request: Request, plan_kind: str | None = None):
+    return templates.TemplateResponse(
+        "partials/plan_versions_table.html",
+        {
+            "request": request,
+            "plan_versions": list_plan_kind_versions(plan_kind=plan_kind),
+        },
+    )
+
+
+@app.get("/admin/plans/versions/form", response_class=HTMLResponse)
+def plan_versions_form(request: Request):
+    return templates.TemplateResponse(
+        "partials/plan_versions_form.html",
+        {
+            "request": request,
+            "plan_version": None,
+        },
+    )
+
+
+@app.get("/admin/plans/versions/{plan_kind}/{plan_version}/form", response_class=HTMLResponse)
+def plan_versions_form_edit(request: Request, plan_kind: str, plan_version: int):
+    return templates.TemplateResponse(
+        "partials/plan_versions_form.html",
+        {
+            "request": request,
+            "plan_version": get_plan_kind_version(plan_kind, plan_version),
+        },
+    )
+
+
+@app.post("/admin/plans/versions", response_class=HTMLResponse)
+def create_plan_version_view(
+    request: Request,
+    plan_kind: str = Form(...),
+    plan_version: int = Form(...),
+    json_schema: str = Form(...),
+    example: str = Form(""),
+    is_deprecated: str | None = Form(None),
+):
+    create_plan_kind_version(
+        {
+            "plan_kind": plan_kind.strip(),
+            "plan_version": plan_version,
+            "json_schema": json_schema.strip(),
+            "example": example.strip() or None,
+            "is_deprecated": _as_bool(is_deprecated, 0),
+        }
+    )
+    return plan_versions_table(request)
+
+
+@app.post("/admin/plans/versions/{plan_kind}/{plan_version}", response_class=HTMLResponse)
+def update_plan_version_view(
+    request: Request,
+    plan_kind: str,
+    plan_version: int,
+    json_schema: str = Form(...),
+    example: str = Form(""),
+    is_deprecated: str | None = Form(None),
+):
+    update_plan_kind_version(
+        plan_kind,
+        plan_version,
+        {
+            "json_schema": json_schema.strip(),
+            "example": example.strip() or None,
+            "is_deprecated": _as_bool(is_deprecated, 0),
+        },
+    )
+    return plan_versions_table(request)
+
+
+@app.post("/admin/plans/versions/{plan_kind}/{plan_version}/delete", response_class=HTMLResponse)
+def delete_plan_version_view(request: Request, plan_kind: str, plan_version: int):
+    delete_plan_kind_version(plan_kind, plan_version)
+    return plan_versions_table(request)
+
+
+@app.get("/admin/plans/executors/table", response_class=HTMLResponse)
+def plan_executors_table(request: Request):
+    return templates.TemplateResponse(
+        "partials/plan_executors_table.html",
+        {
+            "request": request,
+            "plan_executors": list_plan_executors(),
+        },
+    )
+
+
+@app.get("/admin/plans/executors/form", response_class=HTMLResponse)
+def plan_executors_form(request: Request):
+    return templates.TemplateResponse(
+        "partials/plan_executors_form.html",
+        {
+            "request": request,
+            "plan_executor": None,
+        },
+    )
+
+
+@app.get("/admin/plans/executors/{plan_kind}/{plan_version}/form", response_class=HTMLResponse)
+def plan_executors_form_edit(request: Request, plan_kind: str, plan_version: int):
+    return templates.TemplateResponse(
+        "partials/plan_executors_form.html",
+        {
+            "request": request,
+            "plan_executor": get_plan_executor(plan_kind, plan_version),
+        },
+    )
+
+
+@app.post("/admin/plans/executors", response_class=HTMLResponse)
+def create_plan_executor_view(
+    request: Request,
+    plan_kind: str = Form(...),
+    plan_version: int = Form(...),
+    executor_key: str = Form(...),
+    min_agent_version: str = Form(""),
+):
+    create_plan_executor(
+        {
+            "plan_kind": plan_kind.strip(),
+            "plan_version": plan_version,
+            "executor_key": executor_key.strip(),
+            "min_agent_version": min_agent_version.strip() or None,
+        }
+    )
+    return plan_executors_table(request)
+
+
+@app.post("/admin/plans/executors/{plan_kind}/{plan_version}", response_class=HTMLResponse)
+def update_plan_executor_view(
+    request: Request,
+    plan_kind: str,
+    plan_version: int,
+    executor_key: str = Form(...),
+    min_agent_version: str = Form(""),
+):
+    update_plan_executor(
+        plan_kind,
+        plan_version,
+        {
+            "executor_key": executor_key.strip(),
+            "min_agent_version": min_agent_version.strip() or None,
+        },
+    )
+    return plan_executors_table(request)
+
+
+@app.post("/admin/plans/executors/{plan_kind}/{plan_version}/delete", response_class=HTMLResponse)
+def delete_plan_executor_view(request: Request, plan_kind: str, plan_version: int):
+    delete_plan_executor(plan_kind, plan_version)
+    return plan_executors_table(request)
+
+
+@app.get("/admin/plans/instances/table", response_class=HTMLResponse)
+def plan_instances_table(request: Request, correlation_id: str | None = None):
+    return templates.TemplateResponse(
+        "partials/plan_instances_table.html",
+        {
+            "request": request,
+            "plan_instances": list_plan_instances(correlation_id=correlation_id),
+            "correlation_id": correlation_id or "",
         },
     )
 

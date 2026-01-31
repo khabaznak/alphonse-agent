@@ -1,0 +1,23 @@
+<div id="plan-executors-form">
+  <form class="form-grid" hx-post="{% if plan_executor %}/admin/plans/executors/{{ plan_executor.plan_kind }}/{{ plan_executor.plan_version }}{% else %}/admin/plans/executors{% endif %}" hx-target="#plan-executors-table" hx-swap="outerHTML">
+    <label>
+      Plan Kind
+      <input type="text" name="plan_kind" value="{{ plan_executor.plan_kind if plan_executor else '' }}" {% if plan_executor %}readonly{% endif %} required>
+    </label>
+    <label>
+      Plan Version
+      <input type="number" name="plan_version" value="{{ plan_executor.plan_version if plan_executor else '' }}" {% if plan_executor %}readonly{% endif %} required>
+    </label>
+    <label>
+      Executor Key
+      <input type="text" name="executor_key" value="{{ plan_executor.executor_key if plan_executor else '' }}" required>
+    </label>
+    <label>
+      Min Agent Version
+      <input type="text" name="min_agent_version" value="{{ plan_executor.min_agent_version if plan_executor else '' }}">
+    </label>
+    <div class="form-actions form-full">
+      <button type="submit">{% if plan_executor %}Save executor{% else %}Create executor{% endif %}</button>
+    </div>
+  </form>
+</div>

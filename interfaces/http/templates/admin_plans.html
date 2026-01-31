@@ -1,0 +1,95 @@
+{% extends "base.html" %}
+
+{% block title %}Plans — Admin{% endblock %}
+
+{% block content %}
+  <main class="app-shell">
+    {% include "partials/top_nav.html" %}
+    <div class="shell-body">
+      {% include "partials/sidebar_nav.html" %}
+      <section class="content">
+        <div class="section-header">
+          <div class="subtitle">Plan Registry</div>
+        </div>
+
+        <section class="panel" id="plan-kinds">
+          <h2>Plan Kinds</h2>
+          <div
+            id="plan-kinds-table"
+            hx-get="/admin/plans/kinds/table"
+            hx-trigger="load, plan-kinds-updated from:body"
+            hx-swap="outerHTML"
+          >
+            <p class="status-message">Loading plan kinds...</p>
+          </div>
+        </section>
+
+        <section class="panel" id="plan-kinds-form-panel">
+          <h2>Edit Plan Kind</h2>
+          <div
+            id="plan-kinds-form"
+            hx-get="/admin/plans/kinds/form"
+            hx-trigger="load, plan-kinds-updated from:body"
+            hx-swap="outerHTML"
+          ></div>
+        </section>
+
+        <section class="panel" id="plan-versions">
+          <h2>Plan Versions</h2>
+          <div
+            id="plan-versions-table"
+            hx-get="/admin/plans/versions/table"
+            hx-trigger="load, plan-versions-updated from:body"
+            hx-swap="outerHTML"
+          >
+            <p class="status-message">Loading plan versions...</p>
+          </div>
+        </section>
+
+        <section class="panel" id="plan-versions-form-panel">
+          <h2>Edit Plan Version</h2>
+          <div
+            id="plan-versions-form"
+            hx-get="/admin/plans/versions/form"
+            hx-trigger="load, plan-versions-updated from:body"
+            hx-swap="outerHTML"
+          ></div>
+        </section>
+
+        <section class="panel" id="plan-executors">
+          <h2>Plan Executors</h2>
+          <div
+            id="plan-executors-table"
+            hx-get="/admin/plans/executors/table"
+            hx-trigger="load, plan-executors-updated from:body"
+            hx-swap="outerHTML"
+          >
+            <p class="status-message">Loading plan executors...</p>
+          </div>
+        </section>
+
+        <section class="panel" id="plan-executors-form-panel">
+          <h2>Edit Plan Executor</h2>
+          <div
+            id="plan-executors-form"
+            hx-get="/admin/plans/executors/form"
+            hx-trigger="load, plan-executors-updated from:body"
+            hx-swap="outerHTML"
+          ></div>
+        </section>
+
+        <section class="panel" id="plan-instances">
+          <h2>Plan Instances</h2>
+          <div
+            id="plan-instances-table"
+            hx-get="/admin/plans/instances/table"
+            hx-trigger="load, plan-instances-updated from:body"
+            hx-swap="outerHTML"
+          >
+            <p class="status-message">Loading plan instances...</p>
+          </div>
+        </section>
+      </section>
+    </div>
+  </main>
+{% endblock %}

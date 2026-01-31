@@ -1,0 +1,47 @@
+<div id="plan-executors-table">
+  {% if plan_executors %}
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Kind</th>
+            <th>Version</th>
+            <th>Executor Key</th>
+            <th>Min Agent Version</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for executor in plan_executors %}
+            <tr>
+              <td>{{ executor.plan_kind }}</td>
+              <td>{{ executor.plan_version }}</td>
+              <td>{{ executor.executor_key }}</td>
+              <td>{{ executor.min_agent_version or "" }}</td>
+              <td>
+                <button
+                  class="nav-link"
+                  hx-get="/admin/plans/executors/{{ executor.plan_kind }}/{{ executor.plan_version }}/form"
+                  hx-target="#plan-executors-form"
+                  hx-swap="outerHTML"
+                >
+                  Edit
+                </button>
+                <button
+                  class="nav-link"
+                  hx-post="/admin/plans/executors/{{ executor.plan_kind }}/{{ executor.plan_version }}/delete"
+                  hx-target="#plan-executors-table"
+                  hx-swap="outerHTML"
+                >
+                  Delete
+                </button>
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <p class="status-message">No plan executors defined.</p>
+  {% endif %}
+</div>

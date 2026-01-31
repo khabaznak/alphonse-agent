@@ -1,0 +1,27 @@
+<div id="plan-versions-form">
+  <form class="form-grid" hx-post="{% if plan_version %}/admin/plans/versions/{{ plan_version.plan_kind }}/{{ plan_version.plan_version }}{% else %}/admin/plans/versions{% endif %}" hx-target="#plan-versions-table" hx-swap="outerHTML">
+    <label>
+      Plan Kind
+      <input type="text" name="plan_kind" value="{{ plan_version.plan_kind if plan_version else '' }}" {% if plan_version %}readonly{% endif %} required>
+    </label>
+    <label>
+      Plan Version
+      <input type="number" name="plan_version" value="{{ plan_version.plan_version if plan_version else '' }}" {% if plan_version %}readonly{% endif %} required>
+    </label>
+    <label class="form-full">
+      JSON Schema
+      <textarea name="json_schema" rows="8" required>{{ plan_version.json_schema if plan_version else '' }}</textarea>
+    </label>
+    <label class="form-full">
+      Example JSON
+      <textarea name="example" rows="6">{{ plan_version.example if plan_version else '' }}</textarea>
+    </label>
+    <label>
+      Deprecated
+      <input type="checkbox" name="is_deprecated" {% if plan_version and plan_version.is_deprecated %}checked{% endif %}>
+    </label>
+    <div class="form-actions form-full">
+      <button type="submit">{% if plan_version %}Save plan version{% else %}Create plan version{% endif %}</button>
+    </div>
+  </form>
+</div>

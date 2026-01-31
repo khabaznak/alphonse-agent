@@ -4,7 +4,7 @@ from typing import Any
 
 from alphonse.agent.actions.base import Action
 from alphonse.agent.actions.models import ActionResult
-from alphonse.agent.cognition.skills.command_plans import CreateReminderPlan, parse_plan
+from alphonse.agent.cognition.skills.command_plans import CreateReminderPlan, parse_command_plan
 
 
 class HandleTimerFiredAction(Action):
@@ -45,7 +45,7 @@ def _extract_plan(payload: dict[str, Any]) -> CreateReminderPlan | None:
     if not isinstance(plan_data, dict):
         return None
     try:
-        plan = parse_plan(plan_data)
+        plan = parse_command_plan(plan_data)
     except ValueError:
         return None
     if isinstance(plan, CreateReminderPlan):
@@ -55,7 +55,7 @@ def _extract_plan(payload: dict[str, Any]) -> CreateReminderPlan | None:
 
 def _message_from_plan(plan: CreateReminderPlan | None, payload: dict[str, Any]) -> str:
     if plan:
-        return plan.message.text
+        return plan.payload.message.text
     signal_payload = payload.get("payload") if isinstance(payload, dict) else None
     if isinstance(signal_payload, dict):
         message = signal_payload.get("message")
@@ -65,8 +65,8 @@ def _message_from_plan(plan: CreateReminderPlan | None, payload: dict[str, Any])
 
 
 def _channel_hint(plan: CreateReminderPlan | None, payload: dict[str, Any]) -> str:
-    if plan and plan.delivery.preferred_channel_type:
-        return str(plan.delivery.preferred_channel_type)
+    if plan and plan.payload.delivery and plan.payload.delivery.channel_type:
+        return str(plan.payload.delivery.channel_type)
     signal_payload = payload.get("payload") if isinstance(payload, dict) else None
     if isinstance(signal_payload, dict):
         origin = signal_payload.get("origin") or payload.get("origin")
@@ -83,8 +83,8 @@ def _target_address(payload: dict[str, Any]) -> str | None:
 
 
 def _audience(plan: CreateReminderPlan | None, payload: dict[str, Any]) -> dict[str, str]:
-    if plan and plan.target_person_id:
-        return {"kind": "person", "id": str(plan.target_person_id)}
+    if plan and plan.payload.target.person_ref.id:
+        return {"kind": "person", "id": str(plan.payload.target.person_ref.id)}
     signal_payload = payload.get("payload") if isinstance(payload, dict) else None
     if isinstance(signal_payload, dict):
         person_id = signal_payload.get("person_id")

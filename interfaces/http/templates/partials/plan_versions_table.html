@@ -1,0 +1,47 @@
+<div id="plan-versions-table">
+  {% if plan_versions %}
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Kind</th>
+            <th>Version</th>
+            <th>Deprecated</th>
+            <th>Created</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for version in plan_versions %}
+            <tr>
+              <td>{{ version.plan_kind }}</td>
+              <td>{{ version.plan_version }}</td>
+              <td>{{ "yes" if version.is_deprecated else "no" }}</td>
+              <td>{{ version.created_at }}</td>
+              <td>
+                <button
+                  class="nav-link"
+                  hx-get="/admin/plans/versions/{{ version.plan_kind }}/{{ version.plan_version }}/form"
+                  hx-target="#plan-versions-form"
+                  hx-swap="outerHTML"
+                >
+                  Edit
+                </button>
+                <button
+                  class="nav-link"
+                  hx-post="/admin/plans/versions/{{ version.plan_kind }}/{{ version.plan_version }}/delete"
+                  hx-target="#plan-versions-table"
+                  hx-swap="outerHTML"
+                >
+                  Delete
+                </button>
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <p class="status-message">No plan versions defined.</p>
+  {% endif %}
+</div>
