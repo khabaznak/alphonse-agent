@@ -7,6 +7,8 @@ from typing import Any
 
 from alphonse.agent.actions.base import Action
 from alphonse.agent.actions.models import ActionResult
+from alphonse.agent.cognition.plans import CortexPlan, PlanType
+from alphonse.agent.cognition.plan_executor import PlanExecutionContext, PlanExecutor
 from alphonse.agent.cortex.graph import invoke_cortex
 from alphonse.agent.cortex.state_store import load_state, save_state
 from alphonse.agent.cognition.skills.interpretation.skills import build_ollama_client
@@ -46,20 +48,28 @@ class HandleIncomingMessageAction(Action):
         if not text:
             return _message_result("No te escuché bien. ¿Puedes repetir?", incoming)
 
-        state = load_state(incoming.address or incoming.channel_type) or {}
-        state.update(
-            {
-                "chat_id": incoming.address or incoming.channel_type,
-                "channel_type": incoming.channel_type,
-                "channel_target": incoming.address or incoming.channel_type,
-                "actor_person_id": incoming.person_id,
-            }
-        )
+        chat_key = incoming.address or incoming.channel_type
+        stored_state = load_state(chat_key) or {}
+        state = _build_cortex_state(stored_state, incoming, correlation_id)
         llm_client = _build_llm_client()
-        result_state = invoke_cortex(state, text, llm_client=llm_client)
-        response_text = result_state.get("response_text") or "¿En qué puedo ayudarte?"
-        save_state(incoming.address or incoming.channel_type, _persisted_state(result_state))
-        return _message_result(str(response_text), incoming)
+        result = invoke_cortex(state, text, llm_client=llm_client)
+        save_state(chat_key, result.cognition_state)
+        executor = PlanExecutor()
+        exec_context = PlanExecutionContext(
+            channel_type=incoming.channel_type,
+            channel_target=incoming.address,
+            actor_person_id=incoming.person_id,
+            correlation_id=incoming.correlation_id,
+        )
+        if result.reply_text:
+            reply_plan = CortexPlan(
+                plan_type=PlanType.COMMUNICATE,
+                payload={"message": str(result.reply_text)},
+            )
+            executor.execute([reply_plan], context, exec_context)
+        if result.plans:
+            executor.execute(result.plans, context, exec_context)
+        return _noop_result(incoming)
 
 
 def _build_incoming_context(payload: dict, signal: object | None, correlation_id: str) -> IncomingContext:
@@ -100,11 +110,22 @@ def _resolve_person_id(payload: dict, channel_type: str, address: str | None) ->
     return None
 
 
-def _persisted_state(state: dict[str, Any]) -> dict[str, Any]:
-    persisted = dict(state)
-    persisted.pop("incoming_text", None)
-    persisted.pop("response_text", None)
-    return persisted
+def _build_cortex_state(
+    stored_state: dict[str, Any],
+    incoming: IncomingContext,
+    correlation_id: str,
+) -> dict[str, Any]:
+    return {
+        "chat_id": incoming.address or incoming.channel_type,
+        "channel_type": incoming.channel_type,
+        "channel_target": incoming.address or incoming.channel_type,
+        "actor_person_id": incoming.person_id,
+        "pending_intent": stored_state.get("pending_intent"),
+        "slots": stored_state.get("slots_collected") or {},
+        "missing_slots": stored_state.get("missing_slots") or [],
+        "intent": stored_state.get("last_intent"),
+        "correlation_id": correlation_id,
+    }
 
 
 def _message_result(message: str, incoming: IncomingContext) -> ActionResult:
@@ -134,6 +155,11 @@ def _message_result(message: str, incoming: IncomingContext) -> ActionResult:
         payload=payload,
         urgency="normal",
     )
+
+
+def _noop_result(incoming: IncomingContext) -> ActionResult:
+    logger.info("HandleIncomingMessageAction response channel=%s message=noop", incoming.channel_type)
+    return ActionResult(intention_key="NOOP", payload={}, urgency=None)
 
 
 def _audience_for(person_id: str | None) -> dict[str, str]:

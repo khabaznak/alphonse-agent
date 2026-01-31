@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
 from typing import Any, TypedDict
 
 from langgraph.graph import END, StateGraph
 
+from alphonse.agent.cognition.plans import CortexPlan, CortexResult, PlanType
 from alphonse.agent.cognition.providers.ollama import OllamaClient
 from alphonse.agent.core.settings_store import get_timezone
 from alphonse.agent.cortex.intent import (
@@ -14,7 +16,6 @@ from alphonse.agent.cortex.intent import (
     extract_reminder_text,
     parse_trigger_time,
 )
-from alphonse.agent.extremities.scheduler_extremity import schedule_reminder
 
 logger = logging.getLogger(__name__)
 
@@ -35,44 +36,54 @@ class CortexState(TypedDict, total=False):
     response_text: str | None
     timezone: str
     intent_evidence: dict[str, Any]
+    correlation_id: str | None
+    plans: list[dict[str, Any]]
+    last_intent: str | None
 
 
 def build_cortex_graph(llm_client: OllamaClient | None = None) -> StateGraph:
     graph = StateGraph(CortexState)
-    graph.add_node("ingest", _ingest_node)
-    graph.add_node("intent", _intent_node(llm_client))
-    graph.add_node("slot_fill", _slot_fill_node)
-    graph.add_node("clarify", _clarify_node)
-    graph.add_node("execute", _execute_node)
-    graph.add_node("respond", _respond_node)
+    graph.add_node("ingest_node", _ingest_node)
+    graph.add_node("intent_node", _intent_node(llm_client))
+    graph.add_node("slot_fill_node", _slot_fill_node)
+    graph.add_node("clarify_node", _clarify_node)
+    graph.add_node("plan_node", _plan_node)
+    graph.add_node("respond_node", _respond_node)
 
-    graph.set_entry_point("ingest")
-    graph.add_edge("ingest", "intent")
+    graph.set_entry_point("ingest_node")
+    graph.add_edge("ingest_node", "intent_node")
     graph.add_conditional_edges(
-        "intent",
+        "intent_node",
         _route_after_intent,
         {
-            "schedule_reminder": "slot_fill",
-            "respond": "respond",
+            "schedule_reminder": "slot_fill_node",
+            "respond": "respond_node",
         },
     )
     graph.add_conditional_edges(
-        "slot_fill",
+        "slot_fill_node",
         _route_after_slots,
         {
-            "clarify": "clarify",
-            "execute": "execute",
+            "clarify": "clarify_node",
+            "plan": "plan_node",
         },
     )
-    graph.add_edge("clarify", "respond")
-    graph.add_edge("execute", "respond")
-    graph.add_edge("respond", END)
+    graph.add_edge("clarify_node", "respond_node")
+    graph.add_edge("plan_node", "respond_node")
+    graph.add_edge("respond_node", END)
     return graph
 
 
-def invoke_cortex(state: dict[str, Any], text: str, *, llm_client: OllamaClient | None = None) -> dict[str, Any]:
+def invoke_cortex(state: dict[str, Any], text: str, *, llm_client: OllamaClient | None = None) -> CortexResult:
     graph = build_cortex_graph(llm_client).compile()
-    return graph.invoke({**state, "incoming_text": text})
+    result_state = graph.invoke({**state, "incoming_text": text})
+    plans = [CortexPlan.model_validate(plan) for plan in result_state.get("plans") or []]
+    return CortexResult(
+        reply_text=result_state.get("response_text"),
+        plans=plans,
+        cognition_state=_build_cognition_state(result_state),
+        meta=_build_meta(result_state),
+    )
 
 
 def _ingest_node(state: CortexState) -> dict[str, Any]:
@@ -87,6 +98,7 @@ def _ingest_node(state: CortexState) -> dict[str, Any]:
         "messages": messages,
         "timezone": state.get("timezone") or get_timezone(),
         "response_text": None,
+        "plans": [],
     }
 
 
@@ -112,6 +124,7 @@ def _intent_node(llm_client: OllamaClient | None):
             "intent": intent,
             "intent_confidence": confidence,
             "intent_evidence": evidence,
+            "last_intent": intent,
         }
 
     return _node
@@ -159,24 +172,36 @@ def _clarify_node(state: CortexState) -> dict[str, Any]:
     return {"response_text": response}
 
 
-def _execute_node(state: CortexState) -> dict[str, Any]:
+def _plan_node(state: CortexState) -> dict[str, Any]:
     slots = state.get("slots") or {}
     reminder_text = slots.get("reminder_text")
     trigger_time = slots.get("trigger_time")
     if not reminder_text or not trigger_time:
         return {"response_text": "¿Puedes aclarar qué necesitas?"}
-    result = schedule_reminder(
-        reminder_text=str(reminder_text),
-        trigger_time=str(trigger_time),
-        chat_id=str(state.get("channel_target") or state.get("chat_id")),
-        channel_type=str(state.get("channel_type")),
-        actor_person_id=state.get("actor_person_id"),
-        intent_evidence=state.get("intent_evidence") or {},
-        correlation_id=str(state.get("chat_id")),
+    plan = CortexPlan(
+        plan_type=PlanType.SCHEDULE_TIMED_SIGNAL,
+        target=str(state.get("channel_target") or state.get("chat_id") or ""),
+        channels=None,
+        payload={
+            "signal_type": "reminder",
+            "trigger_at": str(trigger_time),
+            "timezone": str(state.get("timezone") or get_timezone()),
+            "reminder_text": str(reminder_text),
+            "origin": str(state.get("channel_type") or "system"),
+            "chat_id": str(state.get("channel_target") or state.get("chat_id") or ""),
+            "correlation_id": str(state.get("correlation_id") or state.get("chat_id") or ""),
+        },
     )
-    logger.info("cortex execute reminder status=%s", result)
+    plans = list(state.get("plans") or [])
+    plans.append(plan.model_dump())
+    logger.info(
+        "cortex plans chat_id=%s plan_type=%s plan_id=%s",
+        state.get("chat_id"),
+        plan.plan_type,
+        plan.plan_id,
+    )
     return {
-        "response_text": f"Programé el recordatorio para {trigger_time}.",
+        "plans": plans,
         "pending_intent": None,
         "missing_slots": [],
     }
@@ -186,6 +211,8 @@ def _respond_node(state: CortexState) -> dict[str, Any]:
     if state.get("response_text"):
         return {}
     intent = state.get("intent")
+    if intent in {"schedule_reminder", "greeting"} and state.get("plans"):
+        return {}
     if intent == "get_status":
         response = "Estoy activo y listo para recordatorios."
     elif intent == "help":
@@ -193,7 +220,24 @@ def _respond_node(state: CortexState) -> dict[str, Any]:
     elif intent == "identity_question":
         response = "Soy Alphonse, tu asistente. Solo conozco este chat autorizado."
     elif intent == "greeting":
-        response = "¡Hola! ¿En qué te ayudo?"
+        plan = CortexPlan(
+            plan_type=PlanType.COMMUNICATE,
+            channels=["telegram"],
+            payload={
+                "message": "¡Hola! ¿En qué te ayudo?",
+                "style": "friendly",
+                "locale": "es-MX",
+            },
+        )
+        plans = list(state.get("plans") or [])
+        plans.append(plan.model_dump())
+        logger.info(
+            "cortex plans chat_id=%s plan_type=%s plan_id=%s",
+            state.get("chat_id"),
+            plan.plan_type,
+            plan.plan_id,
+        )
+        return {"plans": plans}
     else:
         response = "Puedo programar recordatorios. Prueba: \"Recuérdame X en 10 min\"."
     return {"response_text": response}
@@ -205,4 +249,23 @@ def _route_after_intent(state: CortexState) -> str:
 
 def _route_after_slots(state: CortexState) -> str:
     missing = state.get("missing_slots") or []
-    return "clarify" if missing else "execute"
+    return "clarify" if missing else "plan"
+
+
+def _build_cognition_state(state: CortexState) -> dict[str, Any]:
+    return {
+        "pending_intent": state.get("pending_intent"),
+        "slots_collected": state.get("slots") or {},
+        "missing_slots": state.get("missing_slots") or [],
+        "last_intent": state.get("intent"),
+        "last_updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def _build_meta(state: CortexState) -> dict[str, Any]:
+    return {
+        "intent": state.get("intent"),
+        "intent_confidence": state.get("intent_confidence"),
+        "correlation_id": state.get("correlation_id"),
+        "chat_id": state.get("chat_id"),
+    }
