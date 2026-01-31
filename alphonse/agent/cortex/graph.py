@@ -190,8 +190,12 @@ def _plan_node(state: CortexState) -> dict[str, Any]:
             "trigger_at": str(trigger_time),
             "timezone": str(state.get("timezone") or get_timezone()),
             "reminder_text": str(reminder_text),
+            "reminder_text_raw": str(reminder_text),
             "origin": str(state.get("channel_type") or "system"),
             "chat_id": str(state.get("channel_target") or state.get("chat_id") or ""),
+            "origin_channel": str(state.get("channel_type") or "system"),
+            "locale_hint": None,
+            "created_at": datetime.now(timezone.utc).isoformat(),
             "correlation_id": str(state.get("correlation_id") or state.get("chat_id") or ""),
         },
     )

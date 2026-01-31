@@ -53,8 +53,12 @@ class ScheduleTimedSignalPayload(BaseModel):
     trigger_at: str
     timezone: str
     reminder_text: str
+    reminder_text_raw: str | None = None
     origin: str
     chat_id: str
+    origin_channel: str | None = None
+    locale_hint: str | None = None
+    created_at: str | None = None
     correlation_id: str
 
 

@@ -16,6 +16,15 @@ class PolicyDecision:
 
 
 class PolicyEngine:
+    def approve(self, plans: list[CortexPlan], context: object) -> list[CortexPlan]:
+        _ = context
+        approved: list[CortexPlan] = []
+        for plan in plans:
+            decision = self.approve_plan(plan, context)
+            if decision.allowed:
+                approved.append(plan)
+        return approved
+
     def approve_plan(self, plan: CortexPlan, exec_context: object) -> PolicyDecision:
         if plan.plan_type == PlanType.SCHEDULE_TIMED_SIGNAL:
             return self._approve_schedule(plan, exec_context)

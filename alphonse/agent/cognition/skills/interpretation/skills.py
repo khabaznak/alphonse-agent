@@ -164,6 +164,14 @@ def _build_timed_signal_record(decision: RoutingDecision, message: MessageEvent)
         extracted = _extract_message_text(message.text)
         if extracted:
             payload["message"] = extracted
+    if isinstance(payload, dict) and not payload.get("reminder_text_raw"):
+        payload["reminder_text_raw"] = payload.get("message") or _extract_message_text(message.text) or message.text
+    if isinstance(payload, dict) and not payload.get("chat_id"):
+        payload["chat_id"] = _as_optional_str(args.get("target")) or _as_optional_str(message.metadata.get("target"))
+    if isinstance(payload, dict) and not payload.get("origin_channel"):
+        payload["origin_channel"] = _as_optional_str(args.get("origin")) or message.channel
+    if isinstance(payload, dict) and not payload.get("created_at"):
+        payload["created_at"] = datetime.now(timezone.utc).isoformat()
 
     tz_name = _normalize_timezone(args.get("timezone"))
     trigger_at_raw = args.get("trigger_at")
