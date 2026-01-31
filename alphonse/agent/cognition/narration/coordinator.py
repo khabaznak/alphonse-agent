@@ -14,12 +14,14 @@ from alphonse.agent.cognition.narration.policies import (
     PolicyStack,
 )
 from alphonse.agent.cognition.skills.narration.renderer import render_message
+from alphonse.agent.cognition.skills.narration.skill import NarrationSkill
 from alphonse.agent.identity import store as identity_store
 
 
 @dataclass
 class DeliveryCoordinator:
     stack: PolicyStack
+    skill: NarrationSkill
 
     def deliver(self, result: ActionResult, context: dict) -> ActionResult | None:
         payload = result.payload
@@ -32,17 +34,15 @@ class DeliveryCoordinator:
         if not intent.should_narrate or intent.channel_type == "silent":
             return None
 
-        draft = MessageDraft(
+        draft = self.skill.compose(
+            message=str(message),
+            intent=intent,
+            presentation=presentation,
             correlation_id=str(payload.get("correlation_id") or bundle.event.get("correlation_id") or ""),
-            audience=intent.audience,
-            channel_type=intent.channel_type,
-            format=intent.format,
-            content=str(message),
             metadata={"data": payload.get("data")},
         )
         rendered = render_message(draft, presentation)
-        fallback_address = _as_optional_str(payload.get("target"))
-        resolution = resolve_channel(intent, fallback_address=fallback_address)
+        resolution = resolve_channel(intent)
 
         return _action_result_for_channel(
             rendered.channel_type,
@@ -67,6 +67,7 @@ def build_context_bundle(payload: dict[str, Any], context: dict) -> ContextBundl
     presence = _resolve_presence(payload)
     identity = _resolve_identity(payload)
     identity["channel_hint"] = payload.get("channel_hint")
+    identity["model_budget_policy"] = payload.get("model_budget_policy")
     return ContextBundle(
         event=event,
         trace=trace,
@@ -155,4 +156,4 @@ def build_default_coordinator() -> DeliveryCoordinator:
         preferences=CommunicationPreferencesPolicy(),
         model_routing=ModelRoutingPolicy(),
     )
-    return DeliveryCoordinator(stack=stack)
+    return DeliveryCoordinator(stack=stack, skill=NarrationSkill())

@@ -14,7 +14,7 @@ class ChannelResolution:
     person_id: str | None
 
 
-def resolve_channel(intent: NarrationIntent, fallback_address: str | None = None) -> ChannelResolution:
+def resolve_channel(intent: NarrationIntent) -> ChannelResolution:
     if intent.channel_type == "silent":
         return ChannelResolution(channel_type="silent", address=None, person_id=None)
 
@@ -27,6 +27,7 @@ def resolve_channel(intent: NarrationIntent, fallback_address: str | None = None
                 address=str(channel["address"]),
                 person_id=channel.get("person_id"),
             )
+        return ChannelResolution(channel_type="silent", address=None, person_id=intent.audience.id)
     if intent.audience.kind == "group":
         channels = identity_store.list_channels_for_group(intent.audience.id, intent.channel_type)
         if channels:
@@ -36,9 +37,4 @@ def resolve_channel(intent: NarrationIntent, fallback_address: str | None = None
                 address=str(channel["address"]),
                 person_id=channel.get("person_id"),
             )
-
-    if intent.channel_type in {"cli", "api"}:
-        return ChannelResolution(channel_type=intent.channel_type, address=None, person_id=None)
-    if fallback_address:
-        return ChannelResolution(channel_type=intent.channel_type, address=fallback_address, person_id=None)
     return ChannelResolution(channel_type="silent", address=None, person_id=None)
