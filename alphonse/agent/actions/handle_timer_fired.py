@@ -5,11 +5,15 @@ from typing import Any
 
 from alphonse.agent.actions.base import Action
 from alphonse.agent.actions.models import ActionResult
-from alphonse.agent.cognition.skills.command_plans import CreateReminderPlan, parse_command_plan
+from alphonse.agent.cognition.skills.command_plans import (
+    CreateReminderPlan,
+    parse_command_plan,
+)
 from alphonse.agent.cognition.reminders.renderer import render_reminder
 from alphonse.agent.cognition.plan_executor import PlanExecutionContext, PlanExecutor
 from alphonse.agent.cognition.plans import CortexPlan, PlanType
 from alphonse.agent.policy.engine import PolicyEngine
+from alphonse.config import settings
 
 
 logger = logging.getLogger(__name__)
@@ -99,19 +103,26 @@ def _build_reminder_payload(
     if plan:
         return {
             "reminder_text_raw": plan.payload.message.text,
-            "chat_id": plan.actor.channel.target if plan.actor and plan.actor.channel else None,
+            "chat_id": plan.actor.channel.target
+            if plan.actor and plan.actor.channel
+            else None,
             "origin_channel": plan.source,
             "locale_hint": plan.payload.message.language,
             "created_at": plan.created_at,
+            "trigger_at": plan.payload.schedule.trigger_at,
         }
     reminder_text_raw = inner.get("reminder_text_raw") or inner.get("message")
     return {
         "reminder_text_raw": reminder_text_raw,
         "chat_id": inner.get("chat_id") or inner.get("target"),
-        "origin_channel": inner.get("origin_channel") or inner.get("origin") or payload.get("origin"),
+        "origin_channel": inner.get("origin_channel")
+        or inner.get("origin")
+        or payload.get("origin"),
         "locale_hint": inner.get("locale_hint"),
         "created_at": inner.get("created_at"),
         "person_id": inner.get("person_id"),
+        "trigger_at": inner.get("trigger_at"),
+        "user_name": inner.get("user_name"),
     }
 
 
@@ -122,7 +133,9 @@ def _target_address(payload: dict[str, Any]) -> str | None:
     return str(target)
 
 
-def _correlation_id(payload: dict[str, Any], signal: object | None, plan: CreateReminderPlan | None) -> str | None:
+def _correlation_id(
+    payload: dict[str, Any], signal: object | None, plan: CreateReminderPlan | None
+) -> str | None:
     if plan:
         return plan.correlation_id
     if isinstance(payload, dict):
@@ -137,9 +150,16 @@ def _locale_from_payload(payload: dict[str, Any]) -> str:
     if isinstance(hint, str) and hint.strip():
         return hint
     raw = payload.get("reminder_text_raw") or ""
-    if any(token in str(raw).lower() for token in ("recuérd", "recuerda", "bañar", "mañana", "hoy")):
+    if any(
+        token in str(raw).lower()
+        for token in ("recuérd", "recuerda", "bañar", "mañana", "hoy")
+    ):
         return "es-MX"
-    return "en-US"
+    if any(
+        token in str(raw).lower() for token in ("remind", "tomorrow", "today", "please")
+    ):
+        return "en-US"
+    return settings.get_default_locale()
 
 
 def _actor_person_id(payload: dict[str, Any]) -> str | None:

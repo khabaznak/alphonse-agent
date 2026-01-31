@@ -16,7 +16,10 @@ from dateutil.rrule import rrulestr
 
 from alphonse.agent.runtime import get_runtime
 from alphonse.agent.cognition.providers.ollama import OllamaClient
-from alphonse.agent.cognition.skills.interpretation.models import MessageEvent, RoutingDecision
+from alphonse.agent.cognition.skills.interpretation.models import (
+    MessageEvent,
+    RoutingDecision,
+)
 from alphonse.agent.cognition.skills.interpretation.registry import SkillRegistry
 from alphonse.agent.nervous_system.paths import resolve_nervous_system_db_path
 from alphonse.agent.core.settings_store import get_timezone
@@ -68,7 +71,9 @@ class SkillExecutor:
             f"- Last signal at: {last_signal_at}\n"
         )
         try:
-            content = self.llm_client.complete(system_prompt=system_prompt, user_prompt=prompt)
+            content = self.llm_client.complete(
+                system_prompt=system_prompt, user_prompt=prompt
+            )
             if content:
                 return str(content).strip()
         except Exception as exc:
@@ -89,7 +94,9 @@ class SkillExecutor:
         )
         prompt = "Please provide a short, kind joke."
         try:
-            content = self.llm_client.complete(system_prompt=system_prompt, user_prompt=prompt)
+            content = self.llm_client.complete(
+                system_prompt=system_prompt, user_prompt=prompt
+            )
             if content:
                 return str(content).strip()
         except Exception as exc:
@@ -102,7 +109,9 @@ class SkillExecutor:
         for skill in sorted(self.registry.list_skills(), key=lambda item: item.key):
             if skill.key == "conversation.echo":
                 continue
-            aliases = [alias for alias in skill.aliases if alias and not alias.startswith("/")]
+            aliases = [
+                alias for alias in skill.aliases if alias and not alias.startswith("/")
+            ]
             alias_text = ", ".join(sorted(set(aliases)))
             if alias_text:
                 lines.append(f"- {skill.key}: {alias_text}")
@@ -110,7 +119,9 @@ class SkillExecutor:
                 lines.append(f"- {skill.key}")
         return "\n".join(lines)
 
-    def _schedule_timed_signal(self, decision: RoutingDecision, message: MessageEvent) -> str:
+    def _schedule_timed_signal(
+        self, decision: RoutingDecision, message: MessageEvent
+    ) -> str:
         try:
             record = _build_timed_signal_record(decision, message)
         except ValueError as exc:
@@ -129,7 +140,9 @@ class SkillExecutor:
 def build_ollama_client() -> OllamaClient:
     base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
     model = os.getenv("LOCAL_LLM_MODEL", "mistral:7b-instruct")
-    timeout_seconds = _parse_float(os.getenv("LOCAL_LLM_TIMEOUT_SECONDS"), default=240.0)
+    timeout_seconds = _parse_float(
+        os.getenv("LOCAL_LLM_TIMEOUT_SECONDS"), default=240.0
+    )
     return OllamaClient(
         base_url=base_url,
         model=model,
@@ -146,11 +159,17 @@ def _parse_float(raw: str | None, default: float) -> float:
         return default
 
 
-def _build_timed_signal_record(decision: RoutingDecision, message: MessageEvent) -> dict[str, Any]:
+def _build_timed_signal_record(
+    decision: RoutingDecision, message: MessageEvent
+) -> dict[str, Any]:
     args = decision.args
     signal_type = _normalize_signal_type(args.get("signal_type"))
     payload = _normalize_payload(args.get("payload"))
-    user_name = _as_optional_str(payload.get("user_name")) if isinstance(payload, dict) else None
+    user_name = (
+        _as_optional_str(payload.get("user_name"))
+        if isinstance(payload, dict)
+        else None
+    )
     if not user_name:
         user_name = _as_optional_str(args.get("user_name"))
         if user_name and isinstance(payload, dict):
@@ -165,21 +184,43 @@ def _build_timed_signal_record(decision: RoutingDecision, message: MessageEvent)
         if extracted:
             payload["message"] = extracted
     if isinstance(payload, dict) and not payload.get("reminder_text_raw"):
-        payload["reminder_text_raw"] = payload.get("message") or _extract_message_text(message.text) or message.text
+        payload["reminder_text_raw"] = (
+            payload.get("message")
+            or _extract_message_text(message.text)
+            or message.text
+        )
     if isinstance(payload, dict) and not payload.get("chat_id"):
-        payload["chat_id"] = _as_optional_str(args.get("target")) or _as_optional_str(message.metadata.get("target"))
+        payload["chat_id"] = _as_optional_str(args.get("target")) or _as_optional_str(
+            message.metadata.get("target")
+        )
     if isinstance(payload, dict) and not payload.get("origin_channel"):
-        payload["origin_channel"] = _as_optional_str(args.get("origin")) or message.channel
+        payload["origin_channel"] = (
+            _as_optional_str(args.get("origin")) or message.channel
+        )
     if isinstance(payload, dict) and not payload.get("created_at"):
         payload["created_at"] = datetime.now(timezone.utc).isoformat()
+    if isinstance(payload, dict) and not payload.get("locale_hint"):
+        locale_hint = _as_optional_str(args.get("locale"))
+        if not locale_hint:
+            locale_hint = _as_optional_str(
+                message.metadata.get("locale") or message.metadata.get("language")
+            )
+        if locale_hint:
+            payload["locale_hint"] = locale_hint
 
     tz_name = _normalize_timezone(args.get("timezone"))
     trigger_at_raw = args.get("trigger_at")
     trigger_at = _resolve_trigger_at(trigger_at_raw, message.text, tz_name)
     trigger_at_utc = trigger_at.astimezone(timezone.utc)
+    if isinstance(payload, dict) and not payload.get("trigger_at"):
+        payload["trigger_at"] = trigger_at_utc.isoformat()
 
     rrule_raw = args.get("rrule")
-    rrule_value = str(rrule_raw).strip() if isinstance(rrule_raw, str) and rrule_raw.strip() else None
+    rrule_value = (
+        str(rrule_raw).strip()
+        if isinstance(rrule_raw, str) and rrule_raw.strip()
+        else None
+    )
     next_trigger_at = None
     if rrule_value:
         next_trigger_at = _next_occurrence(rrule_value, trigger_at, tz_name)
@@ -199,7 +240,8 @@ def _build_timed_signal_record(decision: RoutingDecision, message: MessageEvent)
         "last_error": None,
         "signal_type": signal_type,
         "payload": payload,
-        "target": _as_optional_str(args.get("target")) or _as_optional_str(message.metadata.get("target")),
+        "target": _as_optional_str(args.get("target"))
+        or _as_optional_str(message.metadata.get("target")),
         "origin": _as_optional_str(args.get("origin")) or message.channel,
         "correlation_id": _as_optional_str(args.get("correlation_id")),
     }
@@ -318,7 +360,9 @@ def _resolve_trigger_at(value: object | None, text: str, tz_name: str) -> dateti
     raise ValueError("trigger_at is required")
 
 
-def _next_occurrence(rrule_value: str, start: datetime, tz_name: str) -> datetime | None:
+def _next_occurrence(
+    rrule_value: str, start: datetime, tz_name: str
+) -> datetime | None:
     tzinfo = ZoneInfo(tz_name)
     dtstart = start.astimezone(tzinfo)
     rule = rrulestr(rrule_value, dtstart=dtstart)
@@ -349,6 +393,8 @@ def _extract_message_text(text: str) -> str | None:
         parts = text.split("to", 1)
         if len(parts) == 2:
             candidate = parts[1].strip()
-            candidate = re.sub(r"\bat\b\s+.+", "", candidate, flags=re.IGNORECASE).strip()
+            candidate = re.sub(
+                r"\bat\b\s+.+", "", candidate, flags=re.IGNORECASE
+            ).strip()
             return candidate or None
     return None

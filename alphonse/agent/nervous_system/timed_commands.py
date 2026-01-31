@@ -26,6 +26,7 @@ def insert_timed_signal_from_plan(plan: CreateReminderPlan) -> None:
         "origin_channel": channel_type or plan.source,
         "locale_hint": plan.payload.message.language,
         "created_at": plan.created_at,
+        "trigger_at": plan.payload.schedule.trigger_at,
     }
     with sqlite3.connect(db_path) as conn:
         conn.execute(
