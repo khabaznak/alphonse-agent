@@ -47,31 +47,25 @@ class HandleMessageAction(Action):
         decision = interpreter.interpret(event)
         response = executor.respond(decision, event)
 
-        if origin == "cli":
-            return ActionResult(
-                intention_key="NOTIFY_CLI",
-                payload={
-                    "message": response,
-                },
-                urgency="normal",
-            )
-
-        if origin == "api":
-            return ActionResult(
-                intention_key="NOTIFY_API",
-                payload={
-                    "correlation_id": correlation_id,
-                    "message": response,
-                    "data": {"decision": decision.__dict__},
-                },
-                urgency="normal",
-            )
-
         return ActionResult(
-            intention_key="NOTIFY_TELEGRAM",
+            intention_key="MESSAGE_READY",
             payload={
-                "chat_id": chat_id,
                 "message": response,
+                "origin": origin,
+                "channel_hint": origin,
+                "target": chat_id,
+                "audience": {
+                    "kind": "person",
+                    "id": _as_optional_str(payload.get("person_id")) or "system",
+                },
+                "correlation_id": correlation_id,
+                "data": {"decision": decision.__dict__},
             },
             urgency="normal",
         )
+
+
+def _as_optional_str(value: object | None) -> str | None:
+    if value is None:
+        return None
+    return str(value)

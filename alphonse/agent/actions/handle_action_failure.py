@@ -11,12 +11,15 @@ class HandleActionFailure(Action):
         signal = context.get("signal")
         payload = getattr(signal, "payload", {}) if signal else {}
         error_message = payload.get("error_message") or "Action failed"
+        correlation_id = getattr(signal, "correlation_id", None) if signal else None
         return ActionResult(
-            intention_key="NOTIFY_HOUSEHOLD",
+            intention_key="MESSAGE_READY",
             payload={
-                "title": "Action Failed",
                 "message": str(error_message),
-                "target_group": "all",
+                "origin": "system",
+                "channel_hint": "silent",
+                "correlation_id": correlation_id,
+                "audience": {"kind": "system", "id": "system"},
             },
             urgency="normal",
         )

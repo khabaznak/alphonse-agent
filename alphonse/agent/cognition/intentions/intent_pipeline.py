@@ -18,6 +18,7 @@ from alphonse.agent.extremities.cli_extremity import CliExtremity
 from alphonse.agent.extremities.registry import ExtremityRegistry
 from alphonse.agent.nervous_system.senses.bus import Bus, Signal
 from alphonse.agent.nervous_system.trace_store import write_trace
+from alphonse.agent.cognition.narration.coordinator import build_default_coordinator, DeliveryCoordinator
 
 
 @dataclass
@@ -25,6 +26,7 @@ class IntentPipeline:
     actions: ActionRegistry
     extremities: ExtremityRegistry
     bus: Bus
+    coordinator: DeliveryCoordinator
 
     def handle(self, action_key: str | None, context: dict) -> None:
         if not action_key:
@@ -35,7 +37,12 @@ class IntentPipeline:
         action = factory(context)
         try:
             result = action.execute(context)
-            self.extremities.dispatch(result, None)
+            if result.intention_key == "MESSAGE_READY":
+                delivery = self.coordinator.deliver(result, context)
+                if delivery:
+                    self.extremities.dispatch(delivery, None)
+            else:
+                self.extremities.dispatch(result, None)
             self._emit_outcome(result, context, success=True, error=None)
         except Exception as exc:
             self._emit_outcome(None, context, success=False, error=exc)
@@ -70,7 +77,12 @@ def build_default_pipeline_with_bus(bus: Bus) -> IntentPipeline:
     extremities.register(TelegramNotificationExtremity())
     extremities.register(ApiExtremity())
     extremities.register(CliExtremity())
-    return IntentPipeline(actions=actions, extremities=extremities, bus=bus)
+    return IntentPipeline(
+        actions=actions,
+        extremities=extremities,
+        bus=bus,
+        coordinator=build_default_coordinator(),
+    )
 
 
 def _extract_context_payload(context: dict) -> dict:

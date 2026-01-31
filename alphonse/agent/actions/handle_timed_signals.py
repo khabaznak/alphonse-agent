@@ -19,11 +19,14 @@ class HandleTimedSignalsAction(Action):
             limit_val = 200
         data = {"timed_signals": list_timed_signals(limit=limit_val)}
         return ActionResult(
-            intention_key="NOTIFY_API",
+            intention_key="MESSAGE_READY",
             payload={
-                "correlation_id": correlation_id,
                 "message": "ok",
+                "origin": "api",
+                "channel_hint": "api",
+                "correlation_id": correlation_id,
                 "data": data,
+                "audience": {"kind": "system", "id": "system"},
             },
             urgency="normal",
         )

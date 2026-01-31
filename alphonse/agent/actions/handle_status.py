@@ -13,11 +13,14 @@ class HandleStatusAction(Action):
         correlation_id = getattr(signal, "correlation_id", None) if signal else None
         snapshot = get_runtime().snapshot()
         return ActionResult(
-            intention_key="NOTIFY_API",
+            intention_key="MESSAGE_READY",
             payload={
-                "correlation_id": correlation_id,
                 "message": "ok",
+                "origin": "api",
+                "channel_hint": "api",
+                "correlation_id": correlation_id,
                 "data": snapshot,
+                "audience": {"kind": "system", "id": "system"},
             },
             urgency="normal",
         )
