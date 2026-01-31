@@ -48,6 +48,7 @@ dist/
 .env
 .env.*
 !alphonse/agent/.env.example
+alphonse.log
 alphonse/agent/nervous_system/db/
 
 # Local sqlite data
