@@ -32,7 +32,8 @@ def load_heart(config: HeartConfig, bus: Bus, ddfsm: DDFSM) -> Heart:
 
 def main() -> None:
     load_env()
-    logging.basicConfig(level=logging.INFO)
+    log_level = os.getenv("ALPHONSE_LOG_LEVEL", "INFO").upper()
+    logging.basicConfig(level=getattr(logging, log_level, logging.INFO))
 
     init_settings_db()
 

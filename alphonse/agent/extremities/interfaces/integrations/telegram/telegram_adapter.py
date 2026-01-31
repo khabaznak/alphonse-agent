@@ -2,15 +2,19 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import threading
+import time
 from urllib import parse, request
 from typing import Any
 
 from alphonse.agent.extremities.interfaces.integrations._contracts import IntegrationAdapter
 from alphonse.agent.nervous_system.senses.bus import Signal as BusSignal
+from alphonse.agent.nervous_system.telegram_updates_store import mark_update_processed
 
 logger = logging.getLogger(__name__)
+_SNIPPET_LIMIT = 80
 
 
 class TelegramAdapter(IntegrationAdapter):
@@ -24,6 +28,8 @@ class TelegramAdapter(IntegrationAdapter):
         self._running = False
         self._thread: threading.Thread | None = None
         self._application = None
+        self._last_update_id: int | None = None
+        self._seen_update_ids: set[int] = set()
 
         self._bot_token = str(config.get("bot_token") or "").strip()
         if not self._bot_token:
@@ -82,56 +88,168 @@ class TelegramAdapter(IntegrationAdapter):
         self._send_message_http(chat_id, text)
 
     def _run_polling(self) -> None:
-        try:
-            from telegram.ext import Application, MessageHandler, filters
-        except Exception as exc:  # pragma: no cover - dependency missing
-            self._running = False
-            raise RuntimeError(
-                "python-telegram-bot is required. Install with: pip install python-telegram-bot"
-            ) from exc
-
-        application = Application.builder().token(self._bot_token).build()
-        self._application = application
-
-        async def _handle_message(update, _context) -> None:
-            if not update or not update.message:
-                return
-            message = update.message
-            chat_id = message.chat_id
-            if self._allowed_chat_ids is not None and chat_id not in self._allowed_chat_ids:
-                logger.debug("TelegramAdapter ignored message from chat_id=%s", chat_id)
-                return
-
-            text = message.text or ""
-            from_user = None
-            from_user_name = None
-            if message.from_user is not None:
-                from_user = message.from_user.username or message.from_user.id
-                from_user_name = message.from_user.first_name or message.from_user.username
-
-            signal = BusSignal(
-                type="external.telegram.message",
-                payload={
-                    "text": text,
-                    "chat_id": chat_id,
-                    "from_user": from_user,
-                    "from_user_name": from_user_name,
-                    "message_id": message.message_id,
-                },
-                source="telegram",
+        while self._running:
+            offset = (self._last_update_id or 0) + 1
+            updates = self._fetch_updates(offset)
+            if updates is None:
+                time.sleep(self._poll_interval_sec)
+                continue
+            max_update_id = None
+            for update in updates:
+                update_id = update.get("update_id")
+                if isinstance(update_id, int):
+                    max_update_id = update_id if max_update_id is None else max(max_update_id, update_id)
+                self._handle_update(update)
+            if max_update_id is not None:
+                self._last_update_id = max_update_id
+            logger.info(
+                "TelegramAdapter getUpdates offset=%s returned=%s max_update_id=%s",
+                offset,
+                len(updates),
+                max_update_id,
             )
-            logger.info("TelegramAdapter received message: %s", text)
-            self.emit_signal(signal)  # type: ignore[arg-type]
+            time.sleep(self._poll_interval_sec)
 
-        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, _handle_message))
-        application.run_polling(poll_interval=self._poll_interval_sec, stop_signals=None)
+    def _fetch_updates(self, offset: int) -> list[dict[str, Any]] | None:
+        endpoint = "getUpdates"
+        url = f"https://api.telegram.org/bot{self._bot_token}/{endpoint}"
+        data = parse.urlencode({"timeout": 0, "offset": offset}).encode("utf-8")
+        req = request.Request(url, data=data, method="POST")
+        try:
+            with request.urlopen(req, timeout=10) as response:
+                body = response.read().decode("utf-8", errors="ignore")
+        except Exception as exc:
+            logger.error("TelegramAdapter %s failed: %s", endpoint, exc)
+            return None
+        parsed = _parse_json(body)
+        if not isinstance(parsed, dict):
+            logger.error("TelegramAdapter %s invalid JSON", endpoint)
+            return None
+        if not parsed.get("ok"):
+            logger.error(
+                "TelegramAdapter %s ok=false error_code=%s description=%s",
+                endpoint,
+                parsed.get("error_code"),
+                parsed.get("description"),
+            )
+            return None
+        result = parsed.get("result")
+        if isinstance(result, list):
+            return [item for item in result if isinstance(item, dict)]
+        return []
+
+    def _handle_update(self, update: dict[str, Any]) -> None:
+        update_id = update.get("update_id")
+        if not isinstance(update_id, int):
+            return
+        if update_id in self._seen_update_ids:
+            logger.info("TelegramAdapter duplicate update_id=%s skipped", update_id)
+            return
+        self._seen_update_ids.add(update_id)
+
+        message = update.get("message")
+        if not isinstance(message, dict):
+            return
+        text = message.get("text") or ""
+        chat = message.get("chat") if isinstance(message.get("chat"), dict) else {}
+        chat_id = message.get("chat_id") or chat.get("id")
+        if chat_id is None:
+            return
+        if not mark_update_processed(update_id, str(chat_id)):
+            logger.info("TelegramAdapter duplicate update_id=%s skipped (db)", update_id)
+            return
+        if self._allowed_chat_ids is not None and int(chat_id) not in self._allowed_chat_ids:
+            logger.info(
+                "TelegramAdapter rejected message update_id=%s chat_id=%s reason=not_allowed",
+                update_id,
+                chat_id,
+            )
+            return
+
+        from_user_payload = message.get("from") if isinstance(message.get("from"), dict) else {}
+        from_user = from_user_payload.get("username") or from_user_payload.get("id")
+        from_user_name = from_user_payload.get("first_name") or from_user_payload.get("username")
+
+        logger.info(
+            "TelegramAdapter accepted message update_id=%s chat_id=%s from=%s text=%s",
+            update_id,
+            chat_id,
+            from_user,
+            _snippet(str(text)),
+        )
+
+        signal = BusSignal(
+            type="external.telegram.message",
+            payload={
+                "text": text,
+                "chat_id": chat_id,
+                "from_user": from_user,
+                "from_user_name": from_user_name,
+                "message_id": message.get("message_id"),
+                "update_id": update_id,
+            },
+            source="telegram",
+        )
+        logger.info(
+            "TelegramAdapter emitting external signal update_id=%s chat_id=%s",
+            update_id,
+            chat_id,
+        )
+        self.emit_signal(signal)  # type: ignore[arg-type]
 
     def _send_message_http(self, chat_id: int, text: str) -> None:
-        url = f"https://api.telegram.org/bot{self._bot_token}/sendMessage"
+        endpoint = "sendMessage"
+        url = f"https://api.telegram.org/bot{self._bot_token}/{endpoint}"
         data = parse.urlencode({"chat_id": chat_id, "text": text}).encode("utf-8")
         req = request.Request(url, data=data, method="POST")
         try:
             with request.urlopen(req, timeout=10) as response:
-                response.read()
+                body = response.read()
+                body_text = body.decode("utf-8", errors="ignore")
+                logger.info(
+                    "TelegramAdapter %s status=%s chat_id=%s body=%s",
+                    endpoint,
+                    response.status,
+                    chat_id,
+                    _snippet(body_text),
+                )
+                parsed = _parse_json(body_text)
+                if not isinstance(parsed, dict):
+                    raise RuntimeError("TelegramAdapter invalid JSON response")
+                ok = bool(parsed.get("ok"))
+                if ok:
+                    message_id = None
+                    if isinstance(parsed.get("result"), dict):
+                        message_id = parsed["result"].get("message_id")
+                    logger.info(
+                        "TelegramAdapter %s ok=true message_id=%s",
+                        endpoint,
+                        message_id,
+                    )
+                    return
+                error_code = parsed.get("error_code")
+                description = parsed.get("description")
+                logger.error(
+                    "TelegramAdapter %s ok=false error_code=%s description=%s",
+                    endpoint,
+                    error_code,
+                    description,
+                )
+                raise RuntimeError(f"TelegramAdapter {endpoint} failed: {error_code} {description}")
         except Exception as exc:
-            logger.error("TelegramAdapter send_message failed: %s", exc)
+            logger.error("TelegramAdapter %s failed: %s", endpoint, exc)
+            raise
+
+
+def _snippet(text: str) -> str:
+    return text if len(text) <= _SNIPPET_LIMIT else f"{text[:_SNIPPET_LIMIT]}..."
+
+
+def _parse_json(text: str) -> dict[str, Any] | None:
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        return None
+    if isinstance(parsed, dict):
+        return parsed
+    return None

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -12,14 +13,21 @@ from alphonse.agent.cognition.skills.command_plans import (
     CommandPlan,
     CreateReminderPlan,
     SendMessagePlan,
+    UnknownPlan,
+    GreetingPlan,
     parse_plan,
 )
-from alphonse.agent.cognition.skills.plan_interpreter import infer_trigger_at, interpret_plan
+from alphonse.agent.cognition.skills.command_interpreter import (
+    CommandInterpreterContext,
+    build_default_command_interpreter,
+)
+from alphonse.agent.cognition.skills.plan_interpreter import infer_trigger_at
 from alphonse.agent.core.settings_store import get_timezone
 from alphonse.agent.identity import store as identity_store
 from alphonse.agent.nervous_system.pending_store import create_pending_plan, get_pending_plan, update_pending_status
 from alphonse.agent.nervous_system.timed_commands import insert_timed_signal_from_plan
 
+logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class IncomingContext:
@@ -42,6 +50,12 @@ class HandleIncomingMessageAction(Action):
         correlation_id = str(correlation_id or uuid.uuid4())
 
         incoming = _build_incoming_context(payload, signal, correlation_id)
+        logger.info(
+            "HandleIncomingMessageAction start channel=%s person=%s text=%s",
+            incoming.channel_type,
+            incoming.person_id,
+            _snippet(text),
+        )
         if not text:
             return _message_result(
                 "I did not catch that. Could you rephrase?",
@@ -94,16 +108,20 @@ def _resolve_person_id(payload: dict, channel_type: str, address: str | None) ->
 def _interpret_new_message(text: str, incoming: IncomingContext) -> ActionResult:
     timezone = get_timezone()
     created_by = incoming.person_id or _channel_identity(incoming)
-    plan = interpret_plan(
-        text=text,
-        created_by=created_by,
-        source=incoming.channel_type,
-        correlation_id=incoming.correlation_id,
-        timezone=timezone,
+    interpreter = build_default_command_interpreter()
+    plan = interpreter.interpret(
+        text,
+        CommandInterpreterContext(
+            created_by=created_by,
+            source=incoming.channel_type,
+            correlation_id=incoming.correlation_id,
+            timezone=timezone,
+        ),
     )
     if plan is None:
         return _message_result(
-            "I can help set reminders. Try 'remind me to water plants at 6pm'.",
+            "Te escuché. ¿Qué quieres que haga con eso? Por ejemplo: "
+            "recordatorio, mensaje, estado.",
             incoming,
         )
     return _handle_plan(plan, incoming)
@@ -111,7 +129,10 @@ def _interpret_new_message(text: str, incoming: IncomingContext) -> ActionResult
 
 def _handle_plan(plan: CommandPlan, incoming: IncomingContext) -> ActionResult:
     if isinstance(plan, CreateReminderPlan):
-        if not plan.schedule.trigger_at:
+        if not _accept_reminder_plan(plan):
+            question = "¿Quieres que programe un recordatorio? Si es así, dime cuándo."
+            return _message_result(question, incoming)
+        if not plan.schedule.trigger_at and not plan.schedule.rrule:
             pending_id = str(uuid.uuid4())
             create_pending_plan(
                 {
@@ -124,7 +145,7 @@ def _handle_plan(plan: CommandPlan, incoming: IncomingContext) -> ActionResult:
                     "expires_at": _expires_at(),
                 }
             )
-            return _message_result("When should I set the reminder?", incoming)
+            return _message_result("¿Para cuándo debo programar el recordatorio?", incoming)
         insert_timed_signal_from_plan(plan)
         return _message_result(
             f"Scheduled reminder for {plan.schedule.trigger_at}.",
@@ -132,6 +153,11 @@ def _handle_plan(plan: CommandPlan, incoming: IncomingContext) -> ActionResult:
         )
     if isinstance(plan, SendMessagePlan):
         return _message_result(plan.message.text, incoming)
+    if isinstance(plan, GreetingPlan):
+        return _message_result("Hola. ¿En qué puedo ayudarte?", incoming)
+    if isinstance(plan, UnknownPlan):
+        question = plan.question or "¿Puedes aclarar qué necesitas?"
+        return _message_result(question, incoming)
     return _message_result("I could not process that request.", incoming)
 
 
@@ -156,7 +182,7 @@ def _continue_pending_plan(pending: dict[str, Any], text: str, incoming: Incomin
     if isinstance(plan, CreateReminderPlan) and not plan.schedule.trigger_at:
         trigger_at = infer_trigger_at(text, timezone)
         if not trigger_at:
-            return _message_result("What time should I use for the reminder?", incoming)
+            return _message_result("¿A qué hora debo programarlo?", incoming)
         plan = plan.model_copy(update={"schedule": plan.schedule.model_copy(update={"trigger_at": trigger_at})})
         update_pending_status(str(pending.get("pending_id")), "confirmed")
         insert_timed_signal_from_plan(plan)
@@ -173,6 +199,11 @@ def _continue_pending_plan(pending: dict[str, Any], text: str, incoming: Incomin
 
 
 def _message_result(message: str, incoming: IncomingContext) -> ActionResult:
+    logger.info(
+        "HandleIncomingMessageAction response channel=%s message=%s",
+        incoming.channel_type,
+        _snippet(message),
+    )
     payload: dict[str, Any] = {
         "message": message,
         "origin": incoming.channel_type,
@@ -182,6 +213,13 @@ def _message_result(message: str, incoming: IncomingContext) -> ActionResult:
     }
     if incoming.address:
         payload["target"] = incoming.address
+    if incoming.channel_type == "telegram" and incoming.address:
+        payload["direct_reply"] = {
+            "channel_type": "telegram",
+            "target": incoming.address,
+            "text": message,
+            "correlation_id": incoming.correlation_id,
+        }
     return ActionResult(
         intention_key="MESSAGE_READY",
         payload=payload,
@@ -227,3 +265,16 @@ def _is_cancel(text: str) -> bool:
 def _expires_at() -> str:
     expires = datetime.now(tz=timezone.utc) + timedelta(hours=1)
     return expires.isoformat()
+
+
+def _snippet(text: str, limit: int = 80) -> str:
+    return text if len(text) <= limit else f"{text[:limit]}..."
+
+
+def _accept_reminder_plan(plan: CreateReminderPlan) -> bool:
+    evidence = plan.intent_evidence
+    if evidence.score >= 0.6:
+        return True
+    if evidence.reminder_verbs or evidence.time_hints:
+        return True
+    return False

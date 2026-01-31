@@ -29,16 +29,28 @@ class TelegramNotificationExtremity(Extremity):
         payload = result.payload
         chat_id = payload.get("chat_id")
         message = narration or payload.get("message")
+        correlation_id = payload.get("correlation_id")
         if chat_id is None or not message:
             logger.warning("Telegram notify missing chat_id or message")
             return
+        logger.info(
+            "Telegram notify chat_id=%s text_len=%s correlation_id=%s",
+            chat_id,
+            len(str(message)),
+            correlation_id,
+        )
         self._adapter.handle_action(
             {
                 "type": "send_message",
                 "payload": {
                     "chat_id": chat_id,
                     "text": message,
+                    "correlation_id": correlation_id,
                 },
                 "target_integration_id": "telegram",
             }
         )
+
+
+def _snippet(text: str, limit: int = 80) -> str:
+    return text if len(text) <= limit else f"{text[:limit]}..."

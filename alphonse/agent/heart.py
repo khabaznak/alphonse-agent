@@ -52,10 +52,22 @@ class Heart:
         """
         while self.signal != SHUTDOWN:
             signal = self.bus.get(timeout=None)
+            logger.info(
+                "Heart received signal state=%s/%s signal=%s",
+                self.state.id,
+                self.state.key,
+                signal.type,
+            )
             self._runtime.update_signal(signal.type, signal.source)
             if signal.type == SHUTDOWN:
                 break
             outcome = self.ddfsm.handle(self.state, signal, self.ctx)
+            logger.info(
+                "Heart transition outcome matched=%s action=%s next_state=%s",
+                getattr(outcome, "matched", None),
+                getattr(outcome, "action_key", None),
+                getattr(outcome, "next_state_key", None),
+            )
             if outcome:
                 self.pipeline.handle(
                     outcome.action_key,

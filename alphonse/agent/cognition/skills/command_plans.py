@@ -41,12 +41,22 @@ class ReminderDelivery(BaseModel):
     priority: Literal["low", "normal", "high", "urgent"] = "normal"
 
 
+class IntentEvidence(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    reminder_verbs: list[str]
+    time_hints: list[str]
+    quoted_spans: list[str]
+    score: float
+
+
 class CreateReminderPlan(PlanBase):
     kind: Literal["create_reminder"]
     target_person_id: str | None = None
     schedule: ReminderSchedule
     message: ReminderMessage
     delivery: ReminderDelivery
+    intent_evidence: IntentEvidence
 
 
 class SendMessagePlan(PlanBase):
@@ -56,7 +66,17 @@ class SendMessagePlan(PlanBase):
     channel_type: str | None = None
 
 
-CommandPlan = CreateReminderPlan | SendMessagePlan
+class GreetingPlan(PlanBase):
+    kind: Literal["greeting"]
+    language: str | None = None
+
+
+class UnknownPlan(PlanBase):
+    kind: Literal["unknown"]
+    question: str | None = None
+
+
+CommandPlan = CreateReminderPlan | SendMessagePlan | GreetingPlan | UnknownPlan
 
 
 def parse_plan(data: dict) -> CommandPlan:
@@ -65,4 +85,8 @@ def parse_plan(data: dict) -> CommandPlan:
         return CreateReminderPlan.model_validate(data)
     if kind == "send_message":
         return SendMessagePlan.model_validate(data)
+    if kind == "greeting":
+        return GreetingPlan.model_validate(data)
+    if kind == "unknown":
+        return UnknownPlan.model_validate(data)
     raise ValueError(f"Unknown plan kind: {kind}")

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import logging
 from datetime import datetime
 from typing import Any
 
@@ -17,6 +18,8 @@ from alphonse.agent.cognition.skills.narration.renderer import render_message
 from alphonse.agent.cognition.skills.narration.skill import NarrationSkill
 from alphonse.agent.identity import store as identity_store
 
+logger = logging.getLogger(__name__)
+
 
 @dataclass
 class DeliveryCoordinator:
@@ -28,6 +31,30 @@ class DeliveryCoordinator:
         message = payload.get("message")
         if not message:
             return None
+
+        direct_reply = payload.get("direct_reply")
+        if isinstance(direct_reply, dict) and direct_reply.get("channel_type") == "telegram":
+            target = direct_reply.get("target")
+            text = direct_reply.get("text")
+            correlation_id = direct_reply.get("correlation_id")
+            if not target:
+                logger.error("DirectReply missing target for telegram")
+                raise ValueError("DirectReply requires target for telegram")
+            if not text:
+                logger.error("DirectReply missing text for telegram")
+                raise ValueError("DirectReply requires text for telegram")
+            logger.info(
+                "telegram send attempt chat_id=%s text_len=%s correlation_id=%s endpoint=sendMessage",
+                target,
+                len(str(text)),
+                correlation_id,
+            )
+            return _action_result_for_channel(
+                "telegram",
+                str(target),
+                str(correlation_id or ""),
+                {"content": text},
+            )
 
         bundle = build_context_bundle(payload, context)
         intent, presentation, _model_plan = self.stack.evaluate(bundle)
@@ -42,6 +69,16 @@ class DeliveryCoordinator:
             metadata={"data": payload.get("data")},
         )
         rendered = render_message(draft, presentation)
+        channel_hint = payload.get("channel_hint")
+        target = payload.get("target")
+        if channel_hint and target:
+            return _action_result_for_channel(
+                str(channel_hint),
+                str(target),
+                draft.correlation_id,
+                rendered.payload,
+            )
+
         resolution = resolve_channel(intent)
 
         return _action_result_for_channel(
