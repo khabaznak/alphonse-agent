@@ -7,7 +7,10 @@ from datetime import datetime, timezone
 import logging
 
 from alphonse.agent.runtime import get_runtime
-from alphonse.agent.intent_pipeline import IntentPipeline, build_default_pipeline
+from alphonse.agent.cognition.intentions.intent_pipeline import (
+    IntentPipeline,
+    build_default_pipeline_with_bus,
+)
 from alphonse.agent.nervous_system.ddfsm import CurrentState, DDFSM
 from alphonse.agent.nervous_system.senses.bus import Bus
 
@@ -44,7 +47,7 @@ class Heart:
         self.signal = RUNNING
         self._runtime = get_runtime()
         self._runtime.update_state(self.state.id, self.state.key, self.state.name)
-        self.pipeline = pipeline or build_default_pipeline()
+        self.pipeline = pipeline or build_default_pipeline_with_bus(self.bus)
 
     def run(self) -> None:
         """Run the vital loop until a shutdown is requested or received.

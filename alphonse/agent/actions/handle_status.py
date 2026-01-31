@@ -1,0 +1,23 @@
+from __future__ import annotations
+
+from alphonse.agent.actions.base import Action
+from alphonse.agent.actions.models import ActionResult
+from alphonse.agent.runtime import get_runtime
+
+
+class HandleStatusAction(Action):
+    key = "handle_status"
+
+    def execute(self, context: dict) -> ActionResult:
+        signal = context.get("signal")
+        correlation_id = getattr(signal, "correlation_id", None) if signal else None
+        snapshot = get_runtime().snapshot()
+        return ActionResult(
+            intention_key="NOTIFY_API",
+            payload={
+                "correlation_id": correlation_id,
+                "message": "ok",
+                "data": snapshot,
+            },
+            urgency="normal",
+        )

@@ -1,0 +1,49 @@
+<div id="nerve-senses-table">
+  {% if senses %}
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Key</th>
+            <th>Name</th>
+            <th>Source Type</th>
+            <th>Enabled</th>
+            <th>Owner</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for sense in senses %}
+            <tr>
+              <td>{{ sense.key }}</td>
+              <td>{{ sense.name }}</td>
+              <td>{{ sense.source_type }}</td>
+              <td>{{ "yes" if sense.enabled else "no" }}</td>
+              <td>{{ sense.owner or "—" }}</td>
+              <td>
+                <button
+                  class="nav-link"
+                  hx-get="/nerve/senses/{{ sense.id }}/form"
+                  hx-target="#nerve-senses-form"
+                  hx-swap="outerHTML"
+                >
+                  Edit
+                </button>
+                <button
+                  class="nav-link"
+                  hx-post="/nerve/senses/{{ sense.id }}/delete"
+                  hx-target="#nerve-senses-table"
+                  hx-swap="outerHTML"
+                >
+                  Delete
+                </button>
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <p class="status-message">No senses defined.</p>
+  {% endif %}
+</div>

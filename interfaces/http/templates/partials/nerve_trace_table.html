@@ -1,0 +1,34 @@
+<div id="nerve-trace-table">
+  {% if trace %}
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Time</th>
+            <th>Signal</th>
+            <th>State Before</th>
+            <th>Action</th>
+            <th>State After</th>
+            <th>Result</th>
+            <th>Error</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in trace %}
+            <tr>
+              <td>{{ row.ts }}</td>
+              <td>{{ row.signal_type or "—" }}</td>
+              <td>{{ row.state_before or "—" }}</td>
+              <td>{{ row.action_key or "—" }}</td>
+              <td>{{ row.state_after or "—" }}</td>
+              <td>{{ row.result }}</td>
+              <td>{{ row.error_summary or "—" }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <p class="status-message">No trace rows yet.</p>
+  {% endif %}
+</div>

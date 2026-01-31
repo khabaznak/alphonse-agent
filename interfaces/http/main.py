@@ -29,19 +29,26 @@ from core.settings_store import (
 )
 from core.nerve_store import (
     create_signal,
+    create_sense,
     create_state,
     create_transition,
     delete_signal,
+    delete_sense,
     delete_state,
     delete_transition,
     get_signal,
+    get_sense,
     get_state,
     get_transition,
     list_signal_queue,
     list_signals,
+    list_senses,
     list_states,
+    list_trace,
     list_transitions,
+    resolve_transition,
     update_signal,
+    update_sense,
     update_state,
     update_transition,
 )
@@ -111,6 +118,9 @@ def _side_nav_links(page: str) -> list[dict[str, str | bool]]:
             {"label": "Signals", "href": "/nerve/signals"},
             {"label": "States", "href": "/nerve/states"},
             {"label": "Transitions", "href": "/nerve/transitions"},
+            {"label": "Senses", "href": "/nerve/senses"},
+            {"label": "FSM Inspector", "href": "/nerve/inspector"},
+            {"label": "Trace", "href": "/nerve/trace"},
             {"label": "Signal Queue", "href": "/nerve/queue"},
         ]
     return [
@@ -140,7 +150,10 @@ def _fetch_alphonse_status() -> dict[str, object]:
     try:
         with request.urlopen(url, timeout=3) as response:
             payload = response.read().decode("utf-8")
-            return json.loads(payload)
+            data = json.loads(payload)
+            if isinstance(data, dict) and "data" in data:
+                return data.get("data") or {}
+            return data
     except Exception:
         return {"runtime": None, "error": "status_unavailable"}
 
@@ -159,9 +172,10 @@ def _fetch_alphonse_message(text: str) -> dict[str, object]:
     try:
         with request.urlopen(req, timeout=5) as response:
             payload = response.read().decode("utf-8")
-            return json.loads(payload)
+            data = json.loads(payload)
+            return data if isinstance(data, dict) else {"message": str(data)}
     except Exception:
-        return {"response": "Alphonse is unavailable.", "decision": None}
+        return {"message": "Alphonse is unavailable."}
 
 
 def _fetch_alphonse_timed_signals() -> list[dict[str, object]]:
@@ -170,7 +184,9 @@ def _fetch_alphonse_timed_signals() -> list[dict[str, object]]:
         with request.urlopen(url, timeout=5) as response:
             payload = response.read().decode("utf-8")
             data = json.loads(payload)
-            return data.get("timed_signals", [])
+            if isinstance(data, dict) and "data" in data:
+                return data.get("data", {}).get("timed_signals", [])
+            return data.get("timed_signals", []) if isinstance(data, dict) else []
     except Exception:
         return []
 
@@ -193,9 +209,10 @@ def _post_alphonse_message(text: str, args: dict[str, object] | None = None) -> 
     try:
         with request.urlopen(req, timeout=5) as response:
             payload = response.read().decode("utf-8")
-            return json.loads(payload)
+            data = json.loads(payload)
+            return data if isinstance(data, dict) else {"message": str(data)}
     except Exception:
-        return {"response": "Alphonse is unavailable.", "decision": None}
+        return {"message": "Alphonse is unavailable."}
 
 
 def _base_context(request: Request, page: str) -> dict:
@@ -310,7 +327,7 @@ def index(request: Request):
 def get_status_fragment(request: Request):
     result = _fetch_alphonse_message("status")
     snapshot = _fetch_alphonse_status()
-    message = str(result.get("response") or "Alphonse is unavailable.")
+    message = str(result.get("message") or "Alphonse is unavailable.")
     return templates.TemplateResponse(
         "partials/status.html",
         {
@@ -325,7 +342,7 @@ def get_status_fragment(request: Request):
 def get_status():
     result = _fetch_alphonse_message("status")
     snapshot = _fetch_alphonse_status()
-    return {"message": result.get("response"), "runtime": snapshot}
+    return {"message": result.get("message"), "runtime": snapshot}
 
 
 @app.get("/notifications")
@@ -920,5 +937,154 @@ def nerve_queue_table(request: Request):
         {
             "request": request,
             "queue": list_signal_queue(),
+        },
+    )
+
+
+@app.get("/nerve/senses", response_class=HTMLResponse)
+def nerve_senses(request: Request):
+    return templates.TemplateResponse(
+        "nerve_senses.html",
+        {
+            **_base_context(request, "nerve-senses"),
+        },
+    )
+
+
+@app.get("/nerve/senses/table", response_class=HTMLResponse)
+def nerve_senses_table(request: Request):
+    return templates.TemplateResponse(
+        "partials/nerve_senses_table.html",
+        {
+            "request": request,
+            "senses": list_senses(),
+        },
+    )
+
+
+@app.get("/nerve/senses/form", response_class=HTMLResponse)
+def nerve_senses_form(request: Request):
+    return templates.TemplateResponse(
+        "partials/nerve_senses_form.html",
+        {
+            "request": request,
+            "sense": None,
+        },
+    )
+
+
+@app.get("/nerve/senses/{sense_id}/form", response_class=HTMLResponse)
+def nerve_senses_form_edit(request: Request, sense_id: int):
+    return templates.TemplateResponse(
+        "partials/nerve_senses_form.html",
+        {
+            "request": request,
+            "sense": get_sense(sense_id),
+        },
+    )
+
+
+@app.post("/nerve/senses", response_class=HTMLResponse)
+def create_nerve_sense(
+    request: Request,
+    key: str = Form(...),
+    name: str = Form(...),
+    description: str = Form(""),
+    source_type: str = Form("system"),
+    enabled: str | None = Form(None),
+    owner: str = Form(""),
+):
+    create_sense(
+        {
+            "key": key.strip(),
+            "name": name.strip(),
+            "description": description.strip() or None,
+            "source_type": source_type.strip() or "system",
+            "enabled": _as_bool(enabled, 1),
+            "owner": owner.strip() or None,
+        }
+    )
+    return nerve_senses_table(request)
+
+
+@app.post("/nerve/senses/{sense_id}", response_class=HTMLResponse)
+def update_nerve_sense(
+    request: Request,
+    sense_id: int,
+    key: str = Form(...),
+    name: str = Form(...),
+    description: str = Form(""),
+    source_type: str = Form("system"),
+    enabled: str | None = Form(None),
+    owner: str = Form(""),
+):
+    update_sense(
+        sense_id,
+        {
+            "key": key.strip(),
+            "name": name.strip(),
+            "description": description.strip() or None,
+            "source_type": source_type.strip() or "system",
+            "enabled": _as_bool(enabled, 1),
+            "owner": owner.strip() or None,
+        },
+    )
+    return nerve_senses_table(request)
+
+
+@app.post("/nerve/senses/{sense_id}/delete", response_class=HTMLResponse)
+def delete_nerve_sense(request: Request, sense_id: int):
+    delete_sense(sense_id)
+    return nerve_senses_table(request)
+
+
+@app.get("/nerve/trace", response_class=HTMLResponse)
+def nerve_trace(request: Request):
+    return templates.TemplateResponse(
+        "nerve_trace.html",
+        {
+            **_base_context(request, "nerve-trace"),
+        },
+    )
+
+
+@app.get("/nerve/trace/table", response_class=HTMLResponse)
+def nerve_trace_table(request: Request):
+    return templates.TemplateResponse(
+        "partials/nerve_trace_table.html",
+        {
+            "request": request,
+            "trace": list_trace(),
+        },
+    )
+
+
+@app.get("/nerve/inspector", response_class=HTMLResponse)
+def nerve_inspector(request: Request):
+    return templates.TemplateResponse(
+        "nerve_inspector.html",
+        {
+            **_base_context(request, "nerve-inspector"),
+            "signals": list_signals(),
+            "states": list_states(),
+            "resolved": None,
+        },
+    )
+
+
+@app.post("/nerve/inspector", response_class=HTMLResponse)
+def nerve_inspector_resolve(
+    request: Request,
+    state_id: int = Form(...),
+    signal_id: int = Form(...),
+):
+    resolved = resolve_transition(state_id, signal_id)
+    return templates.TemplateResponse(
+        "nerve_inspector.html",
+        {
+            **_base_context(request, "nerve-inspector"),
+            "signals": list_signals(),
+            "states": list_states(),
+            "resolved": resolved,
         },
     )

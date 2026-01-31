@@ -12,10 +12,9 @@ from alphonse.agent.nervous_system.ddfsm import DDFSM, DDFSMConfig
 from alphonse.agent.nervous_system.senses.bus import Bus
 from alphonse.agent.nervous_system.senses.manager import SenseManager
 from alphonse.agent.nervous_system.senses.registry import register_senses, register_signals
-from alphonse.agent.extremities.telegram_extremity import build_telegram_extremity_from_env
-from alphonse.agent.extremities.cli_extremity import build_cli_extremity_from_env
 from alphonse.infrastructure.api_server import ApiServer
-from alphonse.agent.nervous_system.timed_scheduler import TimedSignalScheduler
+from alphonse.infrastructure.api_gateway import gateway
+from alphonse.infrastructure.api_exchange import ApiExchange
 from alphonse.agent.nervous_system.paths import resolve_nervous_system_db_path
 from alphonse.agent.nervous_system.migrate import apply_schema
 from alphonse.agent.core.settings_store import init_db as init_settings_db
@@ -64,38 +63,25 @@ def main() -> None:
     # Signal bus is in-memory transport only.
     bus = Bus()
 
+    gateway.configure(bus, ApiExchange())
+
     register_senses(str(db_path))
     register_signals(str(db_path))
 
     sense_manager = SenseManager(db_path=str(db_path), bus=bus)
     sense_manager.start()
 
-    timed_scheduler = _build_timed_scheduler(str(db_path), bus)
-    timed_scheduler.start()
 
     api_server = _build_api_server()
     if api_server:
         api_server.start()
 
-    telegram_extremity = build_telegram_extremity_from_env()
-    if telegram_extremity:
-        telegram_extremity.start()
-
-    cli_extremity = build_cli_extremity_from_env()
-    if cli_extremity:
-        cli_extremity.start()
-
     heart = load_heart(config, bus, ddfsm)
     try:
         heart.run()
     finally:
-        if cli_extremity:
-            cli_extremity.stop()
-        if telegram_extremity:
-            telegram_extremity.stop()
         if api_server:
             api_server.stop()
-        timed_scheduler.stop()
         sense_manager.stop()
 
 
@@ -117,23 +103,6 @@ def _build_api_server() -> ApiServer | None:
     return ApiServer(host=host, port=port)
 
 
-def _build_timed_scheduler(db_path: str, bus: Bus) -> TimedSignalScheduler:
-    window_raw = os.getenv("TIMED_SIGNAL_DISPATCH_WINDOW_SECONDS", "1800")
-    idle_raw = os.getenv("TIMED_SIGNAL_IDLE_SLEEP_SECONDS", "60")
-    try:
-        dispatch_window = int(window_raw)
-    except ValueError:
-        dispatch_window = 1800
-    try:
-        idle_sleep = int(idle_raw)
-    except ValueError:
-        idle_sleep = 60
-    return TimedSignalScheduler(
-        db_path=db_path,
-        bus=bus,
-        dispatch_window_seconds=dispatch_window,
-        idle_sleep_seconds=idle_sleep,
-    )
 
 
 if __name__ == "__main__":

@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+
+{% block title %}FSM Trace — Nerve DB{% endblock %}
+
+{% block content %}
+  <main class="app-shell">
+    {% include "partials/top_nav.html" %}
+    <div class="shell-body">
+      {% include "partials/sidebar_nav.html" %}
+      <section class="content">
+        <div class="section-header">
+          <div class="subtitle">FSM Trace</div>
+        </div>
+
+        <section class="panel" id="trace-list">
+          <h2>Trace</h2>
+          <div
+            id="nerve-trace-table"
+            hx-get="/nerve/trace/table"
+            hx-trigger="load, every 10s"
+            hx-swap="outerHTML"
+          >
+            <p class="status-message">Loading trace...</p>
+          </div>
+        </section>
+
+        <section class="panel" id="recent-signals">
+          <h2>Recent Signals</h2>
+          <div
+            id="nerve-queue-table"
+            hx-get="/nerve/queue/table"
+            hx-trigger="load, every 5s"
+            hx-swap="outerHTML"
+          >
+            <p class="status-message">Loading signals...</p>
+          </div>
+        </section>
+      </section>
+    </div>
+  </main>
+{% endblock %}
