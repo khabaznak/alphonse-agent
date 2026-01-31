@@ -5,12 +5,12 @@
 - Set `NERVE_DB_PATH` in `alphonse/agent/.env` to point at the SQLite DB.
 - Relative paths are resolved from `alphonse/agent/`.
 - A starter template is in `alphonse/agent/.env.example`.
-- Runtime DB files live under `alphonse/nervous_system/db/` and are ignored.
+- Runtime DB files live under `alphonse/agent/nervous_system/db/` and are ignored.
 
 ## FSM schema and seed
 
-- Apply schema: `python alphonse/nervous_system/migrate.py`
-- Seed data: `python alphonse/nervous_system/seed.py`
+- Apply schema: `python alphonse/agent/nervous_system/migrate.py`
+- Seed data: `python alphonse/agent/nervous_system/seed.py`
 
 ## Running Alphonse
 
@@ -48,10 +48,10 @@ Doorbell pressed while user sleeping:
 
 ## How to add a new Sense
 
-1) Create a new module under `alphonse/senses/` that subclasses `Sense`.
+1) Create a new module under `alphonse/agent/nervous_system/senses/` that subclasses `Sense`.
 2) Define `key`, `name`, `source_type`, and `signals`.
 3) Implement a background producer with `start()` and `stop()` that emits to the `Bus`.
-4) Run `python alphonse/nervous_system/migrate.py` and `python alphonse/nervous_system/seed.py` or call `register_senses()` and `register_signals()` to register metadata.
+4) Run `python alphonse/agent/nervous_system/migrate.py` and `python alphonse/agent/nervous_system/seed.py` or call `register_senses()` and `register_signals()` to register metadata.
 
 Minimal example:
 
@@ -61,8 +61,8 @@ from __future__ import annotations
 import threading
 import time
 
-from alphonse.senses.base import Sense, SignalSpec
-from alphonse.senses.bus import Bus, Signal
+from alphonse.nervous_system.senses.base import Sense, SignalSpec
+from alphonse.nervous_system.senses.bus import Bus, Signal
 
 
 class ExampleSense(Sense):

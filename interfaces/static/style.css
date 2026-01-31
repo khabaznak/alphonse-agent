@@ -1,9 +1,10 @@
 :root {
-  color-scheme: light;
-  --ink: #1d1b18;
-  --paper: #f4f0ea;
-  --accent: #225b5b;
-  --accent-soft: #d7e4e2;
+  --bg: #f4f1ea;
+  --card: #ffffff;
+  --ink: #2b2a28;
+  --muted: #6f6a63;
+  --accent: #7f4c2a;
+  --border: #e2ddd3;
 }
 
 * {
@@ -13,370 +14,183 @@
 body {
   margin: 0;
   font-family: "IBM Plex Serif", "Georgia", serif;
-  background: radial-gradient(circle at top, #ffffff 0%, var(--paper) 55%, #efe7db 100%);
+  background: radial-gradient(circle at top, #fff8ef 0%, #f4f1ea 60%);
   color: var(--ink);
 }
 
-main {
-  max-width: 1120px;
-  margin: 0 auto;
-  padding: 40px 24px 96px;
-}
-
-h1 {
-  font-size: clamp(2.1rem, 4.5vw, 3.1rem);
-  margin: 0;
-  letter-spacing: -0.02em;
-}
-
-.subtitle {
-  font-family: "IBM Plex Sans", "Trebuchet MS", sans-serif;
-  font-size: 0.9rem;
-  letter-spacing: 0.2em;
-  text-transform: uppercase;
-  color: rgba(0, 0, 0, 0.55);
+a {
+  color: inherit;
 }
 
 .app-shell {
+  min-height: 100vh;
   display: flex;
   flex-direction: column;
-  gap: 24px;
 }
 
 .topbar {
   display: flex;
-  align-items: center;
   justify-content: space-between;
+  align-items: center;
   padding: 20px 24px;
+  border-bottom: 1px solid var(--border);
   background: rgba(255, 255, 255, 0.9);
-  border: 1px solid rgba(0, 0, 0, 0.08);
-  border-radius: 18px;
-  box-shadow: 0 18px 42px rgba(0, 0, 0, 0.08);
   backdrop-filter: blur(6px);
 }
 
-.brand {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
 .brand-title {
-  font-size: 1.6rem;
-  font-weight: 600;
+  font-size: 20px;
+  font-weight: 700;
 }
 
 .brand-subtitle {
-  font-family: "IBM Plex Sans", "Trebuchet MS", sans-serif;
-  font-size: 0.85rem;
-  letter-spacing: 0.18em;
+  font-size: 12px;
+  color: var(--muted);
   text-transform: uppercase;
-  color: rgba(0, 0, 0, 0.55);
+  letter-spacing: 0.12em;
 }
 
 .model-status {
-  margin-left: 8px;
-  letter-spacing: 0.12em;
-  font-size: 0.75rem;
-  color: rgba(0, 0, 0, 0.45);
+  margin-left: 10px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  font-size: 11px;
 }
 
-.topbar-links {
+.topbar-links,
+.sidebar-links {
   display: flex;
-  align-items: center;
-  gap: 16px;
+  gap: 12px;
   flex-wrap: wrap;
+}
+
+.nav-link {
+  text-decoration: none;
+  padding: 8px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: #fffdf9;
+  color: var(--ink);
+  font-size: 13px;
+}
+
+.nav-link.is-active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.sidebar {
+  padding: 16px;
+  border-radius: 16px;
+  border: 1px solid var(--border);
+  background: #fffdf9;
+  height: fit-content;
+}
+
+.sidebar-title {
+  font-size: 12px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 12px;
 }
 
 .shell-body {
   display: grid;
-  grid-template-columns: minmax(180px, 220px) 1fr;
-  gap: 28px;
-  align-items: start;
-}
-
-.sidebar {
-  position: sticky;
-  top: 24px;
-  align-self: start;
-  padding: 20px;
-  border-radius: 16px;
-  background: #fff;
-  border: 1px solid rgba(0, 0, 0, 0.08);
-  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.06);
-}
-
-.sidebar-title {
-  font-family: "IBM Plex Sans", "Trebuchet MS", sans-serif;
-  font-size: 0.75rem;
-  letter-spacing: 0.24em;
-  text-transform: uppercase;
-  color: rgba(0, 0, 0, 0.55);
-  margin-bottom: 12px;
-}
-
-.sidebar-links {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
+  grid-template-columns: 240px 1fr;
+  gap: 24px;
+  padding: 24px;
 }
 
 .content {
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  gap: 24px;
+}
+
+.panel {
+  background: var(--card);
+  border-radius: 16px;
+  padding: 20px;
+  box-shadow: 0 16px 40px rgba(38, 30, 18, 0.08);
+  border: 1px solid var(--border);
 }
 
 .section-header {
-  display: flex;
-  justify-content: flex-end;
+  margin-bottom: 16px;
 }
 
-.nav-link {
-  font-family: "IBM Plex Sans", "Trebuchet MS", sans-serif;
-  font-size: 0.95rem;
-  color: var(--ink);
-  text-decoration: none;
-  padding: 6px 10px;
-  border-radius: 999px;
-  background: transparent;
-  transition: background 150ms ease, color 150ms ease;
-}
-
-.nav-link:hover {
-  background: var(--accent-soft);
-}
-
-.nav-link.is-active {
-  background: var(--accent);
-  color: #fff;
+.subtitle {
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  font-size: 12px;
 }
 
 .table-wrap {
-  width: 100%;
   overflow-x: auto;
 }
 
 table {
   width: 100%;
   border-collapse: collapse;
-  font-family: "IBM Plex Sans", "Trebuchet MS", sans-serif;
-  font-size: 0.95rem;
+  font-size: 14px;
 }
 
 th,
 td {
-  text-align: left;
   padding: 10px 12px;
-  border-bottom: 1px solid rgba(0, 0, 0, 0.08);
+  border-bottom: 1px solid var(--border);
+  text-align: left;
 }
 
-thead th {
-  text-transform: uppercase;
-  letter-spacing: 0.18em;
-  font-size: 0.7rem;
-  color: rgba(0, 0, 0, 0.5);
-}
-
-.card {
-  border-radius: 14px;
-  background: var(--accent-soft);
-  padding: 16px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.card-interpretation {
-  background: #f8f4ec;
-  border: 1px solid rgba(0, 0, 0, 0.08);
-  margin-bottom: 5px;
-}
-
-.card-title {
-  font-size: 1.1rem;
+th {
   font-weight: 600;
-}
-
-.card-meta {
-  font-family: "IBM Plex Sans", "Trebuchet MS", sans-serif;
-  font-size: 0.85rem;
-  color: rgba(0, 0, 0, 0.6);
-}
-
-.card-body {
-  margin: 0;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 11px;
 }
 
 .form-grid {
   display: grid;
+  gap: 12px;
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  gap: 16px;
-  font-family: "IBM Plex Sans", "Trebuchet MS", sans-serif;
-}
-
-.form-grid label {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  font-size: 0.85rem;
-  text-transform: uppercase;
-  letter-spacing: 0.16em;
-  color: rgba(0, 0, 0, 0.55);
-}
-
-.form-grid input,
-.form-grid select,
-.form-grid textarea {
-  border-radius: 10px;
-  border: 1px solid rgba(0, 0, 0, 0.15);
-  padding: 10px 12px;
-  font-family: "IBM Plex Sans", "Trebuchet MS", sans-serif;
-  font-size: 0.95rem;
 }
 
 .form-full {
   grid-column: 1 / -1;
 }
 
-.form-actions {
-  display: flex;
-  justify-content: flex-end;
-}
-
-.form-grid button {
-  width: fit-content;
-}
-
-.panel {
-  background: #fff;
-  border-radius: 18px;
-  padding: 28px;
-  box-shadow: 0 18px 42px rgba(0, 0, 0, 0.08);
-  border: 1px solid rgba(0, 0, 0, 0.08);
-}
-
-.panel h2 {
-  margin: 0 0 12px;
-  font-size: 1.5rem;
-}
-
-.panel + .panel {
-  margin-top: 16px;
-}
-
-.code-block {
-  background: #0f1618;
-  color: #e3ece8;
-  padding: 12px;
+input,
+select,
+textarea {
+  width: 100%;
+  padding: 10px 12px;
   border-radius: 10px;
-  font-size: 0.85rem;
-  overflow-x: auto;
-}
-
-.status-message {
-  font-size: 1.2rem;
-  line-height: 1.5;
-  margin: 0 0 20px;
-}
-
-.actions {
-  display: flex;
-  gap: 12px;
-  align-items: center;
-  margin-bottom: 20px;
+  border: 1px solid var(--border);
+  font-family: inherit;
+  background: #fffdf9;
 }
 
 button {
+  padding: 10px 18px;
+  border-radius: 999px;
   border: none;
   background: var(--accent);
   color: #fff;
-  padding: 10px 16px;
-  border-radius: 999px;
-  font-size: 0.95rem;
+  font-weight: 600;
   cursor: pointer;
-  font-family: "IBM Plex Sans", "Trebuchet MS", sans-serif;
 }
 
-.indicator {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  font-family: "IBM Plex Sans", "Trebuchet MS", sans-serif;
-  font-size: 0.85rem;
-  color: rgba(0, 0, 0, 0.5);
-  opacity: 0;
-  transition: opacity 150ms ease;
-  pointer-events: none;
+.status-message {
+  color: var(--muted);
 }
 
-.indicator::before {
-  content: "";
-  width: 14px;
-  height: 14px;
-  border-radius: 50%;
-  border: 2px solid rgba(34, 91, 91, 0.25);
-  border-top-color: var(--accent);
-  animation: spin 0.8s linear infinite;
-}
-
-.indicator.htmx-request {
-  opacity: 1;
-}
-
-@keyframes spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-dl {
-  display: grid;
-  grid-template-columns: minmax(140px, 200px) 1fr;
-  gap: 10px 16px;
-  margin: 0;
-  font-family: "IBM Plex Sans", "Trebuchet MS", sans-serif;
-  font-size: 0.95rem;
-}
-
-dt {
-  color: rgba(0, 0, 0, 0.6);
-  text-transform: uppercase;
-  font-size: 0.75rem;
-  letter-spacing: 0.18em;
-}
-
-dd {
-  margin: 0;
-}
-
-.soft {
-  padding: 16px;
-  border-radius: 12px;
-  background: var(--accent-soft);
-  margin-top: 18px;
-}
-
-@media (max-width: 640px) {
-  .topbar {
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 16px;
-  }
-
+@media (max-width: 900px) {
   .shell-body {
-    grid-template-columns: 1fr;
-  }
-
-  .sidebar {
-    position: static;
-  }
-
-  .form-actions {
-    justify-content: stretch;
-  }
-
-  dl {
     grid-template-columns: 1fr;
   }
 }

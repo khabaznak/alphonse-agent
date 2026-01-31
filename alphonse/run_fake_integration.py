@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import logging
 
-from alphonse.extremities.interfaces.integrations.loader import IntegrationLoader
-from alphonse.senses.bus import Bus
+from alphonse.agent.extremities.interfaces.integrations.loader import IntegrationLoader
+from alphonse.agent.nervous_system.senses.bus import Bus
 
 
 def main() -> None:
@@ -17,7 +17,7 @@ def main() -> None:
             {
                 "name": "fake",
                 "enabled": True,
-                "module": "alphonse.extremities.interfaces.integrations.fake.fake_adapter",
+                "module": "alphonse.agent.extremities.interfaces.integrations.fake.fake_adapter",
                 "class": "FakeAdapter",
                 "config": {},
             }

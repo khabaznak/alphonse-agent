@@ -48,7 +48,7 @@ alphonse/
     actions/
     intentions/
     mediation/
-    senses/
+    nervous_system/senses/
   extremities/
     telegram/
     webui/

@@ -8,17 +8,17 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 from alphonse.agent.heart import Heart, HeartConfig
-from alphonse.nervous_system.ddfsm import DDFSM, DDFSMConfig
-from alphonse.senses.bus import Bus
-from alphonse.senses.manager import SenseManager
-from alphonse.senses.registry import register_senses, register_signals
-from alphonse.extremities.telegram_extremity import build_telegram_extremity_from_env
-from alphonse.extremities.cli_extremity import build_cli_extremity_from_env
+from alphonse.agent.nervous_system.ddfsm import DDFSM, DDFSMConfig
+from alphonse.agent.nervous_system.senses.bus import Bus
+from alphonse.agent.nervous_system.senses.manager import SenseManager
+from alphonse.agent.nervous_system.senses.registry import register_senses, register_signals
+from alphonse.agent.extremities.telegram_extremity import build_telegram_extremity_from_env
+from alphonse.agent.extremities.cli_extremity import build_cli_extremity_from_env
 from alphonse.infrastructure.api_server import ApiServer
-from alphonse.nervous_system.timed_scheduler import TimedSignalScheduler
-from alphonse.nervous_system.paths import resolve_nervous_system_db_path
-from alphonse.nervous_system.migrate import apply_schema
-from core.settings_store import init_db as init_settings_db
+from alphonse.agent.nervous_system.timed_scheduler import TimedSignalScheduler
+from alphonse.agent.nervous_system.paths import resolve_nervous_system_db_path
+from alphonse.agent.nervous_system.migrate import apply_schema
+from alphonse.agent.core.settings_store import init_db as init_settings_db
 
 
 def load_env() -> None:

@@ -7,11 +7,11 @@ from typing import Any
 from fastapi import FastAPI, Body
 
 from alphonse.agent.runtime import get_runtime
-from alphonse.interpretation.interpreter import MessageInterpreter
-from alphonse.interpretation.models import MessageEvent, RoutingDecision
-from alphonse.interpretation.registry import build_default_registry
-from alphonse.interpretation.skills import SkillExecutor, build_ollama_client
-from alphonse.nervous_system.timed_store import list_timed_signals
+from alphonse.agent.cognition.skills.interpretation.interpreter import MessageInterpreter
+from alphonse.agent.cognition.skills.interpretation.models import MessageEvent, RoutingDecision
+from alphonse.agent.cognition.skills.interpretation.registry import build_default_registry
+from alphonse.agent.cognition.skills.interpretation.skills import SkillExecutor, build_ollama_client
+from alphonse.agent.nervous_system.timed_store import list_timed_signals
 
 app = FastAPI(title="Alphonse API", version="0.1.0")
 

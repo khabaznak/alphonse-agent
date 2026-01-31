@@ -1,73 +1,42 @@
+from __future__ import annotations
+
+import uuid
+from datetime import datetime
 from typing import Any
 
-from core.integrations.supabase import get_supabase_client
+
+_FAMILY: dict[str, dict[str, Any]] = {}
 
 
-TABLE_NAME = "family"
-
-
-def create_family_member(payload: dict[str, Any]) -> dict[str, Any]:
-    response = (
-        get_supabase_client()
-        .table(TABLE_NAME)
-        .insert(payload)
-        .execute()
-    )
-    data = _handle_response(response)
-    return data[0] if data else {}
-
-
-def list_family_members(limit: int = 100) -> list[dict[str, Any]]:
-    response = (
-        get_supabase_client()
-        .table(TABLE_NAME)
-        .select("*")
-        .order("name", desc=False)
-        .limit(limit)
-        .execute()
-    )
-    return _handle_response(response)
+def list_family_members(limit: int = 200) -> list[dict[str, Any]]:
+    return list(_FAMILY.values())[:limit]
 
 
 def get_family_member(member_id: str) -> dict[str, Any] | None:
-    response = (
-        get_supabase_client()
-        .table(TABLE_NAME)
-        .select("*")
-        .eq("id", member_id)
-        .execute()
-    )
-    data = _handle_response(response)
-    return data[0] if data else None
+    return _FAMILY.get(member_id)
 
 
-def update_family_member(member_id: str, payload: dict[str, Any]) -> dict[str, Any]:
-    response = (
-        get_supabase_client()
-        .table(TABLE_NAME)
-        .update(payload)
-        .eq("id", member_id)
-        .execute()
-    )
-    data = _handle_response(response)
-    return data[0] if data else {}
+def create_family_member(payload: dict[str, Any]) -> dict[str, Any]:
+    member_id = str(uuid.uuid4())
+    record = {
+        "id": member_id,
+        "name": payload.get("name"),
+        "role": payload.get("role", "member"),
+        "created_at": _timestamp(),
+        "updated_at": _timestamp(),
+    }
+    _FAMILY[member_id] = record
+    return record
 
 
-def delete_family_member(member_id: str) -> dict[str, Any]:
-    response = (
-        get_supabase_client()
-        .table(TABLE_NAME)
-        .delete()
-        .eq("id", member_id)
-        .execute()
-    )
-    data = _handle_response(response)
-    return data[0] if data else {}
+def update_family_member(member_id: str, payload: dict[str, Any]) -> dict[str, Any] | None:
+    record = _FAMILY.get(member_id)
+    if not record:
+        return None
+    record.update(payload)
+    record["updated_at"] = _timestamp()
+    return record
 
 
-def _handle_response(response) -> list[dict[str, Any]]:
-    error = getattr(response, "error", None)
-    if error:
-        raise RuntimeError(str(error))
-    data = getattr(response, "data", None)
-    return data or []
+def _timestamp() -> str:
+    return datetime.now().isoformat()

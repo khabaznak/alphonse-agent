@@ -8,8 +8,8 @@ import logging
 
 from alphonse.agent.runtime import get_runtime
 from alphonse.agent.intent_pipeline import IntentPipeline, build_default_pipeline
-from alphonse.nervous_system.ddfsm import CurrentState, DDFSM
-from alphonse.senses.bus import Bus
+from alphonse.agent.nervous_system.ddfsm import CurrentState, DDFSM
+from alphonse.agent.nervous_system.senses.bus import Bus
 
 SHUTDOWN = "SHUTDOWN"
 RUNNING = "RUNNING"

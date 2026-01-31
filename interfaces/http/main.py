@@ -46,7 +46,7 @@ from core.nerve_store import (
     update_transition,
 )
 from interfaces.http.routes.api import router as api_router, trigger_router
-from alphonse.cognition.provider_selector import get_provider_info
+from alphonse.agent.cognition.provider_selector import get_provider_info
 from alphonse.config import load_alphonse_config
 
 load_dotenv()
@@ -183,6 +183,9 @@ def _post_alphonse_message(text: str, args: dict[str, object] | None = None) -> 
             "args": args or {},
             "channel": "webui",
             "timestamp": time.time(),
+            "metadata": {
+                "user_name": "Alex",
+            },
         }
     ).encode("utf-8")
     req = request.Request(url, data=body, method="POST")

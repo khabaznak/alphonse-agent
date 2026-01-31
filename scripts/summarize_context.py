@@ -5,8 +5,8 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.append(str(PROJECT_ROOT))
 
-from alphonse.cognition.providers.ollama import OllamaClient
-from alphonse.cognition.reasoner import REFERENCE_FILES, SUMMARY_PATH
+from alphonse.agent.cognition.providers.ollama import OllamaClient
+from alphonse.agent.cognition.reasoner import REFERENCE_FILES, SUMMARY_PATH
 from alphonse.config import load_alphonse_config
 
 

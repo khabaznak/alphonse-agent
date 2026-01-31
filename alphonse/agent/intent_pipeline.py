@@ -2,13 +2,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from alphonse.actions.registry import ActionRegistry
-from alphonse.actions.models import ActionResult
-from alphonse.extremities.notification import NotificationExtremity
-from alphonse.actions.system_reminder import SystemReminderAction
-from alphonse.extremities.registry import ExtremityRegistry
-from alphonse.mediation.narrator import Narrator
-from alphonse.mediation.policy import NarrationPolicy
+from alphonse.agent.actions.registry import ActionRegistry
+from alphonse.agent.actions.models import ActionResult
+from alphonse.agent.extremities.notification import NotificationExtremity
+from alphonse.agent.extremities.telegram_notification import TelegramNotificationExtremity
+from alphonse.agent.actions.system_reminder import SystemReminderAction
+from alphonse.agent.extremities.registry import ExtremityRegistry
+from alphonse.agent.cognition.skills.mediation.narrator import Narrator
+from alphonse.agent.cognition.skills.mediation.policy import NarrationPolicy
 
 
 @dataclass
@@ -40,6 +41,7 @@ def build_default_pipeline() -> IntentPipeline:
     actions.register("system_reminder", lambda _: SystemReminderAction())
     extremities = ExtremityRegistry()
     extremities.register(NotificationExtremity())
+    extremities.register(TelegramNotificationExtremity())
     return IntentPipeline(
         actions=actions,
         extremities=extremities,

@@ -1,73 +1,43 @@
-import json
+from __future__ import annotations
+
+import uuid
+from datetime import datetime
 from typing import Any
 
-from core.integrations.supabase import get_supabase_client
 
-
-def upsert_push_device(payload: dict[str, Any]) -> dict[str, Any]:
-    normalized = _normalize_payload(payload)
-    response = (
-        get_supabase_client()
-        .table("push_devices")
-        .upsert(normalized, on_conflict="token")
-        .execute()
-    )
-    data = _handle_response(response)
-    return data[0] if data else {}
+_DEVICES: dict[str, dict[str, Any]] = {}
 
 
 def list_push_devices(limit: int = 200) -> list[dict[str, Any]]:
-    response = (
-        get_supabase_client()
-        .table("push_devices")
-        .select("*")
-        .limit(limit)
-        .execute()
-    )
-    return _handle_response(response)
+    return list(_DEVICES.values())[:limit]
 
 
-def list_active_push_devices(
-    target_group: str | None = None,
-    platforms: list[str] | None = None,
-) -> list[dict[str, Any]]:
-    query = (
-        get_supabase_client()
-        .table("push_devices")
-        .select("*")
-        .eq("active", True)
-    )
-    if target_group and target_group != "all":
-        query = query.eq("owner_id", target_group)
+def list_active_push_devices(target_group: str | None = None, platforms: list[str] | None = None) -> list[dict[str, Any]]:
+    devices = [device for device in _DEVICES.values() if device.get("active", True)]
     if platforms:
-        query = query.in_("platform", platforms)
-    response = query.execute()
-    return _handle_response(response)
+        devices = [device for device in devices if device.get("platform") in platforms]
+    return devices
 
 
-def deactivate_push_device(device_id: str) -> dict[str, Any]:
-    response = (
-        get_supabase_client()
-        .table("push_devices")
-        .update({"active": False})
-        .eq("id", device_id)
-        .execute()
-    )
-    data = _handle_response(response)
-    return data[0] if data else {}
+def upsert_push_device(payload: dict[str, Any]) -> dict[str, Any]:
+    device_id = payload.get("id") or str(uuid.uuid4())
+    record = _DEVICES.get(device_id, {})
+    record.update(payload)
+    record.setdefault("id", device_id)
+    record.setdefault("created_at", _timestamp())
+    record["updated_at"] = _timestamp()
+    _DEVICES[device_id] = record
+    return record
 
 
-def _normalize_payload(payload: dict[str, Any]) -> dict[str, Any]:
-    normalized = dict(payload)
-    token = normalized.get("token")
-    if isinstance(token, dict):
-        normalized["token"] = json.dumps(token)
-    return normalized
+def deactivate_push_device(device_id: str) -> dict[str, Any] | None:
+    record = _DEVICES.get(device_id)
+    if not record:
+        return None
+    record["active"] = False
+    record["updated_at"] = _timestamp()
+    return record
 
 
-def _handle_response(response) -> list[dict[str, Any]]:
-    error = getattr(response, "error", None)
-    if error:
-        raise RuntimeError(str(error))
-    data = getattr(response, "data", None)
-    return data or []
+def _timestamp() -> str:
+    return datetime.now().isoformat()
