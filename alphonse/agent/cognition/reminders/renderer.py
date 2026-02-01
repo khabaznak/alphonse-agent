@@ -84,12 +84,12 @@ def _safe_light_corrections(text: str) -> str:
 
 
 def _resolve_locale(payload: dict[str, Any], text: str, prefs: dict[str, Any]) -> str:
-    hint = payload.get("locale_hint") if isinstance(payload, dict) else None
-    if isinstance(hint, str) and hint.strip():
-        return hint
     pref_locale = prefs.get("locale") if isinstance(prefs, dict) else None
     if isinstance(pref_locale, str) and pref_locale.strip():
         return pref_locale
+    hint = payload.get("locale_hint") if isinstance(payload, dict) else None
+    if isinstance(hint, str) and hint.strip():
+        return hint
     lowered = text.lower()
     if any(
         token in lowered
@@ -294,7 +294,7 @@ def _load_preferences(payload: dict[str, Any]) -> dict[str, Any]:
     )
     if not principal_id:
         return {}
-    return {
+    prefs = {
         "locale": get_with_fallback(
             principal_id, "locale", settings.get_default_locale()
         ),
@@ -306,3 +306,11 @@ def _load_preferences(payload: dict[str, Any]) -> dict[str, Any]:
             principal_id, "reminders.relay_style", True
         ),
     }
+    logger.info(
+        "ReminderRenderer prefs principal_id=%s locale=%s tone=%s address=%s",
+        principal_id,
+        prefs.get("locale"),
+        prefs.get("tone"),
+        prefs.get("address_style"),
+    )
+    return prefs

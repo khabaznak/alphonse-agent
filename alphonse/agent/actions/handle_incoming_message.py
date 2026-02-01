@@ -7,6 +7,7 @@ from typing import Any
 
 from alphonse.agent.actions.base import Action
 from alphonse.agent.actions.models import ActionResult
+from alphonse.agent.cognition.localization import render_message
 from alphonse.agent.cognition.plans import CortexPlan, PlanType
 from alphonse.agent.cognition.preferences.store import (
     get_or_create_principal_for_channel,
@@ -72,10 +73,33 @@ class HandleIncomingMessageAction(Action):
             actor_person_id=incoming.person_id,
             correlation_id=incoming.correlation_id,
         )
-        if result.reply_text:
+        response_key = (
+            result.meta.get("response_key") if isinstance(result.meta, dict) else None
+        )
+        response_vars = (
+            result.meta.get("response_vars") if isinstance(result.meta, dict) else None
+        )
+        if response_key:
+            rendered, outgoing_locale = _render_outgoing_message(
+                response_key,
+                response_vars,
+                incoming,
+            )
             reply_plan = CortexPlan(
                 plan_type=PlanType.COMMUNICATE,
-                payload={"message": str(result.reply_text)},
+                payload={
+                    "message": rendered,
+                    "locale": outgoing_locale,
+                },
+            )
+            executor.execute([reply_plan], context, exec_context)
+        elif result.reply_text:
+            reply_plan = CortexPlan(
+                plan_type=PlanType.COMMUNICATE,
+                payload={
+                    "message": str(result.reply_text),
+                    "locale": _effective_locale(incoming),
+                },
             )
             executor.execute([reply_plan], context, exec_context)
         if result.plans:
@@ -132,6 +156,9 @@ def _build_cortex_state(
     correlation_id: str,
 ) -> dict[str, Any]:
     principal_id = None
+    effective_locale = settings.get_default_locale()
+    effective_tone = settings.get_tone()
+    effective_address = settings.get_address_style()
     if incoming.channel_type and (incoming.address or incoming.channel_type):
         channel_id = str(incoming.address or incoming.channel_type)
         principal_id = get_or_create_principal_for_channel(
@@ -141,6 +168,22 @@ def _build_cortex_state(
     timezone = settings.get_timezone()
     if principal_id:
         timezone = get_with_fallback(principal_id, "timezone", timezone)
+        effective_locale = get_with_fallback(
+            principal_id, "locale", settings.get_default_locale()
+        )
+        effective_tone = get_with_fallback(principal_id, "tone", settings.get_tone())
+        effective_address = get_with_fallback(
+            principal_id, "address_style", settings.get_address_style()
+        )
+    logger.info(
+        "HandleIncomingMessageAction principal channel=%s channel_id=%s principal_id=%s locale=%s tone=%s address=%s",
+        incoming.channel_type,
+        incoming.address,
+        principal_id,
+        effective_locale,
+        effective_tone,
+        effective_address,
+    )
     return {
         "chat_id": incoming.address or incoming.channel_type,
         "channel_type": incoming.channel_type,
@@ -153,6 +196,83 @@ def _build_cortex_state(
         "correlation_id": correlation_id,
         "timezone": timezone,
     }
+
+
+def _effective_locale(incoming: IncomingContext) -> str:
+    principal_id = _principal_id_for_incoming(incoming)
+    if principal_id:
+        return get_with_fallback(principal_id, "locale", settings.get_default_locale())
+    return settings.get_default_locale()
+
+
+def _effective_tone(incoming: IncomingContext) -> str:
+    principal_id = _principal_id_for_incoming(incoming)
+    if principal_id:
+        return get_with_fallback(principal_id, "tone", settings.get_tone())
+    return settings.get_tone()
+
+
+def _effective_address_style(incoming: IncomingContext) -> str:
+    principal_id = _principal_id_for_incoming(incoming)
+    if principal_id:
+        return get_with_fallback(
+            principal_id, "address_style", settings.get_address_style()
+        )
+    return settings.get_address_style()
+
+
+def _principal_id_for_incoming(incoming: IncomingContext) -> str | None:
+    if incoming.channel_type and (incoming.address or incoming.channel_type):
+        channel_id = str(incoming.address or incoming.channel_type)
+        return get_or_create_principal_for_channel(
+            str(incoming.channel_type),
+            channel_id,
+        )
+    return None
+
+
+def _render_outgoing_message(
+    key: str,
+    response_vars: dict[str, Any] | None,
+    incoming: IncomingContext,
+) -> tuple[str, str]:
+    locale = _effective_locale(incoming)
+    tone = _effective_tone(incoming)
+    address_style = _effective_address_style(incoming)
+    vars: dict[str, Any] = {
+        "tone": tone,
+        "address_style": address_style,
+    }
+    if isinstance(response_vars, dict):
+        vars.update(response_vars)
+        updated = _updated_preferences_from_vars(response_vars)
+        locale = updated.get("locale", locale)
+        tone = updated.get("tone", tone)
+        address_style = updated.get("address_style", address_style)
+        vars["tone"] = tone
+        vars["address_style"] = address_style
+    logger.info(
+        "HandleIncomingMessageAction outgoing key=%s locale=%s address=%s",
+        key,
+        locale,
+        address_style,
+    )
+    return render_message(key, locale, vars), locale
+
+
+def _updated_preferences_from_vars(vars: dict[str, Any]) -> dict[str, str]:
+    updates = vars.get("updates")
+    if not isinstance(updates, list):
+        return {}
+    extracted: dict[str, str] = {}
+    for update in updates:
+        if not isinstance(update, dict):
+            continue
+        key = update.get("key")
+        value = update.get("value")
+        if isinstance(key, str) and isinstance(value, str):
+            extracted[key] = value
+    return extracted
 
 
 def _message_result(message: str, incoming: IncomingContext) -> ActionResult:

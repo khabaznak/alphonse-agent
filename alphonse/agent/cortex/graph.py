@@ -40,6 +40,8 @@ class CortexState(TypedDict, total=False):
     pending_intent: str | None
     messages: list[dict[str, str]]
     response_text: str | None
+    response_key: str | None
+    response_vars: dict[str, Any] | None
     timezone: str
     intent_evidence: dict[str, Any]
     correlation_id: str | None
@@ -109,6 +111,8 @@ def _ingest_node(state: CortexState) -> dict[str, Any]:
         "messages": messages,
         "timezone": state.get("timezone") or get_timezone(),
         "response_text": None,
+        "response_key": None,
+        "response_vars": None,
         "plans": [],
     }
 
@@ -182,21 +186,20 @@ def _slot_fill_node(state: CortexState) -> dict[str, Any]:
 def _clarify_node(state: CortexState) -> dict[str, Any]:
     missing = state.get("missing_slots") or []
     if "reminder_text" in missing:
-        response = '¿Qué debo recordarte? Por ejemplo: "llamar a mamá".'
+        return {"response_key": "clarify.reminder_text"}
     else:
-        response = '¿Cuándo debo recordarlo? Ejemplo: "en 10 min" o "a las 7pm".'
-    return {"response_text": response}
+        return {"response_key": "clarify.trigger_time"}
 
 
 def _plan_node(state: CortexState) -> dict[str, Any]:
     if state.get("intent") == "update_preferences":
         updates = extract_preference_updates(state.get("last_user_message", ""))
         if not updates:
-            return {"response_text": "¿Qué preferencia quieres ajustar?"}
+            return {"response_key": "preference.missing"}
         channel_type = state.get("channel_type")
         channel_id = state.get("channel_target") or state.get("chat_id")
         if not channel_type or not channel_id:
-            return {"response_text": "Necesito un canal para guardar tus preferencias."}
+            return {"response_key": "preference.no_channel"}
         plan = CortexPlan(
             plan_type=PlanType.UPDATE_PREFERENCES,
             payload={
@@ -209,9 +212,6 @@ def _plan_node(state: CortexState) -> dict[str, Any]:
         )
         plans = list(state.get("plans") or [])
         plans.append(plan.model_dump())
-        response = _build_preference_confirmation(
-            updates, state.get("last_user_message", "")
-        )
         logger.info(
             "cortex plans chat_id=%s plan_type=%s plan_id=%s",
             state.get("chat_id"),
@@ -220,13 +220,14 @@ def _plan_node(state: CortexState) -> dict[str, Any]:
         )
         return {
             "plans": plans,
-            "response_text": response,
+            "response_key": "ack.preference_updated",
+            "response_vars": {"updates": updates},
         }
     slots = state.get("slots") or {}
     reminder_text = slots.get("reminder_text")
     trigger_time = slots.get("trigger_time")
     if not reminder_text or not trigger_time:
-        return {"response_text": "¿Puedes aclarar qué necesitas?"}
+        return {"response_key": "generic.unknown"}
     plan = CortexPlan(
         plan_type=PlanType.SCHEDULE_TIMED_SIGNAL,
         target=str(state.get("channel_target") or state.get("chat_id") or ""),
@@ -263,41 +264,22 @@ def _plan_node(state: CortexState) -> dict[str, Any]:
 
 
 def _respond_node(state: CortexState) -> dict[str, Any]:
-    if state.get("response_text"):
+    if state.get("response_text") or state.get("response_key"):
         return {}
     intent = state.get("intent")
     if intent in {"schedule_reminder", "greeting"} and state.get("plans"):
         return {}
     if intent == "get_status":
-        response = "Estoy activo y listo para recordatorios."
+        response_key = "status"
     elif intent == "help":
-        response = (
-            'Puedo programar recordatorios. Ejemplo: "Recuérdame tomar agua en 10 min".'
-        )
+        response_key = "help"
     elif intent == "identity_question":
-        response = "Soy Alphonse, tu asistente. Solo conozco este chat autorizado."
+        response_key = "identity"
     elif intent == "greeting":
-        plan = CortexPlan(
-            plan_type=PlanType.COMMUNICATE,
-            channels=["telegram"],
-            payload={
-                "message": "¡Hola! ¿En qué te ayudo?",
-                "style": "friendly",
-                "locale": "es-MX",
-            },
-        )
-        plans = list(state.get("plans") or [])
-        plans.append(plan.model_dump())
-        logger.info(
-            "cortex plans chat_id=%s plan_type=%s plan_id=%s",
-            state.get("chat_id"),
-            plan.plan_type,
-            plan.plan_id,
-        )
-        return {"plans": plans}
+        response_key = "greeting"
     else:
-        response = 'Puedo programar recordatorios. Prueba: "Recuérdame X en 10 min".'
-    return {"response_text": response}
+        response_key = "generic.unknown"
+    return {"response_key": response_key}
 
 
 def _route_after_intent(state: CortexState) -> str:
@@ -326,75 +308,6 @@ def _preferred_locale_hint(state: CortexState) -> str | None:
     return get_with_fallback(principal_id, "locale", settings.get_default_locale())
 
 
-def _build_preference_confirmation(updates: list[dict[str, str]], text: str) -> str:
-    locale = settings.get_default_locale()
-    for update in updates:
-        if update.get("key") == "locale":
-            locale = str(update.get("value") or locale)
-            break
-    if locale.startswith("en") or _looks_english(text):
-        parts = _preference_confirmation_parts_en(updates)
-        return " ".join(parts) if parts else "Got it. Preferences updated."
-    parts = _preference_confirmation_parts_es(updates)
-    return " ".join(parts) if parts else "Listo, ajusté tus preferencias."
-
-
-def _preference_confirmation_parts_es(updates: list[dict[str, str]]) -> list[str]:
-    parts: list[str] = []
-    for update in updates:
-        key = update.get("key")
-        value = update.get("value")
-        if key == "address_style":
-            parts.append(
-                "Listo, te hablaré de tú."
-                if value == "tu"
-                else "Listo, le hablaré de usted."
-            )
-        elif key == "locale":
-            parts.append(
-                "Listo, hablaré en español."
-                if str(value).startswith("es")
-                else "Listo, hablaré en inglés."
-            )
-        elif key == "tone":
-            if value == "formal":
-                parts.append("Seré más formal.")
-            else:
-                parts.append("Seré más casual.")
-    return parts
-
-
-def _preference_confirmation_parts_en(updates: list[dict[str, str]]) -> list[str]:
-    parts: list[str] = []
-    for update in updates:
-        key = update.get("key")
-        value = update.get("value")
-        if key == "address_style":
-            parts.append(
-                "Got it. I'll use tuteo."
-                if value == "tu"
-                else "Got it. I'll address you formally."
-            )
-        elif key == "locale":
-            parts.append(
-                "Got it. I'll use Spanish."
-                if str(value).startswith("es")
-                else "Got it. I'll use English."
-            )
-        elif key == "tone":
-            parts.append(
-                "Got it. I'll be more formal."
-                if value == "formal"
-                else "Got it. I'll be more casual."
-            )
-    return parts
-
-
-def _looks_english(text: str) -> bool:
-    lowered = text.lower()
-    return any(token in lowered for token in ("english", "please", "speak", "remind"))
-
-
 def _build_cognition_state(state: CortexState) -> dict[str, Any]:
     return {
         "pending_intent": state.get("pending_intent"),
@@ -411,4 +324,6 @@ def _build_meta(state: CortexState) -> dict[str, Any]:
         "intent_confidence": state.get("intent_confidence"),
         "correlation_id": state.get("correlation_id"),
         "chat_id": state.get("chat_id"),
+        "response_key": state.get("response_key"),
+        "response_vars": state.get("response_vars"),
     }

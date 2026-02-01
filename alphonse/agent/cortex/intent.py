@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import unicodedata
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -150,26 +151,29 @@ def _heuristic_intent(text: str) -> IntentResult:
 
 def extract_preference_updates(text: str) -> list[dict[str, str]]:
     lowered = text.lower()
+    normalized = _normalize_pref_text(text)
     updates: list[dict[str, str]] = []
 
     if _matches_any(
-        lowered,
+        normalized,
         [
-            r"\bh[aá]blame\s+de\s+t[uú]\b",
-            r"\bhable\s+de\s+t[uú]\b",
-            r"\bhabla\s+de\s+t[uú]\b",
+            r"\bhablame\s+de\s+tu\b",
+            r"\bhableme\s+de\s+tu\b",
+            r"\bhable\s+de\s+tu\b",
+            r"\bhabla\s+de\s+tu\b",
             r"\btutea(me|nos)\b",
         ],
     ):
         updates.append({"key": "address_style", "value": "tu"})
 
     if _matches_any(
-        lowered,
+        normalized,
         [
-            r"\bh[aá]blame\s+de\s+usted\b",
+            r"\bhablame\s+de\s+usted\b",
+            r"\bhableme\s+de\s+usted\b",
             r"\bhabla\s+de\s+usted\b",
             r"\bhable\s+de\s+usted\b",
-            r"\btr[aá]tame\s+de\s+usted\b",
+            r"\btratame\s+de\s+usted\b",
         ],
     ):
         updates.append({"key": "address_style", "value": "usted"})
@@ -187,12 +191,14 @@ def extract_preference_updates(text: str) -> list[dict[str, str]]:
         updates.append({"key": "locale", "value": "en-US"})
 
     if _matches_any(
-        lowered,
+        normalized,
         [
-            r"\bhabla\s+en\s+espa[nñ]ol\b",
-            r"\bhabla\s+espa[nñ]ol\b",
-            r"\ben\s+espa[nñ]ol\b",
-            r"\bespa[nñ]ol\b",
+            r"\bhabla\s+en\s+espanol\b",
+            r"\bhabla\s+espanol\b",
+            r"\bhablemos\s+en\s+espanol\b",
+            r"\bahora\s+hablemos\s+en\s+espanol\b",
+            r"\ben\s+espanol\b",
+            r"\bespanol\b",
         ],
     ):
         updates.append({"key": "locale", "value": "es-MX"})
@@ -278,6 +284,13 @@ def _extract_reminder_verbs(text: str) -> list[str]:
 
 def _matches_any(text: str, patterns: list[str]) -> bool:
     return any(re.search(pattern, text, flags=re.IGNORECASE) for pattern in patterns)
+
+
+def _normalize_pref_text(text: str) -> str:
+    normalized = unicodedata.normalize("NFKD", text)
+    normalized = "".join(ch for ch in normalized if not unicodedata.combining(ch))
+    normalized = re.sub(r"\s+", " ", normalized).strip().lower()
+    return normalized
 
 
 def _dedupe_preference_updates(updates: list[dict[str, str]]) -> list[dict[str, str]]:

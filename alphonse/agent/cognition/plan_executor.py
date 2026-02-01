@@ -17,10 +17,13 @@ from alphonse.agent.cognition.plans import (
     ScheduleTimedSignalPayload,
     UpdatePreferencesPayload,
 )
+from alphonse.agent.cognition.localization import render_message
 from alphonse.agent.cognition.preferences.store import (
     get_or_create_principal_for_channel,
+    get_with_fallback,
     set_preference,
 )
+from alphonse.config import settings
 from alphonse.agent.extremities.api_extremity import ApiExtremity
 from alphonse.agent.extremities.cli_extremity import CliExtremity
 from alphonse.agent.extremities.registry import ExtremityRegistry
@@ -154,7 +157,7 @@ class PlanExecutor:
             plan.plan_type,
             result,
         )
-        confirmation = f"Programé el recordatorio para {payload.trigger_at}."
+        confirmation = self._render_schedule_confirmation(payload)
         self._dispatch_message(
             channel=payload.origin,
             target=payload.chat_id,
@@ -182,19 +185,47 @@ class PlanExecutor:
             )
             return
         logger.info(
-            "executor dispatch plan_id=%s plan_type=%s channel=%s target=%s",
+            "executor dispatch plan_id=%s plan_type=%s channel=%s target=%s locale=%s",
             plan.plan_id,
             plan.plan_type,
             channel,
             target or "none",
+            plan.payload.get("locale") if isinstance(plan.payload, dict) else None,
         )
         payload = _message_payload(message, channel, target, exec_context)
+        if isinstance(plan.payload, dict) and plan.payload.get("locale"):
+            payload["locale"] = plan.payload.get("locale")
         action = ActionResult(
             intention_key="MESSAGE_READY", payload=payload, urgency="normal"
         )
         delivery = self._coordinator.deliver(action, context)
         if delivery:
             self._extremities.dispatch(delivery, None)
+
+    def _render_schedule_confirmation(self, payload: ScheduleTimedSignalPayload) -> str:
+        principal_id = get_or_create_principal_for_channel(
+            str(payload.origin),
+            str(payload.chat_id),
+        )
+        locale = settings.get_default_locale()
+        address_style = settings.get_address_style()
+        tone = settings.get_tone()
+        if principal_id:
+            locale = get_with_fallback(principal_id, "locale", locale)
+            address_style = get_with_fallback(
+                principal_id, "address_style", address_style
+            )
+            tone = get_with_fallback(principal_id, "tone", tone)
+        logger.info(
+            "executor schedule confirmation locale=%s address=%s",
+            locale,
+            address_style,
+        )
+        return render_message(
+            "ack.reminder_scheduled",
+            locale,
+            {"address_style": address_style, "tone": tone},
+        )
 
     def _execute_update_preferences(
         self,
