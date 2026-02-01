@@ -56,6 +56,12 @@ def main() -> None:
 
     status_parser = sub.add_parser("status", help="Show timed signal status summary")
 
+    report_parser = sub.add_parser("report", help="Report utilities")
+    report_sub = report_parser.add_subparsers(dest="report_command", required=True)
+    report_daily = report_sub.add_parser(
+        "daily", help="Show daily report schedule and last sent"
+    )
+
     gaps_parser = sub.add_parser("gaps", help="Inspect capability gaps")
     gaps_sub = gaps_parser.add_subparsers(dest="gaps_command", required=True)
     gaps_list = gaps_sub.add_parser("list", help="List capability gaps")
@@ -95,6 +101,9 @@ def main() -> None:
         return
     if args.command == "status":
         _command_status(db_path)
+        return
+    if args.command == "report":
+        _command_report(args, db_path)
         return
     if args.command == "gaps":
         _command_gaps(args)
@@ -174,6 +183,33 @@ def _command_status(db_path: Path) -> None:
         print(f"- {status}: {count}")
     if due:
         print(f"Due now: {due[0]}")
+
+
+def _command_report(args: argparse.Namespace, db_path: Path) -> None:
+    if args.report_command == "daily":
+        _command_report_daily(db_path)
+        return
+
+
+def _command_report_daily(db_path: Path) -> None:
+    with sqlite3.connect(db_path) as conn:
+        row = conn.execute(
+            """
+            SELECT id, signal_type, status, trigger_at, next_trigger_at, fired_at, rrule
+            FROM timed_signals WHERE id = 'daily_report'
+            """
+        ).fetchone()
+    if not row:
+        print("Daily report schedule not found.")
+        return
+    print("Daily report schedule:")
+    print(f"- id: {row[0]}")
+    print(f"- signal_type: {row[1]}")
+    print(f"- status: {row[2]}")
+    print(f"- trigger_at: {row[3]}")
+    print(f"- next_trigger_at: {row[4]}")
+    print(f"- fired_at: {row[5]}")
+    print(f"- rrule: {row[6]}")
 
 
 def _command_gaps(args: argparse.Namespace) -> None:
