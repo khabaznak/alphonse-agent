@@ -11,7 +11,10 @@ from alphonse.agent.heart import Heart, HeartConfig
 from alphonse.agent.nervous_system.ddfsm import DDFSM, DDFSMConfig
 from alphonse.agent.nervous_system.senses.bus import Bus
 from alphonse.agent.nervous_system.senses.manager import SenseManager
-from alphonse.agent.nervous_system.senses.registry import register_senses, register_signals
+from alphonse.agent.nervous_system.senses.registry import (
+    register_senses,
+    register_signals,
+)
 from alphonse.infrastructure.api_server import ApiServer
 from alphonse.infrastructure.api_gateway import gateway
 from alphonse.infrastructure.api_exchange import ApiExchange
@@ -40,6 +43,7 @@ def main() -> None:
 
     # Resolve once; used across Alphonse components.
     db_path = resolve_nervous_system_db_path()
+    logging.info("Nerve DB path=%s exists=%s", db_path, db_path.exists())
     # Config / nervous system
     config = HeartConfig(
         nervous_system_db_path=str(db_path),
@@ -59,7 +63,6 @@ def main() -> None:
 
     sense_manager = SenseManager(db_path=str(db_path), bus=bus)
     sense_manager.start()
-
 
     api_server = _build_api_server()
     if api_server:
@@ -90,8 +93,6 @@ def _build_api_server() -> ApiServer | None:
     except ValueError:
         port = 8001
     return ApiServer(host=host, port=port)
-
-
 
 
 if __name__ == "__main__":

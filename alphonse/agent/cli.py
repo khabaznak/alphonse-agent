@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import os
 import sqlite3
@@ -8,6 +9,7 @@ import time
 import uuid
 from pathlib import Path
 from datetime import datetime, timezone
+from urllib import request
 
 from dotenv import load_dotenv
 
@@ -62,6 +64,12 @@ def main() -> None:
         "daily", help="Show daily report schedule and last sent"
     )
 
+    debug_parser = sub.add_parser("debug", help="Diagnostics")
+    debug_sub = debug_parser.add_subparsers(dest="debug_command", required=True)
+    debug_wiring = debug_sub.add_parser(
+        "wiring", help="Show DB path and timed signals API status"
+    )
+
     gaps_parser = sub.add_parser("gaps", help="Inspect capability gaps")
     gaps_sub = gaps_parser.add_subparsers(dest="gaps_command", required=True)
     gaps_list = gaps_sub.add_parser("list", help="List capability gaps")
@@ -90,6 +98,7 @@ def main() -> None:
     _load_env()
     init_settings_db()
     db_path = resolve_nervous_system_db_path()
+    logging.info("Nerve DB path=%s exists=%s", db_path, db_path.exists())
     apply_schema(db_path)
     apply_seed(db_path)
 
@@ -104,6 +113,9 @@ def main() -> None:
         return
     if args.command == "report":
         _command_report(args, db_path)
+        return
+    if args.command == "debug":
+        _command_debug(args)
         return
     if args.command == "gaps":
         _command_gaps(args)
@@ -210,6 +222,39 @@ def _command_report_daily(db_path: Path) -> None:
     print(f"- next_trigger_at: {row[4]}")
     print(f"- fired_at: {row[5]}")
     print(f"- rrule: {row[6]}")
+
+
+def _command_debug(args: argparse.Namespace) -> None:
+    if args.debug_command == "wiring":
+        _command_debug_wiring()
+        return
+
+
+def _command_debug_wiring() -> None:
+    db_path = resolve_nervous_system_db_path()
+    api_base = os.getenv("ALPHONSE_API_BASE_URL", "http://localhost:8001").rstrip("/")
+    token = os.getenv("ALPHONSE_API_TOKEN")
+    print(f"DB path: {db_path}")
+    print(f"API base: {api_base}")
+    print("API token set: yes" if token else "API token set: no")
+
+    url = f"{api_base}/agent/timed-signals"
+    req = request.Request(url, method="GET")
+    if token:
+        req.add_header("x-alphonse-api-token", token)
+    try:
+        with request.urlopen(req, timeout=5) as response:
+            payload = response.read().decode("utf-8")
+            data = json.loads(payload)
+            if isinstance(data, dict) and "data" in data:
+                timed_signals = data.get("data", {}).get("timed_signals", [])
+            else:
+                timed_signals = (
+                    data.get("timed_signals", []) if isinstance(data, dict) else []
+                )
+            print(f"API timed signals count: {len(timed_signals)}")
+    except Exception as exc:
+        print(f"API timed signals error: {exc}")
 
 
 def _command_gaps(args: argparse.Namespace) -> None:

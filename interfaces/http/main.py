@@ -101,9 +101,7 @@ load_dotenv()
 init_db()
 
 app = FastAPI(
-    title="Atrium",
-    description="Domestic presence interface",
-    version="0.1.0"
+    title="Atrium", description="Domestic presence interface", version="0.1.0"
 )
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -123,13 +121,25 @@ app.include_router(trigger_router)
 def _top_nav_links(active: str) -> list[dict[str, str | bool]]:
     return [
         {"label": "Alphonse", "href": "/", "active": active == "alphonse"},
-        {"label": "Timed Signals", "href": "/timed-signals", "active": active == "timed-signals"},
+        {
+            "label": "Timed Signals",
+            "href": "/timed-signals",
+            "active": active == "timed-signals",
+        },
         {"label": "Family", "href": "/family", "active": active == "family"},
         {"label": "Push Test", "href": "/push-test", "active": active == "push-test"},
         {"label": "Settings", "href": "/settings", "active": active == "settings"},
-        {"label": "Nerve DB", "href": "/nerve/signals", "active": active.startswith("nerve")},
+        {
+            "label": "Nerve DB",
+            "href": "/nerve/signals",
+            "active": active.startswith("nerve"),
+        },
         {"label": "Plans", "href": "/admin/plans", "active": active == "admin-plans"},
-        {"label": "Identity", "href": "/identity/persons", "active": active.startswith("identity")},
+        {
+            "label": "Identity",
+            "href": "/identity/persons",
+            "active": active.startswith("identity"),
+        },
         {"label": "Status JSON", "href": "/status"},
     ]
 
@@ -203,10 +213,19 @@ def _alphonse_api_base() -> str:
     return base.rstrip("/")
 
 
+def _alphonse_api_token() -> str | None:
+    token = os.getenv("ALPHONSE_API_TOKEN")
+    return token.strip() if isinstance(token, str) and token.strip() else None
+
+
 def _fetch_alphonse_status() -> dict[str, object]:
     url = f"{_alphonse_api_base()}/agent/status"
+    req = request.Request(url, method="GET")
+    token = _alphonse_api_token()
+    if token:
+        req.add_header("x-alphonse-api-token", token)
     try:
-        with request.urlopen(url, timeout=3) as response:
+        with request.urlopen(req, timeout=3) as response:
             payload = response.read().decode("utf-8")
             data = json.loads(payload)
             if isinstance(data, dict) and "data" in data:
@@ -227,6 +246,9 @@ def _fetch_alphonse_message(text: str) -> dict[str, object]:
     ).encode("utf-8")
     req = request.Request(url, data=body, method="POST")
     req.add_header("Content-Type", "application/json")
+    token = _alphonse_api_token()
+    if token:
+        req.add_header("x-alphonse-api-token", token)
     try:
         with request.urlopen(req, timeout=5) as response:
             payload = response.read().decode("utf-8")
@@ -238,8 +260,12 @@ def _fetch_alphonse_message(text: str) -> dict[str, object]:
 
 def _fetch_alphonse_timed_signals() -> list[dict[str, object]]:
     url = f"{_alphonse_api_base()}/agent/timed-signals"
+    req = request.Request(url, method="GET")
+    token = _alphonse_api_token()
+    if token:
+        req.add_header("x-alphonse-api-token", token)
     try:
-        with request.urlopen(url, timeout=5) as response:
+        with request.urlopen(req, timeout=5) as response:
             payload = response.read().decode("utf-8")
             data = json.loads(payload)
             if isinstance(data, dict) and "data" in data:
@@ -249,7 +275,9 @@ def _fetch_alphonse_timed_signals() -> list[dict[str, object]]:
         return []
 
 
-def _post_alphonse_message(text: str, args: dict[str, object] | None = None) -> dict[str, object]:
+def _post_alphonse_message(
+    text: str, args: dict[str, object] | None = None
+) -> dict[str, object]:
     url = f"{_alphonse_api_base()}/agent/message"
     body = json.dumps(
         {
@@ -264,6 +292,9 @@ def _post_alphonse_message(text: str, args: dict[str, object] | None = None) -> 
     ).encode("utf-8")
     req = request.Request(url, data=body, method="POST")
     req.add_header("Content-Type", "application/json")
+    token = _alphonse_api_token()
+    if token:
+        req.add_header("x-alphonse-api-token", token)
     try:
         with request.urlopen(req, timeout=5) as response:
             payload = response.read().decode("utf-8")
@@ -1253,7 +1284,9 @@ def plan_versions_form(request: Request):
     )
 
 
-@app.get("/admin/plans/versions/{plan_kind}/{plan_version}/form", response_class=HTMLResponse)
+@app.get(
+    "/admin/plans/versions/{plan_kind}/{plan_version}/form", response_class=HTMLResponse
+)
 def plan_versions_form_edit(request: Request, plan_kind: str, plan_version: int):
     return templates.TemplateResponse(
         "partials/plan_versions_form.html",
@@ -1285,7 +1318,9 @@ def create_plan_version_view(
     return plan_versions_table(request)
 
 
-@app.post("/admin/plans/versions/{plan_kind}/{plan_version}", response_class=HTMLResponse)
+@app.post(
+    "/admin/plans/versions/{plan_kind}/{plan_version}", response_class=HTMLResponse
+)
 def update_plan_version_view(
     request: Request,
     plan_kind: str,
@@ -1306,7 +1341,10 @@ def update_plan_version_view(
     return plan_versions_table(request)
 
 
-@app.post("/admin/plans/versions/{plan_kind}/{plan_version}/delete", response_class=HTMLResponse)
+@app.post(
+    "/admin/plans/versions/{plan_kind}/{plan_version}/delete",
+    response_class=HTMLResponse,
+)
 def delete_plan_version_view(request: Request, plan_kind: str, plan_version: int):
     delete_plan_kind_version(plan_kind, plan_version)
     return plan_versions_table(request)
@@ -1334,7 +1372,10 @@ def plan_executors_form(request: Request):
     )
 
 
-@app.get("/admin/plans/executors/{plan_kind}/{plan_version}/form", response_class=HTMLResponse)
+@app.get(
+    "/admin/plans/executors/{plan_kind}/{plan_version}/form",
+    response_class=HTMLResponse,
+)
 def plan_executors_form_edit(request: Request, plan_kind: str, plan_version: int):
     return templates.TemplateResponse(
         "partials/plan_executors_form.html",
@@ -1364,7 +1405,9 @@ def create_plan_executor_view(
     return plan_executors_table(request)
 
 
-@app.post("/admin/plans/executors/{plan_kind}/{plan_version}", response_class=HTMLResponse)
+@app.post(
+    "/admin/plans/executors/{plan_kind}/{plan_version}", response_class=HTMLResponse
+)
 def update_plan_executor_view(
     request: Request,
     plan_kind: str,
@@ -1383,7 +1426,10 @@ def update_plan_executor_view(
     return plan_executors_table(request)
 
 
-@app.post("/admin/plans/executors/{plan_kind}/{plan_version}/delete", response_class=HTMLResponse)
+@app.post(
+    "/admin/plans/executors/{plan_kind}/{plan_version}/delete",
+    response_class=HTMLResponse,
+)
 def delete_plan_executor_view(request: Request, plan_kind: str, plan_version: int):
     delete_plan_executor(plan_kind, plan_version)
     return plan_executors_table(request)
