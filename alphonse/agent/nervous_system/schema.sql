@@ -73,7 +73,41 @@ CREATE TABLE IF NOT EXISTS timed_signals (
 ) STRICT;
 
 ----------------------------------------------------------------------
--- 2.6.1) PENDING PLANS
+-- 2.6.1) PRINCIPALS
+----------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS principals (
+  principal_id   TEXT PRIMARY KEY,
+  principal_type TEXT NOT NULL,
+  channel_type   TEXT,
+  channel_id     TEXT,
+  display_name   TEXT,
+  created_at     TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at     TEXT NOT NULL DEFAULT (datetime('now')),
+  CHECK (principal_type IN ('person', 'channel_chat', 'household'))
+) STRICT;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_principals_channel_unique
+  ON principals (channel_type, channel_id)
+  WHERE channel_type IS NOT NULL AND channel_id IS NOT NULL;
+
+----------------------------------------------------------------------
+-- 2.6.2) PREFERENCES
+----------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS preferences (
+  preference_id TEXT PRIMARY KEY,
+  principal_id  TEXT NOT NULL REFERENCES principals(principal_id) ON DELETE CASCADE,
+  key           TEXT NOT NULL,
+  value_json    TEXT NOT NULL,
+  source        TEXT NOT NULL,
+  created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at    TEXT NOT NULL DEFAULT (datetime('now'))
+) STRICT;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_preferences_principal_key
+  ON preferences (principal_id, key);
+
+----------------------------------------------------------------------
+-- 2.6.3) PENDING PLANS
 ----------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS pending_plans (
   pending_id    TEXT PRIMARY KEY,

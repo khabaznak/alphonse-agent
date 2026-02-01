@@ -5,19 +5,29 @@ import logging
 from typing import Any
 
 from alphonse.agent.actions.models import ActionResult
-from alphonse.agent.cognition.narration.coordinator import DeliveryCoordinator, build_default_coordinator
+from alphonse.agent.cognition.narration.coordinator import (
+    DeliveryCoordinator,
+    build_default_coordinator,
+)
 from alphonse.agent.cognition.plans import (
     CommunicatePayload,
     CortexPlan,
     PlanType,
     QueryStatusPayload,
     ScheduleTimedSignalPayload,
+    UpdatePreferencesPayload,
+)
+from alphonse.agent.cognition.preferences.store import (
+    get_or_create_principal_for_channel,
+    set_preference,
 )
 from alphonse.agent.extremities.api_extremity import ApiExtremity
 from alphonse.agent.extremities.cli_extremity import CliExtremity
 from alphonse.agent.extremities.registry import ExtremityRegistry
 from alphonse.agent.extremities.scheduler_extremity import schedule_reminder
-from alphonse.agent.extremities.telegram_notification import TelegramNotificationExtremity
+from alphonse.agent.extremities.telegram_notification import (
+    TelegramNotificationExtremity,
+)
 from alphonse.agent.policy.engine import PolicyDecision, PolicyEngine
 
 logger = logging.getLogger(__name__)
@@ -43,7 +53,9 @@ class PlanExecutor:
         self._extremities = extremities or _build_default_extremities()
         self._policy = policy_engine or PolicyEngine()
 
-    def execute(self, plans: list[CortexPlan], context: dict, exec_context: PlanExecutionContext) -> None:
+    def execute(
+        self, plans: list[CortexPlan], context: dict, exec_context: PlanExecutionContext
+    ) -> None:
         for plan in plans:
             try:
                 self._execute_plan(plan, context, exec_context)
@@ -56,7 +68,9 @@ class PlanExecutor:
                 )
                 self._dispatch_error(exec_context, context)
 
-    def _execute_plan(self, plan: CortexPlan, context: dict, exec_context: PlanExecutionContext) -> None:
+    def _execute_plan(
+        self, plan: CortexPlan, context: dict, exec_context: PlanExecutionContext
+    ) -> None:
         decision = self._policy.approve_plan(plan, exec_context)
         if not decision.allowed:
             logger.warning(
@@ -77,9 +91,21 @@ class PlanExecutor:
             return
         if plan.plan_type == PlanType.QUERY_STATUS:
             QueryStatusPayload.model_validate(plan.payload)
-            logger.info("executor dispatch plan_id=%s plan_type=%s outcome=ignored", plan.plan_id, plan.plan_type)
+            logger.info(
+                "executor dispatch plan_id=%s plan_type=%s outcome=ignored",
+                plan.plan_id,
+                plan.plan_type,
+            )
             return
-        logger.info("executor dispatch plan_id=%s plan_type=%s outcome=noop", plan.plan_id, plan.plan_type)
+        if plan.plan_type == PlanType.UPDATE_PREFERENCES:
+            payload = UpdatePreferencesPayload.model_validate(plan.payload)
+            self._execute_update_preferences(plan, payload)
+            return
+        logger.info(
+            "executor dispatch plan_id=%s plan_type=%s outcome=noop",
+            plan.plan_id,
+            plan.plan_type,
+        )
 
     def _execute_communicate(
         self,
@@ -163,19 +189,51 @@ class PlanExecutor:
             target or "none",
         )
         payload = _message_payload(message, channel, target, exec_context)
-        action = ActionResult(intention_key="MESSAGE_READY", payload=payload, urgency="normal")
+        action = ActionResult(
+            intention_key="MESSAGE_READY", payload=payload, urgency="normal"
+        )
         delivery = self._coordinator.deliver(action, context)
         if delivery:
             self._extremities.dispatch(delivery, None)
 
-    def _dispatch_error(self, exec_context: PlanExecutionContext, context: dict) -> None:
+    def _execute_update_preferences(
+        self,
+        plan: CortexPlan,
+        payload: UpdatePreferencesPayload,
+    ) -> None:
+        principal = payload.principal
+        principal_id = get_or_create_principal_for_channel(
+            principal.channel_type,
+            principal.channel_id,
+        )
+        if not principal_id:
+            logger.warning(
+                "executor dispatch plan_id=%s plan_type=%s outcome=missing_principal",
+                plan.plan_id,
+                plan.plan_type,
+            )
+            return
+        for update in payload.updates:
+            set_preference(principal_id, update.key, update.value, source="user")
+        logger.info(
+            "executor dispatch plan_id=%s plan_type=%s outcome=preferences_updated count=%s",
+            plan.plan_id,
+            plan.plan_type,
+            len(payload.updates),
+        )
+
+    def _dispatch_error(
+        self, exec_context: PlanExecutionContext, context: dict
+    ) -> None:
         payload = _message_payload(
             "Lo siento, tuve un problema al procesar la solicitud.",
             exec_context.channel_type,
             exec_context.channel_target,
             exec_context,
         )
-        action = ActionResult(intention_key="MESSAGE_READY", payload=payload, urgency="normal")
+        action = ActionResult(
+            intention_key="MESSAGE_READY", payload=payload, urgency="normal"
+        )
         delivery = self._coordinator.deliver(action, context)
         if delivery:
             self._extremities.dispatch(delivery, None)
@@ -187,7 +245,10 @@ class PlanExecutor:
         exec_context: PlanExecutionContext,
         plan: CortexPlan,
     ) -> None:
-        if exec_context.channel_type in {"telegram", "cli", "api"} and not exec_context.channel_target:
+        if (
+            exec_context.channel_type in {"telegram", "cli", "api"}
+            and not exec_context.channel_target
+        ):
             logger.warning(
                 "executor policy denial could not notify plan_id=%s reason=missing_target",
                 plan.plan_id,
@@ -200,7 +261,9 @@ class PlanExecutor:
             exec_context.channel_target,
             exec_context,
         )
-        action = ActionResult(intention_key="MESSAGE_READY", payload=payload, urgency="normal")
+        action = ActionResult(
+            intention_key="MESSAGE_READY", payload=payload, urgency="normal"
+        )
         delivery = self._coordinator.deliver(action, context)
         if delivery:
             self._extremities.dispatch(delivery, None)

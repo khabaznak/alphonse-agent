@@ -140,6 +140,23 @@ Marker 4 — Policy hook
 
 ---
 
+## Preferences (per chat)
+
+Alphonse stores user/chat preferences in the nerve DB so they persist across restarts.
+Deployment defaults come from environment settings, but per-chat overrides live in SQLite.
+
+Examples (Telegram or CLI):
+
+- "Háblame de tú" → sets `address_style=tu`
+- "Háblame de usted" → sets `address_style=usted`
+- "Habla en español" / "Speak English" → sets `locale`
+- "Sé más formal" / "Be more casual" → sets `tone`
+
+Preferences are keyed per principal (currently `channel_chat`), and the renderer uses them
+for reminder phrasing immediately after they are set.
+
+---
+
 ## LangGraph Cortex
 
 Alphonse's conversation orchestration runs in `alphonse/agent/cortex/graph.py`.

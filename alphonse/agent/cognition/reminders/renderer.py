@@ -6,6 +6,10 @@ from datetime import datetime, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from alphonse.agent.cognition.preferences.store import (
+    get_or_create_principal_for_channel,
+    get_with_fallback,
+)
 from alphonse.config import settings
 
 logger = logging.getLogger(__name__)
@@ -14,7 +18,8 @@ logger = logging.getLogger(__name__)
 def render_reminder(
     payload: dict[str, Any], prefs: dict[str, Any] | None = None
 ) -> str:
-    prefs = prefs or {}
+    stored_prefs = _load_preferences(payload)
+    prefs = {**stored_prefs, **(prefs or {})}
     raw = _extract_raw_text(payload)
     cleaned = _normalize_task_text(raw)
     locale = _resolve_locale(payload, cleaned, prefs)
@@ -22,14 +27,18 @@ def render_reminder(
     address_style = _resolve_address_style(prefs)
     name = _resolve_name(payload, prefs)
     timing = _timing_reference(payload, locale)
-    rendered = _render_relay(
-        cleaned,
-        locale=locale,
-        tone=tone,
-        address_style=address_style,
-        name=name,
-        timing=timing,
-    )
+    relay_style = prefs.get("reminders.relay_style", True)
+    if relay_style is False:
+        rendered = _render_simple(cleaned, locale)
+    else:
+        rendered = _render_relay(
+            cleaned,
+            locale=locale,
+            tone=tone,
+            address_style=address_style,
+            name=name,
+            timing=timing,
+        )
     logger.info(
         "ReminderRenderer locale=%s tone=%s address=%s raw_len=%s cleaned_len=%s",
         locale,
@@ -138,7 +147,7 @@ def _render_relay(
     if locale.startswith("es"):
         name_part = f"{name}, " if name else ""
         if address_style == "usted":
-            template = "🕒 {name}me pidió que le recuerde {task}"
+            template = "🕒 {name}me pediste que le recuerde {task}"
         else:
             template = "🕒 {name}me pediste que te recuerde {task}"
         body = template.format(name=name_part, task=task)
@@ -147,6 +156,12 @@ def _render_relay(
     if timing:
         body = f"{body} {timing}"
     return _ensure_terminal_punctuation(body)
+
+
+def _render_simple(task: str, locale: str) -> str:
+    body = task or "recordatorio"
+    prefix = "🕒 Recordatorio: " if locale.startswith("es") else "🕒 Reminder: "
+    return _ensure_terminal_punctuation(f"{prefix}{body}")
 
 
 def _ensure_terminal_punctuation(text: str) -> str:
@@ -263,3 +278,31 @@ def _parse_datetime(value: str) -> datetime | None:
         except Exception:
             parsed = parsed.replace(tzinfo=timezone.utc)
     return parsed
+
+
+def _load_preferences(payload: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        return {}
+    channel_type = payload.get("origin_channel") or payload.get("channel_type")
+    channel_id = (
+        payload.get("chat_id") or payload.get("channel_id") or payload.get("target")
+    )
+    if not channel_type or not channel_id:
+        return {}
+    principal_id = get_or_create_principal_for_channel(
+        str(channel_type), str(channel_id)
+    )
+    if not principal_id:
+        return {}
+    return {
+        "locale": get_with_fallback(
+            principal_id, "locale", settings.get_default_locale()
+        ),
+        "tone": get_with_fallback(principal_id, "tone", settings.get_tone()),
+        "address_style": get_with_fallback(
+            principal_id, "address_style", settings.get_address_style()
+        ),
+        "reminders.relay_style": get_with_fallback(
+            principal_id, "reminders.relay_style", True
+        ),
+    }

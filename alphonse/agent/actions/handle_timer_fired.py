@@ -13,6 +13,10 @@ from alphonse.agent.cognition.reminders.renderer import render_reminder
 from alphonse.agent.cognition.plan_executor import PlanExecutionContext, PlanExecutor
 from alphonse.agent.cognition.plans import CortexPlan, PlanType
 from alphonse.agent.policy.engine import PolicyEngine
+from alphonse.agent.cognition.preferences.store import (
+    get_or_create_principal_for_channel,
+    get_with_fallback,
+)
 from alphonse.config import settings
 
 
@@ -146,6 +150,17 @@ def _correlation_id(
 
 
 def _locale_from_payload(payload: dict[str, Any]) -> str:
+    channel_type = payload.get("origin_channel")
+    channel_id = payload.get("chat_id")
+    if channel_type and channel_id:
+        principal_id = get_or_create_principal_for_channel(
+            str(channel_type),
+            str(channel_id),
+        )
+        if principal_id:
+            return get_with_fallback(
+                principal_id, "locale", settings.get_default_locale()
+            )
     hint = payload.get("locale_hint")
     if isinstance(hint, str) and hint.strip():
         return hint

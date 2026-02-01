@@ -8,6 +8,11 @@ from typing import Any
 from alphonse.agent.actions.base import Action
 from alphonse.agent.actions.models import ActionResult
 from alphonse.agent.cognition.plans import CortexPlan, PlanType
+from alphonse.agent.cognition.preferences.store import (
+    get_or_create_principal_for_channel,
+    get_with_fallback,
+)
+from alphonse.config import settings
 from alphonse.agent.cognition.plan_executor import PlanExecutionContext, PlanExecutor
 from alphonse.agent.cortex.graph import invoke_cortex
 from alphonse.agent.cortex.state_store import load_state, save_state
@@ -78,7 +83,9 @@ class HandleIncomingMessageAction(Action):
         return _noop_result(incoming)
 
 
-def _build_incoming_context(payload: dict, signal: object | None, correlation_id: str) -> IncomingContext:
+def _build_incoming_context(
+    payload: dict, signal: object | None, correlation_id: str
+) -> IncomingContext:
     origin = payload.get("origin") or getattr(signal, "source", None) or "system"
     channel_type = str(origin)
     address = _resolve_address(channel_type, payload)
@@ -106,7 +113,9 @@ def _resolve_address(channel_type: str, payload: dict) -> str | None:
     return str(target) if target is not None else None
 
 
-def _resolve_person_id(payload: dict, channel_type: str, address: str | None) -> str | None:
+def _resolve_person_id(
+    payload: dict, channel_type: str, address: str | None
+) -> str | None:
     person_id = payload.get("person_id")
     if person_id:
         return str(person_id)
@@ -122,6 +131,16 @@ def _build_cortex_state(
     incoming: IncomingContext,
     correlation_id: str,
 ) -> dict[str, Any]:
+    principal_id = None
+    if incoming.channel_type and (incoming.address or incoming.channel_type):
+        channel_id = str(incoming.address or incoming.channel_type)
+        principal_id = get_or_create_principal_for_channel(
+            str(incoming.channel_type),
+            channel_id,
+        )
+    timezone = settings.get_timezone()
+    if principal_id:
+        timezone = get_with_fallback(principal_id, "timezone", timezone)
     return {
         "chat_id": incoming.address or incoming.channel_type,
         "channel_type": incoming.channel_type,
@@ -132,6 +151,7 @@ def _build_cortex_state(
         "missing_slots": stored_state.get("missing_slots") or [],
         "intent": stored_state.get("last_intent"),
         "correlation_id": correlation_id,
+        "timezone": timezone,
     }
 
 
@@ -165,7 +185,10 @@ def _message_result(message: str, incoming: IncomingContext) -> ActionResult:
 
 
 def _noop_result(incoming: IncomingContext) -> ActionResult:
-    logger.info("HandleIncomingMessageAction response channel=%s message=noop", incoming.channel_type)
+    logger.info(
+        "HandleIncomingMessageAction response channel=%s message=noop",
+        incoming.channel_type,
+    )
     return ActionResult(intention_key="NOOP", payload={}, urgency=None)
 
 

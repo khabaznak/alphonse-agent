@@ -13,6 +13,7 @@ class PlanType(str, Enum):
     SCHEDULE_TIMED_SIGNAL = "SCHEDULE_TIMED_SIGNAL"
     QUERY_STATUS = "QUERY_STATUS"
     SET_PREFERENCE = "SET_PREFERENCE"
+    UPDATE_PREFERENCES = "UPDATE_PREFERENCES"
     NOOP = "NOOP"
 
 
@@ -66,3 +67,24 @@ class QueryStatusPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     include: list[str]
+
+
+class PreferencePrincipal(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    channel_type: str
+    channel_id: str
+
+
+class PreferenceUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    key: str
+    value: Any
+
+
+class UpdatePreferencesPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    principal: PreferencePrincipal
+    updates: list[PreferenceUpdate]
