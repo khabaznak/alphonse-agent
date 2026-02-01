@@ -133,6 +133,47 @@ CREATE INDEX IF NOT EXISTS idx_capability_gaps_created
   ON capability_gaps (created_at);
 
 ----------------------------------------------------------------------
+-- 2.6.2.2) GAP PROPOSALS
+----------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS gap_proposals (
+  id                          TEXT PRIMARY KEY,
+  gap_id                      TEXT NOT NULL,
+  created_at                  TEXT NOT NULL,
+  status                      TEXT NOT NULL,
+  proposed_category           TEXT NOT NULL,
+  confidence                  REAL,
+  proposed_next_action        TEXT NOT NULL,
+  proposed_intent_name        TEXT,
+  proposed_clarifying_question TEXT,
+  notes                       TEXT,
+  language                    TEXT,
+  reviewer                    TEXT,
+  reviewed_at                 TEXT,
+  CHECK (status IN ('pending', 'approved', 'rejected', 'dispatched'))
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_gap_proposals_status
+  ON gap_proposals (status);
+CREATE INDEX IF NOT EXISTS idx_gap_proposals_gap
+  ON gap_proposals (gap_id);
+
+----------------------------------------------------------------------
+-- 2.6.2.3) GAP TASKS (DISPATCH QUEUE)
+----------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS gap_tasks (
+  id          TEXT PRIMARY KEY,
+  proposal_id TEXT NOT NULL,
+  type        TEXT NOT NULL,
+  status      TEXT NOT NULL DEFAULT 'open',
+  created_at  TEXT NOT NULL,
+  payload     TEXT,
+  CHECK (status IN ('open', 'done')),
+  CHECK (type IN ('plan', 'investigate', 'fix_now'))
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_gap_tasks_status
+  ON gap_tasks (status);
+----------------------------------------------------------------------
 -- 2.6.3) PENDING PLANS
 ----------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS pending_plans (

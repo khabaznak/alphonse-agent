@@ -24,6 +24,9 @@ INTENTS = {
     "help",
     "identity_question",
     "greeting",
+    "meta.gaps_list",
+    "meta.capabilities",
+    "timed_signals.list",
     "update_preferences",
     "unknown",
 }
@@ -43,7 +46,8 @@ def classify_intent(text: str, llm_client: OllamaClient | None) -> IntentResult:
         return IntentResult(intent="unknown", confidence=0.2)
     prompt = (
         "Classify the intent into one of: schedule_reminder, update_preferences, get_status, "
-        'help, identity_question, greeting, unknown. Return JSON {"intent":...,"confidence":0-1}.'
+        "help, identity_question, greeting, meta.gaps_list, meta.capabilities, "
+        'timed_signals.list, unknown. Return JSON {"intent":...,"confidence":0-1}.'
     )
     try:
         raw = llm_client.complete(system_prompt=prompt, user_prompt=text)
@@ -131,6 +135,33 @@ def _heuristic_intent(text: str) -> IntentResult:
     lowered = text.lower().strip()
     if any(token in lowered for token in ("status", "estado")):
         return IntentResult(intent="get_status", confidence=0.7)
+    if any(token in lowered for token in ("gaps", "gap list", "gaps list", "brechas")):
+        return IntentResult(intent="meta.gaps_list", confidence=0.7)
+    if any(
+        token in lowered
+        for token in (
+            "what else can you do",
+            "what can you do",
+            "capabilities",
+            "que puedes hacer",
+            "qué puedes hacer",
+            "que mas puedes hacer",
+            "qué más puedes hacer",
+        )
+    ):
+        return IntentResult(intent="meta.capabilities", confidence=0.7)
+    if any(
+        token in lowered
+        for token in (
+            "what reminders do you have",
+            "reminders scheduled",
+            "list reminders",
+            "que recordatorios tienes",
+            "qué recordatorios tienes",
+            "recordatorios programados",
+        )
+    ):
+        return IntentResult(intent="timed_signals.list", confidence=0.7)
     if any(
         token in lowered for token in ("ayuda", "help", "what can you do", "que puedes")
     ):

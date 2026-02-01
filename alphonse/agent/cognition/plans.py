@@ -68,6 +68,8 @@ class QueryStatusPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     include: list[str]
+    limit: int | None = None
+    locale: str | None = None
 
 
 class PreferencePrincipal(BaseModel):

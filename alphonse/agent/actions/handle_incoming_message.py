@@ -8,6 +8,7 @@ from typing import Any
 from alphonse.agent.actions.base import Action
 from alphonse.agent.actions.models import ActionResult
 from alphonse.agent.cognition.localization import render_message
+from alphonse.agent.cognition.capability_gaps.triage import detect_language
 from alphonse.agent.cognition.plans import CortexPlan, PlanType
 from alphonse.agent.cognition.preferences.store import (
     get_or_create_principal_for_channel,
@@ -84,6 +85,7 @@ class HandleIncomingMessageAction(Action):
                 response_key,
                 response_vars,
                 incoming,
+                text,
             )
             reply_plan = CortexPlan(
                 plan_type=PlanType.COMMUNICATE,
@@ -94,11 +96,13 @@ class HandleIncomingMessageAction(Action):
             )
             executor.execute([reply_plan], context, exec_context)
         elif result.reply_text:
+            detected = detect_language(text)
+            locale = "es-MX" if detected == "es" else "en-US"
             reply_plan = CortexPlan(
                 plan_type=PlanType.COMMUNICATE,
                 payload={
                     "message": str(result.reply_text),
-                    "locale": _effective_locale(incoming),
+                    "locale": locale,
                 },
             )
             executor.execute([reply_plan], context, exec_context)
@@ -193,6 +197,7 @@ def _build_cortex_state(
         "slots": stored_state.get("slots_collected") or {},
         "missing_slots": stored_state.get("missing_slots") or [],
         "intent": stored_state.get("last_intent"),
+        "locale": stored_state.get("locale"),
         "correlation_id": correlation_id,
         "timezone": timezone,
     }
@@ -235,10 +240,13 @@ def _render_outgoing_message(
     key: str,
     response_vars: dict[str, Any] | None,
     incoming: IncomingContext,
+    text: str,
 ) -> tuple[str, str]:
     locale = _effective_locale(incoming)
     tone = _effective_tone(incoming)
     address_style = _effective_address_style(incoming)
+    detected = detect_language(text)
+    locale = "es-MX" if detected == "es" else "en-US"
     vars: dict[str, Any] = {
         "tone": tone,
         "address_style": address_style,

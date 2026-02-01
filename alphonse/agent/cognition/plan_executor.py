@@ -19,6 +19,10 @@ from alphonse.agent.cognition.plans import (
     CapabilityGapPayload,
 )
 from alphonse.agent.cognition.localization import render_message
+from alphonse.agent.cognition.status_summaries import (
+    summarize_gaps,
+    summarize_timed_signals,
+)
 from alphonse.agent.cognition.preferences.store import (
     get_or_create_principal_for_channel,
     get_with_fallback,
@@ -95,12 +99,8 @@ class PlanExecutor:
             self._execute_schedule(plan, payload, context, exec_context)
             return
         if plan.plan_type == PlanType.QUERY_STATUS:
-            QueryStatusPayload.model_validate(plan.payload)
-            logger.info(
-                "executor dispatch plan_id=%s plan_type=%s outcome=ignored",
-                plan.plan_id,
-                plan.plan_type,
-            )
+            payload = QueryStatusPayload.model_validate(plan.payload)
+            self._execute_query_status(plan, payload, context, exec_context)
             return
         if plan.plan_type == PlanType.UPDATE_PREFERENCES:
             payload = UpdatePreferencesPayload.model_validate(plan.payload)
@@ -173,6 +173,46 @@ class PlanExecutor:
             plan=plan,
         )
 
+    def _execute_query_status(
+        self,
+        plan: CortexPlan,
+        payload: QueryStatusPayload,
+        context: dict,
+        exec_context: PlanExecutionContext,
+    ) -> None:
+        logger.info(
+            "executor dispatch plan_id=%s plan_type=%s include=%s",
+            plan.plan_id,
+            plan.plan_type,
+            ",".join(payload.include),
+        )
+        parts: list[str] = []
+        locale = payload.locale or "en-US"
+        limit = payload.limit or 10
+        if "timed_signals" in payload.include:
+            parts.append(summarize_timed_signals(locale, limit=limit))
+        if "gaps_summary" in payload.include:
+            parts.append(summarize_gaps(locale, limit=limit))
+        if not parts:
+            logger.info(
+                "executor dispatch plan_id=%s plan_type=%s outcome=ignored",
+                plan.plan_id,
+                plan.plan_type,
+            )
+            return
+        message = "\n\n".join(parts)
+        channels = plan.channels or [exec_context.channel_type]
+        target = plan.target or exec_context.channel_target
+        for channel in channels:
+            self._dispatch_message(
+                channel=channel,
+                target=target,
+                message=message,
+                context=context,
+                exec_context=exec_context,
+                plan=plan,
+            )
+
     def _dispatch_message(
         self,
         *,
@@ -213,7 +253,7 @@ class PlanExecutor:
             str(payload.origin),
             str(payload.chat_id),
         )
-        locale = settings.get_default_locale()
+        locale = payload.locale_hint or settings.get_default_locale()
         address_style = settings.get_address_style()
         tone = settings.get_tone()
         if principal_id:

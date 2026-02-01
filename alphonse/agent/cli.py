@@ -28,6 +28,18 @@ from alphonse.agent.nervous_system.capability_gaps import (
     list_gaps,
     update_gap_status,
 )
+from alphonse.agent.cognition.capability_gaps.reflection import reflect_gaps
+from alphonse.agent.nervous_system.gap_proposals import (
+    get_gap_proposal,
+    list_gap_proposals,
+    update_gap_proposal_status,
+)
+from alphonse.agent.nervous_system.gap_tasks import (
+    get_gap_task,
+    insert_gap_task,
+    list_gap_tasks,
+    update_gap_task_status,
+)
 from alphonse.agent.core.settings_store import init_db as init_settings_db
 
 
@@ -92,6 +104,42 @@ def main() -> None:
     gaps_ignore = gaps_sub.add_parser("ignore", help="Ignore a gap")
     gaps_ignore.add_argument("gap_id", help="Gap id")
     gaps_ignore.add_argument("--note", required=True, help="Reason for ignoring")
+
+    gaps_reflect = gaps_sub.add_parser("reflect", help="Propose actions for open gaps")
+    gaps_reflect.add_argument("--limit", type=int, default=50, help="Limit open gaps")
+
+    proposals_parser = gaps_sub.add_parser("proposals", help="Manage gap proposals")
+    proposals_sub = proposals_parser.add_subparsers(
+        dest="proposals_command", required=True
+    )
+    proposals_list = proposals_sub.add_parser("list", help="List proposals")
+    proposals_list.add_argument(
+        "--status",
+        choices=["pending", "approved", "rejected", "dispatched"],
+        default="pending",
+    )
+    proposals_list.add_argument("--limit", type=int, default=50, help="Limit results")
+    proposals_show = proposals_sub.add_parser("show", help="Show proposal details")
+    proposals_show.add_argument("proposal_id", help="Proposal id")
+    proposals_approve = proposals_sub.add_parser("approve", help="Approve proposal")
+    proposals_approve.add_argument("proposal_id", help="Proposal id")
+    proposals_approve.add_argument(
+        "--queue", choices=["plan", "investigate", "fix_now"], default=None
+    )
+    proposals_approve.add_argument("--reviewer", default="human")
+    proposals_reject = proposals_sub.add_parser("reject", help="Reject proposal")
+    proposals_reject.add_argument("proposal_id", help="Proposal id")
+    proposals_reject.add_argument("--reason", default=None)
+
+    tasks_parser = gaps_sub.add_parser("tasks", help="Manage gap tasks")
+    tasks_sub = tasks_parser.add_subparsers(dest="tasks_command", required=True)
+    tasks_list = tasks_sub.add_parser("list", help="List tasks")
+    tasks_list.add_argument("--status", choices=["open", "done"], default="open")
+    tasks_list.add_argument("--limit", type=int, default=50)
+    tasks_show = tasks_sub.add_parser("show", help="Show task details")
+    tasks_show.add_argument("task_id", help="Task id")
+    tasks_done = tasks_sub.add_parser("done", help="Mark task as done")
+    tasks_done.add_argument("task_id", help="Task id")
 
     args = parser.parse_args()
     _configure_logging(args.log_level)
@@ -270,6 +318,15 @@ def _command_gaps(args: argparse.Namespace) -> None:
     if args.gaps_command == "ignore":
         _command_gaps_update(args, status="ignored")
         return
+    if args.gaps_command == "reflect":
+        _command_gaps_reflect(args)
+        return
+    if args.gaps_command == "proposals":
+        _command_gap_proposals(args)
+        return
+    if args.gaps_command == "tasks":
+        _command_gap_tasks(args)
+        return
 
 
 def _command_gaps_list(args: argparse.Namespace) -> None:
@@ -302,6 +359,89 @@ def _command_gaps_update(args: argparse.Namespace, *, status: str) -> None:
         print(f"Updated {args.gap_id} to {status}.")
     else:
         print("Gap not found.")
+
+
+def _command_gaps_reflect(args: argparse.Namespace) -> None:
+    created = reflect_gaps(limit=args.limit)
+    if not created:
+        print("No proposals created.")
+        return
+    print(f"Created {len(created)} proposal(s).")
+
+
+def _command_gap_proposals(args: argparse.Namespace) -> None:
+    if args.proposals_command == "list":
+        rows = list_gap_proposals(status=args.status, limit=args.limit)
+        if not rows:
+            print("No proposals found.")
+            return
+        for row in rows:
+            print(
+                f"- {row.get('id')} gap={row.get('gap_id')} "
+                f"{row.get('proposed_category')} "
+                f"conf={row.get('confidence')} "
+                f"next={row.get('proposed_next_action')}"
+            )
+        return
+    if args.proposals_command == "show":
+        proposal = get_gap_proposal(args.proposal_id)
+        if not proposal:
+            print("Proposal not found.")
+            return
+        print(json.dumps(proposal, indent=2, ensure_ascii=True))
+        return
+    if args.proposals_command == "approve":
+        if update_gap_proposal_status(
+            args.proposal_id, "approved", reviewer=args.reviewer
+        ):
+            print(f"Proposal {args.proposal_id} approved.")
+            if args.queue:
+                task_id = insert_gap_task(
+                    {
+                        "proposal_id": args.proposal_id,
+                        "type": args.queue,
+                        "status": "open",
+                        "payload": {},
+                    }
+                )
+                print(f"Queued task {task_id}.")
+        else:
+            print("Proposal not found.")
+        return
+    if args.proposals_command == "reject":
+        if update_gap_proposal_status(
+            args.proposal_id, "rejected", reviewer="human", notes=args.reason
+        ):
+            print(f"Proposal {args.proposal_id} rejected.")
+        else:
+            print("Proposal not found.")
+        return
+
+
+def _command_gap_tasks(args: argparse.Namespace) -> None:
+    if args.tasks_command == "list":
+        rows = list_gap_tasks(status=args.status, limit=args.limit)
+        if not rows:
+            print("No tasks found.")
+            return
+        for row in rows:
+            print(
+                f"- {row.get('id')} proposal={row.get('proposal_id')} "
+                f"type={row.get('type')} status={row.get('status')}"
+            )
+        return
+    if args.tasks_command == "show":
+        task = get_gap_task(args.task_id)
+        if not task:
+            print("Task not found.")
+            return
+        print(json.dumps(task, indent=2, ensure_ascii=True))
+        return
+    if args.tasks_command == "done":
+        if update_gap_task_status(args.task_id, "done"):
+            print(f"Task {args.task_id} marked done.")
+        else:
+            print("Task not found.")
 
 
 def _load_env() -> None:

@@ -7,6 +7,9 @@ from typing import Any, TypedDict
 from langgraph.graph import END, StateGraph
 
 from alphonse.agent.cognition.plans import CortexPlan, CortexResult, PlanType
+from alphonse.agent.cognition.capability_gaps.triage import detect_language
+from alphonse.agent.cognition.localization import render_message
+from alphonse.agent.cognition.status_summaries import summarize_capabilities
 from alphonse.agent.cognition.providers.ollama import OllamaClient
 from alphonse.agent.cognition.preferences.store import (
     get_or_create_principal_for_channel,
@@ -47,6 +50,7 @@ class CortexState(TypedDict, total=False):
     correlation_id: str | None
     plans: list[dict[str, Any]]
     last_intent: str | None
+    locale: str | None
 
 
 def build_cortex_graph(llm_client: OllamaClient | None = None) -> StateGraph:
@@ -91,8 +95,15 @@ def invoke_cortex(
     plans = [
         CortexPlan.model_validate(plan) for plan in result_state.get("plans") or []
     ]
+    response_text = result_state.get("response_text")
+    if not response_text and result_state.get("response_key"):
+        response_text = render_message(
+            str(result_state.get("response_key")),
+            _locale_for_state(result_state),
+            result_state.get("response_vars") or {},
+        )
     return CortexResult(
-        reply_text=result_state.get("response_text"),
+        reply_text=response_text,
         plans=plans,
         cognition_state=_build_cognition_state(result_state),
         meta=_build_meta(result_state),
@@ -105,6 +116,7 @@ def _ingest_node(state: CortexState) -> dict[str, Any]:
     if text:
         messages.append({"role": "user", "content": text})
     messages = messages[-8:]
+    locale = _locale_for_text(text)
     logger.info("cortex ingest chat_id=%s text=%s", state.get("chat_id"), text)
     return {
         "last_user_message": text,
@@ -114,6 +126,7 @@ def _ingest_node(state: CortexState) -> dict[str, Any]:
         "response_key": None,
         "response_vars": None,
         "plans": [],
+        "locale": locale,
     }
 
 
@@ -285,6 +298,48 @@ def _respond_node(state: CortexState) -> dict[str, Any]:
         response_key = "identity"
     elif intent == "greeting":
         response_key = "greeting"
+    elif intent == "meta.capabilities":
+        return {"response_text": summarize_capabilities(_locale_for_state(state))}
+    elif intent == "meta.gaps_list":
+        plan = CortexPlan(
+            plan_type=PlanType.QUERY_STATUS,
+            target=str(state.get("channel_target") or state.get("chat_id") or ""),
+            channels=[str(state.get("channel_type") or "telegram")],
+            payload={
+                "include": ["gaps_summary"],
+                "limit": 5,
+                "locale": _locale_for_state(state),
+            },
+        )
+        plans = list(state.get("plans") or [])
+        plans.append(plan.model_dump())
+        logger.info(
+            "cortex plans chat_id=%s plan_type=%s plan_id=%s",
+            state.get("chat_id"),
+            plan.plan_type,
+            plan.plan_id,
+        )
+        return {"plans": plans}
+    elif intent == "timed_signals.list":
+        plan = CortexPlan(
+            plan_type=PlanType.QUERY_STATUS,
+            target=str(state.get("channel_target") or state.get("chat_id") or ""),
+            channels=[str(state.get("channel_type") or "telegram")],
+            payload={
+                "include": ["timed_signals"],
+                "limit": 10,
+                "locale": _locale_for_state(state),
+            },
+        )
+        plans = list(state.get("plans") or [])
+        plans.append(plan.model_dump())
+        logger.info(
+            "cortex plans chat_id=%s plan_type=%s plan_id=%s",
+            state.get("chat_id"),
+            plan.plan_type,
+            plan.plan_id,
+        )
+        return {"plans": plans}
     else:
         response_key = "generic.unknown"
     result: dict[str, Any] = {"response_key": response_key}
@@ -311,6 +366,9 @@ def _route_after_slots(state: CortexState) -> str:
 
 
 def _preferred_locale_hint(state: CortexState) -> str | None:
+    locale = state.get("locale")
+    if isinstance(locale, str) and locale:
+        return locale
     channel_type = state.get("channel_type")
     channel_id = state.get("channel_target") or state.get("chat_id")
     if not channel_type or not channel_id:
@@ -363,6 +421,7 @@ def _build_cognition_state(state: CortexState) -> dict[str, Any]:
         "slots_collected": state.get("slots") or {},
         "missing_slots": state.get("missing_slots") or [],
         "last_intent": state.get("intent"),
+        "locale": state.get("locale"),
         "last_updated_at": datetime.now(timezone.utc).isoformat(),
     }
 
@@ -376,3 +435,15 @@ def _build_meta(state: CortexState) -> dict[str, Any]:
         "response_key": state.get("response_key"),
         "response_vars": state.get("response_vars"),
     }
+
+
+def _locale_for_text(text: str) -> str:
+    language = detect_language(text)
+    return "es-MX" if language == "es" else "en-US"
+
+
+def _locale_for_state(state: CortexState) -> str:
+    locale = state.get("locale")
+    if isinstance(locale, str) and locale:
+        return locale
+    return "en-US"
