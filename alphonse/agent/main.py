@@ -42,7 +42,7 @@ def main() -> None:
     init_settings_db()
 
     # Resolve once; used across Alphonse components.
-    db_path = resolve_nervous_system_db_path()
+    db_path = _resolve_nerve_db_path()
     logging.info("Nerve DB path=%s exists=%s", db_path, db_path.exists())
     # Config / nervous system
     config = HeartConfig(
@@ -93,6 +93,16 @@ def _build_api_server() -> ApiServer | None:
     except ValueError:
         port = 8001
     return ApiServer(host=host, port=port)
+
+
+def _resolve_nerve_db_path() -> Path:
+    configured = os.getenv("NERVE_DB_PATH")
+    if configured:
+        return resolve_nervous_system_db_path()
+    base = Path(__file__).resolve().parents[1]
+    path = base / "nervous_system" / "db" / "nerve-db"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return path
 
 
 if __name__ == "__main__":
