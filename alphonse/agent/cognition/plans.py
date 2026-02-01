@@ -14,6 +14,7 @@ class PlanType(str, Enum):
     QUERY_STATUS = "QUERY_STATUS"
     SET_PREFERENCE = "SET_PREFERENCE"
     UPDATE_PREFERENCES = "UPDATE_PREFERENCES"
+    CAPABILITY_GAP = "CAPABILITY_GAP"
     NOOP = "NOOP"
 
 
@@ -88,3 +89,20 @@ class UpdatePreferencesPayload(BaseModel):
 
     principal: PreferencePrincipal
     updates: list[PreferenceUpdate]
+
+
+class CapabilityGapPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    user_text: str
+    reason: str
+    status: str = "open"
+    intent: str | None = None
+    confidence: float | None = None
+    missing_slots: list[str] | None = None
+    principal_type: str | None = None
+    principal_id: str | None = None
+    channel_type: str | None = None
+    channel_id: str | None = None
+    correlation_id: str | None = None
+    metadata: dict[str, Any] | None = None

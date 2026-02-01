@@ -141,6 +141,9 @@ _TEMPLATES: dict[str, dict[str, str]] = {
         "ack.reminder_scheduled": "Got it. Reminder scheduled.",
         "preference.missing": "What preference should I update?",
         "preference.no_channel": "I need a channel to store your preferences.",
+        "report.daily_gaps.header": "Daily gap report: {total} total, {open} open.",
+        "report.daily_gaps.line": "- {reason} ({count}): {example}",
+        "report.daily_gaps.empty": "No capability gaps in the last day.",
     },
     "es": {
         "generic.unknown": 'Puedo programar recordatorios. Prueba: "Recuérdame tomar agua en 10 min".',
@@ -150,6 +153,9 @@ _TEMPLATES: dict[str, dict[str, str]] = {
         "ack.reminder_scheduled": "Listo, programé el recordatorio.",
         "preference.missing": "¿Qué preferencia quieres ajustar?",
         "preference.no_channel": "Necesito un canal para guardar tus preferencias.",
+        "report.daily_gaps.header": "Reporte diario de brechas: {total} total, {open} abiertas.",
+        "report.daily_gaps.line": "- {reason} ({count}): {example}",
+        "report.daily_gaps.empty": "No hubo brechas de capacidad en el último día.",
     },
 }
 
@@ -161,4 +167,7 @@ _FORMAL_ES_TEMPLATES: dict[str, str] = {
     "ack.reminder_scheduled": "Listo, programé el recordatorio.",
     "preference.missing": "¿Qué preferencia quiere ajustar?",
     "preference.no_channel": "Necesito un canal para guardar sus preferencias.",
+    "report.daily_gaps.header": "Reporte diario de brechas: {total} total, {open} abiertas.",
+    "report.daily_gaps.line": "- {reason} ({count}): {example}",
+    "report.daily_gaps.empty": "No hubo brechas de capacidad en el último día.",
 }

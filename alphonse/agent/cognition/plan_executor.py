@@ -16,6 +16,7 @@ from alphonse.agent.cognition.plans import (
     QueryStatusPayload,
     ScheduleTimedSignalPayload,
     UpdatePreferencesPayload,
+    CapabilityGapPayload,
 )
 from alphonse.agent.cognition.localization import render_message
 from alphonse.agent.cognition.preferences.store import (
@@ -23,6 +24,7 @@ from alphonse.agent.cognition.preferences.store import (
     get_with_fallback,
     set_preference,
 )
+from alphonse.agent.nervous_system.capability_gaps import insert_gap
 from alphonse.config import settings
 from alphonse.agent.extremities.api_extremity import ApiExtremity
 from alphonse.agent.extremities.cli_extremity import CliExtremity
@@ -103,6 +105,10 @@ class PlanExecutor:
         if plan.plan_type == PlanType.UPDATE_PREFERENCES:
             payload = UpdatePreferencesPayload.model_validate(plan.payload)
             self._execute_update_preferences(plan, payload)
+            return
+        if plan.plan_type == PlanType.CAPABILITY_GAP:
+            payload = CapabilityGapPayload.model_validate(plan.payload)
+            self._execute_capability_gap(payload)
             return
         logger.info(
             "executor dispatch plan_id=%s plan_type=%s outcome=noop",
@@ -253,6 +259,15 @@ class PlanExecutor:
             len(payload.updates),
         )
 
+    def _execute_capability_gap(self, payload: CapabilityGapPayload) -> None:
+        record = payload.model_dump()
+        insert_gap(record)
+        logger.info(
+            "executor dispatch plan_type=%s outcome=gap_written reason=%s",
+            PlanType.CAPABILITY_GAP,
+            payload.reason,
+        )
+
     def _dispatch_error(
         self, exec_context: PlanExecutionContext, context: dict
     ) -> None:
@@ -276,6 +291,7 @@ class PlanExecutor:
         exec_context: PlanExecutionContext,
         plan: CortexPlan,
     ) -> None:
+        self._record_policy_gap(decision, exec_context, plan)
         if (
             exec_context.channel_type in {"telegram", "cli", "api"}
             and not exec_context.channel_target
@@ -298,6 +314,41 @@ class PlanExecutor:
         delivery = self._coordinator.deliver(action, context)
         if delivery:
             self._extremities.dispatch(delivery, None)
+
+    def _record_policy_gap(
+        self,
+        decision: PolicyDecision,
+        exec_context: PlanExecutionContext,
+        plan: CortexPlan,
+    ) -> None:
+        channel_type = exec_context.channel_type
+        channel_id = exec_context.channel_target
+        principal_id = None
+        if channel_type and channel_id:
+            principal_id = get_or_create_principal_for_channel(channel_type, channel_id)
+        user_text = None
+        if isinstance(plan.payload, dict):
+            user_text = (
+                plan.payload.get("reminder_text_raw")
+                or plan.payload.get("reminder_text")
+                or plan.payload.get("message")
+            )
+        insert_gap(
+            {
+                "user_text": str(user_text or ""),
+                "reason": "policy_denied",
+                "status": "open",
+                "intent": str(plan.plan_type),
+                "confidence": None,
+                "missing_slots": None,
+                "principal_type": "channel_chat",
+                "principal_id": principal_id,
+                "channel_type": channel_type,
+                "channel_id": channel_id,
+                "correlation_id": exec_context.correlation_id,
+                "metadata": {"policy_reason": decision.reason},
+            }
+        )
 
 
 def _message_payload(

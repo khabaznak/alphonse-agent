@@ -11,7 +11,9 @@ from datetime import datetime, timezone
 
 from dotenv import load_dotenv
 
-from alphonse.agent.cognition.intentions.intent_pipeline import build_default_pipeline_with_bus
+from alphonse.agent.cognition.intentions.intent_pipeline import (
+    build_default_pipeline_with_bus,
+)
 from alphonse.agent.heart import Heart, HeartConfig, SHUTDOWN
 from alphonse.agent.nervous_system.ddfsm import DDFSM, DDFSMConfig
 from alphonse.agent.nervous_system.migrate import apply_schema
@@ -19,6 +21,11 @@ from alphonse.agent.nervous_system.paths import resolve_nervous_system_db_path
 from alphonse.agent.nervous_system.senses.bus import Bus, Signal
 from alphonse.agent.nervous_system.senses.timer import TimerSense
 from alphonse.agent.nervous_system.seed import apply_seed
+from alphonse.agent.nervous_system.capability_gaps import (
+    get_gap,
+    list_gaps,
+    update_gap_status,
+)
 from alphonse.agent.core.settings_store import init_db as init_settings_db
 
 
@@ -27,17 +34,50 @@ def main() -> None:
     parser.add_argument("--log-level", default=os.getenv("ALPHONSE_LOG_LEVEL", "INFO"))
     sub = parser.add_subparsers(dest="command", required=True)
 
-    say_parser = sub.add_parser("say", help="Send a message through the cortex pipeline")
+    say_parser = sub.add_parser(
+        "say", help="Send a message through the cortex pipeline"
+    )
     say_parser.add_argument("text", help="Message text")
     say_parser.add_argument("--chat-id", default="cli", help="Channel target/chat id")
-    say_parser.add_argument("--channel", default="cli", help="Origin channel (cli, telegram, api)")
+    say_parser.add_argument(
+        "--channel", default="cli", help="Origin channel (cli, telegram, api)"
+    )
     say_parser.add_argument("--person-id", default=None, help="Optional person id")
-    say_parser.add_argument("--correlation-id", default=None, help="Optional correlation id")
+    say_parser.add_argument(
+        "--correlation-id", default=None, help="Optional correlation id"
+    )
 
-    run_parser = sub.add_parser("run-scheduler", help="Run the timed signal dispatcher loop")
-    run_parser.add_argument("--poll-seconds", type=float, default=None, help="Override poll interval")
+    run_parser = sub.add_parser(
+        "run-scheduler", help="Run the timed signal dispatcher loop"
+    )
+    run_parser.add_argument(
+        "--poll-seconds", type=float, default=None, help="Override poll interval"
+    )
 
     status_parser = sub.add_parser("status", help="Show timed signal status summary")
+
+    gaps_parser = sub.add_parser("gaps", help="Inspect capability gaps")
+    gaps_sub = gaps_parser.add_subparsers(dest="gaps_command", required=True)
+    gaps_list = gaps_sub.add_parser("list", help="List capability gaps")
+    gaps_list.add_argument("--all", action="store_true", help="Include non-open gaps")
+    gaps_list.add_argument(
+        "--status",
+        choices=["open", "triaged", "resolved", "ignored"],
+        default=None,
+        help="Filter by status",
+    )
+    gaps_list.add_argument("--limit", type=int, default=50, help="Limit results")
+
+    gaps_show = gaps_sub.add_parser("show", help="Show a gap by id")
+    gaps_show.add_argument("gap_id", help="Gap id")
+
+    gaps_resolve = gaps_sub.add_parser("resolve", help="Resolve a gap")
+    gaps_resolve.add_argument("gap_id", help="Gap id")
+    gaps_resolve.add_argument("--note", required=True, help="Resolution note")
+
+    gaps_ignore = gaps_sub.add_parser("ignore", help="Ignore a gap")
+    gaps_ignore.add_argument("gap_id", help="Gap id")
+    gaps_ignore.add_argument("--note", required=True, help="Reason for ignoring")
 
     args = parser.parse_args()
     _configure_logging(args.log_level)
@@ -56,6 +96,9 @@ def main() -> None:
     if args.command == "status":
         _command_status(db_path)
         return
+    if args.command == "gaps":
+        _command_gaps(args)
+        return
 
 
 def _command_say(args: argparse.Namespace, db_path: Path) -> None:
@@ -64,7 +107,11 @@ def _command_say(args: argparse.Namespace, db_path: Path) -> None:
     pipeline = build_default_pipeline_with_bus(bus)
     correlation_id = args.correlation_id or str(uuid.uuid4())
     channel = str(args.channel).strip() or "cli"
-    signal_type = f"{channel}.message_received" if channel in {"telegram", "cli", "api"} else "cli.message_received"
+    signal_type = (
+        f"{channel}.message_received"
+        if channel in {"telegram", "cli", "api"}
+        else "cli.message_received"
+    )
     payload = {
         "text": args.text,
         "chat_id": args.chat_id,
@@ -95,7 +142,9 @@ def _command_run_scheduler(args: argparse.Namespace, db_path: Path) -> None:
         os.environ["TIMER_POLL_SECONDS"] = str(args.poll_seconds)
     bus = Bus()
     ddfsm = DDFSM(DDFSMConfig(db_path=str(db_path)))
-    heart = Heart(HeartConfig(nervous_system_db_path=str(db_path)), bus=bus, ddfsm=ddfsm)
+    heart = Heart(
+        HeartConfig(nervous_system_db_path=str(db_path)), bus=bus, ddfsm=ddfsm
+    )
     timer = TimerSense()
     timer.start(bus)
     logging.info("Scheduler loop started (ctrl+c to stop)")
@@ -125,6 +174,53 @@ def _command_status(db_path: Path) -> None:
         print(f"- {status}: {count}")
     if due:
         print(f"Due now: {due[0]}")
+
+
+def _command_gaps(args: argparse.Namespace) -> None:
+    if args.gaps_command == "list":
+        _command_gaps_list(args)
+        return
+    if args.gaps_command == "show":
+        _command_gaps_show(args)
+        return
+    if args.gaps_command == "resolve":
+        _command_gaps_update(args, status="resolved")
+        return
+    if args.gaps_command == "ignore":
+        _command_gaps_update(args, status="ignored")
+        return
+
+
+def _command_gaps_list(args: argparse.Namespace) -> None:
+    rows = list_gaps(
+        status=args.status,
+        limit=args.limit,
+        include_all=args.all,
+    )
+    if not rows:
+        print("No capability gaps found.")
+        return
+    for row in rows:
+        print(
+            f"{row['gap_id']} | {row['status']} | {row['reason']} | {row['created_at']} | {row['user_text']}"
+        )
+
+
+def _command_gaps_show(args: argparse.Namespace) -> None:
+    row = get_gap(args.gap_id)
+    if not row:
+        print("Gap not found.")
+        return
+    for key, value in row.items():
+        print(f"{key}: {value}")
+
+
+def _command_gaps_update(args: argparse.Namespace, *, status: str) -> None:
+    updated = update_gap_status(args.gap_id, status=status, note=args.note)
+    if updated:
+        print(f"Updated {args.gap_id} to {status}.")
+    else:
+        print("Gap not found.")
 
 
 def _load_env() -> None:

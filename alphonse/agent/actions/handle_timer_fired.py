@@ -10,6 +10,7 @@ from alphonse.agent.cognition.skills.command_plans import (
     parse_command_plan,
 )
 from alphonse.agent.cognition.reminders.renderer import render_reminder
+from alphonse.agent.actions.handle_daily_report import dispatch_daily_report
 from alphonse.agent.cognition.plan_executor import PlanExecutionContext, PlanExecutor
 from alphonse.agent.cognition.plans import CortexPlan, PlanType
 from alphonse.agent.policy.engine import PolicyEngine
@@ -29,12 +30,16 @@ class HandleTimerFiredAction(Action):
     def execute(self, context: dict) -> ActionResult:
         signal = context.get("signal")
         payload = getattr(signal, "payload", {}) if signal else {}
+        signal_type = payload.get("signal_type")
         logger.info(
             "HandleTimerFiredAction invoked signal_id=%s timed_signal_id=%s correlation_id=%s",
             getattr(signal, "id", None),
             payload.get("timed_signal_id"),
             getattr(signal, "correlation_id", None),
         )
+        if signal_type == "daily_report":
+            dispatch_daily_report(context, payload)
+            return ActionResult(intention_key="NOOP", payload={}, urgency=None)
         plan = _extract_plan(payload)
         inner = _payload_from_signal(payload)
         reminder_payload = _build_reminder_payload(plan, payload, inner)

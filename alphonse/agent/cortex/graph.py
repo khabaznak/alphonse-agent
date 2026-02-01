@@ -186,9 +186,17 @@ def _slot_fill_node(state: CortexState) -> dict[str, Any]:
 def _clarify_node(state: CortexState) -> dict[str, Any]:
     missing = state.get("missing_slots") or []
     if "reminder_text" in missing:
-        return {"response_key": "clarify.reminder_text"}
+        response_key = "clarify.reminder_text"
     else:
-        return {"response_key": "clarify.trigger_time"}
+        response_key = "clarify.trigger_time"
+    plan = _build_gap_plan(
+        state,
+        reason="missing_slots",
+        missing_slots=missing,
+    )
+    plans = list(state.get("plans") or [])
+    plans.append(plan.model_dump())
+    return {"response_key": response_key, "plans": plans}
 
 
 def _plan_node(state: CortexState) -> dict[str, Any]:
@@ -279,7 +287,14 @@ def _respond_node(state: CortexState) -> dict[str, Any]:
         response_key = "greeting"
     else:
         response_key = "generic.unknown"
-    return {"response_key": response_key}
+    result: dict[str, Any] = {"response_key": response_key}
+    if response_key == "generic.unknown":
+        reason = "unknown_intent" if intent == "unknown" else "no_tool"
+        plan = _build_gap_plan(state, reason=reason)
+        plans = list(state.get("plans") or [])
+        plans.append(plan.model_dump())
+        result["plans"] = plans
+    return result
 
 
 def _route_after_intent(state: CortexState) -> str:
@@ -306,6 +321,40 @@ def _preferred_locale_hint(state: CortexState) -> str | None:
     if not principal_id:
         return None
     return get_with_fallback(principal_id, "locale", settings.get_default_locale())
+
+
+def _build_gap_plan(
+    state: CortexState,
+    *,
+    reason: str,
+    missing_slots: list[str] | None = None,
+) -> CortexPlan:
+    channel_type = state.get("channel_type")
+    channel_id = state.get("channel_target") or state.get("chat_id")
+    principal_id = None
+    if channel_type and channel_id:
+        principal_id = get_or_create_principal_for_channel(
+            str(channel_type), str(channel_id)
+        )
+    return CortexPlan(
+        plan_type=PlanType.CAPABILITY_GAP,
+        payload={
+            "user_text": str(state.get("last_user_message") or ""),
+            "reason": reason,
+            "status": "open",
+            "intent": str(state.get("intent") or ""),
+            "confidence": state.get("intent_confidence"),
+            "missing_slots": missing_slots,
+            "principal_type": "channel_chat",
+            "principal_id": principal_id,
+            "channel_type": str(channel_type) if channel_type else None,
+            "channel_id": str(channel_id) if channel_id else None,
+            "correlation_id": state.get("correlation_id"),
+            "metadata": {
+                "intent_evidence": state.get("intent_evidence"),
+            },
+        },
+    )
 
 
 def _build_cognition_state(state: CortexState) -> dict[str, Any]:

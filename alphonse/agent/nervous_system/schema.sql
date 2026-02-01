@@ -107,6 +107,32 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_preferences_principal_key
   ON preferences (principal_id, key);
 
 ----------------------------------------------------------------------
+-- 2.6.2.1) CAPABILITY GAPS
+----------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS capability_gaps (
+  gap_id           TEXT PRIMARY KEY,
+  created_at       TEXT NOT NULL,
+  principal_type   TEXT,
+  principal_id     TEXT,
+  channel_type     TEXT,
+  channel_id       TEXT,
+  correlation_id   TEXT,
+  user_text        TEXT,
+  intent           TEXT,
+  confidence       REAL,
+  missing_slots    TEXT,
+  reason           TEXT NOT NULL,
+  status           TEXT NOT NULL,
+  resolution_notes TEXT,
+  metadata         TEXT
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_capability_gaps_status
+  ON capability_gaps (status);
+CREATE INDEX IF NOT EXISTS idx_capability_gaps_created
+  ON capability_gaps (created_at);
+
+----------------------------------------------------------------------
 -- 2.6.3) PENDING PLANS
 ----------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS pending_plans (

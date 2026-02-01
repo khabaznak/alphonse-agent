@@ -29,6 +29,28 @@ VALUES
   ('timer.fired', 'Timer Fired', 'timer', 'Scheduled timer fired', 1),
   ('timed_signal.fired', 'Timed Signal Fired', 'timer', 'Scheduled timed signal fired', 1);
 
+INSERT OR IGNORE INTO timed_signals (
+  id, trigger_at, next_trigger_at, rrule, timezone, status, fired_at, attempt_count, attempts,
+  last_error, signal_type, payload, target, origin, correlation_id
+)
+VALUES (
+  'daily_report',
+  datetime('now'),
+  NULL,
+  'FREQ=DAILY',
+  NULL,
+  'pending',
+  NULL,
+  0,
+  0,
+  NULL,
+  'daily_report',
+  NULL,
+  NULL,
+  'system',
+  'daily_report'
+);
+
 INSERT OR IGNORE INTO transitions (
   state_id,
   signal_id,

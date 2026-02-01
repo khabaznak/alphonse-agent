@@ -97,6 +97,39 @@ def get_with_fallback(principal_id: str, key: str, default: Any) -> Any:
     return default if value is None else value
 
 
+def list_principals_with_preference(
+    key: str, value: Any | None = None
+) -> list[dict[str, str]]:
+    if not key:
+        return []
+    db_path = resolve_nervous_system_db_path()
+    params: list[Any] = [key]
+    value_clause = ""
+    if value is not None:
+        value_clause = "AND preferences.value_json = ?"
+        params.append(json.dumps(value))
+    with sqlite3.connect(db_path) as conn:
+        rows = conn.execute(
+            f"""
+            SELECT principals.principal_id, principals.principal_type,
+                   principals.channel_type, principals.channel_id
+            FROM preferences
+            JOIN principals ON principals.principal_id = preferences.principal_id
+            WHERE preferences.key = ? {value_clause}
+            """,
+            tuple(params),
+        ).fetchall()
+    return [
+        {
+            "principal_id": str(row[0]),
+            "principal_type": str(row[1]),
+            "channel_type": str(row[2]) if row[2] is not None else "",
+            "channel_id": str(row[3]) if row[3] is not None else "",
+        }
+        for row in rows
+    ]
+
+
 def _timestamp() -> str:
     return datetime.now(timezone.utc).isoformat()
 
