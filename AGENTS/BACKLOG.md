@@ -26,3 +26,4 @@ Each item should align with the PLAN.
 16. [ ] Define task payload shape for skills (minimal, high-level input/output).
 17. [ ] Decide defaults for agent_id, version, and owner fields.
 18. [ ] Keep A2A discovery LAN-only and document exposure constraints.
+19. [ ] Refactor to ensure a single nerve-db file exists in `alphonse/agent/nervous_system/db` (move from `alphonse/nervous_system/db`).
