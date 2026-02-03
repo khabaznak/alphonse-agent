@@ -379,3 +379,22 @@ CREATE INDEX IF NOT EXISTS ix_signal_queue_type
 
 CREATE UNIQUE INDEX IF NOT EXISTS ux_signal_queue_signal_id
   ON signal_queue(signal_id);
+
+----------------------------------------------------------------------
+-- 5) LAN PAIRING (ALPHONSE LINK)
+----------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS pairing_codes (
+  code        TEXT PRIMARY KEY,
+  expires_at  TEXT NOT NULL,
+  created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS paired_devices (
+  device_id       TEXT PRIMARY KEY,
+  device_name     TEXT,
+  paired_at       TEXT NOT NULL,
+  allowed_scopes  TEXT NOT NULL,
+  last_seen_at    TEXT,
+  last_status     TEXT,
+  last_status_at  TEXT
+) STRICT;

@@ -96,9 +96,14 @@ from core.nerve_store import (
 from interfaces.http.routes.api import router as api_router, trigger_router
 from alphonse.agent.cognition.provider_selector import get_provider_info
 from alphonse.config import load_alphonse_config
+from alphonse.agent.lan.store import generate_pairing_code, list_paired_devices
+from alphonse.agent.nervous_system.migrate import apply_schema
+from alphonse.agent.nervous_system.paths import resolve_nervous_system_db_path
+from alphonse.agent.lan.qr import render_svg_qr
 
 load_dotenv()
 init_db()
+apply_schema(resolve_nervous_system_db_path())
 
 app = FastAPI(
     title="Atrium", description="Domestic presence interface", version="0.1.0"
@@ -140,6 +145,7 @@ def _top_nav_links(active: str) -> list[dict[str, str | bool]]:
             "href": "/identity/persons",
             "active": active.startswith("identity"),
         },
+        {"label": "LAN", "href": "/lan", "active": active == "lan"},
         {"label": "Status JSON", "href": "/status"},
     ]
 
@@ -190,6 +196,11 @@ def _side_nav_links(page: str) -> list[dict[str, str | bool]]:
             {"label": "Plan Versions", "href": "#plan-versions"},
             {"label": "Plan Executors", "href": "#plan-executors"},
             {"label": "Plan Instances", "href": "#plan-instances"},
+        ]
+    if page == "lan":
+        return [
+            {"label": "Pairing", "href": "#lan-pairing"},
+            {"label": "Devices", "href": "#lan-devices"},
         ]
     return [
         {"label": "Current State", "href": "#current-state", "active": True},
@@ -434,6 +445,33 @@ def get_status():
     return {"message": result.get("message"), "runtime": snapshot}
 
 
+@app.get("/lan", response_class=HTMLResponse)
+def lan_home(request: Request):
+    devices = list_paired_devices(limit=50)
+    return templates.TemplateResponse(
+        "lan.html",
+        {
+            **_base_context(request, "lan"),
+            "devices": devices,
+        },
+    )
+
+
+@app.post("/lan/pairing-code", response_class=HTMLResponse)
+def lan_pairing_code(request: Request):
+    code = generate_pairing_code()
+    qr_svg = render_svg_qr(code.code)
+    return templates.TemplateResponse(
+        "partials/lan_pairing_code.html",
+        {
+            "request": request,
+            "pair_code": code.code,
+            "expires_at": code.expires_at.isoformat(),
+            "qr_svg": qr_svg,
+        },
+    )
+
+
 @app.get("/notifications")
 def notifications_redirect():
     return RedirectResponse("/timed-signals", status_code=303)
@@ -600,14 +638,14 @@ def create_settings(
     request: Request,
     name: str = Form(...),
     description: str = Form(""),
-    schema: str = Form(""),
+    schema_: str = Form("", alias="schema"),
     config: str = Form("{}"),
 ):
     create_setting(
         {
             "name": name.strip(),
             "description": description.strip() or None,
-            "schema": schema.strip() or None,
+            "schema": schema_.strip() or None,
             "config": config.strip() or "{}",
         }
     )
@@ -627,7 +665,7 @@ def update_settings(
     setting_id: int,
     name: str = Form(...),
     description: str = Form(""),
-    schema: str = Form(""),
+    schema_: str = Form("", alias="schema"),
     config: str = Form("{}"),
 ):
     update_setting(
@@ -635,7 +673,7 @@ def update_settings(
         {
             "name": name.strip(),
             "description": description.strip() or None,
-            "schema": schema.strip() or None,
+            "schema": schema_.strip() or None,
             "config": config.strip() or "{}",
         },
     )

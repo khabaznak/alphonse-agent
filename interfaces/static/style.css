@@ -189,6 +189,21 @@ button {
   color: var(--muted);
 }
 
+.qr-code {
+  margin-top: 12px;
+  max-width: 220px;
+}
+
+.qr-code svg {
+  width: 100%;
+  height: auto;
+  display: block;
+  background: #fff;
+  padding: 8px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+}
+
 @media (max-width: 900px) {
   .shell-body {
     grid-template-columns: 1fr;

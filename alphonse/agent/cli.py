@@ -141,6 +141,18 @@ def main() -> None:
     tasks_done = tasks_sub.add_parser("done", help="Mark task as done")
     tasks_done.add_argument("task_id", help="Task id")
 
+    lan_parser = sub.add_parser("lan", help="LAN pairing utilities")
+    lan_sub = lan_parser.add_subparsers(dest="lan_command", required=True)
+    lan_code = lan_sub.add_parser("pairing-code", help="Generate a pairing code")
+    lan_code.add_argument(
+        "--ttl-minutes",
+        type=int,
+        default=None,
+        help="Override pairing code TTL minutes",
+    )
+    lan_devices = lan_sub.add_parser("devices", help="List paired devices")
+    lan_devices.add_argument("--limit", type=int, default=25)
+
     args = parser.parse_args()
     _configure_logging(args.log_level)
     _load_env()
@@ -167,6 +179,9 @@ def main() -> None:
         return
     if args.command == "gaps":
         _command_gaps(args)
+        return
+    if args.command == "lan":
+        _command_lan(args)
         return
 
 
@@ -259,6 +274,32 @@ def _command_report_daily(db_path: Path) -> None:
             FROM timed_signals WHERE id = 'daily_report'
             """
         ).fetchone()
+
+
+def _command_lan(args: argparse.Namespace) -> None:
+    from alphonse.agent.lan.store import generate_pairing_code, list_paired_devices
+    from alphonse.agent.lan.qr import render_ascii_qr
+
+    if args.lan_command == "pairing-code":
+        ttl = args.ttl_minutes if args.ttl_minutes is not None else None
+        code = generate_pairing_code(ttl_minutes=ttl or 15)
+        print("Pairing code:")
+        print(f"- code: {code.code}")
+        print(f"- expires_at: {code.expires_at.isoformat()}")
+        print("\nQR:\n")
+        print(render_ascii_qr(code.code))
+        return
+
+    if args.lan_command == "devices":
+        devices = list_paired_devices(limit=args.limit)
+        if not devices:
+            print("No paired devices.")
+            return
+        print("Paired devices:")
+        for device in devices:
+            name = device.device_name or "Unnamed device"
+            last_seen = device.last_seen_at.isoformat() if device.last_seen_at else "never"
+            print(f"- {device.device_id} ({name}) last_seen={last_seen}")
     if not row:
         print("Daily report schedule not found.")
         return

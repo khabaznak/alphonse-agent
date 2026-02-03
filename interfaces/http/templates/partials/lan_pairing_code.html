@@ -1,0 +1,9 @@
+<div class="status-message">
+  <strong>{{ pair_code }}</strong>
+  <div>Expires: {{ expires_at }}</div>
+</div>
+{% if qr_svg %}
+  <div class="qr-code">
+    {{ qr_svg | safe }}
+  </div>
+{% endif %}
