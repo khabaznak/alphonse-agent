@@ -8,11 +8,11 @@ def render_message(
 ) -> str:
     vars = variables or {}
     language = _language_for(locale)
-    if key == "greeting":
+    if key in {"greeting", "core.greeting"}:
         return _render_greeting(language, vars)
     if key == "ack.preference_updated":
         return _render_preference_ack(language, vars)
-    if key == "greeting":
+    if key in {"greeting", "core.greeting"}:
         return _render_greeting(language, vars)
     if key == "clarify.reminder_text":
         return _render_clarify_reminder_text(language, vars)
@@ -141,6 +141,9 @@ _TEMPLATES: dict[str, dict[str, str]] = {
         "identity": "I'm Alphonse, your assistant. I only know this authorized chat.",
         "identity.user": "I don't know your name yet. Tell me what you'd like me to call you.",
         "identity.user.known": "Yes, your name is {user_name}.",
+        "core.identity.agent": "I'm Alphonse, your assistant. I only know this authorized chat.",
+        "core.identity.user.ask_name": "I don't know your name yet. Tell me what you'd like me to call you.",
+        "core.identity.user.known": "Yes, your name is {user_name}.",
         "ack.user_name": "Perfect, {user_name}. I'll call you that from now on.",
         "ack.confirmed": "Got it.",
         "ack.reminder_scheduled": "Got it. Reminder scheduled.",
@@ -158,6 +161,9 @@ _TEMPLATES: dict[str, dict[str, str]] = {
         "identity": "Soy Alphonse, tu asistente. Solo conozco este chat autorizado.",
         "identity.user": "Aún no sé tu nombre. Dime cómo quieres que te llame.",
         "identity.user.known": "Sí, te llamas {user_name}.",
+        "core.identity.agent": "Soy Alphonse, tu asistente. Solo conozco este chat autorizado.",
+        "core.identity.user.ask_name": "Aún no sé tu nombre. Dime cómo quieres que te llame.",
+        "core.identity.user.known": "Sí, te llamas {user_name}.",
         "ack.user_name": "Perfecto, {user_name}. A partir de ahora te llamaré así.",
         "ack.confirmed": "Entendido.",
         "ack.reminder_scheduled": "Listo, programé el recordatorio.",
@@ -177,6 +183,9 @@ _FORMAL_ES_TEMPLATES: dict[str, str] = {
     "identity": "Soy Alphonse, su asistente. Solo conozco este chat autorizado.",
     "identity.user": "Aún no sé su nombre. Dígame cómo quiere que le llame.",
     "identity.user.known": "Sí, se llama {user_name}.",
+    "core.identity.agent": "Soy Alphonse, su asistente. Solo conozco este chat autorizado.",
+    "core.identity.user.ask_name": "Aún no sé su nombre. Dígame cómo quiere que le llame.",
+    "core.identity.user.known": "Sí, se llama {user_name}.",
     "ack.user_name": "Perfecto, {user_name}. A partir de ahora le llamaré así.",
     "ack.confirmed": "Entendido.",
     "ack.reminder_scheduled": "Listo, programé el recordatorio.",

@@ -11,5 +11,5 @@ def test_user_identity_sets_pending_interaction() -> None:
         "timezone": "America/Mexico_City",
     }
     result = invoke_cortex(state, "Sabes como me llamo yo?", llm_client=None)
-    assert result.meta.get("response_key") == "identity.user"
+    assert result.meta.get("response_key") == "core.identity.user.ask_name"
     assert result.cognition_state.get("pending_interaction") is not None

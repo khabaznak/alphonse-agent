@@ -107,6 +107,51 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_preferences_principal_key
   ON preferences (principal_id, key);
 
 ----------------------------------------------------------------------
+-- 2.6.2.1) PROMPT TEMPLATES
+----------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS prompt_templates (
+  id            TEXT PRIMARY KEY,
+  key           TEXT NOT NULL,
+  locale        TEXT NOT NULL,
+  address_style TEXT NOT NULL,
+  tone          TEXT NOT NULL,
+  channel       TEXT NOT NULL,
+  variant       TEXT NOT NULL,
+  policy_tier   TEXT NOT NULL,
+  template      TEXT NOT NULL,
+  enabled       INTEGER NOT NULL DEFAULT 1,
+  priority      INTEGER NOT NULL DEFAULT 0,
+  created_at    TEXT NOT NULL,
+  updated_at    TEXT NOT NULL
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_prompt_templates_key_enabled
+  ON prompt_templates (key, enabled);
+
+CREATE INDEX IF NOT EXISTS idx_prompt_templates_match
+  ON prompt_templates (key, locale, address_style, tone, channel, variant, policy_tier);
+
+CREATE UNIQUE INDEX IF NOT EXISTS ux_prompt_templates_selectors
+  ON prompt_templates (key, locale, address_style, tone, channel, variant, policy_tier);
+
+----------------------------------------------------------------------
+-- 2.6.2.2) PROMPT VERSIONS
+----------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS prompt_versions (
+  id           TEXT PRIMARY KEY,
+  template_id  TEXT NOT NULL,
+  version      INTEGER NOT NULL,
+  template     TEXT NOT NULL,
+  changed_by   TEXT NOT NULL,
+  change_reason TEXT,
+  created_at   TEXT NOT NULL,
+  FOREIGN KEY (template_id) REFERENCES prompt_templates(id) ON DELETE CASCADE
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_prompt_versions_template
+  ON prompt_versions (template_id, version);
+
+----------------------------------------------------------------------
 -- 2.6.2.1) CAPABILITY GAPS
 ----------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS capability_gaps (

@@ -13,6 +13,9 @@ class ResponseSpec:
     locale: str | None = None
     address_style: str | None = None
     tone: str | None = None
+    channel: str | None = None
+    variant: str | None = None
+    policy_tier: str | None = None
     variables: dict[str, Any] = field(default_factory=dict)
     options: list[dict[str, Any]] | None = None
     next_prompt: str | None = None

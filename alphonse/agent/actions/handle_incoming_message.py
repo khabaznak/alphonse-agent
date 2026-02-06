@@ -316,6 +316,9 @@ def _render_pending_ack(
         locale=locale,
         address_style=address_style,
         tone=tone,
+        channel=incoming.channel_type,
+        variant="default",
+        policy_tier="safe",
         variables=vars,
     )
     return ResponseComposer().compose(spec), locale
@@ -508,6 +511,9 @@ def _render_outgoing_message(
         locale=locale,
         address_style=address_style,
         tone=tone,
+        channel=incoming.channel_type,
+        variant="default",
+        policy_tier="safe",
         variables=vars,
     )
     return ResponseComposer().compose(spec), locale

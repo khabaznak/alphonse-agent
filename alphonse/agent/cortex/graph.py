@@ -393,7 +393,7 @@ def _respond_node(state: CortexState) -> dict[str, Any]:
     elif intent == "help":
         response_key = "help"
     elif intent == "identity_question":
-        response_key = "identity"
+        response_key = "core.identity.agent"
     elif intent in {"user_identity_question", "identity.query_user_name"}:
         conversation_key = _conversation_key_from_state(state)
         name = identity_profile.get_display_name(conversation_key)
@@ -404,7 +404,7 @@ def _respond_node(state: CortexState) -> dict[str, Any]:
         )
         if name:
             return {
-                "response_key": "identity.user.known",
+                "response_key": "core.identity.user.known",
                 "response_vars": {"user_name": name},
             }
         pending = build_pending_interaction(
@@ -413,11 +413,11 @@ def _respond_node(state: CortexState) -> dict[str, Any]:
             context={"origin_intent": "identity.learn_user_name"},
         )
         return {
-            "response_key": "identity.user",
+            "response_key": "core.identity.user.ask_name",
             "pending_interaction": serialize_pending_interaction(pending),
         }
     elif intent == "greeting":
-        response_key = "greeting"
+        response_key = "core.greeting"
     elif intent == "meta.capabilities":
         return {"response_text": summarize_capabilities(_locale_for_state(state))}
     elif intent == "meta.gaps_list":
