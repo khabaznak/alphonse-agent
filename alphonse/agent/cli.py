@@ -8,6 +8,9 @@ import sqlite3
 import time
 import uuid
 import shlex
+import signal
+import subprocess
+import sys
 from pathlib import Path
 from datetime import datetime, timezone
 from urllib import request
@@ -98,6 +101,13 @@ def build_parser() -> argparse.ArgumentParser:
         "intent", help="Inspect intent routing for a message"
     )
     debug_intent.add_argument("text", nargs="+", help="Message text to route")
+
+    agent_parser = sub.add_parser("agent", help="Manage agent process (REPL-only)")
+    agent_sub = agent_parser.add_subparsers(dest="agent_command", required=True)
+    agent_sub.add_parser("start", help="Start managed agent process")
+    agent_sub.add_parser("stop", help="Stop managed agent process")
+    agent_sub.add_parser("restart", help="Restart managed agent process")
+    agent_sub.add_parser("status", help="Show managed agent status")
 
     gaps_parser = sub.add_parser("gaps", help="Inspect capability gaps")
     gaps_sub = gaps_parser.add_subparsers(dest="gaps_command", required=True)
@@ -237,6 +247,8 @@ def _dispatch_command(
     args: argparse.Namespace,
     db_path: Path,
     parser: argparse.ArgumentParser,
+    *,
+    supervisor: "AgentSupervisor | None" = None,
 ) -> None:
     if args.command == "say":
         _command_say(args, db_path)
@@ -253,6 +265,9 @@ def _dispatch_command(
     if args.command == "debug":
         _command_debug(args)
         return
+    if args.command == "agent":
+        _command_agent(args, supervisor=supervisor)
+        return
     if args.command == "gaps":
         _command_gaps(args)
         return
@@ -265,6 +280,7 @@ def _dispatch_command(
 
 
 def _command_repl(parser: argparse.ArgumentParser, db_path: Path) -> None:
+    supervisor = AgentSupervisor()
     while True:
         try:
             raw = input("alphonse> ").strip()
@@ -285,7 +301,9 @@ def _command_repl(parser: argparse.ArgumentParser, db_path: Path) -> None:
         if args.command == "repl":
             print("Already in repl. Type a command or 'exit'.")
             continue
-        _dispatch_command(args, db_path, parser)
+        _dispatch_command(args, db_path, parser, supervisor=supervisor)
+    if supervisor.is_running():
+        print("Managed agent is still running. Use 'agent stop' to stop it.")
 
 
 def _command_run_scheduler(args: argparse.Namespace, db_path: Path) -> None:
@@ -438,6 +456,72 @@ def _command_debug_intent(args: argparse.Namespace) -> None:
     print(f"- confidence: {routed.confidence:.2f}")
     print(f"- rationale: {routed.rationale}")
     print(f"- needs_clarification: {routed.needs_clarification}")
+
+
+def _command_agent(args: argparse.Namespace, *, supervisor: "AgentSupervisor | None") -> None:
+    if supervisor is None:
+        print("Agent management is available in the REPL session only.")
+        return
+    if args.agent_command == "start":
+        supervisor.start()
+        return
+    if args.agent_command == "stop":
+        supervisor.stop()
+        return
+    if args.agent_command == "restart":
+        supervisor.restart()
+        return
+    if args.agent_command == "status":
+        supervisor.status()
+        return
+
+
+class AgentSupervisor:
+    def __init__(self) -> None:
+        self._process: subprocess.Popen[str] | None = None
+
+    def start(self) -> None:
+        if self.is_running():
+            print(f"Agent already running (pid={self._process.pid}).")
+            return
+        cmd = [sys.executable, "-m", "alphonse.agent.main"]
+        self._process = subprocess.Popen(cmd)
+        print(f"Agent started (pid={self._process.pid}).")
+
+    def stop(self) -> None:
+        if not self.is_running():
+            print("No managed agent process is running.")
+            return
+        assert self._process is not None
+        self._process.send_signal(signal.SIGINT)
+        try:
+            self._process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            self._process.terminate()
+            try:
+                self._process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                self._process.kill()
+                self._process.wait(timeout=5)
+        print("Agent stopped.")
+        self._process = None
+
+    def restart(self) -> None:
+        if self.is_running():
+            self.stop()
+        self.start()
+
+    def status(self) -> None:
+        if not self.is_running():
+            print("Agent status: stopped.")
+            return
+        assert self._process is not None
+        print(f"Agent status: running (pid={self._process.pid}).")
+
+    def is_running(self) -> bool:
+        if self._process is None:
+            return False
+        return self._process.poll() is None
 
 
 def _command_gaps(args: argparse.Namespace) -> None:

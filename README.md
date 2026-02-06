@@ -105,10 +105,37 @@ python -m alphonse.agent.main
 
 ### CLI harness (local testing)
 
+Start the full agent loop directly:
+
+```bash
+python -m alphonse.agent.main
+```
+
 Send a message into the same cortex pipeline as Telegram:
 
 ```bash
 python -m alphonse.agent.cli say "Recuérdame hacer ejercicio en 1 min" --chat-id local --channel cli
+```
+
+Start the interactive CLI REPL:
+
+```bash
+python -m alphonse.agent.cli repl
+```
+
+Inside the REPL you can inspect intent routing:
+
+```text
+alphonse> debug intent "Cuál es mi nombre?"
+```
+
+Inside the REPL you can also manage a **managed** agent process (started by the REPL):
+
+```text
+alphonse> agent start
+alphonse> agent status
+alphonse> agent restart
+alphonse> agent stop
 ```
 
 Run the dispatcher loop (separate process):
