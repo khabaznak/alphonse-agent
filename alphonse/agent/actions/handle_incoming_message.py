@@ -13,6 +13,7 @@ from alphonse.agent.cognition.plans import CortexPlan, PlanType
 from alphonse.agent.cognition.preferences.store import (
     get_or_create_principal_for_channel,
     get_with_fallback,
+    set_preference,
 )
 from alphonse.config import settings
 from alphonse.agent.cognition.plan_executor import PlanExecutionContext, PlanExecutor
@@ -20,6 +21,12 @@ from alphonse.agent.cortex.graph import invoke_cortex
 from alphonse.agent.cortex.state_store import load_state, save_state
 from alphonse.agent.cognition.skills.interpretation.skills import build_ollama_client
 from alphonse.agent.identity import store as identity_store
+from alphonse.agent.cognition.pending_interaction import (
+    PendingInteraction,
+    PendingInteractionType,
+    build_pending_interaction,
+    try_consume,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +64,42 @@ class HandleIncomingMessageAction(Action):
 
         chat_key = incoming.address or incoming.channel_type
         stored_state = load_state(chat_key) or {}
+        pending_raw = stored_state.get("pending_interaction")
+        pending = _parse_pending_interaction(pending_raw)
+        if pending:
+            resolution = try_consume(text, pending)
+            if resolution.consumed:
+                _apply_pending_result(resolution.result or {}, incoming, stored_state)
+                stored_state.pop("pending_interaction", None)
+                save_state(chat_key, stored_state)
+                response_key = "ack.user_name" if pending.key == "user_name" else None
+                response_vars = resolution.result or {}
+                rendered, outgoing_locale = _render_outgoing_message(
+                    response_key or "ack.confirmed",
+                    response_vars,
+                    incoming,
+                    text,
+                )
+                reply_plan = CortexPlan(
+                    plan_type=PlanType.COMMUNICATE,
+                    payload={
+                        "message": rendered,
+                        "locale": outgoing_locale,
+                    },
+                )
+                executor = PlanExecutor()
+                exec_context = PlanExecutionContext(
+                    channel_type=incoming.channel_type,
+                    channel_target=incoming.address,
+                    actor_person_id=incoming.person_id,
+                    correlation_id=incoming.correlation_id,
+                )
+                executor.execute([reply_plan], context, exec_context)
+                return _noop_result(incoming)
+            if resolution.error == "expired":
+                stored_state.pop("pending_interaction", None)
+                save_state(chat_key, stored_state)
+
         state = _build_cortex_state(stored_state, incoming, correlation_id, payload)
         llm_client = _build_llm_client()
         result = invoke_cortex(state, text, llm_client=llm_client)
@@ -154,6 +197,32 @@ def _resolve_person_id(
     return None
 
 
+def _parse_pending_interaction(raw: dict | None) -> PendingInteraction | None:
+    if not isinstance(raw, dict):
+        return None
+    try:
+        return PendingInteraction(
+            type=PendingInteractionType(str(raw.get("type"))),
+            key=str(raw.get("key") or ""),
+            context=raw.get("context") or {},
+            created_at=str(raw.get("created_at") or ""),
+            expires_at=raw.get("expires_at"),
+        )
+    except Exception:
+        return None
+
+
+def _apply_pending_result(result: dict[str, object], incoming: IncomingContext, stored_state: dict[str, Any]) -> None:
+    if "user_name" in result and incoming.channel_type and incoming.address:
+        principal_id = get_or_create_principal_for_channel(
+            str(incoming.channel_type),
+            str(incoming.address),
+        )
+        if principal_id:
+            set_preference(principal_id, "display_name", str(result["user_name"]))
+            stored_state["display_name"] = str(result["user_name"])
+
+
 def _build_cortex_state(
     stored_state: dict[str, Any],
     incoming: IncomingContext,
@@ -208,6 +277,7 @@ def _build_cortex_state(
         "intent_category": stored_state.get("intent_category"),
         "routing_rationale": stored_state.get("routing_rationale"),
         "routing_needs_clarification": stored_state.get("routing_needs_clarification"),
+        "pending_interaction": stored_state.get("pending_interaction"),
         "correlation_id": correlation_id,
         "timezone": timezone,
     }

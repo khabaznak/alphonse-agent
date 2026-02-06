@@ -27,6 +27,10 @@ from alphonse.agent.cognition.intent_lifecycle import (
     record_event,
     signature_key,
 )
+from alphonse.agent.cognition.pending_interaction import (
+    PendingInteractionType,
+    build_pending_interaction,
+)
 from alphonse.agent.cognition.preferences.store import (
     get_or_create_principal_for_channel,
     get_with_fallback,
@@ -389,6 +393,12 @@ def _respond_node(state: CortexState) -> dict[str, Any]:
         response_key = "identity"
     elif intent == "user_identity_question":
         response_key = "identity.user"
+        pending = build_pending_interaction(
+            PendingInteractionType.SLOT_FILL,
+            key="user_name",
+            context={"origin_intent": "identity.learn_user_name"},
+        )
+        return {"response_key": response_key, "pending_interaction": pending.__dict__}
     elif intent == "greeting":
         response_key = "greeting"
     elif intent == "meta.capabilities":
@@ -709,6 +719,7 @@ def _build_cognition_state(state: CortexState) -> dict[str, Any]:
         "intent_category": state.get("intent_category"),
         "routing_rationale": state.get("routing_rationale"),
         "routing_needs_clarification": state.get("routing_needs_clarification"),
+        "pending_interaction": state.get("pending_interaction"),
         "last_updated_at": datetime.now(timezone.utc).isoformat(),
     }
 
