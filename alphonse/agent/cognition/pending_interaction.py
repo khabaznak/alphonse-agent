@@ -47,6 +47,16 @@ def build_pending_interaction(
     )
 
 
+def serialize_pending_interaction(pending: PendingInteraction) -> dict[str, Any]:
+    return {
+        "type": pending.type.value,
+        "key": pending.key,
+        "context": pending.context,
+        "created_at": pending.created_at,
+        "expires_at": pending.expires_at,
+    }
+
+
 def is_expired(pending: PendingInteraction) -> bool:
     if not pending.expires_at:
         return False

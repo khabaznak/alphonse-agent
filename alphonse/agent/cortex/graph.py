@@ -30,6 +30,7 @@ from alphonse.agent.cognition.intent_lifecycle import (
 from alphonse.agent.cognition.pending_interaction import (
     PendingInteractionType,
     build_pending_interaction,
+    serialize_pending_interaction,
 )
 from alphonse.agent.cognition.preferences.store import (
     get_or_create_principal_for_channel,
@@ -398,7 +399,10 @@ def _respond_node(state: CortexState) -> dict[str, Any]:
             key="user_name",
             context={"origin_intent": "identity.learn_user_name"},
         )
-        return {"response_key": response_key, "pending_interaction": pending.__dict__}
+        return {
+            "response_key": response_key,
+            "pending_interaction": serialize_pending_interaction(pending),
+        }
     elif intent == "greeting":
         response_key = "greeting"
     elif intent == "meta.capabilities":
