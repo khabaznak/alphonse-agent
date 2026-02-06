@@ -12,6 +12,8 @@ from alphonse.agent.cognition.capability_gaps.triage import detect_language
 from alphonse.agent.cognition.localization import render_message
 from alphonse.agent.cognition.status_summaries import summarize_capabilities
 from alphonse.agent.cognition.providers.ollama import OllamaClient
+from alphonse.agent.cognition.planning import PlanningMode, parse_planning_mode
+from alphonse.agent.cognition.planning_engine import propose_plan
 from alphonse.agent.cognition.preferences.store import (
     get_or_create_principal_for_channel,
     get_with_fallback,
@@ -53,6 +55,8 @@ class CortexState(TypedDict, total=False):
     plans: list[dict[str, Any]]
     last_intent: str | None
     locale: str | None
+    autonomy_level: float | None
+    planning_mode: str | None
 
 
 def build_cortex_graph(llm_client: OllamaClient | None = None) -> StateGraph:
@@ -252,6 +256,18 @@ def _plan_node(state: CortexState) -> dict[str, Any]:
             },
         )
         plans = list(state.get("plans") or [])
+        _attach_planning_scaffold(
+            state,
+            intent="update_preferences",
+            draft_steps=[
+                "Apply the requested preference updates.",
+                "Confirm which preferences were updated.",
+            ],
+            acceptance_criteria=[
+                "All requested preferences are updated for the principal.",
+            ],
+            plans=plans,
+        )
         plans.append(plan.model_dump())
         logger.info(
             "cortex plans chat_id=%s plan_type=%s plan_id=%s",
@@ -290,6 +306,20 @@ def _plan_node(state: CortexState) -> dict[str, Any]:
         },
     )
     plans = list(state.get("plans") or [])
+    _attach_planning_scaffold(
+        state,
+        intent="schedule_reminder",
+        draft_steps=[
+            "Confirm the reminder message and time.",
+            "Schedule the reminder.",
+            "Send a confirmation.",
+        ],
+        acceptance_criteria=[
+            "Reminder is scheduled at the agreed time.",
+            "User receives a confirmation message.",
+        ],
+        plans=plans,
+    )
     plans.append(plan.model_dump())
     logger.info(
         "cortex plans chat_id=%s plan_type=%s plan_id=%s",
@@ -478,6 +508,49 @@ def _build_gap_plan(
     )
 
 
+def _attach_planning_scaffold(
+    state: CortexState,
+    *,
+    intent: str,
+    draft_steps: list[str],
+    acceptance_criteria: list[str],
+    plans: list[dict[str, Any]],
+) -> None:
+    requested_mode = _planning_mode_request(state)
+    proposal = propose_plan(
+        intent=intent,
+        autonomy_level=state.get("autonomy_level"),
+        requested_mode=requested_mode,
+        draft_steps=draft_steps,
+        acceptance_criteria=acceptance_criteria,
+    )
+    scaffold = CortexPlan(
+        plan_type=PlanType.PLANNING,
+        payload={
+            "plan": proposal.plan.model_dump(),
+            "mode": proposal.plan.planning_mode.value,
+            "autonomy_level": proposal.plan.autonomy_level,
+        },
+    )
+    plans.append(scaffold.model_dump())
+    logger.info(
+        "cortex planning scaffold chat_id=%s mode=%s autonomy=%.2f plan_id=%s",
+        state.get("chat_id"),
+        proposal.plan.planning_mode.value,
+        proposal.plan.autonomy_level,
+        scaffold.plan_id,
+    )
+
+
+def _planning_mode_request(state: CortexState) -> PlanningMode | None:
+    raw = state.get("planning_mode")
+    if not raw:
+        return None
+    if isinstance(raw, PlanningMode):
+        return raw
+    return parse_planning_mode(str(raw))
+
+
 def _build_cognition_state(state: CortexState) -> dict[str, Any]:
     return {
         "pending_intent": state.get("pending_intent"),
@@ -485,6 +558,8 @@ def _build_cognition_state(state: CortexState) -> dict[str, Any]:
         "missing_slots": state.get("missing_slots") or [],
         "last_intent": state.get("intent"),
         "locale": state.get("locale"),
+        "autonomy_level": state.get("autonomy_level"),
+        "planning_mode": state.get("planning_mode"),
         "last_updated_at": datetime.now(timezone.utc).isoformat(),
     }
 
@@ -497,6 +572,8 @@ def _build_meta(state: CortexState) -> dict[str, Any]:
         "chat_id": state.get("chat_id"),
         "response_key": state.get("response_key"),
         "response_vars": state.get("response_vars"),
+        "autonomy_level": state.get("autonomy_level"),
+        "planning_mode": state.get("planning_mode"),
     }
 
 

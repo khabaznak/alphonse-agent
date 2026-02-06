@@ -60,6 +60,18 @@ def main() -> None:
     say_parser.add_argument(
         "--correlation-id", default=None, help="Optional correlation id"
     )
+    say_parser.add_argument(
+        "--planning-mode",
+        choices=["aventurizacion", "contrato_de_resultado"],
+        default=None,
+        help="Override planning mode for this message",
+    )
+    say_parser.add_argument(
+        "--autonomy-level",
+        type=float,
+        default=None,
+        help="Override autonomy level (0.0 - 1.0)",
+    )
 
     run_parser = sub.add_parser(
         "run-scheduler", help="Run the timed signal dispatcher loop"
@@ -205,6 +217,10 @@ def _command_say(args: argparse.Namespace, db_path: Path) -> None:
         "origin": channel,
         "timestamp": time.time(),
     }
+    if args.planning_mode:
+        payload["planning_mode"] = args.planning_mode
+    if args.autonomy_level is not None:
+        payload["autonomy_level"] = args.autonomy_level
     if args.person_id:
         payload["person_id"] = args.person_id
     signal = Signal(

@@ -7,6 +7,7 @@ DEFAULT_TIMEZONE = "America/Mexico_City"
 DEFAULT_LOCALE = "es-MX"
 DEFAULT_TONE = "friendly"
 DEFAULT_ADDRESS_STYLE = "tu"
+DEFAULT_AUTONOMY_LEVEL = 0.35
 
 
 def get_timezone() -> str:
@@ -53,3 +54,21 @@ def get_address_style() -> str:
     if style not in {"tu", "usted"}:
         return DEFAULT_ADDRESS_STYLE
     return style
+
+
+def get_autonomy_level() -> float:
+    configured = os.getenv("ALPHONSE_AUTONOMY_LEVEL")
+    if configured is None:
+        return DEFAULT_AUTONOMY_LEVEL
+    try:
+        value = float(configured)
+    except (TypeError, ValueError):
+        return DEFAULT_AUTONOMY_LEVEL
+    return min(max(value, 0.0), 1.0)
+
+
+def get_planning_mode() -> str | None:
+    configured = os.getenv("ALPHONSE_PLANNING_MODE")
+    if isinstance(configured, str) and configured.strip():
+        return configured.strip()
+    return None

@@ -19,6 +19,7 @@ class PlanType(str, Enum):
     LAN_DISARM = "LAN_DISARM"
     PAIR_APPROVE = "PAIR_APPROVE"
     PAIR_DENY = "PAIR_DENY"
+    PLANNING = "PLANNING"
     NOOP = "NOOP"
 
 
@@ -33,6 +34,14 @@ class CortexPlan(BaseModel):
     payload: dict[str, Any]
     requires_confirmation: bool = False
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+class PlanningPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    plan: dict[str, Any]
+    mode: str
+    autonomy_level: float
 
 
 class CortexResult(BaseModel):

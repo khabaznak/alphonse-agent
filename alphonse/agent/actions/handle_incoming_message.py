@@ -57,7 +57,7 @@ class HandleIncomingMessageAction(Action):
 
         chat_key = incoming.address or incoming.channel_type
         stored_state = load_state(chat_key) or {}
-        state = _build_cortex_state(stored_state, incoming, correlation_id)
+        state = _build_cortex_state(stored_state, incoming, correlation_id, payload)
         llm_client = _build_llm_client()
         result = invoke_cortex(state, text, llm_client=llm_client)
         logger.info(
@@ -158,6 +158,7 @@ def _build_cortex_state(
     stored_state: dict[str, Any],
     incoming: IncomingContext,
     correlation_id: str,
+    payload: dict[str, Any],
 ) -> dict[str, Any]:
     principal_id = None
     effective_locale = settings.get_default_locale()
@@ -188,6 +189,10 @@ def _build_cortex_state(
         effective_tone,
         effective_address,
     )
+    planning_mode = payload.get("planning_mode") if isinstance(payload, dict) else None
+    autonomy_level = (
+        payload.get("autonomy_level") if isinstance(payload, dict) else None
+    )
     return {
         "chat_id": incoming.address or incoming.channel_type,
         "channel_type": incoming.channel_type,
@@ -198,6 +203,8 @@ def _build_cortex_state(
         "missing_slots": stored_state.get("missing_slots") or [],
         "intent": stored_state.get("last_intent"),
         "locale": stored_state.get("locale"),
+        "autonomy_level": autonomy_level or stored_state.get("autonomy_level"),
+        "planning_mode": planning_mode or stored_state.get("planning_mode"),
         "correlation_id": correlation_id,
         "timezone": timezone,
     }

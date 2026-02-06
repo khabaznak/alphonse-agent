@@ -13,6 +13,7 @@ from alphonse.agent.cognition.plans import (
     CommunicatePayload,
     CortexPlan,
     PlanType,
+    PlanningPayload,
     QueryStatusPayload,
     ScheduleTimedSignalPayload,
     UpdatePreferencesPayload,
@@ -113,6 +114,10 @@ class PlanExecutor:
         if plan.plan_type == PlanType.CAPABILITY_GAP:
             payload = CapabilityGapPayload.model_validate(plan.payload)
             self._execute_capability_gap(payload)
+            return
+        if plan.plan_type == PlanType.PLANNING:
+            payload = PlanningPayload.model_validate(plan.payload)
+            self._execute_planning(plan, payload)
             return
         if plan.plan_type in {PlanType.LAN_ARM, PlanType.LAN_DISARM}:
             payload = LanArmPayload.model_validate(plan.payload)
@@ -384,6 +389,19 @@ class PlanExecutor:
             "executor dispatch plan_type=%s outcome=gap_written reason=%s",
             PlanType.CAPABILITY_GAP,
             payload.reason,
+        )
+
+    def _execute_planning(
+        self,
+        plan: CortexPlan,
+        payload: PlanningPayload,
+    ) -> None:
+        _ = plan
+        logger.info(
+            "executor dispatch plan_type=%s outcome=planning_scaffold mode=%s autonomy=%.2f",
+            PlanType.PLANNING,
+            payload.mode,
+            payload.autonomy_level,
         )
 
     def _dispatch_error(
