@@ -498,3 +498,24 @@ CREATE TABLE IF NOT EXISTS intent_lifecycle (
   trust_score       REAL,
   opt_in_automated  INTEGER NOT NULL DEFAULT 0
 ) STRICT;
+
+----------------------------------------------------------------------
+-- 9) HABIT LIFECYCLE
+----------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS habit_lifecycle (
+  habit_id               TEXT PRIMARY KEY,
+  intent_signature_key   TEXT NOT NULL,
+  trigger_type           TEXT NOT NULL,
+  trigger_definition     TEXT NOT NULL,
+  target                 TEXT NOT NULL,
+  lifecycle_state        TEXT NOT NULL,
+  autonomy_level_override REAL,
+  created_at             TEXT NOT NULL,
+  last_executed_at        TEXT,
+  execution_count        INTEGER NOT NULL DEFAULT 0,
+  success_count          INTEGER NOT NULL DEFAULT 0,
+  failure_count          INTEGER NOT NULL DEFAULT 0,
+  paused                 INTEGER NOT NULL DEFAULT 0,
+  user_opt_in            INTEGER NOT NULL DEFAULT 0,
+  audit_required         INTEGER NOT NULL DEFAULT 1
+) STRICT;
