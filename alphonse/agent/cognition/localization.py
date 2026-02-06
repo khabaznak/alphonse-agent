@@ -135,6 +135,7 @@ def _is_formal(value: Any) -> bool:
 _TEMPLATES: dict[str, dict[str, str]] = {
     "en": {
         "generic.unknown": 'I can help with reminders. Try: "Remind me to drink water in 10 min".',
+        "clarify.intent": "I'm not sure what you need yet. What would you like me to do?",
         "help": 'I can schedule reminders. Try: "Remind me to drink water in 10 min".',
         "status": "I'm active and ready for reminders.",
         "identity": "I'm Alphonse, your assistant. I only know this authorized chat.",
@@ -148,6 +149,7 @@ _TEMPLATES: dict[str, dict[str, str]] = {
     },
     "es": {
         "generic.unknown": 'Puedo programar recordatorios. Prueba: "Recuérdame tomar agua en 10 min".',
+        "clarify.intent": "No estoy seguro de lo que necesitas. ¿Qué te gustaría que hiciera?",
         "help": 'Puedo programar recordatorios. Ejemplo: "Recuérdame tomar agua en 10 min".',
         "status": "Estoy activo y listo para recordatorios.",
         "identity": "Soy Alphonse, tu asistente. Solo conozco este chat autorizado.",
@@ -163,6 +165,7 @@ _TEMPLATES: dict[str, dict[str, str]] = {
 
 _FORMAL_ES_TEMPLATES: dict[str, str] = {
     "generic.unknown": 'Puedo programar recordatorios. Pruebe: "Recuérdeme tomar agua en 10 min".',
+    "clarify.intent": "No estoy seguro de lo que necesita. ¿Qué le gustaría que hiciera?",
     "help": 'Puedo programar recordatorios. Ejemplo: "Recuérdeme tomar agua en 10 min".',
     "status": "Estoy activo y listo para recordatorios.",
     "identity": "Soy Alphonse, su asistente. Solo conozco este chat autorizado.",

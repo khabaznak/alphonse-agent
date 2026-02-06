@@ -23,10 +23,9 @@ class IntentResult:
 
 
 def classify_intent(text: str, llm_client: object | None = None) -> IntentResult:
-    _ = llm_client
     from alphonse.agent.cognition.intent_router import route_message
 
-    routed = route_message(text, context={})
+    routed = route_message(text, context={}, llm_client=llm_client)
     return IntentResult(intent=routed.intent, confidence=routed.confidence)
 
 

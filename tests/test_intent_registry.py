@@ -83,6 +83,13 @@ def test_identity_question_routes_in_spanish() -> None:
     assert routed.category == IntentCategory.CORE_CONVERSATIONAL
 
 
+def test_identity_question_routes_te_llamas() -> None:
+    routed = route_message("Como te llamas?", registry=get_registry())
+    assert routed.intent == "identity_question"
+    assert routed.category == IntentCategory.CORE_CONVERSATIONAL
+    assert routed.rationale == "fast_path_regex"
+
+
 def test_user_identity_question_routes_in_spanish() -> None:
     routed = route_message("Cuál es mi nombre?", registry=get_registry())
     assert routed.intent == "user_identity_question"

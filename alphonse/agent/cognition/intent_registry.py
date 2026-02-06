@@ -99,7 +99,7 @@ def register_builtin_intents(registry: IntentRegistry) -> None:
             default_risk=RiskLevel.LOW,
             supports_autonomy=False,
             patterns=(
-                r"\b(quien eres|quién eres|who are you|what are you|what is your name|what's your name)\b",
+                r"\b(quien eres|quién eres|who are you|what are you|what is your name|what's your name|como te llamas|cómo te llamas)\b",
             ),
         ),
         allow_core=True,

@@ -177,7 +177,11 @@ def _intent_node(llm_client: OllamaClient | None):
             rationale = "pending_intent"
             needs_clarification = True
         else:
-            routed = route_message(state.get("last_user_message", ""), context=state)
+            routed = route_message(
+                state.get("last_user_message", ""),
+                context=state,
+                llm_client=llm_client,
+            )
             intent = routed.intent
             confidence = routed.confidence
             category = routed.category.value
@@ -461,6 +465,8 @@ def _respond_node(state: CortexState) -> dict[str, Any]:
         response_key = "generic.unknown"
     result: dict[str, Any] = {"response_key": response_key}
     if response_key == "generic.unknown" and state.get("routing_needs_clarification"):
+        response_key = "clarify.intent"
+        result["response_key"] = response_key
         events = _append_event(
             state.get("events"),
             "routing.needs_clarification",
