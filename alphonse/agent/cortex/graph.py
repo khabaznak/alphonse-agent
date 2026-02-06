@@ -16,6 +16,15 @@ from alphonse.agent.cognition.planning import PlanningMode, parse_planning_mode
 from alphonse.agent.cognition.planning_engine import propose_plan
 from alphonse.agent.cognition.intent_registry import IntentCategory, get_registry
 from alphonse.agent.cognition.intent_router import route_message
+from alphonse.agent.cognition.intent_catalog import IntentCatalogStore
+from alphonse.agent.cognition.intent_detector_llm import IntentDetectorLLM
+from alphonse.agent.cognition.slots.resolvers import build_default_registry
+from alphonse.agent.cognition.slots.slot_filler import fill_slots
+from alphonse.agent.cognition.slots.slot_fsm import deserialize_machine, serialize_machine
+from alphonse.agent.cognition.slots.utterance_guard import (
+    detect_core_intent,
+    is_resume_utterance,
+)
 from alphonse.agent.cognition.capability_gaps.guard import GapGuardInput, PlanStatus, should_create_gap
 from alphonse.agent.cognition.intent_lifecycle import (
     IntentSignature,
@@ -54,6 +63,7 @@ class CortexState(TypedDict, total=False):
     chat_id: str
     channel_type: str
     channel_target: str
+    conversation_key: str
     actor_person_id: str | None
     incoming_text: str
     last_user_message: str
@@ -78,6 +88,9 @@ class CortexState(TypedDict, total=False):
     autonomy_level: float | None
     planning_mode: str | None
     events: list[dict[str, Any]]
+    slot_machine: dict[str, Any] | None
+    catalog_intent: str | None
+    catalog_slot_guesses: dict[str, Any]
     pending_interaction: dict[str, Any] | None
 
 
@@ -85,6 +98,7 @@ def build_cortex_graph(llm_client: OllamaClient | None = None) -> StateGraph:
     graph = StateGraph(CortexState)
     graph.add_node("ingest_node", _ingest_node)
     graph.add_node("intent_node", _intent_node(llm_client))
+    graph.add_node("catalog_slot_node", _catalog_slot_node)
     graph.add_node("slot_fill_node", _slot_fill_node)
     graph.add_node("clarify_node", _clarify_node)
     graph.add_node("plan_node", _plan_node)
@@ -96,11 +110,13 @@ def build_cortex_graph(llm_client: OllamaClient | None = None) -> StateGraph:
         "intent_node",
         _route_after_intent,
         {
+            "catalog": "catalog_slot_node",
             "schedule_reminder": "slot_fill_node",
             "update_preferences": "plan_node",
             "respond": "respond_node",
         },
     )
+    graph.add_edge("catalog_slot_node", "respond_node")
     graph.add_conditional_edges(
         "slot_fill_node",
         _route_after_slots,
@@ -194,6 +210,9 @@ def _intent_node(llm_client: OllamaClient | None):
             rationale = "pending_intent"
             needs_clarification = True
         else:
+            catalog_result = _detect_catalog_intent(state, llm_client)
+            if catalog_result:
+                return catalog_result
             routed = route_message(
                 state.get("last_user_message", ""),
                 context=state,
@@ -227,6 +246,53 @@ def _intent_node(llm_client: OllamaClient | None):
         }
 
     return _node
+
+
+def _detect_catalog_intent(
+    state: CortexState, llm_client: OllamaClient | None
+) -> dict[str, Any] | None:
+    if state.get("slot_machine") and state.get("catalog_intent"):
+        machine = deserialize_machine(state.get("slot_machine") or {})
+        text = str(state.get("last_user_message") or "")
+        if machine and machine.paused_at and not is_resume_utterance(text):
+            return None
+        intent_name = str(state.get("catalog_intent") or "")
+        return {
+            "intent": intent_name,
+            "intent_confidence": state.get("intent_confidence", 0.6),
+            "intent_category": state.get("intent_category"),
+            "routing_rationale": "catalog_slot_machine",
+            "routing_needs_clarification": True,
+            "intent_evidence": build_intent_evidence(state.get("last_user_message", "")),
+            "last_intent": intent_name,
+            "catalog_intent": intent_name,
+            "catalog_slot_guesses": {},
+        }
+    catalog = IntentCatalogStore()
+    detector = IntentDetectorLLM(catalog)
+    detection = detector.detect(state.get("last_user_message", ""), llm_client)
+    if not detection or detection.intent_name == "unknown":
+        return None
+    spec = catalog.get(detection.intent_name)
+    if not spec:
+        return None
+    logger.info(
+        "cortex intent catalog chat_id=%s intent=%s confidence=%.2f",
+        state.get("chat_id"),
+        detection.intent_name,
+        detection.confidence,
+    )
+    return {
+        "intent": detection.intent_name,
+        "intent_confidence": detection.confidence,
+        "intent_category": spec.category,
+        "routing_rationale": "catalog_llm",
+        "routing_needs_clarification": detection.needs_clarification,
+        "intent_evidence": build_intent_evidence(state.get("last_user_message", "")),
+        "last_intent": detection.intent_name,
+        "catalog_intent": detection.intent_name,
+        "catalog_slot_guesses": detection.slot_guesses,
+    }
 
 
 def _slot_fill_node(state: CortexState) -> dict[str, Any]:
@@ -263,6 +329,73 @@ def _slot_fill_node(state: CortexState) -> dict[str, Any]:
         "missing_slots": missing,
         "pending_intent": pending_intent,
     }
+
+
+def _catalog_slot_node(state: CortexState) -> dict[str, Any]:
+    intent_name = state.get("catalog_intent")
+    if not intent_name:
+        return {}
+    catalog = IntentCatalogStore()
+    spec = catalog.get(str(intent_name))
+    if not spec:
+        return {}
+    registry = build_default_registry()
+    machine = deserialize_machine(state.get("slot_machine") or {})
+    text = str(state.get("last_user_message") or "")
+    if machine:
+        core_intent = detect_core_intent(text)
+        if core_intent:
+            if core_intent == "cancel":
+                return {
+                    "response_key": "ack.cancelled",
+                    "slot_machine": None,
+                    "catalog_intent": None,
+                    "intent": "cancel",
+                    "routing_rationale": "slot_cancel",
+                }
+            machine.paused_at = datetime.now(timezone.utc).isoformat()
+            return {
+                "intent": core_intent,
+                "intent_category": IntentCategory.CORE_CONVERSATIONAL.value,
+                "slot_machine": serialize_machine(machine),
+                "catalog_intent": intent_name,
+                "routing_rationale": "slot_barge_in",
+            }
+    context = {
+        "locale": state.get("locale"),
+        "timezone": state.get("timezone"),
+        "now": datetime.now(timezone.utc),
+        "conversation_key": state.get("conversation_key"),
+        "channel": state.get("channel_type"),
+        "channel_type": state.get("channel_type"),
+        "channel_target": state.get("channel_target"),
+        "chat_id": state.get("chat_id"),
+        "correlation_id": state.get("correlation_id"),
+    }
+    result = fill_slots(
+        spec,
+        text=text,
+        slot_guesses=state.get("catalog_slot_guesses") or {},
+        registry=registry,
+        context=context,
+        machine=machine,
+    )
+    updated: dict[str, Any] = {
+        "intent": intent_name,
+        "intent_category": spec.category,
+        "slots": result.slots,
+        "missing_slots": result.missing_slots,
+        "pending_intent": None,
+        "slot_machine": result.slot_machine,
+        "catalog_intent": intent_name,
+        "catalog_slot_guesses": {},
+    }
+    if result.response_key:
+        updated["response_key"] = result.response_key
+        updated["response_vars"] = result.response_vars
+    if result.plans:
+        updated["plans"] = list(state.get("plans") or []) + result.plans
+    return updated
 
 
 def _clarify_node(state: CortexState) -> dict[str, Any]:
@@ -386,7 +519,7 @@ def _respond_node(state: CortexState) -> dict[str, Any]:
     if state.get("response_text") or state.get("response_key"):
         return {}
     intent = state.get("intent")
-    if intent in {"schedule_reminder", "greeting"} and state.get("plans"):
+    if intent in {"schedule_reminder", "greeting", "timed_signals.create", "timed_signals.list"} and state.get("plans"):
         return {}
     if intent == "get_status":
         response_key = "status"
@@ -535,6 +668,8 @@ def _respond_node(state: CortexState) -> dict[str, Any]:
 
 
 def _route_after_intent(state: CortexState) -> str:
+    if state.get("catalog_intent"):
+        return "catalog"
     if state.get("intent") == "schedule_reminder":
         return "schedule_reminder"
     if state.get("intent") == "update_preferences":
@@ -750,6 +885,8 @@ def _build_cognition_state(state: CortexState) -> dict[str, Any]:
         "routing_needs_clarification": state.get("routing_needs_clarification"),
         "pending_interaction": state.get("pending_interaction"),
         "last_updated_at": datetime.now(timezone.utc).isoformat(),
+        "slot_machine": state.get("slot_machine"),
+        "catalog_intent": state.get("catalog_intent"),
     }
 
 
@@ -767,6 +904,8 @@ def _build_meta(state: CortexState) -> dict[str, Any]:
         "routing_rationale": state.get("routing_rationale"),
         "routing_needs_clarification": state.get("routing_needs_clarification"),
         "events": state.get("events") or [],
+        "slot_machine": state.get("slot_machine"),
+        "catalog_intent": state.get("catalog_intent"),
     }
 
 

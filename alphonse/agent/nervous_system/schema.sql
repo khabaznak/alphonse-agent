@@ -152,6 +152,25 @@ CREATE INDEX IF NOT EXISTS idx_prompt_versions_template
   ON prompt_versions (template_id, version);
 
 ----------------------------------------------------------------------
+-- 2.6.2.3) INTENT SPECS (CATALOG)
+----------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS intent_specs (
+  intent_name         TEXT PRIMARY KEY,
+  category            TEXT NOT NULL,
+  description         TEXT NOT NULL,
+  examples_json       TEXT NOT NULL,
+  required_slots_json TEXT NOT NULL,
+  optional_slots_json TEXT NOT NULL,
+  default_mode        TEXT NOT NULL,
+  risk_level          TEXT NOT NULL,
+  handler             TEXT NOT NULL,
+  enabled             INTEGER NOT NULL DEFAULT 1
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_intent_specs_enabled
+  ON intent_specs (enabled, intent_name);
+
+----------------------------------------------------------------------
 -- 2.6.2.1) CAPABILITY GAPS
 ----------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS capability_gaps (

@@ -404,6 +404,7 @@ def _build_cortex_state(
         "chat_id": incoming.address or incoming.channel_type,
         "channel_type": incoming.channel_type,
         "channel_target": incoming.address or incoming.channel_type,
+        "conversation_key": _conversation_key(incoming),
         "actor_person_id": incoming.person_id,
         "pending_intent": stored_state.get("pending_intent"),
         "slots": stored_state.get("slots_collected") or {},
@@ -416,6 +417,7 @@ def _build_cortex_state(
         "routing_rationale": stored_state.get("routing_rationale"),
         "routing_needs_clarification": stored_state.get("routing_needs_clarification"),
         "pending_interaction": stored_state.get("pending_interaction"),
+        "slot_machine": stored_state.get("slot_machine"),
         "correlation_id": correlation_id,
         "timezone": timezone,
     }
