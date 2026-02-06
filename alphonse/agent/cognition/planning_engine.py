@@ -16,6 +16,7 @@ from alphonse.agent.cognition.planning import (
     resolve_planning_context,
 )
 from alphonse.agent.policy.planning_policy import PlanningPolicy
+from alphonse.agent.cognition.intent_lifecycle import LifecycleHint
 
 
 @dataclass(frozen=True)
@@ -32,12 +33,18 @@ def propose_plan(
     draft_steps: list[str] | None = None,
     acceptance_criteria: list[str] | None = None,
     policy: PlanningPolicy | None = None,
+    lifecycle_hint: LifecycleHint | None = None,
 ) -> PlanningProposal:
     policy = policy or PlanningPolicy()
     context = resolve_planning_context(
         autonomy_level=autonomy_level,
         requested_mode=requested_mode,
     )
+    if lifecycle_hint is not None and requested_mode is None:
+        context = resolve_planning_context(
+            autonomy_level=min(context.autonomy_level, lifecycle_hint.autonomy_cap),
+            requested_mode=lifecycle_hint.preferred_mode,
+        )
     adjusted_autonomy = policy.adjust_autonomy_level(
         context.autonomy_level,
         intent=intent,

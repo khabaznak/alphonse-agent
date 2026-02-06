@@ -17,6 +17,16 @@ from alphonse.agent.cognition.planning_engine import propose_plan
 from alphonse.agent.cognition.intent_registry import IntentCategory, get_registry
 from alphonse.agent.cognition.intent_router import route_message
 from alphonse.agent.cognition.capability_gaps.guard import GapGuardInput, PlanStatus, should_create_gap
+from alphonse.agent.cognition.intent_lifecycle import (
+    IntentSignature,
+    LifecycleEvent,
+    LifecycleEventType,
+    LifecycleState,
+    lifecycle_hint,
+    get_record,
+    record_event,
+    signature_key,
+)
 from alphonse.agent.cognition.preferences.store import (
     get_or_create_principal_for_channel,
     get_with_fallback,
@@ -193,6 +203,11 @@ def _intent_node(llm_client: OllamaClient | None):
             state.get("chat_id"),
             intent,
             confidence,
+        )
+        _record_intent_detected(
+            intent=intent,
+            category=category,
+            state=state,
         )
         return {
             "intent": intent,
@@ -574,12 +589,14 @@ def _attach_planning_scaffold(
     plans: list[dict[str, Any]],
 ) -> None:
     requested_mode = _planning_mode_request(state)
+    hint = _lifecycle_hint_for_state(state, intent)
     proposal = propose_plan(
         intent=intent,
         autonomy_level=state.get("autonomy_level"),
         requested_mode=requested_mode,
         draft_steps=draft_steps,
         acceptance_criteria=acceptance_criteria,
+        lifecycle_hint=hint,
     )
     scaffold = CortexPlan(
         plan_type=PlanType.PLANNING,
@@ -617,6 +634,67 @@ def _category_from_state(state: CortexState) -> IntentCategory | None:
             if category.value == raw:
                 return category
     return None
+
+
+def _lifecycle_hint_for_state(state: CortexState, intent: str) -> LifecycleHint | None:
+    category = _category_from_state(state)
+    if category is None:
+        return None
+    signature = _build_signature(intent=intent, category=category, state=state)
+    record = get_record(signature_key(signature))
+    if record is None:
+        return lifecycle_hint(LifecycleState.DISCOVERED, category)  # type: ignore[name-defined]
+    return lifecycle_hint(record.state, record.category)
+
+
+def _record_intent_detected(intent: str, category: str | IntentCategory, state: CortexState) -> None:
+    normalized_category = category
+    if isinstance(category, str):
+        normalized_category = _category_from_state({"intent_category": category})
+    if not isinstance(normalized_category, IntentCategory):
+        return
+    signature = _build_signature(intent=intent, category=normalized_category, state=state)
+    record_event(
+        signature,
+        LifecycleEvent(
+            event_type=LifecycleEventType.INTENT_DETECTED,
+            recognized=intent != "unknown",
+        ),
+    )
+
+
+def _build_signature(
+    *,
+    intent: str,
+    category: IntentCategory,
+    state: CortexState,
+) -> IntentSignature:
+    slots = _signature_slots(intent, state)
+    scope = str(state.get("chat_id") or state.get("channel_target") or "global")
+    return IntentSignature(
+        intent_name=intent,
+        category=category,
+        slots=slots,
+        user_scope=scope,
+    )
+
+
+def _signature_slots(intent: str, state: CortexState) -> dict[str, Any]:
+    slots = state.get("slots") or {}
+    if intent == "schedule_reminder":
+        return {
+            "channel": state.get("channel_type"),
+            "recipient": state.get("channel_target") or state.get("chat_id"),
+            "trigger_time": slots.get("trigger_time"),
+        }
+    if intent == "update_preferences":
+        return {
+            "channel": state.get("channel_type"),
+            "keys": [update.get("key") for update in extract_preference_updates(state.get("last_user_message", ""))],
+        }
+    return {
+        "channel": state.get("channel_type"),
+    }
 
 
 def _build_cognition_state(state: CortexState) -> dict[str, Any]:

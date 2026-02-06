@@ -479,3 +479,22 @@ CREATE TABLE IF NOT EXISTS plan_runs (
 
 CREATE INDEX IF NOT EXISTS idx_habits_trigger_enabled ON habits (trigger, enabled);
 CREATE INDEX IF NOT EXISTS idx_plan_runs_correlation ON plan_runs (correlation_id);
+
+----------------------------------------------------------------------
+-- 8) INTENT LIFECYCLE
+----------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS intent_lifecycle (
+  signature_key     TEXT PRIMARY KEY,
+  intent_name       TEXT NOT NULL,
+  category          TEXT NOT NULL,
+  state             TEXT NOT NULL,
+  first_seen_at     TEXT NOT NULL,
+  last_seen_at      TEXT NOT NULL,
+  usage_count       INTEGER NOT NULL DEFAULT 0,
+  success_count     INTEGER NOT NULL DEFAULT 0,
+  correction_count  INTEGER NOT NULL DEFAULT 0,
+  last_mode_used    TEXT,
+  last_outcome      TEXT,
+  trust_score       REAL,
+  opt_in_automated  INTEGER NOT NULL DEFAULT 0
+) STRICT;
