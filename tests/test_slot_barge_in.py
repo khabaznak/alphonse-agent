@@ -101,3 +101,17 @@ def test_resume_flow_asks_pending_slot(
     }
     result = invoke_cortex(state, "continuar", llm_client=None)
     assert result.meta.get("response_key") == "clarify.trigger_time"
+
+
+def test_hi_does_not_enter_reminder_flow(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _prepare_db(tmp_path, monkeypatch)
+    state = {
+        "chat_id": "123",
+        "channel_type": "telegram",
+        "channel_target": "123",
+        "timezone": "UTC",
+    }
+    result = invoke_cortex(state, "Hi", llm_client=None)
+    assert result.meta.get("response_key") == "core.greeting"

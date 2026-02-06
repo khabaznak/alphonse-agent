@@ -44,17 +44,13 @@ from alphonse.agent.cognition.pending_interaction import (
 from alphonse.agent.identity import profile as identity_profile
 from alphonse.agent.cognition.preferences.store import (
     get_or_create_principal_for_channel,
-    get_with_fallback,
 )
 from alphonse.agent.core.settings_store import get_timezone
 from alphonse.agent.cortex.intent import (
     build_intent_evidence,
     extract_preference_updates,
-    extract_reminder_text,
-    parse_trigger_time,
     pairing_command_intent,
 )
-from alphonse.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -73,8 +69,6 @@ class CortexState(TypedDict, total=False):
     routing_rationale: str | None
     routing_needs_clarification: bool
     slots: dict[str, Any]
-    missing_slots: list[str]
-    pending_intent: str | None
     messages: list[dict[str, str]]
     response_text: str | None
     response_key: str | None
@@ -99,8 +93,6 @@ def build_cortex_graph(llm_client: OllamaClient | None = None) -> StateGraph:
     graph.add_node("ingest_node", _ingest_node)
     graph.add_node("intent_node", _intent_node(llm_client))
     graph.add_node("catalog_slot_node", _catalog_slot_node)
-    graph.add_node("slot_fill_node", _slot_fill_node)
-    graph.add_node("clarify_node", _clarify_node)
     graph.add_node("plan_node", _plan_node)
     graph.add_node("respond_node", _respond_node)
 
@@ -111,21 +103,11 @@ def build_cortex_graph(llm_client: OllamaClient | None = None) -> StateGraph:
         _route_after_intent,
         {
             "catalog": "catalog_slot_node",
-            "schedule_reminder": "slot_fill_node",
             "update_preferences": "plan_node",
             "respond": "respond_node",
         },
     )
     graph.add_edge("catalog_slot_node", "respond_node")
-    graph.add_conditional_edges(
-        "slot_fill_node",
-        _route_after_slots,
-        {
-            "clarify": "clarify_node",
-            "plan": "plan_node",
-        },
-    )
-    graph.add_edge("clarify_node", "respond_node")
     graph.add_edge("plan_node", "respond_node")
     graph.add_edge("respond_node", END)
     return graph
@@ -196,33 +178,33 @@ def _intent_node(llm_client: OllamaClient | None):
                 "routing_needs_clarification": False,
                 "intent_evidence": evidence,
                 "last_intent": pairing,
-                "pending_intent": None,
-                "missing_slots": [],
                 "slots": {},
             }
-        pending = state.get("pending_intent")
-        missing = state.get("missing_slots") or []
-        if pending and missing:
-            intent = pending
-            confidence = state.get("intent_confidence", 0.6)
-            meta = get_registry().get(intent)
-            category = meta.category.value if meta else IntentCategory.TASK_PLANE.value
-            rationale = "pending_intent"
-            needs_clarification = True
-        else:
-            catalog_result = _detect_catalog_intent(state, llm_client)
-            if catalog_result:
-                return catalog_result
-            routed = route_message(
-                state.get("last_user_message", ""),
-                context=state,
-                llm_client=llm_client,
-            )
-            intent = routed.intent
-            confidence = routed.confidence
-            category = routed.category.value
-            rationale = routed.rationale
-            needs_clarification = routed.needs_clarification
+        catalog_result = _detect_catalog_intent(state, llm_client)
+        if catalog_result:
+            return catalog_result
+        routed = route_message(
+            state.get("last_user_message", ""),
+            context=state,
+            llm_client=llm_client,
+        )
+        intent = routed.intent
+        if intent == "schedule_reminder":
+            return {
+                "intent": "timed_signals.create",
+                "intent_confidence": routed.confidence,
+                "intent_category": IntentCategory.TASK_PLANE.value,
+                "routing_rationale": "legacy_mapped",
+                "routing_needs_clarification": routed.needs_clarification,
+                "intent_evidence": build_intent_evidence(state.get("last_user_message", "")),
+                "last_intent": "timed_signals.create",
+                "catalog_intent": "timed_signals.create",
+                "catalog_slot_guesses": {},
+            }
+        confidence = routed.confidence
+        category = routed.category.value
+        rationale = routed.rationale
+        needs_clarification = routed.needs_clarification
         evidence = build_intent_evidence(state.get("last_user_message", ""))
         logger.info(
             "cortex intent chat_id=%s intent=%s confidence=%.2f",
@@ -295,42 +277,6 @@ def _detect_catalog_intent(
     }
 
 
-def _slot_fill_node(state: CortexState) -> dict[str, Any]:
-    if state.get("intent") != "schedule_reminder":
-        return {}
-    if state.get("pending_intent") != "schedule_reminder":
-        slots: dict[str, Any] = {}
-    else:
-        slots = dict(state.get("slots") or {})
-    text = state.get("last_user_message", "")
-    reminder_text = slots.get("reminder_text")
-    trigger_time = slots.get("trigger_time")
-    if not reminder_text:
-        reminder_text = extract_reminder_text(text) or reminder_text
-    if not reminder_text and state.get("pending_intent") == "schedule_reminder":
-        reminder_text = text or reminder_text
-    if not trigger_time:
-        trigger_time = parse_trigger_time(text, state.get("timezone") or get_timezone())
-    slots["reminder_text"] = reminder_text
-    slots["trigger_time"] = trigger_time
-    missing = []
-    if not reminder_text:
-        missing.append("reminder_text")
-    if not trigger_time:
-        missing.append("trigger_time")
-    pending_intent = "schedule_reminder" if missing else None
-    logger.info(
-        "cortex slots chat_id=%s missing=%s",
-        state.get("chat_id"),
-        ",".join(missing) or "none",
-    )
-    return {
-        "slots": slots,
-        "missing_slots": missing,
-        "pending_intent": pending_intent,
-    }
-
-
 def _catalog_slot_node(state: CortexState) -> dict[str, Any]:
     intent_name = state.get("catalog_intent")
     if not intent_name:
@@ -364,7 +310,7 @@ def _catalog_slot_node(state: CortexState) -> dict[str, Any]:
     context = {
         "locale": state.get("locale"),
         "timezone": state.get("timezone"),
-        "now": datetime.now(timezone.utc),
+        "now": datetime.now(timezone.utc).isoformat(),
         "conversation_key": state.get("conversation_key"),
         "channel": state.get("channel_type"),
         "channel_type": state.get("channel_type"),
@@ -384,8 +330,6 @@ def _catalog_slot_node(state: CortexState) -> dict[str, Any]:
         "intent": intent_name,
         "intent_category": spec.category,
         "slots": result.slots,
-        "missing_slots": result.missing_slots,
-        "pending_intent": None,
         "slot_machine": result.slot_machine,
         "catalog_intent": intent_name,
         "catalog_slot_guesses": {},
@@ -396,25 +340,6 @@ def _catalog_slot_node(state: CortexState) -> dict[str, Any]:
     if result.plans:
         updated["plans"] = list(state.get("plans") or []) + result.plans
     return updated
-
-
-def _clarify_node(state: CortexState) -> dict[str, Any]:
-    missing = state.get("missing_slots") or []
-    if "reminder_text" in missing:
-        response_key = "clarify.reminder_text"
-    else:
-        response_key = "clarify.trigger_time"
-    events = _append_event(
-        state.get("events"),
-        "interaction.awaiting_user_input",
-        {
-            "reason": "missing_slots",
-            "missing_slots": missing,
-            "intent": state.get("intent"),
-            "intent_category": state.get("intent_category"),
-        },
-    )
-    return {"response_key": response_key, "events": events}
 
 
 def _plan_node(state: CortexState) -> dict[str, Any]:
@@ -461,65 +386,14 @@ def _plan_node(state: CortexState) -> dict[str, Any]:
             "response_key": "ack.preference_updated",
             "response_vars": {"updates": updates},
         }
-    slots = state.get("slots") or {}
-    reminder_text = slots.get("reminder_text")
-    trigger_time = slots.get("trigger_time")
-    if not reminder_text or not trigger_time:
-        return {"response_key": "generic.unknown"}
-    plan = CortexPlan(
-        plan_type=PlanType.SCHEDULE_TIMED_SIGNAL,
-        target=str(state.get("channel_target") or state.get("chat_id") or ""),
-        channels=None,
-        payload={
-            "signal_type": "reminder",
-            "trigger_at": str(trigger_time),
-            "timezone": str(state.get("timezone") or get_timezone()),
-            "reminder_text": str(reminder_text),
-            "reminder_text_raw": str(reminder_text),
-            "origin": str(state.get("channel_type") or "system"),
-            "chat_id": str(state.get("channel_target") or state.get("chat_id") or ""),
-            "origin_channel": str(state.get("channel_type") or "system"),
-            "locale_hint": _preferred_locale_hint(state),
-            "created_at": datetime.now(timezone.utc).isoformat(),
-            "correlation_id": str(
-                state.get("correlation_id") or state.get("chat_id") or ""
-            ),
-        },
-    )
-    plans = list(state.get("plans") or [])
-    _attach_planning_scaffold(
-        state,
-        intent="schedule_reminder",
-        draft_steps=[
-            "Confirm the reminder message and time.",
-            "Schedule the reminder.",
-            "Send a confirmation.",
-        ],
-        acceptance_criteria=[
-            "Reminder is scheduled at the agreed time.",
-            "User receives a confirmation message.",
-        ],
-        plans=plans,
-    )
-    plans.append(plan.model_dump())
-    logger.info(
-        "cortex plans chat_id=%s plan_type=%s plan_id=%s",
-        state.get("chat_id"),
-        plan.plan_type,
-        plan.plan_id,
-    )
-    return {
-        "plans": plans,
-        "pending_intent": None,
-        "missing_slots": [],
-    }
+    return {}
 
 
 def _respond_node(state: CortexState) -> dict[str, Any]:
     if state.get("response_text") or state.get("response_key"):
         return {}
     intent = state.get("intent")
-    if intent in {"schedule_reminder", "greeting", "timed_signals.create", "timed_signals.list"} and state.get("plans"):
+    if intent in {"greeting", "timed_signals.create", "timed_signals.list"} and state.get("plans"):
         return {}
     if intent == "get_status":
         response_key = "status"
@@ -670,32 +544,9 @@ def _respond_node(state: CortexState) -> dict[str, Any]:
 def _route_after_intent(state: CortexState) -> str:
     if state.get("catalog_intent"):
         return "catalog"
-    if state.get("intent") == "schedule_reminder":
-        return "schedule_reminder"
     if state.get("intent") == "update_preferences":
         return "update_preferences"
     return "respond"
-
-
-def _route_after_slots(state: CortexState) -> str:
-    missing = state.get("missing_slots") or []
-    return "clarify" if missing else "plan"
-
-
-def _preferred_locale_hint(state: CortexState) -> str | None:
-    locale = state.get("locale")
-    if isinstance(locale, str) and locale:
-        return locale
-    channel_type = state.get("channel_type")
-    channel_id = state.get("channel_target") or state.get("chat_id")
-    if not channel_type or not channel_id:
-        return None
-    principal_id = get_or_create_principal_for_channel(
-        str(channel_type), str(channel_id)
-    )
-    if not principal_id:
-        return None
-    return get_with_fallback(principal_id, "locale", settings.get_default_locale())
 
 
 def _build_gap_plan(
@@ -843,12 +694,6 @@ def _build_signature(
 
 def _signature_slots(intent: str, state: CortexState) -> dict[str, Any]:
     slots = state.get("slots") or {}
-    if intent == "schedule_reminder":
-        return {
-            "channel": state.get("channel_type"),
-            "recipient": state.get("channel_target") or state.get("chat_id"),
-            "trigger_time": slots.get("trigger_time"),
-        }
     if intent == "update_preferences":
         return {
             "channel": state.get("channel_type"),
@@ -873,9 +718,7 @@ def _conversation_key_from_state(state: CortexState) -> str:
 
 def _build_cognition_state(state: CortexState) -> dict[str, Any]:
     return {
-        "pending_intent": state.get("pending_intent"),
         "slots_collected": state.get("slots") or {},
-        "missing_slots": state.get("missing_slots") or [],
         "last_intent": state.get("intent"),
         "locale": state.get("locale"),
         "autonomy_level": state.get("autonomy_level"),
