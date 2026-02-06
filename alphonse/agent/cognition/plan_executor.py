@@ -17,6 +17,8 @@ from alphonse.agent.cognition.plans import (
     ScheduleTimedSignalPayload,
     UpdatePreferencesPayload,
     CapabilityGapPayload,
+    LanArmPayload,
+    PairingDecisionPayload,
 )
 from alphonse.agent.cognition.localization import render_message
 from alphonse.agent.cognition.status_summaries import (
@@ -29,6 +31,8 @@ from alphonse.agent.cognition.preferences.store import (
     set_preference,
 )
 from alphonse.agent.nervous_system.capability_gaps import insert_gap
+from alphonse.agent.lan.store import arm_device, disarm_device, get_latest_paired_device, get_paired_device
+from alphonse.agent.lan.pairing_store import approve_pairing, deny_pairing, get_pairing_request
 from alphonse.config import settings
 from alphonse.agent.extremities.api_extremity import ApiExtremity
 from alphonse.agent.extremities.cli_extremity import CliExtremity
@@ -109,6 +113,14 @@ class PlanExecutor:
         if plan.plan_type == PlanType.CAPABILITY_GAP:
             payload = CapabilityGapPayload.model_validate(plan.payload)
             self._execute_capability_gap(payload)
+            return
+        if plan.plan_type in {PlanType.LAN_ARM, PlanType.LAN_DISARM}:
+            payload = LanArmPayload.model_validate(plan.payload)
+            self._execute_lan_arm(plan, payload, context, exec_context)
+            return
+        if plan.plan_type in {PlanType.PAIR_APPROVE, PlanType.PAIR_DENY}:
+            payload = PairingDecisionPayload.model_validate(plan.payload)
+            self._execute_pairing_decision(plan, payload, context, exec_context)
             return
         logger.info(
             "executor dispatch plan_id=%s plan_type=%s outcome=noop",
@@ -299,6 +311,72 @@ class PlanExecutor:
             len(payload.updates),
         )
 
+    def _execute_lan_arm(
+        self,
+        plan: CortexPlan,
+        payload: LanArmPayload,
+        context: dict,
+        exec_context: PlanExecutionContext,
+    ) -> None:
+        device = get_paired_device(payload.device_id) if payload.device_id else get_latest_paired_device()
+        if not device:
+            message = _arm_message("not_found", payload.locale)
+            self._dispatch_message(
+                channel=exec_context.channel_type,
+                target=exec_context.channel_target,
+                message=message,
+                context=context,
+                exec_context=exec_context,
+                plan=plan,
+            )
+            return
+        if plan.plan_type == PlanType.LAN_ARM:
+            arm_device(device.device_id, armed_by=str(exec_context.channel_target or "telegram"))
+            status = _arm_message("armed", payload.locale)
+        else:
+            disarm_device(device.device_id)
+            status = _arm_message("disarmed", payload.locale)
+        name = device.device_name or "Unnamed device"
+        message = f"{status} {name} ({device.device_id})"
+        self._dispatch_message(
+            channel=exec_context.channel_type,
+            target=exec_context.channel_target,
+            message=message,
+            context=context,
+            exec_context=exec_context,
+            plan=plan,
+        )
+
+    def _execute_pairing_decision(
+        self,
+        plan: CortexPlan,
+        payload: PairingDecisionPayload,
+        context: dict,
+        exec_context: PlanExecutionContext,
+    ) -> None:
+        request = get_pairing_request(payload.pairing_id)
+        if not request:
+            message = "Pairing not found."
+        elif request.status != "pending":
+            message = f"Pairing already {request.status}."
+        elif plan.plan_type == PlanType.PAIR_APPROVE:
+            if not payload.otp:
+                message = "Missing OTP."
+            else:
+                approved = approve_pairing(payload.pairing_id, payload.otp, exec_context.channel_type)
+                message = "✅ Pairing approved." if approved else "Invalid OTP or expired."
+        else:
+            denied = deny_pairing(payload.pairing_id, exec_context.channel_type)
+            message = "Pairing denied." if denied else "Pairing already resolved."
+        self._dispatch_message(
+            channel=exec_context.channel_type,
+            target=exec_context.channel_target,
+            message=message,
+            context=context,
+            exec_context=exec_context,
+            plan=plan,
+        )
+
     def _execute_capability_gap(self, payload: CapabilityGapPayload) -> None:
         record = payload.model_dump()
         insert_gap(record)
@@ -421,3 +499,12 @@ def _build_default_extremities() -> ExtremityRegistry:
     registry.register(ApiExtremity())
     registry.register(CliExtremity())
     return registry
+
+
+def _arm_message(kind: str, locale: str | None) -> str:
+    language = "es" if str(locale or "").lower().startswith("es") else "en"
+    if kind == "not_found":
+        return "No paired devices found." if language == "en" else "No se encontraron dispositivos emparejados."
+    if kind == "disarmed":
+        return "🔒 Disarmed device" if language == "en" else "🔒 Dispositivo desarmado"
+    return "✅ Armed device" if language == "en" else "✅ Dispositivo armado"

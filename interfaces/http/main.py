@@ -96,10 +96,8 @@ from core.nerve_store import (
 from interfaces.http.routes.api import router as api_router, trigger_router
 from alphonse.agent.cognition.provider_selector import get_provider_info
 from alphonse.config import load_alphonse_config
-from alphonse.agent.lan.store import generate_pairing_code, list_paired_devices
 from alphonse.agent.nervous_system.migrate import apply_schema
 from alphonse.agent.nervous_system.paths import resolve_nervous_system_db_path
-from alphonse.agent.lan.qr import render_svg_qr
 
 load_dotenv()
 init_db()
@@ -286,6 +284,38 @@ def _fetch_alphonse_timed_signals() -> list[dict[str, object]]:
         return []
 
 
+def _fetch_alphonse_pairing_code() -> dict[str, object]:
+    url = f"{_alphonse_api_base()}/lan/pairing-codes/qr"
+    req = request.Request(url, method="POST")
+    req.add_header("Content-Type", "application/json")
+    token = _alphonse_api_token()
+    if token:
+        req.add_header("x-alphonse-api-token", token)
+    try:
+        with request.urlopen(req, timeout=5) as response:
+            payload = response.read().decode("utf-8")
+            data = json.loads(payload)
+            return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _fetch_alphonse_paired_devices() -> list[dict[str, object]]:
+    url = f"{_alphonse_api_base()}/lan/devices"
+    req = request.Request(url, method="GET")
+    token = _alphonse_api_token()
+    if token:
+        req.add_header("x-alphonse-api-token", token)
+    try:
+        with request.urlopen(req, timeout=5) as response:
+            payload = response.read().decode("utf-8")
+            data = json.loads(payload)
+            if isinstance(data, dict):
+                return data.get("devices", []) if isinstance(data.get("devices"), list) else []
+            return []
+    except Exception:
+        return []
+
 def _post_alphonse_message(
     text: str, args: dict[str, object] | None = None
 ) -> dict[str, object]:
@@ -447,7 +477,7 @@ def get_status():
 
 @app.get("/lan", response_class=HTMLResponse)
 def lan_home(request: Request):
-    devices = list_paired_devices(limit=50)
+    devices = _fetch_alphonse_paired_devices()
     return templates.TemplateResponse(
         "lan.html",
         {
@@ -459,14 +489,19 @@ def lan_home(request: Request):
 
 @app.post("/lan/pairing-code", response_class=HTMLResponse)
 def lan_pairing_code(request: Request):
-    code = generate_pairing_code()
-    qr_svg = render_svg_qr(code.code)
+    data = _fetch_alphonse_pairing_code()
+    pair_code = data.get("pair_code") if isinstance(data, dict) else None
+    expires_at = data.get("expires_at") if isinstance(data, dict) else None
+    qr_svg = data.get("qr_svg") if isinstance(data, dict) else None
+    if not pair_code:
+        pair_code = "Pairing unavailable"
+        expires_at = "n/a"
     return templates.TemplateResponse(
         "partials/lan_pairing_code.html",
         {
             "request": request,
-            "pair_code": code.code,
-            "expires_at": code.expires_at.isoformat(),
+            "pair_code": pair_code,
+            "expires_at": expires_at,
             "qr_svg": qr_svg,
         },
     )

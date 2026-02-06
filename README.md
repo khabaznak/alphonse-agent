@@ -238,6 +238,24 @@ python workers/notification_worker.py
 
 ---
 
+## Habit crystallization (MVP)
+
+Alphonse can crystallize a habit on `pairing.requested`. The flow uses LangGraph:
+router → planner → executor, then persists the plan/run/receipts in the nerve DB.
+
+Quick dev trigger:
+
+```bash
+curl -s -X POST http://<alphonse_host>:8001/pair/start \
+  -H "Content-Type: application/json" \
+  -d '{"device_name":"Test Phone","device_platform":"android"}'
+```
+
+Habits and runs live in the nerve DB (SQLite). See tables `habits`, `plan_runs`,
+and `delivery_receipts`.
+
+---
+
 ## Philosophy
 
 Atrium is built with the belief that:

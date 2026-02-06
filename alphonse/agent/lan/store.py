@@ -22,6 +22,10 @@ class PairedDevice:
     device_name: str | None
     paired_at: datetime
     allowed_scopes: list[str]
+    armed: bool
+    armed_at: datetime | None
+    armed_by: str | None
+    armed_until: datetime | None
     last_seen_at: datetime | None
     last_status: dict[str, Any] | None
     last_status_at: datetime | None
@@ -77,8 +81,9 @@ def register_device(
     _execute(
         """
         INSERT INTO paired_devices
-          (device_id, device_name, paired_at, allowed_scopes, last_seen_at, last_status, last_status_at)
-        VALUES (?, ?, ?, ?, NULL, NULL, NULL)
+          (device_id, device_name, paired_at, allowed_scopes, armed, armed_at, armed_by, armed_until,
+           last_seen_at, last_status, last_status_at)
+        VALUES (?, ?, ?, ?, 0, NULL, NULL, NULL, NULL, NULL, NULL)
         """,
         (
             device_id,
@@ -92,6 +97,10 @@ def register_device(
         device_name=device_name,
         paired_at=now,
         allowed_scopes=allowed_scopes,
+        armed=False,
+        armed_at=None,
+        armed_by=None,
+        armed_until=None,
         last_seen_at=None,
         last_status=None,
         last_status_at=None,
@@ -101,7 +110,8 @@ def register_device(
 def get_paired_device(device_id: str) -> PairedDevice | None:
     record = _fetch_one(
         """
-        SELECT device_id, device_name, paired_at, allowed_scopes, last_seen_at, last_status, last_status_at
+        SELECT device_id, device_name, paired_at, allowed_scopes, armed, armed_at, armed_by, armed_until,
+               last_seen_at, last_status, last_status_at
         FROM paired_devices
         WHERE device_id = ?
         """,
@@ -135,6 +145,17 @@ def update_device_status(device_id: str, payload: dict[str, Any]) -> None:
     )
 
 
+def set_device_token(device_id: str, token_hash: str, expires_at: datetime) -> None:
+    _execute(
+        """
+        UPDATE paired_devices
+        SET token_hash = ?, token_expires_at = ?
+        WHERE device_id = ?
+        """,
+        (token_hash, expires_at.isoformat(), device_id),
+    )
+
+
 def get_latest_last_seen() -> datetime | None:
     record = _fetch_one(
         "SELECT last_seen_at FROM paired_devices WHERE last_seen_at IS NOT NULL ORDER BY last_seen_at DESC LIMIT 1",
@@ -156,7 +177,8 @@ def is_paired_device(device_id: str) -> bool:
 def list_paired_devices(limit: int = 100) -> list[PairedDevice]:
     rows = _fetch_all(
         """
-        SELECT device_id, device_name, paired_at, allowed_scopes, last_seen_at, last_status, last_status_at
+        SELECT device_id, device_name, paired_at, allowed_scopes, armed, armed_at, armed_by, armed_until,
+               last_seen_at, last_status, last_status_at
         FROM paired_devices
         ORDER BY paired_at DESC
         LIMIT ?
@@ -164,6 +186,51 @@ def list_paired_devices(limit: int = 100) -> list[PairedDevice]:
         (limit,),
     )
     return [_row_to_device(row) for row in rows]
+
+
+def get_latest_paired_device() -> PairedDevice | None:
+    rows = _fetch_all(
+        """
+        SELECT device_id, device_name, paired_at, allowed_scopes, armed, armed_at, armed_by, armed_until,
+               last_seen_at, last_status, last_status_at
+        FROM paired_devices
+        ORDER BY paired_at DESC
+        LIMIT 1
+        """,
+        (),
+    )
+    if not rows:
+        return None
+    return _row_to_device(rows[0])
+
+
+def arm_device(device_id: str, armed_by: str | None = None, armed_until: datetime | None = None) -> bool:
+    _execute(
+        """
+        UPDATE paired_devices
+        SET armed = 1, armed_at = ?, armed_by = ?, armed_until = ?
+        WHERE device_id = ?
+        """,
+        (
+            _utcnow().isoformat(),
+            armed_by,
+            armed_until.isoformat() if armed_until else None,
+            device_id,
+        ),
+    )
+    return True
+
+
+def disarm_device(device_id: str) -> bool:
+    _execute(
+        """
+        UPDATE paired_devices
+        SET armed = 0, armed_until = NULL
+        WHERE device_id = ?
+        """,
+        (device_id,),
+    )
+    return True
 
 
 def _row_to_device(record: dict[str, Any]) -> PairedDevice:
@@ -183,6 +250,10 @@ def _row_to_device(record: dict[str, Any]) -> PairedDevice:
         device_name=record.get("device_name"),
         paired_at=_parse_timestamp(record.get("paired_at")) or _utcnow(),
         allowed_scopes=allowed_scopes,
+        armed=bool(record.get("armed")),
+        armed_at=_parse_timestamp(record.get("armed_at")),
+        armed_by=record.get("armed_by"),
+        armed_until=_parse_timestamp(record.get("armed_until")),
         last_seen_at=_parse_timestamp(record.get("last_seen_at")),
         last_status=last_status if isinstance(last_status, dict) else None,
         last_status_at=_parse_timestamp(record.get("last_status_at")),

@@ -15,6 +15,10 @@ class PlanType(str, Enum):
     SET_PREFERENCE = "SET_PREFERENCE"
     UPDATE_PREFERENCES = "UPDATE_PREFERENCES"
     CAPABILITY_GAP = "CAPABILITY_GAP"
+    LAN_ARM = "LAN_ARM"
+    LAN_DISARM = "LAN_DISARM"
+    PAIR_APPROVE = "PAIR_APPROVE"
+    PAIR_DENY = "PAIR_DENY"
     NOOP = "NOOP"
 
 
@@ -108,3 +112,18 @@ class CapabilityGapPayload(BaseModel):
     channel_id: str | None = None
     correlation_id: str | None = None
     metadata: dict[str, Any] | None = None
+
+
+class LanArmPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    device_id: str | None = None
+    locale: str | None = None
+
+
+class PairingDecisionPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    pairing_id: str
+    otp: str | None = None
+    locale: str | None = None

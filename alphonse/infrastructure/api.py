@@ -9,7 +9,7 @@ from alphonse.infrastructure.api_gateway import gateway
 from alphonse.agent.lan.api import router as lan_router
 
 app = FastAPI(title="Alphonse API", version="0.1.0")
-app.include_router(lan_router)
+app.include_router(lan_router, prefix="/lan")
 
 
 @app.get("/agent/status")

@@ -27,6 +27,10 @@ INTENTS = {
     "meta.gaps_list",
     "meta.capabilities",
     "timed_signals.list",
+    "lan.arm",
+    "lan.disarm",
+    "pair.approve",
+    "pair.deny",
     "update_preferences",
     "unknown",
 }
@@ -39,6 +43,9 @@ class IntentResult:
 
 
 def classify_intent(text: str, llm_client: OllamaClient | None) -> IntentResult:
+    pairing = _pairing_command_intent(text)
+    if pairing is not None:
+        return IntentResult(intent=pairing, confidence=0.9)
     heuristic = _heuristic_intent(text)
     if heuristic.intent != "unknown":
         return heuristic
@@ -47,7 +54,7 @@ def classify_intent(text: str, llm_client: OllamaClient | None) -> IntentResult:
     prompt = (
         "Classify the intent into one of: schedule_reminder, update_preferences, get_status, "
         "help, identity_question, greeting, meta.gaps_list, meta.capabilities, "
-        'timed_signals.list, unknown. Return JSON {"intent":...,"confidence":0-1}.'
+        'timed_signals.list, lan.arm, lan.disarm, pair.approve, pair.deny, unknown. Return JSON {"intent":...,"confidence":0-1}.'
     )
     try:
         raw = llm_client.complete(system_prompt=prompt, user_prompt=text)
@@ -135,6 +142,13 @@ def _heuristic_intent(text: str) -> IntentResult:
     lowered = text.lower().strip()
     if any(token in lowered for token in ("status", "estado")):
         return IntentResult(intent="get_status", confidence=0.7)
+    if any(token in lowered for token in ("arm", "arm link", "unlock", "arm alphonse link")):
+        return IntentResult(intent="lan.arm", confidence=0.7)
+    if any(token in lowered for token in ("disarm", "lock", "disarm link")):
+        return IntentResult(intent="lan.disarm", confidence=0.7)
+    pairing = _pairing_command_intent(lowered)
+    if pairing is not None:
+        return IntentResult(intent=pairing, confidence=0.7)
     if any(token in lowered for token in ("gaps", "gap list", "gaps list", "brechas")):
         return IntentResult(intent="meta.gaps_list", confidence=0.7)
     if any(
@@ -178,6 +192,19 @@ def _heuristic_intent(text: str) -> IntentResult:
     if _contains_reminder_intent(lowered):
         return IntentResult(intent="schedule_reminder", confidence=0.6)
     return IntentResult(intent="unknown", confidence=0.2)
+
+
+def _pairing_command_intent(text: str) -> str | None:
+    lowered = text.lower().strip()
+    if lowered.startswith(("/approve", "approve")):
+        return "pair.approve"
+    if lowered.startswith(("/deny", "deny")):
+        return "pair.deny"
+    return None
+
+
+def pairing_command_intent(text: str) -> str | None:
+    return _pairing_command_intent(text)
 
 
 def extract_preference_updates(text: str) -> list[dict[str, str]]:

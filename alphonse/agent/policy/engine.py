@@ -28,6 +28,10 @@ class PolicyEngine:
     def approve_plan(self, plan: CortexPlan, exec_context: object) -> PolicyDecision:
         if plan.plan_type == PlanType.SCHEDULE_TIMED_SIGNAL:
             return self._approve_schedule(plan, exec_context)
+        if plan.plan_type in {PlanType.LAN_ARM, PlanType.LAN_DISARM}:
+            return self._approve_lan_arm(exec_context)
+        if plan.plan_type in {PlanType.PAIR_APPROVE, PlanType.PAIR_DENY}:
+            return self._approve_pairing(exec_context)
         return PolicyDecision(allowed=True)
 
     def _approve_schedule(self, plan: CortexPlan, exec_context: object) -> PolicyDecision:
@@ -51,6 +55,35 @@ class PolicyEngine:
         if chat_id not in allowed:
             return PolicyDecision(allowed=False, reason="not_allowed")
         return PolicyDecision(allowed=True)
+
+    def _approve_lan_arm(self, exec_context: object) -> PolicyDecision:
+        channel_type = getattr(exec_context, "channel_type", None)
+        channel_target = getattr(exec_context, "channel_target", None)
+        if channel_type != "telegram":
+            return PolicyDecision(allowed=False, reason="not_telegram")
+        allowed = _parse_allowed_chat_ids(
+            os.getenv("TELEGRAM_ALLOWED_CHAT_IDS"),
+            os.getenv("TELEGRAM_ALLOWED_CHAT_ID"),
+        )
+        if not allowed:
+            return PolicyDecision(allowed=False, reason="not_allowed")
+        if channel_target is None:
+            return PolicyDecision(allowed=False, reason="missing_target")
+        try:
+            chat_id = int(str(channel_target))
+        except ValueError:
+            return PolicyDecision(allowed=False, reason="invalid_target")
+        if chat_id not in allowed:
+            return PolicyDecision(allowed=False, reason="not_allowed")
+        return PolicyDecision(allowed=True)
+
+    def _approve_pairing(self, exec_context: object) -> PolicyDecision:
+        channel_type = getattr(exec_context, "channel_type", None)
+        if channel_type == "cli":
+            return PolicyDecision(allowed=True)
+        if channel_type != "telegram":
+            return PolicyDecision(allowed=False, reason="not_telegram")
+        return self._approve_lan_arm(exec_context)
 
 
 def _parse_allowed_chat_ids(primary: str | None, fallback: str | None) -> set[int] | None:

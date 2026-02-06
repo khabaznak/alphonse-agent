@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from datetime import datetime, timezone
 from typing import Any, TypedDict
 
@@ -23,6 +24,7 @@ from alphonse.agent.cortex.intent import (
     extract_preference_updates,
     extract_reminder_text,
     parse_trigger_time,
+    pairing_command_intent,
 )
 from alphonse.config import settings
 
@@ -132,6 +134,24 @@ def _ingest_node(state: CortexState) -> dict[str, Any]:
 
 def _intent_node(llm_client: OllamaClient | None):
     def _node(state: CortexState) -> dict[str, Any]:
+        pairing = pairing_command_intent(state.get("last_user_message", ""))
+        if pairing is not None:
+            evidence = build_intent_evidence(state.get("last_user_message", ""))
+            logger.info(
+                "cortex intent chat_id=%s intent=%s confidence=%.2f",
+                state.get("chat_id"),
+                pairing,
+                0.9,
+            )
+            return {
+                "intent": pairing,
+                "intent_confidence": 0.9,
+                "intent_evidence": evidence,
+                "last_intent": pairing,
+                "pending_intent": None,
+                "missing_slots": [],
+                "slots": {},
+            }
         pending = state.get("pending_intent")
         missing = state.get("missing_slots") or []
         if pending and missing:
@@ -340,6 +360,49 @@ def _respond_node(state: CortexState) -> dict[str, Any]:
             plan.plan_id,
         )
         return {"plans": plans}
+    elif intent in {"lan.arm", "lan.disarm"}:
+        device_id = _extract_device_id(state.get("last_user_message", ""))
+        plan = CortexPlan(
+            plan_type=PlanType.LAN_ARM if intent == "lan.arm" else PlanType.LAN_DISARM,
+            target=str(state.get("channel_target") or state.get("chat_id") or ""),
+            channels=[str(state.get("channel_type") or "telegram")],
+            payload={
+                "device_id": device_id,
+                "locale": _locale_for_state(state),
+            },
+        )
+        plans = list(state.get("plans") or [])
+        plans.append(plan.model_dump())
+        logger.info(
+            "cortex plans chat_id=%s plan_type=%s plan_id=%s",
+            state.get("chat_id"),
+            plan.plan_type,
+            plan.plan_id,
+        )
+        return {"plans": plans}
+    elif intent in {"pair.approve", "pair.deny"}:
+        pairing_id, otp = _extract_pairing_decision(state.get("last_user_message", ""))
+        if not pairing_id:
+            return {"response_key": "generic.unknown"}
+        plan = CortexPlan(
+            plan_type=PlanType.PAIR_APPROVE if intent == "pair.approve" else PlanType.PAIR_DENY,
+            target=str(state.get("channel_target") or state.get("chat_id") or ""),
+            channels=[str(state.get("channel_type") or "telegram")],
+            payload={
+                "pairing_id": pairing_id,
+                "otp": otp,
+                "locale": _locale_for_state(state),
+            },
+        )
+        plans = list(state.get("plans") or [])
+        plans.append(plan.model_dump())
+        logger.info(
+            "cortex plans chat_id=%s plan_type=%s plan_id=%s",
+            state.get("chat_id"),
+            plan.plan_type,
+            plan.plan_id,
+        )
+        return {"plans": plans}
     else:
         response_key = "generic.unknown"
     result: dict[str, Any] = {"response_key": response_key}
@@ -435,6 +498,26 @@ def _build_meta(state: CortexState) -> dict[str, Any]:
         "response_key": state.get("response_key"),
         "response_vars": state.get("response_vars"),
     }
+
+
+def _extract_device_id(text: str) -> str | None:
+    candidate = re.search(r"\bdevice\s+([A-Za-z0-9_-]{4,})\b", text, re.IGNORECASE)
+    if candidate:
+        return candidate.group(1)
+    return None
+
+
+def _extract_pairing_decision(text: str) -> tuple[str | None, str | None]:
+    parts = text.strip().split()
+    if not parts:
+        return None, None
+    if parts[0].startswith("/"):
+        parts = parts[1:]
+    if not parts:
+        return None, None
+    pairing_id = parts[0]
+    otp = parts[1] if len(parts) > 1 else None
+    return pairing_id, otp
 
 
 def _locale_for_text(text: str) -> str:

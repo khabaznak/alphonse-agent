@@ -18,6 +18,7 @@ from alphonse.agent.nervous_system.senses.registry import (
 from alphonse.infrastructure.api_server import ApiServer
 from alphonse.infrastructure.api_gateway import gateway
 from alphonse.infrastructure.api_exchange import ApiExchange
+from alphonse.agent.relay.client import build_relay_client_from_env
 from alphonse.agent.nervous_system.paths import resolve_nervous_system_db_path
 from alphonse.agent.nervous_system.migrate import apply_schema
 from alphonse.agent.nervous_system.seed import apply_seed
@@ -67,6 +68,9 @@ def main() -> None:
     api_server = _build_api_server()
     if api_server:
         api_server.start()
+    relay_client = build_relay_client_from_env()
+    if relay_client:
+        relay_client.start()
 
     heart = load_heart(config, bus, ddfsm)
     try:
@@ -74,6 +78,8 @@ def main() -> None:
     finally:
         if api_server:
             api_server.stop()
+        if relay_client:
+            relay_client.stop()
         sense_manager.stop()
 
 

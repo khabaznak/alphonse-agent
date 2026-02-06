@@ -394,7 +394,88 @@ CREATE TABLE IF NOT EXISTS paired_devices (
   device_name     TEXT,
   paired_at       TEXT NOT NULL,
   allowed_scopes  TEXT NOT NULL,
+  armed           INTEGER NOT NULL DEFAULT 0,
+  armed_at        TEXT,
+  armed_by        TEXT,
+  armed_until     TEXT,
+  token_hash      TEXT,
+  token_expires_at TEXT,
   last_seen_at    TEXT,
   last_status     TEXT,
   last_status_at  TEXT
 ) STRICT;
+
+----------------------------------------------------------------------
+-- 6) PAIRING REQUESTS + AUDIT
+----------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS pairing_requests (
+  pairing_id   TEXT PRIMARY KEY,
+  device_name  TEXT,
+  challenge    TEXT,
+  otp_hash     TEXT,
+  status       TEXT NOT NULL,
+  expires_at   TEXT NOT NULL,
+  approved_via TEXT,
+  approved_at  TEXT,
+  created_at   TEXT NOT NULL
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS delivery_receipts (
+  receipt_id   TEXT PRIMARY KEY,
+  run_id       TEXT,
+  pairing_id   TEXT,
+  stage_id     TEXT,
+  action_id    TEXT,
+  skill        TEXT,
+  channel      TEXT,
+  status       TEXT NOT NULL,
+  details_json TEXT,
+  created_at   TEXT NOT NULL
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS audit_log (
+  id            TEXT PRIMARY KEY,
+  event_type    TEXT NOT NULL,
+  correlation_id TEXT,
+  payload_json  TEXT,
+  created_at    TEXT NOT NULL
+) STRICT;
+
+----------------------------------------------------------------------
+-- 7) HABITS + PLAN RUNS
+----------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS habits (
+  habit_id           TEXT PRIMARY KEY,
+  name               TEXT NOT NULL,
+  trigger            TEXT NOT NULL,
+  conditions_json    TEXT NOT NULL,
+  plan_json          TEXT NOT NULL,
+  version            INTEGER NOT NULL,
+  enabled            INTEGER NOT NULL DEFAULT 1,
+  created_at         TEXT NOT NULL,
+  updated_at         TEXT NOT NULL,
+  success_count      INTEGER NOT NULL DEFAULT 0,
+  fail_count         INTEGER NOT NULL DEFAULT 0,
+  last_success_at    TEXT,
+  last_fail_at       TEXT,
+  menu_snapshot_hash TEXT
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS plan_runs (
+  run_id         TEXT PRIMARY KEY,
+  habit_id       TEXT,
+  plan_id        TEXT NOT NULL,
+  trigger        TEXT NOT NULL,
+  correlation_id TEXT NOT NULL,
+  status         TEXT NOT NULL,
+  resolution     TEXT,
+  resolved_via   TEXT,
+  started_at     TEXT NOT NULL,
+  ended_at       TEXT,
+  state_json     TEXT,
+  scheduled_json TEXT,
+  plan_json      TEXT NOT NULL
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_habits_trigger_enabled ON habits (trigger, enabled);
+CREATE INDEX IF NOT EXISTS idx_plan_runs_correlation ON plan_runs (correlation_id);
