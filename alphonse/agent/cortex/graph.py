@@ -368,6 +368,8 @@ def _respond_node(state: CortexState) -> dict[str, Any]:
         response_key = "help"
     elif intent == "identity_question":
         response_key = "identity"
+    elif intent == "user_identity_question":
+        response_key = "identity.user"
     elif intent == "greeting":
         response_key = "greeting"
     elif intent == "meta.capabilities":

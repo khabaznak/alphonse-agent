@@ -78,8 +78,26 @@ def test_dynamic_intent_registration_is_routable() -> None:
 
 
 def test_identity_question_routes_in_spanish() -> None:
-    routed = route_message("Cuál es mi nombre?", registry=get_registry())
+    routed = route_message("Quién eres?", registry=get_registry())
     assert routed.intent == "identity_question"
+    assert routed.category == IntentCategory.CORE_CONVERSATIONAL
+
+
+def test_user_identity_question_routes_in_spanish() -> None:
+    routed = route_message("Cuál es mi nombre?", registry=get_registry())
+    assert routed.intent == "user_identity_question"
+    assert routed.category == IntentCategory.CORE_CONVERSATIONAL
+
+
+def test_identity_question_routes_in_english() -> None:
+    routed = route_message("What is your name?", registry=get_registry())
+    assert routed.intent == "identity_question"
+    assert routed.category == IntentCategory.CORE_CONVERSATIONAL
+
+
+def test_user_identity_question_routes_in_english() -> None:
+    routed = route_message("What's my name?", registry=get_registry())
+    assert routed.intent == "user_identity_question"
     assert routed.category == IntentCategory.CORE_CONVERSATIONAL
 
 

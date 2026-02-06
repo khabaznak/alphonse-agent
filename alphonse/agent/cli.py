@@ -94,6 +94,10 @@ def build_parser() -> argparse.ArgumentParser:
     debug_wiring = debug_sub.add_parser(
         "wiring", help="Show DB path and timed signals API status"
     )
+    debug_intent = debug_sub.add_parser(
+        "intent", help="Inspect intent routing for a message"
+    )
+    debug_intent.add_argument("text", nargs="+", help="Message text to route")
 
     gaps_parser = sub.add_parser("gaps", help="Inspect capability gaps")
     gaps_sub = gaps_parser.add_subparsers(dest="gaps_command", required=True)
@@ -390,6 +394,9 @@ def _command_debug(args: argparse.Namespace) -> None:
     if args.debug_command == "wiring":
         _command_debug_wiring()
         return
+    if args.debug_command == "intent":
+        _command_debug_intent(args)
+        return
 
 
 def _command_debug_wiring() -> None:
@@ -417,6 +424,20 @@ def _command_debug_wiring() -> None:
             print(f"API timed signals count: {len(timed_signals)}")
     except Exception as exc:
         print(f"API timed signals error: {exc}")
+
+
+def _command_debug_intent(args: argparse.Namespace) -> None:
+    from alphonse.agent.cognition.intent_registry import get_registry
+    from alphonse.agent.cognition.intent_router import route_message
+
+    text = " ".join(args.text)
+    routed = route_message(text, context={}, registry=get_registry())
+    print("Intent routing:")
+    print(f"- intent: {routed.intent}")
+    print(f"- category: {routed.category.value}")
+    print(f"- confidence: {routed.confidence:.2f}")
+    print(f"- rationale: {routed.rationale}")
+    print(f"- needs_clarification: {routed.needs_clarification}")
 
 
 def _command_gaps(args: argparse.Namespace) -> None:

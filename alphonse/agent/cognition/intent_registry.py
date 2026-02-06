@@ -99,7 +99,20 @@ def register_builtin_intents(registry: IntentRegistry) -> None:
             default_risk=RiskLevel.LOW,
             supports_autonomy=False,
             patterns=(
-                r"\b(quien eres|quién eres|quien soy yo|quién soy yo|quién soy|quien soy|cual es mi nombre|cuál es mi nombre|como me llamo|cómo me llamo)\b",
+                r"\b(quien eres|quién eres|who are you|what are you|what is your name|what's your name)\b",
+            ),
+        ),
+        allow_core=True,
+    )
+    registry.register(
+        "user_identity_question",
+        IntentMetadata(
+            category=IntentCategory.CORE_CONVERSATIONAL,
+            requires_planner=False,
+            default_risk=RiskLevel.LOW,
+            supports_autonomy=False,
+            patterns=(
+                r"\b(quien soy yo|quién soy yo|quien soy|quién soy|cual es mi nombre|cuál es mi nombre|como me llamo|cómo me llamo|who am i|what is my name|what's my name)\b",
             ),
         ),
         allow_core=True,
