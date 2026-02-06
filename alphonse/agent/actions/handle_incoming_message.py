@@ -27,6 +27,7 @@ from alphonse.agent.cognition.pending_interaction import (
     build_pending_interaction,
     try_consume,
 )
+from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
 
@@ -62,23 +63,52 @@ class HandleIncomingMessageAction(Action):
         if not text:
             return _message_result("No te escuché bien. ¿Puedes repetir?", incoming)
 
-        chat_key = incoming.address or incoming.channel_type
+        conversation_key = _conversation_key(incoming)
+        logger.info(
+            "HandleIncomingMessageAction session_key=%s channel=%s address=%s",
+            conversation_key,
+            incoming.channel_type,
+            incoming.address,
+        )
+        chat_key = conversation_key
         stored_state = load_state(chat_key) or {}
         pending_raw = stored_state.get("pending_interaction")
+        if pending_raw is not None:
+            logger.info(
+                "HandleIncomingMessageAction pending_raw=%s",
+                pending_raw,
+            )
         pending = _parse_pending_interaction(pending_raw)
         if pending:
+            logger.info(
+                "HandleIncomingMessageAction pending_interaction type=%s key=%s created_at=%s expires_at=%s",
+                pending.type.value,
+                pending.key,
+                pending.created_at,
+                pending.expires_at,
+            )
             resolution = try_consume(text, pending)
+            logger.info(
+                "HandleIncomingMessageAction pending_resolution consumed=%s error=%s",
+                resolution.consumed,
+                resolution.error,
+            )
             if resolution.consumed:
                 _apply_pending_result(resolution.result or {}, incoming, stored_state)
                 stored_state.pop("pending_interaction", None)
                 save_state(chat_key, stored_state)
+                logger.info(
+                    "HandleIncomingMessageAction pending_consumed cleared=true stored_keys=%s",
+                    ",".join(sorted(stored_state.keys())),
+                )
                 response_key = "ack.user_name" if pending.key == "user_name" else None
                 response_vars = resolution.result or {}
-                rendered, outgoing_locale = _render_outgoing_message(
+                rendered, outgoing_locale = _render_pending_ack(
                     response_key or "ack.confirmed",
                     response_vars,
                     incoming,
                     text,
+                    stored_state,
                 )
                 reply_plan = CortexPlan(
                     plan_type=PlanType.COMMUNICATE,
@@ -99,6 +129,9 @@ class HandleIncomingMessageAction(Action):
             if resolution.error == "expired":
                 stored_state.pop("pending_interaction", None)
                 save_state(chat_key, stored_state)
+                logger.info(
+                    "HandleIncomingMessageAction pending_expired cleared=true"
+                )
 
         state = _build_cortex_state(stored_state, incoming, correlation_id, payload)
         llm_client = _build_llm_client()
@@ -110,6 +143,11 @@ class HandleIncomingMessageAction(Action):
             incoming.correlation_id,
         )
         save_state(chat_key, result.cognition_state)
+        if isinstance(result.cognition_state, dict):
+            logger.info(
+                "HandleIncomingMessageAction saved_state pending_interaction=%s",
+                result.cognition_state.get("pending_interaction"),
+            )
         executor = PlanExecutor()
         exec_context = PlanExecutionContext(
             channel_type=incoming.channel_type,
@@ -201,11 +239,15 @@ def _parse_pending_interaction(raw: dict | None) -> PendingInteraction | None:
     if not isinstance(raw, dict):
         return None
     try:
+        raw_type = str(raw.get("type") or "")
+        normalized_type = raw_type.split(".")[-1].upper()
+        pending_type = PendingInteractionType(normalized_type)
+        created_at = str(raw.get("created_at") or "") or datetime.now(timezone.utc).isoformat()
         return PendingInteraction(
-            type=PendingInteractionType(str(raw.get("type"))),
+            type=pending_type,
             key=str(raw.get("key") or ""),
             context=raw.get("context") or {},
-            created_at=str(raw.get("created_at") or ""),
+            created_at=created_at,
             expires_at=raw.get("expires_at"),
         )
     except Exception:
@@ -221,6 +263,46 @@ def _apply_pending_result(result: dict[str, object], incoming: IncomingContext, 
         if principal_id:
             set_preference(principal_id, "display_name", str(result["user_name"]))
             stored_state["display_name"] = str(result["user_name"])
+
+
+def _conversation_key(incoming: IncomingContext) -> str:
+    if incoming.channel_type == "telegram":
+        return f"telegram:{incoming.address or ''}"
+    if incoming.channel_type == "cli":
+        return f"cli:{incoming.address or 'cli'}"
+    if incoming.channel_type == "api":
+        return f"api:{incoming.address or 'api'}"
+    return f"{incoming.channel_type}:{incoming.address or incoming.channel_type}"
+
+
+def _render_pending_ack(
+    key: str,
+    response_vars: dict[str, Any] | None,
+    incoming: IncomingContext,
+    text: str,
+    stored_state: dict[str, Any],
+) -> tuple[str, str]:
+    locale_hint = stored_state.get("locale")
+    if isinstance(locale_hint, str) and locale_hint:
+        locale = locale_hint
+    else:
+        detected = detect_language(text)
+        locale = "es-MX" if detected == "es" else "en-US"
+    tone = _effective_tone(incoming)
+    address_style = _effective_address_style(incoming)
+    vars: dict[str, Any] = {
+        "tone": tone,
+        "address_style": address_style,
+    }
+    if isinstance(response_vars, dict):
+        vars.update(response_vars)
+    logger.info(
+        "HandleIncomingMessageAction pending_ack key=%s locale=%s address=%s",
+        key,
+        locale,
+        address_style,
+    )
+    return render_message(key, locale, vars), locale
 
 
 def _build_cortex_state(

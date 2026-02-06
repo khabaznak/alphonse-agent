@@ -77,6 +77,7 @@ class CortexState(TypedDict, total=False):
     autonomy_level: float | None
     planning_mode: str | None
     events: list[dict[str, Any]]
+    pending_interaction: dict[str, Any] | None
 
 
 def build_cortex_graph(llm_client: OllamaClient | None = None) -> StateGraph:

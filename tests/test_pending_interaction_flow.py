@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from alphonse.agent.actions.handle_incoming_message import HandleIncomingMessageAction
-from alphonse.agent.cortex.state_store import save_state
+from alphonse.agent.cortex.state_store import save_state, load_state
 from alphonse.agent.nervous_system.migrate import apply_schema
 from alphonse.agent.nervous_system.senses.bus import Signal
 
@@ -24,7 +24,7 @@ def test_pending_name_consumes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
     monkeypatch.setenv("NERVE_DB_PATH", str(db_path))
     apply_schema(db_path)
     save_state(
-        "cli",
+        "telegram:123",
         {
             "pending_interaction": {
                 "type": "SLOT_FILL",
@@ -35,10 +35,15 @@ def test_pending_name_consumes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
         },
     )
     action = HandleIncomingMessageAction()
-    _send_text(action, "Alex")
-    # If consumed, it should not create a gap or fall back to unknown intent response.
-    # This is a smoke check; detailed behavior is tested in resolver unit tests.
-    assert True
+    signal = Signal(
+        type="telegram.message_received",
+        payload={"text": "Alex", "origin": "telegram", "chat_id": "123"},
+        source="telegram",
+    )
+    action.execute({"signal": signal, "state": None, "outcome": None, "ctx": None})
+    state = load_state("telegram:123")
+    assert state is not None
+    assert state.get("pending_interaction") is None
 
 
 def test_pending_non_consumable_falls_through(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -46,7 +51,7 @@ def test_pending_non_consumable_falls_through(tmp_path: Path, monkeypatch: pytes
     monkeypatch.setenv("NERVE_DB_PATH", str(db_path))
     apply_schema(db_path)
     save_state(
-        "cli",
+        "telegram:123",
         {
             "pending_interaction": {
                 "type": "SLOT_FILL",
@@ -57,5 +62,12 @@ def test_pending_non_consumable_falls_through(tmp_path: Path, monkeypatch: pytes
         },
     )
     action = HandleIncomingMessageAction()
-    _send_text(action, "")
-    assert True
+    signal = Signal(
+        type="telegram.message_received",
+        payload={"text": "", "origin": "telegram", "chat_id": "123"},
+        source="telegram",
+    )
+    action.execute({"signal": signal, "state": None, "outcome": None, "ctx": None})
+    state = load_state("telegram:123")
+    assert state is not None
+    assert state.get("pending_interaction") is not None
