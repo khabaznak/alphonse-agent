@@ -12,6 +12,7 @@ from alphonse.agent.cognition.capability_gaps.triage import detect_language
 from alphonse.agent.cognition.plans import CortexPlan, PlanType
 from alphonse.agent.cognition.preferences.store import (
     get_or_create_principal_for_channel,
+    get_preference,
     get_with_fallback,
     set_preference,
 )
@@ -21,6 +22,7 @@ from alphonse.agent.cortex.graph import invoke_cortex
 from alphonse.agent.cortex.state_store import load_state, save_state
 from alphonse.agent.cognition.skills.interpretation.skills import build_ollama_client
 from alphonse.agent.identity import store as identity_store
+from alphonse.agent.identity import profile as identity_profile
 from alphonse.agent.cognition.pending_interaction import (
     PendingInteraction,
     PendingInteractionType,
@@ -133,6 +135,7 @@ class HandleIncomingMessageAction(Action):
                     "HandleIncomingMessageAction pending_expired cleared=true"
                 )
 
+        _ensure_conversation_locale(chat_key, text, stored_state, incoming)
         state = _build_cortex_state(stored_state, incoming, correlation_id, payload)
         llm_client = _build_llm_client()
         result = invoke_cortex(state, text, llm_client=llm_client)
@@ -254,15 +257,19 @@ def _parse_pending_interaction(raw: dict | None) -> PendingInteraction | None:
         return None
 
 
-def _apply_pending_result(result: dict[str, object], incoming: IncomingContext, stored_state: dict[str, Any]) -> None:
+def _apply_pending_result(
+    result: dict[str, object], incoming: IncomingContext, stored_state: dict[str, Any]
+) -> None:
     if "user_name" in result and incoming.channel_type and incoming.address:
-        principal_id = get_or_create_principal_for_channel(
-            str(incoming.channel_type),
-            str(incoming.address),
+        conversation_key = _conversation_key(incoming)
+        identity_profile.set_display_name(conversation_key, str(result["user_name"]))
+        stored = identity_profile.get_display_name(conversation_key)
+        logger.info(
+            "HandleIncomingMessageAction pending_identity conversation_key=%s display_name=%s",
+            conversation_key,
+            stored,
         )
-        if principal_id:
-            set_preference(principal_id, "display_name", str(result["user_name"]))
-            stored_state["display_name"] = str(result["user_name"])
+        stored_state["display_name"] = str(result["user_name"])
 
 
 def _conversation_key(incoming: IncomingContext) -> str:
@@ -286,8 +293,7 @@ def _render_pending_ack(
     if isinstance(locale_hint, str) and locale_hint:
         locale = locale_hint
     else:
-        detected = detect_language(text)
-        locale = "es-MX" if detected == "es" else "en-US"
+        locale = _preferred_locale(incoming, text)
     tone = _effective_tone(incoming)
     address_style = _effective_address_style(incoming)
     vars: dict[str, Any] = {
@@ -303,6 +309,35 @@ def _render_pending_ack(
         address_style,
     )
     return render_message(key, locale, vars), locale
+
+
+def _ensure_conversation_locale(
+    conversation_key: str,
+    text: str,
+    stored_state: dict[str, Any],
+    incoming: IncomingContext,
+) -> None:
+    if stored_state.get("locale"):
+        return
+    channel_locale = _explicit_channel_locale(incoming)
+    if channel_locale:
+        stored_state["locale"] = channel_locale
+        return
+    existing = identity_profile.get_locale(conversation_key)
+    if existing:
+        stored_state["locale"] = existing
+        return
+    if _is_spanish_text(text):
+        identity_profile.set_locale(conversation_key, "es-MX")
+        stored_state["locale"] = "es-MX"
+
+
+def _is_spanish_text(text: str) -> bool:
+    lowered = str(text or "").lower()
+    return any(
+        token in lowered
+        for token in ("¿", "¡", "cómo", "llamo", "sabes", "nombre", "hola", "buenos", "buenas")
+    )
 
 
 def _build_cortex_state(
@@ -344,6 +379,14 @@ def _build_cortex_state(
     autonomy_level = (
         payload.get("autonomy_level") if isinstance(payload, dict) else None
     )
+    conversation_key = _conversation_key(incoming)
+    state_locale = stored_state.get("locale")
+    if not state_locale:
+        state_locale = _explicit_channel_locale(incoming)
+    if not state_locale:
+        state_locale = identity_profile.get_locale(conversation_key)
+    if not state_locale:
+        state_locale = effective_locale
     return {
         "chat_id": incoming.address or incoming.channel_type,
         "channel_type": incoming.channel_type,
@@ -353,7 +396,7 @@ def _build_cortex_state(
         "slots": stored_state.get("slots_collected") or {},
         "missing_slots": stored_state.get("missing_slots") or [],
         "intent": stored_state.get("last_intent"),
-        "locale": stored_state.get("locale"),
+        "locale": state_locale,
         "autonomy_level": autonomy_level or stored_state.get("autonomy_level"),
         "planning_mode": planning_mode or stored_state.get("planning_mode"),
         "intent_category": stored_state.get("intent_category"),
@@ -366,9 +409,13 @@ def _build_cortex_state(
 
 
 def _effective_locale(incoming: IncomingContext) -> str:
-    principal_id = _principal_id_for_incoming(incoming)
-    if principal_id:
-        return get_with_fallback(principal_id, "locale", settings.get_default_locale())
+    explicit = _explicit_channel_locale(incoming)
+    if explicit:
+        return explicit
+    conversation_key = _conversation_key(incoming)
+    conversation_locale = identity_profile.get_locale(conversation_key)
+    if conversation_locale:
+        return conversation_locale
     return settings.get_default_locale()
 
 
@@ -388,6 +435,26 @@ def _effective_address_style(incoming: IncomingContext) -> str:
     return settings.get_address_style()
 
 
+def _explicit_channel_locale(incoming: IncomingContext) -> str | None:
+    principal_id = _principal_id_for_incoming(incoming)
+    if not principal_id:
+        return None
+    value = get_preference(principal_id, "locale")
+    return value if isinstance(value, str) else None
+
+
+def _preferred_locale(incoming: IncomingContext, text: str) -> str:
+    explicit = _explicit_channel_locale(incoming)
+    if explicit:
+        return explicit
+    conversation_key = _conversation_key(incoming)
+    conversation_locale = identity_profile.get_locale(conversation_key)
+    if conversation_locale:
+        return conversation_locale
+    detected = detect_language(text)
+    return "es-MX" if detected == "es" else "en-US"
+
+
 def _principal_id_for_incoming(incoming: IncomingContext) -> str | None:
     if incoming.channel_type and (incoming.address or incoming.channel_type):
         channel_id = str(incoming.address or incoming.channel_type)
@@ -404,11 +471,9 @@ def _render_outgoing_message(
     incoming: IncomingContext,
     text: str,
 ) -> tuple[str, str]:
-    locale = _effective_locale(incoming)
+    locale = _preferred_locale(incoming, text)
     tone = _effective_tone(incoming)
     address_style = _effective_address_style(incoming)
-    detected = detect_language(text)
-    locale = "es-MX" if detected == "es" else "en-US"
     vars: dict[str, Any] = {
         "tone": tone,
         "address_style": address_style,

@@ -130,6 +130,25 @@ def list_principals_with_preference(
     ]
 
 
+def get_or_create_principal_for_conversation(conversation_key: str) -> str | None:
+    if not conversation_key:
+        return None
+    return get_or_create_principal_for_channel("conversation", conversation_key)
+
+
+def set_preference_for_conversation(conversation_key: str, key: str, value: Any, source: str = "user") -> None:
+    principal_id = get_or_create_principal_for_conversation(conversation_key)
+    if principal_id:
+        set_preference(principal_id, key, value, source=source)
+
+
+def get_preference_for_conversation(conversation_key: str, key: str) -> Any | None:
+    principal_id = get_or_create_principal_for_conversation(conversation_key)
+    if not principal_id:
+        return None
+    return get_preference(principal_id, key)
+
+
 def _timestamp() -> str:
     return datetime.now(timezone.utc).isoformat()
 

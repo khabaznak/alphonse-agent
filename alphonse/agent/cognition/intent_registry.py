@@ -118,6 +118,20 @@ def register_builtin_intents(registry: IntentRegistry) -> None:
         allow_core=True,
     )
     registry.register(
+        "identity.query_user_name",
+        IntentMetadata(
+            category=IntentCategory.CORE_CONVERSATIONAL,
+            requires_planner=False,
+            default_risk=RiskLevel.LOW,
+            supports_autonomy=False,
+            patterns=(
+                r"\b(ya\s+sabes\s+mi\s+nombre|sabes\s+como\s+me\s+llamo|sabes\s+mi\s+nombre|conoces\s+mi\s+nombre)\b",
+                r"\b(do you know my name|do you know what my name is|do you know who i am)\b",
+            ),
+        ),
+        allow_core=True,
+    )
+    registry.register(
         "update_preferences",
         IntentMetadata(
             category=IntentCategory.CONTROL_PLANE,

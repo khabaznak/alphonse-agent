@@ -32,6 +32,7 @@ from alphonse.agent.cognition.pending_interaction import (
     build_pending_interaction,
     serialize_pending_interaction,
 )
+from alphonse.agent.identity import profile as identity_profile
 from alphonse.agent.cognition.preferences.store import (
     get_or_create_principal_for_channel,
     get_with_fallback,
@@ -393,15 +394,26 @@ def _respond_node(state: CortexState) -> dict[str, Any]:
         response_key = "help"
     elif intent == "identity_question":
         response_key = "identity"
-    elif intent == "user_identity_question":
-        response_key = "identity.user"
+    elif intent in {"user_identity_question", "identity.query_user_name"}:
+        conversation_key = _conversation_key_from_state(state)
+        name = identity_profile.get_display_name(conversation_key)
+        logger.info(
+            "cortex identity lookup conversation_key=%s name=%s",
+            conversation_key,
+            name,
+        )
+        if name:
+            return {
+                "response_key": "identity.user.known",
+                "response_vars": {"user_name": name},
+            }
         pending = build_pending_interaction(
             PendingInteractionType.SLOT_FILL,
             key="user_name",
             context={"origin_intent": "identity.learn_user_name"},
         )
         return {
-            "response_key": response_key,
+            "response_key": "identity.user",
             "pending_interaction": serialize_pending_interaction(pending),
         }
     elif intent == "greeting":
@@ -710,6 +722,18 @@ def _signature_slots(intent: str, state: CortexState) -> dict[str, Any]:
     return {
         "channel": state.get("channel_type"),
     }
+
+
+def _conversation_key_from_state(state: CortexState) -> str:
+    channel_type = str(state.get("channel_type") or "unknown")
+    channel_id = str(state.get("channel_target") or state.get("chat_id") or "")
+    if channel_type == "telegram":
+        return f"telegram:{channel_id}"
+    if channel_type == "cli":
+        return f"cli:{channel_id or 'cli'}"
+    if channel_type == "api":
+        return f"api:{channel_id or 'api'}"
+    return f"{channel_type}:{channel_id}"
 
 
 def _build_cognition_state(state: CortexState) -> dict[str, Any]:
