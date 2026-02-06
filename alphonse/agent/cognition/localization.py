@@ -134,10 +134,10 @@ def _is_formal(value: Any) -> bool:
 
 _TEMPLATES: dict[str, dict[str, str]] = {
     "en": {
-        "generic.unknown": 'I can help with reminders. Try: "Remind me to drink water in 10 min".',
-        "clarify.intent": "I'm not sure what you need yet. What would you like me to do?",
+        "generic.unknown": "I'm not sure what you mean yet. What would you like to do?",
+        "clarify.intent": "I'm not sure what you mean yet. What would you like to do?",
         "help": 'I can schedule reminders. Try: "Remind me to drink water in 10 min".',
-        "status": "I'm active and ready for reminders.",
+        "status": "I'm active and ready.",
         "identity": "I'm Alphonse, your assistant. I only know this authorized chat.",
         "identity.user": "I don't know your name yet. Tell me what you'd like me to call you.",
         "identity.user.known": "Yes, your name is {user_name}.",
@@ -151,10 +151,10 @@ _TEMPLATES: dict[str, dict[str, str]] = {
         "report.daily_gaps.empty": "No capability gaps in the last day.",
     },
     "es": {
-        "generic.unknown": 'Puedo programar recordatorios. Prueba: "Recuérdame tomar agua en 10 min".',
-        "clarify.intent": "No estoy seguro de lo que necesitas. ¿Qué te gustaría que hiciera?",
+        "generic.unknown": "No estoy seguro de a qué te refieres. ¿Qué te gustaría hacer?",
+        "clarify.intent": "No estoy seguro de a qué te refieres. ¿Qué te gustaría hacer?",
         "help": 'Puedo programar recordatorios. Ejemplo: "Recuérdame tomar agua en 10 min".',
-        "status": "Estoy activo y listo para recordatorios.",
+        "status": "Estoy activo y listo.",
         "identity": "Soy Alphonse, tu asistente. Solo conozco este chat autorizado.",
         "identity.user": "Aún no sé tu nombre. Dime cómo quieres que te llame.",
         "identity.user.known": "Sí, te llamas {user_name}.",
@@ -170,10 +170,10 @@ _TEMPLATES: dict[str, dict[str, str]] = {
 }
 
 _FORMAL_ES_TEMPLATES: dict[str, str] = {
-    "generic.unknown": 'Puedo programar recordatorios. Pruebe: "Recuérdeme tomar agua en 10 min".',
-    "clarify.intent": "No estoy seguro de lo que necesita. ¿Qué le gustaría que hiciera?",
+    "generic.unknown": "No estoy seguro de a qué se refiere. ¿Qué le gustaría hacer?",
+    "clarify.intent": "No estoy seguro de a qué se refiere. ¿Qué le gustaría hacer?",
     "help": 'Puedo programar recordatorios. Ejemplo: "Recuérdeme tomar agua en 10 min".',
-    "status": "Estoy activo y listo para recordatorios.",
+    "status": "Estoy activo y listo.",
     "identity": "Soy Alphonse, su asistente. Solo conozco este chat autorizado.",
     "identity.user": "Aún no sé su nombre. Dígame cómo quiere que le llame.",
     "identity.user.known": "Sí, se llama {user_name}.",

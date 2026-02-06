@@ -8,6 +8,8 @@ from typing import Any
 from alphonse.agent.actions.base import Action
 from alphonse.agent.actions.models import ActionResult
 from alphonse.agent.cognition.localization import render_message
+from alphonse.agent.cognition.response_composer import ResponseComposer
+from alphonse.agent.cognition.response_spec import ResponseSpec
 from alphonse.agent.cognition.capability_gaps.triage import detect_language
 from alphonse.agent.cognition.plans import CortexPlan, PlanType
 from alphonse.agent.cognition.preferences.store import (
@@ -308,7 +310,15 @@ def _render_pending_ack(
         locale,
         address_style,
     )
-    return render_message(key, locale, vars), locale
+    spec = ResponseSpec(
+        kind="ack",
+        key=key,
+        locale=locale,
+        address_style=address_style,
+        tone=tone,
+        variables=vars,
+    )
+    return ResponseComposer().compose(spec), locale
 
 
 def _ensure_conversation_locale(
@@ -492,7 +502,15 @@ def _render_outgoing_message(
         locale,
         address_style,
     )
-    return render_message(key, locale, vars), locale
+    spec = ResponseSpec(
+        kind="answer",
+        key=key,
+        locale=locale,
+        address_style=address_style,
+        tone=tone,
+        variables=vars,
+    )
+    return ResponseComposer().compose(spec), locale
 
 
 def _updated_preferences_from_vars(vars: dict[str, Any]) -> dict[str, str]:
