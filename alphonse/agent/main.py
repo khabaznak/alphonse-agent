@@ -7,9 +7,9 @@ import logging
 from pathlib import Path
 
 from dotenv import load_dotenv
-from alphonse.agent.heart import Heart, HeartConfig
+from alphonse.agent.heart import Heart, HeartConfig, SHUTDOWN
 from alphonse.agent.nervous_system.ddfsm import DDFSM, DDFSMConfig
-from alphonse.agent.nervous_system.senses.bus import Bus
+from alphonse.agent.nervous_system.senses.bus import Bus, Signal
 from alphonse.agent.nervous_system.senses.manager import SenseManager
 from alphonse.agent.nervous_system.senses.registry import (
     register_senses,
@@ -75,6 +75,10 @@ def main() -> None:
     heart = load_heart(config, bus, ddfsm)
     try:
         heart.run()
+    except KeyboardInterrupt:
+        logging.info("Shutdown requested (KeyboardInterrupt).")
+        heart.stop()
+        bus.emit(Signal(type=SHUTDOWN, source="system"))
     finally:
         if api_server:
             api_server.stop()
