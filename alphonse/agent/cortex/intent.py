@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import logging
 import re
 import unicodedata
@@ -11,29 +10,10 @@ from typing import Any
 
 import dateparser
 
-from alphonse.agent.cognition.providers.ollama import OllamaClient
 from alphonse.config import settings
 
 
 logger = logging.getLogger(__name__)
-
-
-INTENTS = {
-    "schedule_reminder",
-    "get_status",
-    "help",
-    "identity_question",
-    "greeting",
-    "meta.gaps_list",
-    "meta.capabilities",
-    "timed_signals.list",
-    "lan.arm",
-    "lan.disarm",
-    "pair.approve",
-    "pair.deny",
-    "update_preferences",
-    "unknown",
-}
 
 
 @dataclass(frozen=True)
@@ -42,30 +22,12 @@ class IntentResult:
     confidence: float
 
 
-def classify_intent(text: str, llm_client: OllamaClient | None) -> IntentResult:
-    pairing = _pairing_command_intent(text)
-    if pairing is not None:
-        return IntentResult(intent=pairing, confidence=0.9)
-    heuristic = _heuristic_intent(text)
-    if heuristic.intent != "unknown":
-        return heuristic
-    if llm_client is None:
-        return IntentResult(intent="unknown", confidence=0.2)
-    prompt = (
-        "Classify the intent into one of: schedule_reminder, update_preferences, get_status, "
-        "help, identity_question, greeting, meta.gaps_list, meta.capabilities, "
-        'timed_signals.list, lan.arm, lan.disarm, pair.approve, pair.deny, unknown. Return JSON {"intent":...,"confidence":0-1}.'
-    )
-    try:
-        raw = llm_client.complete(system_prompt=prompt, user_prompt=text)
-    except Exception:
-        return IntentResult(intent="unknown", confidence=0.2)
-    data = _parse_json(str(raw)) or {}
-    intent = str(data.get("intent") or "unknown").strip()
-    if intent not in INTENTS:
-        intent = "unknown"
-    confidence = _as_float(data.get("confidence"), default=0.4)
-    return IntentResult(intent=intent, confidence=confidence)
+def classify_intent(text: str, llm_client: object | None = None) -> IntentResult:
+    _ = llm_client
+    from alphonse.agent.cognition.intent_router import route_message
+
+    routed = route_message(text, context={})
+    return IntentResult(intent=routed.intent, confidence=routed.confidence)
 
 
 def extract_reminder_text(text: str) -> str | None:
@@ -136,62 +98,6 @@ def build_intent_evidence(text: str) -> dict[str, Any]:
         "quoted_spans": quoted_spans,
         "score": score,
     }
-
-
-def _heuristic_intent(text: str) -> IntentResult:
-    lowered = text.lower().strip()
-    if any(token in lowered for token in ("status", "estado")):
-        return IntentResult(intent="get_status", confidence=0.7)
-    if any(token in lowered for token in ("arm", "arm link", "unlock", "arm alphonse link")):
-        return IntentResult(intent="lan.arm", confidence=0.7)
-    if any(token in lowered for token in ("disarm", "lock", "disarm link")):
-        return IntentResult(intent="lan.disarm", confidence=0.7)
-    pairing = _pairing_command_intent(lowered)
-    if pairing is not None:
-        return IntentResult(intent=pairing, confidence=0.7)
-    if any(token in lowered for token in ("gaps", "gap list", "gaps list", "brechas")):
-        return IntentResult(intent="meta.gaps_list", confidence=0.7)
-    if any(
-        token in lowered
-        for token in (
-            "what else can you do",
-            "what can you do",
-            "capabilities",
-            "que puedes hacer",
-            "qué puedes hacer",
-            "que mas puedes hacer",
-            "qué más puedes hacer",
-        )
-    ):
-        return IntentResult(intent="meta.capabilities", confidence=0.7)
-    if any(
-        token in lowered
-        for token in (
-            "what reminders do you have",
-            "reminders scheduled",
-            "list reminders",
-            "que recordatorios tienes",
-            "qué recordatorios tienes",
-            "recordatorios programados",
-        )
-    ):
-        return IntentResult(intent="timed_signals.list", confidence=0.7)
-    if any(
-        token in lowered for token in ("ayuda", "help", "what can you do", "que puedes")
-    ):
-        return IntentResult(intent="help", confidence=0.7)
-    if any(
-        token in lowered
-        for token in ("quien eres", "quién eres", "quien soy yo", "quién soy yo")
-    ):
-        return IntentResult(intent="identity_question", confidence=0.7)
-    if lowered.startswith(("hola", "hello", "hi", "buenas", "buenos", "hey")):
-        return IntentResult(intent="greeting", confidence=0.6)
-    if extract_preference_updates(lowered):
-        return IntentResult(intent="update_preferences", confidence=0.7)
-    if _contains_reminder_intent(lowered):
-        return IntentResult(intent="schedule_reminder", confidence=0.6)
-    return IntentResult(intent="unknown", confidence=0.2)
 
 
 def _pairing_command_intent(text: str) -> str | None:
@@ -409,23 +315,5 @@ def _strip_time_phrases(text: str) -> str:
     return re.sub(r"\b(en|in|a las|at)\b.*", "", text, flags=re.IGNORECASE).strip()
 
 
-def _parse_json(text: str) -> dict[str, Any] | None:
-    candidate = text.strip()
-    if candidate.startswith("```"):
-        candidate = candidate.strip("`")
-        if candidate.startswith("json"):
-            candidate = candidate[4:].strip()
-    try:
-        parsed = json.loads(candidate)
-    except json.JSONDecodeError:
-        return None
-    return parsed if isinstance(parsed, dict) else None
-
-
-def _as_float(value: object | None, default: float) -> float:
-    if value is None:
-        return default
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return default
+def contains_reminder_intent(text: str) -> bool:
+    return _contains_reminder_intent(text)

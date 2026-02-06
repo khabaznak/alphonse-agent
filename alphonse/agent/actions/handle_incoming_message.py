@@ -205,6 +205,9 @@ def _build_cortex_state(
         "locale": stored_state.get("locale"),
         "autonomy_level": autonomy_level or stored_state.get("autonomy_level"),
         "planning_mode": planning_mode or stored_state.get("planning_mode"),
+        "intent_category": stored_state.get("intent_category"),
+        "routing_rationale": stored_state.get("routing_rationale"),
+        "routing_needs_clarification": stored_state.get("routing_needs_clarification"),
         "correlation_id": correlation_id,
         "timezone": timezone,
     }

@@ -7,6 +7,7 @@ import os
 import sqlite3
 import time
 import uuid
+import shlex
 from pathlib import Path
 from datetime import datetime, timezone
 from urllib import request
@@ -43,7 +44,7 @@ from alphonse.agent.nervous_system.gap_tasks import (
 from alphonse.agent.core.settings_store import init_db as init_settings_db
 
 
-def main() -> None:
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="alphonse cli")
     parser.add_argument("--log-level", default=os.getenv("ALPHONSE_LOG_LEVEL", "INFO"))
     sub = parser.add_subparsers(dest="command", required=True)
@@ -168,6 +169,13 @@ def main() -> None:
     lan_token.add_argument("device_id", help="Device id")
     lan_token.add_argument("--device-name", default=None, help="Optional device name")
 
+    repl_parser = sub.add_parser("repl", help="Start interactive CLI session")
+
+    return parser
+
+
+def main() -> None:
+    parser = build_parser()
     args = parser.parse_args()
     _configure_logging(args.log_level)
     _load_env()
@@ -177,27 +185,8 @@ def main() -> None:
     apply_schema(db_path)
     apply_seed(db_path)
 
-    if args.command == "say":
-        _command_say(args, db_path)
-        return
-    if args.command == "run-scheduler":
-        _command_run_scheduler(args, db_path)
-        return
-    if args.command == "status":
-        _command_status(db_path)
-        return
-    if args.command == "report":
-        _command_report(args, db_path)
-        return
-    if args.command == "debug":
-        _command_debug(args)
-        return
-    if args.command == "gaps":
-        _command_gaps(args)
-        return
-    if args.command == "lan":
-        _command_lan(args)
-        return
+    _dispatch_command(args, db_path, parser)
+    return
 
 
 def _command_say(args: argparse.Namespace, db_path: Path) -> None:
@@ -238,6 +227,61 @@ def _command_say(args: argparse.Namespace, db_path: Path) -> None:
             "ctx": None,
         },
     )
+
+
+def _dispatch_command(
+    args: argparse.Namespace,
+    db_path: Path,
+    parser: argparse.ArgumentParser,
+) -> None:
+    if args.command == "say":
+        _command_say(args, db_path)
+        return
+    if args.command == "run-scheduler":
+        _command_run_scheduler(args, db_path)
+        return
+    if args.command == "status":
+        _command_status(db_path)
+        return
+    if args.command == "report":
+        _command_report(args, db_path)
+        return
+    if args.command == "debug":
+        _command_debug(args)
+        return
+    if args.command == "gaps":
+        _command_gaps(args)
+        return
+    if args.command == "lan":
+        _command_lan(args)
+        return
+    if args.command == "repl":
+        _command_repl(parser, db_path)
+        return
+
+
+def _command_repl(parser: argparse.ArgumentParser, db_path: Path) -> None:
+    while True:
+        try:
+            raw = input("alphonse> ").strip()
+        except EOFError:
+            break
+        if not raw:
+            continue
+        if raw in {"exit", "quit"}:
+            break
+        if raw in {"help", "?"}:
+            parser.print_help()
+            continue
+        try:
+            args = parser.parse_args(shlex.split(raw))
+        except SystemExit:
+            continue
+        _configure_logging(args.log_level)
+        if args.command == "repl":
+            print("Already in repl. Type a command or 'exit'.")
+            continue
+        _dispatch_command(args, db_path, parser)
 
 
 def _command_run_scheduler(args: argparse.Namespace, db_path: Path) -> None:

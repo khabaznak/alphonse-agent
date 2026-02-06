@@ -427,7 +427,7 @@ class PlanExecutor:
         exec_context: PlanExecutionContext,
         plan: CortexPlan,
     ) -> None:
-        self._record_policy_gap(decision, exec_context, plan)
+        self._record_policy_event(decision, exec_context, plan)
         if (
             exec_context.channel_type in {"telegram", "cli", "api"}
             and not exec_context.channel_target
@@ -451,7 +451,7 @@ class PlanExecutor:
         if delivery:
             self._extremities.dispatch(delivery, None)
 
-    def _record_policy_gap(
+    def _record_policy_event(
         self,
         decision: PolicyDecision,
         exec_context: PlanExecutionContext,
@@ -459,9 +459,6 @@ class PlanExecutor:
     ) -> None:
         channel_type = exec_context.channel_type
         channel_id = exec_context.channel_target
-        principal_id = None
-        if channel_type and channel_id:
-            principal_id = get_or_create_principal_for_channel(channel_type, channel_id)
         user_text = None
         if isinstance(plan.payload, dict):
             user_text = (
@@ -469,21 +466,14 @@ class PlanExecutor:
                 or plan.payload.get("reminder_text")
                 or plan.payload.get("message")
             )
-        insert_gap(
-            {
-                "user_text": str(user_text or ""),
-                "reason": "policy_denied",
-                "status": "open",
-                "intent": str(plan.plan_type),
-                "confidence": None,
-                "missing_slots": None,
-                "principal_type": "channel_chat",
-                "principal_id": principal_id,
-                "channel_type": channel_type,
-                "channel_id": channel_id,
-                "correlation_id": exec_context.correlation_id,
-                "metadata": {"policy_reason": decision.reason},
-            }
+        logger.info(
+            "executor event policy.restriction_triggered plan_id=%s plan_type=%s reason=%s channel=%s target=%s text=%s",
+            plan.plan_id,
+            plan.plan_type,
+            decision.reason,
+            channel_type,
+            channel_id,
+            str(user_text or ""),
         )
 
 

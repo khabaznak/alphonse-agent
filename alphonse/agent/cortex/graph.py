@@ -14,15 +14,16 @@ from alphonse.agent.cognition.status_summaries import summarize_capabilities
 from alphonse.agent.cognition.providers.ollama import OllamaClient
 from alphonse.agent.cognition.planning import PlanningMode, parse_planning_mode
 from alphonse.agent.cognition.planning_engine import propose_plan
+from alphonse.agent.cognition.intent_registry import IntentCategory, get_registry
+from alphonse.agent.cognition.intent_router import route_message
+from alphonse.agent.cognition.capability_gaps.guard import GapGuardInput, PlanStatus, should_create_gap
 from alphonse.agent.cognition.preferences.store import (
     get_or_create_principal_for_channel,
     get_with_fallback,
 )
 from alphonse.agent.core.settings_store import get_timezone
 from alphonse.agent.cortex.intent import (
-    IntentResult,
     build_intent_evidence,
-    classify_intent,
     extract_preference_updates,
     extract_reminder_text,
     parse_trigger_time,
@@ -41,7 +42,10 @@ class CortexState(TypedDict, total=False):
     incoming_text: str
     last_user_message: str
     intent: str | None
+    intent_category: str | None
     intent_confidence: float
+    routing_rationale: str | None
+    routing_needs_clarification: bool
     slots: dict[str, Any]
     missing_slots: list[str]
     pending_intent: str | None
@@ -57,6 +61,7 @@ class CortexState(TypedDict, total=False):
     locale: str | None
     autonomy_level: float | None
     planning_mode: str | None
+    events: list[dict[str, Any]]
 
 
 def build_cortex_graph(llm_client: OllamaClient | None = None) -> StateGraph:
@@ -133,6 +138,7 @@ def _ingest_node(state: CortexState) -> dict[str, Any]:
         "response_vars": None,
         "plans": [],
         "locale": locale,
+        "events": [],
     }
 
 
@@ -141,6 +147,8 @@ def _intent_node(llm_client: OllamaClient | None):
         pairing = pairing_command_intent(state.get("last_user_message", ""))
         if pairing is not None:
             evidence = build_intent_evidence(state.get("last_user_message", ""))
+            meta = get_registry().get(pairing)
+            category = meta.category.value if meta else IntentCategory.CONTROL_PLANE.value
             logger.info(
                 "cortex intent chat_id=%s intent=%s confidence=%.2f",
                 state.get("chat_id"),
@@ -150,6 +158,9 @@ def _intent_node(llm_client: OllamaClient | None):
             return {
                 "intent": pairing,
                 "intent_confidence": 0.9,
+                "intent_category": category,
+                "routing_rationale": "pairing_command",
+                "routing_needs_clarification": False,
                 "intent_evidence": evidence,
                 "last_intent": pairing,
                 "pending_intent": None,
@@ -161,12 +172,17 @@ def _intent_node(llm_client: OllamaClient | None):
         if pending and missing:
             intent = pending
             confidence = state.get("intent_confidence", 0.6)
+            meta = get_registry().get(intent)
+            category = meta.category.value if meta else IntentCategory.TASK_PLANE.value
+            rationale = "pending_intent"
+            needs_clarification = True
         else:
-            result: IntentResult = classify_intent(
-                state.get("last_user_message", ""), llm_client
-            )
-            intent = result.intent
-            confidence = result.confidence
+            routed = route_message(state.get("last_user_message", ""), context=state)
+            intent = routed.intent
+            confidence = routed.confidence
+            category = routed.category.value
+            rationale = routed.rationale
+            needs_clarification = routed.needs_clarification
         evidence = build_intent_evidence(state.get("last_user_message", ""))
         logger.info(
             "cortex intent chat_id=%s intent=%s confidence=%.2f",
@@ -177,6 +193,9 @@ def _intent_node(llm_client: OllamaClient | None):
         return {
             "intent": intent,
             "intent_confidence": confidence,
+            "intent_category": category,
+            "routing_rationale": rationale,
+            "routing_needs_clarification": needs_clarification,
             "intent_evidence": evidence,
             "last_intent": intent,
         }
@@ -226,14 +245,17 @@ def _clarify_node(state: CortexState) -> dict[str, Any]:
         response_key = "clarify.reminder_text"
     else:
         response_key = "clarify.trigger_time"
-    plan = _build_gap_plan(
-        state,
-        reason="missing_slots",
-        missing_slots=missing,
+    events = _append_event(
+        state.get("events"),
+        "interaction.awaiting_user_input",
+        {
+            "reason": "missing_slots",
+            "missing_slots": missing,
+            "intent": state.get("intent"),
+            "intent_category": state.get("intent_category"),
+        },
     )
-    plans = list(state.get("plans") or [])
-    plans.append(plan.model_dump())
-    return {"response_key": response_key, "plans": plans}
+    return {"response_key": response_key, "events": events}
 
 
 def _plan_node(state: CortexState) -> dict[str, Any]:
@@ -436,12 +458,29 @@ def _respond_node(state: CortexState) -> dict[str, Any]:
     else:
         response_key = "generic.unknown"
     result: dict[str, Any] = {"response_key": response_key}
+    if response_key == "generic.unknown" and state.get("routing_needs_clarification"):
+        events = _append_event(
+            state.get("events"),
+            "routing.needs_clarification",
+            {
+                "intent": intent,
+                "intent_category": state.get("intent_category"),
+                "rationale": state.get("routing_rationale"),
+            },
+        )
+        result["events"] = events
     if response_key == "generic.unknown":
-        reason = "unknown_intent" if intent == "unknown" else "no_tool"
-        plan = _build_gap_plan(state, reason=reason)
-        plans = list(state.get("plans") or [])
-        plans.append(plan.model_dump())
-        result["plans"] = plans
+        guard_input = GapGuardInput(
+            category=_category_from_state(state),
+            plan_status=PlanStatus.AWAITING_USER if state.get("routing_needs_clarification") else None,
+            needs_clarification=bool(state.get("routing_needs_clarification")),
+            reason="unknown_intent" if intent == "unknown" else "no_tool",
+        )
+        if should_create_gap(guard_input):
+            plan = _build_gap_plan(state, reason="missing_capability")
+            plans = list(state.get("plans") or [])
+            plans.append(plan.model_dump())
+            result["plans"] = plans
     return result
 
 
@@ -508,6 +547,16 @@ def _build_gap_plan(
     )
 
 
+def _append_event(
+    existing: list[dict[str, Any]] | None,
+    event_type: str,
+    payload: dict[str, Any],
+) -> list[dict[str, Any]]:
+    events = list(existing or [])
+    events.append({"type": event_type, "payload": payload})
+    return events
+
+
 def _attach_planning_scaffold(
     state: CortexState,
     *,
@@ -551,6 +600,17 @@ def _planning_mode_request(state: CortexState) -> PlanningMode | None:
     return parse_planning_mode(str(raw))
 
 
+def _category_from_state(state: CortexState) -> IntentCategory | None:
+    raw = state.get("intent_category")
+    if isinstance(raw, IntentCategory):
+        return raw
+    if isinstance(raw, str):
+        for category in IntentCategory:
+            if category.value == raw:
+                return category
+    return None
+
+
 def _build_cognition_state(state: CortexState) -> dict[str, Any]:
     return {
         "pending_intent": state.get("pending_intent"),
@@ -560,6 +620,9 @@ def _build_cognition_state(state: CortexState) -> dict[str, Any]:
         "locale": state.get("locale"),
         "autonomy_level": state.get("autonomy_level"),
         "planning_mode": state.get("planning_mode"),
+        "intent_category": state.get("intent_category"),
+        "routing_rationale": state.get("routing_rationale"),
+        "routing_needs_clarification": state.get("routing_needs_clarification"),
         "last_updated_at": datetime.now(timezone.utc).isoformat(),
     }
 
@@ -574,6 +637,10 @@ def _build_meta(state: CortexState) -> dict[str, Any]:
         "response_vars": state.get("response_vars"),
         "autonomy_level": state.get("autonomy_level"),
         "planning_mode": state.get("planning_mode"),
+        "intent_category": state.get("intent_category"),
+        "routing_rationale": state.get("routing_rationale"),
+        "routing_needs_clarification": state.get("routing_needs_clarification"),
+        "events": state.get("events") or [],
     }
 
 
