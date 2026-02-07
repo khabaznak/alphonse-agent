@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
 
-from alphonse.agent.cognition.intent_registry import IntentCategory
+from alphonse.agent.cognition.intent_types import IntentCategory
 from alphonse.agent.cognition.planning import PlanningMode
 from alphonse.agent.nervous_system.paths import resolve_nervous_system_db_path
 

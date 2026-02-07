@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from alphonse.agent.cognition.intent_catalog import reset_catalog_service
 from alphonse.agent.cortex.graph import invoke_cortex
 from alphonse.agent.cognition.plans import PlanType
 from alphonse.agent.nervous_system.migrate import apply_schema
@@ -22,6 +23,7 @@ def _prepare_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     db_path = tmp_path / "nerve-db"
     monkeypatch.setenv("NERVE_DB_PATH", str(db_path))
     apply_schema(db_path)
+    reset_catalog_service()
 
 
 def test_timed_signals_create_flow(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

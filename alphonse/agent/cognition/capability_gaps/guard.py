@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 
-from alphonse.agent.cognition.intent_registry import IntentCategory
+from alphonse.agent.cognition.intent_types import IntentCategory
 
 
 class PlanStatus(str, Enum):

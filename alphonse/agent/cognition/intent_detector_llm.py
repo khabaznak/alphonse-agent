@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
-from alphonse.agent.cognition.intent_catalog import IntentCatalogStore, IntentSpec
+from alphonse.agent.cognition.intent_catalog import (
+    IntentCatalogService,
+    IntentSpec,
+    match_intent_by_examples,
+)
 from alphonse.agent.cognition.prompt_store import PromptContext, SqlitePromptStore
 
 logger = logging.getLogger(__name__)
@@ -22,22 +25,23 @@ class IntentDetection:
 
 
 class IntentDetectorLLM:
-    def __init__(self, catalog: IntentCatalogStore, prompt_store: SqlitePromptStore | None = None) -> None:
+    def __init__(
+        self,
+        catalog: IntentCatalogService,
+        prompt_store: SqlitePromptStore | None = None,
+    ) -> None:
         self._catalog = catalog
         self._prompt_store = prompt_store or SqlitePromptStore()
 
     def detect(self, text: str, llm_client: object | None) -> IntentDetection | None:
-        fast = _deterministic_hint(text)
-        if not self._catalog.available:
+        enabled = self._catalog.load_enabled_intents()
+        if not self._catalog.store.available:
             logger.warning("intent catalog unavailable; skipping LLM detection")
             return None
+        fast = _deterministic_hint(text, enabled)
         if not llm_client:
             if fast:
                 return IntentDetection(intent_name=fast, confidence=0.6, slot_guesses={}, needs_clarification=True)
-            return None
-        enabled = self._catalog.list_enabled()
-        if not self._catalog.available:
-            logger.warning("intent catalog unavailable after list; skipping LLM detection")
             return None
         if not enabled:
             return None
@@ -51,12 +55,20 @@ class IntentDetectorLLM:
             raw = llm_client.complete(system_prompt=prompt, user_prompt=text)
         except Exception as exc:
             logger.warning("intent detector LLM failed: %s", exc)
+            if fast:
+                return IntentDetection(
+                    intent_name=fast,
+                    confidence=0.6,
+                    slot_guesses={},
+                    needs_clarification=True,
+                )
             return None
         data = _parse_payload(str(raw))
         if not data:
             return None
         intent_name = str(data.get("intent_name") or "unknown")
-        if intent_name != "unknown" and not self._catalog.get(intent_name):
+        enabled_names = {spec.intent_name for spec in enabled}
+        if intent_name != "unknown" and intent_name not in enabled_names:
             intent_name = "unknown"
         if intent_name == "unknown" and fast:
             intent_name = fast
@@ -152,10 +164,6 @@ def _parse_payload(raw: str) -> dict[str, Any] | None:
     return parsed if isinstance(parsed, dict) else None
 
 
-def _deterministic_hint(text: str) -> str | None:
-    lowered = text.lower()
-    if re.search(r"\b(recordatorios|reminders|reminder list|lista de recordatorios)\b", lowered):
-        return "timed_signals.list"
-    if re.search(r"\b(remind me|recu[eé]rdame)\b", lowered):
-        return "timed_signals.create"
-    return None
+def _deterministic_hint(text: str, intents: list[IntentSpec]) -> str | None:
+    matched = match_intent_by_examples(text, intents)
+    return matched.intent_name if matched else None

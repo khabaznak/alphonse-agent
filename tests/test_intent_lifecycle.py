@@ -10,7 +10,7 @@ from alphonse.agent.cognition.intent_lifecycle import (
     lifecycle_hint,
     next_state,
 )
-from alphonse.agent.cognition.intent_registry import IntentCategory
+from alphonse.agent.cognition.intent_types import IntentCategory
 from alphonse.agent.cognition.planning import PlanningMode
 from alphonse.agent.cognition.planning_engine import propose_plan
 

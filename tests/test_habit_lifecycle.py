@@ -13,7 +13,7 @@ from alphonse.agent.cognition.habit_lifecycle import (
     next_habit_state,
 )
 from alphonse.agent.cognition.intent_lifecycle import LifecycleState
-from alphonse.agent.cognition.intent_registry import RiskLevel
+from alphonse.agent.cognition.intent_types import RiskLevel
 
 
 def _record(state: HabitState, *, success: int = 0, failures: int = 0, executions: int = 0, opt_in: bool = True) -> HabitRecord:

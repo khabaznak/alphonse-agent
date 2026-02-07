@@ -14,9 +14,8 @@ from alphonse.agent.cognition.status_summaries import summarize_capabilities
 from alphonse.agent.cognition.providers.ollama import OllamaClient
 from alphonse.agent.cognition.planning import PlanningMode, parse_planning_mode
 from alphonse.agent.cognition.planning_engine import propose_plan
-from alphonse.agent.cognition.intent_registry import IntentCategory, get_registry
-from alphonse.agent.cognition.intent_router import route_message
-from alphonse.agent.cognition.intent_catalog import IntentCatalogStore
+from alphonse.agent.cognition.intent_types import IntentCategory
+from alphonse.agent.cognition.intent_catalog import get_catalog_service
 from alphonse.agent.cognition.intent_detector_llm import IntentDetectorLLM
 from alphonse.agent.cognition.slots.resolvers import build_default_registry
 from alphonse.agent.cognition.slots.slot_filler import fill_slots
@@ -93,7 +92,6 @@ def build_cortex_graph(llm_client: OllamaClient | None = None) -> StateGraph:
     graph.add_node("ingest_node", _ingest_node)
     graph.add_node("intent_node", _intent_node(llm_client))
     graph.add_node("catalog_slot_node", _catalog_slot_node)
-    graph.add_node("plan_node", _plan_node)
     graph.add_node("respond_node", _respond_node)
 
     graph.set_entry_point("ingest_node")
@@ -103,12 +101,10 @@ def build_cortex_graph(llm_client: OllamaClient | None = None) -> StateGraph:
         _route_after_intent,
         {
             "catalog": "catalog_slot_node",
-            "update_preferences": "plan_node",
             "respond": "respond_node",
         },
     )
     graph.add_edge("catalog_slot_node", "respond_node")
-    graph.add_edge("plan_node", "respond_node")
     graph.add_edge("respond_node", END)
     return graph
 
@@ -160,71 +156,62 @@ def _ingest_node(state: CortexState) -> dict[str, Any]:
 def _intent_node(llm_client: OllamaClient | None):
     def _node(state: CortexState) -> dict[str, Any]:
         pairing = pairing_command_intent(state.get("last_user_message", ""))
+        catalog_service = get_catalog_service()
         if pairing is not None:
-            evidence = build_intent_evidence(state.get("last_user_message", ""))
-            meta = get_registry().get(pairing)
-            category = meta.category.value if meta else IntentCategory.CONTROL_PLANE.value
-            logger.info(
-                "cortex intent chat_id=%s intent=%s confidence=%.2f",
-                state.get("chat_id"),
-                pairing,
-                0.9,
-            )
-            return {
-                "intent": pairing,
-                "intent_confidence": 0.9,
-                "intent_category": category,
-                "routing_rationale": "pairing_command",
-                "routing_needs_clarification": False,
-                "intent_evidence": evidence,
-                "last_intent": pairing,
-                "slots": {},
-            }
+            spec = catalog_service.get_intent(pairing)
+            if spec:
+                evidence = build_intent_evidence(state.get("last_user_message", ""))
+                logger.info(
+                    "cortex intent chat_id=%s intent=%s confidence=%.2f",
+                    state.get("chat_id"),
+                    pairing,
+                    0.9,
+                )
+                _record_intent_detected(
+                    intent=pairing,
+                    category=spec.category,
+                    state=state,
+                )
+                return {
+                    "intent": pairing,
+                    "intent_confidence": 0.9,
+                    "intent_category": spec.category,
+                    "routing_rationale": "pairing_command",
+                    "routing_needs_clarification": False,
+                    "intent_evidence": evidence,
+                    "last_intent": pairing,
+                    "slots": {},
+                }
+        if extract_preference_updates(state.get("last_user_message", "")):
+            spec = catalog_service.get_intent("update_preferences")
+            if spec:
+                evidence = build_intent_evidence(state.get("last_user_message", ""))
+                _record_intent_detected(
+                    intent="update_preferences",
+                    category=spec.category,
+                    state=state,
+                )
+                return {
+                    "intent": "update_preferences",
+                    "intent_confidence": 0.7,
+                    "intent_category": spec.category,
+                    "routing_rationale": "preference_update",
+                    "routing_needs_clarification": False,
+                    "intent_evidence": evidence,
+                    "last_intent": "update_preferences",
+                    "slots": {},
+                }
         catalog_result = _detect_catalog_intent(state, llm_client)
         if catalog_result:
             return catalog_result
-        routed = route_message(
-            state.get("last_user_message", ""),
-            context=state,
-            llm_client=llm_client,
-        )
-        intent = routed.intent
-        if intent == "schedule_reminder":
-            return {
-                "intent": "timed_signals.create",
-                "intent_confidence": routed.confidence,
-                "intent_category": IntentCategory.TASK_PLANE.value,
-                "routing_rationale": "legacy_mapped",
-                "routing_needs_clarification": routed.needs_clarification,
-                "intent_evidence": build_intent_evidence(state.get("last_user_message", "")),
-                "last_intent": "timed_signals.create",
-                "catalog_intent": "timed_signals.create",
-                "catalog_slot_guesses": {},
-            }
-        confidence = routed.confidence
-        category = routed.category.value
-        rationale = routed.rationale
-        needs_clarification = routed.needs_clarification
-        evidence = build_intent_evidence(state.get("last_user_message", ""))
-        logger.info(
-            "cortex intent chat_id=%s intent=%s confidence=%.2f",
-            state.get("chat_id"),
-            intent,
-            confidence,
-        )
-        _record_intent_detected(
-            intent=intent,
-            category=category,
-            state=state,
-        )
         return {
-            "intent": intent,
-            "intent_confidence": confidence,
-            "intent_category": category,
-            "routing_rationale": rationale,
-            "routing_needs_clarification": needs_clarification,
-            "intent_evidence": evidence,
-            "last_intent": intent,
+            "intent": "unknown",
+            "intent_confidence": 0.2,
+            "intent_category": IntentCategory.TASK_PLANE.value,
+            "routing_rationale": "needs_clarification",
+            "routing_needs_clarification": True,
+            "intent_evidence": build_intent_evidence(state.get("last_user_message", "")),
+            "last_intent": "unknown",
         }
 
     return _node
@@ -250,14 +237,14 @@ def _detect_catalog_intent(
             "catalog_intent": intent_name,
             "catalog_slot_guesses": {},
         }
-    catalog = IntentCatalogStore()
-    if not catalog.is_available():
+    catalog_service = get_catalog_service()
+    if not catalog_service.store.is_available():
         return None
-    detector = IntentDetectorLLM(catalog)
+    detector = IntentDetectorLLM(catalog_service)
     detection = detector.detect(state.get("last_user_message", ""), llm_client)
     if not detection or detection.intent_name == "unknown":
         return None
-    spec = catalog.get(detection.intent_name)
+    spec = catalog_service.get_intent(detection.intent_name)
     if not spec:
         return None
     logger.info(
@@ -265,6 +252,11 @@ def _detect_catalog_intent(
         state.get("chat_id"),
         detection.intent_name,
         detection.confidence,
+    )
+    _record_intent_detected(
+        intent=detection.intent_name,
+        category=spec.category,
+        state=state,
     )
     return {
         "intent": detection.intent_name,
@@ -283,11 +275,11 @@ def _catalog_slot_node(state: CortexState) -> dict[str, Any]:
     intent_name = state.get("catalog_intent")
     if not intent_name:
         return {}
-    catalog = IntentCatalogStore()
-    if not catalog.available:
+    catalog_service = get_catalog_service()
+    if not catalog_service.store.available:
         return {"response_key": "help"}
-    spec = catalog.get(str(intent_name))
-    if not catalog.available:
+    spec = catalog_service.get_intent(str(intent_name))
+    if not catalog_service.store.available:
         return {"response_key": "help"}
     if not spec:
         return {}
@@ -305,10 +297,16 @@ def _catalog_slot_node(state: CortexState) -> dict[str, Any]:
                     "intent": "cancel",
                     "routing_rationale": "slot_cancel",
                 }
+            core_spec = catalog_service.get_intent(core_intent)
+            category = (
+                core_spec.category
+                if core_spec
+                else IntentCategory.CORE_CONVERSATIONAL.value
+            )
             machine.paused_at = datetime.now(timezone.utc).isoformat()
             return {
                 "intent": core_intent,
-                "intent_category": IntentCategory.CORE_CONVERSATIONAL.value,
+                "intent_category": category,
                 "slot_machine": serialize_machine(machine),
                 "catalog_intent": intent_name,
                 "routing_rationale": "slot_barge_in",
@@ -348,177 +346,26 @@ def _catalog_slot_node(state: CortexState) -> dict[str, Any]:
     return updated
 
 
-def _plan_node(state: CortexState) -> dict[str, Any]:
-    if state.get("intent") == "update_preferences":
-        updates = extract_preference_updates(state.get("last_user_message", ""))
-        if not updates:
-            return {"response_key": "preference.missing"}
-        channel_type = state.get("channel_type")
-        channel_id = state.get("channel_target") or state.get("chat_id")
-        if not channel_type or not channel_id:
-            return {"response_key": "preference.no_channel"}
-        plan = CortexPlan(
-            plan_type=PlanType.UPDATE_PREFERENCES,
-            payload={
-                "principal": {
-                    "channel_type": str(channel_type),
-                    "channel_id": str(channel_id),
-                },
-                "updates": updates,
-            },
-        )
-        plans = list(state.get("plans") or [])
-        _attach_planning_scaffold(
-            state,
-            intent="update_preferences",
-            draft_steps=[
-                "Apply the requested preference updates.",
-                "Confirm which preferences were updated.",
-            ],
-            acceptance_criteria=[
-                "All requested preferences are updated for the principal.",
-            ],
-            plans=plans,
-        )
-        plans.append(plan.model_dump())
-        logger.info(
-            "cortex plans chat_id=%s plan_type=%s plan_id=%s",
-            state.get("chat_id"),
-            plan.plan_type,
-            plan.plan_id,
-        )
-        return {
-            "plans": plans,
-            "response_key": "ack.preference_updated",
-            "response_vars": {"updates": updates},
-        }
-    return {}
-
-
 def _respond_node(state: CortexState) -> dict[str, Any]:
     if state.get("response_text") or state.get("response_key"):
         return {}
     intent = state.get("intent")
     if intent in {"greeting", "timed_signals.create", "timed_signals.list"} and state.get("plans"):
         return {}
-    if intent == "get_status":
-        response_key = "status"
-    elif intent == "help":
-        response_key = "help"
-    elif intent == "identity_question":
-        response_key = "core.identity.agent"
-    elif intent in {"user_identity_question", "identity.query_user_name"}:
-        conversation_key = _conversation_key_from_state(state)
-        name = identity_profile.get_display_name(conversation_key)
-        logger.info(
-            "cortex identity lookup conversation_key=%s name=%s",
-            conversation_key,
-            name,
-        )
-        if name:
-            return {
-                "response_key": "core.identity.user.known",
-                "response_vars": {"user_name": name},
-            }
-        pending = build_pending_interaction(
-            PendingInteractionType.SLOT_FILL,
-            key="user_name",
-            context={"origin_intent": "identity.learn_user_name"},
-        )
-        return {
-            "response_key": "core.identity.user.ask_name",
-            "pending_interaction": serialize_pending_interaction(pending),
-        }
-    elif intent == "greeting":
-        response_key = "core.greeting"
-    elif intent == "meta.capabilities":
-        return {"response_text": summarize_capabilities(_locale_for_state(state))}
-    elif intent == "meta.gaps_list":
-        plan = CortexPlan(
-            plan_type=PlanType.QUERY_STATUS,
-            target=str(state.get("channel_target") or state.get("chat_id") or ""),
-            channels=[str(state.get("channel_type") or "telegram")],
-            payload={
-                "include": ["gaps_summary"],
-                "limit": 5,
-                "locale": _locale_for_state(state),
-            },
-        )
-        plans = list(state.get("plans") or [])
-        plans.append(plan.model_dump())
-        logger.info(
-            "cortex plans chat_id=%s plan_type=%s plan_id=%s",
-            state.get("chat_id"),
-            plan.plan_type,
-            plan.plan_id,
-        )
-        return {"plans": plans}
-    elif intent == "timed_signals.list":
-        plan = CortexPlan(
-            plan_type=PlanType.QUERY_STATUS,
-            target=str(state.get("channel_target") or state.get("chat_id") or ""),
-            channels=[str(state.get("channel_type") or "telegram")],
-            payload={
-                "include": ["timed_signals"],
-                "limit": 10,
-                "locale": _locale_for_state(state),
-            },
-        )
-        plans = list(state.get("plans") or [])
-        plans.append(plan.model_dump())
-        logger.info(
-            "cortex plans chat_id=%s plan_type=%s plan_id=%s",
-            state.get("chat_id"),
-            plan.plan_type,
-            plan.plan_id,
-        )
-        return {"plans": plans}
-    elif intent in {"lan.arm", "lan.disarm"}:
-        device_id = _extract_device_id(state.get("last_user_message", ""))
-        plan = CortexPlan(
-            plan_type=PlanType.LAN_ARM if intent == "lan.arm" else PlanType.LAN_DISARM,
-            target=str(state.get("channel_target") or state.get("chat_id") or ""),
-            channels=[str(state.get("channel_type") or "telegram")],
-            payload={
-                "device_id": device_id,
-                "locale": _locale_for_state(state),
-            },
-        )
-        plans = list(state.get("plans") or [])
-        plans.append(plan.model_dump())
-        logger.info(
-            "cortex plans chat_id=%s plan_type=%s plan_id=%s",
-            state.get("chat_id"),
-            plan.plan_type,
-            plan.plan_id,
-        )
-        return {"plans": plans}
-    elif intent in {"pair.approve", "pair.deny"}:
-        pairing_id, otp = _extract_pairing_decision(state.get("last_user_message", ""))
-        if not pairing_id:
-            return {"response_key": "generic.unknown"}
-        plan = CortexPlan(
-            plan_type=PlanType.PAIR_APPROVE if intent == "pair.approve" else PlanType.PAIR_DENY,
-            target=str(state.get("channel_target") or state.get("chat_id") or ""),
-            channels=[str(state.get("channel_type") or "telegram")],
-            payload={
-                "pairing_id": pairing_id,
-                "otp": otp,
-                "locale": _locale_for_state(state),
-            },
-        )
-        plans = list(state.get("plans") or [])
-        plans.append(plan.model_dump())
-        logger.info(
-            "cortex plans chat_id=%s plan_type=%s plan_id=%s",
-            state.get("chat_id"),
-            plan.plan_type,
-            plan.plan_id,
-        )
-        return {"plans": plans}
-    else:
-        response_key = "generic.unknown"
-    result: dict[str, Any] = {"response_key": response_key}
+    handlers = _intent_handlers()
+    handler = handlers.get(str(intent or ""))
+    if handler is not None:
+        return handler(state)
+    if intent:
+        spec = get_catalog_service().get_intent(str(intent))
+        if spec:
+            logger.error("missing handler for intent=%s", intent)
+            plan = _build_gap_plan(state, reason="missing_handler")
+            plans = list(state.get("plans") or [])
+            plans.append(plan.model_dump())
+            return {"response_key": "generic.unknown", "plans": plans}
+    result: dict[str, Any] = {"response_key": "generic.unknown"}
+    response_key = result["response_key"]
     if response_key == "generic.unknown" and state.get("routing_needs_clarification"):
         response_key = "clarify.intent"
         result["response_key"] = response_key
@@ -547,11 +394,237 @@ def _respond_node(state: CortexState) -> dict[str, Any]:
     return result
 
 
+def _intent_handlers() -> dict[str, Any]:
+    return {
+        "get_status": _handle_get_status,
+        "help": _handle_help,
+        "core.identity.query_agent_name": _handle_identity_agent,
+        "core.identity.query_user_name": _handle_identity_user,
+        "greeting": _handle_greeting,
+        "cancel": _handle_cancel,
+        "meta.capabilities": _handle_meta_capabilities,
+        "meta.gaps_list": _handle_meta_gaps_list,
+        "timed_signals.list": _handle_timed_signals_list,
+        "timed_signals.create": _handle_noop,
+        "update_preferences": _handle_update_preferences,
+        "lan.arm": _handle_lan_arm,
+        "lan.disarm": _handle_lan_disarm,
+        "pair.approve": _handle_pair_approve,
+        "pair.deny": _handle_pair_deny,
+    }
+
+
+def _handle_get_status(state: CortexState) -> dict[str, Any]:
+    return {"response_key": "status"}
+
+
+def _handle_help(state: CortexState) -> dict[str, Any]:
+    return {"response_key": "help"}
+
+
+def _handle_identity_agent(state: CortexState) -> dict[str, Any]:
+    return {"response_key": "core.identity.agent"}
+
+
+def _handle_identity_user(state: CortexState) -> dict[str, Any]:
+    conversation_key = _conversation_key_from_state(state)
+    name = identity_profile.get_display_name(conversation_key)
+    logger.info(
+        "cortex identity lookup conversation_key=%s name=%s",
+        conversation_key,
+        name,
+    )
+    if name:
+        return {
+            "response_key": "core.identity.user.known",
+            "response_vars": {"user_name": name},
+        }
+    pending = build_pending_interaction(
+        PendingInteractionType.SLOT_FILL,
+        key="user_name",
+        context={"origin_intent": "identity.learn_user_name"},
+    )
+    return {
+        "response_key": "core.identity.user.ask_name",
+        "pending_interaction": serialize_pending_interaction(pending),
+    }
+
+
+def _handle_greeting(state: CortexState) -> dict[str, Any]:
+    return {"response_key": "core.greeting"}
+
+
+def _handle_cancel(state: CortexState) -> dict[str, Any]:
+    return {"response_key": "ack.cancelled"}
+
+
+def _handle_meta_capabilities(state: CortexState) -> dict[str, Any]:
+    return {"response_text": summarize_capabilities(_locale_for_state(state))}
+
+
+def _handle_meta_gaps_list(state: CortexState) -> dict[str, Any]:
+    plan = CortexPlan(
+        plan_type=PlanType.QUERY_STATUS,
+        target=str(state.get("channel_target") or state.get("chat_id") or ""),
+        channels=[str(state.get("channel_type") or "telegram")],
+        payload={
+            "include": ["gaps_summary"],
+            "limit": 5,
+            "locale": _locale_for_state(state),
+        },
+    )
+    plans = list(state.get("plans") or [])
+    plans.append(plan.model_dump())
+    logger.info(
+        "cortex plans chat_id=%s plan_type=%s plan_id=%s",
+        state.get("chat_id"),
+        plan.plan_type,
+        plan.plan_id,
+    )
+    return {"plans": plans}
+
+
+def _handle_timed_signals_list(state: CortexState) -> dict[str, Any]:
+    plan = CortexPlan(
+        plan_type=PlanType.QUERY_STATUS,
+        target=str(state.get("channel_target") or state.get("chat_id") or ""),
+        channels=[str(state.get("channel_type") or "telegram")],
+        payload={
+            "include": ["timed_signals"],
+            "limit": 10,
+            "locale": _locale_for_state(state),
+        },
+    )
+    plans = list(state.get("plans") or [])
+    plans.append(plan.model_dump())
+    logger.info(
+        "cortex plans chat_id=%s plan_type=%s plan_id=%s",
+        state.get("chat_id"),
+        plan.plan_type,
+        plan.plan_id,
+    )
+    return {"plans": plans}
+
+
+def _handle_update_preferences(state: CortexState) -> dict[str, Any]:
+    updates = extract_preference_updates(state.get("last_user_message", ""))
+    if not updates:
+        return {"response_key": "preference.missing"}
+    channel_type = state.get("channel_type")
+    channel_id = state.get("channel_target") or state.get("chat_id")
+    if not channel_type or not channel_id:
+        return {"response_key": "preference.no_channel"}
+    plan = CortexPlan(
+        plan_type=PlanType.UPDATE_PREFERENCES,
+        payload={
+            "principal": {
+                "channel_type": str(channel_type),
+                "channel_id": str(channel_id),
+            },
+            "updates": updates,
+        },
+    )
+    plans = list(state.get("plans") or [])
+    _attach_planning_scaffold(
+        state,
+        intent="update_preferences",
+        draft_steps=[
+            "Apply the requested preference updates.",
+            "Confirm which preferences were updated.",
+        ],
+        acceptance_criteria=[
+            "All requested preferences are updated for the principal.",
+        ],
+        plans=plans,
+    )
+    plans.append(plan.model_dump())
+    logger.info(
+        "cortex plans chat_id=%s plan_type=%s plan_id=%s",
+        state.get("chat_id"),
+        plan.plan_type,
+        plan.plan_id,
+    )
+    return {
+        "plans": plans,
+        "response_key": "ack.preference_updated",
+        "response_vars": {"updates": updates},
+    }
+
+
+def _handle_lan_arm(state: CortexState) -> dict[str, Any]:
+    device_id = _extract_device_id(state.get("last_user_message", ""))
+    return _handle_lan_plan(state, PlanType.LAN_ARM, device_id)
+
+
+def _handle_lan_disarm(state: CortexState) -> dict[str, Any]:
+    device_id = _extract_device_id(state.get("last_user_message", ""))
+    return _handle_lan_plan(state, PlanType.LAN_DISARM, device_id)
+
+
+def _handle_lan_plan(
+    state: CortexState, plan_type: PlanType, device_id: str | None
+) -> dict[str, Any]:
+    plan = CortexPlan(
+        plan_type=plan_type,
+        target=str(state.get("channel_target") or state.get("chat_id") or ""),
+        channels=[str(state.get("channel_type") or "telegram")],
+        payload={
+            "device_id": device_id,
+            "locale": _locale_for_state(state),
+        },
+    )
+    plans = list(state.get("plans") or [])
+    plans.append(plan.model_dump())
+    logger.info(
+        "cortex plans chat_id=%s plan_type=%s plan_id=%s",
+        state.get("chat_id"),
+        plan.plan_type,
+        plan.plan_id,
+    )
+    return {"plans": plans}
+
+
+def _handle_pair_approve(state: CortexState) -> dict[str, Any]:
+    return _handle_pairing_decision(state, PlanType.PAIR_APPROVE)
+
+
+def _handle_pair_deny(state: CortexState) -> dict[str, Any]:
+    return _handle_pairing_decision(state, PlanType.PAIR_DENY)
+
+
+def _handle_pairing_decision(state: CortexState, plan_type: PlanType) -> dict[str, Any]:
+    pairing_id, otp = _extract_pairing_decision(state.get("last_user_message", ""))
+    if not pairing_id:
+        return {"response_key": "generic.unknown"}
+    plan = CortexPlan(
+        plan_type=plan_type,
+        target=str(state.get("channel_target") or state.get("chat_id") or ""),
+        channels=[str(state.get("channel_type") or "telegram")],
+        payload={
+            "pairing_id": pairing_id,
+            "otp": otp,
+            "locale": _locale_for_state(state),
+        },
+    )
+    plans = list(state.get("plans") or [])
+    plans.append(plan.model_dump())
+    logger.info(
+        "cortex plans chat_id=%s plan_type=%s plan_id=%s",
+        state.get("chat_id"),
+        plan.plan_type,
+        plan.plan_id,
+    )
+    return {"plans": plans}
+
+
+def _handle_noop(state: CortexState) -> dict[str, Any]:
+    _ = state
+    return {}
+
+
 def _route_after_intent(state: CortexState) -> str:
     if state.get("catalog_intent"):
         return "catalog"
-    if state.get("intent") == "update_preferences":
-        return "update_preferences"
     return "respond"
 
 

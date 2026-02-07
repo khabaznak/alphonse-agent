@@ -23,10 +23,15 @@ class IntentResult:
 
 
 def classify_intent(text: str, llm_client: object | None = None) -> IntentResult:
-    from alphonse.agent.cognition.intent_router import route_message
+    from alphonse.agent.cognition.intent_catalog import get_catalog_service
+    from alphonse.agent.cognition.intent_detector_llm import IntentDetectorLLM
 
-    routed = route_message(text, context={}, llm_client=llm_client)
-    return IntentResult(intent=routed.intent, confidence=routed.confidence)
+    service = get_catalog_service()
+    detector = IntentDetectorLLM(service)
+    detection = detector.detect(text, llm_client=llm_client)
+    if not detection:
+        return IntentResult(intent="unknown", confidence=0.0)
+    return IntentResult(intent=detection.intent_name, confidence=detection.confidence)
 
 
 def extract_reminder_text(text: str) -> str | None:

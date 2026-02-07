@@ -164,7 +164,12 @@ CREATE TABLE IF NOT EXISTS intent_specs (
   default_mode        TEXT NOT NULL,
   risk_level          TEXT NOT NULL,
   handler             TEXT NOT NULL,
-  enabled             INTEGER NOT NULL DEFAULT 1
+  enabled             INTEGER NOT NULL DEFAULT 1,
+  intent_version      TEXT NOT NULL,
+  origin              TEXT NOT NULL,
+  parent_intent       TEXT,
+  created_at          TEXT NOT NULL,
+  updated_at          TEXT NOT NULL
 ) STRICT;
 
 CREATE INDEX IF NOT EXISTS idx_intent_specs_enabled

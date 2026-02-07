@@ -1,6 +1,12 @@
 from __future__ import annotations
 
+from pathlib import Path
+
+import pytest
+
+from alphonse.agent.cognition.intent_catalog import reset_catalog_service
 from alphonse.agent.cortex.graph import invoke_cortex
+from alphonse.agent.nervous_system.migrate import apply_schema
 
 
 class StubLLM:
@@ -13,9 +19,15 @@ class StubLLM:
         return self._payload
 
 
-def test_unknown_routes_to_clarify_response() -> None:
+def test_unknown_routes_to_clarify_response(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    db_path = tmp_path / "nerve-db"
+    monkeypatch.setenv("NERVE_DB_PATH", str(db_path))
+    apply_schema(db_path)
+    reset_catalog_service()
     llm = StubLLM(
-        '{"category":"TASK_PLANE","intent_guess":null,"confidence":0.3,"needs_clarification":true}'
+        '{"intent_name":"unknown","confidence":0.3,"needs_clarification":true,"slot_guesses":{}}'
     )
     state = {
         "chat_id": "cli",

@@ -9,7 +9,7 @@ from enum import Enum
 from typing import Any
 
 from alphonse.agent.cognition.intent_lifecycle import LifecycleState, get_record
-from alphonse.agent.cognition.intent_registry import IntentCategory, RiskLevel
+from alphonse.agent.cognition.intent_types import IntentCategory, RiskLevel
 from alphonse.agent.nervous_system.paths import resolve_nervous_system_db_path
 
 logger = logging.getLogger(__name__)

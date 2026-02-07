@@ -1,45 +1,32 @@
 from __future__ import annotations
 
-import re
+from alphonse.agent.cognition.intent_catalog import (
+    get_catalog_service,
+    match_intent_by_examples,
+)
+from alphonse.agent.cognition.intent_types import IntentCategory
 
 
-_GREETING = [
-    r"\b(hi|hello|hey|hola|buenas|buenos dias|buenas tardes|buenas noches)\b",
-]
-_HELP = [r"\b(help|ayuda)\b"]
-_META = [
-    r"\b(what can you do|what else can you do|capabilities|que puedes hacer|qué puedes hacer|que sabes hacer|qué sabes hacer)\b",
-]
-_STATUS = [r"\b(status|estado)\b"]
-_CANCEL = [r"\b(cancel|stop|olvida|olvidalo|olvídalo|cancelar|parar|detener)\b"]
-_IDENTITY = [
-    r"\b(quien eres|quién eres|who are you|what is your name|como te llamas|cómo te llamas)\b",
-]
-_USER_IDENTITY = [
-    r"\b(quien soy yo|quién soy yo|como me llamo|cómo me llamo|what is my name|do you know my name)\b",
-]
-_RESUME = [
-    r"\b(continuar|continua|seguir|retomar|resume)\b",
-]
+_RESUME_KEYWORDS = {"continuar", "continua", "seguir", "retomar", "resume"}
 
 
 def detect_core_intent(text: str) -> str | None:
-    normalized = _normalize(text)
-    if _matches_any(normalized, _CANCEL):
-        return "cancel"
-    if _matches_any(normalized, _GREETING):
-        return "greeting"
-    if _matches_any(normalized, _HELP):
-        return "help"
-    if _matches_any(normalized, _META):
-        return "meta.capabilities"
-    if _matches_any(normalized, _STATUS):
-        return "get_status"
-    if _matches_any(normalized, _USER_IDENTITY):
-        return "identity.query_user_name"
-    if _matches_any(normalized, _IDENTITY):
-        return "identity_question"
-    return None
+    service = get_catalog_service()
+    intents = [
+        spec
+        for spec in service.load_enabled_intents()
+        if spec.category
+        in {
+            IntentCategory.CORE_CONVERSATIONAL.value,
+            IntentCategory.DEBUG_META.value,
+            IntentCategory.CONTROL_PLANE.value,
+        }
+    ]
+    if not intents:
+        return None
+    intents = sorted(intents, key=_core_intent_priority)
+    matched = match_intent_by_examples(text, intents)
+    return matched.intent_name if matched else None
 
 
 def is_core_conversational_utterance(text: str) -> bool:
@@ -47,12 +34,15 @@ def is_core_conversational_utterance(text: str) -> bool:
 
 
 def is_resume_utterance(text: str) -> bool:
-    return _matches_any(_normalize(text), _RESUME)
+    normalized = " ".join(str(text or "").strip().lower().split())
+    return any(keyword in normalized for keyword in _RESUME_KEYWORDS)
 
 
-def _matches_any(text: str, patterns: list[str]) -> bool:
-    return any(re.search(pattern, text, flags=re.IGNORECASE) for pattern in patterns)
-
-
-def _normalize(text: str) -> str:
-    return re.sub(r"\s+", " ", str(text or "").strip().lower())
+def _core_intent_priority(spec) -> int:
+    if spec.intent_name == "cancel":
+        return 0
+    if spec.intent_name == "help":
+        return 1
+    if spec.intent_name == "meta.capabilities":
+        return 2
+    return 10
