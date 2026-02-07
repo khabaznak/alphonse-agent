@@ -189,3 +189,51 @@ def test_mixed_language_acuerdame_routes_to_create(
     )
     assert result.plans
     assert result.plans[0].plan_type == PlanType.SCHEDULE_TIMED_SIGNAL
+
+
+def test_multi_action_remind_with_pronoun_object_uses_details_as_task(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _prepare_db(tmp_path, monkeypatch)
+    llm = FakeLLM(
+        """
+        {
+          "language": "en",
+          "social": {"is_greeting": false, "is_farewell": false, "is_thanks": false, "text": null},
+          "actions": [
+            {
+              "verb": "remind",
+              "object": "me",
+              "target": null,
+              "details": "to go down to get water",
+              "priority": "high"
+            },
+            {
+              "verb": "go",
+              "object": "water",
+              "target": null,
+              "details": "in 2 min",
+              "priority": "normal"
+            }
+          ],
+          "entities": ["water"],
+          "constraints": {"times": ["2 min"], "numbers": [], "locations": [], "questions": [], "commands": []},
+          "raw_intent_hint": "multi_action",
+          "confidence": "high"
+        }
+        """
+    )
+    state = {
+        "chat_id": "123",
+        "channel_type": "telegram",
+        "channel_target": "123",
+        "timezone": "UTC",
+        "locale": "en-US",
+    }
+    result = invoke_cortex(
+        state,
+        "Remind me to go down to get water in 2 min",
+        llm_client=llm,
+    )
+    assert result.plans
+    assert result.plans[0].plan_type == PlanType.SCHEDULE_TIMED_SIGNAL

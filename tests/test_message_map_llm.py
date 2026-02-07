@@ -41,3 +41,23 @@ def test_invalid_json_fallback_map() -> None:
     assert result.message_map.raw_intent_hint == "other"
     assert result.message_map.confidence == "low"
     assert result.message_map.social.is_greeting is True
+
+
+def test_nested_questions_and_commands_inside_constraints_are_supported() -> None:
+    llm = StubLLM(
+        """
+        {
+          "language":"en",
+          "social":{"is_greeting":false,"is_farewell":false,"is_thanks":false,"text":null},
+          "actions":[],
+          "entities":[],
+          "constraints":{"times":[],"numbers":[],"locations":[],"questions":["what can you do?"],"commands":["/approve"]},
+          "raw_intent_hint":"mixed",
+          "confidence":"medium"
+        }
+        """
+    )
+    result = dissect_message("what can you do", llm_client=llm)
+    assert result.parse_ok is True
+    assert result.message_map.questions == ["what can you do?"]
+    assert result.message_map.commands == ["/approve"]

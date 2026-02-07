@@ -447,10 +447,54 @@ def _build_slot_guesses_from_map(message_map: MessageMap) -> dict[str, Any]:
         guesses["trigger_geo"] = message_map.constraints.locations[0]
     if message_map.actions:
         first = message_map.actions[0]
-        reminder_text = first.object or first.details or first.target
+        reminder_text = _select_reminder_text_candidate(
+            first.object,
+            first.details,
+            first.target,
+            message_map.entities,
+        )
         if reminder_text:
             guesses["reminder_text"] = reminder_text
     return guesses
+
+
+def _select_reminder_text_candidate(
+    obj: str | None,
+    details: str | None,
+    target: str | None,
+    entities: list[str],
+) -> str | None:
+    candidates = [details, obj, target]
+    for candidate in candidates:
+        cleaned = str(candidate or "").strip()
+        if not cleaned:
+            continue
+        if _is_low_signal_reminder_candidate(cleaned):
+            continue
+        return cleaned
+    for entity in entities:
+        cleaned = str(entity or "").strip()
+        if not cleaned:
+            continue
+        if _is_low_signal_reminder_candidate(cleaned):
+            continue
+        return cleaned
+    return None
+
+
+def _is_low_signal_reminder_candidate(text: str) -> bool:
+    normalized = _normalize_for_intent_matching(text)
+    low_signal = {
+        "me",
+        "my",
+        "yo",
+        "mi",
+        "m",
+        "moi",
+        "tu",
+        "you",
+    }
+    return normalized in low_signal
 
 
 def _is_slot_machine_input(

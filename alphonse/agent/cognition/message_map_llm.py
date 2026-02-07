@@ -292,6 +292,13 @@ def _coerce_message_map(payload: dict[str, Any], *, text: str) -> MessageMap:
     if confidence not in {"low", "medium", "high"}:
         confidence = "low"
 
+    top_level_questions = _to_string_list(payload.get("questions"))
+    nested_questions = _to_string_list(constraints_raw.get("questions"))
+    questions = top_level_questions or nested_questions
+    top_level_commands = _to_string_list(payload.get("commands"))
+    nested_commands = _to_string_list(constraints_raw.get("commands"))
+    commands = top_level_commands or nested_commands
+
     return MessageMap(
         language=str(payload.get("language") or "unknown"),
         social=SocialFragment(
@@ -307,8 +314,8 @@ def _coerce_message_map(payload: dict[str, Any], *, text: str) -> MessageMap:
             numbers=_to_string_list(constraints_raw.get("numbers")),
             locations=_to_string_list(constraints_raw.get("locations")),
         ),
-        questions=_to_string_list(payload.get("questions")),
-        commands=_to_string_list(payload.get("commands")),
+        questions=questions,
+        commands=commands,
         raw_intent_hint=raw_hint,  # type: ignore[arg-type]
         confidence=confidence,  # type: ignore[arg-type]
     )
