@@ -7,6 +7,7 @@ from typing import Any
 
 from alphonse.agent.actions.base import Action
 from alphonse.agent.actions.models import ActionResult
+from alphonse.agent.io import get_io_registry
 from alphonse.agent.cognition.response_composer import ResponseComposer
 from alphonse.agent.cognition.response_spec import ResponseSpec
 from alphonse.agent.cognition.capability_gaps.triage import detect_language
@@ -49,13 +50,27 @@ class HandleIncomingMessageAction(Action):
     def execute(self, context: dict) -> ActionResult:
         signal = context.get("signal")
         payload = getattr(signal, "payload", {}) if signal else {}
-        text = str(payload.get("text", "")).strip()
         correlation_id = getattr(signal, "correlation_id", None) if signal else None
         if not correlation_id and isinstance(payload, dict):
             correlation_id = payload.get("correlation_id")
         correlation_id = str(correlation_id or uuid.uuid4())
 
-        incoming = _build_incoming_context(payload, signal, correlation_id)
+        normalized = _normalize_incoming_payload(payload, signal)
+        if not normalized:
+            logger.warning("HandleIncomingMessageAction missing normalized payload")
+            locale = settings.get_default_locale()
+            spec = ResponseSpec(kind="error", key="system.unavailable.catalog", locale=locale)
+            rendered = ResponseComposer().compose(spec)
+            incoming = IncomingContext(
+                channel_type="system",
+                address=None,
+                person_id=None,
+                correlation_id=correlation_id,
+                update_id=None,
+            )
+            return _message_result(rendered, incoming)
+        text = str(normalized.text or "").strip()
+        incoming = _build_incoming_context_from_normalized(normalized, correlation_id)
         logger.info(
             "HandleIncomingMessageAction start channel=%s person=%s text=%s",
             incoming.channel_type,
@@ -198,14 +213,14 @@ class HandleIncomingMessageAction(Action):
         return _noop_result(incoming)
 
 
-def _build_incoming_context(
-    payload: dict, signal: object | None, correlation_id: str
+def _build_incoming_context_from_normalized(
+    normalized: object, correlation_id: str
 ) -> IncomingContext:
-    origin = payload.get("origin") or getattr(signal, "source", None) or "system"
-    channel_type = str(origin)
-    address = _resolve_address(channel_type, payload)
-    person_id = _resolve_person_id(payload, channel_type, address)
-    update_id = payload.get("update_id") if isinstance(payload, dict) else None
+    channel_type = str(getattr(normalized, "channel_type", "") or "system")
+    address = _as_optional_str(getattr(normalized, "channel_target", None))
+    metadata = getattr(normalized, "metadata", {}) or {}
+    person_id = _resolve_person_id_from_normalized(channel_type, address, metadata)
+    update_id = metadata.get("update_id") if isinstance(metadata, dict) else None
     return IncomingContext(
         channel_type=channel_type,
         address=address,
@@ -215,23 +230,10 @@ def _build_incoming_context(
     )
 
 
-def _resolve_address(channel_type: str, payload: dict) -> str | None:
-    if channel_type == "telegram":
-        chat_id = payload.get("chat_id")
-        return str(chat_id) if chat_id is not None else None
-    if channel_type == "cli":
-        chat_id = payload.get("chat_id")
-        return str(chat_id) if chat_id is not None else "cli"
-    if channel_type == "api":
-        return "api"
-    target = payload.get("target")
-    return str(target) if target is not None else None
-
-
-def _resolve_person_id(
-    payload: dict, channel_type: str, address: str | None
+def _resolve_person_id_from_normalized(
+    channel_type: str, address: str | None, metadata: dict[str, Any]
 ) -> str | None:
-    person_id = payload.get("person_id")
+    person_id = metadata.get("person_id") if isinstance(metadata, dict) else None
     if person_id:
         return str(person_id)
     if channel_type and address:
@@ -616,3 +618,30 @@ def _build_llm_client():
         return build_ollama_client()
     except Exception:
         return None
+
+
+def _normalize_incoming_payload(payload: dict, signal: object | None) -> object | None:
+    if not isinstance(payload, dict):
+        return None
+    channel_type = payload.get("channel") or payload.get("origin")
+    if not channel_type and signal is not None:
+        channel_type = getattr(signal, "source", None)
+    if channel_type == "api" and payload.get("channel"):
+        channel_type = payload.get("channel")
+    if not channel_type:
+        return None
+    registry = get_io_registry()
+    adapter = registry.get_sense(str(channel_type))
+    if not adapter:
+        return None
+    try:
+        return adapter.normalize(payload)
+    except Exception:
+        logger.exception("Failed to normalize payload for channel=%s", channel_type)
+        return None
+
+
+def _as_optional_str(value: object | None) -> str | None:
+    if value is None:
+        return None
+    return str(value)

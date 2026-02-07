@@ -1,0 +1,92 @@
+from __future__ import annotations
+
+import logging
+import time
+from dataclasses import dataclass
+from typing import Any
+
+from alphonse.agent.io.contracts import (
+    NormalizedInboundMessage,
+    NormalizedOutboundMessage,
+)
+from alphonse.agent.io.adapters import SenseAdapter, ExtremityAdapter
+from alphonse.agent.extremities.interfaces.integrations.telegram.telegram_adapter import TelegramAdapter
+from alphonse.agent.extremities.telegram_config import build_telegram_adapter_config
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class TelegramSenseAdapter(SenseAdapter):
+    channel_type: str = "telegram"
+
+    def normalize(self, payload: dict[str, Any]) -> NormalizedInboundMessage:
+        text = str(payload.get("text", "")).strip()
+        chat_id = payload.get("chat_id")
+        user_id = _as_optional_str(payload.get("from_user"))
+        user_name = _as_optional_str(payload.get("from_user_name")) or user_id
+        timestamp = _as_float(payload.get("timestamp"), default=time.time())
+        correlation_id = _as_optional_str(payload.get("correlation_id"))
+
+        metadata = {
+            "message_id": payload.get("message_id"),
+            "update_id": payload.get("update_id"),
+            "raw": payload,
+        }
+
+        return NormalizedInboundMessage(
+            text=text,
+            channel_type=self.channel_type,
+            channel_target=_as_optional_str(chat_id),
+            user_id=user_id,
+            user_name=user_name,
+            timestamp=timestamp,
+            correlation_id=correlation_id,
+            metadata=metadata,
+        )
+
+
+class TelegramExtremityAdapter(ExtremityAdapter):
+    channel_type: str = "telegram"
+
+    def __init__(self) -> None:
+        config = build_telegram_adapter_config()
+        if not config:
+            self._adapter: TelegramAdapter | None = None
+            logger.warning("TelegramExtremityAdapter disabled: missing bot token")
+        else:
+            self._adapter = TelegramAdapter(config)
+
+    def deliver(self, message: NormalizedOutboundMessage) -> None:
+        if not self._adapter:
+            logger.warning("TelegramExtremityAdapter missing adapter; message skipped")
+            return
+        if not message.channel_target:
+            logger.warning("TelegramExtremityAdapter missing channel_target")
+            return
+        self._adapter.handle_action(
+            {
+                "type": "send_message",
+                "payload": {
+                    "chat_id": message.channel_target,
+                    "text": message.message,
+                    "correlation_id": message.correlation_id,
+                },
+                "target_integration_id": "telegram",
+            }
+        )
+
+
+def _as_optional_str(value: object | None) -> str | None:
+    if value is None:
+        return None
+    return str(value)
+
+
+def _as_float(value: object | None, *, default: float) -> float:
+    if value is None:
+        return default
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default

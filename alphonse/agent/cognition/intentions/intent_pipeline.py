@@ -8,7 +8,6 @@ from alphonse.agent.actions.registry import ActionRegistry
 from alphonse.agent.actions.models import ActionResult
 from alphonse.agent.actions.system_reminder import SystemReminderAction
 from alphonse.agent.actions.handle_incoming_message import HandleIncomingMessageAction
-from alphonse.agent.actions.handle_message import HandleMessageAction
 from alphonse.agent.actions.handle_status import HandleStatusAction
 from alphonse.agent.actions.handle_timed_signals import HandleTimedSignalsAction
 from alphonse.agent.actions.handle_action_failure import HandleActionFailure
@@ -21,6 +20,7 @@ from alphonse.agent.extremities.registry import ExtremityRegistry
 from alphonse.agent.nervous_system.senses.bus import Bus, Signal
 from alphonse.agent.nervous_system.trace_store import write_trace
 from alphonse.agent.cognition.narration.coordinator import build_default_coordinator, DeliveryCoordinator
+from alphonse.agent.io import get_io_registry, NormalizedOutboundMessage
 
 
 @dataclass
@@ -42,9 +42,12 @@ class IntentPipeline:
             if result.intention_key == "MESSAGE_READY":
                 delivery = self.coordinator.deliver(result, context)
                 if delivery:
-                    self.extremities.dispatch(delivery, None)
+                    self._deliver_normalized(delivery, result)
             else:
-                self.extremities.dispatch(result, None)
+                if result.intention_key.startswith("NOTIFY_"):
+                    self._deliver_notify(result)
+                else:
+                    self.extremities.dispatch(result, None)
             self._emit_outcome(result, context, success=True, error=None)
         except Exception as exc:
             self._emit_outcome(None, context, success=False, error=exc)
@@ -62,6 +65,26 @@ class IntentPipeline:
             _emit_outcome_signal(self.bus, payload, success)
         _emit_trace(context, success, error)
 
+    def _deliver_normalized(self, delivery: ActionResult, original: ActionResult) -> None:
+        normalized = _build_normalized_outbound(delivery, original)
+        if not normalized:
+            return
+        registry = get_io_registry()
+        adapter = registry.get_extremity(normalized.channel_type)
+        if not adapter:
+            return
+        adapter.deliver(normalized)
+
+    def _deliver_notify(self, result: ActionResult) -> None:
+        normalized = _build_normalized_from_notify(result)
+        if not normalized:
+            return
+        registry = get_io_registry()
+        adapter = registry.get_extremity(normalized.channel_type)
+        if not adapter:
+            return
+        adapter.deliver(normalized)
+
 
 def build_default_pipeline() -> IntentPipeline:
     raise RuntimeError("build_default_pipeline requires a Bus instance")
@@ -71,7 +94,6 @@ def build_default_pipeline_with_bus(bus: Bus) -> IntentPipeline:
     actions = ActionRegistry()
     actions.register("system_reminder", lambda _: SystemReminderAction())
     actions.register("handle_incoming_message", lambda _: HandleIncomingMessageAction())
-    actions.register("handle_message", lambda _: HandleMessageAction())
     actions.register("handle_status", lambda _: HandleStatusAction())
     actions.register("handle_timed_signals", lambda _: HandleTimedSignalsAction())
     actions.register("handle_action_failure", lambda _: HandleActionFailure())
@@ -86,6 +108,83 @@ def build_default_pipeline_with_bus(bus: Bus) -> IntentPipeline:
         extremities=extremities,
         bus=bus,
         coordinator=build_default_coordinator(),
+    )
+
+
+def _channel_from_intention(intention_key: str) -> str | None:
+    mapping = {
+        "NOTIFY_TELEGRAM": "telegram",
+        "NOTIFY_CLI": "cli",
+        "NOTIFY_API": "api",
+    }
+    return mapping.get(intention_key)
+
+
+def _default_target_for_channel(channel_type: str) -> str | None:
+    if channel_type == "cli":
+        return "cli"
+    if channel_type == "api":
+        return "api"
+    return None
+
+
+def _audience_from_payload(payload: dict) -> dict[str, str]:
+    audience = payload.get("audience")
+    if isinstance(audience, dict):
+        kind = audience.get("kind")
+        ident = audience.get("id")
+        if isinstance(kind, str) and isinstance(ident, str):
+            return {"kind": kind, "id": ident}
+    return {"kind": "system", "id": "system"}
+
+
+def _build_normalized_outbound(
+    delivery: ActionResult, original: ActionResult
+) -> NormalizedOutboundMessage | None:
+    channel_type = _channel_from_intention(delivery.intention_key)
+    if not channel_type:
+        return None
+    payload = delivery.payload or {}
+    message = payload.get("message")
+    if not message:
+        return None
+    channel_target = (
+        str(payload.get("chat_id"))
+        if channel_type == "telegram" and payload.get("chat_id") is not None
+        else _default_target_for_channel(channel_type)
+    )
+    return NormalizedOutboundMessage(
+        message=str(message),
+        channel_type=channel_type,
+        channel_target=channel_target,
+        audience=_audience_from_payload(original.payload or {}),
+        correlation_id=str(payload.get("correlation_id") or original.payload.get("correlation_id") or ""),
+        metadata={"data": payload.get("data")},
+    )
+
+
+def _build_normalized_from_notify(
+    result: ActionResult,
+) -> NormalizedOutboundMessage | None:
+    channel_type = _channel_from_intention(result.intention_key)
+    if not channel_type:
+        return None
+    payload = result.payload or {}
+    message = payload.get("message")
+    if not message:
+        return None
+    channel_target = (
+        str(payload.get("chat_id"))
+        if channel_type == "telegram" and payload.get("chat_id") is not None
+        else _default_target_for_channel(channel_type)
+    )
+    return NormalizedOutboundMessage(
+        message=str(message),
+        channel_type=channel_type,
+        channel_target=channel_target,
+        audience=_audience_from_payload(payload),
+        correlation_id=str(payload.get("correlation_id") or ""),
+        metadata={"data": payload.get("data")},
     )
 
 

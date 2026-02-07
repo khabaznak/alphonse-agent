@@ -24,6 +24,7 @@ from alphonse.agent.nervous_system.migrate import apply_schema
 from alphonse.agent.nervous_system.seed import apply_seed
 from alphonse.agent.cognition.brain_health import BrainUnavailable, require_brain_health
 from alphonse.agent.core.settings_store import init_db as init_settings_db
+from alphonse.agent.io import get_io_registry
 
 
 def load_env() -> None:
@@ -67,6 +68,13 @@ def main() -> None:
 
     register_senses(str(db_path))
     register_signals(str(db_path))
+
+    io_registry = get_io_registry()
+    logging.info(
+        "IO registry ready senses=%s extremities=%s",
+        ",".join(sorted(io_registry.senses.keys())),
+        ",".join(sorted(io_registry.extremities.keys())),
+    )
 
     sense_manager = SenseManager(db_path=str(db_path), bus=bus)
     sense_manager.start()

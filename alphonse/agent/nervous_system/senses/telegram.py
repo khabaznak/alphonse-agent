@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import logging
 import os
-import time
 from dataclasses import dataclass
 
 from alphonse.agent.extremities.interfaces.integrations.telegram.telegram_adapter import TelegramAdapter
+from alphonse.agent.io import TelegramSenseAdapter
 from alphonse.agent.nervous_system.senses.base import Sense, SignalSpec
 from alphonse.agent.nervous_system.senses.bus import Bus, Signal
 
@@ -32,6 +32,7 @@ class TelegramSense(Sense):
         self._adapter: TelegramAdapter | None = None
         self._running = False
         self._bus: Bus | None = None
+        self._sense_adapter = TelegramSenseAdapter()
 
     def start(self, bus: Bus) -> None:
         if self._running:
@@ -73,21 +74,22 @@ class TelegramSense(Sense):
             payload.get("from_user"),
             _snippet(str(payload.get("text") or "")),
         )
+        normalized = self._sense_adapter.normalize(payload)
         self._bus.emit(
             Signal(
                 type="telegram.message_received",
                 payload={
-                    "text": payload.get("text"),
-                    "chat_id": payload.get("chat_id"),
-                    "from_user": payload.get("from_user"),
-                    "from_user_name": payload.get("from_user_name"),
-                    "message_id": payload.get("message_id"),
-                    "update_id": payload.get("update_id"),
-                    "origin": "telegram",
-                    "timestamp": time.time(),
+                    "text": normalized.text,
+                    "channel": normalized.channel_type,
+                    "target": normalized.channel_target,
+                    "user_id": normalized.user_id,
+                    "user_name": normalized.user_name,
+                    "timestamp": normalized.timestamp,
+                    "correlation_id": normalized.correlation_id,
+                    "metadata": normalized.metadata,
                 },
                 source="telegram",
-                correlation_id=payload.get("correlation_id"),
+                correlation_id=normalized.correlation_id,
             )
         )
         logger.info(

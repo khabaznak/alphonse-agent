@@ -23,7 +23,7 @@ behavior, and integrations are the concrete transport adapters they use.
 alphonse/
   extremities/
     telegram/
-      inbound.py        # TelegramExtremity
+      inbound.py        # (removed) legacy Telegram extremity
       outbound.py       # TelegramNotificationExtremity
       adapter.py        # TelegramAdapter
       config.py         # shared Telegram config

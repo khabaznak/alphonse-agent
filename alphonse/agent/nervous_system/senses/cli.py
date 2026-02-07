@@ -6,6 +6,7 @@ import time
 
 from alphonse.agent.nervous_system.senses.base import Sense, SignalSpec
 from alphonse.agent.nervous_system.senses.bus import Bus, Signal
+from alphonse.agent.io import CliSenseAdapter
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +24,7 @@ class CliSense(Sense):
         self._thread: threading.Thread | None = None
         self._stop_event = threading.Event()
         self._bus: Bus | None = None
+        self._sense_adapter = CliSenseAdapter()
 
     def start(self, bus: Bus) -> None:
         if self._thread and self._thread.is_alive():
@@ -50,15 +52,28 @@ class CliSense(Sense):
                 continue
             if not self._bus:
                 continue
+            normalized = self._sense_adapter.normalize(
+                {
+                    "text": text,
+                    "origin": "cli",
+                    "user_name": "Alex",
+                    "timestamp": time.time(),
+                }
+            )
             self._bus.emit(
                 Signal(
                     type="cli.message_received",
                     payload={
-                        "text": text,
-                        "origin": "cli",
-                        "user_name": "Alex",
-                        "timestamp": time.time(),
+                        "text": normalized.text,
+                        "channel": normalized.channel_type,
+                        "target": normalized.channel_target,
+                        "user_id": normalized.user_id,
+                        "user_name": normalized.user_name,
+                        "timestamp": normalized.timestamp,
+                        "correlation_id": normalized.correlation_id,
+                        "metadata": normalized.metadata,
                     },
                     source="cli",
+                    correlation_id=normalized.correlation_id,
                 )
             )

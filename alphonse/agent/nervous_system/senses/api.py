@@ -5,6 +5,7 @@ import time
 import uuid
 from dataclasses import dataclass
 
+from alphonse.agent.io import get_io_registry
 from alphonse.agent.nervous_system.senses.base import Sense, SignalSpec
 from alphonse.agent.nervous_system.senses.bus import Bus, Signal
 
@@ -35,16 +36,28 @@ class ApiSense(Sense):
 
     def emit(self, bus: Bus, api_signal: ApiSignal) -> None:
         _assert_api_token(api_signal.payload)
+        registry = get_io_registry()
+        channel = api_signal.payload.get("channel") or api_signal.payload.get("origin") or "webui"
+        adapter = registry.get_sense(str(channel))
+        if not adapter:
+            raise ValueError(f"No sense adapter for channel={channel}")
+        normalized = adapter.normalize({**api_signal.payload, "channel": channel})
         bus.emit(
             Signal(
                 type=api_signal.type,
                 payload={
-                    **api_signal.payload,
+                    "text": normalized.text,
+                    "channel": normalized.channel_type,
+                    "target": normalized.channel_target,
+                    "user_id": normalized.user_id,
+                    "user_name": normalized.user_name,
+                    "timestamp": normalized.timestamp,
+                    "correlation_id": normalized.correlation_id,
+                    "metadata": normalized.metadata,
                     "origin": "api",
-                    "timestamp": time.time(),
                 },
                 source="api",
-                correlation_id=api_signal.correlation_id,
+                correlation_id=normalized.correlation_id or api_signal.correlation_id,
             )
         )
 
