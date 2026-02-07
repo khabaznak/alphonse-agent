@@ -10,6 +10,7 @@ from alphonse.agent.cognition.prompt_store import (
     SqlitePromptStore,
 )
 from alphonse.agent.cognition.response_spec import ResponseSpec
+from alphonse.agent.cognition.safe_fallbacks import get_safe_fallback
 
 
 class ResponseComposer:
@@ -55,7 +56,5 @@ def _is_sensitive_key(key: str) -> bool:
 
 
 def _safe_fallback(spec: ResponseSpec, variables: dict[str, Any]) -> str:
-    fallback = render_message(spec.key, spec.locale or "en-US", variables)
-    if fallback and "remind" not in fallback.lower():
-        return fallback
-    return "I can't do that right now."
+    _ = variables
+    return get_safe_fallback(spec.key, spec.locale)

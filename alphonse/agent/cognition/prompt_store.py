@@ -98,6 +98,39 @@ class SqlitePromptStore:
             },
         )
 
+    def is_available(self) -> bool:
+        try:
+            with sqlite3.connect(self._db_path) as conn:
+                row = conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name='prompt_templates'"
+                ).fetchone()
+                if not row:
+                    return False
+                columns = {
+                    col[1] for col in conn.execute("PRAGMA table_info(prompt_templates)")
+                }
+                versions = conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name='prompt_versions'"
+                ).fetchone()
+        except sqlite3.Error:
+            return False
+        required = {
+            "id",
+            "key",
+            "locale",
+            "address_style",
+            "tone",
+            "channel",
+            "variant",
+            "policy_tier",
+            "template",
+            "enabled",
+            "priority",
+            "created_at",
+            "updated_at",
+        }
+        return bool(versions) and required.issubset(columns)
+
     def upsert_template(
         self,
         *,

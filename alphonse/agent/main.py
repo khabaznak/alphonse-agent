@@ -22,6 +22,7 @@ from alphonse.agent.relay.client import build_relay_client_from_env
 from alphonse.agent.nervous_system.paths import resolve_nervous_system_db_path
 from alphonse.agent.nervous_system.migrate import apply_schema
 from alphonse.agent.nervous_system.seed import apply_seed
+from alphonse.agent.cognition.brain_health import BrainUnavailable, require_brain_health
 from alphonse.agent.core.settings_store import init_db as init_settings_db
 
 
@@ -53,6 +54,11 @@ def main() -> None:
 
     apply_schema(db_path)
     apply_seed(db_path)
+    try:
+        require_brain_health(db_path)
+    except BrainUnavailable as exc:
+        logging.critical("Brain health check failed. Shutting down gracefully: %s", exc)
+        return
 
     # Signal bus is in-memory transport only.
     bus = Bus()

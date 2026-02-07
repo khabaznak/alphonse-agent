@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from alphonse.agent.cognition.prompt_store import (
+    NullPromptStore,
     PromptContext,
     SqlitePromptStore,
     seed_default_templates,
@@ -188,3 +189,23 @@ def test_seed_includes_executor_response_keys(
             PromptContext(locale="es-MX", address_style="tu", tone="friendly"),
         )
         assert match is not None, key
+
+
+def test_sensitive_response_uses_safe_fallback_when_prompt_missing() -> None:
+    composer = ResponseComposer(prompt_store=NullPromptStore())
+    spec = ResponseSpec(
+        kind="policy_block",
+        key="policy.reminder.restricted",
+        locale="es-MX",
+    )
+    assert composer.compose(spec) == "No estoy autorizado para programar ese recordatorio."
+
+
+def test_unknown_sensitive_key_uses_default_safe_fallback() -> None:
+    composer = ResponseComposer(prompt_store=NullPromptStore())
+    spec = ResponseSpec(
+        kind="policy_block",
+        key="policy.unknown",
+        locale="en-US",
+    )
+    assert composer.compose(spec) == "I can't do that right now."
