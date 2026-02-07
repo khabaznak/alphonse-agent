@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import sqlite3
 from dataclasses import dataclass, field
 from typing import Any
@@ -9,6 +10,10 @@ from typing import Any
 from alphonse.agent.nervous_system.paths import resolve_nervous_system_db_path
 
 logger = logging.getLogger(__name__)
+
+
+class CatalogUnavailable(RuntimeError):
+    pass
 
 
 @dataclass(frozen=True)
@@ -42,19 +47,62 @@ class IntentSpec:
 class IntentCatalogStore:
     def __init__(self, db_path: str | None = None) -> None:
         self._db_path = db_path or str(resolve_nervous_system_db_path())
+        self.available = True
+
+    def is_available(self) -> bool:
+        try:
+            with sqlite3.connect(self._db_path) as conn:
+                row = conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name='intent_specs'"
+                ).fetchone()
+            return row is not None
+        except sqlite3.Error:
+            return False
 
     def list_enabled(self) -> list[IntentSpec]:
+        if not self.is_available():
+            self.available = False
+            logger.error(
+                "intent catalog unavailable db_path=%s error=missing intent_specs table",
+                self._db_path,
+            )
+            if _is_dev():
+                raise CatalogUnavailable(
+                    "intent_specs missing. Run apply_schema() or migrate nerve-db."
+                )
+            return []
         try:
             with sqlite3.connect(self._db_path) as conn:
                 conn.row_factory = sqlite3.Row
                 rows = conn.execute(
                     "SELECT * FROM intent_specs WHERE enabled = 1",
                 ).fetchall()
-        except sqlite3.OperationalError:
-            return []
+        except sqlite3.OperationalError as exc:
+            if _is_schema_error(exc):
+                self.available = False
+                logger.error(
+                    "intent catalog unavailable db_path=%s error=%s",
+                    self._db_path,
+                    exc,
+                )
+                if _is_dev():
+                    raise CatalogUnavailable(str(exc)) from exc
+                return []
+            raise
         return [self._row_to_spec(row) for row in rows]
 
     def get(self, intent_name: str) -> IntentSpec | None:
+        if not self.is_available():
+            self.available = False
+            logger.error(
+                "intent catalog unavailable db_path=%s error=missing intent_specs table",
+                self._db_path,
+            )
+            if _is_dev():
+                raise CatalogUnavailable(
+                    "intent_specs missing. Run apply_schema() or migrate nerve-db."
+                )
+            return None
         try:
             with sqlite3.connect(self._db_path) as conn:
                 conn.row_factory = sqlite3.Row
@@ -62,8 +110,18 @@ class IntentCatalogStore:
                     "SELECT * FROM intent_specs WHERE intent_name = ?",
                     (intent_name,),
                 ).fetchone()
-        except sqlite3.OperationalError:
-            return None
+        except sqlite3.OperationalError as exc:
+            if _is_schema_error(exc):
+                self.available = False
+                logger.error(
+                    "intent catalog unavailable db_path=%s error=%s",
+                    self._db_path,
+                    exc,
+                )
+                if _is_dev():
+                    raise CatalogUnavailable(str(exc)) from exc
+                return None
+            raise
         return self._row_to_spec(row) if row else None
 
     def upsert(self, spec: IntentSpec) -> None:
@@ -120,6 +178,54 @@ class IntentCatalogStore:
 def seed_default_intents(db_path: str | None = None) -> None:
     store = IntentCatalogStore(db_path=db_path)
     intents = [
+        IntentSpec(
+            intent_name="greeting",
+            category="core_conversational",
+            description="Greet the user.",
+            examples=["Hi", "Hello", "Hola", "Buenas tardes"],
+            required_slots=[],
+            optional_slots=[],
+            default_mode="aventurizacion",
+            risk_level="low",
+            handler="greeting",
+            enabled=True,
+        ),
+        IntentSpec(
+            intent_name="help",
+            category="core_conversational",
+            description="Explain what Alphonse can do.",
+            examples=["help", "ayuda", "what can you do"],
+            required_slots=[],
+            optional_slots=[],
+            default_mode="aventurizacion",
+            risk_level="low",
+            handler="help",
+            enabled=True,
+        ),
+        IntentSpec(
+            intent_name="get_status",
+            category="debug_meta",
+            description="Report system status.",
+            examples=["status", "estado", "are you online"],
+            required_slots=[],
+            optional_slots=[],
+            default_mode="aventurizacion",
+            risk_level="low",
+            handler="get_status",
+            enabled=True,
+        ),
+        IntentSpec(
+            intent_name="identity_question",
+            category="core_conversational",
+            description="Tell the user who the assistant is.",
+            examples=["who are you", "quién eres", "cómo te llamas"],
+            required_slots=[],
+            optional_slots=[],
+            default_mode="aventurizacion",
+            risk_level="low",
+            handler="identity",
+            enabled=True,
+        ),
         IntentSpec(
             intent_name="timed_signals.create",
             category="task_plane",
@@ -254,3 +360,15 @@ def _loads_slots(raw: str | None) -> list[SlotSpec]:
             )
         )
     return slots
+
+
+def _is_schema_error(exc: sqlite3.OperationalError) -> bool:
+    message = str(exc).lower()
+    return "no such table" in message or "no such column" in message
+
+
+def _is_dev() -> bool:
+    env = os.getenv("ALPHONSE_ENV", "").lower()
+    if env in {"dev", "development"}:
+        return True
+    return os.getenv("ALPHONSE_DEV") in {"1", "true", "yes"}

@@ -25,11 +25,17 @@ class IntentDetectorLLM:
 
     def detect(self, text: str, llm_client: object | None) -> IntentDetection | None:
         fast = _deterministic_hint(text)
+        if not self._catalog.available:
+            logger.warning("intent catalog unavailable; skipping LLM detection")
+            return None
         if not llm_client:
             if fast:
                 return IntentDetection(intent_name=fast, confidence=0.6, slot_guesses={}, needs_clarification=True)
             return None
         enabled = self._catalog.list_enabled()
+        if not self._catalog.available:
+            logger.warning("intent catalog unavailable after list; skipping LLM detection")
+            return None
         if not enabled:
             return None
         prompt = _build_prompt(enabled)

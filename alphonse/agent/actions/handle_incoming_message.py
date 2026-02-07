@@ -359,6 +359,13 @@ def _build_cortex_state(
     correlation_id: str,
     payload: dict[str, Any],
 ) -> dict[str, Any]:
+    try:
+        from alphonse.agent.nervous_system.migrate import apply_schema
+        from alphonse.agent.nervous_system.paths import resolve_nervous_system_db_path
+
+        apply_schema(resolve_nervous_system_db_path())
+    except Exception:
+        pass
     principal_id = None
     effective_locale = settings.get_default_locale()
     effective_tone = settings.get_tone()

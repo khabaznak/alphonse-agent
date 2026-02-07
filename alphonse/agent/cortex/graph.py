@@ -251,6 +251,8 @@ def _detect_catalog_intent(
             "catalog_slot_guesses": {},
         }
     catalog = IntentCatalogStore()
+    if not catalog.is_available():
+        return None
     detector = IntentDetectorLLM(catalog)
     detection = detector.detect(state.get("last_user_message", ""), llm_client)
     if not detection or detection.intent_name == "unknown":
@@ -282,7 +284,11 @@ def _catalog_slot_node(state: CortexState) -> dict[str, Any]:
     if not intent_name:
         return {}
     catalog = IntentCatalogStore()
+    if not catalog.available:
+        return {"response_key": "help"}
     spec = catalog.get(str(intent_name))
+    if not catalog.available:
+        return {"response_key": "help"}
     if not spec:
         return {}
     registry = build_default_registry()
