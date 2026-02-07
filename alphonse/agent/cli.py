@@ -201,6 +201,10 @@ def build_parser() -> argparse.ArgumentParser:
     catalog_sub.add_parser("seed", help="Seed factory intents into the catalog")
     catalog_sub.add_parser("validate", help="Validate catalog entries")
     catalog_sub.add_parser("stats", help="Show catalog diagnostics")
+    catalog_prompt = catalog_sub.add_parser("prompt", help="Render intent detector prompt")
+    catalog_prompt.add_argument("--text", required=True, help="User message to render")
+    catalog_template = catalog_sub.add_parser("template", help="Show prompt template by key")
+    catalog_template.add_argument("key", help="Prompt template key")
 
     return parser
 
@@ -538,6 +542,38 @@ def _command_catalog(args: argparse.Namespace) -> None:
             print("- categories:")
             for key, value in sorted(diag.categories.items()):
                 print(f"  - {key}: {value}")
+        return
+
+    if args.catalog_command == "prompt":
+        from alphonse.agent.cognition.intent_detector_llm import build_detector_prompt
+
+        service = get_catalog_service()
+        prompt = build_detector_prompt(args.text, service)
+        if prompt is None:
+            print("No enabled intents; prompt not available.")
+            return
+        print(prompt)
+        return
+
+    if args.catalog_command == "template":
+        from alphonse.agent.cognition.prompt_store import SqlitePromptStore, PromptContext
+
+        store = SqlitePromptStore()
+        match = store.get_template(
+            args.key,
+            PromptContext(
+                locale="any",
+                address_style="any",
+                tone="any",
+                channel="any",
+                variant="default",
+                policy_tier="safe",
+            ),
+        )
+        if not match:
+            print(f"Template not found: {args.key}")
+            return
+        print(match.template)
         return
 
 

@@ -59,3 +59,16 @@ def test_enabled_intent_matches_examples(tmp_path: Path) -> None:
     result = detector.detect("EnabledExample", llm_client=None)
     assert result is not None
     assert result.intent_name == "custom.enabled"
+
+
+class ExplodingLLM:
+    def complete(self, system_prompt: str, user_prompt: str) -> str:  # type: ignore[no-untyped-def]
+        raise AssertionError("LLM should not be called for fast path")
+
+
+def test_fast_path_skips_llm(tmp_path: Path) -> None:
+    service = _setup_db(tmp_path)
+    detector = IntentDetectorLLM(service)
+    result = detector.detect("Hi Alphonse", llm_client=ExplodingLLM())
+    assert result is not None
+    assert result.intent_name == "greeting"

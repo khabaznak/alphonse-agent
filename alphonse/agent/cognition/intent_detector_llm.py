@@ -38,10 +38,22 @@ class IntentDetectorLLM:
         if not self._catalog.store.available:
             logger.warning("intent catalog unavailable; skipping LLM detection")
             return None
-        fast = _deterministic_hint(text, enabled)
+        fast_spec = _deterministic_hint(text, enabled)
+        if fast_spec and fast_spec.category != "task_plane":
+            return IntentDetection(
+                intent_name=fast_spec.intent_name,
+                confidence=0.9,
+                slot_guesses={},
+                needs_clarification=False,
+            )
         if not llm_client:
-            if fast:
-                return IntentDetection(intent_name=fast, confidence=0.6, slot_guesses={}, needs_clarification=True)
+            if fast_spec:
+                return IntentDetection(
+                    intent_name=fast_spec.intent_name,
+                    confidence=0.6,
+                    slot_guesses={},
+                    needs_clarification=True,
+                )
             return None
         if not enabled:
             return None
@@ -51,13 +63,14 @@ class IntentDetectorLLM:
             user_message=text,
             locale=None,
         )
+        logger.info("intent detector prompt:\n%s", prompt)
         try:
             raw = llm_client.complete(system_prompt=prompt, user_prompt=text)
         except Exception as exc:
             logger.warning("intent detector LLM failed: %s", exc)
-            if fast:
+            if fast_spec:
                 return IntentDetection(
-                    intent_name=fast,
+                    intent_name=fast_spec.intent_name,
                     confidence=0.6,
                     slot_guesses={},
                     needs_clarification=True,
@@ -65,13 +78,20 @@ class IntentDetectorLLM:
             return None
         data = _parse_payload(str(raw))
         if not data:
+            if fast_spec:
+                return IntentDetection(
+                    intent_name=fast_spec.intent_name,
+                    confidence=0.6,
+                    slot_guesses={},
+                    needs_clarification=True,
+                )
             return None
         intent_name = str(data.get("intent_name") or "unknown")
         enabled_names = {spec.intent_name for spec in enabled}
         if intent_name != "unknown" and intent_name not in enabled_names:
             intent_name = "unknown"
-        if intent_name == "unknown" and fast:
-            intent_name = fast
+        if intent_name == "unknown" and fast_spec:
+            intent_name = fast_spec.intent_name
         return IntentDetection(
             intent_name=intent_name,
             confidence=float(data.get("confidence") or 0.0),
@@ -104,6 +124,24 @@ def _build_prompt(
             "user_message": user_message,
             "now": datetime.now(timezone.utc).isoformat(),
         },
+    )
+
+
+def build_detector_prompt(
+    text: str,
+    catalog: IntentCatalogService,
+    *,
+    prompt_store: SqlitePromptStore | None = None,
+) -> str | None:
+    enabled = catalog.load_enabled_intents()
+    if not enabled:
+        return None
+    store = prompt_store or SqlitePromptStore()
+    return _build_prompt(
+        enabled,
+        prompt_store=store,
+        user_message=text,
+        locale=None,
     )
 
 
@@ -164,6 +202,5 @@ def _parse_payload(raw: str) -> dict[str, Any] | None:
     return parsed if isinstance(parsed, dict) else None
 
 
-def _deterministic_hint(text: str, intents: list[IntentSpec]) -> str | None:
-    matched = match_intent_by_examples(text, intents)
-    return matched.intent_name if matched else None
+def _deterministic_hint(text: str, intents: list[IntentSpec]) -> IntentSpec | None:
+    return match_intent_by_examples(text, intents)
