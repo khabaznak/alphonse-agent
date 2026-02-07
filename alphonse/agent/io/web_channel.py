@@ -38,8 +38,19 @@ class WebExtremityAdapter(ExtremityAdapter):
     channel_type: str = "webui"
 
     def deliver(self, message: NormalizedOutboundMessage) -> None:
+        from alphonse.infrastructure.api_gateway import gateway
+
+        # API/web UI currently use the API exchange for request-response delivery.
+        if message.correlation_id and gateway.exchange:
+            gateway.exchange.publish(
+                str(message.correlation_id),
+                {
+                    "message": message.message,
+                    "data": (message.metadata or {}).get("data"),
+                },
+            )
         logger.info(
-            "WebExtremityAdapter deliver noop channel_target=%s correlation_id=%s",
+            "WebExtremityAdapter delivered target=%s correlation_id=%s",
             message.channel_target,
             message.correlation_id,
         )

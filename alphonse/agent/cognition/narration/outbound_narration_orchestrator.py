@@ -17,6 +17,7 @@ from alphonse.agent.cognition.narration.policies import (
 from alphonse.agent.cognition.skills.narration.renderer import render_message
 from alphonse.agent.cognition.skills.narration.skill import NarrationSkill
 from alphonse.agent.identity import store as identity_store
+from alphonse.agent.io import NormalizedOutboundMessage
 
 logger = logging.getLogger(__name__)
 
@@ -26,34 +27,37 @@ class DeliveryCoordinator:
     stack: PolicyStack
     skill: NarrationSkill
 
-    def deliver(self, result: ActionResult, context: dict) -> ActionResult | None:
+    def deliver(self, result: ActionResult, context: dict) -> NormalizedOutboundMessage | None:
         payload = result.payload
         message = payload.get("message")
         if not message:
             return None
 
         direct_reply = payload.get("direct_reply")
-        if isinstance(direct_reply, dict) and direct_reply.get("channel_type") == "telegram":
+        if isinstance(direct_reply, dict):
+            channel_type = str(direct_reply.get("channel_type") or "")
             target = direct_reply.get("target")
             text = direct_reply.get("text")
             correlation_id = direct_reply.get("correlation_id")
             if not target:
-                logger.error("DirectReply missing target for telegram")
-                raise ValueError("DirectReply requires target for telegram")
+                logger.error("DirectReply missing target for channel=%s", channel_type or "unknown")
+                raise ValueError("DirectReply requires target")
             if not text:
-                logger.error("DirectReply missing text for telegram")
-                raise ValueError("DirectReply requires text for telegram")
+                logger.error("DirectReply missing text for channel=%s", channel_type or "unknown")
+                raise ValueError("DirectReply requires text")
             logger.info(
-                "telegram send attempt chat_id=%s text_len=%s correlation_id=%s endpoint=sendMessage",
+                "direct reply send attempt channel=%s target=%s text_len=%s correlation_id=%s",
+                channel_type or "unknown",
                 target,
                 len(str(text)),
                 correlation_id,
             )
-            return _action_result_for_channel(
-                "telegram",
+            return _normalized_outbound_for_channel(
+                channel_type or "webui",
                 str(target),
                 str(correlation_id or ""),
                 {"content": text},
+                audience=_audience_from_payload(payload),
             )
 
         bundle = build_context_bundle(payload, context)
@@ -72,20 +76,22 @@ class DeliveryCoordinator:
         channel_hint = payload.get("channel_hint")
         target = payload.get("target")
         if channel_hint and target:
-            return _action_result_for_channel(
+            return _normalized_outbound_for_channel(
                 str(channel_hint),
                 str(target),
                 draft.correlation_id,
                 rendered.payload,
+                audience=_audience_from_payload(payload),
             )
 
         resolution = resolve_channel(intent)
 
-        return _action_result_for_channel(
+        return _normalized_outbound_for_channel(
             rendered.channel_type,
             resolution.address,
             draft.correlation_id,
             rendered.payload,
+            audience=_audience_from_payload(payload),
         )
 
 
@@ -143,48 +149,53 @@ def _resolve_presence(payload: dict[str, Any]) -> dict[str, Any]:
     return {"in_meeting": False}
 
 
-def _action_result_for_channel(
+def _normalized_outbound_for_channel(
     channel_type: str,
     address: str | None,
     correlation_id: str,
     payload: dict[str, Any],
-) -> ActionResult | None:
-    if channel_type == "telegram" and address is not None:
-        return ActionResult(
-            intention_key="NOTIFY_TELEGRAM",
-            payload={
-                "chat_id": address,
-                "message": payload.get("content"),
-                "correlation_id": correlation_id,
-            },
-            urgency="normal",
-        )
-    if channel_type == "cli":
-        return ActionResult(
-            intention_key="NOTIFY_CLI",
-            payload={
-                "message": payload.get("content"),
-                "correlation_id": correlation_id,
-            },
-            urgency="normal",
-        )
-    if channel_type == "api":
-        return ActionResult(
-            intention_key="NOTIFY_API",
-            payload={
-                "correlation_id": correlation_id,
-                "message": payload.get("content"),
-                "data": payload.get("data"),
-            },
-            urgency="normal",
-        )
-    return None
-
-
-def _as_optional_str(value: object | None) -> str | None:
-    if value is None:
+    *,
+    audience: dict[str, str],
+) -> NormalizedOutboundMessage | None:
+    normalized_channel = _normalize_channel_type(channel_type)
+    target = address or _default_target(normalized_channel)
+    if not target:
         return None
-    return str(value)
+    return NormalizedOutboundMessage(
+        message=str(payload.get("content") or ""),
+        channel_type=normalized_channel,
+        channel_target=target,
+        audience=audience,
+        correlation_id=correlation_id,
+        metadata={"data": payload.get("data")},
+    )
+
+
+def _audience_from_payload(payload: dict[str, Any]) -> dict[str, str]:
+    audience = payload.get("audience")
+    if isinstance(audience, dict):
+        kind = audience.get("kind")
+        ident = audience.get("id")
+        if isinstance(kind, str) and isinstance(ident, str):
+            return {"kind": kind, "id": ident}
+    return {"kind": "system", "id": "system"}
+
+
+def _normalize_channel_type(channel_type: str) -> str:
+    normalized = str(channel_type or "").strip().lower()
+    aliases = {
+        "api": "webui",
+        "web": "webui",
+    }
+    return aliases.get(normalized, normalized or "webui")
+
+
+def _default_target(channel_type: str) -> str | None:
+    defaults = {
+        "cli": "cli",
+        "webui": "webui",
+    }
+    return defaults.get(channel_type)
 
 
 def build_default_coordinator() -> DeliveryCoordinator:

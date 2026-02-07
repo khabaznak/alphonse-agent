@@ -6,7 +6,7 @@ import logging
 from typing import Any
 
 from alphonse.agent.actions.models import ActionResult
-from alphonse.agent.cognition.narration.coordinator import (
+from alphonse.agent.cognition.narration.outbound_narration_orchestrator import (
     DeliveryCoordinator,
     build_default_coordinator,
 )
@@ -37,13 +37,8 @@ from alphonse.agent.nervous_system.capability_gaps import insert_gap
 from alphonse.agent.lan.store import arm_device, disarm_device, get_latest_paired_device, get_paired_device
 from alphonse.agent.lan.pairing_store import approve_pairing, deny_pairing, get_pairing_request
 from alphonse.config import settings
-from alphonse.agent.extremities.api_extremity import ApiExtremity
-from alphonse.agent.extremities.cli_extremity import CliExtremity
-from alphonse.agent.extremities.registry import ExtremityRegistry
 from alphonse.agent.extremities.scheduler_extremity import schedule_reminder
-from alphonse.agent.extremities.telegram_notification import (
-    TelegramNotificationExtremity,
-)
+from alphonse.agent.io import NormalizedOutboundMessage, get_io_registry
 from alphonse.agent.policy.engine import PolicyDecision, PolicyEngine
 
 logger = logging.getLogger(__name__)
@@ -62,11 +57,11 @@ class PlanExecutor:
         self,
         *,
         coordinator: DeliveryCoordinator | None = None,
-        extremities: ExtremityRegistry | None = None,
+        extremities: object | None = None,
         policy_engine: PolicyEngine | None = None,
     ) -> None:
+        _ = extremities
         self._coordinator = coordinator or build_default_coordinator()
-        self._extremities = extremities or _build_default_extremities()
         self._policy = policy_engine or PolicyEngine()
         self._responses = ResponseComposer()
 
@@ -273,7 +268,7 @@ class PlanExecutor:
         )
         delivery = self._coordinator.deliver(action, context)
         if delivery:
-            self._extremities.dispatch(delivery, None)
+            self._deliver_normalized(delivery)
 
     def _render_schedule_confirmation(self, payload: ScheduleTimedSignalPayload) -> str:
         locale, address_style, tone = self._resolve_message_presentation(
@@ -482,7 +477,7 @@ class PlanExecutor:
         )
         delivery = self._coordinator.deliver(action, context)
         if delivery:
-            self._extremities.dispatch(delivery, None)
+            self._deliver_normalized(delivery)
 
     def _dispatch_policy_rejection(
         self,
@@ -526,7 +521,14 @@ class PlanExecutor:
         )
         delivery = self._coordinator.deliver(action, context)
         if delivery:
-            self._extremities.dispatch(delivery, None)
+            self._deliver_normalized(delivery)
+
+    def _deliver_normalized(self, delivery: NormalizedOutboundMessage) -> None:
+        registry = get_io_registry()
+        adapter = registry.get_extremity(delivery.channel_type)
+        if not adapter:
+            return
+        adapter.deliver(delivery)
 
     def _record_policy_event(
         self,
@@ -618,11 +620,3 @@ def _audience_for(person_id: str | None) -> dict[str, str]:
     if person_id:
         return {"kind": "person", "id": person_id}
     return {"kind": "system", "id": "system"}
-
-
-def _build_default_extremities() -> ExtremityRegistry:
-    registry = ExtremityRegistry()
-    registry.register(TelegramNotificationExtremity())
-    registry.register(ApiExtremity())
-    registry.register(CliExtremity())
-    return registry

@@ -581,13 +581,6 @@ def _message_result(message: str, incoming: IncomingContext) -> ActionResult:
     }
     if incoming.address:
         payload["target"] = incoming.address
-    if incoming.channel_type == "telegram" and incoming.address:
-        payload["direct_reply"] = {
-            "channel_type": "telegram",
-            "target": incoming.address,
-            "text": message,
-            "correlation_id": incoming.correlation_id,
-        }
     return ActionResult(
         intention_key="MESSAGE_READY",
         payload=payload,

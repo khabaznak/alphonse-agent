@@ -13,13 +13,13 @@ from alphonse.agent.actions.handle_timed_signals import HandleTimedSignalsAction
 from alphonse.agent.actions.handle_action_failure import HandleActionFailure
 from alphonse.agent.actions.handle_timer_fired import HandleTimerFiredAction
 from alphonse.agent.extremities.notification import NotificationExtremity
-from alphonse.agent.extremities.telegram_notification import TelegramNotificationExtremity
-from alphonse.agent.extremities.api_extremity import ApiExtremity
-from alphonse.agent.extremities.cli_extremity import CliExtremity
 from alphonse.agent.extremities.registry import ExtremityRegistry
 from alphonse.agent.nervous_system.senses.bus import Bus, Signal
 from alphonse.agent.nervous_system.trace_store import write_trace
-from alphonse.agent.cognition.narration.coordinator import build_default_coordinator, DeliveryCoordinator
+from alphonse.agent.cognition.narration.outbound_narration_orchestrator import (
+    build_default_coordinator,
+    DeliveryCoordinator,
+)
 from alphonse.agent.io import get_io_registry, NormalizedOutboundMessage
 
 
@@ -42,12 +42,9 @@ class IntentPipeline:
             if result.intention_key == "MESSAGE_READY":
                 delivery = self.coordinator.deliver(result, context)
                 if delivery:
-                    self._deliver_normalized(delivery, result)
+                    self._deliver_normalized(delivery)
             else:
-                if result.intention_key.startswith("NOTIFY_"):
-                    self._deliver_notify(result)
-                else:
-                    self.extremities.dispatch(result, None)
+                self.extremities.dispatch(result, None)
             self._emit_outcome(result, context, success=True, error=None)
         except Exception as exc:
             self._emit_outcome(None, context, success=False, error=exc)
@@ -65,25 +62,12 @@ class IntentPipeline:
             _emit_outcome_signal(self.bus, payload, success)
         _emit_trace(context, success, error)
 
-    def _deliver_normalized(self, delivery: ActionResult, original: ActionResult) -> None:
-        normalized = _build_normalized_outbound(delivery, original)
-        if not normalized:
-            return
+    def _deliver_normalized(self, delivery: NormalizedOutboundMessage) -> None:
         registry = get_io_registry()
-        adapter = registry.get_extremity(normalized.channel_type)
+        adapter = registry.get_extremity(delivery.channel_type)
         if not adapter:
             return
-        adapter.deliver(normalized)
-
-    def _deliver_notify(self, result: ActionResult) -> None:
-        normalized = _build_normalized_from_notify(result)
-        if not normalized:
-            return
-        registry = get_io_registry()
-        adapter = registry.get_extremity(normalized.channel_type)
-        if not adapter:
-            return
-        adapter.deliver(normalized)
+        adapter.deliver(delivery)
 
 
 def build_default_pipeline() -> IntentPipeline:
@@ -100,91 +84,11 @@ def build_default_pipeline_with_bus(bus: Bus) -> IntentPipeline:
     actions.register("handle_timer_fired", lambda _: HandleTimerFiredAction())
     extremities = ExtremityRegistry()
     extremities.register(NotificationExtremity())
-    extremities.register(TelegramNotificationExtremity())
-    extremities.register(ApiExtremity())
-    extremities.register(CliExtremity())
     return IntentPipeline(
         actions=actions,
         extremities=extremities,
         bus=bus,
         coordinator=build_default_coordinator(),
-    )
-
-
-def _channel_from_intention(intention_key: str) -> str | None:
-    mapping = {
-        "NOTIFY_TELEGRAM": "telegram",
-        "NOTIFY_CLI": "cli",
-        "NOTIFY_API": "api",
-    }
-    return mapping.get(intention_key)
-
-
-def _default_target_for_channel(channel_type: str) -> str | None:
-    if channel_type == "cli":
-        return "cli"
-    if channel_type == "api":
-        return "api"
-    return None
-
-
-def _audience_from_payload(payload: dict) -> dict[str, str]:
-    audience = payload.get("audience")
-    if isinstance(audience, dict):
-        kind = audience.get("kind")
-        ident = audience.get("id")
-        if isinstance(kind, str) and isinstance(ident, str):
-            return {"kind": kind, "id": ident}
-    return {"kind": "system", "id": "system"}
-
-
-def _build_normalized_outbound(
-    delivery: ActionResult, original: ActionResult
-) -> NormalizedOutboundMessage | None:
-    channel_type = _channel_from_intention(delivery.intention_key)
-    if not channel_type:
-        return None
-    payload = delivery.payload or {}
-    message = payload.get("message")
-    if not message:
-        return None
-    channel_target = (
-        str(payload.get("chat_id"))
-        if channel_type == "telegram" and payload.get("chat_id") is not None
-        else _default_target_for_channel(channel_type)
-    )
-    return NormalizedOutboundMessage(
-        message=str(message),
-        channel_type=channel_type,
-        channel_target=channel_target,
-        audience=_audience_from_payload(original.payload or {}),
-        correlation_id=str(payload.get("correlation_id") or original.payload.get("correlation_id") or ""),
-        metadata={"data": payload.get("data")},
-    )
-
-
-def _build_normalized_from_notify(
-    result: ActionResult,
-) -> NormalizedOutboundMessage | None:
-    channel_type = _channel_from_intention(result.intention_key)
-    if not channel_type:
-        return None
-    payload = result.payload or {}
-    message = payload.get("message")
-    if not message:
-        return None
-    channel_target = (
-        str(payload.get("chat_id"))
-        if channel_type == "telegram" and payload.get("chat_id") is not None
-        else _default_target_for_channel(channel_type)
-    )
-    return NormalizedOutboundMessage(
-        message=str(message),
-        channel_type=channel_type,
-        channel_target=channel_target,
-        audience=_audience_from_payload(payload),
-        correlation_id=str(payload.get("correlation_id") or ""),
-        metadata={"data": payload.get("data")},
     )
 
 
