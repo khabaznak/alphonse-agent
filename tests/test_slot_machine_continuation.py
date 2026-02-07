@@ -226,3 +226,101 @@ def test_stale_trigger_time_not_reused_for_new_create_intent(
     slots = result.cognition_state.get("slots_collected") or {}
     assert "reminder_text" in slots
     assert "trigger_time" not in slots
+
+
+def test_set_reminder_phrase_with_from_now_schedules_even_when_map_time_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _prepare_db(tmp_path, monkeypatch)
+    llm = FakeLLM(
+        """
+        {
+          "language": "en",
+          "social": {"is_greeting": false, "is_farewell": false, "is_thanks": false, "text": null},
+          "actions": [
+            {
+              "verb": "set",
+              "object": "reminder",
+              "target": null,
+              "details": "go take a shower",
+              "priority": "normal"
+            }
+          ],
+          "entities": [],
+          "constraints": {"times": [], "numbers": [], "locations": []},
+          "questions": [],
+          "commands": [],
+          "raw_intent_hint": "single_action",
+          "confidence": "medium"
+        }
+        """
+    )
+    result = invoke_cortex(
+        _base_state(),
+        "Please set a reminder to go take a shower in 5 minutes from now",
+        llm_client=llm,
+    )
+    assert result.plans
+    assert result.plans[0].plan_type == PlanType.SCHEDULE_TIMED_SIGNAL
+
+
+def test_slot_continuation_accepts_yes_with_time_phrase(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _prepare_db(tmp_path, monkeypatch)
+    first_llm = FakeLLM(
+        """
+        {
+          "language": "en",
+          "social": {"is_greeting": false, "is_farewell": false, "is_thanks": false, "text": null},
+          "actions": [
+            {
+              "verb": "set",
+              "object": "reminder",
+              "target": null,
+              "details": "go take a shower",
+              "priority": "normal"
+            }
+          ],
+          "entities": [],
+          "constraints": {"times": [], "numbers": [], "locations": []},
+          "questions": [],
+          "commands": [],
+          "raw_intent_hint": "single_action",
+          "confidence": "medium"
+        }
+        """
+    )
+    first = invoke_cortex(
+        _base_state(),
+        "Please set a reminder to go take a shower",
+        llm_client=first_llm,
+    )
+    first_state = _next_state(first.cognition_state)
+    machine = first_state.get("slot_machine") or {}
+    assert machine.get("slot_name") == "trigger_time"
+    assert first.cognition_state.get("slots_collected", {}).get("reminder_text")
+
+    second_llm = FakeLLM(
+        """
+        {
+          "language": "en",
+          "social": {"is_greeting": false, "is_farewell": false, "is_thanks": false, "text": null},
+          "actions": [],
+          "entities": [],
+          "constraints": {"times": [], "numbers": [], "locations": []},
+          "questions": [],
+          "commands": [],
+          "raw_intent_hint": "other",
+          "confidence": "medium"
+        }
+        """
+    )
+    second = invoke_cortex(
+        first_state,
+        "yes, in 5 min from now",
+        llm_client=second_llm,
+    )
+    assert second.plans
+    assert second.plans[0].plan_type == PlanType.SCHEDULE_TIMED_SIGNAL
+    assert second.cognition_state.get("slot_machine") is None

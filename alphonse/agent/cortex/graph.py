@@ -303,7 +303,7 @@ def _route_decision_to_intent(
     elif intent_name is None and decision.domain in {"task_single", "task_multi"}:
         intent_name = _task_intent_from_map(text, message_map)
         if intent_name == "timed_signals.create":
-            slot_guesses = _build_slot_guesses_from_map(message_map)
+            slot_guesses = _build_slot_guesses_from_map(text, message_map)
             if not slot_guesses:
                 needs_clarification = True
         if intent_name is None:
@@ -389,14 +389,28 @@ def _question_intent_from_map(
 
 
 def _task_intent_from_map(text: str, message_map: MessageMap) -> str | None:
+    normalized_text = _normalize_for_intent_matching(text)
     if message_map.raw_intent_hint not in {"single_action", "multi_action", "mixed"}:
-        return None
-    if not message_map.actions:
-        return None
-    for action in message_map.actions:
-        verb = _normalize_for_intent_matching(action.verb or "")
-        if any(token in verb for token in ("remind", "recu", "recorda", "acuerd")):
+        # Fallback path for weak message-map extraction.
+        if _looks_like_reminder_request(normalized_text):
             return "timed_signals.create"
+        return None
+    if message_map.actions:
+        for action in message_map.actions:
+            fields = (
+                action.verb or "",
+                action.object or "",
+                action.details or "",
+                action.target or "",
+            )
+            normalized_fields = [_normalize_for_intent_matching(value) for value in fields]
+            if any(
+                any(token in value for token in ("remind", "recu", "recorda", "acuerd", "recordatorio", "reminder"))
+                for value in normalized_fields
+            ):
+                return "timed_signals.create"
+    if _looks_like_reminder_request(normalized_text):
+        return "timed_signals.create"
     return None
 
 
@@ -405,7 +419,7 @@ def _normalize_for_intent_matching(text: str) -> str:
     return "".join(ch for ch in normalized if not unicodedata.combining(ch)).lower()
 
 
-def _build_slot_guesses_from_map(message_map: MessageMap) -> dict[str, Any]:
+def _build_slot_guesses_from_map(text: str, message_map: MessageMap) -> dict[str, Any]:
     guesses: dict[str, Any] = {}
     if message_map.constraints.times:
         guesses["trigger_time"] = message_map.constraints.times[0]
@@ -421,6 +435,15 @@ def _build_slot_guesses_from_map(message_map: MessageMap) -> dict[str, Any]:
         )
         if reminder_text:
             guesses["reminder_text"] = reminder_text
+    # Fallbacks when parser output is sparse but user intent is explicit.
+    if "trigger_time" not in guesses:
+        trigger_hint = _extract_relative_time_hint(text)
+        if trigger_hint:
+            guesses["trigger_time"] = trigger_hint
+    if "reminder_text" not in guesses:
+        reminder_hint = _extract_reminder_text_hint(text)
+        if reminder_hint:
+            guesses["reminder_text"] = reminder_hint
     return guesses
 
 
@@ -437,12 +460,16 @@ def _select_reminder_text_candidate(
             continue
         if _is_low_signal_reminder_candidate(cleaned):
             continue
+        if _is_time_only_phrase(cleaned):
+            continue
         return cleaned
     for entity in entities:
         cleaned = str(entity or "").strip()
         if not cleaned:
             continue
         if _is_low_signal_reminder_candidate(cleaned):
+            continue
+        if _is_time_only_phrase(cleaned):
             continue
         return cleaned
     return None
@@ -461,6 +488,62 @@ def _is_low_signal_reminder_candidate(text: str) -> bool:
         "you",
     }
     return normalized in low_signal
+
+
+def _is_time_only_phrase(text: str) -> bool:
+    normalized = _normalize_for_intent_matching(text).strip()
+    if not normalized:
+        return True
+    patterns = [
+        r"^(in|en)\s+\d+\s*(min|mins|minutes?|minutos?|hr|hrs|hours?|hora|horas)(\s+from\s+now)?$",
+        r"^\d+\s*(min|mins|minutes?|minutos?|hr|hrs|hours?|hora|horas)(\s+from\s+now)?$",
+        r"^(now|ahora)$",
+    ]
+    return any(re.match(pattern, normalized) for pattern in patterns)
+
+
+def _looks_like_reminder_request(normalized_text: str) -> bool:
+    reminder_tokens = ("reminder", "recordatorio", "recordarme", "recuerdame", "remind me", "remember to")
+    action_tokens = ("set", "pon", "ponme", "crea", "create", "haz")
+    if any(token in normalized_text for token in ("remind", "recu", "recorda", "acuerd")):
+        return True
+    if any(token in normalized_text for token in reminder_tokens):
+        if any(token in normalized_text for token in action_tokens):
+            return True
+        if " in " in normalized_text or " en " in normalized_text:
+            return True
+    return False
+
+
+def _extract_relative_time_hint(text: str) -> str | None:
+    lowered = str(text or "").strip().lower()
+    match = re.search(
+        r"\b(?:in|en)\s+\d+\s*(?:min|mins|minutes?|minutos?|hr|hrs|hours?|hora|horas)\b(?:\s+from now)?",
+        lowered,
+    )
+    if match:
+        return match.group(0)
+    return None
+
+
+def _extract_reminder_text_hint(text: str) -> str | None:
+    lowered = str(text or "").strip()
+    patterns = [
+        r"(?i)\b(?:set\s+a\s+reminder\s+to|remind\s+me\s+to|remember\s+to)\s+(.+?)(?:\s+\b(?:in|en)\b\s+\d+.*)?$",
+        r"(?i)\b(?:recu[ée]rdame(?:\s+de)?|pon(?:me)?\s+un\s+recordatorio(?:\s+para)?)\s+(.+?)(?:\s+\b(?:en|in)\b\s+\d+.*)?$",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, lowered)
+        if not match:
+            continue
+        candidate = str(match.group(1) or "").strip(" .,!?:;\"'")
+        if (
+            candidate
+            and not _is_low_signal_reminder_candidate(candidate)
+            and not _is_time_only_phrase(candidate)
+        ):
+            return candidate
+    return None
 
 
 def _is_slot_machine_input(
