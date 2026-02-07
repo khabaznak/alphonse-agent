@@ -29,6 +29,7 @@ from alphonse.agent.cognition.slots.slot_filler import fill_slots
 from alphonse.agent.cognition.slots.slot_fsm import deserialize_machine, serialize_machine
 from alphonse.agent.cognition.slots.utterance_guard import (
     detect_core_intent,
+    is_core_conversational_utterance,
     is_resume_utterance,
 )
 from alphonse.agent.cognition.capability_gaps.guard import GapGuardInput, PlanStatus, should_create_gap
@@ -257,6 +258,24 @@ def _detect_catalog_intent_from_map(
     )
     if state.get("slot_machine") and state.get("catalog_intent"):
         intent_name = str(state.get("catalog_intent") or "")
+        spec = get_catalog_service().get_intent(intent_name)
+        if machine and spec and _is_slot_machine_input(
+            text=text,
+            machine=machine,
+            intent_spec=spec,
+            state=state,
+        ):
+            return {
+                "intent": intent_name,
+                "intent_confidence": state.get("intent_confidence", 0.6),
+                "intent_category": state.get("intent_category"),
+                "routing_rationale": "message_map:slot_machine_value",
+                "routing_needs_clarification": True,
+                "intent_evidence": build_intent_evidence(text),
+                "last_intent": intent_name,
+                "catalog_intent": intent_name,
+                "catalog_slot_guesses": {},
+            }
         if decision.decision != "interrupt_and_new_plan":
             if decision.domain == "social" and machine:
                 machine.paused_at = datetime.now(timezone.utc).isoformat()
@@ -426,6 +445,45 @@ def _build_slot_guesses_from_map(message_map: MessageMap) -> dict[str, Any]:
     return guesses
 
 
+def _is_slot_machine_input(
+    *,
+    text: str,
+    machine: Any,
+    intent_spec: Any,
+    state: CortexState,
+) -> bool:
+    candidate = text.strip()
+    if not candidate:
+        return False
+    slot_spec = None
+    for spec in intent_spec.required_slots + intent_spec.optional_slots:
+        if spec.name == machine.slot_name:
+            slot_spec = spec
+            break
+    if slot_spec and slot_spec.semantic_text:
+        if slot_spec.min_length and len(candidate) < slot_spec.min_length:
+            return False
+        if (
+            slot_spec.reject_if_core_conversational
+            and is_core_conversational_utterance(candidate)
+        ):
+            return False
+    resolver = build_default_registry().get(machine.slot_type)
+    if not resolver:
+        return False
+    context = {
+        "locale": state.get("locale"),
+        "timezone": state.get("timezone"),
+        "now": datetime.now(timezone.utc).isoformat(),
+        "conversation_key": state.get("conversation_key"),
+        "channel": state.get("channel_type"),
+        "channel_type": state.get("channel_type"),
+        "channel_target": state.get("channel_target"),
+        "chat_id": state.get("chat_id"),
+    }
+    return bool(resolver.parse(candidate, context).ok)
+
+
 def _use_legacy_intent_detector() -> bool:
     raw = os.getenv("ALPHONSE_USE_LEGACY_INTENT_DETECTOR", "false").strip().lower()
     return raw in {"1", "true", "yes", "on"}
@@ -488,6 +546,7 @@ def _catalog_slot_node(state: CortexState) -> dict[str, Any]:
         slot_guesses=state.get("catalog_slot_guesses") or {},
         registry=registry,
         context=context,
+        existing_slots=state.get("slots") or {},
         machine=machine,
     )
     updated: dict[str, Any] = {

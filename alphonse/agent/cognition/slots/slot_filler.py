@@ -40,10 +40,11 @@ def fill_slots(
     slot_guesses: dict[str, Any],
     registry: ResolverRegistry,
     context: dict[str, Any],
+    existing_slots: dict[str, Any] | None = None,
     machine: SlotMachine | None = None,
     max_attempts: int = 3,
 ) -> SlotFillResult:
-    slots: dict[str, Any] = {}
+    slots: dict[str, Any] = dict(existing_slots or {})
     missing: list[str] = []
 
     if machine:
