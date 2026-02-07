@@ -11,7 +11,8 @@ from langgraph.graph import END, StateGraph
 
 from alphonse.agent.cognition.plans import CortexPlan, CortexResult, PlanType
 from alphonse.agent.cognition.capability_gaps.triage import detect_language
-from alphonse.agent.cognition.localization import render_message
+from alphonse.agent.cognition.response_composer import ResponseComposer
+from alphonse.agent.cognition.response_spec import ResponseSpec
 from alphonse.agent.cognition.status_summaries import summarize_capabilities
 from alphonse.agent.cognition.providers.ollama import OllamaClient
 from alphonse.agent.cognition.planning import PlanningMode, parse_planning_mode
@@ -129,17 +130,25 @@ def invoke_cortex(
     ]
     response_text = result_state.get("response_text")
     if not response_text and result_state.get("response_key"):
-        response_text = render_message(
-            str(result_state.get("response_key")),
-            _locale_for_state(result_state),
-            result_state.get("response_vars") or {},
-        )
+        response_text = _compose_response_from_state(result_state)
     return CortexResult(
         reply_text=response_text,
         plans=plans,
         cognition_state=_build_cognition_state(result_state),
         meta=_build_meta(result_state),
     )
+
+
+def _compose_response_from_state(state: dict[str, Any]) -> str:
+    composer = ResponseComposer()
+    spec = ResponseSpec(
+        kind="answer",
+        key=str(state.get("response_key") or "generic.unknown"),
+        locale=_locale_for_state(state),
+        channel=str(state.get("channel_type") or "telegram"),
+        variables=state.get("response_vars") or {},
+    )
+    return composer.compose(spec)
 
 
 def _ingest_node(state: CortexState) -> dict[str, Any]:
