@@ -417,6 +417,62 @@ def seed_default_templates(db_path: str | None = None) -> None:
             "Listo, lo cancelé.",
         ),
         (
+            "intent_detector.rules.v1",
+            "en",
+            "any",
+            "any",
+            "any",
+            "default",
+            "safe",
+            "Rules:\n"
+            "- Only choose intents from the catalog or \"unknown\".\n"
+            "- Prefer \"unknown\" when ambiguous or too short.\n"
+            "- Do not choose timed_signals.list unless the user is asking about reminders.\n"
+            "- Do not choose timed_signals.create unless the user requests a reminder.\n"
+            "- Confidence: high only when clear, low when uncertain.",
+        ),
+        (
+            "intent_detector.rules.v1",
+            "es",
+            "any",
+            "any",
+            "any",
+            "default",
+            "safe",
+            "Reglas:\n"
+            "- Solo elige intents del catálogo o \"unknown\".\n"
+            "- Prefiere \"unknown\" cuando sea ambiguo o muy corto.\n"
+            "- No elijas timed_signals.list a menos que pregunte por recordatorios.\n"
+            "- No elijas timed_signals.create a menos que pida un recordatorio.\n"
+            "- Confianza: alta solo cuando sea claro, baja cuando sea incierto.",
+        ),
+        (
+            "intent_detector.catalog.prompt.v1",
+            "en",
+            "any",
+            "any",
+            "any",
+            "default",
+            "safe",
+            "{rules_block}\n\n"
+            "Catalog:\n{catalog_json}\n\n"
+            "User message: {user_message}\n"
+            "Return strict JSON: intent_name, confidence, slot_guesses, needs_clarification.",
+        ),
+        (
+            "intent_detector.catalog.prompt.v1",
+            "es",
+            "any",
+            "any",
+            "any",
+            "default",
+            "safe",
+            "{rules_block}\n\n"
+            "Catálogo:\n{catalog_json}\n\n"
+            "Mensaje del usuario: {user_message}\n"
+            "Devuelve JSON estricto: intent_name, confidence, slot_guesses, needs_clarification.",
+        ),
+        (
             "clarify.reminder_text",
             "en",
             "any",

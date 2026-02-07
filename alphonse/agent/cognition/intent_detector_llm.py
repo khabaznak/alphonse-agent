@@ -4,9 +4,11 @@ import json
 import logging
 import re
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any
 
 from alphonse.agent.cognition.intent_catalog import IntentCatalogStore, IntentSpec
+from alphonse.agent.cognition.prompt_store import PromptContext, SqlitePromptStore
 
 logger = logging.getLogger(__name__)
 
@@ -20,8 +22,9 @@ class IntentDetection:
 
 
 class IntentDetectorLLM:
-    def __init__(self, catalog: IntentCatalogStore) -> None:
+    def __init__(self, catalog: IntentCatalogStore, prompt_store: SqlitePromptStore | None = None) -> None:
         self._catalog = catalog
+        self._prompt_store = prompt_store or SqlitePromptStore()
 
     def detect(self, text: str, llm_client: object | None) -> IntentDetection | None:
         fast = _deterministic_hint(text)
@@ -38,7 +41,12 @@ class IntentDetectorLLM:
             return None
         if not enabled:
             return None
-        prompt = _build_prompt(enabled)
+        prompt = _build_prompt(
+            enabled,
+            prompt_store=self._prompt_store,
+            user_message=text,
+            locale=None,
+        )
         try:
             raw = llm_client.complete(system_prompt=prompt, user_prompt=text)
         except Exception as exc:
@@ -60,22 +68,75 @@ class IntentDetectorLLM:
         )
 
 
-def _build_prompt(intents: list[IntentSpec]) -> str:
-    lines = [
-        "Select the best intent from the catalog. Return strict JSON with keys: "
-        "intent_name, confidence, slot_guesses, needs_clarification.",
-        "Only use intents from this list or 'unknown'.",
-    ]
-    for intent in intents:
+def _build_prompt(
+    intents: list[IntentSpec],
+    *,
+    prompt_store: SqlitePromptStore,
+    user_message: str,
+    locale: str | None,
+) -> str:
+    catalog_json = json.dumps(serialize_intents(intents), ensure_ascii=False, indent=2)
+    rules_block = _render_prompt(
+        prompt_store,
+        "intent_detector.rules.v1",
+        locale,
+        {"catalog_json": catalog_json, "user_message": user_message},
+    )
+    return _render_prompt(
+        prompt_store,
+        "intent_detector.catalog.prompt.v1",
+        locale,
+        {
+            "rules_block": rules_block,
+            "catalog_json": catalog_json,
+            "user_message": user_message,
+            "now": datetime.now(timezone.utc).isoformat(),
+        },
+    )
+
+
+def serialize_intents(intents: list[IntentSpec]) -> dict[str, Any]:
+    serialized = []
+    for intent in sorted(intents, key=lambda item: item.intent_name):
         slots = [
-            f"{slot.name}:{slot.type}"
+            {
+                "name": slot.name,
+                "type": slot.type,
+                "required": slot.required,
+                "critical": slot.critical,
+            }
             for slot in intent.required_slots + intent.optional_slots
         ]
-        examples = ", ".join(intent.examples[:5])
-        lines.append(
-            f"- {intent.intent_name} | {intent.description} | examples: {examples} | slots: {', '.join(slots)}"
+        serialized.append(
+            {
+                "name": intent.intent_name,
+                "description": intent.description,
+                "examples": intent.examples[:5],
+                "slots": slots,
+            }
         )
-    return "\n".join(lines)
+    return {"intents": serialized}
+
+
+def _render_prompt(
+    store: SqlitePromptStore,
+    key: str,
+    locale: str | None,
+    variables: dict[str, Any],
+) -> str:
+    match = store.get_template(
+        key,
+        PromptContext(
+            locale=locale,
+            address_style="any",
+            tone="any",
+            channel="any",
+            variant="default",
+            policy_tier="safe",
+        ),
+    )
+    template = match.template if match else ""
+    return template.format(**variables)
 
 
 def _parse_payload(raw: str) -> dict[str, Any] | None:
