@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
 import logging
 from typing import Any
 
@@ -159,11 +160,18 @@ class PlanExecutor:
         context: dict,
         exec_context: PlanExecutionContext,
     ) -> None:
+        now_utc = datetime.now(tz=timezone.utc)
+        trigger_at = _parse_iso_datetime(payload.trigger_at)
+        eta_seconds = None
+        if trigger_at is not None:
+            eta_seconds = int((trigger_at - now_utc).total_seconds())
         logger.info(
-            "executor dispatch plan_id=%s plan_type=%s tool=scheduler trigger_at=%s",
+            "executor dispatch plan_id=%s plan_type=%s tool=scheduler trigger_at=%s now_utc=%s eta_seconds=%s",
             plan.plan_id,
             plan.plan_type,
             payload.trigger_at,
+            now_utc.isoformat(),
+            eta_seconds if eta_seconds is not None else "unknown",
         )
         result = schedule_reminder(
             reminder_text=payload.reminder_text,
@@ -493,6 +501,16 @@ def _message_payload(
     if target:
         payload["target"] = target
     return payload
+
+
+def _parse_iso_datetime(value: str) -> datetime | None:
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
 
 
 def _audience_for(person_id: str | None) -> dict[str, str]:

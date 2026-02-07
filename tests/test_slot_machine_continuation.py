@@ -179,3 +179,50 @@ def test_create_asks_reminder_then_text_answer_schedules(
     assert second.plans
     assert second.plans[0].plan_type == PlanType.SCHEDULE_TIMED_SIGNAL
     assert second.cognition_state.get("slot_machine") is None
+
+
+def test_stale_trigger_time_not_reused_for_new_create_intent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _prepare_db(tmp_path, monkeypatch)
+    llm = FakeLLM(
+        """
+        {
+          "language": "en",
+          "social": {"is_greeting": false, "is_farewell": false, "is_thanks": false, "text": null},
+          "actions": [
+            {
+              "verb": "remind",
+              "object": "go to the kitchen",
+              "target": null,
+              "details": null,
+              "priority": "normal"
+            }
+          ],
+          "entities": ["go to the kitchen"],
+          "constraints": {"times": [], "numbers": [], "locations": []},
+          "questions": [],
+          "commands": [],
+          "raw_intent_hint": "single_action",
+          "confidence": "high"
+        }
+        """
+    )
+    state = _base_state()
+    state["slots"] = {
+        "reminder_text": "old reminder",
+        "trigger_time": {
+            "kind": "trigger_at",
+            "trigger_at": "2026-02-06T22:12:18.137791-06:00",
+        },
+    }
+    state["catalog_intent"] = "timed_signals.create"
+    state["intent"] = "timed_signals.create"
+    state["intent_category"] = "task_plane"
+    result = invoke_cortex(state, "remind me to go to the kitchen", llm_client=llm)
+    assert not result.plans
+    machine = result.cognition_state.get("slot_machine") or {}
+    assert machine.get("slot_name") == "trigger_time"
+    slots = result.cognition_state.get("slots_collected") or {}
+    assert "reminder_text" in slots
+    assert "trigger_time" not in slots

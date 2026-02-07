@@ -13,10 +13,26 @@ def test_time_expression_parses_english_minutes() -> None:
     assert result.value["kind"] == "trigger_at"
 
 
+def test_time_expression_parses_english_number_word_short_unit() -> None:
+    resolver = TimeExpressionResolver()
+    now = datetime(2026, 2, 6, 12, 0, tzinfo=timezone.utc)
+    result = resolver.parse("five min", {"timezone": "UTC", "now": now})
+    assert result.ok is True
+    assert result.value["kind"] == "trigger_at"
+
+
 def test_time_expression_parses_spanish_minutes() -> None:
     resolver = TimeExpressionResolver()
     now = datetime(2026, 2, 6, 12, 0, tzinfo=timezone.utc)
     result = resolver.parse("quince minutos", {"timezone": "UTC", "now": now})
+    assert result.ok is True
+    assert result.value["kind"] == "trigger_at"
+
+
+def test_time_expression_parses_spanish_number_word() -> None:
+    resolver = TimeExpressionResolver()
+    now = datetime(2026, 2, 6, 12, 0, tzinfo=timezone.utc)
+    result = resolver.parse("cinco minutos", {"timezone": "UTC", "now": now})
     assert result.ok is True
     assert result.value["kind"] == "trigger_at"
 

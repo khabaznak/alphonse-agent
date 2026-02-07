@@ -540,13 +540,16 @@ def _catalog_slot_node(state: CortexState) -> dict[str, Any]:
         "chat_id": state.get("chat_id"),
         "correlation_id": state.get("correlation_id"),
     }
+    existing_slots: dict[str, Any] = {}
+    if machine:
+        existing_slots = state.get("slots") or {}
     result = fill_slots(
         spec,
         text=text,
         slot_guesses=state.get("catalog_slot_guesses") or {},
         registry=registry,
         context=context,
-        existing_slots=state.get("slots") or {},
+        existing_slots=existing_slots,
         machine=machine,
     )
     updated: dict[str, Any] = {
