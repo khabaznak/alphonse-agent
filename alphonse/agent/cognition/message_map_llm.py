@@ -136,6 +136,15 @@ Message:
 """
 
 
+def build_message_map_prompt(text: str) -> str:
+    return (
+        "SYSTEM:\n"
+        f"{_SYSTEM_PROMPT}\n\n"
+        "USER:\n"
+        f"{_USER_PROMPT_TEMPLATE.replace('{MESSAGE_TEXT}', text)}"
+    )
+
+
 def dissect_message(
     text: str,
     *,

@@ -201,8 +201,14 @@ def build_parser() -> argparse.ArgumentParser:
     catalog_sub.add_parser("seed", help="Seed factory intents into the catalog")
     catalog_sub.add_parser("validate", help="Validate catalog entries")
     catalog_sub.add_parser("stats", help="Show catalog diagnostics")
-    catalog_prompt = catalog_sub.add_parser("prompt", help="Render intent detector prompt")
+    catalog_prompt = catalog_sub.add_parser("prompt", help="Render routing prompt")
     catalog_prompt.add_argument("--text", required=True, help="User message to render")
+    catalog_prompt.add_argument(
+        "--mode",
+        choices=("map", "legacy"),
+        default="map",
+        help="Prompt mode: map (default runtime) or legacy detector",
+    )
     catalog_template = catalog_sub.add_parser("template", help="Show prompt template by key")
     catalog_template.add_argument("key", help="Prompt template key")
 
@@ -545,13 +551,21 @@ def _command_catalog(args: argparse.Namespace) -> None:
         return
 
     if args.catalog_command == "prompt":
-        from alphonse.agent.cognition.intent_detector_llm import build_detector_prompt
+        if args.mode == "legacy":
+            from alphonse.agent.cognition.intent_detector_llm import build_detector_prompt
 
-        service = get_catalog_service()
-        prompt = build_detector_prompt(args.text, service)
-        if prompt is None:
-            print("No enabled intents; prompt not available.")
+            service = get_catalog_service()
+            prompt = build_detector_prompt(args.text, service)
+            if prompt is None:
+                print("No enabled intents; prompt not available.")
+                return
+            print("Mode: legacy")
+            print(prompt)
             return
+        from alphonse.agent.cognition.message_map_llm import build_message_map_prompt
+
+        prompt = build_message_map_prompt(args.text)
+        print("Mode: map")
         print(prompt)
         return
 
