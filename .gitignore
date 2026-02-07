@@ -54,7 +54,6 @@ alphonse/agent/nervous_system/db/
 # Local sqlite data
 data/*.db
 alphonse/agent/nervous_system/db/
-nervous_system/
 **/nerve-db*
 
 # WhatsApp CLI store
