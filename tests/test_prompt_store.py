@@ -4,7 +4,11 @@ from pathlib import Path
 
 import pytest
 
-from alphonse.agent.cognition.prompt_store import PromptContext, SqlitePromptStore
+from alphonse.agent.cognition.prompt_store import (
+    PromptContext,
+    SqlitePromptStore,
+    seed_default_templates,
+)
 from alphonse.agent.cognition.response_composer import ResponseComposer
 from alphonse.agent.cognition.response_spec import ResponseSpec
 from alphonse.agent.nervous_system.migrate import apply_schema
@@ -164,3 +168,23 @@ def test_response_composer_prefers_prompt_store(
         policy_tier="safe",
     )
     assert composer.compose(spec) == "Custom clarify"
+
+
+def test_seed_includes_executor_response_keys(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = _prepare_db(tmp_path, monkeypatch)
+    seed_default_templates(str(tmp_path / "nerve-db"))
+    keys = [
+        "lan.device.not_found",
+        "lan.device.armed",
+        "pairing.not_found",
+        "error.execution_failed",
+        "policy.reminder.restricted",
+    ]
+    for key in keys:
+        match = store.get_template(
+            key,
+            PromptContext(locale="es-MX", address_style="tu", tone="friendly"),
+        )
+        assert match is not None, key

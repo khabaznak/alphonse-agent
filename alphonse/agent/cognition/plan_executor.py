@@ -22,7 +22,8 @@ from alphonse.agent.cognition.plans import (
     LanArmPayload,
     PairingDecisionPayload,
 )
-from alphonse.agent.cognition.localization import render_message
+from alphonse.agent.cognition.response_composer import ResponseComposer
+from alphonse.agent.cognition.response_spec import ResponseSpec
 from alphonse.agent.cognition.status_summaries import (
     summarize_gaps,
     summarize_timed_signals,
@@ -67,6 +68,7 @@ class PlanExecutor:
         self._coordinator = coordinator or build_default_coordinator()
         self._extremities = extremities or _build_default_extremities()
         self._policy = policy_engine or PolicyEngine()
+        self._responses = ResponseComposer()
 
     def execute(
         self, plans: list[CortexPlan], context: dict, exec_context: PlanExecutionContext
@@ -274,28 +276,24 @@ class PlanExecutor:
             self._extremities.dispatch(delivery, None)
 
     def _render_schedule_confirmation(self, payload: ScheduleTimedSignalPayload) -> str:
-        principal_id = get_or_create_principal_for_channel(
-            str(payload.origin),
-            str(payload.chat_id),
+        locale, address_style, tone = self._resolve_message_presentation(
+            channel=str(payload.origin),
+            target=str(payload.chat_id),
+            locale_hint=payload.locale_hint,
         )
-        locale = payload.locale_hint or settings.get_default_locale()
-        address_style = settings.get_address_style()
-        tone = settings.get_tone()
-        if principal_id:
-            locale = get_with_fallback(principal_id, "locale", locale)
-            address_style = get_with_fallback(
-                principal_id, "address_style", address_style
-            )
-            tone = get_with_fallback(principal_id, "tone", tone)
         logger.info(
             "executor schedule confirmation locale=%s address=%s",
             locale,
             address_style,
         )
-        return render_message(
-            "ack.reminder_scheduled",
-            locale,
-            {"address_style": address_style, "tone": tone},
+        return self._responses.compose(
+            ResponseSpec(
+                kind="ack",
+                key="ack.reminder_scheduled",
+                locale=locale,
+                address_style=address_style,
+                tone=tone,
+            )
         )
 
     def _execute_update_preferences(
@@ -332,8 +330,21 @@ class PlanExecutor:
         exec_context: PlanExecutionContext,
     ) -> None:
         device = get_paired_device(payload.device_id) if payload.device_id else get_latest_paired_device()
+        locale, address_style, tone = self._resolve_message_presentation(
+            channel=exec_context.channel_type,
+            target=exec_context.channel_target,
+            locale_hint=payload.locale,
+        )
         if not device:
-            message = _arm_message("not_found", payload.locale)
+            message = self._responses.compose(
+                ResponseSpec(
+                    kind="answer",
+                    key="lan.device.not_found",
+                    locale=locale,
+                    address_style=address_style,
+                    tone=tone,
+                )
+            )
             self._dispatch_message(
                 channel=exec_context.channel_type,
                 target=exec_context.channel_target,
@@ -345,12 +356,23 @@ class PlanExecutor:
             return
         if plan.plan_type == PlanType.LAN_ARM:
             arm_device(device.device_id, armed_by=str(exec_context.channel_target or "telegram"))
-            status = _arm_message("armed", payload.locale)
+            key = "lan.device.armed"
         else:
             disarm_device(device.device_id)
-            status = _arm_message("disarmed", payload.locale)
-        name = device.device_name or "Unnamed device"
-        message = f"{status} {name} ({device.device_id})"
+            key = "lan.device.disarmed"
+        message = self._responses.compose(
+            ResponseSpec(
+                kind="ack",
+                key=key,
+                locale=locale,
+                address_style=address_style,
+                tone=tone,
+                variables={
+                    "device_name": device.device_name or "Unnamed device",
+                    "device_id": device.device_id,
+                },
+            )
+        )
         self._dispatch_message(
             channel=exec_context.channel_type,
             target=exec_context.channel_target,
@@ -368,19 +390,39 @@ class PlanExecutor:
         exec_context: PlanExecutionContext,
     ) -> None:
         request = get_pairing_request(payload.pairing_id)
+        locale, address_style, tone = self._resolve_message_presentation(
+            channel=exec_context.channel_type,
+            target=exec_context.channel_target,
+            locale_hint=payload.locale,
+        )
         if not request:
-            message = "Pairing not found."
+            key = "pairing.not_found"
+            variables: dict[str, Any] = {}
         elif request.status != "pending":
-            message = f"Pairing already {request.status}."
+            key = "pairing.already_resolved"
+            variables = {"status": request.status}
         elif plan.plan_type == PlanType.PAIR_APPROVE:
             if not payload.otp:
-                message = "Missing OTP."
+                key = "pairing.missing_otp"
+                variables = {}
             else:
                 approved = approve_pairing(payload.pairing_id, payload.otp, exec_context.channel_type)
-                message = "✅ Pairing approved." if approved else "Invalid OTP or expired."
+                key = "pairing.approved" if approved else "pairing.invalid_otp"
+                variables = {}
         else:
             denied = deny_pairing(payload.pairing_id, exec_context.channel_type)
-            message = "Pairing denied." if denied else "Pairing already resolved."
+            key = "pairing.denied" if denied else "pairing.already_resolved"
+            variables = {}
+        message = self._responses.compose(
+            ResponseSpec(
+                kind="answer",
+                key=key,
+                locale=locale,
+                address_style=address_style,
+                tone=tone,
+                variables=variables,
+            )
+        )
         self._dispatch_message(
             channel=exec_context.channel_type,
             target=exec_context.channel_target,
@@ -415,8 +457,22 @@ class PlanExecutor:
     def _dispatch_error(
         self, exec_context: PlanExecutionContext, context: dict
     ) -> None:
+        locale, address_style, tone = self._resolve_message_presentation(
+            channel=exec_context.channel_type,
+            target=exec_context.channel_target,
+            locale_hint=None,
+        )
+        message = self._responses.compose(
+            ResponseSpec(
+                kind="error",
+                key="error.execution_failed",
+                locale=locale,
+                address_style=address_style,
+                tone=tone,
+            )
+        )
         payload = _message_payload(
-            "Lo siento, tuve un problema al procesar la solicitud.",
+            message,
             exec_context.channel_type,
             exec_context.channel_target,
             exec_context,
@@ -445,7 +501,20 @@ class PlanExecutor:
                 plan.plan_id,
             )
             return
-        message = "No estoy autorizado para programar ese recordatorio."
+        locale, address_style, tone = self._resolve_message_presentation(
+            channel=exec_context.channel_type,
+            target=exec_context.channel_target,
+            locale_hint=None,
+        )
+        message = self._responses.compose(
+            ResponseSpec(
+                kind="policy_block",
+                key="policy.reminder.restricted",
+                locale=locale,
+                address_style=address_style,
+                tone=tone,
+            )
+        )
         payload = _message_payload(
             message,
             exec_context.channel_type,
@@ -483,6 +552,26 @@ class PlanExecutor:
             channel_id,
             str(user_text or ""),
         )
+
+    def _resolve_message_presentation(
+        self,
+        *,
+        channel: str,
+        target: str | None,
+        locale_hint: str | None,
+    ) -> tuple[str, str, str]:
+        locale = locale_hint or settings.get_default_locale()
+        address_style = settings.get_address_style()
+        tone = settings.get_tone()
+        if not target:
+            return locale, address_style, tone
+        principal_id = get_or_create_principal_for_channel(str(channel), str(target))
+        if not principal_id:
+            return locale, address_style, tone
+        locale = get_with_fallback(principal_id, "locale", locale)
+        address_style = get_with_fallback(principal_id, "address_style", address_style)
+        tone = get_with_fallback(principal_id, "tone", tone)
+        return locale, address_style, tone
 
 
 def _message_payload(
@@ -525,12 +614,3 @@ def _build_default_extremities() -> ExtremityRegistry:
     registry.register(ApiExtremity())
     registry.register(CliExtremity())
     return registry
-
-
-def _arm_message(kind: str, locale: str | None) -> str:
-    language = "es" if str(locale or "").lower().startswith("es") else "en"
-    if kind == "not_found":
-        return "No paired devices found." if language == "en" else "No se encontraron dispositivos emparejados."
-    if kind == "disarmed":
-        return "🔒 Disarmed device" if language == "en" else "🔒 Dispositivo desarmado"
-    return "✅ Armed device" if language == "en" else "✅ Dispositivo armado"
