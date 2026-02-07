@@ -1,12 +1,9 @@
 from __future__ import annotations
 
-import logging
-import os
 from dataclasses import dataclass
+from typing import Protocol
 
-from alphonse.agent.cognition.plans import CortexPlan, PlanType
-
-logger = logging.getLogger(__name__)
+from alphonse.agent.cognition.plans import CortexPlan
 
 
 @dataclass(frozen=True)
@@ -15,7 +12,33 @@ class PolicyDecision:
     reason: str | None = None
 
 
+class PolicyRule(Protocol):
+    def evaluate(self, plan: CortexPlan, exec_context: object) -> PolicyDecision | None:
+        ...
+
+
+class PolicyRuleProvider(Protocol):
+    def build_rules(self) -> list[PolicyRule]:
+        ...
+
+
 class PolicyEngine:
+    def __init__(
+        self,
+        rules: list[PolicyRule] | None = None,
+        rule_providers: list[PolicyRuleProvider] | None = None,
+    ) -> None:
+        providers = rule_providers[:] if rule_providers else _default_rule_providers()
+        resolved_rules: list[PolicyRule] = []
+        for provider in providers:
+            resolved_rules.extend(provider.build_rules())
+        if rules:
+            resolved_rules.extend(rules)
+        self._rules = resolved_rules
+
+    def register_rule(self, rule: PolicyRule) -> None:
+        self._rules.append(rule)
+
     def approve(self, plans: list[CortexPlan], context: object) -> list[CortexPlan]:
         _ = context
         approved: list[CortexPlan] = []
@@ -26,77 +49,14 @@ class PolicyEngine:
         return approved
 
     def approve_plan(self, plan: CortexPlan, exec_context: object) -> PolicyDecision:
-        if plan.plan_type == PlanType.SCHEDULE_TIMED_SIGNAL:
-            return self._approve_schedule(plan, exec_context)
-        if plan.plan_type in {PlanType.LAN_ARM, PlanType.LAN_DISARM}:
-            return self._approve_lan_arm(exec_context)
-        if plan.plan_type in {PlanType.PAIR_APPROVE, PlanType.PAIR_DENY}:
-            return self._approve_pairing(exec_context)
+        for rule in self._rules:
+            decision = rule.evaluate(plan, exec_context)
+            if decision is not None:
+                return decision
         return PolicyDecision(allowed=True)
 
-    def _approve_schedule(self, plan: CortexPlan, exec_context: object) -> PolicyDecision:
-        channel_type = getattr(exec_context, "channel_type", None)
-        channel_target = getattr(exec_context, "channel_target", None)
-        if channel_type != "telegram":
-            return PolicyDecision(allowed=True)
-        allowed = _parse_allowed_chat_ids(
-            os.getenv("TELEGRAM_ALLOWED_CHAT_IDS"),
-            os.getenv("TELEGRAM_ALLOWED_CHAT_ID"),
-        )
-        if not allowed:
-            return PolicyDecision(allowed=True)
-        if channel_target is None:
-            logger.warning("policy schedule denied reason=missing_target")
-            return PolicyDecision(allowed=False, reason="missing_target")
-        try:
-            chat_id = int(str(channel_target))
-        except ValueError:
-            return PolicyDecision(allowed=False, reason="invalid_target")
-        if chat_id not in allowed:
-            return PolicyDecision(allowed=False, reason="not_allowed")
-        return PolicyDecision(allowed=True)
 
-    def _approve_lan_arm(self, exec_context: object) -> PolicyDecision:
-        channel_type = getattr(exec_context, "channel_type", None)
-        channel_target = getattr(exec_context, "channel_target", None)
-        if channel_type != "telegram":
-            return PolicyDecision(allowed=False, reason="not_telegram")
-        allowed = _parse_allowed_chat_ids(
-            os.getenv("TELEGRAM_ALLOWED_CHAT_IDS"),
-            os.getenv("TELEGRAM_ALLOWED_CHAT_ID"),
-        )
-        if not allowed:
-            return PolicyDecision(allowed=False, reason="not_allowed")
-        if channel_target is None:
-            return PolicyDecision(allowed=False, reason="missing_target")
-        try:
-            chat_id = int(str(channel_target))
-        except ValueError:
-            return PolicyDecision(allowed=False, reason="invalid_target")
-        if chat_id not in allowed:
-            return PolicyDecision(allowed=False, reason="not_allowed")
-        return PolicyDecision(allowed=True)
+def _default_rule_providers() -> list[PolicyRuleProvider]:
+    from alphonse.agent.policy.rules.telegram import TelegramPolicyRuleProvider
 
-    def _approve_pairing(self, exec_context: object) -> PolicyDecision:
-        channel_type = getattr(exec_context, "channel_type", None)
-        if channel_type == "cli":
-            return PolicyDecision(allowed=True)
-        if channel_type != "telegram":
-            return PolicyDecision(allowed=False, reason="not_telegram")
-        return self._approve_lan_arm(exec_context)
-
-
-def _parse_allowed_chat_ids(primary: str | None, fallback: str | None) -> set[int] | None:
-    raw = primary or fallback
-    if not raw:
-        return None
-    ids: set[int] = set()
-    for entry in raw.split(","):
-        entry = entry.strip()
-        if not entry:
-            continue
-        try:
-            ids.add(int(entry))
-        except ValueError:
-            continue
-    return ids or None
+    return [TelegramPolicyRuleProvider()]

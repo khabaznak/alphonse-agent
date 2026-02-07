@@ -30,14 +30,14 @@ Make `nerve-db` the source of truth for behavior/config text and reduce hardcode
   - Shift from high-selector combinatorics to mostly `key + locale (+ variant)`.
   - Keep selector dimensions for explicit overrides only.
 
-- `[ ]` Phase 3: Policy engine pluginization.
-  - Introduce rule interface and registry.
-  - Move Telegram-specific checks from core engine into integration rule providers.
+- `[x]` Phase 3: Policy engine pluginization.
+  - Introduced rule interface and provider loading in `PolicyEngine`.
+  - Moved Telegram-specific checks out of core engine into `policy/rules/telegram.py`.
 
-- `[ ]` Phase 4: Prompt seed ownership cleanup.
-  - Move seed payload out of runtime code paths into explicit migration/seed assets.
-  - Keep runtime store logic only in `prompt_store.py`.
+- `[x]` Phase 4: Prompt seed ownership cleanup.
+  - Moved prompt seed payload from `prompt_store.py` into explicit seed asset `nervous_system/resources/prompt_templates.seed.json`.
+  - Kept runtime store logic in `prompt_store.py`; it now only loads and applies seed rows.
 
-- `[ ]` Phase 5: Guardrails.
-  - Test to fail if new user-facing literal blocks are added outside `safe_fallbacks.py`.
-  - Runtime tests for unavailable-brain behavior.
+- `[x]` Phase 5: Guardrails.
+  - Added test that fails on hardcoded runtime user-response literals outside `safe_fallbacks.py`.
+  - Added startup runtime test for graceful exit when brain health is unavailable.

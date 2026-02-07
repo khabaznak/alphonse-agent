@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import logging
+import json
 import sqlite3
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Protocol
 
 from alphonse.agent.nervous_system.paths import resolve_nervous_system_db_path
@@ -319,504 +321,47 @@ class NullPromptStore:
 
 def seed_default_templates(db_path: str | None = None) -> None:
     store = SqlitePromptStore(db_path=db_path)
-    seeds = [
-        ("core.greeting", "en", "any", "any", "any", "default", "safe", "Hi! How can I help?"),
-        ("core.greeting", "es", "any", "any", "any", "default", "safe", "¡Hola! ¿En qué te ayudo?"),
-        (
-            "core.identity.agent",
-            "en",
-            "any",
-            "any",
-            "any",
-            "default",
-            "safe",
-            "I'm Alphonse, your assistant. I only know this authorized chat.",
-        ),
-        (
-            "core.identity.agent",
-            "es",
-            "any",
-            "any",
-            "any",
-            "default",
-            "safe",
-            "Soy Alphonse, tu asistente. Solo conozco este chat autorizado.",
-        ),
-        (
-            "core.identity.user.ask_name",
-            "en",
-            "any",
-            "any",
-            "any",
-            "default",
-            "safe",
-            "I don't know your name yet. Tell me what you'd like me to call you.",
-        ),
-        (
-            "core.identity.user.ask_name",
-            "es",
-            "any",
-            "any",
-            "any",
-            "default",
-            "safe",
-            "Aún no sé tu nombre. Dime cómo quieres que te llame.",
-        ),
-        (
-            "core.identity.user.known",
-            "en",
-            "any",
-            "any",
-            "any",
-            "default",
-            "safe",
-            "Yes, your name is {user_name}.",
-        ),
-        (
-            "core.identity.user.known",
-            "es",
-            "any",
-            "any",
-            "any",
-            "default",
-            "safe",
-            "Sí, te llamas {user_name}.",
-        ),
-        (
-            "clarify.intent",
-            "en",
-            "any",
-            "any",
-            "any",
-            "default",
-            "safe",
-            "I'm not sure what you mean yet. What would you like to do?",
-        ),
-        (
-            "clarify.intent",
-            "es",
-            "any",
-            "any",
-            "any",
-            "default",
-            "safe",
-            "No estoy seguro de a qué te refieres. ¿Qué te gustaría hacer?",
-        ),
-        (
-            "clarify.slot_abort",
-            "en",
-            "any",
-            "any",
-            "any",
-            "default",
-            "safe",
-            "We can cancel this or try again later. What would you prefer?",
-        ),
-        (
-            "clarify.slot_abort",
-            "es",
-            "any",
-            "any",
-            "any",
-            "default",
-            "safe",
-            "Puedo cancelar esto o intentarlo más tarde. ¿Qué prefieres?",
-        ),
-        (
-            "ack.cancelled",
-            "en",
-            "any",
-            "any",
-            "any",
-            "default",
-            "safe",
-            "Okay, I cancelled that.",
-        ),
-        (
-            "ack.cancelled",
-            "es",
-            "any",
-            "any",
-            "any",
-            "default",
-            "safe",
-            "Listo, lo cancelé.",
-        ),
-        (
-            "intent_detector.rules.v1",
-            "en",
-            "any",
-            "any",
-            "any",
-            "default",
-            "safe",
-            "Rules:\n"
-            "- Only choose intents from the catalog or \"unknown\".\n"
-            "- Prefer \"unknown\" when ambiguous or too short.\n"
-            "- Do not choose timed_signals.list unless the user is asking about reminders.\n"
-            "- Do not choose timed_signals.create unless the user requests a reminder.\n"
-            "- Confidence: high only when clear, low when uncertain.",
-        ),
-        (
-            "intent_detector.rules.v1",
-            "es",
-            "any",
-            "any",
-            "any",
-            "default",
-            "safe",
-            "Reglas:\n"
-            "- Solo elige intents del catálogo o \"unknown\".\n"
-            "- Prefiere \"unknown\" cuando sea ambiguo o muy corto.\n"
-            "- No elijas timed_signals.list a menos que pregunte por recordatorios.\n"
-            "- No elijas timed_signals.create a menos que pida un recordatorio.\n"
-            "- Confianza: alta solo cuando sea claro, baja cuando sea incierto.",
-        ),
-        (
-            "intent_detector.catalog.prompt.v1",
-            "en",
-            "any",
-            "any",
-            "any",
-            "default",
-            "safe",
-            "{rules_block}\n\n"
-            "Catalog:\n{catalog_json}\n\n"
-            "User message: {user_message}\n"
-            "Return strict JSON: intent_name, confidence, slot_guesses, needs_clarification.",
-        ),
-        (
-            "intent_detector.catalog.prompt.v1",
-            "es",
-            "any",
-            "any",
-            "any",
-            "default",
-            "safe",
-            "{rules_block}\n\n"
-            "Catálogo:\n{catalog_json}\n\n"
-            "Mensaje del usuario: {user_message}\n"
-            "Devuelve JSON estricto: intent_name, confidence, slot_guesses, needs_clarification.",
-        ),
-        (
-            "clarify.reminder_text",
-            "en",
-            "any",
-            "any",
-            "any",
-            "default",
-            "safe",
-            'What should I remind you about? Example: "drink water".',
-        ),
-        (
-            "clarify.reminder_text",
-            "es",
-            "any",
-            "any",
-            "any",
-            "default",
-            "safe",
-            '¿Qué debo recordarte? Ejemplo: "tomar agua".',
-        ),
-        (
-            "clarify.trigger_time",
-            "en",
-            "any",
-            "any",
-            "any",
-            "default",
-            "safe",
-            'When should I remind you? Example: "in 10 min" or "at 7pm".',
-        ),
-        (
-            "clarify.trigger_time",
-            "es",
-            "any",
-            "any",
-            "any",
-            "default",
-            "safe",
-            '¿Cuándo debo recordártelo? Ejemplo: "en 10 min" o "a las 7".',
-        ),
-        (
-            "clarify.trigger_geo.stub_setup",
-            "en",
-            "any",
-            "any",
-            "any",
-            "default",
-            "safe",
-            "I can do location-based reminders once home is set up. Want to switch to a time-based reminder?",
-        ),
-        (
-            "clarify.trigger_geo.stub_setup",
-            "es",
-            "any",
-            "any",
-            "any",
-            "default",
-            "safe",
-            "Puedo hacer recordatorios por ubicación cuando casa esté configurada. ¿Quieres usar un recordatorio por hora?",
-        ),
-        (
-            "ack.reminder_scheduled",
-            "en",
-            "any",
-            "any",
-            "any",
-            "default",
-            "safe",
-            "Got it. Reminder scheduled.",
-        ),
-        (
-            "ack.reminder_scheduled",
-            "es",
-            "any",
-            "any",
-            "any",
-            "default",
-            "safe",
-            "Listo, programé el recordatorio.",
-        ),
-        (
-            "lan.device.not_found",
-            "en",
-            "any",
-            "any",
-            "any",
-            "default",
-            "safe",
-            "No paired devices found.",
-        ),
-        (
-            "lan.device.not_found",
-            "es",
-            "any",
-            "any",
-            "any",
-            "default",
-            "safe",
-            "No se encontraron dispositivos emparejados.",
-        ),
-        (
-            "lan.device.armed",
-            "en",
-            "any",
-            "any",
-            "any",
-            "default",
-            "safe",
-            "✅ Armed device {device_name} ({device_id})",
-        ),
-        (
-            "lan.device.armed",
-            "es",
-            "any",
-            "any",
-            "any",
-            "default",
-            "safe",
-            "✅ Dispositivo armado {device_name} ({device_id})",
-        ),
-        (
-            "lan.device.disarmed",
-            "en",
-            "any",
-            "any",
-            "any",
-            "default",
-            "safe",
-            "🔒 Disarmed device {device_name} ({device_id})",
-        ),
-        (
-            "lan.device.disarmed",
-            "es",
-            "any",
-            "any",
-            "any",
-            "default",
-            "safe",
-            "🔒 Dispositivo desarmado {device_name} ({device_id})",
-        ),
-        (
-            "pairing.not_found",
-            "en",
-            "any",
-            "any",
-            "any",
-            "default",
-            "safe",
-            "Pairing not found.",
-        ),
-        (
-            "pairing.not_found",
-            "es",
-            "any",
-            "any",
-            "any",
-            "default",
-            "safe",
-            "No encontré ese emparejamiento.",
-        ),
-        (
-            "pairing.already_resolved",
-            "en",
-            "any",
-            "any",
-            "any",
-            "default",
-            "safe",
-            "Pairing already {status}.",
-        ),
-        (
-            "pairing.already_resolved",
-            "es",
-            "any",
-            "any",
-            "any",
-            "default",
-            "safe",
-            "El emparejamiento ya está {status}.",
-        ),
-        (
-            "pairing.missing_otp",
-            "en",
-            "any",
-            "any",
-            "any",
-            "default",
-            "safe",
-            "Missing OTP.",
-        ),
-        (
-            "pairing.missing_otp",
-            "es",
-            "any",
-            "any",
-            "any",
-            "default",
-            "safe",
-            "Falta el OTP.",
-        ),
-        (
-            "pairing.approved",
-            "en",
-            "any",
-            "any",
-            "any",
-            "default",
-            "safe",
-            "✅ Pairing approved.",
-        ),
-        (
-            "pairing.approved",
-            "es",
-            "any",
-            "any",
-            "any",
-            "default",
-            "safe",
-            "✅ Emparejamiento aprobado.",
-        ),
-        (
-            "pairing.invalid_otp",
-            "en",
-            "any",
-            "any",
-            "any",
-            "default",
-            "safe",
-            "Invalid OTP or expired.",
-        ),
-        (
-            "pairing.invalid_otp",
-            "es",
-            "any",
-            "any",
-            "any",
-            "default",
-            "safe",
-            "OTP inválido o expirado.",
-        ),
-        (
-            "pairing.denied",
-            "en",
-            "any",
-            "any",
-            "any",
-            "default",
-            "safe",
-            "Pairing denied.",
-        ),
-        (
-            "pairing.denied",
-            "es",
-            "any",
-            "any",
-            "any",
-            "default",
-            "safe",
-            "Emparejamiento rechazado.",
-        ),
-        (
-            "error.execution_failed",
-            "en",
-            "any",
-            "any",
-            "any",
-            "default",
-            "safe",
-            "Sorry, I had a problem processing that request.",
-        ),
-        (
-            "error.execution_failed",
-            "es",
-            "any",
-            "any",
-            "any",
-            "default",
-            "safe",
-            "Lo siento, tuve un problema al procesar la solicitud.",
-        ),
-        (
-            "policy.reminder.restricted",
-            "en",
-            "any",
-            "any",
-            "any",
-            "default",
-            "strict",
-            "I am not authorized to schedule that reminder.",
-        ),
-        (
-            "policy.reminder.restricted",
-            "es",
-            "any",
-            "any",
-            "any",
-            "default",
-            "strict",
-            "No estoy autorizado para programar ese recordatorio.",
-        ),
-    ]
-    for key, locale, address_style, tone, channel, variant, policy_tier, template in seeds:
+    for seed in _load_seed_templates():
         try:
             store.upsert_template(
-                key=key,
-                locale=locale,
-                address_style=address_style,
-                tone=tone,
-                channel=channel,
-                variant=variant,
-                policy_tier=policy_tier,
-                template=template,
+                key=seed["key"],
+                locale=seed["locale"],
+                address_style=seed["address_style"],
+                tone=seed["tone"],
+                channel=seed["channel"],
+                variant=seed["variant"],
+                policy_tier=seed["policy_tier"],
+                template=seed["template"],
                 enabled=True,
                 priority=0,
                 changed_by="seed",
                 reason="initial_seed",
             )
         except Exception:
-            logger.exception("prompt seed failed key=%s locale=%s", key, locale)
+            logger.exception(
+                "prompt seed failed key=%s locale=%s",
+                seed.get("key"),
+                seed.get("locale"),
+            )
+
+
+def _load_seed_templates() -> list[dict[str, str]]:
+    seed_path = (
+        Path(__file__).resolve().parent.parent / "nervous_system" / "resources" / "prompt_templates.seed.json"
+    )
+    payload = json.loads(seed_path.read_text(encoding="utf-8"))
+    if not isinstance(payload, list):
+        raise ValueError("prompt template seed payload must be a list")
+    required = {"key", "locale", "address_style", "tone", "channel", "variant", "policy_tier", "template"}
+    rows: list[dict[str, str]] = []
+    for item in payload:
+        if not isinstance(item, dict):
+            raise ValueError("prompt template seed row must be an object")
+        if not required.issubset(item.keys()):
+            missing = sorted(required - set(item.keys()))
+            raise ValueError(f"prompt template seed row missing fields: {missing}")
+        rows.append({name: str(item[name]) for name in required})
+    return rows
 
 
 def _score_template(row: dict[str, Any], context: PromptContext) -> float:

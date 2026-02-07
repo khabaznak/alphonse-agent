@@ -63,7 +63,10 @@ class HandleIncomingMessageAction(Action):
             _snippet(text),
         )
         if not text:
-            return _message_result("No te escuché bien. ¿Puedes repetir?", incoming)
+            locale = settings.get_default_locale()
+            spec = ResponseSpec(kind="clarify", key="clarify.repeat_input", locale=locale)
+            rendered = ResponseComposer().compose(spec)
+            return _message_result(rendered, incoming)
 
         conversation_key = _conversation_key(incoming)
         logger.info(
