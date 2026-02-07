@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+import unicodedata
 from datetime import datetime, timezone
 from typing import Any, TypedDict
 
@@ -27,6 +28,7 @@ from alphonse.agent.cognition.intent_router_map import (
 from alphonse.agent.cognition.slots.resolvers import build_default_registry
 from alphonse.agent.cognition.slots.slot_filler import fill_slots
 from alphonse.agent.cognition.slots.slot_fsm import deserialize_machine, serialize_machine
+from alphonse.agent.cognition.slot_question_llm import generate_slot_question
 from alphonse.agent.cognition.slots.utterance_guard import (
     detect_core_intent,
     is_core_conversational_utterance,
@@ -53,7 +55,7 @@ from alphonse.agent.cognition.preferences.store import (
     get_or_create_principal_for_channel,
 )
 from alphonse.agent.core.settings_store import get_timezone
-from alphonse.agent.cortex.intent import (
+from alphonse.agent.cognition.routing_primitives import (
     build_intent_evidence,
     extract_preference_updates,
     pairing_command_intent,
@@ -99,7 +101,7 @@ def build_cortex_graph(llm_client: OllamaClient | None = None) -> StateGraph:
     graph = StateGraph(CortexState)
     graph.add_node("ingest_node", _ingest_node)
     graph.add_node("intent_node", _intent_node(llm_client))
-    graph.add_node("catalog_slot_node", _catalog_slot_node)
+    graph.add_node("catalog_slot_node", _catalog_slot_node(llm_client))
     graph.add_node("respond_node", _respond_node)
 
     graph.set_entry_point("ingest_node")
@@ -421,14 +423,20 @@ def _question_intent_from_map(text: str, message_map: MessageMap) -> str | None:
 
 
 def _task_intent_from_map(text: str, message_map: MessageMap) -> str | None:
-    lowered = text.lower()
-    if any(token in lowered for token in ("remind", "recu", "recorda")):
-        return "timed_signals.create"
+    if message_map.raw_intent_hint not in {"single_action", "multi_action", "mixed"}:
+        return None
+    if not message_map.actions:
+        return None
     for action in message_map.actions:
-        verb = (action.verb or "").lower()
-        if any(token in verb for token in ("remind", "recu", "recorda")):
+        verb = _normalize_for_intent_matching(action.verb or "")
+        if any(token in verb for token in ("remind", "recu", "recorda", "acuerd")):
             return "timed_signals.create"
     return None
+
+
+def _normalize_for_intent_matching(text: str) -> str:
+    normalized = unicodedata.normalize("NFKD", str(text or ""))
+    return "".join(ch for ch in normalized if not unicodedata.combining(ch)).lower()
 
 
 def _build_slot_guesses_from_map(message_map: MessageMap) -> dict[str, Any]:
@@ -489,83 +497,107 @@ def _use_legacy_intent_detector() -> bool:
     return raw in {"1", "true", "yes", "on"}
 
 
-def _catalog_slot_node(state: CortexState) -> dict[str, Any]:
-    intent_name = state.get("catalog_intent")
-    if not intent_name:
-        return {}
-    catalog_service = get_catalog_service()
-    if not catalog_service.store.available:
-        return {"response_key": "help"}
-    spec = catalog_service.get_intent(str(intent_name))
-    if not catalog_service.store.available:
-        return {"response_key": "help"}
-    if not spec:
-        return {}
-    registry = build_default_registry()
-    machine = deserialize_machine(state.get("slot_machine") or {})
-    text = str(state.get("last_user_message") or "")
-    if machine:
-        core_intent = detect_core_intent(text)
-        if core_intent:
-            if core_intent == "cancel":
+def _catalog_slot_node(llm_client: OllamaClient | None):
+    def _node(state: CortexState) -> dict[str, Any]:
+        intent_name = state.get("catalog_intent")
+        if not intent_name:
+            return {}
+        catalog_service = get_catalog_service()
+        if not catalog_service.store.available:
+            return {"response_key": "help"}
+        spec = catalog_service.get_intent(str(intent_name))
+        if not catalog_service.store.available:
+            return {"response_key": "help"}
+        if not spec:
+            return {}
+        registry = build_default_registry()
+        machine = deserialize_machine(state.get("slot_machine") or {})
+        text = str(state.get("last_user_message") or "")
+        if machine:
+            core_intent = detect_core_intent(text)
+            if core_intent:
+                if core_intent == "cancel":
+                    return {
+                        "response_key": "ack.cancelled",
+                        "slot_machine": None,
+                        "catalog_intent": None,
+                        "intent": "cancel",
+                        "routing_rationale": "slot_cancel",
+                    }
+                core_spec = catalog_service.get_intent(core_intent)
+                category = (
+                    core_spec.category
+                    if core_spec
+                    else IntentCategory.CORE_CONVERSATIONAL.value
+                )
+                machine.paused_at = datetime.now(timezone.utc).isoformat()
                 return {
-                    "response_key": "ack.cancelled",
-                    "slot_machine": None,
-                    "catalog_intent": None,
-                    "intent": "cancel",
-                    "routing_rationale": "slot_cancel",
+                    "intent": core_intent,
+                    "intent_category": category,
+                    "slot_machine": serialize_machine(machine),
+                    "catalog_intent": intent_name,
+                    "routing_rationale": "slot_barge_in",
                 }
-            core_spec = catalog_service.get_intent(core_intent)
-            category = (
-                core_spec.category
-                if core_spec
-                else IntentCategory.CORE_CONVERSATIONAL.value
-            )
-            machine.paused_at = datetime.now(timezone.utc).isoformat()
-            return {
-                "intent": core_intent,
-                "intent_category": category,
-                "slot_machine": serialize_machine(machine),
-                "catalog_intent": intent_name,
-                "routing_rationale": "slot_barge_in",
-            }
-    context = {
-        "locale": state.get("locale"),
-        "timezone": state.get("timezone"),
-        "now": datetime.now(timezone.utc).isoformat(),
-        "conversation_key": state.get("conversation_key"),
-        "channel": state.get("channel_type"),
-        "channel_type": state.get("channel_type"),
-        "channel_target": state.get("channel_target"),
-        "chat_id": state.get("chat_id"),
-        "correlation_id": state.get("correlation_id"),
-    }
-    existing_slots: dict[str, Any] = {}
-    if machine:
-        existing_slots = state.get("slots") or {}
-    result = fill_slots(
-        spec,
-        text=text,
-        slot_guesses=state.get("catalog_slot_guesses") or {},
-        registry=registry,
-        context=context,
-        existing_slots=existing_slots,
-        machine=machine,
-    )
-    updated: dict[str, Any] = {
-        "intent": intent_name,
-        "intent_category": spec.category,
-        "slots": result.slots,
-        "slot_machine": result.slot_machine,
-        "catalog_intent": intent_name,
-        "catalog_slot_guesses": {},
-    }
-    if result.response_key:
-        updated["response_key"] = result.response_key
-        updated["response_vars"] = result.response_vars
-    if result.plans:
-        updated["plans"] = list(state.get("plans") or []) + result.plans
-    return updated
+        context = {
+            "locale": state.get("locale"),
+            "timezone": state.get("timezone"),
+            "now": datetime.now(timezone.utc).isoformat(),
+            "conversation_key": state.get("conversation_key"),
+            "channel": state.get("channel_type"),
+            "channel_type": state.get("channel_type"),
+            "channel_target": state.get("channel_target"),
+            "chat_id": state.get("chat_id"),
+            "correlation_id": state.get("correlation_id"),
+        }
+        existing_slots: dict[str, Any] = {}
+        if machine:
+            existing_slots = state.get("slots") or {}
+        result = fill_slots(
+            spec,
+            text=text,
+            slot_guesses=state.get("catalog_slot_guesses") or {},
+            registry=registry,
+            context=context,
+            existing_slots=existing_slots,
+            machine=machine,
+        )
+        updated: dict[str, Any] = {
+            "intent": intent_name,
+            "intent_category": spec.category,
+            "slots": result.slots,
+            "slot_machine": result.slot_machine,
+            "catalog_intent": intent_name,
+            "catalog_slot_guesses": {},
+        }
+        if result.response_key:
+            updated["response_key"] = result.response_key
+            updated["response_vars"] = result.response_vars
+            if result.slot_machine:
+                slot_name = str(result.slot_machine.get("slot_name") or "")
+                slot_spec = _slot_spec_by_name(spec, slot_name)
+                if slot_spec:
+                    question = generate_slot_question(
+                        intent_name=spec.intent_name,
+                        slot_spec=slot_spec,
+                        locale=_locale_for_state(state),
+                        llm_client=llm_client,
+                    )
+                    if question:
+                        updated["response_key"] = None
+                        updated["response_text"] = question
+                        updated["response_vars"] = None
+        if result.plans:
+            updated["plans"] = list(state.get("plans") or []) + result.plans
+        return updated
+
+    return _node
+
+
+def _slot_spec_by_name(intent_spec: Any, slot_name: str) -> Any | None:
+    for spec in intent_spec.required_slots + intent_spec.optional_slots:
+        if spec.name == slot_name:
+            return spec
+    return None
 
 
 def _respond_node(state: CortexState) -> dict[str, Any]:

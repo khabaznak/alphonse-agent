@@ -146,3 +146,46 @@ def test_geo_stub_flow(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     assert result.reply_text
     assert "ubicación" in result.reply_text.lower() or "location" in result.reply_text.lower()
     assert not result.plans
+
+
+def test_mixed_language_acuerdame_routes_to_create(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _prepare_db(tmp_path, monkeypatch)
+    llm = FakeLLM(
+        """
+        {
+          "language": "mixed",
+          "social": {"is_greeting": false, "is_farewell": false, "is_thanks": false, "text": null},
+          "actions": [
+            {
+              "verb": "acuérdame",
+              "object": "bajar por agua",
+              "target": null,
+              "details": null,
+              "priority": "normal"
+            }
+          ],
+          "entities": ["bajar por agua"],
+          "constraints": {"times": ["en 2 min"], "numbers": ["2"], "locations": []},
+          "questions": [],
+          "commands": [],
+          "raw_intent_hint": "single_action",
+          "confidence": "high"
+        }
+        """
+    )
+    state = {
+        "chat_id": "123",
+        "channel_type": "telegram",
+        "channel_target": "123",
+        "timezone": "America/Mexico_City",
+        "locale": "es-MX",
+    }
+    result = invoke_cortex(
+        state,
+        "please acuérdame de bajar por agua en 2min",
+        llm_client=llm,
+    )
+    assert result.plans
+    assert result.plans[0].plan_type == PlanType.SCHEDULE_TIMED_SIGNAL
