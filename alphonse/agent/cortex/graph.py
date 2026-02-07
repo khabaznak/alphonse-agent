@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import re
 from datetime import datetime, timezone
 from typing import Any, TypedDict
@@ -17,6 +18,12 @@ from alphonse.agent.cognition.planning_engine import propose_plan
 from alphonse.agent.cognition.intent_types import IntentCategory
 from alphonse.agent.cognition.intent_catalog import get_catalog_service
 from alphonse.agent.cognition.intent_detector_llm import IntentDetectorLLM
+from alphonse.agent.cognition.message_map_llm import dissect_message, MessageMap
+from alphonse.agent.cognition.intent_router_map import (
+    FsmState,
+    RouteDecision,
+    route as route_map,
+)
 from alphonse.agent.cognition.slots.resolvers import build_default_registry
 from alphonse.agent.cognition.slots.slot_filler import fill_slots
 from alphonse.agent.cognition.slots.slot_fsm import deserialize_machine, serialize_machine
@@ -155,53 +162,10 @@ def _ingest_node(state: CortexState) -> dict[str, Any]:
 
 def _intent_node(llm_client: OllamaClient | None):
     def _node(state: CortexState) -> dict[str, Any]:
-        pairing = pairing_command_intent(state.get("last_user_message", ""))
-        catalog_service = get_catalog_service()
-        if pairing is not None:
-            spec = catalog_service.get_intent(pairing)
-            if spec:
-                evidence = build_intent_evidence(state.get("last_user_message", ""))
-                logger.info(
-                    "cortex intent chat_id=%s intent=%s confidence=%.2f",
-                    state.get("chat_id"),
-                    pairing,
-                    0.9,
-                )
-                _record_intent_detected(
-                    intent=pairing,
-                    category=spec.category,
-                    state=state,
-                )
-                return {
-                    "intent": pairing,
-                    "intent_confidence": 0.9,
-                    "intent_category": spec.category,
-                    "routing_rationale": "pairing_command",
-                    "routing_needs_clarification": False,
-                    "intent_evidence": evidence,
-                    "last_intent": pairing,
-                    "slots": {},
-                }
-        if extract_preference_updates(state.get("last_user_message", "")):
-            spec = catalog_service.get_intent("update_preferences")
-            if spec:
-                evidence = build_intent_evidence(state.get("last_user_message", ""))
-                _record_intent_detected(
-                    intent="update_preferences",
-                    category=spec.category,
-                    state=state,
-                )
-                return {
-                    "intent": "update_preferences",
-                    "intent_confidence": 0.7,
-                    "intent_category": spec.category,
-                    "routing_rationale": "preference_update",
-                    "routing_needs_clarification": False,
-                    "intent_evidence": evidence,
-                    "last_intent": "update_preferences",
-                    "slots": {},
-                }
-        catalog_result = _detect_catalog_intent(state, llm_client)
+        if _use_legacy_intent_detector():
+            catalog_result = _detect_catalog_intent_legacy(state, llm_client)
+        else:
+            catalog_result = _detect_catalog_intent_from_map(state, llm_client)
         if catalog_result:
             return catalog_result
         return {
@@ -217,7 +181,7 @@ def _intent_node(llm_client: OllamaClient | None):
     return _node
 
 
-def _detect_catalog_intent(
+def _detect_catalog_intent_legacy(
     state: CortexState, llm_client: OllamaClient | None
 ) -> dict[str, Any] | None:
     if state.get("slot_machine") and state.get("catalog_intent"):
@@ -269,6 +233,202 @@ def _detect_catalog_intent(
         "catalog_intent": detection.intent_name,
         "catalog_slot_guesses": detection.slot_guesses,
     }
+
+
+def _detect_catalog_intent_from_map(
+    state: CortexState, llm_client: OllamaClient | None
+) -> dict[str, Any] | None:
+    text = str(state.get("last_user_message") or "")
+    map_result = dissect_message(text, llm_client=llm_client)
+    message_map = map_result.message_map
+    machine = deserialize_machine(state.get("slot_machine") or {})
+    fsm_state = FsmState(
+        plan_active=bool(state.get("catalog_intent") and machine is not None),
+        expected_slot=machine.slot_type if machine else None,
+    )
+    decision = route_map(message_map, fsm_state)
+    logger.info(
+        "cortex message_map chat_id=%s parse_ok=%s domain=%s decision=%s latency_ms=%s",
+        state.get("chat_id"),
+        map_result.parse_ok,
+        decision.domain,
+        decision.decision,
+        map_result.latency_ms,
+    )
+    if state.get("slot_machine") and state.get("catalog_intent"):
+        intent_name = str(state.get("catalog_intent") or "")
+        if decision.decision != "interrupt_and_new_plan":
+            if decision.domain == "social" and machine:
+                machine.paused_at = datetime.now(timezone.utc).isoformat()
+                return {
+                    "intent": "greeting",
+                    "intent_confidence": 0.9,
+                    "intent_category": IntentCategory.CORE_CONVERSATIONAL.value,
+                    "routing_rationale": "message_map:plan_active_social",
+                    "routing_needs_clarification": False,
+                    "intent_evidence": build_intent_evidence(text),
+                    "last_intent": "greeting",
+                    "slot_machine": serialize_machine(machine),
+                    "catalog_intent": intent_name,
+                }
+            return {
+                "intent": intent_name,
+                "intent_confidence": state.get("intent_confidence", 0.6),
+                "intent_category": state.get("intent_category"),
+                "routing_rationale": "message_map:slot_machine_continue",
+                "routing_needs_clarification": True,
+                "intent_evidence": build_intent_evidence(text),
+                "last_intent": intent_name,
+                "catalog_intent": intent_name,
+                "catalog_slot_guesses": {},
+            }
+    routed = _route_decision_to_intent(
+        state=state,
+        message_map=message_map,
+        decision=decision,
+    )
+    if routed is None:
+        return None
+    return routed
+
+
+def _route_decision_to_intent(
+    *,
+    state: CortexState,
+    message_map: MessageMap,
+    decision: RouteDecision,
+) -> dict[str, Any] | None:
+    text = str(state.get("last_user_message") or "")
+    catalog_service = get_catalog_service()
+    intent_name: str | None = None
+    intent_confidence = 0.6
+    needs_clarification = False
+    slot_guesses: dict[str, Any] = {}
+
+    core_intent = detect_core_intent(text)
+    if core_intent:
+        intent_name = core_intent
+        intent_confidence = 0.9
+    elif extract_preference_updates(text):
+        intent_name = "update_preferences"
+        intent_confidence = 0.7
+
+    if intent_name is None and decision.domain == "commands":
+        intent_name = pairing_command_intent(text)
+        if intent_name is None and extract_preference_updates(text):
+            intent_name = "update_preferences"
+            intent_confidence = 0.7
+        if intent_name is None:
+            return None
+    elif intent_name is None and decision.domain == "social":
+        intent_name = "greeting"
+        intent_confidence = 0.9
+    elif intent_name is None and decision.domain == "question":
+        intent_name = _question_intent_from_map(text, message_map)
+        intent_confidence = 0.75
+        if intent_name is None:
+            needs_clarification = True
+    elif intent_name is None and decision.domain in {"task_single", "task_multi"}:
+        intent_name = _task_intent_from_map(text, message_map)
+        if intent_name == "timed_signals.create":
+            slot_guesses = _build_slot_guesses_from_map(message_map)
+            if not slot_guesses:
+                needs_clarification = True
+        if intent_name is None:
+            needs_clarification = True
+    elif intent_name is None and decision.domain == "other":
+        intent_name = None
+
+    if intent_name is None:
+        return {
+            "intent": "unknown",
+            "intent_confidence": 0.2,
+            "intent_category": IntentCategory.TASK_PLANE.value,
+            "routing_rationale": "message_map_unknown",
+            "routing_needs_clarification": True,
+            "intent_evidence": build_intent_evidence(text),
+            "last_intent": "unknown",
+        }
+
+    spec = catalog_service.get_intent(intent_name)
+    if not spec:
+        return {
+            "intent": "unknown",
+            "intent_confidence": 0.2,
+            "intent_category": IntentCategory.TASK_PLANE.value,
+            "routing_rationale": "message_map_intent_not_enabled",
+            "routing_needs_clarification": True,
+            "intent_evidence": build_intent_evidence(text),
+            "last_intent": "unknown",
+        }
+
+    result: dict[str, Any] = {
+        "intent": intent_name,
+        "intent_confidence": intent_confidence,
+        "intent_category": spec.category,
+        "routing_rationale": f"message_map:{decision.domain}",
+        "routing_needs_clarification": needs_clarification,
+        "intent_evidence": build_intent_evidence(text),
+        "last_intent": intent_name,
+    }
+    if spec.handler.startswith("timed_signals."):
+        result["catalog_intent"] = intent_name
+        result["catalog_slot_guesses"] = slot_guesses
+    if decision.decision == "interrupt_and_new_plan":
+        events = _append_event(
+            state.get("events"),
+            "fsm.plan_interrupted",
+            {
+                "previous_intent": state.get("catalog_intent"),
+                "new_intent": intent_name,
+                "reason": decision.reason,
+            },
+        )
+        result["events"] = events
+        result["slot_machine"] = None
+        result["catalog_intent"] = intent_name if spec.handler.startswith("timed_signals.") else None
+    _record_intent_detected(intent=intent_name, category=spec.category, state=state)
+    return result
+
+
+def _question_intent_from_map(text: str, message_map: MessageMap) -> str | None:
+    core_intent = detect_core_intent(text)
+    if core_intent:
+        return core_intent
+    question_blob = " ".join(message_map.questions).lower()
+    if any(token in question_blob for token in ("reminder", "recordatorio")):
+        return "timed_signals.list"
+    return None
+
+
+def _task_intent_from_map(text: str, message_map: MessageMap) -> str | None:
+    lowered = text.lower()
+    if any(token in lowered for token in ("remind", "recu", "recorda")):
+        return "timed_signals.create"
+    for action in message_map.actions:
+        verb = (action.verb or "").lower()
+        if any(token in verb for token in ("remind", "recu", "recorda")):
+            return "timed_signals.create"
+    return None
+
+
+def _build_slot_guesses_from_map(message_map: MessageMap) -> dict[str, Any]:
+    guesses: dict[str, Any] = {}
+    if message_map.constraints.times:
+        guesses["trigger_time"] = message_map.constraints.times[0]
+    if message_map.constraints.locations:
+        guesses["trigger_geo"] = message_map.constraints.locations[0]
+    if message_map.actions:
+        first = message_map.actions[0]
+        reminder_text = first.object or first.details or first.target
+        if reminder_text:
+            guesses["reminder_text"] = reminder_text
+    return guesses
+
+
+def _use_legacy_intent_detector() -> bool:
+    raw = os.getenv("ALPHONSE_USE_LEGACY_INTENT_DETECTOR", "false").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
 
 
 def _catalog_slot_node(state: CortexState) -> dict[str, Any]:
@@ -623,7 +783,7 @@ def _handle_noop(state: CortexState) -> dict[str, Any]:
 
 
 def _route_after_intent(state: CortexState) -> str:
-    if state.get("catalog_intent"):
+    if state.get("intent") in {"timed_signals.create", "timed_signals.list"}:
         return "catalog"
     return "respond"
 

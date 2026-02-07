@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import sqlite3
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -321,9 +322,15 @@ _CATALOG_SERVICE: IntentCatalogService | None = None
 
 def get_catalog_service() -> IntentCatalogService:
     global _CATALOG_SERVICE
+    expected_db_path = str(resolve_nervous_system_db_path())
+    if _CATALOG_SERVICE is not None and _CATALOG_SERVICE.store._db_path != expected_db_path:
+        _CATALOG_SERVICE = None
     if _CATALOG_SERVICE is None:
         ttl = int(os.getenv("ALPHONSE_INTENT_CATALOG_TTL", "60"))
-        _CATALOG_SERVICE = IntentCatalogService(ttl_seconds=ttl)
+        _CATALOG_SERVICE = IntentCatalogService(
+            store=IntentCatalogStore(db_path=expected_db_path),
+            ttl_seconds=ttl,
+        )
     return _CATALOG_SERVICE
 
 
@@ -772,4 +779,10 @@ def _normalize_text(text: str) -> str:
 def _example_in_text(text: str, example: str) -> bool:
     if not example:
         return False
+    example = example.strip()
+    if not example:
+        return False
+    if " " not in example:
+        pattern = r"\b" + re.escape(example) + r"\b"
+        return re.search(pattern, text, flags=re.IGNORECASE) is not None
     return example in text

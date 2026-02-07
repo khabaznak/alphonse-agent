@@ -31,13 +31,27 @@ def test_timed_signals_create_flow(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     llm = FakeLLM(
         """
         {
-          "intent_name": "timed_signals.create",
-          "confidence": 0.9,
-          "slot_guesses": {
-            "reminder_text": "drink water",
-            "trigger_time": "fifteen minutes"
+          "language": "en",
+          "social": {"is_greeting": false, "is_farewell": false, "is_thanks": false, "text": null},
+          "actions": [
+            {
+              "verb": "remind",
+              "object": "drink water",
+              "target": null,
+              "details": null,
+              "priority": "normal"
+            }
+          ],
+          "entities": ["drink water"],
+          "constraints": {
+            "times": ["fifteen minutes"],
+            "numbers": [],
+            "locations": []
           },
-          "needs_clarification": false
+          "questions": [],
+          "commands": [],
+          "raw_intent_hint": "single_action",
+          "confidence": "high"
         }
         """
     )
@@ -68,10 +82,15 @@ def test_timed_signals_list_flow(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     llm = FakeLLM(
         """
         {
-          "intent_name": "timed_signals.list",
-          "confidence": 0.8,
-          "slot_guesses": {},
-          "needs_clarification": false
+          "language": "es",
+          "social": {"is_greeting": false, "is_farewell": false, "is_thanks": false, "text": null},
+          "actions": [],
+          "entities": ["recordatorios"],
+          "constraints": {"times": [], "numbers": [], "locations": []},
+          "questions": ["Qué recordatorios pendientes tengo?"],
+          "commands": [],
+          "raw_intent_hint": "question_only",
+          "confidence": "high"
         }
         """
     )
@@ -92,13 +111,23 @@ def test_geo_stub_flow(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     llm = FakeLLM(
         """
         {
-          "intent_name": "timed_signals.create",
-          "confidence": 0.8,
-          "slot_guesses": {
-            "reminder_text": "cerrar la puerta",
-            "trigger_geo": "al llegar a casa"
-          },
-          "needs_clarification": false
+          "language": "es",
+          "social": {"is_greeting": false, "is_farewell": false, "is_thanks": false, "text": null},
+          "actions": [
+            {
+              "verb": "recuérdame",
+              "object": "cerrar la puerta",
+              "target": null,
+              "details": null,
+              "priority": "normal"
+            }
+          ],
+          "entities": [],
+          "constraints": {"times": [], "numbers": [], "locations": ["al llegar a casa"]},
+          "questions": [],
+          "commands": [],
+          "raw_intent_hint": "single_action",
+          "confidence": "medium"
         }
         """
     )
