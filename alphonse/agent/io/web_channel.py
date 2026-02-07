@@ -39,15 +39,21 @@ class WebExtremityAdapter(ExtremityAdapter):
 
     def deliver(self, message: NormalizedOutboundMessage) -> None:
         from alphonse.infrastructure.api_gateway import gateway
+        from alphonse.infrastructure.web_event_hub import web_event_hub
 
         # API/web UI currently use the API exchange for request-response delivery.
+        event_payload = {
+            "message": message.message,
+            "data": (message.metadata or {}).get("data"),
+            "channel_target": message.channel_target,
+            "correlation_id": message.correlation_id,
+        }
+        if message.channel_target:
+            web_event_hub.publish(str(message.channel_target), event_payload)
         if message.correlation_id and gateway.exchange:
             gateway.exchange.publish(
                 str(message.correlation_id),
-                {
-                    "message": message.message,
-                    "data": (message.metadata or {}).get("data"),
-                },
+                {"message": message.message, "data": (message.metadata or {}).get("data")},
             )
         logger.info(
             "WebExtremityAdapter delivered target=%s correlation_id=%s",

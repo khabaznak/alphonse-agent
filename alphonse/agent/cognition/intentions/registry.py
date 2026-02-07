@@ -24,14 +24,8 @@ class IntentionRegistry:
 def register_default_intentions(registry: IntentionRegistry) -> None:
     registry.register(
         Intention(
-            key="INFORM_STATUS",
-            metadata=IntentionMetadata(urgency="low", semantics="status"),
-        )
-    )
-    registry.register(
-        Intention(
-            key="NOTIFY_HOUSEHOLD",
-            metadata=IntentionMetadata(urgency="medium", audience="household"),
+            key="MESSAGE_READY",
+            metadata=IntentionMetadata(urgency="medium", audience="channel", semantics="narration"),
         )
     )
     registry.register(

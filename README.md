@@ -59,6 +59,10 @@ Key files:
 - `docs/` — Design notes, vision, and long-term ideas
 - `docs/architecture.md` — Alphonse architecture and boundaries
 - `docs/refactor_roadmap.md` — Cleanup and separation roadmap
+- `docs/message_io_contract.md` — Normalized inbound/outbound adapter contract
+
+Alphonse HTTP chat integration (MVP) uses `POST /agent/message`.
+Web UI outbound push can subscribe to `GET /agent/events` (SSE).
 
 Configuration lives in `config/alphonse.yaml`. The `mode` controls which inference
 provider Alphonse uses:

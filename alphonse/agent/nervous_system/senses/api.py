@@ -42,6 +42,7 @@ class ApiSense(Sense):
         if not adapter:
             raise ValueError(f"No sense adapter for channel={channel}")
         normalized = adapter.normalize({**api_signal.payload, "channel": channel})
+        correlation_id = normalized.correlation_id or api_signal.correlation_id
         bus.emit(
             Signal(
                 type=api_signal.type,
@@ -52,12 +53,12 @@ class ApiSense(Sense):
                     "user_id": normalized.user_id,
                     "user_name": normalized.user_name,
                     "timestamp": normalized.timestamp,
-                    "correlation_id": normalized.correlation_id,
+                    "correlation_id": correlation_id,
                     "metadata": normalized.metadata,
                     "origin": "api",
                 },
                 source="api",
-                correlation_id=normalized.correlation_id or api_signal.correlation_id,
+                correlation_id=correlation_id,
             )
         )
 
