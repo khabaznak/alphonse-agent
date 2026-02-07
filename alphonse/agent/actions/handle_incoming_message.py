@@ -10,7 +10,6 @@ from alphonse.agent.actions.models import ActionResult
 from alphonse.agent.io import get_io_registry
 from alphonse.agent.cognition.response_composer import ResponseComposer
 from alphonse.agent.cognition.response_spec import ResponseSpec
-from alphonse.agent.cognition.capability_gaps.triage import detect_language
 from alphonse.agent.cognition.plans import CortexPlan, PlanType
 from alphonse.agent.cognition.preferences.store import (
     get_or_create_principal_for_channel,
@@ -198,8 +197,7 @@ class HandleIncomingMessageAction(Action):
             )
             executor.execute([reply_plan], context, exec_context)
         elif result.reply_text:
-            detected = detect_language(text)
-            locale = "es-MX" if detected == "es" else "en-US"
+            locale = _preferred_locale(incoming, text)
             reply_plan = CortexPlan(
                 plan_type=PlanType.COMMUNICATE,
                 payload={
@@ -343,17 +341,7 @@ def _ensure_conversation_locale(
     if existing:
         stored_state["locale"] = existing
         return
-    if _is_spanish_text(text):
-        identity_profile.set_locale(conversation_key, "es-MX")
-        stored_state["locale"] = "es-MX"
-
-
-def _is_spanish_text(text: str) -> bool:
-    lowered = str(text or "").lower()
-    return any(
-        token in lowered
-        for token in ("¿", "¡", "cómo", "llamo", "sabes", "nombre", "hola", "buenos", "buenas")
-    )
+    stored_state["locale"] = settings.get_default_locale()
 
 
 def _build_cortex_state(
@@ -496,8 +484,7 @@ def _preferred_locale(incoming: IncomingContext, text: str) -> str:
     conversation_locale = identity_profile.get_locale(conversation_key)
     if conversation_locale:
         return conversation_locale
-    detected = detect_language(text)
-    return "es-MX" if detected == "es" else "en-US"
+    return settings.get_default_locale()
 
 
 def _principal_id_for_incoming(incoming: IncomingContext) -> str | None:

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-import os
+import json
 import re
 import unicodedata
 from datetime import datetime, timezone
@@ -10,7 +10,6 @@ from typing import Any, TypedDict
 from langgraph.graph import END, StateGraph
 
 from alphonse.agent.cognition.plans import CortexPlan, CortexResult, PlanType
-from alphonse.agent.cognition.capability_gaps.triage import detect_language
 from alphonse.agent.cognition.response_composer import ResponseComposer
 from alphonse.agent.cognition.response_spec import ResponseSpec
 from alphonse.agent.cognition.status_summaries import summarize_capabilities
@@ -19,7 +18,6 @@ from alphonse.agent.cognition.planning import PlanningMode, parse_planning_mode
 from alphonse.agent.cognition.planning_engine import propose_plan
 from alphonse.agent.cognition.intent_types import IntentCategory
 from alphonse.agent.cognition.intent_catalog import get_catalog_service
-from alphonse.agent.cognition.intent_detector_llm import IntentDetectorLLM
 from alphonse.agent.cognition.message_map_llm import dissect_message, MessageMap
 from alphonse.agent.cognition.intent_router_map import (
     FsmState,
@@ -103,7 +101,7 @@ def build_cortex_graph(llm_client: OllamaClient | None = None) -> StateGraph:
     graph.add_node("ingest_node", _ingest_node)
     graph.add_node("intent_node", _intent_node(llm_client))
     graph.add_node("catalog_slot_node", _catalog_slot_node(llm_client))
-    graph.add_node("respond_node", _respond_node)
+    graph.add_node("respond_node", _respond_node(llm_client))
 
     graph.set_entry_point("ingest_node")
     graph.add_edge("ingest_node", "intent_node")
@@ -157,7 +155,7 @@ def _ingest_node(state: CortexState) -> dict[str, Any]:
     if text:
         messages.append({"role": "user", "content": text})
     messages = messages[-8:]
-    locale = _locale_for_text(text)
+    locale = _locale_for_state(state)
     logger.info("cortex ingest chat_id=%s text=%s", state.get("chat_id"), text)
     return {
         "last_user_message": text,
@@ -174,10 +172,7 @@ def _ingest_node(state: CortexState) -> dict[str, Any]:
 
 def _intent_node(llm_client: OllamaClient | None):
     def _node(state: CortexState) -> dict[str, Any]:
-        if _use_legacy_intent_detector():
-            catalog_result = _detect_catalog_intent_legacy(state, llm_client)
-        else:
-            catalog_result = _detect_catalog_intent_from_map(state, llm_client)
+        catalog_result = _detect_catalog_intent_from_map(state, llm_client)
         if catalog_result:
             return catalog_result
         return {
@@ -191,61 +186,6 @@ def _intent_node(llm_client: OllamaClient | None):
         }
 
     return _node
-
-
-def _detect_catalog_intent_legacy(
-    state: CortexState, llm_client: OllamaClient | None
-) -> dict[str, Any] | None:
-    if state.get("slot_machine") and state.get("catalog_intent"):
-        machine = deserialize_machine(state.get("slot_machine") or {})
-        text = str(state.get("last_user_message") or "")
-        if machine and machine.paused_at and not is_resume_utterance(text):
-            return None
-        intent_name = str(state.get("catalog_intent") or "")
-        return {
-            "intent": intent_name,
-            "intent_confidence": state.get("intent_confidence", 0.6),
-            "intent_category": state.get("intent_category"),
-            "routing_rationale": "catalog_slot_machine",
-            "routing_needs_clarification": True,
-            "intent_evidence": build_intent_evidence(state.get("last_user_message", "")),
-            "last_intent": intent_name,
-            "catalog_intent": intent_name,
-            "catalog_slot_guesses": {},
-        }
-    catalog_service = get_catalog_service()
-    if not catalog_service.store.is_available():
-        return None
-    detector = IntentDetectorLLM(catalog_service)
-    detection = detector.detect(state.get("last_user_message", ""), llm_client)
-    if not detection or detection.intent_name == "unknown":
-        return None
-    spec = catalog_service.get_intent(detection.intent_name)
-    if not spec:
-        return None
-    logger.info(
-        "cortex intent catalog chat_id=%s intent=%s confidence=%.2f",
-        state.get("chat_id"),
-        detection.intent_name,
-        detection.confidence,
-    )
-    _record_intent_detected(
-        intent=detection.intent_name,
-        category=spec.category,
-        state=state,
-    )
-    return {
-        "intent": detection.intent_name,
-        "intent_confidence": detection.confidence,
-        "intent_category": spec.category,
-        "routing_rationale": "catalog_llm",
-        "routing_needs_clarification": detection.needs_clarification,
-        "intent_evidence": build_intent_evidence(state.get("last_user_message", "")),
-        "last_intent": detection.intent_name,
-        "catalog_intent": detection.intent_name,
-        "catalog_slot_guesses": detection.slot_guesses,
-    }
-
 
 def _detect_catalog_intent_from_map(
     state: CortexState, llm_client: OllamaClient | None
@@ -316,6 +256,7 @@ def _detect_catalog_intent_from_map(
         state=state,
         message_map=message_map,
         decision=decision,
+        llm_client=llm_client,
     )
     if routed is None:
         return None
@@ -327,6 +268,7 @@ def _route_decision_to_intent(
     state: CortexState,
     message_map: MessageMap,
     decision: RouteDecision,
+    llm_client: OllamaClient | None,
 ) -> dict[str, Any] | None:
     text = str(state.get("last_user_message") or "")
     catalog_service = get_catalog_service()
@@ -354,7 +296,7 @@ def _route_decision_to_intent(
         intent_name = "greeting"
         intent_confidence = 0.9
     elif intent_name is None and decision.domain == "question":
-        intent_name = _question_intent_from_map(text, message_map)
+        intent_name = _question_intent_from_map(text, message_map, llm_client=llm_client)
         intent_confidence = 0.75
         if intent_name is None:
             needs_clarification = True
@@ -421,12 +363,27 @@ def _route_decision_to_intent(
     return result
 
 
-def _question_intent_from_map(text: str, message_map: MessageMap) -> str | None:
+def _question_intent_from_map(
+    text: str, message_map: MessageMap, *, llm_client: OllamaClient | None
+) -> str | None:
     core_intent = detect_core_intent(text)
     if core_intent:
         return core_intent
-    question_blob = " ".join(message_map.questions).lower()
-    if any(token in question_blob for token in ("reminder", "recordatorio")):
+    if llm_client:
+        inferred = _infer_question_intent_llm(text, llm_client)
+        if inferred:
+            return inferred
+    normalized_text = _normalize_for_intent_matching(text)
+    hints = [
+        normalized_text,
+        _normalize_for_intent_matching(" ".join(message_map.questions or [])),
+        _normalize_for_intent_matching(" ".join(message_map.entities or [])),
+    ]
+    if any(
+        token in hint
+        for hint in hints
+        for token in ("reminder", "recordatorio", "recordatorios", "avisame", "aviso")
+    ):
         return "timed_signals.list"
     return None
 
@@ -545,11 +502,6 @@ def _is_slot_machine_input(
     return bool(resolver.parse(candidate, context).ok)
 
 
-def _use_legacy_intent_detector() -> bool:
-    raw = os.getenv("ALPHONSE_USE_LEGACY_INTENT_DETECTOR", "false").strip().lower()
-    return raw in {"1", "true", "yes", "on"}
-
-
 def _catalog_slot_node(llm_client: OllamaClient | None):
     def _node(state: CortexState) -> dict[str, Any]:
         intent_name = state.get("catalog_intent")
@@ -653,7 +605,7 @@ def _slot_spec_by_name(intent_spec: Any, slot_name: str) -> Any | None:
     return None
 
 
-def _respond_node(state: CortexState) -> dict[str, Any]:
+def _respond_node_impl(state: CortexState, llm_client: OllamaClient | None) -> dict[str, Any]:
     if state.get("response_text") or state.get("response_key"):
         return {}
     intent = state.get("intent")
@@ -674,8 +626,16 @@ def _respond_node(state: CortexState) -> dict[str, Any]:
     result: dict[str, Any] = {"response_key": "generic.unknown"}
     response_key = result["response_key"]
     if response_key == "generic.unknown" and state.get("routing_needs_clarification"):
-        response_key = "clarify.intent"
-        result["response_key"] = response_key
+        clarify = _generate_contextual_clarify_question(
+            str(state.get("last_user_message") or ""),
+            _locale_for_state(state),
+            llm_client,
+        )
+        if clarify:
+            result["response_text"] = clarify
+            result["response_key"] = None
+        else:
+            result["response_key"] = "clarify.intent"
         events = _append_event(
             state.get("events"),
             "routing.needs_clarification",
@@ -699,6 +659,19 @@ def _respond_node(state: CortexState) -> dict[str, Any]:
             plans.append(plan.model_dump())
             result["plans"] = plans
     return result
+
+
+def _respond_node(arg: OllamaClient | CortexState | None = None):
+    # Backward-compatible call shape for tests: _respond_node(state_dict)
+    if isinstance(arg, dict):
+        return _respond_node_impl(arg, None)
+
+    llm_client = arg
+
+    def _node(state: CortexState) -> dict[str, Any]:
+        return _respond_node_impl(state, llm_client)
+
+    return _node
 
 
 def _intent_handlers() -> dict[str, Any]:
@@ -1158,13 +1131,70 @@ def _extract_pairing_decision(text: str) -> tuple[str | None, str | None]:
     return pairing_id, otp
 
 
-def _locale_for_text(text: str) -> str:
-    language = detect_language(text)
-    return "es-MX" if language == "es" else "en-US"
-
-
 def _locale_for_state(state: CortexState) -> str:
     locale = state.get("locale")
     if isinstance(locale, str) and locale:
         return locale
     return "en-US"
+
+
+def _infer_question_intent_llm(text: str, llm_client: OllamaClient) -> str | None:
+    prompt = (
+        "Classify the user question into one intent name. "
+        "Return JSON: {\"intent\": \"<name|unknown>\"}. "
+        "Valid intents: core.identity.query_user_name, timed_signals.list, "
+        "meta.capabilities, help, unknown.\n\n"
+        f"User question: {text}"
+    )
+    try:
+        raw = str(llm_client.complete(system_prompt="You are an intent classifier.", user_prompt=prompt))
+    except Exception:
+        return None
+    parsed = _parse_json_dict(raw)
+    if not parsed:
+        return None
+    intent = str(parsed.get("intent") or "").strip()
+    if intent in {"core.identity.query_user_name", "timed_signals.list", "meta.capabilities", "help"}:
+        return intent
+    return None
+
+
+def _generate_contextual_clarify_question(
+    text: str, locale: str, llm_client: OllamaClient | None
+) -> str | None:
+    if llm_client is None:
+        return None
+    prompt = (
+        "Given the user message, ask one short clarifying question that is relevant. "
+        "Keep the same language as the user message. "
+        "Return only the question text.\n\n"
+        f"Locale preference: {locale}\n"
+        f"User message: {text}"
+    )
+    try:
+        raw = str(llm_client.complete(system_prompt="You ask concise clarifying questions.", user_prompt=prompt)).strip()
+    except Exception:
+        return None
+    if not raw:
+        return None
+    if raw.startswith("{") or raw.startswith("["):
+        return None
+    return raw
+
+
+def _parse_json_dict(raw: str) -> dict[str, Any] | None:
+    candidate = str(raw or "").strip()
+    if not candidate:
+        return None
+    try:
+        parsed = json.loads(candidate)
+    except json.JSONDecodeError:
+        start = candidate.find("{")
+        end = candidate.rfind("}")
+        if start == -1 or end == -1 or end <= start:
+            return None
+        try:
+            parsed = json.loads(candidate[start : end + 1])
+        except json.JSONDecodeError:
+            return None
+    return parsed if isinstance(parsed, dict) else None

@@ -23,14 +23,17 @@ class TelegramSenseAdapter(SenseAdapter):
     def normalize(self, payload: dict[str, Any]) -> NormalizedInboundMessage:
         text = str(payload.get("text", "")).strip()
         chat_id = payload.get("chat_id")
-        user_id = _as_optional_str(payload.get("from_user"))
-        user_name = _as_optional_str(payload.get("from_user_name")) or user_id
+        if chat_id is None:
+            chat_id = payload.get("target")
+        user_id = _as_optional_str(payload.get("from_user") or payload.get("user_id"))
+        user_name = _as_optional_str(payload.get("from_user_name") or payload.get("user_name")) or user_id
         timestamp = _as_float(payload.get("timestamp"), default=time.time())
         correlation_id = _as_optional_str(payload.get("correlation_id"))
 
+        metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
         metadata = {
-            "message_id": payload.get("message_id"),
-            "update_id": payload.get("update_id"),
+            "message_id": payload.get("message_id") or metadata.get("message_id"),
+            "update_id": payload.get("update_id") or metadata.get("update_id"),
             "raw": payload,
         }
 

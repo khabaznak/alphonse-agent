@@ -59,6 +59,28 @@ def test_telegram_sense_adapter_normalizes() -> None:
     assert result.user_name == "User"
 
 
+def test_telegram_sense_adapter_normalizes_canonical_payload() -> None:
+    adapter = TelegramSenseAdapter()
+    result = adapter.normalize(
+        {
+            "text": "hi",
+            "channel": "telegram",
+            "target": "42",
+            "user_id": "u1",
+            "user_name": "User",
+            "timestamp": 10.0,
+            "correlation_id": "cid-1",
+            "metadata": {"message_id": 7, "update_id": 9},
+        }
+    )
+    assert result.channel_target == "42"
+    assert result.user_id == "u1"
+    assert result.user_name == "User"
+    assert result.correlation_id == "cid-1"
+    assert result.metadata["message_id"] == 7
+    assert result.metadata["update_id"] == 9
+
+
 def test_web_sense_adapter_normalizes() -> None:
     adapter = WebSenseAdapter()
     result = adapter.normalize({"text": "ping", "user_id": "u", "timestamp": 1.0})
