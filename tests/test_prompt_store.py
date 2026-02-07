@@ -209,3 +209,68 @@ def test_unknown_sensitive_key_uses_default_safe_fallback() -> None:
         locale="en-US",
     )
     assert composer.compose(spec) == "I can't do that right now."
+
+
+def test_relaxed_matching_allows_selector_mismatch_for_non_sensitive_keys(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = _prepare_db(tmp_path, monkeypatch)
+    store.upsert_template(
+        key="core.greeting.custom_relaxed",
+        locale="en",
+        address_style="tu",
+        tone="formal",
+        channel="telegram",
+        variant="default",
+        policy_tier="safe",
+        template="Hello from strict row",
+        enabled=True,
+        priority=0,
+        changed_by="test",
+        reason="seed",
+    )
+    match = store.get_template(
+        "core.greeting.custom_relaxed",
+        PromptContext(
+            locale="en-US",
+            address_style="usted",
+            tone="casual",
+            channel="cli",
+            variant="default",
+            policy_tier="safe",
+        ),
+    )
+    assert match is not None
+    assert match.template == "Hello from strict row"
+
+
+def test_sensitive_keys_remain_strict_on_selector_mismatch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = _prepare_db(tmp_path, monkeypatch)
+    store.upsert_template(
+        key="policy.custom.strict_test",
+        locale="en",
+        address_style="any",
+        tone="formal",
+        channel="any",
+        variant="default",
+        policy_tier="strict",
+        template="STRICT POLICY RESPONSE",
+        enabled=True,
+        priority=0,
+        changed_by="test",
+        reason="seed",
+    )
+    match = store.get_template(
+        "policy.custom.strict_test",
+        PromptContext(
+            locale="en-US",
+            address_style="tu",
+            tone="casual",
+            channel="telegram",
+            variant="default",
+            policy_tier="strict",
+        ),
+    )
+    assert match is None

@@ -69,16 +69,9 @@ class SqlitePromptStore:
         rows = self._list_enabled_by_key(key)
         if not rows:
             return None
-        best: tuple[float, dict[str, Any]] | None = None
-        for row in rows:
-            score = _score_template(row, context)
-            if score <= 0:
-                continue
-            if best is None or score > best[0] or (
-                score == best[0]
-                and _tie_breaker(row, best[1])
-            ):
-                best = (score, row)
+        best = _pick_best_match(rows, key, context, relaxed=False)
+        if best is None and not _is_sensitive_prompt_key(key):
+            best = _pick_best_match(rows, key, context, relaxed=True)
         if not best:
             return None
         match = best[1]
@@ -837,6 +830,24 @@ def _score_template(row: dict[str, Any], context: PromptContext) -> float:
     return score
 
 
+def _score_template_relaxed(
+    row: dict[str, Any],
+    key: str,
+    context: PromptContext,
+) -> float:
+    score = 0.0
+    score += _score_locale(row.get("locale"), context.locale)
+    score += _score_variant(row.get("variant"), context.variant)
+    if _is_sensitive_prompt_key(key):
+        score += _score_exact(row.get("policy_tier"), context.policy_tier)
+    else:
+        score += _score_soft(row.get("address_style"), context.address_style)
+        score += _score_soft(row.get("tone"), context.tone)
+        score += _score_soft(row.get("channel"), context.channel)
+        score += _score_soft(row.get("policy_tier"), context.policy_tier)
+    return score
+
+
 def _score_locale(template_locale: str | None, requested: str | None) -> float:
     if not template_locale:
         return 0.0
@@ -868,6 +879,21 @@ def _score_exact(template_value: str | None, requested: str | None) -> float:
     return 0.0
 
 
+def _score_soft(template_value: str | None, requested: str | None) -> float:
+    if not template_value:
+        return 0.0
+    tpl = template_value.lower()
+    if not requested:
+        return 0.6 if tpl == "any" else 0.4
+    req = requested.lower()
+    if tpl == req:
+        return 1.0
+    if tpl == "any":
+        return 0.7
+    # In relaxed mode we prefer exact/any selectors, but do not reject mismatches.
+    return 0.2
+
+
 def _score_variant(template_variant: str | None, requested: str | None) -> float:
     if not template_variant:
         return 0.0
@@ -886,6 +912,57 @@ def _tie_breaker(candidate: dict[str, Any], current: dict[str, Any]) -> bool:
     if candidate.get("priority", 0) != current.get("priority", 0):
         return candidate.get("priority", 0) > current.get("priority", 0)
     return str(candidate.get("updated_at") or "") > str(current.get("updated_at") or "")
+
+
+def _pick_best_match(
+    rows: list[dict[str, Any]],
+    key: str,
+    context: PromptContext,
+    *,
+    relaxed: bool,
+) -> tuple[float, dict[str, Any]] | None:
+    best: tuple[float, dict[str, Any]] | None = None
+    strict_sensitive = (not relaxed) and _is_sensitive_prompt_key(key)
+    for row in rows:
+        if strict_sensitive and not _selectors_compatible(row, context):
+            continue
+        score = (
+            _score_template_relaxed(row, key, context)
+            if relaxed
+            else _score_template(row, context)
+        )
+        if score <= 0:
+            continue
+        if best is None or score > best[0] or (
+            score == best[0] and _tie_breaker(row, best[1])
+        ):
+            best = (score, row)
+    return best
+
+
+def _is_sensitive_prompt_key(key: str) -> bool:
+    return key.startswith("policy.") or key.startswith("security.") or key.startswith(
+        "error."
+    )
+
+
+def _selectors_compatible(row: dict[str, Any], context: PromptContext) -> bool:
+    return (
+        _selector_compatible(row.get("address_style"), context.address_style)
+        and _selector_compatible(row.get("tone"), context.tone)
+        and _selector_compatible(row.get("channel"), context.channel)
+        and _selector_compatible(row.get("policy_tier"), context.policy_tier)
+    )
+
+
+def _selector_compatible(template_value: Any, requested: str | None) -> bool:
+    if requested is None:
+        return True
+    if template_value is None:
+        return True
+    tpl = str(template_value).lower()
+    req = str(requested).lower()
+    return tpl == "any" or tpl == req
 
 
 def _next_version(conn: sqlite3.Connection, template_id: str) -> int:

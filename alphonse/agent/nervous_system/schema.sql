@@ -83,7 +83,7 @@ CREATE TABLE IF NOT EXISTS principals (
   display_name   TEXT,
   created_at     TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at     TEXT NOT NULL DEFAULT (datetime('now')),
-  CHECK (principal_type IN ('person', 'channel_chat', 'household'))
+  CHECK (principal_type IN ('person', 'channel_chat', 'household', 'office', 'system'))
 ) STRICT;
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_principals_channel_unique

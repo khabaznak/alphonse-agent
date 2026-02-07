@@ -16,7 +16,7 @@ from alphonse.agent.cognition.plans import CortexPlan, PlanType
 from alphonse.agent.policy.engine import PolicyEngine
 from alphonse.agent.cognition.preferences.store import (
     get_or_create_principal_for_channel,
-    get_with_fallback,
+    resolve_preference_with_precedence,
 )
 from alphonse.config import settings
 
@@ -163,8 +163,10 @@ def _locale_from_payload(payload: dict[str, Any]) -> str:
             str(channel_id),
         )
         if principal_id:
-            return get_with_fallback(
-                principal_id, "locale", settings.get_default_locale()
+            return resolve_preference_with_precedence(
+                key="locale",
+                default=settings.get_default_locale(),
+                channel_principal_id=principal_id,
             )
     hint = payload.get("locale_hint")
     if isinstance(hint, str) and hint.strip():

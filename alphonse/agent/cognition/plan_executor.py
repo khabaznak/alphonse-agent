@@ -30,7 +30,7 @@ from alphonse.agent.cognition.status_summaries import (
 )
 from alphonse.agent.cognition.preferences.store import (
     get_or_create_principal_for_channel,
-    get_with_fallback,
+    resolve_preference_with_precedence,
     set_preference,
 )
 from alphonse.agent.nervous_system.capability_gaps import insert_gap
@@ -568,9 +568,21 @@ class PlanExecutor:
         principal_id = get_or_create_principal_for_channel(str(channel), str(target))
         if not principal_id:
             return locale, address_style, tone
-        locale = get_with_fallback(principal_id, "locale", locale)
-        address_style = get_with_fallback(principal_id, "address_style", address_style)
-        tone = get_with_fallback(principal_id, "tone", tone)
+        locale = resolve_preference_with_precedence(
+            key="locale",
+            default=locale,
+            channel_principal_id=principal_id,
+        )
+        address_style = resolve_preference_with_precedence(
+            key="address_style",
+            default=address_style,
+            channel_principal_id=principal_id,
+        )
+        tone = resolve_preference_with_precedence(
+            key="tone",
+            default=tone,
+            channel_principal_id=principal_id,
+        )
         return locale, address_style, tone
 
 

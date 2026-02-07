@@ -42,6 +42,47 @@ def get_or_create_principal_for_channel(
         return principal_id
 
 
+def get_scope_principal_id(scope: str, scope_id: str = "default") -> str | None:
+    if not scope or not scope_id:
+        return None
+    if scope not in {"household", "office", "system"}:
+        return None
+    db_path = resolve_nervous_system_db_path()
+    with sqlite3.connect(db_path) as conn:
+        row = conn.execute(
+            """
+            SELECT principal_id
+            FROM principals
+            WHERE principal_type = ? AND channel_type = ? AND channel_id = ?
+            """,
+            (scope, scope, scope_id),
+        ).fetchone()
+    return str(row[0]) if row else None
+
+
+def get_or_create_scope_principal(scope: str, scope_id: str = "default") -> str | None:
+    if not scope or not scope_id:
+        return None
+    if scope not in {"household", "office", "system"}:
+        return None
+    existing = get_scope_principal_id(scope, scope_id)
+    if existing:
+        return existing
+    db_path = resolve_nervous_system_db_path()
+    now = _timestamp()
+    principal_id = str(uuid.uuid4())
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO principals (
+              principal_id, principal_type, channel_type, channel_id, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (principal_id, scope, scope, scope_id, now, now),
+        )
+    return principal_id
+
+
 def get_preference(principal_id: str, key: str) -> Any | None:
     if not principal_id or not key:
         return None
@@ -95,6 +136,44 @@ def set_preference(
 def get_with_fallback(principal_id: str, key: str, default: Any) -> Any:
     value = get_preference(principal_id, key)
     return default if value is None else value
+
+
+def resolve_preference_with_precedence(
+    *,
+    key: str,
+    default: Any,
+    person_principal_id: str | None = None,
+    channel_principal_id: str | None = None,
+    office_scope_id: str | None = None,
+    household_scope_id: str | None = "default",
+    include_system: bool = True,
+) -> Any:
+    principal_ids: list[str] = []
+    if person_principal_id:
+        principal_ids.append(person_principal_id)
+    if channel_principal_id:
+        principal_ids.append(channel_principal_id)
+    if office_scope_id:
+        office_id = get_scope_principal_id("office", office_scope_id)
+        if office_id:
+            principal_ids.append(office_id)
+    if household_scope_id:
+        household_id = get_scope_principal_id("household", household_scope_id)
+        if household_id:
+            principal_ids.append(household_id)
+    if include_system:
+        system_id = get_scope_principal_id("system", "default")
+        if system_id:
+            principal_ids.append(system_id)
+    seen: set[str] = set()
+    for principal_id in principal_ids:
+        if principal_id in seen:
+            continue
+        seen.add(principal_id)
+        value = get_preference(principal_id, key)
+        if value is not None:
+            return value
+    return default
 
 
 def list_principals_with_preference(

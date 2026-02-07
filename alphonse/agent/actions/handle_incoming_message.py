@@ -13,8 +13,7 @@ from alphonse.agent.cognition.capability_gaps.triage import detect_language
 from alphonse.agent.cognition.plans import CortexPlan, PlanType
 from alphonse.agent.cognition.preferences.store import (
     get_or_create_principal_for_channel,
-    get_preference,
-    get_with_fallback,
+    resolve_preference_with_precedence,
     set_preference,
 )
 from alphonse.config import settings
@@ -377,13 +376,25 @@ def _build_cortex_state(
         )
     timezone = settings.get_timezone()
     if principal_id:
-        timezone = get_with_fallback(principal_id, "timezone", timezone)
-        effective_locale = get_with_fallback(
-            principal_id, "locale", settings.get_default_locale()
+        timezone = resolve_preference_with_precedence(
+            key="timezone",
+            default=timezone,
+            channel_principal_id=principal_id,
         )
-        effective_tone = get_with_fallback(principal_id, "tone", settings.get_tone())
-        effective_address = get_with_fallback(
-            principal_id, "address_style", settings.get_address_style()
+        effective_locale = resolve_preference_with_precedence(
+            key="locale",
+            default=settings.get_default_locale(),
+            channel_principal_id=principal_id,
+        )
+        effective_tone = resolve_preference_with_precedence(
+            key="tone",
+            default=settings.get_tone(),
+            channel_principal_id=principal_id,
+        )
+        effective_address = resolve_preference_with_precedence(
+            key="address_style",
+            default=settings.get_address_style(),
+            channel_principal_id=principal_id,
         )
     logger.info(
         "HandleIncomingMessageAction principal channel=%s channel_id=%s principal_id=%s locale=%s tone=%s address=%s",
@@ -441,15 +452,21 @@ def _effective_locale(incoming: IncomingContext) -> str:
 def _effective_tone(incoming: IncomingContext) -> str:
     principal_id = _principal_id_for_incoming(incoming)
     if principal_id:
-        return get_with_fallback(principal_id, "tone", settings.get_tone())
+        return resolve_preference_with_precedence(
+            key="tone",
+            default=settings.get_tone(),
+            channel_principal_id=principal_id,
+        )
     return settings.get_tone()
 
 
 def _effective_address_style(incoming: IncomingContext) -> str:
     principal_id = _principal_id_for_incoming(incoming)
     if principal_id:
-        return get_with_fallback(
-            principal_id, "address_style", settings.get_address_style()
+        return resolve_preference_with_precedence(
+            key="address_style",
+            default=settings.get_address_style(),
+            channel_principal_id=principal_id,
         )
     return settings.get_address_style()
 
@@ -458,7 +475,11 @@ def _explicit_channel_locale(incoming: IncomingContext) -> str | None:
     principal_id = _principal_id_for_incoming(incoming)
     if not principal_id:
         return None
-    value = get_preference(principal_id, "locale")
+    value = resolve_preference_with_precedence(
+        key="locale",
+        default=None,
+        channel_principal_id=principal_id,
+    )
     return value if isinstance(value, str) else None
 
 

@@ -8,8 +8,8 @@ from alphonse.agent.cognition.capability_gaps.reporting import build_daily_repor
 from alphonse.agent.cognition.plan_executor import PlanExecutionContext, PlanExecutor
 from alphonse.agent.cognition.plans import CortexPlan, PlanType
 from alphonse.agent.cognition.preferences.store import (
-    get_with_fallback,
     list_principals_with_preference,
+    resolve_preference_with_precedence,
 )
 from alphonse.agent.nervous_system.capability_gaps import list_recent_gaps
 from alphonse.agent.policy.engine import PolicyEngine
@@ -36,11 +36,21 @@ def dispatch_daily_report(context: dict, payload: dict[str, Any]) -> None:
         address_style = settings.get_address_style()
         tone = settings.get_tone()
         if principal_id:
-            locale = get_with_fallback(principal_id, "locale", locale)
-            address_style = get_with_fallback(
-                principal_id, "address_style", address_style
+            locale = resolve_preference_with_precedence(
+                key="locale",
+                default=locale,
+                channel_principal_id=principal_id,
             )
-            tone = get_with_fallback(principal_id, "tone", tone)
+            address_style = resolve_preference_with_precedence(
+                key="address_style",
+                default=address_style,
+                channel_principal_id=principal_id,
+            )
+            tone = resolve_preference_with_precedence(
+                key="tone",
+                default=tone,
+                channel_principal_id=principal_id,
+            )
         report = build_daily_report(locale, gaps)
         communicate_plan = CortexPlan(
             plan_type=PlanType.COMMUNICATE,
