@@ -12,7 +12,9 @@ from alphonse.agent.cognition.response_composer import ResponseComposer
 from alphonse.agent.cognition.response_spec import ResponseSpec
 from alphonse.agent.cognition.plans import CortexPlan, PlanType
 from alphonse.agent.cognition.preferences.store import (
+    get_or_create_scope_principal,
     get_or_create_principal_for_channel,
+    get_preference,
     resolve_preference_with_precedence,
     set_preference,
 )
@@ -27,11 +29,18 @@ from alphonse.agent.cognition.pending_interaction import (
     PendingInteraction,
     PendingInteractionType,
     build_pending_interaction,
+    serialize_pending_interaction,
     try_consume,
 )
 from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
+
+_PRIMARY_ONBOARDING_COMPLETED_KEY = "onboarding.primary.completed"
+_PRIMARY_ONBOARDING_ADMIN_PRINCIPAL_KEY = "onboarding.primary.admin_principal_id"
+_ONBOARDING_STATE_KEY = "onboarding.state"
+_ONBOARDING_STATE_AWAITING_NAME = "awaiting_name"
+_ONBOARDING_STATE_COMPLETED = "completed"
 
 
 @dataclass(frozen=True)
@@ -114,6 +123,10 @@ class HandleIncomingMessageAction(Action):
             )
             if resolution.consumed:
                 _apply_pending_result(resolution.result or {}, incoming, stored_state)
+                _finalize_primary_onboarding_if_needed(
+                    pending=pending,
+                    incoming=incoming,
+                )
                 stored_state.pop("pending_interaction", None)
                 save_state(chat_key, stored_state)
                 logger.info(
@@ -153,6 +166,9 @@ class HandleIncomingMessageAction(Action):
                 )
 
         _ensure_conversation_locale(chat_key, text, stored_state, incoming)
+        if _should_start_primary_onboarding(incoming):
+            _start_primary_onboarding(chat_key, stored_state, incoming, context)
+            return _noop_result(incoming)
         state = _build_cortex_state(stored_state, incoming, correlation_id, payload)
         llm_client = _build_llm_client()
         result = invoke_cortex(state, text, llm_client=llm_client)
@@ -283,6 +299,120 @@ def _conversation_key(incoming: IncomingContext) -> str:
     if incoming.channel_type == "api":
         return f"api:{incoming.address or 'api'}"
     return f"{incoming.channel_type}:{incoming.address or incoming.channel_type}"
+
+
+def _should_start_primary_onboarding(incoming: IncomingContext) -> bool:
+    if _is_primary_onboarding_completed():
+        return False
+    principal_id = _principal_id_for_incoming(incoming)
+    if not principal_id:
+        return False
+    conversation_key = _conversation_key(incoming)
+    if identity_profile.get_display_name(conversation_key):
+        _complete_primary_onboarding(principal_id)
+        return False
+    onboarding_state = get_preference(principal_id, _ONBOARDING_STATE_KEY)
+    if onboarding_state == _ONBOARDING_STATE_COMPLETED:
+        _complete_primary_onboarding(principal_id)
+        return False
+    return True
+
+
+def _start_primary_onboarding(
+    chat_key: str,
+    stored_state: dict[str, Any],
+    incoming: IncomingContext,
+    context: dict[str, Any],
+) -> None:
+    principal_id = _principal_id_for_incoming(incoming)
+    if principal_id:
+        set_preference(
+            principal_id,
+            _ONBOARDING_STATE_KEY,
+            _ONBOARDING_STATE_AWAITING_NAME,
+            source="system",
+        )
+    pending = build_pending_interaction(
+        PendingInteractionType.SLOT_FILL,
+        key="user_name",
+        context={"origin_intent": "core.onboarding.primary"},
+    )
+    stored_state["pending_interaction"] = serialize_pending_interaction(pending)
+    save_state(chat_key, stored_state)
+    rendered, outgoing_locale = _render_outgoing_message(
+        "core.onboarding.primary.ask_name",
+        None,
+        incoming,
+        "",
+    )
+    reply_plan = CortexPlan(
+        plan_type=PlanType.COMMUNICATE,
+        payload={
+            "message": rendered,
+            "locale": outgoing_locale,
+        },
+    )
+    executor = PlanExecutor()
+    exec_context = PlanExecutionContext(
+        channel_type=incoming.channel_type,
+        channel_target=incoming.address,
+        actor_person_id=incoming.person_id,
+        correlation_id=incoming.correlation_id,
+    )
+    executor.execute([reply_plan], context, exec_context)
+
+
+def _finalize_primary_onboarding_if_needed(
+    *,
+    pending: PendingInteraction,
+    incoming: IncomingContext,
+) -> None:
+    if pending.key != "user_name":
+        return
+    if _is_primary_onboarding_completed():
+        return
+    principal_id = _principal_id_for_incoming(incoming)
+    if not principal_id:
+        return
+    _complete_primary_onboarding(principal_id)
+
+
+def _complete_primary_onboarding(admin_principal_id: str) -> None:
+    system_principal_id = get_or_create_scope_principal("system", "default")
+    if not system_principal_id:
+        return
+    set_preference(
+        system_principal_id,
+        _PRIMARY_ONBOARDING_COMPLETED_KEY,
+        True,
+        source="system",
+    )
+    set_preference(
+        system_principal_id,
+        _PRIMARY_ONBOARDING_ADMIN_PRINCIPAL_KEY,
+        admin_principal_id,
+        source="system",
+    )
+    set_preference(
+        admin_principal_id,
+        _ONBOARDING_STATE_KEY,
+        _ONBOARDING_STATE_COMPLETED,
+        source="system",
+    )
+
+
+def _is_primary_onboarding_completed() -> bool:
+    system_principal_id = get_or_create_scope_principal("system", "default")
+    if not system_principal_id:
+        return False
+    value = get_preference(system_principal_id, _PRIMARY_ONBOARDING_COMPLETED_KEY)
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    if isinstance(value, int):
+        return value == 1
+    return False
 
 
 def _render_pending_ack(

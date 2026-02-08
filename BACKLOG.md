@@ -1,5 +1,10 @@
 # BACKLOG
 
+## Terminology
+- `Skills` = markdown instructions for coding agents.
+- `Abilities` = Alphonse runtime intent capabilities (JSON/code), executed via tools.
+- [ ] Standardize naming in docs/code/comments to use `Abilities` for runtime capabilities and avoid `Skills` ambiguity.
+
 ## API / Delivery
 - [ ] Replace blocking `POST /agent/message` wait-response with async flow:
   - `POST /agent/message` -> `202 Accepted` + `correlation_id`

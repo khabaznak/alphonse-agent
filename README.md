@@ -186,6 +186,20 @@ Examples (Telegram or CLI):
 Preferences are keyed per principal (currently `channel_chat`), and the renderer uses them
 for reminder phrasing immediately after they are set.
 
+## Onboarding
+
+Alphonse uses a two-phase onboarding model:
+
+- Primary onboarding (out-of-box):
+  - Runs once to bootstrap the first admin user.
+  - Captures initial display name and records global bootstrap completion.
+- Secondary onboarding (subsequent users):
+  - Runs per new user/channel after primary onboarding is complete.
+  - Captures per-user profile defaults and links identity progressively.
+
+Primary onboarding and secondary onboarding are intentionally separated so each can evolve
+independently without mixing first-run bootstrap concerns with household growth flows.
+
 ---
 
 ## LangGraph Cortex

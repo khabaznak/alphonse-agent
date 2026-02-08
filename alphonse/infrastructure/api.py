@@ -9,6 +9,7 @@ from fastapi import FastAPI, Body, HTTPException, Header
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
+from alphonse.agent.cognition.abilities.store import AbilitySpecStore
 from alphonse.agent.cognition.capability_gaps.coalescing import (
     coalesce_open_intent_gaps,
 )
@@ -63,6 +64,23 @@ class GapCoalesceRequest(BaseModel):
 
 class GapTaskUpdate(BaseModel):
     status: str = Field(..., description="open|done")
+
+
+class AbilitySpecCreate(BaseModel):
+    intent_name: str
+    kind: str
+    tools: list[str] = Field(default_factory=list)
+    spec: dict[str, Any]
+    enabled: bool = True
+    source: str = "user"
+
+
+class AbilitySpecPatch(BaseModel):
+    kind: str | None = None
+    tools: list[str] | None = None
+    spec: dict[str, Any] | None = None
+    enabled: bool | None = None
+    source: str | None = None
 
 
 @app.get("/agent/status")
@@ -278,6 +296,96 @@ def update_agent_gap_task(
     if not ok:
         raise HTTPException(status_code=404, detail="Gap task not found")
     return {"item": get_gap_task(task_id)}
+
+
+@app.get("/agent/abilities")
+def list_agent_abilities(
+    enabled_only: bool = False,
+    limit: int = 100,
+    x_alphonse_api_token: str | None = Header(default=None),
+) -> dict[str, Any]:
+    _assert_api_token(x_alphonse_api_token)
+    store = AbilitySpecStore()
+    return {"items": store.list_specs(enabled_only=enabled_only, limit=limit)}
+
+
+@app.get("/agent/abilities/{intent_name}")
+def get_agent_ability(
+    intent_name: str,
+    x_alphonse_api_token: str | None = Header(default=None),
+) -> dict[str, Any]:
+    _assert_api_token(x_alphonse_api_token)
+    store = AbilitySpecStore()
+    item = store.get_spec(intent_name)
+    if not item:
+        raise HTTPException(status_code=404, detail="Ability spec not found")
+    return {"item": item}
+
+
+@app.post("/agent/abilities", status_code=201)
+def create_agent_ability(
+    payload: AbilitySpecCreate,
+    x_alphonse_api_token: str | None = Header(default=None),
+) -> dict[str, Any]:
+    _assert_api_token(x_alphonse_api_token)
+    if payload.spec.get("intent_name") and payload.spec.get("intent_name") != payload.intent_name:
+        raise HTTPException(status_code=400, detail="spec.intent_name must match intent_name")
+    store = AbilitySpecStore()
+    spec = dict(payload.spec)
+    spec["intent_name"] = payload.intent_name
+    spec["kind"] = payload.kind
+    spec["tools"] = list(payload.tools)
+    store.upsert_spec(
+        payload.intent_name,
+        spec,
+        enabled=payload.enabled,
+        source=payload.source,
+    )
+    return {"item": store.get_spec(payload.intent_name)}
+
+
+@app.patch("/agent/abilities/{intent_name}")
+def patch_agent_ability(
+    intent_name: str,
+    payload: AbilitySpecPatch,
+    x_alphonse_api_token: str | None = Header(default=None),
+) -> dict[str, Any]:
+    _assert_api_token(x_alphonse_api_token)
+    store = AbilitySpecStore()
+    current = store.get_spec(intent_name)
+    if not current:
+        raise HTTPException(status_code=404, detail="Ability spec not found")
+    current_spec = current.get("spec") if isinstance(current.get("spec"), dict) else {}
+    spec = dict(current_spec)
+    if payload.spec is not None:
+        spec.update(payload.spec)
+    if payload.kind is not None:
+        spec["kind"] = payload.kind
+    if payload.tools is not None:
+        spec["tools"] = list(payload.tools)
+    spec["intent_name"] = intent_name
+    enabled = current.get("enabled") if payload.enabled is None else payload.enabled
+    source = str(current.get("source") or "user") if payload.source is None else payload.source
+    store.upsert_spec(
+        intent_name,
+        spec,
+        enabled=bool(enabled),
+        source=source,
+    )
+    return {"item": store.get_spec(intent_name)}
+
+
+@app.delete("/agent/abilities/{intent_name}")
+def delete_agent_ability(
+    intent_name: str,
+    x_alphonse_api_token: str | None = Header(default=None),
+) -> dict[str, Any]:
+    _assert_api_token(x_alphonse_api_token)
+    store = AbilitySpecStore()
+    ok = store.delete_spec(intent_name)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Ability spec not found")
+    return {"deleted": True, "intent_name": intent_name}
 
 
 def _as_optional_str(value: object | None) -> str | None:

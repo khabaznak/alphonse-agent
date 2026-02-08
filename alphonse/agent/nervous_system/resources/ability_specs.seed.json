@@ -1,13 +1,18 @@
 [
   {
     "intent_name": "time.current",
-    "kind": "clock_time_response",
+    "kind": "tool_call_then_response",
     "tools": ["clock"],
-    "timezone_state_key": "timezone",
-    "timezone_default": "America/Mexico_City",
+    "tool_call": {
+      "tool": "clock",
+      "method": "current_time",
+      "args": {
+        "timezone_name": "{timezone}"
+      }
+    },
     "responses": {
-      "es": "Son las {time} en {timezone}.",
-      "default": "It is {time} in {timezone}."
+      "es": "Son las {tool_output.time} en {tool_output.timezone}.",
+      "default": "It is {tool_output.time} in {tool_output.timezone}."
     }
   },
   {

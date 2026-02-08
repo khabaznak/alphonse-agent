@@ -17,6 +17,7 @@ _SAFE_FALLBACKS: dict[str, dict[str, str]] = {
         "system.unavailable.catalog": "Alphonse is unavailable: intent catalog is not ready.",
         "system.unavailable.prompt_store": "Alphonse is unavailable: prompt store is not ready.",
         "system.unavailable.nerve_db": "Alphonse is unavailable: nerve-db is not accessible.",
+        "core.onboarding.primary.ask_name": "Hi, I am Alphonse. What is your name, or how should I address you?",
         "default": "I can't do that right now.",
     },
     "es": {
@@ -34,6 +35,7 @@ _SAFE_FALLBACKS: dict[str, dict[str, str]] = {
         "system.unavailable.catalog": "Alphonse no está disponible: el catálogo de intents no está listo.",
         "system.unavailable.prompt_store": "Alphonse no está disponible: el almacén de prompts no está listo.",
         "system.unavailable.nerve_db": "Alphonse no está disponible: no hay acceso a nerve-db.",
+        "core.onboarding.primary.ask_name": "Hola, soy Alphonse. Cual es tu nombre o como te gustaria que te llame?",
         "default": "No puedo hacer eso ahora mismo.",
     },
 }

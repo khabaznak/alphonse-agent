@@ -1,5 +1,14 @@
 # Ability, Sense, Tool, Extremity Guide
 
+## Terminology Standard
+- `Skills`:
+  - Markdown-based operational instructions used by coding agents (for example `SKILL.md` files).
+  - Human-authored guidance, not Alphonse runtime executables.
+- `Abilities`:
+  - Alphonse runtime capabilities bound to intents.
+  - Implemented via code and/or JSON ability specs.
+  - Executed through `intent -> ability -> tools`.
+
 ## Canonical Concepts
 
 ### Sense
@@ -24,6 +33,29 @@
 
 ## Runtime Flow
 - `Sense -> Intent Detection -> Ability -> Tool(s) -> Plan/Response -> Extremity`
+
+## Onboarding Model
+
+### Primary Onboarding (Out-Of-Box)
+- Purpose: bootstrap Alphonse on first run with the first admin user.
+- Scope: global system bootstrap + first chat principal.
+- Trigger: no system bootstrap marker exists.
+- Result:
+  - captures first admin display name,
+  - stores bootstrap completion marker,
+  - stores bootstrap admin principal id.
+
+### Secondary Onboarding (Subsequent Users)
+- Purpose: onboard additional household users after primary bootstrap is complete.
+- Scope: per-user/per-channel profile capture and linkage.
+- Trigger: known system bootstrap, but incoming principal has no profile/onboarding completion.
+- Result:
+  - captures user display name and defaults,
+  - stores per-principal onboarding state.
+
+### State Ownership
+- Global bootstrap state: system-scope preferences (single source of truth).
+- Per-user onboarding state: channel/person principal preferences.
 
 ## Current Code Anchors
 - Senses: `/Users/alex/Code Projects/atrium-server/alphonse/agent/nervous_system/senses/`

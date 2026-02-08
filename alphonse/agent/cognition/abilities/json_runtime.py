@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from alphonse.agent.cognition.abilities.registry import Ability
+from alphonse.agent.cognition.abilities.store import AbilitySpecStore
 from alphonse.agent.cognition.plans import CortexPlan, PlanType
 from alphonse.agent.tools.registry import ToolRegistry
 from alphonse.config import settings
@@ -13,8 +14,11 @@ from alphonse.config import settings
 logger = logging.getLogger(__name__)
 
 
-def load_json_abilities() -> list[Ability]:
-    specs = _load_specs_file()
+def load_json_abilities(db_path: str | None = None) -> list[Ability]:
+    specs = _merge_specs(
+        _load_specs_file(),
+        _load_specs_db(db_path),
+    )
     abilities: list[Ability] = []
     for spec in specs:
         ability = _ability_from_spec(spec)
@@ -43,6 +47,33 @@ def _load_specs_file() -> list[dict[str, Any]]:
     return [item for item in raw if isinstance(item, dict)]
 
 
+def _load_specs_db(db_path: str | None = None) -> list[dict[str, Any]]:
+    try:
+        store = AbilitySpecStore(db_path=db_path)
+        return store.list_enabled_specs()
+    except Exception as exc:
+        logger.warning("ability specs db load failed db_path=%s error=%s", db_path, exc)
+        return []
+
+
+def _merge_specs(
+    file_specs: list[dict[str, Any]],
+    db_specs: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    merged: dict[str, dict[str, Any]] = {}
+    for spec in file_specs:
+        key = str(spec.get("intent_name") or "").strip()
+        if not key:
+            continue
+        merged[key] = spec
+    for spec in db_specs:
+        key = str(spec.get("intent_name") or "").strip()
+        if not key:
+            continue
+        merged[key] = spec
+    return [merged[key] for key in sorted(merged.keys())]
+
+
 def _ability_from_spec(spec: dict[str, Any]) -> Ability | None:
     kind = str(spec.get("kind") or "").strip()
     intent_name = str(spec.get("intent_name") or "").strip()
@@ -54,6 +85,8 @@ def _ability_from_spec(spec: dict[str, Any]) -> Ability | None:
         return Ability(intent_name=intent_name, tools=tools, execute=_build_clock_time_executor(spec))
     if kind == "plan_emit":
         return Ability(intent_name=intent_name, tools=tools, execute=_build_plan_emit_executor(spec))
+    if kind == "tool_call_then_response":
+        return Ability(intent_name=intent_name, tools=tools, execute=_build_tool_call_then_response_executor(spec))
     logger.warning("unsupported ability spec kind=%s intent=%s", kind, intent_name)
     return None
 
@@ -117,6 +150,61 @@ def _build_plan_emit_executor(spec: dict[str, Any]):
     return _execute
 
 
+def _build_tool_call_then_response_executor(spec: dict[str, Any]):
+    tool_call = spec.get("tool_call") if isinstance(spec.get("tool_call"), dict) else {}
+    responses = spec.get("responses") if isinstance(spec.get("responses"), dict) else {}
+    response_key = spec.get("response_key")
+
+    def _execute(state: dict[str, Any], tools: ToolRegistry) -> dict[str, Any]:
+        output = _execute_tool_call(tool_call, state, tools)
+        if output is None:
+            if isinstance(response_key, str) and response_key.strip():
+                return {"response_key": response_key.strip()}
+            return {"response_key": "generic.unknown"}
+        locale = str(state.get("locale") or "")
+        language = "es" if locale.startswith("es") else "default"
+        template = str(
+            responses.get(language) or responses.get("default") or "{output}"
+        )
+        response_text = _render_template(
+            template,
+            {
+                "state": state,
+                "tool_output": output,
+                "locale": locale,
+            },
+        )
+        return {"response_text": response_text}
+
+    return _execute
+
+
+def _execute_tool_call(
+    tool_call: dict[str, Any], state: dict[str, Any], tools: ToolRegistry
+) -> dict[str, Any] | None:
+    tool_name = str(tool_call.get("tool") or "").strip()
+    method_name = str(tool_call.get("method") or "").strip()
+    args_spec = tool_call.get("args") if isinstance(tool_call.get("args"), dict) else {}
+    if not tool_name or not method_name:
+        return None
+    tool = tools.get(tool_name)
+    if tool is None:
+        return None
+
+    # Constrained dispatch: only explicitly allowed tool-method pairs.
+    if tool_name == "clock" and method_name == "current_time":
+        timezone_name = str(
+            _resolve_value(args_spec.get("timezone_name"), state) or settings.get_timezone()
+        )
+        result = tool.current_time(timezone_name)
+        return {
+            "time": result.strftime("%H:%M"),
+            "timezone": timezone_name,
+            "iso": result.isoformat(),
+        }
+    return None
+
+
 def _resolve_target(
     state: dict[str, Any],
     source_keys: list[Any],
@@ -150,9 +238,9 @@ def _resolve_channels(state: dict[str, Any], source_keys: list[Any]) -> list[str
 
 def _resolve_value(value: Any, state: dict[str, Any]) -> Any:
     if isinstance(value, str):
-        token = _extract_state_token(value)
+        token = _extract_token(value)
         if token:
-            return state.get(token)
+            return _resolve_token(token, state)
         return value
     if isinstance(value, list):
         return [_resolve_value(item, state) for item in value]
@@ -166,3 +254,49 @@ def _extract_state_token(value: str) -> str | None:
     if text.startswith("{") and text.endswith("}") and len(text) > 2:
         return text[1:-1].strip()
     return None
+
+
+def _extract_token(value: str) -> str | None:
+    return _extract_state_token(value)
+
+
+def _resolve_token(token: str, state: dict[str, Any]) -> Any:
+    if not token:
+        return None
+    if "." not in token:
+        return state.get(token)
+    parts = token.split(".")
+    current: Any = state
+    for part in parts:
+        if not isinstance(current, dict):
+            return None
+        current = current.get(part)
+    return current
+
+
+def _render_template(template: str, context: dict[str, Any]) -> str:
+    def _replace(match: Any) -> str:
+        token = str(match.group(1) or "").strip()
+        if not token:
+            return ""
+        if token in context:
+            value = context.get(token)
+            return "" if value is None else str(value)
+        value = _resolve_from_context(token, context)
+        return "" if value is None else str(value)
+
+    import re
+
+    return re.sub(r"\{([^{}]+)\}", _replace, template)
+
+
+def _resolve_from_context(path: str, context: dict[str, Any]) -> Any:
+    parts = path.split(".")
+    if not parts:
+        return None
+    current: Any = context
+    for part in parts:
+        if not isinstance(current, dict):
+            return None
+        current = current.get(part)
+    return current
