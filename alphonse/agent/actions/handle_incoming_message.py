@@ -39,6 +39,7 @@ from alphonse.agent.cognition.pending_interaction import (
     serialize_pending_interaction,
     try_consume,
 )
+from alphonse.agent.cognition.routing_primitives import extract_preference_updates
 from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
@@ -200,7 +201,7 @@ class HandleIncomingMessageAction(Action):
         _ensure_conversation_locale(chat_key, text, stored_state, incoming)
         if _maybe_prompt_onboarding_step(text, stored_state, incoming, context):
             return _noop_result(incoming)
-        if _should_start_primary_onboarding(incoming):
+        if _should_start_primary_onboarding(incoming) and not _has_preference_update(text):
             _start_primary_onboarding(chat_key, stored_state, incoming, context)
             return _noop_result(incoming)
         state = _build_cortex_state(stored_state, incoming, correlation_id, payload)
@@ -631,6 +632,14 @@ def _is_greeting_text(text: str) -> bool:
         "buenas tardes",
         "buenas noches",
     }
+
+
+def _has_preference_update(text: str) -> bool:
+    try:
+        return bool(extract_preference_updates(text))
+    except Exception:
+        logger.exception("HandleIncomingMessageAction preference update detection failed")
+        return False
 
 
 def _is_primary_onboarding_completed() -> bool:
