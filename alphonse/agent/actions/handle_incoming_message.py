@@ -150,21 +150,23 @@ class HandleIncomingMessageAction(Action):
                     ",".join(sorted(stored_state.keys())),
                 )
                 response_vars = resolution.result or {}
-        response_key = None
-        if pending.key == "user_name":
-            response_key = "ack.user_name"
-        elif pending.key == "user_role":
-            response_key = "ack.user_role"
-            response_vars = {"role": str(resolution.result.get("user_role") or "")}
-        elif pending.key == "user_relationship":
-            response_key = "ack.user_relationship"
-            response_vars = {
-                "relationship": str(resolution.result.get("user_relationship") or "")
-            }
-        elif pending.key == "address_text":
-            response_key = "ack.location.saved"
-            label = str(pending.context.get("label") or "home")
-            response_vars = {"label": label}
+                response_key = None
+                if pending.key == "user_name":
+                    response_key = "ack.user_name"
+                elif pending.key == "user_role":
+                    response_key = "ack.user_role"
+                    response_vars = {"role": str(resolution.result.get("user_role") or "")}
+                elif pending.key == "user_relationship":
+                    response_key = "ack.user_relationship"
+                    response_vars = {
+                        "relationship": str(
+                            resolution.result.get("user_relationship") or ""
+                        )
+                    }
+                elif pending.key == "address_text":
+                    response_key = "ack.location.saved"
+                    label = str(pending.context.get("label") or "home")
+                    response_vars = {"label": label}
                 rendered, outgoing_locale = _render_pending_ack(
                     response_key or "ack.confirmed",
                     response_vars,

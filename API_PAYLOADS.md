@@ -171,6 +171,52 @@ GET /agent/users?active_only=false&limit=200
 }
 ```
 
+## Intents
+
+Create intent
+```json
+POST /agent/intents
+{
+  "intent_name": "time.current",
+  "category": "task_plane",
+  "description": "Tell the current time for a timezone/location context.",
+  "examples": ["what time is it", "qué horas son"],
+  "required_slots": [],
+  "optional_slots": [],
+  "default_mode": "aventurizacion",
+  "risk_level": "low",
+  "handler": "time.current",
+  "enabled": true,
+  "intent_version": "1.0.0",
+  "origin": "user",
+  "parent_intent": null
+}
+```
+
+Patch intent
+```json
+PATCH /agent/intents/time.current
+{
+  "examples": ["what time is it", "dime la hora"],
+  "enabled": true
+}
+```
+
+Get intent
+```json
+GET /agent/intents/time.current
+```
+
+List intents
+```json
+GET /agent/intents?enabled_only=false&limit=200
+```
+
+Delete intent (disables)
+```json
+DELETE /agent/intents/time.current
+```
+
 ## Locations (home/work/other)
 
 Create or update location
