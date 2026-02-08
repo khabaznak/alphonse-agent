@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from alphonse.agent.tools.clock import ClockTool
+from alphonse.agent.tools.geocoder import GoogleGeocoderTool
 from alphonse.agent.tools.scheduler import SchedulerTool
 
 
@@ -24,5 +25,6 @@ class ToolRegistry:
 def build_default_tool_registry() -> ToolRegistry:
     registry = ToolRegistry()
     registry.register("clock", ClockTool())
+    registry.register("geocoder", GoogleGeocoderTool())
     registry.register("scheduler", SchedulerTool())
     return registry

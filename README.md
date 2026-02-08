@@ -234,6 +234,14 @@ Device location stream/snapshots:
 - `GET /agent/device-locations`
 - `POST /agent/device-locations`
 
+### Google Geocoding (optional)
+
+If you want to normalize addresses into lat/lng, set:
+
+`GOOGLE_MAPS_API_KEY`
+
+The geocoder tool is registered as `geocoder` and uses the Google Maps Geocoding API.
+
 ### CLI Commands
 
 Onboarding profile CRUD:

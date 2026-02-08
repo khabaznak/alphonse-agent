@@ -15,11 +15,13 @@
 - Purpose: perceive external/internal events and emit normalized inbound signals.
 - Owns: ingestion, polling/subscription, source-specific extraction.
 - Does not own: business decisions, user-facing wording, tool orchestration.
+Example: `LocationSense` captures address/location input and delegates normalization to `GeocoderTool`.
 
 ### Tool
 - Purpose: perform a concrete operation with explicit inputs/outputs.
 - Owns: deterministic execution (clock read, scheduling, API call, DB write).
 - Does not own: intent resolution, channel formatting.
+Example: `GeocoderTool` converts an address to lat/lng via Google Maps.
 
 ### Skill (Ability)
 - Purpose: execute an intent by orchestrating state + tools.
