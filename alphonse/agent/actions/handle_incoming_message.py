@@ -22,6 +22,7 @@ from alphonse.agent.nervous_system.onboarding_profiles import (
     get_onboarding_profile,
     upsert_onboarding_profile,
 )
+from alphonse.agent.nervous_system.users import patch_user, upsert_user
 from alphonse.agent.nervous_system.users import upsert_user
 from alphonse.agent.nervous_system.senses.location import LocationSense
 from alphonse.config import settings
@@ -47,6 +48,8 @@ _PRIMARY_ONBOARDING_ADMIN_PRINCIPAL_KEY = "onboarding.primary.admin_principal_id
 _ONBOARDING_STATE_KEY = "onboarding.state"
 _ONBOARDING_STATE_AWAITING_NAME = "awaiting_name"
 _ONBOARDING_STATE_COMPLETED = "completed"
+_ONBOARDING_STEP_ROLE = "role"
+_ONBOARDING_STEP_RELATIONSHIP = "relationship"
 _ONBOARDING_STEP_HOME = "home_location"
 _ONBOARDING_STEP_WORK = "work_location"
 
@@ -147,13 +150,21 @@ class HandleIncomingMessageAction(Action):
                     ",".join(sorted(stored_state.keys())),
                 )
                 response_vars = resolution.result or {}
-                response_key = None
-                if pending.key == "user_name":
-                    response_key = "ack.user_name"
-                elif pending.key == "address_text":
-                    response_key = "ack.location.saved"
-                    label = str(pending.context.get("label") or "home")
-                    response_vars = {"label": label}
+        response_key = None
+        if pending.key == "user_name":
+            response_key = "ack.user_name"
+        elif pending.key == "user_role":
+            response_key = "ack.user_role"
+            response_vars = {"role": str(resolution.result.get("user_role") or "")}
+        elif pending.key == "user_relationship":
+            response_key = "ack.user_relationship"
+            response_vars = {
+                "relationship": str(resolution.result.get("user_relationship") or "")
+            }
+        elif pending.key == "address_text":
+            response_key = "ack.location.saved"
+            label = str(pending.context.get("label") or "home")
+            response_vars = {"label": label}
                 rendered, outgoing_locale = _render_pending_ack(
                     response_key or "ack.confirmed",
                     response_vars,
@@ -185,7 +196,7 @@ class HandleIncomingMessageAction(Action):
                 )
 
         _ensure_conversation_locale(chat_key, text, stored_state, incoming)
-        if _maybe_prompt_location_onboarding(text, stored_state, incoming, context):
+        if _maybe_prompt_onboarding_step(text, stored_state, incoming, context):
             return _noop_result(incoming)
         if _should_start_primary_onboarding(incoming):
             _start_primary_onboarding(chat_key, stored_state, incoming, context)
@@ -331,6 +342,37 @@ def _apply_pending_result(
                 _advance_onboarding_location_step(principal_id, label)
             except Exception:
                 logger.exception("HandleIncomingMessageAction location ingest failed")
+    if "user_role" in result or "user_relationship" in result:
+        channel_type = str(incoming.channel_type or "")
+        channel_target = str(incoming.address or "")
+        principal_id = None
+        if channel_type and channel_target:
+            principal_id = get_or_create_principal_for_channel(channel_type, channel_target)
+        if principal_id:
+            updates: dict[str, Any] = {}
+            if "user_role" in result:
+                updates["role"] = str(result["user_role"])
+                _advance_onboarding_step(principal_id, _ONBOARDING_STEP_ROLE)
+            if "user_relationship" in result:
+                updates["relationship"] = str(result["user_relationship"])
+                _advance_onboarding_step(principal_id, _ONBOARDING_STEP_RELATIONSHIP)
+            if updates:
+                try:
+                    updated = patch_user(principal_id, updates)
+                    if updated is None:
+                        display_name = identity_profile.get_display_name(
+                            _conversation_key(incoming)
+                        )
+                        if display_name:
+                            payload = {
+                                "user_id": principal_id,
+                                "principal_id": principal_id,
+                                "display_name": display_name,
+                                **updates,
+                            }
+                            upsert_user(payload)
+                except Exception:
+                    logger.exception("HandleIncomingMessageAction user profile update failed")
 
 
 def _conversation_key(incoming: IncomingContext) -> str:
@@ -470,7 +512,12 @@ def _ensure_onboarding_profile(principal_id: str) -> None:
             "principal_id": principal_id,
             "state": "in_progress",
             "primary_role": "admin",
-            "next_steps": [_ONBOARDING_STEP_HOME, _ONBOARDING_STEP_WORK],
+            "next_steps": [
+                _ONBOARDING_STEP_ROLE,
+                _ONBOARDING_STEP_RELATIONSHIP,
+                _ONBOARDING_STEP_HOME,
+                _ONBOARDING_STEP_WORK,
+            ],
         }
     )
 
@@ -481,6 +528,14 @@ def _advance_onboarding_location_step(principal_id: str, label: str) -> None:
         return
     next_steps = list(profile.get("next_steps") or [])
     step = _ONBOARDING_STEP_HOME if label == "home" else _ONBOARDING_STEP_WORK
+    _advance_onboarding_step(principal_id, step)
+
+
+def _advance_onboarding_step(principal_id: str, step: str) -> None:
+    profile = get_onboarding_profile(principal_id)
+    if not profile:
+        return
+    next_steps = list(profile.get("next_steps") or [])
     if step in next_steps:
         next_steps.remove(step)
     state = "completed" if not next_steps else str(profile.get("state") or "in_progress")
@@ -496,7 +551,7 @@ def _advance_onboarding_location_step(principal_id: str, label: str) -> None:
     )
 
 
-def _maybe_prompt_location_onboarding(
+def _maybe_prompt_onboarding_step(
     text: str,
     stored_state: dict[str, Any],
     incoming: IncomingContext,
@@ -516,17 +571,18 @@ def _maybe_prompt_location_onboarding(
     if not _is_greeting_text(text):
         return False
     step = next_steps[0]
-    label = "home" if step == _ONBOARDING_STEP_HOME else "work"
+    pending_key, prompt_key, pending_context = _resolve_onboarding_step(step)
+    if not pending_key or not prompt_key:
+        return False
     pending = build_pending_interaction(
         PendingInteractionType.SLOT_FILL,
-        key="address_text",
-        context={"label": label, "onboarding_step": step},
+        key=pending_key,
+        context=pending_context,
     )
     stored_state["pending_interaction"] = serialize_pending_interaction(pending)
     save_state(_conversation_key(incoming), stored_state)
-    response_key = "clarify.location_address" if label == "home" else "clarify.location_work"
     rendered, outgoing_locale = _render_outgoing_message(
-        response_key,
+        prompt_key,
         None,
         incoming,
         text,
@@ -547,6 +603,18 @@ def _maybe_prompt_location_onboarding(
     )
     executor.execute([reply_plan], context, exec_context)
     return True
+
+
+def _resolve_onboarding_step(step: str) -> tuple[str | None, str | None, dict[str, Any]]:
+    if step == _ONBOARDING_STEP_ROLE:
+        return "user_role", "clarify.user_role", {"onboarding_step": step}
+    if step == _ONBOARDING_STEP_RELATIONSHIP:
+        return "user_relationship", "clarify.user_relationship", {"onboarding_step": step}
+    if step == _ONBOARDING_STEP_HOME:
+        return "address_text", "clarify.location_address", {"label": "home", "onboarding_step": step}
+    if step == _ONBOARDING_STEP_WORK:
+        return "address_text", "clarify.location_work", {"label": "work", "onboarding_step": step}
+    return None, None, {}
 
 
 def _is_greeting_text(text: str) -> bool:

@@ -812,6 +812,7 @@ def _ability_registry() -> AbilityRegistry:
     _register_fallback_ability(registry, Ability("help", tuple(), _ability_help))
     _register_fallback_ability(registry, Ability("core.identity.query_agent_name", tuple(), _ability_identity_agent))
     _register_fallback_ability(registry, Ability("core.identity.query_user_name", tuple(), _ability_identity_user))
+    _register_fallback_ability(registry, Ability("core.onboarding.start", tuple(), _ability_onboarding_start))
     _register_fallback_ability(registry, Ability("greeting", tuple(), _ability_greeting))
     _register_fallback_ability(registry, Ability("cancel", tuple(), _ability_cancel))
     _register_fallback_ability(registry, Ability("meta.capabilities", tuple(), _ability_meta_capabilities))
@@ -862,6 +863,11 @@ def _ability_identity_agent(state: dict[str, Any], tools: ToolRegistry) -> dict[
 def _ability_identity_user(state: dict[str, Any], tools: ToolRegistry) -> dict[str, Any]:
     _ = tools
     return _handle_identity_user(state)
+
+
+def _ability_onboarding_start(state: dict[str, Any], tools: ToolRegistry) -> dict[str, Any]:
+    _ = tools
+    return _handle_onboarding_start(state)
 
 
 def _ability_greeting(state: dict[str, Any], tools: ToolRegistry) -> dict[str, Any]:
@@ -974,6 +980,18 @@ def _handle_identity_user(state: CortexState) -> dict[str, Any]:
     )
     return {
         "response_key": "core.identity.user.ask_name",
+        "pending_interaction": serialize_pending_interaction(pending),
+    }
+
+
+def _handle_onboarding_start(state: CortexState) -> dict[str, Any]:
+    pending = build_pending_interaction(
+        PendingInteractionType.SLOT_FILL,
+        key="user_name",
+        context={"origin_intent": "core.onboarding.primary"},
+    )
+    return {
+        "response_key": "core.onboarding.primary.ask_name",
         "pending_interaction": serialize_pending_interaction(pending),
     }
 
