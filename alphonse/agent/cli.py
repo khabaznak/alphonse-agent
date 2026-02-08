@@ -45,6 +45,20 @@ from alphonse.agent.nervous_system.gap_tasks import (
     list_gap_tasks,
     update_gap_task_status,
 )
+from alphonse.agent.nervous_system.onboarding_profiles import (
+    delete_onboarding_profile,
+    get_onboarding_profile,
+    list_onboarding_profiles,
+    upsert_onboarding_profile,
+)
+from alphonse.agent.nervous_system.location_profiles import (
+    delete_location_profile,
+    get_location_profile,
+    insert_device_location,
+    list_device_locations,
+    list_location_profiles,
+    upsert_location_profile,
+)
 from alphonse.agent.core.settings_store import init_db as init_settings_db
 
 
@@ -278,6 +292,62 @@ def build_parser() -> argparse.ArgumentParser:
     abilities_delete = abilities_sub.add_parser("delete", help="Delete ability spec")
     abilities_delete.add_argument("intent_name", help="Intent name")
 
+    onboarding_parser = sub.add_parser("onboarding", help="Onboarding profile CRUD")
+    onboarding_sub = onboarding_parser.add_subparsers(
+        dest="onboarding_command", required=True
+    )
+    onboarding_list = onboarding_sub.add_parser("list", help="List onboarding profiles")
+    onboarding_list.add_argument("--state", default=None)
+    onboarding_list.add_argument("--limit", type=int, default=100)
+    onboarding_show = onboarding_sub.add_parser("show", help="Show onboarding profile")
+    onboarding_show.add_argument("principal_id")
+    onboarding_upsert = onboarding_sub.add_parser("upsert", help="Create/update onboarding profile")
+    onboarding_upsert.add_argument("principal_id")
+    onboarding_upsert.add_argument("--state", default="not_started")
+    onboarding_upsert.add_argument("--primary-role", default=None)
+    onboarding_upsert.add_argument("--next-steps", nargs="*", default=[])
+    onboarding_upsert.add_argument("--resume-token", default=None)
+    onboarding_upsert.add_argument("--completed-at", default=None)
+    onboarding_delete = onboarding_sub.add_parser("delete", help="Delete onboarding profile")
+    onboarding_delete.add_argument("principal_id")
+
+    locations_parser = sub.add_parser("locations", help="Location profile CRUD")
+    locations_sub = locations_parser.add_subparsers(
+        dest="locations_command", required=True
+    )
+    locations_list = locations_sub.add_parser("list", help="List location profiles")
+    locations_list.add_argument("--principal-id", default=None)
+    locations_list.add_argument("--label", default=None)
+    locations_list.add_argument("--active-only", action="store_true")
+    locations_list.add_argument("--limit", type=int, default=100)
+    locations_show = locations_sub.add_parser("show", help="Show location profile")
+    locations_show.add_argument("location_id")
+    locations_upsert = locations_sub.add_parser("upsert", help="Create/update location profile")
+    locations_upsert.add_argument("--location-id", default=None)
+    locations_upsert.add_argument("principal_id")
+    locations_upsert.add_argument("--label", default="other")
+    locations_upsert.add_argument("--address-text", default=None)
+    locations_upsert.add_argument("--lat", type=float, default=None)
+    locations_upsert.add_argument("--lng", type=float, default=None)
+    locations_upsert.add_argument("--source", default="user")
+    locations_upsert.add_argument("--confidence", type=float, default=None)
+    locations_upsert.add_argument("--inactive", action="store_true")
+    locations_delete = locations_sub.add_parser("delete", help="Delete location profile")
+    locations_delete.add_argument("location_id")
+    device_add = locations_sub.add_parser("device-add", help="Insert device location sample")
+    device_add.add_argument("device_id")
+    device_add.add_argument("--principal-id", default=None)
+    device_add.add_argument("--lat", type=float, required=True)
+    device_add.add_argument("--lng", type=float, required=True)
+    device_add.add_argument("--accuracy", type=float, default=None)
+    device_add.add_argument("--source", default="device")
+    device_add.add_argument("--observed-at", default=None)
+    device_add.add_argument("--metadata-json", default=None)
+    device_list = locations_sub.add_parser("device-list", help="List device locations")
+    device_list.add_argument("--principal-id", default=None)
+    device_list.add_argument("--device-id", default=None)
+    device_list.add_argument("--limit", type=int, default=100)
+
     return parser
 
 
@@ -372,6 +442,12 @@ def _dispatch_command(
         return
     if args.command == "abilities":
         _command_abilities(args)
+        return
+    if args.command == "onboarding":
+        _command_onboarding(args)
+        return
+    if args.command == "locations":
+        _command_locations(args)
         return
     if args.command == "repl":
         _command_repl(parser, db_path)
@@ -1084,6 +1160,141 @@ def _load_spec_patch(spec_json: str | None, spec_file: str | None) -> dict[str, 
             raise ValueError(f"Spec file must contain a JSON object: {path}")
         return parsed
     return {}
+
+
+def _command_onboarding(args: argparse.Namespace) -> None:
+    if args.onboarding_command == "list":
+        rows = list_onboarding_profiles(state=args.state, limit=args.limit)
+        if not rows:
+            print("No onboarding profiles found.")
+            return
+        for row in rows:
+            print(
+                f"- principal={row.get('principal_id')} state={row.get('state')} "
+                f"role={row.get('primary_role')}"
+            )
+        return
+
+    if args.onboarding_command == "show":
+        item = get_onboarding_profile(args.principal_id)
+        if not item:
+            print("Onboarding profile not found.")
+            return
+        print(json.dumps(item, indent=2, ensure_ascii=True))
+        return
+
+    if args.onboarding_command == "upsert":
+        principal_id = upsert_onboarding_profile(
+            {
+                "principal_id": args.principal_id,
+                "state": args.state,
+                "primary_role": args.primary_role,
+                "next_steps": list(args.next_steps or []),
+                "resume_token": args.resume_token,
+                "completed_at": args.completed_at,
+            }
+        )
+        print(f"Upserted onboarding profile: {principal_id}")
+        return
+
+    if args.onboarding_command == "delete":
+        ok = delete_onboarding_profile(args.principal_id)
+        if not ok:
+            print("Onboarding profile not found.")
+            return
+        print(f"Deleted onboarding profile: {args.principal_id}")
+        return
+
+
+def _command_locations(args: argparse.Namespace) -> None:
+    if args.locations_command == "list":
+        rows = list_location_profiles(
+            principal_id=args.principal_id,
+            label=args.label,
+            active_only=args.active_only,
+            limit=args.limit,
+        )
+        if not rows:
+            print("No location profiles found.")
+            return
+        for row in rows:
+            print(
+                f"- {row.get('location_id')} principal={row.get('principal_id')} "
+                f"label={row.get('label')} active={row.get('is_active')}"
+            )
+        return
+
+    if args.locations_command == "show":
+        item = get_location_profile(args.location_id)
+        if not item:
+            print("Location profile not found.")
+            return
+        print(json.dumps(item, indent=2, ensure_ascii=True))
+        return
+
+    if args.locations_command == "upsert":
+        location_id = upsert_location_profile(
+            {
+                "location_id": args.location_id,
+                "principal_id": args.principal_id,
+                "label": args.label,
+                "address_text": args.address_text,
+                "latitude": args.lat,
+                "longitude": args.lng,
+                "source": args.source,
+                "confidence": args.confidence,
+                "is_active": not args.inactive,
+            }
+        )
+        print(f"Upserted location profile: {location_id}")
+        return
+
+    if args.locations_command == "delete":
+        ok = delete_location_profile(args.location_id)
+        if not ok:
+            print("Location profile not found.")
+            return
+        print(f"Deleted location profile: {args.location_id}")
+        return
+
+    if args.locations_command == "device-add":
+        metadata = None
+        if args.metadata_json:
+            try:
+                metadata = json.loads(args.metadata_json)
+            except json.JSONDecodeError:
+                print("Invalid --metadata-json")
+                return
+        entry_id = insert_device_location(
+            {
+                "principal_id": args.principal_id,
+                "device_id": args.device_id,
+                "latitude": args.lat,
+                "longitude": args.lng,
+                "accuracy_meters": args.accuracy,
+                "source": args.source,
+                "observed_at": args.observed_at,
+                "metadata": metadata,
+            }
+        )
+        print(f"Inserted device location: {entry_id}")
+        return
+
+    if args.locations_command == "device-list":
+        rows = list_device_locations(
+            principal_id=args.principal_id,
+            device_id=args.device_id,
+            limit=args.limit,
+        )
+        if not rows:
+            print("No device locations found.")
+            return
+        for row in rows:
+            print(
+                f"- {row.get('id')} device={row.get('device_id')} "
+                f"lat={row.get('latitude')} lng={row.get('longitude')} observed={row.get('observed_at')}"
+            )
+        return
 
 
 def _configure_logging(level_name: str) -> None:

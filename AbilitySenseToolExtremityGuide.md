@@ -56,6 +56,49 @@
 ### State Ownership
 - Global bootstrap state: system-scope preferences (single source of truth).
 - Per-user onboarding state: channel/person principal preferences.
+- Onboarding + location operational records: persisted in dedicated nerve-db tables.
+
+## Onboarding + Location Data Model
+
+### `onboarding_profiles`
+- Purpose: resumable onboarding progress per principal.
+- Key fields:
+  - `principal_id` (PK)
+  - `state` (`not_started|awaiting_name|operational|in_progress|completed`)
+  - `primary_role` (for example `admin`)
+  - `next_steps_json`
+  - `resume_token`
+  - `completed_at`
+
+### `location_profiles`
+- Purpose: stable places per principal (home/work/other).
+- Key fields:
+  - `location_id` (PK)
+  - `principal_id` (FK principals)
+  - `label` (`home|work|other`)
+  - `address_text`
+  - `latitude`, `longitude`
+  - `source`, `confidence`, `is_active`
+
+### `device_locations`
+- Purpose: ephemeral location samples from devices (for example AlphonseLink).
+- Key fields:
+  - `id` (PK)
+  - `principal_id` (optional FK principals)
+  - `device_id`
+  - `latitude`, `longitude`, `accuracy_meters`
+  - `source`, `observed_at`, `metadata_json`
+
+## API + CLI Surfaces
+
+### API
+- `/agent/onboarding/profiles`
+- `/agent/locations`
+- `/agent/device-locations`
+
+### CLI
+- `alphonse.agent.cli onboarding ...`
+- `alphonse.agent.cli locations ...`
 
 ## Current Code Anchors
 - Senses: `/Users/alex/Code Projects/atrium-server/alphonse/agent/nervous_system/senses/`

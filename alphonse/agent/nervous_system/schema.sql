@@ -193,6 +193,68 @@ CREATE INDEX IF NOT EXISTS idx_ability_specs_enabled
   ON ability_specs (enabled, intent_name);
 
 ----------------------------------------------------------------------
+-- 2.6.2.5) ONBOARDING PROFILES
+----------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS onboarding_profiles (
+  principal_id    TEXT PRIMARY KEY,
+  state           TEXT NOT NULL DEFAULT 'not_started',
+  primary_role    TEXT,
+  next_steps_json TEXT NOT NULL DEFAULT '[]',
+  resume_token    TEXT,
+  completed_at    TEXT,
+  created_at      TEXT NOT NULL,
+  updated_at      TEXT NOT NULL,
+  FOREIGN KEY (principal_id) REFERENCES principals(principal_id) ON DELETE CASCADE,
+  CHECK (state IN ('not_started', 'awaiting_name', 'operational', 'in_progress', 'completed'))
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_onboarding_profiles_state
+  ON onboarding_profiles (state, updated_at);
+
+----------------------------------------------------------------------
+-- 2.6.2.6) LOCATION PROFILES
+----------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS location_profiles (
+  location_id   TEXT PRIMARY KEY,
+  principal_id  TEXT NOT NULL,
+  label         TEXT NOT NULL,
+  address_text  TEXT,
+  latitude      REAL,
+  longitude     REAL,
+  source        TEXT NOT NULL,
+  confidence    REAL,
+  is_active     INTEGER NOT NULL DEFAULT 1,
+  created_at    TEXT NOT NULL,
+  updated_at    TEXT NOT NULL,
+  FOREIGN KEY (principal_id) REFERENCES principals(principal_id) ON DELETE CASCADE,
+  CHECK (label IN ('home', 'work', 'other')),
+  CHECK (is_active IN (0,1))
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_location_profiles_principal
+  ON location_profiles (principal_id, label, is_active);
+
+----------------------------------------------------------------------
+-- 2.6.2.7) DEVICE LOCATIONS (EPHEMERAL/STREAM)
+----------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS device_locations (
+  id              TEXT PRIMARY KEY,
+  principal_id    TEXT,
+  device_id       TEXT NOT NULL,
+  latitude        REAL NOT NULL,
+  longitude       REAL NOT NULL,
+  accuracy_meters REAL,
+  source          TEXT NOT NULL,
+  observed_at     TEXT NOT NULL,
+  metadata_json   TEXT,
+  created_at      TEXT NOT NULL,
+  FOREIGN KEY (principal_id) REFERENCES principals(principal_id) ON DELETE SET NULL
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_device_locations_device_observed
+  ON device_locations (device_id, observed_at DESC);
+
+----------------------------------------------------------------------
 -- 2.6.2.1) CAPABILITY GAPS
 ----------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS capability_gaps (

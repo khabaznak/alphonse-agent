@@ -200,6 +200,61 @@ Alphonse uses a two-phase onboarding model:
 Primary onboarding and secondary onboarding are intentionally separated so each can evolve
 independently without mixing first-run bootstrap concerns with household growth flows.
 
+### Onboarding + Location Persistence (nerve-db)
+
+New persistence tables:
+
+- `onboarding_profiles`
+- `location_profiles`
+- `device_locations`
+
+These are managed via store modules:
+
+- `/Users/alex/Code Projects/atrium-server/alphonse/agent/nervous_system/onboarding_profiles.py`
+- `/Users/alex/Code Projects/atrium-server/alphonse/agent/nervous_system/location_profiles.py`
+
+### Onboarding + Location API Endpoints
+
+Onboarding:
+
+- `GET /agent/onboarding/profiles`
+- `GET /agent/onboarding/profiles/{principal_id}`
+- `POST /agent/onboarding/profiles`
+- `DELETE /agent/onboarding/profiles/{principal_id}`
+
+Locations:
+
+- `GET /agent/locations`
+- `GET /agent/locations/{location_id}`
+- `POST /agent/locations`
+- `DELETE /agent/locations/{location_id}`
+
+Device location stream/snapshots:
+
+- `GET /agent/device-locations`
+- `POST /agent/device-locations`
+
+### CLI Commands
+
+Onboarding profile CRUD:
+
+```bash
+python -m alphonse.agent.cli onboarding list --state in_progress
+python -m alphonse.agent.cli onboarding show <principal_id>
+python -m alphonse.agent.cli onboarding upsert <principal_id> --state in_progress --primary-role admin --next-steps home_location work_location
+python -m alphonse.agent.cli onboarding delete <principal_id>
+```
+
+Location profile CRUD + device positions:
+
+```bash
+python -m alphonse.agent.cli locations list --principal-id <principal_id>
+python -m alphonse.agent.cli locations upsert <principal_id> --label home --address-text "123 Main St" --lat 20.67 --lng -103.35
+python -m alphonse.agent.cli locations device-add <device_id> --principal-id <principal_id> --lat 20.68 --lng -103.34 --source alphonse_link
+python -m alphonse.agent.cli locations device-list --device-id <device_id>
+python -m alphonse.agent.cli locations delete <location_id>
+```
+
 ---
 
 ## LangGraph Cortex

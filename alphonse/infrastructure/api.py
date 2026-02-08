@@ -26,6 +26,20 @@ from alphonse.agent.nervous_system.gap_tasks import (
     list_gap_tasks,
     update_gap_task_status,
 )
+from alphonse.agent.nervous_system.onboarding_profiles import (
+    delete_onboarding_profile,
+    get_onboarding_profile,
+    list_onboarding_profiles,
+    upsert_onboarding_profile,
+)
+from alphonse.agent.nervous_system.location_profiles import (
+    delete_location_profile,
+    get_location_profile,
+    insert_device_location,
+    list_device_locations,
+    list_location_profiles,
+    upsert_location_profile,
+)
 from alphonse.infrastructure.api_gateway import gateway
 from alphonse.infrastructure.web_event_hub import web_event_hub
 from alphonse.agent.lan.api import router as lan_router
@@ -81,6 +95,38 @@ class AbilitySpecPatch(BaseModel):
     spec: dict[str, Any] | None = None
     enabled: bool | None = None
     source: str | None = None
+
+
+class OnboardingProfileUpsert(BaseModel):
+    principal_id: str
+    state: str = Field(default="not_started")
+    primary_role: str | None = None
+    next_steps: list[str] = Field(default_factory=list)
+    resume_token: str | None = None
+    completed_at: str | None = None
+
+
+class LocationProfileUpsert(BaseModel):
+    location_id: str | None = None
+    principal_id: str
+    label: str = Field(default="other")
+    address_text: str | None = None
+    latitude: float | None = None
+    longitude: float | None = None
+    source: str = "user"
+    confidence: float | None = None
+    is_active: bool = True
+
+
+class DeviceLocationCreate(BaseModel):
+    principal_id: str | None = None
+    device_id: str
+    latitude: float
+    longitude: float
+    accuracy_meters: float | None = None
+    source: str = "device"
+    observed_at: str | None = None
+    metadata: dict[str, Any] | None = None
 
 
 @app.get("/agent/status")
@@ -386,6 +432,132 @@ def delete_agent_ability(
     if not ok:
         raise HTTPException(status_code=404, detail="Ability spec not found")
     return {"deleted": True, "intent_name": intent_name}
+
+
+@app.get("/agent/onboarding/profiles")
+def list_agent_onboarding_profiles(
+    state: str | None = None,
+    limit: int = 100,
+    x_alphonse_api_token: str | None = Header(default=None),
+) -> dict[str, Any]:
+    _assert_api_token(x_alphonse_api_token)
+    return {"items": list_onboarding_profiles(state=state, limit=limit)}
+
+
+@app.get("/agent/onboarding/profiles/{principal_id}")
+def get_agent_onboarding_profile(
+    principal_id: str,
+    x_alphonse_api_token: str | None = Header(default=None),
+) -> dict[str, Any]:
+    _assert_api_token(x_alphonse_api_token)
+    item = get_onboarding_profile(principal_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Onboarding profile not found")
+    return {"item": item}
+
+
+@app.post("/agent/onboarding/profiles", status_code=201)
+def upsert_agent_onboarding_profile(
+    payload: OnboardingProfileUpsert,
+    x_alphonse_api_token: str | None = Header(default=None),
+) -> dict[str, Any]:
+    _assert_api_token(x_alphonse_api_token)
+    principal_id = upsert_onboarding_profile(payload.model_dump())
+    return {"item": get_onboarding_profile(principal_id)}
+
+
+@app.delete("/agent/onboarding/profiles/{principal_id}")
+def delete_agent_onboarding_profile(
+    principal_id: str,
+    x_alphonse_api_token: str | None = Header(default=None),
+) -> dict[str, Any]:
+    _assert_api_token(x_alphonse_api_token)
+    ok = delete_onboarding_profile(principal_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Onboarding profile not found")
+    return {"deleted": True, "principal_id": principal_id}
+
+
+@app.get("/agent/locations")
+def list_agent_locations(
+    principal_id: str | None = None,
+    label: str | None = None,
+    active_only: bool = False,
+    limit: int = 100,
+    x_alphonse_api_token: str | None = Header(default=None),
+) -> dict[str, Any]:
+    _assert_api_token(x_alphonse_api_token)
+    return {
+        "items": list_location_profiles(
+            principal_id=principal_id,
+            label=label,
+            active_only=active_only,
+            limit=limit,
+        )
+    }
+
+
+@app.get("/agent/locations/{location_id}")
+def get_agent_location(
+    location_id: str,
+    x_alphonse_api_token: str | None = Header(default=None),
+) -> dict[str, Any]:
+    _assert_api_token(x_alphonse_api_token)
+    item = get_location_profile(location_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Location profile not found")
+    return {"item": item}
+
+
+@app.post("/agent/locations", status_code=201)
+def upsert_agent_location(
+    payload: LocationProfileUpsert,
+    x_alphonse_api_token: str | None = Header(default=None),
+) -> dict[str, Any]:
+    _assert_api_token(x_alphonse_api_token)
+    location_id = upsert_location_profile(payload.model_dump())
+    return {"item": get_location_profile(location_id)}
+
+
+@app.delete("/agent/locations/{location_id}")
+def delete_agent_location(
+    location_id: str,
+    x_alphonse_api_token: str | None = Header(default=None),
+) -> dict[str, Any]:
+    _assert_api_token(x_alphonse_api_token)
+    ok = delete_location_profile(location_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Location profile not found")
+    return {"deleted": True, "location_id": location_id}
+
+
+@app.get("/agent/device-locations")
+def list_agent_device_locations(
+    principal_id: str | None = None,
+    device_id: str | None = None,
+    limit: int = 100,
+    x_alphonse_api_token: str | None = Header(default=None),
+) -> dict[str, Any]:
+    _assert_api_token(x_alphonse_api_token)
+    return {
+        "items": list_device_locations(
+            principal_id=principal_id,
+            device_id=device_id,
+            limit=limit,
+        )
+    }
+
+
+@app.post("/agent/device-locations", status_code=201)
+def create_agent_device_location(
+    payload: DeviceLocationCreate,
+    x_alphonse_api_token: str | None = Header(default=None),
+) -> dict[str, Any]:
+    _assert_api_token(x_alphonse_api_token)
+    entry_id = insert_device_location(payload.model_dump())
+    rows = list_device_locations(device_id=payload.device_id, limit=1)
+    item = rows[0] if rows else {"id": entry_id}
+    return {"item": item}
 
 
 def _as_optional_str(value: object | None) -> str | None:
