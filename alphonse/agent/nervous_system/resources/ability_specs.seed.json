@@ -1,0 +1,28 @@
+[
+  {
+    "intent_name": "time.current",
+    "kind": "clock_time_response",
+    "tools": ["clock"],
+    "timezone_state_key": "timezone",
+    "timezone_default": "America/Mexico_City",
+    "responses": {
+      "es": "Son las {time} en {timezone}.",
+      "default": "It is {time} in {timezone}."
+    }
+  },
+  {
+    "intent_name": "meta.gaps_list",
+    "kind": "plan_emit",
+    "tools": [],
+    "plan": {
+      "plan_type": "QUERY_STATUS",
+      "target_from": ["channel_target", "chat_id"],
+      "channels_from": ["channel_type"],
+      "payload": {
+        "include": ["gaps_summary"],
+        "limit": 5,
+        "locale": "{locale}"
+      }
+    }
+  }
+]

@@ -110,6 +110,16 @@ def update_gap_proposal_status(
     return cur.rowcount > 0
 
 
+def delete_gap_proposal(proposal_id: str) -> bool:
+    with sqlite3.connect(resolve_nervous_system_db_path()) as conn:
+        cur = conn.execute(
+            "DELETE FROM gap_proposals WHERE id = ?",
+            (proposal_id,),
+        )
+        conn.commit()
+    return cur.rowcount > 0
+
+
 def _row_to_proposal(row: sqlite3.Row | tuple | None) -> dict[str, Any]:
     if row is None:
         return {}

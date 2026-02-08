@@ -4,6 +4,7 @@ import json
 import sqlite3
 from datetime import datetime
 from typing import Any
+import uuid
 
 from alphonse.agent.nervous_system.paths import resolve_nervous_system_db_path
 
@@ -30,6 +31,46 @@ def list_upcoming_timed_signals(limit: int = 10) -> list[dict[str, Any]]:
     with _connect() as conn:
         rows = conn.execute(query, (limit,)).fetchall()
     return [_row_to_timed_signal(row) for row in rows]
+
+
+def insert_timed_signal(
+    *,
+    trigger_at: str,
+    timezone: str,
+    signal_type: str,
+    payload: dict[str, Any],
+    target: str | None,
+    origin: str | None,
+    correlation_id: str | None,
+    signal_id: str | None = None,
+    next_trigger_at: str | None = None,
+    rrule: str | None = None,
+) -> str:
+    timed_signal_id = signal_id or str(uuid.uuid4())
+    with _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO timed_signals
+              (id, trigger_at, next_trigger_at, rrule, timezone, status, fired_at, attempt_count, attempts, last_error,
+               signal_type, payload, target, origin, correlation_id)
+            VALUES
+              (?, ?, ?, ?, ?, 'pending', NULL, 0, 0, NULL, ?, ?, ?, ?, ?)
+            """,
+            (
+                timed_signal_id,
+                trigger_at,
+                next_trigger_at,
+                rrule,
+                timezone,
+                signal_type,
+                json.dumps(payload),
+                target,
+                origin,
+                correlation_id,
+            ),
+        )
+        conn.commit()
+    return timed_signal_id
 
 
 def _connect() -> sqlite3.Connection:

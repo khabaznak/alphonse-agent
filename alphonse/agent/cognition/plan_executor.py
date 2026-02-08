@@ -37,9 +37,9 @@ from alphonse.agent.nervous_system.capability_gaps import insert_gap
 from alphonse.agent.lan.store import arm_device, disarm_device, get_latest_paired_device, get_paired_device
 from alphonse.agent.lan.pairing_store import approve_pairing, deny_pairing, get_pairing_request
 from alphonse.config import settings
-from alphonse.agent.extremities.scheduler_extremity import schedule_reminder
 from alphonse.agent.io import NormalizedOutboundMessage, get_io_registry
 from alphonse.agent.policy.engine import PolicyDecision, PolicyEngine
+from alphonse.agent.tools.scheduler import SchedulerTool
 
 logger = logging.getLogger(__name__)
 
@@ -59,11 +59,13 @@ class PlanExecutor:
         coordinator: DeliveryCoordinator | None = None,
         extremities: object | None = None,
         policy_engine: PolicyEngine | None = None,
+        scheduler: SchedulerTool | None = None,
     ) -> None:
         _ = extremities
         self._coordinator = coordinator or build_default_coordinator()
         self._policy = policy_engine or PolicyEngine()
         self._responses = ResponseComposer()
+        self._scheduler = scheduler or SchedulerTool()
 
     def execute(
         self, plans: list[CortexPlan], context: dict, exec_context: PlanExecutionContext
@@ -170,7 +172,7 @@ class PlanExecutor:
             now_utc.isoformat(),
             eta_seconds if eta_seconds is not None else "unknown",
         )
-        result = schedule_reminder(
+        result = self._scheduler.schedule_reminder(
             reminder_text=payload.reminder_text,
             trigger_time=payload.trigger_at,
             chat_id=payload.chat_id,
@@ -178,6 +180,8 @@ class PlanExecutor:
             actor_person_id=exec_context.actor_person_id,
             intent_evidence={},
             correlation_id=payload.correlation_id,
+            timezone_name=payload.timezone,
+            locale_hint=payload.locale_hint,
         )
         logger.info(
             "executor dispatch plan_id=%s plan_type=%s outcome=scheduled schedule_id=%s",

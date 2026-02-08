@@ -7,13 +7,62 @@ from typing import Any
 
 from fastapi import FastAPI, Body, HTTPException, Header
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, Field
 
+from alphonse.agent.cognition.capability_gaps.coalescing import (
+    coalesce_open_intent_gaps,
+)
+from alphonse.agent.cognition.capability_gaps.workflow import dispatch_gap_proposal
+from alphonse.agent.nervous_system.gap_proposals import (
+    delete_gap_proposal,
+    get_gap_proposal,
+    insert_gap_proposal,
+    list_gap_proposals,
+    update_gap_proposal_status,
+)
+from alphonse.agent.nervous_system.gap_tasks import (
+    get_gap_task,
+    list_gap_tasks,
+    update_gap_task_status,
+)
 from alphonse.infrastructure.api_gateway import gateway
 from alphonse.infrastructure.web_event_hub import web_event_hub
 from alphonse.agent.lan.api import router as lan_router
 
 app = FastAPI(title="Alphonse API", version="0.1.0")
 app.include_router(lan_router, prefix="/lan")
+
+
+class GapProposalCreate(BaseModel):
+    gap_id: str
+    proposed_category: str = "intent_missing"
+    proposed_next_action: str = "plan"
+    proposed_intent_name: str | None = None
+    confidence: float | None = None
+    proposed_clarifying_question: str | None = None
+    notes: str | None = None
+    language: str | None = None
+    status: str = "pending"
+
+
+class GapProposalUpdate(BaseModel):
+    status: str = Field(..., description="pending|approved|rejected|dispatched")
+    reviewer: str | None = None
+    notes: str | None = None
+
+
+class GapProposalDispatch(BaseModel):
+    task_type: str | None = Field(default=None, description="plan|investigate|fix_now")
+    actor: str | None = None
+
+
+class GapCoalesceRequest(BaseModel):
+    limit: int = 300
+    min_cluster_size: int = 2
+
+
+class GapTaskUpdate(BaseModel):
+    status: str = Field(..., description="open|done")
 
 
 @app.get("/agent/status")
@@ -24,7 +73,7 @@ def agent_status(x_alphonse_api_token: str | None = Header(default=None)) -> dic
         {"api_token": x_alphonse_api_token},
         None,
     )
-    response = gateway.emit_and_wait(signal, timeout=5.0)
+    response = gateway.emit_and_wait(signal, timeout=40.0)
     if response is None:
         raise HTTPException(status_code=503, detail="API gateway unavailable")
     return response
@@ -50,7 +99,7 @@ def agent_message(
         },
         _as_optional_str(payload.get("correlation_id")),
     )
-    response = gateway.emit_and_wait(signal, timeout=5.0)
+    response = gateway.emit_and_wait(signal, timeout=40.0)
     if response is None:
         raise HTTPException(status_code=503, detail="API gateway unavailable")
     return response
@@ -97,6 +146,138 @@ def agent_events(
             "Connection": "keep-alive",
         },
     )
+
+
+@app.post("/agent/gap-proposals/coalesce")
+def coalesce_gap_proposals(
+    payload: GapCoalesceRequest = Body(default=GapCoalesceRequest()),
+    x_alphonse_api_token: str | None = Header(default=None),
+) -> dict[str, Any]:
+    _assert_api_token(x_alphonse_api_token)
+    created = coalesce_open_intent_gaps(
+        limit=payload.limit,
+        min_cluster_size=payload.min_cluster_size,
+    )
+    return {"created_count": len(created), "proposal_ids": created}
+
+
+@app.get("/agent/gap-proposals")
+def list_agent_gap_proposals(
+    status: str | None = None,
+    limit: int = 50,
+    x_alphonse_api_token: str | None = Header(default=None),
+) -> dict[str, Any]:
+    _assert_api_token(x_alphonse_api_token)
+    return {"items": list_gap_proposals(status=status, limit=limit)}
+
+
+@app.post("/agent/gap-proposals", status_code=201)
+def create_agent_gap_proposal(
+    payload: GapProposalCreate,
+    x_alphonse_api_token: str | None = Header(default=None),
+) -> dict[str, Any]:
+    _assert_api_token(x_alphonse_api_token)
+    proposal_id = insert_gap_proposal(payload.model_dump())
+    proposal = get_gap_proposal(proposal_id)
+    return {"id": proposal_id, "item": proposal}
+
+
+@app.get("/agent/gap-proposals/{proposal_id}")
+def get_agent_gap_proposal(
+    proposal_id: str,
+    x_alphonse_api_token: str | None = Header(default=None),
+) -> dict[str, Any]:
+    _assert_api_token(x_alphonse_api_token)
+    proposal = get_gap_proposal(proposal_id)
+    if not proposal:
+        raise HTTPException(status_code=404, detail="Gap proposal not found")
+    return {"item": proposal}
+
+
+@app.patch("/agent/gap-proposals/{proposal_id}")
+def update_agent_gap_proposal(
+    proposal_id: str,
+    payload: GapProposalUpdate,
+    x_alphonse_api_token: str | None = Header(default=None),
+) -> dict[str, Any]:
+    _assert_api_token(x_alphonse_api_token)
+    ok = update_gap_proposal_status(
+        proposal_id,
+        payload.status,
+        reviewer=payload.reviewer,
+        notes=payload.notes,
+    )
+    if not ok:
+        raise HTTPException(status_code=404, detail="Gap proposal not found")
+    return {"item": get_gap_proposal(proposal_id)}
+
+
+@app.delete("/agent/gap-proposals/{proposal_id}")
+def delete_agent_gap_proposal(
+    proposal_id: str,
+    x_alphonse_api_token: str | None = Header(default=None),
+) -> dict[str, Any]:
+    _assert_api_token(x_alphonse_api_token)
+    ok = delete_gap_proposal(proposal_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Gap proposal not found")
+    return {"deleted": True, "id": proposal_id}
+
+
+@app.post("/agent/gap-proposals/{proposal_id}/dispatch")
+def dispatch_agent_gap_proposal(
+    proposal_id: str,
+    payload: GapProposalDispatch = Body(default=GapProposalDispatch()),
+    x_alphonse_api_token: str | None = Header(default=None),
+) -> dict[str, Any]:
+    _assert_api_token(x_alphonse_api_token)
+    try:
+        task_id = dispatch_gap_proposal(
+            proposal_id,
+            task_type=payload.task_type,
+            actor=payload.actor,
+        )
+    except ValueError as exc:
+        if str(exc) == "proposal_not_found":
+            raise HTTPException(status_code=404, detail="Gap proposal not found") from exc
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    task = get_gap_task(task_id)
+    return {"task_id": task_id, "task": task, "proposal": get_gap_proposal(proposal_id)}
+
+
+@app.get("/agent/gap-tasks")
+def list_agent_gap_tasks(
+    status: str | None = None,
+    limit: int = 50,
+    x_alphonse_api_token: str | None = Header(default=None),
+) -> dict[str, Any]:
+    _assert_api_token(x_alphonse_api_token)
+    return {"items": list_gap_tasks(status=status, limit=limit)}
+
+
+@app.get("/agent/gap-tasks/{task_id}")
+def get_agent_gap_task(
+    task_id: str,
+    x_alphonse_api_token: str | None = Header(default=None),
+) -> dict[str, Any]:
+    _assert_api_token(x_alphonse_api_token)
+    task = get_gap_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Gap task not found")
+    return {"item": task}
+
+
+@app.patch("/agent/gap-tasks/{task_id}")
+def update_agent_gap_task(
+    task_id: str,
+    payload: GapTaskUpdate,
+    x_alphonse_api_token: str | None = Header(default=None),
+) -> dict[str, Any]:
+    _assert_api_token(x_alphonse_api_token)
+    ok = update_gap_task_status(task_id, payload.status)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Gap task not found")
+    return {"item": get_gap_task(task_id)}
 
 
 def _as_optional_str(value: object | None) -> str | None:

@@ -5,10 +5,6 @@ from typing import Any
 
 from alphonse.agent.actions.base import Action
 from alphonse.agent.actions.models import ActionResult
-from alphonse.agent.cognition.skills.command_plans import (
-    CreateReminderPlan,
-    parse_command_plan,
-)
 from alphonse.agent.cognition.reminders.renderer import render_reminder
 from alphonse.agent.actions.handle_daily_report import dispatch_daily_report
 from alphonse.agent.cognition.plan_executor import PlanExecutionContext, PlanExecutor
@@ -40,12 +36,11 @@ class HandleTimerFiredAction(Action):
         if signal_type == "daily_report":
             dispatch_daily_report(context, payload)
             return ActionResult(intention_key="NOOP", payload={}, urgency=None)
-        plan = _extract_plan(payload)
         inner = _payload_from_signal(payload)
-        reminder_payload = _build_reminder_payload(plan, payload, inner)
+        reminder_payload = _build_reminder_payload(payload, inner)
         rendered = render_reminder(reminder_payload, prefs=None)
         locale = _locale_from_payload(reminder_payload)
-        correlation_id = _correlation_id(payload, signal, plan)
+        correlation_id = _correlation_id(payload, signal)
         target = reminder_payload.get("chat_id") or _target_address(payload)
         channels = ["telegram"]
 
@@ -83,43 +78,15 @@ class HandleTimerFiredAction(Action):
         return ActionResult(intention_key="NOOP", payload={}, urgency=None)
 
 
-def _extract_plan(payload: dict[str, Any]) -> CreateReminderPlan | None:
-    plan_data = None
-    signal_payload = payload.get("payload") if isinstance(payload, dict) else None
-    if isinstance(signal_payload, dict):
-        plan_data = signal_payload.get("plan")
-    if not isinstance(plan_data, dict):
-        return None
-    try:
-        plan = parse_command_plan(plan_data)
-    except ValueError:
-        return None
-    if isinstance(plan, CreateReminderPlan):
-        return plan
-    return None
-
-
 def _payload_from_signal(payload: dict[str, Any]) -> dict[str, Any]:
     signal_payload = payload.get("payload") if isinstance(payload, dict) else None
     return signal_payload if isinstance(signal_payload, dict) else {}
 
 
 def _build_reminder_payload(
-    plan: CreateReminderPlan | None,
     payload: dict[str, Any],
     inner: dict[str, Any],
 ) -> dict[str, Any]:
-    if plan:
-        return {
-            "reminder_text_raw": plan.payload.message.text,
-            "chat_id": plan.actor.channel.target
-            if plan.actor and plan.actor.channel
-            else None,
-            "origin_channel": plan.source,
-            "locale_hint": plan.payload.message.language,
-            "created_at": plan.created_at,
-            "trigger_at": plan.payload.schedule.trigger_at,
-        }
     reminder_text_raw = inner.get("reminder_text_raw") or inner.get("message")
     return {
         "reminder_text_raw": reminder_text_raw,
@@ -143,10 +110,8 @@ def _target_address(payload: dict[str, Any]) -> str | None:
 
 
 def _correlation_id(
-    payload: dict[str, Any], signal: object | None, plan: CreateReminderPlan | None
+    payload: dict[str, Any], signal: object | None
 ) -> str | None:
-    if plan:
-        return plan.correlation_id
     if isinstance(payload, dict):
         cid = payload.get("correlation_id")
         if cid:

@@ -2,13 +2,19 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from typing import Any
 
-from alphonse.agent.cognition.skills.command_plans import CommandPlan
 from alphonse.agent.nervous_system.paths import resolve_nervous_system_db_path
 
 
-def insert_plan_instance(plan: CommandPlan, status: str) -> None:
+def insert_plan_instance(plan: dict[str, Any], status: str) -> None:
     db_path = resolve_nervous_system_db_path()
+    actor = plan.get("actor") if isinstance(plan.get("actor"), dict) else {}
+    channel = actor.get("channel") if isinstance(actor.get("channel"), dict) else {}
+    payload = plan.get("payload") if isinstance(plan.get("payload"), dict) else {}
+    intent_evidence = (
+        plan.get("intent_evidence") if isinstance(plan.get("intent_evidence"), dict) else {}
+    )
     with sqlite3.connect(db_path) as conn:
         conn.execute(
             """
@@ -20,19 +26,19 @@ def insert_plan_instance(plan: CommandPlan, status: str) -> None:
               (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
-                plan.plan_id,
-                plan.plan_kind,
-                plan.plan_version,
-                plan.correlation_id,
+                plan.get("plan_id"),
+                plan.get("plan_kind"),
+                int(plan.get("plan_version") or 1),
+                plan.get("correlation_id"),
                 status,
-                plan.actor.person_id,
-                plan.actor.channel.type,
-                plan.actor.channel.target,
-                float(plan.intent_confidence),
-                json.dumps(plan.payload.model_dump()),
-                json.dumps(plan.intent_evidence.model_dump()),
-                plan.original_text,
-                plan.created_at,
+                actor.get("person_id"),
+                channel.get("type"),
+                channel.get("target"),
+                float(plan.get("intent_confidence") or 0.0),
+                json.dumps(payload),
+                json.dumps(intent_evidence),
+                plan.get("original_text"),
+                plan.get("created_at"),
             ),
         )
         conn.commit()

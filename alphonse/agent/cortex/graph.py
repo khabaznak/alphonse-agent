@@ -59,8 +59,14 @@ from alphonse.agent.cognition.routing_primitives import (
     extract_preference_updates,
     pairing_command_intent,
 )
+from alphonse.agent.cognition.abilities.registry import Ability, AbilityRegistry
+from alphonse.agent.cognition.abilities.json_runtime import load_json_abilities
+from alphonse.agent.tools.registry import ToolRegistry, build_default_tool_registry
 
 logger = logging.getLogger(__name__)
+
+_TOOL_REGISTRY: ToolRegistry = build_default_tool_registry()
+_ABILITY_REGISTRY: AbilityRegistry | None = None
 
 
 class CortexState(TypedDict, total=False):
@@ -94,6 +100,9 @@ class CortexState(TypedDict, total=False):
     catalog_intent: str | None
     catalog_slot_guesses: dict[str, Any]
     pending_interaction: dict[str, Any] | None
+    proposed_intent: str | None
+    proposed_intent_aliases: list[str]
+    proposed_intent_confidence: float | None
 
 
 def build_cortex_graph(llm_client: OllamaClient | None = None) -> StateGraph:
@@ -276,6 +285,9 @@ def _route_decision_to_intent(
     intent_confidence = 0.6
     needs_clarification = False
     slot_guesses: dict[str, Any] = {}
+    proposed_intent: str | None = None
+    proposed_aliases: list[str] = []
+    proposed_confidence: float | None = None
 
     core_intent = detect_core_intent(text)
     if core_intent:
@@ -312,6 +324,17 @@ def _route_decision_to_intent(
         intent_name = None
 
     if intent_name is None:
+        proposed = _propose_intent_from_map(text, message_map, llm_client=llm_client)
+        if proposed:
+            proposed_intent = proposed.get("intent")
+            proposed_aliases = proposed.get("aliases") or []
+            proposed_confidence = proposed.get("confidence")
+            canonical = _canonicalize_proposed_intent(proposed_intent, proposed_aliases)
+            if canonical and catalog_service.get_intent(canonical):
+                intent_name = canonical
+                intent_confidence = proposed_confidence or 0.55
+
+    if intent_name is None:
         return {
             "intent": "unknown",
             "intent_confidence": 0.2,
@@ -320,6 +343,9 @@ def _route_decision_to_intent(
             "routing_needs_clarification": True,
             "intent_evidence": build_intent_evidence(text),
             "last_intent": "unknown",
+            "proposed_intent": proposed_intent,
+            "proposed_intent_aliases": proposed_aliases,
+            "proposed_intent_confidence": proposed_confidence,
         }
 
     spec = catalog_service.get_intent(intent_name)
@@ -343,6 +369,10 @@ def _route_decision_to_intent(
         "intent_evidence": build_intent_evidence(text),
         "last_intent": intent_name,
     }
+    if proposed_intent:
+        result["proposed_intent"] = proposed_intent
+        result["proposed_intent_aliases"] = proposed_aliases
+        result["proposed_intent_confidence"] = proposed_confidence
     if spec.handler.startswith("timed_signals."):
         result["catalog_intent"] = intent_name
         result["catalog_slot_guesses"] = slot_guesses
@@ -385,6 +415,12 @@ def _question_intent_from_map(
         for token in ("reminder", "recordatorio", "recordatorios", "avisame", "aviso")
     ):
         return "timed_signals.list"
+    if any(
+        token in hint
+        for hint in hints
+        for token in ("what time", "current time", "hora", "que horas", "qué horas", "dime la hora")
+    ):
+        return "time.current"
     return None
 
 
@@ -694,10 +730,10 @@ def _respond_node_impl(state: CortexState, llm_client: OllamaClient | None) -> d
     intent = state.get("intent")
     if intent in {"greeting", "timed_signals.create", "timed_signals.list"} and state.get("plans"):
         return {}
-    handlers = _intent_handlers()
-    handler = handlers.get(str(intent or ""))
-    if handler is not None:
-        return handler(state)
+    if intent:
+        ability = _ability_registry().get(str(intent))
+        if ability is not None:
+            return ability.execute(state, _TOOL_REGISTRY)
     if intent:
         spec = get_catalog_service().get_intent(str(intent))
         if spec:
@@ -730,6 +766,12 @@ def _respond_node_impl(state: CortexState, llm_client: OllamaClient | None) -> d
         )
         result["events"] = events
     if response_key == "generic.unknown":
+        if intent == "unknown" and state.get("proposed_intent"):
+            plan = _build_gap_plan(state, reason="proposed_intent_unmapped")
+            plans = list(state.get("plans") or [])
+            plans.append(plan.model_dump())
+            result["plans"] = plans
+            return result
         guard_input = GapGuardInput(
             category=_category_from_state(state),
             plan_status=PlanStatus.AWAITING_USER if state.get("routing_needs_clarification") else None,
@@ -757,28 +799,132 @@ def _respond_node(arg: OllamaClient | CortexState | None = None):
     return _node
 
 
-def _intent_handlers() -> dict[str, Any]:
-    return {
-        "get_status": _handle_get_status,
-        "help": _handle_help,
-        "core.identity.query_agent_name": _handle_identity_agent,
-        "core.identity.query_user_name": _handle_identity_user,
-        "greeting": _handle_greeting,
-        "cancel": _handle_cancel,
-        "meta.capabilities": _handle_meta_capabilities,
-        "meta.gaps_list": _handle_meta_gaps_list,
-        "timed_signals.list": _handle_timed_signals_list,
-        "timed_signals.create": _handle_noop,
-        "update_preferences": _handle_update_preferences,
-        "lan.arm": _handle_lan_arm,
-        "lan.disarm": _handle_lan_disarm,
-        "pair.approve": _handle_pair_approve,
-        "pair.deny": _handle_pair_deny,
-    }
+def _ability_registry() -> AbilityRegistry:
+    global _ABILITY_REGISTRY
+    if _ABILITY_REGISTRY is not None:
+        return _ABILITY_REGISTRY
+    registry = AbilityRegistry()
+    for ability in load_json_abilities():
+        registry.register(ability)
+    _register_fallback_ability(registry, Ability("get_status", tuple(), _ability_get_status))
+    _register_fallback_ability(registry, Ability("time.current", ("clock",), _ability_time_current))
+    _register_fallback_ability(registry, Ability("help", tuple(), _ability_help))
+    _register_fallback_ability(registry, Ability("core.identity.query_agent_name", tuple(), _ability_identity_agent))
+    _register_fallback_ability(registry, Ability("core.identity.query_user_name", tuple(), _ability_identity_user))
+    _register_fallback_ability(registry, Ability("greeting", tuple(), _ability_greeting))
+    _register_fallback_ability(registry, Ability("cancel", tuple(), _ability_cancel))
+    _register_fallback_ability(registry, Ability("meta.capabilities", tuple(), _ability_meta_capabilities))
+    _register_fallback_ability(registry, Ability("meta.gaps_list", tuple(), _ability_meta_gaps_list))
+    _register_fallback_ability(registry, Ability("timed_signals.list", tuple(), _ability_timed_signals_list))
+    _register_fallback_ability(registry, Ability("timed_signals.create", tuple(), _ability_noop))
+    _register_fallback_ability(registry, Ability("update_preferences", tuple(), _ability_update_preferences))
+    _register_fallback_ability(registry, Ability("lan.arm", tuple(), _ability_lan_arm))
+    _register_fallback_ability(registry, Ability("lan.disarm", tuple(), _ability_lan_disarm))
+    _register_fallback_ability(registry, Ability("pair.approve", tuple(), _ability_pair_approve))
+    _register_fallback_ability(registry, Ability("pair.deny", tuple(), _ability_pair_deny))
+    _ABILITY_REGISTRY = registry
+    return registry
+
+
+def _register_fallback_ability(registry: AbilityRegistry, ability: Ability) -> None:
+    if registry.get(ability.intent_name) is None:
+        registry.register(ability)
+
+
+def _ability_get_status(state: dict[str, Any], tools: ToolRegistry) -> dict[str, Any]:
+    _ = tools
+    return _handle_get_status(state)
+
+
+def _ability_time_current(state: dict[str, Any], tools: ToolRegistry) -> dict[str, Any]:
+    return _handle_time_current(state, tools)
+
+
+def _ability_help(state: dict[str, Any], tools: ToolRegistry) -> dict[str, Any]:
+    _ = tools
+    return _handle_help(state)
+
+
+def _ability_identity_agent(state: dict[str, Any], tools: ToolRegistry) -> dict[str, Any]:
+    _ = tools
+    return _handle_identity_agent(state)
+
+
+def _ability_identity_user(state: dict[str, Any], tools: ToolRegistry) -> dict[str, Any]:
+    _ = tools
+    return _handle_identity_user(state)
+
+
+def _ability_greeting(state: dict[str, Any], tools: ToolRegistry) -> dict[str, Any]:
+    _ = tools
+    return _handle_greeting(state)
+
+
+def _ability_cancel(state: dict[str, Any], tools: ToolRegistry) -> dict[str, Any]:
+    _ = tools
+    return _handle_cancel(state)
+
+
+def _ability_meta_capabilities(state: dict[str, Any], tools: ToolRegistry) -> dict[str, Any]:
+    _ = tools
+    return _handle_meta_capabilities(state)
+
+
+def _ability_meta_gaps_list(state: dict[str, Any], tools: ToolRegistry) -> dict[str, Any]:
+    _ = tools
+    return _handle_meta_gaps_list(state)
+
+
+def _ability_timed_signals_list(state: dict[str, Any], tools: ToolRegistry) -> dict[str, Any]:
+    _ = tools
+    return _handle_timed_signals_list(state)
+
+
+def _ability_noop(state: dict[str, Any], tools: ToolRegistry) -> dict[str, Any]:
+    _ = tools
+    return _handle_noop(state)
+
+
+def _ability_update_preferences(state: dict[str, Any], tools: ToolRegistry) -> dict[str, Any]:
+    _ = tools
+    return _handle_update_preferences(state)
+
+
+def _ability_lan_arm(state: dict[str, Any], tools: ToolRegistry) -> dict[str, Any]:
+    _ = tools
+    return _handle_lan_arm(state)
+
+
+def _ability_lan_disarm(state: dict[str, Any], tools: ToolRegistry) -> dict[str, Any]:
+    _ = tools
+    return _handle_lan_disarm(state)
+
+
+def _ability_pair_approve(state: dict[str, Any], tools: ToolRegistry) -> dict[str, Any]:
+    _ = tools
+    return _handle_pair_approve(state)
+
+
+def _ability_pair_deny(state: dict[str, Any], tools: ToolRegistry) -> dict[str, Any]:
+    _ = tools
+    return _handle_pair_deny(state)
 
 
 def _handle_get_status(state: CortexState) -> dict[str, Any]:
     return {"response_key": "status"}
+
+
+def _handle_time_current(state: CortexState, tools: ToolRegistry) -> dict[str, Any]:
+    timezone_name = str(state.get("timezone") or get_timezone())
+    clock = tools.get("clock")
+    if clock is None:
+        return {"response_key": "generic.unknown"}
+    now = clock.current_time(timezone_name)
+    rendered = now.strftime("%H:%M")
+    locale = _locale_for_state(state)
+    if locale.startswith("es"):
+        return {"response_text": f"Son las {rendered} en {timezone_name}."}
+    return {"response_text": f"It is {rendered} in {timezone_name}."}
 
 
 def _handle_help(state: CortexState) -> dict[str, Any]:
@@ -1020,6 +1166,9 @@ def _build_gap_plan(
             "correlation_id": state.get("correlation_id"),
             "metadata": {
                 "intent_evidence": state.get("intent_evidence"),
+                "proposed_intent": state.get("proposed_intent"),
+                "proposed_intent_aliases": state.get("proposed_intent_aliases") or [],
+                "proposed_intent_confidence": state.get("proposed_intent_confidence"),
             },
         },
     )
@@ -1172,6 +1321,9 @@ def _build_cognition_state(state: CortexState) -> dict[str, Any]:
         "last_updated_at": datetime.now(timezone.utc).isoformat(),
         "slot_machine": state.get("slot_machine"),
         "catalog_intent": state.get("catalog_intent"),
+        "proposed_intent": state.get("proposed_intent"),
+        "proposed_intent_aliases": state.get("proposed_intent_aliases") or [],
+        "proposed_intent_confidence": state.get("proposed_intent_confidence"),
     }
 
 
@@ -1191,6 +1343,9 @@ def _build_meta(state: CortexState) -> dict[str, Any]:
         "events": state.get("events") or [],
         "slot_machine": state.get("slot_machine"),
         "catalog_intent": state.get("catalog_intent"),
+        "proposed_intent": state.get("proposed_intent"),
+        "proposed_intent_aliases": state.get("proposed_intent_aliases") or [],
+        "proposed_intent_confidence": state.get("proposed_intent_confidence"),
     }
 
 
@@ -1225,7 +1380,7 @@ def _infer_question_intent_llm(text: str, llm_client: OllamaClient) -> str | Non
     prompt = (
         "Classify the user question into one intent name. "
         "Return JSON: {\"intent\": \"<name|unknown>\"}. "
-        "Valid intents: core.identity.query_user_name, timed_signals.list, "
+        "Valid intents: core.identity.query_user_name, timed_signals.list, time.current, "
         "meta.capabilities, help, unknown.\n\n"
         f"User question: {text}"
     )
@@ -1237,7 +1392,7 @@ def _infer_question_intent_llm(text: str, llm_client: OllamaClient) -> str | Non
     if not parsed:
         return None
     intent = str(parsed.get("intent") or "").strip()
-    if intent in {"core.identity.query_user_name", "timed_signals.list", "meta.capabilities", "help"}:
+    if intent in {"core.identity.query_user_name", "timed_signals.list", "time.current", "meta.capabilities", "help"}:
         return intent
     return None
 
@@ -1281,3 +1436,74 @@ def _parse_json_dict(raw: str) -> dict[str, Any] | None:
         except json.JSONDecodeError:
             return None
     return parsed if isinstance(parsed, dict) else None
+
+
+def _canonicalize_proposed_intent(intent: str | None, aliases: list[str] | None = None) -> str | None:
+    values = [str(intent or "").strip().lower()]
+    values.extend(str(item or "").strip().lower() for item in (aliases or []))
+    values = [value for value in values if value]
+    if not values:
+        return None
+
+    alias_map = {
+        "greeting": "greeting",
+        "saludo": "greeting",
+        "hello": "greeting",
+        "help": "help",
+        "ayuda": "help",
+        "capabilities": "meta.capabilities",
+        "capability": "meta.capabilities",
+        "reminder list": "timed_signals.list",
+        "list reminders": "timed_signals.list",
+        "recordatorios": "timed_signals.list",
+        "recordatorio": "timed_signals.list",
+        "time": "time.current",
+        "current time": "time.current",
+        "hora": "time.current",
+        "que horas son": "time.current",
+        "que hora es": "time.current",
+        "user name query": "core.identity.query_user_name",
+        "remember my name": "core.identity.query_user_name",
+    }
+    for value in values:
+        if value in alias_map:
+            return alias_map[value]
+        if value.replace(" ", ".") == value and "." in value:
+            return value
+    return None
+
+
+def _propose_intent_from_map(
+    text: str,
+    message_map: MessageMap,
+    *,
+    llm_client: OllamaClient | None,
+) -> dict[str, Any] | None:
+    if llm_client is None:
+        return None
+    prompt = (
+        "Infer the user's primary intent in 1-3 words. "
+        "Return JSON: {\"intent\":\"...\",\"aliases\":[\"...\"],\"confidence\":0..1}. "
+        "Use concise lower-case labels.\n\n"
+        f"User message: {text}\n"
+        f"Message map hint: {message_map.raw_intent_hint}"
+    )
+    try:
+        raw = str(llm_client.complete(system_prompt="You infer user intents for routing.", user_prompt=prompt))
+    except Exception:
+        return None
+    parsed = _parse_json_dict(raw)
+    if not parsed:
+        return None
+    intent = str(parsed.get("intent") or "").strip().lower()
+    if not intent:
+        return None
+    aliases_raw = parsed.get("aliases")
+    aliases: list[str] = []
+    if isinstance(aliases_raw, list):
+        aliases = [str(item).strip().lower() for item in aliases_raw if str(item).strip()]
+    confidence_raw = parsed.get("confidence")
+    confidence: float | None = None
+    if isinstance(confidence_raw, (int, float)):
+        confidence = max(0.0, min(1.0, float(confidence_raw)))
+    return {"intent": intent, "aliases": aliases, "confidence": confidence}

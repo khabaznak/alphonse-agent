@@ -12,7 +12,6 @@ from alphonse.agent.actions.handle_status import HandleStatusAction
 from alphonse.agent.actions.handle_timed_signals import HandleTimedSignalsAction
 from alphonse.agent.actions.handle_action_failure import HandleActionFailure
 from alphonse.agent.actions.handle_timer_fired import HandleTimerFiredAction
-from alphonse.agent.extremities.registry import ExtremityRegistry
 from alphonse.agent.nervous_system.senses.bus import Bus, Signal
 from alphonse.agent.nervous_system.trace_store import write_trace
 from alphonse.agent.cognition.narration.outbound_narration_orchestrator import (
@@ -25,7 +24,6 @@ from alphonse.agent.io import get_io_registry, NormalizedOutboundMessage
 @dataclass
 class IntentPipeline:
     actions: ActionRegistry
-    extremities: ExtremityRegistry
     bus: Bus
     coordinator: DeliveryCoordinator
 
@@ -42,8 +40,6 @@ class IntentPipeline:
                 delivery = self.coordinator.deliver(result, context)
                 if delivery:
                     self._deliver_normalized(delivery)
-            else:
-                self.extremities.dispatch(result, None)
             self._emit_outcome(result, context, success=True, error=None)
         except Exception as exc:
             self._emit_outcome(None, context, success=False, error=exc)
@@ -81,10 +77,8 @@ def build_default_pipeline_with_bus(bus: Bus) -> IntentPipeline:
     actions.register("handle_timed_signals", lambda _: HandleTimedSignalsAction())
     actions.register("handle_action_failure", lambda _: HandleActionFailure())
     actions.register("handle_timer_fired", lambda _: HandleTimerFiredAction())
-    extremities = ExtremityRegistry()
     return IntentPipeline(
         actions=actions,
-        extremities=extremities,
         bus=bus,
         coordinator=build_default_coordinator(),
     )

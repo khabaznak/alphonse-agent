@@ -33,7 +33,8 @@ def test_reflect_creates_proposal_without_dispatch(
 
     proposals = list_gap_proposals(status="pending", limit=10)
     assert proposals
-    assert proposals[0].get("proposed_intent_name") == "greeting"
+    # Heuristic triage is intentionally disabled; reflection may leave intent unset.
+    assert proposals[0].get("proposed_category") == "intent_missing"
 
     tasks = list_gap_tasks(status="open", limit=10)
     assert tasks == []
