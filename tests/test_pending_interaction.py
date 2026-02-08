@@ -46,3 +46,28 @@ def test_confirmation_yes_no() -> None:
     assert yes.result == {"confirmed": True}
     assert no.consumed is True
     assert no.result == {"confirmed": False}
+
+
+def test_address_slot_fill_consumes() -> None:
+    pending = PendingInteraction(
+        type=PendingInteractionType.SLOT_FILL,
+        key="address_text",
+        context={"label": "home"},
+        created_at="now",
+        expires_at=None,
+    )
+    result = try_consume("123 Main St", pending)
+    assert result.consumed is True
+    assert result.result == {"address_text": "123 Main St"}
+
+
+def test_address_slot_fill_rejects_short() -> None:
+    pending = PendingInteraction(
+        type=PendingInteractionType.SLOT_FILL,
+        key="address_text",
+        context={},
+        created_at="now",
+        expires_at=None,
+    )
+    result = try_consume("Apt", pending)
+    assert result.consumed is False

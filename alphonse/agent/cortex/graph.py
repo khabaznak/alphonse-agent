@@ -62,6 +62,7 @@ from alphonse.agent.cognition.routing_primitives import (
 from alphonse.agent.cognition.abilities.registry import Ability, AbilityRegistry
 from alphonse.agent.cognition.abilities.json_runtime import load_json_abilities
 from alphonse.agent.tools.registry import ToolRegistry, build_default_tool_registry
+from alphonse.agent.nervous_system.senses.location import LocationSense
 
 logger = logging.getLogger(__name__)
 
@@ -818,6 +819,14 @@ def _ability_registry() -> AbilityRegistry:
     _register_fallback_ability(registry, Ability("timed_signals.list", tuple(), _ability_timed_signals_list))
     _register_fallback_ability(registry, Ability("timed_signals.create", tuple(), _ability_noop))
     _register_fallback_ability(registry, Ability("update_preferences", tuple(), _ability_update_preferences))
+    _register_fallback_ability(
+        registry,
+        Ability("onboarding.location.set_home", ("geocoder",), _ability_set_home_location),
+    )
+    _register_fallback_ability(
+        registry,
+        Ability("onboarding.location.set_work", ("geocoder",), _ability_set_work_location),
+    )
     _register_fallback_ability(registry, Ability("lan.arm", tuple(), _ability_lan_arm))
     _register_fallback_ability(registry, Ability("lan.disarm", tuple(), _ability_lan_disarm))
     _register_fallback_ability(registry, Ability("pair.approve", tuple(), _ability_pair_approve))
@@ -888,6 +897,16 @@ def _ability_noop(state: dict[str, Any], tools: ToolRegistry) -> dict[str, Any]:
 def _ability_update_preferences(state: dict[str, Any], tools: ToolRegistry) -> dict[str, Any]:
     _ = tools
     return _handle_update_preferences(state)
+
+
+def _ability_set_home_location(state: dict[str, Any], tools: ToolRegistry) -> dict[str, Any]:
+    _ = tools
+    return _handle_set_home_location(state)
+
+
+def _ability_set_work_location(state: dict[str, Any], tools: ToolRegistry) -> dict[str, Any]:
+    _ = tools
+    return _handle_set_work_location(state)
 
 
 def _ability_lan_arm(state: dict[str, Any], tools: ToolRegistry) -> dict[str, Any]:
@@ -1058,6 +1077,62 @@ def _handle_update_preferences(state: CortexState) -> dict[str, Any]:
         "response_key": "ack.preference_updated",
         "response_vars": {"updates": updates},
     }
+
+
+def _handle_set_home_location(state: CortexState) -> dict[str, Any]:
+    slots = state.get("slots") or {}
+    address_text = slots.get("address_text")
+    if not isinstance(address_text, str) or not address_text.strip():
+        return {"response_key": "clarify.location_address"}
+    channel_type = str(state.get("channel_type") or "")
+    channel_target = str(state.get("channel_target") or state.get("chat_id") or "")
+    principal_id = None
+    if channel_type and channel_target:
+        principal_id = get_or_create_principal_for_channel(channel_type, channel_target)
+    if not principal_id:
+        return {"response_key": "generic.unknown"}
+    locale = str(state.get("locale") or "")
+    language = "es" if locale.startswith("es") else "en"
+    sense = LocationSense()
+    try:
+        sense.ingest_address(
+            principal_id=principal_id,
+            label="home",
+            address_text=str(address_text),
+            source="user",
+            language=language,
+        )
+    except Exception:
+        return {"response_key": "generic.unknown"}
+    return {"response_key": "ack.location.saved", "response_vars": {"label": "home"}}
+
+
+def _handle_set_work_location(state: CortexState) -> dict[str, Any]:
+    slots = state.get("slots") or {}
+    address_text = slots.get("address_text")
+    if not isinstance(address_text, str) or not address_text.strip():
+        return {"response_key": "clarify.location_work"}
+    channel_type = str(state.get("channel_type") or "")
+    channel_target = str(state.get("channel_target") or state.get("chat_id") or "")
+    principal_id = None
+    if channel_type and channel_target:
+        principal_id = get_or_create_principal_for_channel(channel_type, channel_target)
+    if not principal_id:
+        return {"response_key": "generic.unknown"}
+    locale = str(state.get("locale") or "")
+    language = "es" if locale.startswith("es") else "en"
+    sense = LocationSense()
+    try:
+        sense.ingest_address(
+            principal_id=principal_id,
+            label="work",
+            address_text=str(address_text),
+            source="user",
+            language=language,
+        )
+    except Exception:
+        return {"response_key": "generic.unknown"}
+    return {"response_key": "ack.location.saved", "response_vars": {"label": "work"}}
 
 
 def _handle_lan_arm(state: CortexState) -> dict[str, Any]:
