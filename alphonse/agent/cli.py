@@ -51,6 +51,11 @@ from alphonse.agent.nervous_system.onboarding_profiles import (
     list_onboarding_profiles,
     upsert_onboarding_profile,
 )
+from alphonse.agent.cognition.preferences.store import (
+    delete_preference,
+    get_or_create_scope_principal,
+    get_principal_for_channel,
+)
 from alphonse.agent.nervous_system.users import list_users
 from alphonse.agent.nervous_system.location_profiles import (
     delete_location_profile,
@@ -317,6 +322,28 @@ def build_parser() -> argparse.ArgumentParser:
     onboarding_upsert.add_argument("--completed-at", default=None)
     onboarding_delete = onboarding_sub.add_parser("delete", help="Delete onboarding profile")
     onboarding_delete.add_argument("principal_id")
+    onboarding_reset = onboarding_sub.add_parser(
+        "reset-primary", help="Reset primary onboarding state"
+    )
+    onboarding_reset.add_argument("--principal-id", default=None)
+    onboarding_reset.add_argument("--channel-type", default=None)
+    onboarding_reset.add_argument("--channel-id", default=None)
+    onboarding_reset.add_argument(
+        "--keep-display-name",
+        action="store_true",
+        help="Keep display_name preference for the channel",
+    )
+    onboarding_reset.add_argument(
+        "--purge-profile",
+        action="store_true",
+        help="Delete onboarding profile row if present",
+    )
+    onboarding_resolve = onboarding_sub.add_parser(
+        "resolve-principal",
+        help="Resolve principal_id for a channel",
+    )
+    onboarding_resolve.add_argument("--channel-type", required=True)
+    onboarding_resolve.add_argument("--channel-id", required=True)
 
     users_parser = sub.add_parser("users", help="User registry utilities")
     users_sub = users_parser.add_subparsers(dest="users_command", required=True)
@@ -1241,6 +1268,40 @@ def _command_onboarding(args: argparse.Namespace) -> None:
             print("Onboarding profile not found.")
             return
         print(f"Deleted onboarding profile: {args.principal_id}")
+        return
+    if args.onboarding_command == "reset-primary":
+        principal_id = args.principal_id
+        if not principal_id and args.channel_type and args.channel_id:
+            principal_id = get_principal_for_channel(
+                str(args.channel_type),
+                str(args.channel_id),
+            )
+            if not principal_id:
+                print("Channel principal not found.")
+                return
+        if not principal_id:
+            print("Provide --principal-id or --channel-type and --channel-id.")
+            return
+        system_principal_id = get_or_create_scope_principal("system", "default")
+        if system_principal_id:
+            delete_preference(system_principal_id, "onboarding.primary.completed")
+            delete_preference(system_principal_id, "onboarding.primary.admin_principal_id")
+        delete_preference(principal_id, "onboarding.state")
+        if not args.keep_display_name:
+            delete_preference(principal_id, "display_name")
+        if args.purge_profile:
+            delete_onboarding_profile(principal_id)
+        print(f"Primary onboarding reset for principal: {principal_id}")
+        return
+    if args.onboarding_command == "resolve-principal":
+        principal_id = get_principal_for_channel(
+            str(args.channel_type),
+            str(args.channel_id),
+        )
+        if not principal_id:
+            print("Channel principal not found.")
+            return
+        print(principal_id)
         return
 
 

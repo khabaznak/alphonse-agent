@@ -42,6 +42,22 @@ def get_or_create_principal_for_channel(
         return principal_id
 
 
+def get_principal_for_channel(channel_type: str, channel_id: str) -> str | None:
+    if not channel_type or not channel_id:
+        return None
+    db_path = resolve_nervous_system_db_path()
+    with sqlite3.connect(db_path) as conn:
+        row = conn.execute(
+            """
+            SELECT principal_id
+            FROM principals
+            WHERE channel_type = ? AND channel_id = ?
+            """,
+            (channel_type, channel_id),
+        ).fetchone()
+    return str(row[0]) if row else None
+
+
 def get_scope_principal_id(scope: str, scope_id: str = "default") -> str | None:
     if not scope or not scope_id:
         return None
@@ -131,6 +147,19 @@ def set_preference(
             (str(uuid.uuid4()), principal_id, key, value_json, source, now, now),
         )
     _log_preference_write(principal_id, key, value, source)
+
+
+def delete_preference(principal_id: str, key: str) -> bool:
+    if not principal_id or not key:
+        return False
+    db_path = resolve_nervous_system_db_path()
+    with sqlite3.connect(db_path) as conn:
+        cur = conn.execute(
+            "DELETE FROM preferences WHERE principal_id = ? AND key = ?",
+            (principal_id, key),
+        )
+        conn.commit()
+    return cur.rowcount > 0
 
 
 def get_with_fallback(principal_id: str, key: str, default: Any) -> Any:
