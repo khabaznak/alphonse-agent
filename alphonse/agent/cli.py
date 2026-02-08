@@ -1271,6 +1271,7 @@ def _command_onboarding(args: argparse.Namespace) -> None:
         return
     if args.onboarding_command == "reset-primary":
         principal_id = args.principal_id
+        conversation_principal_id = None
         if not principal_id and args.channel_type and args.channel_id:
             principal_id = get_principal_for_channel(
                 str(args.channel_type),
@@ -1279,6 +1280,15 @@ def _command_onboarding(args: argparse.Namespace) -> None:
             if not principal_id:
                 print("Channel principal not found.")
                 return
+        if args.channel_type and args.channel_id:
+            conversation_key = _conversation_key_from_args(
+                str(args.channel_type),
+                str(args.channel_id),
+            )
+            conversation_principal_id = get_principal_for_channel(
+                "conversation",
+                conversation_key,
+            )
         if not principal_id:
             print("Provide --principal-id or --channel-type and --channel-id.")
             return
@@ -1289,6 +1299,8 @@ def _command_onboarding(args: argparse.Namespace) -> None:
         delete_preference(principal_id, "onboarding.state")
         if not args.keep_display_name:
             delete_preference(principal_id, "display_name")
+            if conversation_principal_id:
+                delete_preference(conversation_principal_id, "display_name")
         if args.purge_profile:
             delete_onboarding_profile(principal_id)
         print(f"Primary onboarding reset for principal: {principal_id}")
@@ -1461,6 +1473,16 @@ def _command_tool_configs(args: argparse.Namespace) -> None:
             return
         print(f"Deleted tool config: {args.config_id}")
         return
+
+
+def _conversation_key_from_args(channel_type: str, channel_id: str) -> str:
+    if channel_type == "telegram":
+        return f"telegram:{channel_id}"
+    if channel_type == "cli":
+        return f"cli:{channel_id or 'cli'}"
+    if channel_type == "api":
+        return f"api:{channel_id or 'api'}"
+    return f"{channel_type}:{channel_id or channel_type}"
 
 
 def _configure_logging(level_name: str) -> None:
