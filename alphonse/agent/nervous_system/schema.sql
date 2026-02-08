@@ -86,6 +86,21 @@ CREATE TABLE IF NOT EXISTS principals (
   CHECK (principal_type IN ('person', 'channel_chat', 'household', 'office', 'system'))
 ) STRICT;
 
+CREATE TABLE IF NOT EXISTS users (
+  user_id      TEXT PRIMARY KEY,
+  principal_id TEXT,
+  display_name TEXT NOT NULL,
+  role         TEXT,
+  relationship TEXT,
+  is_admin     INTEGER NOT NULL DEFAULT 0,
+  is_active    INTEGER NOT NULL DEFAULT 1,
+  onboarded_at TEXT,
+  created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at   TEXT NOT NULL DEFAULT (datetime('now'))
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_users_principal ON users (principal_id);
+
 CREATE UNIQUE INDEX IF NOT EXISTS idx_principals_channel_unique
   ON principals (channel_type, channel_id)
   WHERE channel_type IS NOT NULL AND channel_id IS NOT NULL;

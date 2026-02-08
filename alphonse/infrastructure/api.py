@@ -46,6 +46,13 @@ from alphonse.agent.nervous_system.tool_configs import (
     list_tool_configs,
     upsert_tool_config,
 )
+from alphonse.agent.nervous_system.users import (
+    delete_user,
+    get_user,
+    list_users,
+    patch_user,
+    upsert_user,
+)
 from alphonse.infrastructure.api_gateway import gateway
 from alphonse.infrastructure.web_event_hub import web_event_hub
 from alphonse.agent.lan.api import router as lan_router
@@ -141,6 +148,26 @@ class ToolConfigUpsert(BaseModel):
     name: str | None = None
     config: dict[str, Any]
     is_active: bool = True
+
+
+class UserCreate(BaseModel):
+    user_id: str | None = None
+    principal_id: str | None = None
+    display_name: str
+    role: str | None = None
+    relationship: str | None = None
+    is_admin: bool = False
+    is_active: bool = True
+    onboarded_at: str | None = None
+
+
+class UserPatch(BaseModel):
+    display_name: str | None = None
+    role: str | None = None
+    relationship: str | None = None
+    is_admin: bool | None = None
+    is_active: bool | None = None
+    onboarded_at: str | None = None
 
 @app.get("/agent/status")
 def agent_status(x_alphonse_api_token: str | None = Header(default=None)) -> dict[str, object]:
@@ -622,6 +649,63 @@ def delete_agent_tool_config(
     if not ok:
         raise HTTPException(status_code=404, detail="Tool config not found")
     return {"deleted": True, "config_id": config_id}
+
+
+@app.get("/agent/users")
+def list_agent_users(
+    active_only: bool = False,
+    limit: int = 200,
+    x_alphonse_api_token: str | None = Header(default=None),
+) -> dict[str, Any]:
+    _assert_api_token(x_alphonse_api_token)
+    return {"items": list_users(active_only=active_only, limit=limit)}
+
+
+@app.get("/agent/users/{user_id}")
+def get_agent_user(
+    user_id: str,
+    x_alphonse_api_token: str | None = Header(default=None),
+) -> dict[str, Any]:
+    _assert_api_token(x_alphonse_api_token)
+    item = get_user(user_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="User not found")
+    return {"item": item}
+
+
+@app.post("/agent/users", status_code=201)
+def create_agent_user(
+    payload: UserCreate,
+    x_alphonse_api_token: str | None = Header(default=None),
+) -> dict[str, Any]:
+    _assert_api_token(x_alphonse_api_token)
+    user_id = upsert_user(payload.model_dump())
+    return {"item": get_user(user_id)}
+
+
+@app.patch("/agent/users/{user_id}")
+def patch_agent_user(
+    user_id: str,
+    payload: UserPatch,
+    x_alphonse_api_token: str | None = Header(default=None),
+) -> dict[str, Any]:
+    _assert_api_token(x_alphonse_api_token)
+    item = patch_user(user_id, payload.model_dump(exclude_unset=True))
+    if not item:
+        raise HTTPException(status_code=404, detail="User not found")
+    return {"item": item}
+
+
+@app.delete("/agent/users/{user_id}")
+def delete_agent_user(
+    user_id: str,
+    x_alphonse_api_token: str | None = Header(default=None),
+) -> dict[str, Any]:
+    _assert_api_token(x_alphonse_api_token)
+    ok = delete_user(user_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="User not found")
+    return {"deleted": True, "user_id": user_id}
 
 
 def _as_optional_str(value: object | None) -> str | None:

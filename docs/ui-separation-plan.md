@@ -37,7 +37,7 @@
 ### 1.2 Create Agent API Endpoints
 Add endpoints under `/api/v1` (or similar). Suggested coverage:
 - `GET /api/v1/settings` `POST /api/v1/settings` `PATCH /api/v1/settings/{id}` `DELETE /api/v1/settings/{id}`
-- `GET /api/v1/family` `POST /api/v1/family` `PATCH /api/v1/family/{id}`
+- `GET /api/v1/users` `POST /api/v1/users` `PATCH /api/v1/users/{id}`
 - `GET /api/v1/push/devices` `POST /api/v1/push/devices` `DELETE /api/v1/push/devices/{id}`
 - `GET /api/v1/identity/persons|groups|channels|prefs|presence` and CRUD for each
 - `GET /api/v1/nerve/signals|states|transitions|senses|queue|trace` and CRUD for mutable entities
@@ -82,8 +82,8 @@ Notes:
 
 ### 2.5 UI Route Refactor
 Convert each UI endpoint to use the API client:
-- `GET /family` -> `GET /api/v1/family`
-- `POST /family` -> `POST /api/v1/family`
+- `GET /users` -> `GET /api/v1/users`
+- `POST /users` -> `POST /api/v1/users`
 - `GET /nerve/*` -> `GET /api/v1/nerve/*`
 - `POST /nerve/*` -> `POST /api/v1/nerve/*`
 - Same pattern for identity, plans, settings, etc.

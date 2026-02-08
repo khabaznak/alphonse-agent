@@ -335,19 +335,13 @@ python scripts/generate_vapid_keys.py
 
 API endpoints:
 
-- `POST /api/family-events`
-- `GET /api/family-events`
-- `GET /api/family-events/{id}`
-- `PATCH /api/family-events/{id}`
-- `DELETE /api/family-events/{id}`
-- `POST /api/webhooks/family-events`
 - `POST /api/push-devices`
 - `DELETE /api/push-devices/{id}`
 
 `/api/push-devices` accepts `platform` values like `android` or `web`.
 For web push, send the subscription object as `token`.
 
-`owner_id` for push devices references the `family` table.
+`owner_id` for push devices references the `users` table.
 
 Webhook auth (optional): if `ATRIUM_WEBHOOK_SECRET` is set, include the
 `X-Atrium-Webhook-Secret` header in webhook requests.

@@ -108,6 +108,48 @@ Delete onboarding profile
 DELETE /agent/onboarding/profiles/user-123
 ```
 
+## Users
+
+Create user
+```json
+POST /agent/users
+{
+  "user_id": "principal-123",
+  "principal_id": "principal-123",
+  "display_name": "Alex",
+  "role": "Dad",
+  "relationship": "father",
+  "is_admin": true,
+  "is_active": true,
+  "onboarded_at": "2026-02-08T17:05:00Z"
+}
+```
+
+Patch user
+```json
+PATCH /agent/users/principal-123
+{
+  "role": "Dad",
+  "relationship": "father",
+  "is_admin": true
+}
+```
+
+Get user
+```json
+GET /agent/users/principal-123
+```
+
+List users
+```json
+GET /agent/users?active_only=false&limit=200
+```
+
+Delete user
+```json
+DELETE /agent/users/principal-123
+```
+
 ## Locations (home/work/other)
 
 Create or update location

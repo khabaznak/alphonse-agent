@@ -3,4 +3,4 @@ alter table public.push_devices
 
 alter table public.push_devices
   add constraint push_devices_owner_id_fkey
-  foreign key (owner_id) references public.family (id);
+  foreign key (owner_id) references public.users (id);

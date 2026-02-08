@@ -22,6 +22,7 @@ from alphonse.agent.nervous_system.onboarding_profiles import (
     get_onboarding_profile,
     upsert_onboarding_profile,
 )
+from alphonse.agent.nervous_system.users import upsert_user
 from alphonse.agent.nervous_system.senses.location import LocationSense
 from alphonse.config import settings
 from alphonse.agent.cognition.plan_executor import PlanExecutionContext, PlanExecutor
@@ -415,7 +416,24 @@ def _finalize_primary_onboarding_if_needed(
     principal_id = _principal_id_for_incoming(incoming)
     if not principal_id:
         return
+    _upsert_admin_user(incoming, principal_id)
     _complete_primary_onboarding(principal_id)
+
+
+def _upsert_admin_user(incoming: IncomingContext, principal_id: str) -> None:
+    display_name = identity_profile.get_display_name(_conversation_key(incoming))
+    if not display_name:
+        return
+    upsert_user(
+        {
+            "user_id": principal_id,
+            "principal_id": principal_id,
+            "display_name": display_name,
+            "is_admin": True,
+            "is_active": True,
+            "onboarded_at": datetime.now(timezone.utc).isoformat(),
+        }
+    )
 
 
 def _complete_primary_onboarding(admin_principal_id: str) -> None:

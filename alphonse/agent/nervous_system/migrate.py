@@ -23,6 +23,7 @@ def apply_schema(db_path: Path) -> None:
         _ensure_delivery_receipts_columns(conn)
         _ensure_intent_specs_columns(conn)
         _ensure_principals_constraints(conn)
+        _ensure_users_table(conn)
     try:
         from alphonse.agent.cognition.prompt_store import seed_default_templates
 
@@ -170,6 +171,28 @@ def _ensure_principals_constraints(conn: sqlite3.Connection) -> None:
     if "check" in sql and "system" in sql and "office" in sql:
         return
     _rebuild_principals(conn)
+
+
+def _ensure_users_table(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS users (
+          user_id      TEXT PRIMARY KEY,
+          principal_id TEXT,
+          display_name TEXT NOT NULL,
+          role         TEXT,
+          relationship TEXT,
+          is_admin     INTEGER NOT NULL DEFAULT 0,
+          is_active    INTEGER NOT NULL DEFAULT 1,
+          onboarded_at TEXT,
+          created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+          updated_at   TEXT NOT NULL DEFAULT (datetime('now'))
+        ) STRICT
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_users_principal ON users (principal_id)"
+    )
 
 
 def _rebuild_delivery_receipts(conn: sqlite3.Connection) -> None:
