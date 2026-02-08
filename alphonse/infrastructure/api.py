@@ -40,6 +40,12 @@ from alphonse.agent.nervous_system.location_profiles import (
     list_location_profiles,
     upsert_location_profile,
 )
+from alphonse.agent.nervous_system.tool_configs import (
+    delete_tool_config,
+    get_tool_config,
+    list_tool_configs,
+    upsert_tool_config,
+)
 from alphonse.infrastructure.api_gateway import gateway
 from alphonse.infrastructure.web_event_hub import web_event_hub
 from alphonse.agent.lan.api import router as lan_router
@@ -128,6 +134,13 @@ class DeviceLocationCreate(BaseModel):
     observed_at: str | None = None
     metadata: dict[str, Any] | None = None
 
+
+class ToolConfigUpsert(BaseModel):
+    config_id: str | None = None
+    tool_key: str
+    name: str | None = None
+    config: dict[str, Any]
+    is_active: bool = True
 
 @app.get("/agent/status")
 def agent_status(x_alphonse_api_token: str | None = Header(default=None)) -> dict[str, object]:
@@ -558,6 +571,57 @@ def create_agent_device_location(
     rows = list_device_locations(device_id=payload.device_id, limit=1)
     item = rows[0] if rows else {"id": entry_id}
     return {"item": item}
+
+
+@app.get("/agent/tool-configs")
+def list_agent_tool_configs(
+    tool_key: str | None = None,
+    active_only: bool = False,
+    limit: int = 100,
+    x_alphonse_api_token: str | None = Header(default=None),
+) -> dict[str, Any]:
+    _assert_api_token(x_alphonse_api_token)
+    return {
+        "items": list_tool_configs(
+            tool_key=tool_key,
+            active_only=active_only,
+            limit=limit,
+        )
+    }
+
+
+@app.get("/agent/tool-configs/{config_id}")
+def get_agent_tool_config(
+    config_id: str,
+    x_alphonse_api_token: str | None = Header(default=None),
+) -> dict[str, Any]:
+    _assert_api_token(x_alphonse_api_token)
+    item = get_tool_config(config_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Tool config not found")
+    return {"item": item}
+
+
+@app.post("/agent/tool-configs", status_code=201)
+def upsert_agent_tool_config(
+    payload: ToolConfigUpsert,
+    x_alphonse_api_token: str | None = Header(default=None),
+) -> dict[str, Any]:
+    _assert_api_token(x_alphonse_api_token)
+    config_id = upsert_tool_config(payload.model_dump())
+    return {"item": get_tool_config(config_id)}
+
+
+@app.delete("/agent/tool-configs/{config_id}")
+def delete_agent_tool_config(
+    config_id: str,
+    x_alphonse_api_token: str | None = Header(default=None),
+) -> dict[str, Any]:
+    _assert_api_token(x_alphonse_api_token)
+    ok = delete_tool_config(config_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Tool config not found")
+    return {"deleted": True, "config_id": config_id}
 
 
 def _as_optional_str(value: object | None) -> str | None:

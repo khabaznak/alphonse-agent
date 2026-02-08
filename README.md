@@ -234,6 +234,24 @@ Device location stream/snapshots:
 - `GET /agent/device-locations`
 - `POST /agent/device-locations`
 
+### Tool Configs (Secrets / API Keys)
+
+Store tool API keys or configs in `nerve-db` and manage them via:
+
+- `GET /agent/tool-configs`
+- `GET /agent/tool-configs/{config_id}`
+- `POST /agent/tool-configs`
+- `DELETE /agent/tool-configs/{config_id}`
+
+CLI:
+
+```bash
+python -m alphonse.agent.cli tool-configs list --tool-key geocoder
+python -m alphonse.agent.cli tool-configs upsert --tool-key geocoder --name google --config-json '{"api_key":"..."}'
+python -m alphonse.agent.cli tool-configs show <config_id>
+python -m alphonse.agent.cli tool-configs delete <config_id>
+```
+
 ### Google Geocoding (optional)
 
 If you want to normalize addresses into lat/lng, set:

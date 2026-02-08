@@ -255,6 +255,23 @@ CREATE INDEX IF NOT EXISTS idx_device_locations_device_observed
   ON device_locations (device_id, observed_at DESC);
 
 ----------------------------------------------------------------------
+-- 2.6.2.8) TOOL CONFIGS (SECRETS / API KEYS)
+----------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS tool_configs (
+  config_id     TEXT PRIMARY KEY,
+  tool_key      TEXT NOT NULL,
+  name          TEXT,
+  config_json   TEXT NOT NULL,
+  is_active     INTEGER NOT NULL DEFAULT 1,
+  created_at    TEXT NOT NULL,
+  updated_at    TEXT NOT NULL,
+  CHECK (is_active IN (0,1))
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_tool_configs_tool_active
+  ON tool_configs (tool_key, is_active, updated_at);
+
+----------------------------------------------------------------------
 -- 2.6.2.1) CAPABILITY GAPS
 ----------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS capability_gaps (

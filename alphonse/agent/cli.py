@@ -59,6 +59,12 @@ from alphonse.agent.nervous_system.location_profiles import (
     list_location_profiles,
     upsert_location_profile,
 )
+from alphonse.agent.nervous_system.tool_configs import (
+    delete_tool_config,
+    get_tool_config,
+    list_tool_configs,
+    upsert_tool_config,
+)
 from alphonse.agent.core.settings_store import init_db as init_settings_db
 
 
@@ -348,6 +354,25 @@ def build_parser() -> argparse.ArgumentParser:
     device_list.add_argument("--device-id", default=None)
     device_list.add_argument("--limit", type=int, default=100)
 
+    tool_configs_parser = sub.add_parser("tool-configs", help="Tool config CRUD")
+    tool_configs_sub = tool_configs_parser.add_subparsers(
+        dest="tool_configs_command", required=True
+    )
+    tool_configs_list = tool_configs_sub.add_parser("list", help="List tool configs")
+    tool_configs_list.add_argument("--tool-key", default=None)
+    tool_configs_list.add_argument("--active-only", action="store_true")
+    tool_configs_list.add_argument("--limit", type=int, default=100)
+    tool_configs_show = tool_configs_sub.add_parser("show", help="Show tool config")
+    tool_configs_show.add_argument("config_id")
+    tool_configs_upsert = tool_configs_sub.add_parser("upsert", help="Create/update tool config")
+    tool_configs_upsert.add_argument("--config-id", default=None)
+    tool_configs_upsert.add_argument("--tool-key", required=True)
+    tool_configs_upsert.add_argument("--name", default=None)
+    tool_configs_upsert.add_argument("--config-json", required=True)
+    tool_configs_upsert.add_argument("--inactive", action="store_true")
+    tool_configs_delete = tool_configs_sub.add_parser("delete", help="Delete tool config")
+    tool_configs_delete.add_argument("config_id")
+
     return parser
 
 
@@ -448,6 +473,9 @@ def _dispatch_command(
         return
     if args.command == "locations":
         _command_locations(args)
+        return
+    if args.command == "tool-configs":
+        _command_tool_configs(args)
         return
     if args.command == "repl":
         _command_repl(parser, db_path)
@@ -1294,6 +1322,56 @@ def _command_locations(args: argparse.Namespace) -> None:
                 f"- {row.get('id')} device={row.get('device_id')} "
                 f"lat={row.get('latitude')} lng={row.get('longitude')} observed={row.get('observed_at')}"
             )
+        return
+
+
+def _command_tool_configs(args: argparse.Namespace) -> None:
+    if args.tool_configs_command == "list":
+        rows = list_tool_configs(
+            tool_key=args.tool_key,
+            active_only=args.active_only,
+            limit=args.limit,
+        )
+        if not rows:
+            print("No tool configs found.")
+            return
+        for row in rows:
+            state = "active" if row.get("is_active") else "inactive"
+            print(f"- {row.get('config_id')} tool={row.get('tool_key')} {state}")
+        return
+
+    if args.tool_configs_command == "show":
+        item = get_tool_config(args.config_id)
+        if not item:
+            print("Tool config not found.")
+            return
+        print(json.dumps(item, indent=2, ensure_ascii=True))
+        return
+
+    if args.tool_configs_command == "upsert":
+        try:
+            config = json.loads(args.config_json)
+        except json.JSONDecodeError:
+            print("Invalid --config-json")
+            return
+        config_id = upsert_tool_config(
+            {
+                "config_id": args.config_id,
+                "tool_key": args.tool_key,
+                "name": args.name,
+                "config": config,
+                "is_active": not args.inactive,
+            }
+        )
+        print(f"Upserted tool config: {config_id}")
+        return
+
+    if args.tool_configs_command == "delete":
+        ok = delete_tool_config(args.config_id)
+        if not ok:
+            print("Tool config not found.")
+            return
+        print(f"Deleted tool config: {args.config_id}")
         return
 
 

@@ -97,10 +97,12 @@ Example: `GeocoderTool` converts an address to lat/lng via Google Maps.
 - `/agent/onboarding/profiles`
 - `/agent/locations`
 - `/agent/device-locations`
+- `/agent/tool-configs`
 
 ### CLI
 - `alphonse.agent.cli onboarding ...`
 - `alphonse.agent.cli locations ...`
+- `alphonse.agent.cli tool-configs ...`
 
 ## Current Code Anchors
 - Senses: `/Users/alex/Code Projects/atrium-server/alphonse/agent/nervous_system/senses/`
