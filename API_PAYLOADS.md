@@ -150,6 +150,27 @@ Delete user
 DELETE /agent/users/principal-123
 ```
 
+Sample list response
+```json
+GET /agent/users?active_only=false&limit=200
+{
+  "items": [
+    {
+      "user_id": "principal-123",
+      "principal_id": "principal-123",
+      "display_name": "Alex",
+      "role": "Dad",
+      "relationship": "father",
+      "is_admin": true,
+      "is_active": true,
+      "onboarded_at": "2026-02-08T17:05:00Z",
+      "created_at": "2026-02-08T17:05:00Z",
+      "updated_at": "2026-02-08T17:05:00Z"
+    }
+  ]
+}
+```
+
 ## Locations (home/work/other)
 
 Create or update location
