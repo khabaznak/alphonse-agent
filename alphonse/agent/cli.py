@@ -51,6 +51,7 @@ from alphonse.agent.nervous_system.onboarding_profiles import (
     list_onboarding_profiles,
     upsert_onboarding_profile,
 )
+from alphonse.agent.nervous_system.users import list_users
 from alphonse.agent.nervous_system.location_profiles import (
     delete_location_profile,
     get_location_profile,
@@ -317,6 +318,12 @@ def build_parser() -> argparse.ArgumentParser:
     onboarding_delete = onboarding_sub.add_parser("delete", help="Delete onboarding profile")
     onboarding_delete.add_argument("principal_id")
 
+    users_parser = sub.add_parser("users", help="User registry utilities")
+    users_sub = users_parser.add_subparsers(dest="users_command", required=True)
+    users_list = users_sub.add_parser("list", help="List users")
+    users_list.add_argument("--active-only", action="store_true")
+    users_list.add_argument("--limit", type=int, default=200)
+
     locations_parser = sub.add_parser("locations", help="Location profile CRUD")
     locations_sub = locations_parser.add_subparsers(
         dest="locations_command", required=True
@@ -470,6 +477,9 @@ def _dispatch_command(
         return
     if args.command == "onboarding":
         _command_onboarding(args)
+        return
+    if args.command == "users":
+        _command_users(args)
         return
     if args.command == "locations":
         _command_locations(args)
@@ -1231,6 +1241,23 @@ def _command_onboarding(args: argparse.Namespace) -> None:
             print("Onboarding profile not found.")
             return
         print(f"Deleted onboarding profile: {args.principal_id}")
+        return
+
+
+def _command_users(args: argparse.Namespace) -> None:
+    if args.users_command == "list":
+        rows = list_users(active_only=args.active_only, limit=args.limit)
+        if not rows:
+            print("No users found.")
+            return
+        for row in rows:
+            admin = "admin" if row.get("is_admin") else "user"
+            active = "active" if row.get("is_active") else "inactive"
+            print(
+                f"- {row.get('user_id')} name={row.get('display_name')} "
+                f"role={row.get('role')} relationship={row.get('relationship')} "
+                f"{admin} {active} onboarded={row.get('onboarded_at')}"
+            )
         return
 
 
