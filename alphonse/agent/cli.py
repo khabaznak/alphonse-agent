@@ -422,6 +422,19 @@ def build_parser() -> argparse.ArgumentParser:
     tool_configs_delete = tool_configs_sub.add_parser("delete", help="Delete tool config")
     tool_configs_delete.add_argument("config_id")
 
+    telegram_parser = sub.add_parser("telegram", help="Telegram admin utilities")
+    telegram_sub = telegram_parser.add_subparsers(dest="telegram_command", required=True)
+    telegram_invites = telegram_sub.add_parser("invites", help="Telegram invite approvals")
+    telegram_invites_sub = telegram_invites.add_subparsers(dest="telegram_invites_command", required=True)
+    telegram_invites_list = telegram_invites_sub.add_parser("list", help="List pending invites")
+    telegram_invites_list.add_argument("--status", default=None)
+    telegram_invites_list.add_argument("--limit", type=int, default=200)
+    telegram_invites_show = telegram_invites_sub.add_parser("show", help="Show invite")
+    telegram_invites_show.add_argument("chat_id")
+    telegram_invites_update = telegram_invites_sub.add_parser("update", help="Update invite status")
+    telegram_invites_update.add_argument("chat_id")
+    telegram_invites_update.add_argument("--status", default="approved")
+
     terminal_parser = sub.add_parser("terminal", help="Terminal sandbox + command utilities")
     terminal_sub = terminal_parser.add_subparsers(dest="terminal_command", required=True)
 
@@ -594,6 +607,8 @@ def _dispatch_command(
         return
     if args.command == "terminal":
         _command_terminal(args)
+    if args.command == "telegram":
+        _command_telegram(args)
         return
     if args.command == "repl":
         _command_repl(parser, db_path)
@@ -1665,6 +1680,41 @@ def _command_terminal(args: argparse.Namespace) -> None:
                 return
             print(json.dumps(item, indent=2, ensure_ascii=True))
             return
+
+
+def _command_telegram(args: argparse.Namespace) -> None:
+    if args.telegram_command != "invites":
+        return
+    from alphonse.agent.nervous_system.telegram_invites import (
+        get_invite,
+        list_invites,
+        update_invite_status,
+    )
+
+    if args.telegram_invites_command == "list":
+        rows = list_invites(status=args.status, limit=args.limit)
+        if not rows:
+            print("No telegram invites found.")
+            return
+        for row in rows:
+            print(
+                f"- {row.get('chat_id')} status={row.get('status')} from={row.get('from_user_name')}"
+            )
+        return
+    if args.telegram_invites_command == "show":
+        item = get_invite(args.chat_id)
+        if not item:
+            print("Invite not found.")
+            return
+        print(json.dumps(item, indent=2, ensure_ascii=True))
+        return
+    if args.telegram_invites_command == "update":
+        item = update_invite_status(args.chat_id, args.status)
+        if not item:
+            print("Invite not found.")
+            return
+        print(json.dumps(item, indent=2, ensure_ascii=True))
+        return
         if args.terminal_commands_command == "create":
             session_id = args.session_id
             if not session_id:

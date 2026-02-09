@@ -25,6 +25,7 @@ from alphonse.agent.cognition.preferences.store import (
 )
 from alphonse.agent.nervous_system.onboarding_profiles import upsert_onboarding_profile
 from alphonse.agent.nervous_system.users import get_user_by_display_name, upsert_user
+from alphonse.agent.nervous_system.telegram_invites import update_invite_status
 from alphonse.agent.identity.store import upsert_person, upsert_channel
 from alphonse.agent.identity import profile as identity_profile
 from alphonse.agent.tools.registry import ToolRegistry
@@ -250,6 +251,14 @@ def _extract_params_from_text(
         channel_address = _extract_channel_address(text)
         if channel_address:
             params.setdefault("channel_address", channel_address)
+    if "channel_address" in missing_required:
+        reply_id = state.get("incoming_reply_to_user_id")
+        if reply_id:
+            params.setdefault("channel_address", str(reply_id))
+    if "channel_address" in missing_required:
+        chat_id = state.get("channel_target") or state.get("chat_id")
+        if chat_id:
+            params.setdefault("channel_address", str(chat_id))
 
 
 def _param_type(parameters: list[dict[str, Any]], key: str) -> str:
@@ -461,6 +470,11 @@ def _execute_steps(steps: list[dict[str, Any]], params: dict[str, Any], state: d
                     "channel_provider": channel_provider,
                 }
             }
+        if action == "telegram.invite_approve":
+            channel_address = str(params.get("channel_address") or "").strip()
+            if channel_address:
+                update_invite_status(channel_address, "approved")
+            return {}
     return {}
 
 

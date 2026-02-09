@@ -46,7 +46,9 @@ class TelegramSense(Sense):
             {
                 "bot_token": settings.bot_token,
                 "poll_interval_sec": settings.poll_interval_sec,
-                "allowed_chat_ids": list(settings.allowed_chat_ids or []),
+                "allowed_chat_ids": list(settings.allowed_chat_ids or [])
+                if settings.allowed_chat_ids is not None
+                else None,
             }
         )
         self._adapter.on_signal(self._on_signal)
@@ -64,6 +66,43 @@ class TelegramSense(Sense):
 
     def _on_signal(self, signal: Signal) -> None:
         if not self._bus:
+            return
+        if signal.type == "external.telegram.invite_request":
+            payload = signal.payload or {}
+            chat_id = payload.get("chat_id")
+            if chat_id is None:
+                return
+            from_user = payload.get("from_user")
+            from_user_name = payload.get("from_user_name")
+            text = payload.get("text") or ""
+            from alphonse.agent.nervous_system.telegram_invites import upsert_invite
+
+            upsert_invite(
+                {
+                    "chat_id": str(chat_id),
+                    "from_user_id": str(from_user) if from_user is not None else None,
+                    "from_user_name": from_user_name,
+                    "last_message": text,
+                    "status": "pending",
+                }
+            )
+            self._bus.emit(
+                Signal(
+                    type="telegram.invite_requested",
+                    payload={
+                        "chat_id": str(chat_id),
+                        "from_user": from_user,
+                        "from_user_name": from_user_name,
+                        "text": text,
+                    },
+                    source="telegram",
+                    correlation_id=str(chat_id),
+                )
+            )
+            logger.info(
+                "TelegramSense emitted telegram.invite_requested chat_id=%s",
+                chat_id,
+            )
             return
         if signal.type != "external.telegram.message":
             return
@@ -107,7 +146,21 @@ def _load_settings() -> TelegramSettings | None:
         os.getenv("TELEGRAM_ALLOWED_CHAT_IDS"),
         os.getenv("TELEGRAM_ALLOWED_CHAT_ID"),
     )
+    from alphonse.agent.nervous_system.tool_configs import get_active_tool_config
+
+    config = get_active_tool_config("telegram")
     poll_interval = _parse_float(os.getenv("TELEGRAM_POLL_INTERVAL_SEC"), default=1.0)
+    if config and isinstance(config.get("config"), dict):
+        raw = config.get("config") or {}
+        allowed_cfg = raw.get("allowed_chat_ids")
+        if isinstance(allowed_cfg, list):
+            allowed = {
+                int(x)
+                for x in allowed_cfg
+                if str(x).strip().lstrip("-").isdigit()
+            } or None
+        poll_value = raw.get("poll_interval_sec")
+        poll_interval = _parse_float(str(poll_value), default=poll_interval)
     return TelegramSettings(
         bot_token=bot_token,
         allowed_chat_ids=allowed,

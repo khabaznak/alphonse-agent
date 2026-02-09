@@ -489,6 +489,19 @@ CREATE TABLE IF NOT EXISTS telegram_updates (
   created_at  TEXT NOT NULL DEFAULT (datetime('now'))
 ) STRICT;
 
+CREATE TABLE IF NOT EXISTS telegram_pending_invites (
+  chat_id        TEXT PRIMARY KEY,
+  from_user_id   TEXT,
+  from_user_name TEXT,
+  last_message   TEXT,
+  status         TEXT NOT NULL DEFAULT 'pending',
+  created_at     TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at     TEXT NOT NULL DEFAULT (datetime('now'))
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_telegram_pending_invites_status
+  ON telegram_pending_invites (status, updated_at);
+
 ----------------------------------------------------------------------
 -- 2.8) IDENTITY REGISTRY
 ----------------------------------------------------------------------

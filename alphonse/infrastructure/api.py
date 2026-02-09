@@ -52,6 +52,11 @@ from alphonse.agent.nervous_system.tool_configs import (
     list_tool_configs,
     upsert_tool_config,
 )
+from alphonse.agent.nervous_system.telegram_invites import (
+    get_invite,
+    list_invites,
+    update_invite_status,
+)
 from alphonse.agent.nervous_system.terminal_tools import (
     create_terminal_command,
     delete_terminal_sandbox,
@@ -276,6 +281,10 @@ class UserPatch(BaseModel):
     is_admin: bool | None = None
     is_active: bool | None = None
     onboarded_at: str | None = None
+
+
+class TelegramInviteStatusUpdate(BaseModel):
+    status: str = "approved"
 
 @app.get("/agent/status")
 def agent_status(x_alphonse_api_token: str | None = Header(default=None)) -> dict[str, object]:
@@ -1088,6 +1097,41 @@ def get_agent_terminal_command(
     item = get_terminal_command(command_id)
     if not item:
         raise HTTPException(status_code=404, detail="Terminal command not found")
+    return {"item": item}
+
+
+@app.get("/agent/telegram/invites")
+def list_agent_telegram_invites(
+    status: str | None = None,
+    limit: int = 200,
+    x_alphonse_api_token: str | None = Header(default=None),
+) -> dict[str, Any]:
+    _assert_api_token(x_alphonse_api_token)
+    return {"items": list_invites(status=status, limit=limit)}
+
+
+@app.get("/agent/telegram/invites/{chat_id}")
+def get_agent_telegram_invite(
+    chat_id: str,
+    x_alphonse_api_token: str | None = Header(default=None),
+) -> dict[str, Any]:
+    _assert_api_token(x_alphonse_api_token)
+    item = get_invite(chat_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Invite not found")
+    return {"item": item}
+
+
+@app.post("/agent/telegram/invites/{chat_id}/status")
+def update_agent_telegram_invite_status(
+    chat_id: str,
+    payload: TelegramInviteStatusUpdate,
+    x_alphonse_api_token: str | None = Header(default=None),
+) -> dict[str, Any]:
+    _assert_api_token(x_alphonse_api_token)
+    item = update_invite_status(chat_id, payload.status)
+    if not item:
+        raise HTTPException(status_code=404, detail="Invite not found")
     return {"item": item}
 
 

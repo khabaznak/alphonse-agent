@@ -31,7 +31,8 @@ VALUES
   ('timer.fired', 'Timer Fired', 'timer', 'Scheduled timer fired', 1),
   ('timed_signal.fired', 'Timed Signal Fired', 'timer', 'Scheduled timed signal fired', 1),
   ('terminal.command_updated', 'Terminal Command Updated', 'terminal', 'Terminal command updated', 1),
-  ('terminal.command_executed', 'Terminal Command Executed', 'terminal_executor', 'Terminal command executed', 1);
+  ('terminal.command_executed', 'Terminal Command Executed', 'terminal_executor', 'Terminal command executed', 1),
+  ('telegram.invite_requested', 'Telegram Invite Requested', 'telegram', 'Telegram chat invite awaiting approval', 1);
 
 INSERT OR IGNORE INTO timed_signals (
   id, trigger_at, next_trigger_at, rrule, timezone, status, fired_at, attempt_count, attempts,
@@ -103,6 +104,31 @@ SELECT
   'telegram message received'
 FROM states s1
 JOIN signals sig ON sig.key = 'telegram.message_received'
+JOIN states s2 ON s2.key = 'idle';
+
+INSERT OR IGNORE INTO transitions (
+  state_id,
+  signal_id,
+  next_state_id,
+  priority,
+  is_enabled,
+  guard_key,
+  action_key,
+  match_any_state,
+  notes
+)
+SELECT
+  s1.id,
+  sig.id,
+  s2.id,
+  30,
+  1,
+  NULL,
+  'handle_telegram_invite',
+  1,
+  'telegram invite requested'
+FROM states s1
+JOIN signals sig ON sig.key = 'telegram.invite_requested'
 JOIN states s2 ON s2.key = 'idle';
 
 INSERT OR IGNORE INTO transitions (

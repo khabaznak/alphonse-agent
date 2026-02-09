@@ -380,6 +380,42 @@ Approve command
 python -m alphonse.agent.cli terminal commands approve <command_id> --approved-by principal-123
 ```
 
+## Telegram Config (nerve-db)
+
+Allowlist config stored via tool-configs
+```json
+POST /agent/tool-configs
+{
+  "tool_key": "telegram",
+  "name": "Telegram allowlist",
+  "config": {
+    "allowed_chat_ids": [-5163053372, 8553589429],
+    "poll_interval_sec": 1.0
+  },
+  "is_active": true
+}
+```
+
+## Telegram Invites
+
+List invites
+```json
+GET /agent/telegram/invites?status=pending&limit=200
+```
+
+Get invite
+```json
+GET /agent/telegram/invites/{chat_id}
+```
+
+Update invite status
+```json
+POST /agent/telegram/invites/{chat_id}/status
+{
+  "status": "approved"
+}
+```
+
 ## Locations (home/work/other)
 
 Create or update location

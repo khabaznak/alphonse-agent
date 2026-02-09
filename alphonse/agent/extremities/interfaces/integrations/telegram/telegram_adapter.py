@@ -164,6 +164,8 @@ class TelegramAdapter(IntegrationAdapter):
                 update_id,
                 chat_id,
             )
+            if self._should_emit_invite(message):
+                self._emit_invite_signal(update, message)
             return
 
         from_user_payload = message.get("from") if isinstance(message.get("from"), dict) else {}
@@ -203,6 +205,34 @@ class TelegramAdapter(IntegrationAdapter):
             chat_id,
         )
         self.emit_signal(signal)  # type: ignore[arg-type]
+
+    def _should_emit_invite(self, message: dict[str, Any]) -> bool:
+        text = str(message.get("text") or "").strip()
+        return bool(text)
+
+    def _emit_invite_signal(self, update: dict[str, Any], message: dict[str, Any]) -> None:
+        text = message.get("text") or ""
+        chat = message.get("chat") if isinstance(message.get("chat"), dict) else {}
+        chat_id = message.get("chat_id") or chat.get("id")
+        if chat_id is None:
+            return
+        from_user_payload = message.get("from") if isinstance(message.get("from"), dict) else {}
+        from_user = from_user_payload.get("username") or from_user_payload.get("id")
+        from_user_name = from_user_payload.get("first_name") or from_user_payload.get("username")
+        update_id = update.get("update_id")
+        self.emit_signal(
+            BusSignal(
+                type="external.telegram.invite_request",
+                payload={
+                    "chat_id": chat_id,
+                    "from_user": from_user,
+                    "from_user_name": from_user_name,
+                    "text": text,
+                    "update_id": update_id,
+                },
+                source="telegram",
+            )
+        )
 
     def _send_message_http(self, chat_id: int, text: str) -> None:
         endpoint = "sendMessage"
