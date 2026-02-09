@@ -40,6 +40,26 @@
     "template": "Que ubicacion quieres: casa, trabajo u otra?"
   },
   {
+    "key": "core.location.current.not_set",
+    "locale": "en-US",
+    "address_style": "tu",
+    "tone": "friendly",
+    "channel": "default",
+    "variant": "default",
+    "policy_tier": "default",
+    "template": "I do not have your {label} location yet. Tell me the address so I can save it."
+  },
+  {
+    "key": "core.location.current.not_set",
+    "locale": "es-MX",
+    "address_style": "tu",
+    "tone": "friendly",
+    "channel": "default",
+    "variant": "default",
+    "policy_tier": "default",
+    "template": "No tengo tu ubicacion de {label} todavia. Dime la direccion para guardarla."
+  },
+  {
     "key": "core.location.set.ask_label",
     "locale": "en-US",
     "address_style": "tu",

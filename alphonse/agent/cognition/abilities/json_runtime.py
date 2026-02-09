@@ -212,9 +212,17 @@ def _parse_pending_interaction(raw: dict[str, Any] | None) -> PendingInteraction
 def _merge_pending_result(params: dict[str, Any], key: str, result: dict[str, Any]) -> None:
     if key in result:
         params[key] = result.get(key)
+        if key == "label":
+            normalized = _normalize_location_label(params.get("label"))
+            if normalized:
+                params["label"] = normalized
         return
     if result:
         params[key] = list(result.values())[0]
+        if key == "label":
+            normalized = _normalize_location_label(params.get("label"))
+            if normalized:
+                params["label"] = normalized
 
 
 def _missing_required_params(params: dict[str, Any], parameters: list[dict[str, Any]]) -> list[str]:
@@ -238,8 +246,6 @@ def _extract_params_from_text(
     if not text:
         return
     missing_required = _missing_required_params(params, parameters)
-    if not missing_required:
-        return
     relationship = _extract_relationship(text)
     if relationship and "relationship" in missing_required:
         params.setdefault("relationship", relationship)
@@ -267,11 +273,11 @@ def _extract_params_from_text(
         chat_id = state.get("channel_target") or state.get("chat_id")
         if chat_id:
             params.setdefault("channel_address", str(chat_id))
-    if "label" in missing_required:
+    if "label" not in params and _param_type(parameters, "label"):
         label = _extract_location_label(text)
         if label:
             params.setdefault("label", label)
-    if "address_text" in missing_required:
+    if "address_text" not in params and _param_type(parameters, "address_text"):
         address = _extract_address_text(text)
         if address:
             params.setdefault("address_text", address)
@@ -385,6 +391,15 @@ def _extract_location_label(text: str) -> str | None:
         if key in normalized:
             return value
     return None
+
+
+def _normalize_location_label(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip().lower()
+    if normalized in {"home", "work", "other"}:
+        return normalized
+    return _extract_location_label(normalized)
 
 
 def _extract_address_text(text: str) -> str | None:
@@ -538,6 +553,8 @@ def _execute_steps(steps: list[dict[str, Any]], params: dict[str, Any], state: d
         if action == "location.current":
             principal_id = _principal_id_from_state(state)
             label = str(params.get("label") or "").strip().lower() or None
+            if label:
+                label = _normalize_location_label(label) or label
             location_text = None
             if principal_id:
                 device = list_device_locations(principal_id=principal_id, limit=1)
@@ -549,6 +566,11 @@ def _execute_steps(steps: list[dict[str, Any]], params: dict[str, Any], state: d
                 if profiles:
                     profile = profiles[0]
                     location_text = profile.get("address_text") or f"{profile.get('latitude')}, {profile.get('longitude')}"
+            if not location_text and label:
+                return {
+                    "response_key": "core.location.current.not_set",
+                    "response_vars": {"label": label},
+                }
             if not location_text:
                 pending = build_pending_interaction(
                     PendingInteractionType.SLOT_FILL,
