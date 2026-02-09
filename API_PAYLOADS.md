@@ -171,6 +171,43 @@ GET /agent/users?active_only=false&limit=200
 }
 ```
 
+## Chat (UI / Web)
+
+Send a message into Alphonse (Web UI)
+```json
+POST /agent/message
+{
+  "channel": "webui",
+  "text": "Introduce and authorize Gaby on Telegram",
+  "correlation_id": "ui-123"
+}
+```
+
+Send a message that replies to a Telegram user (use reply metadata to capture the user_id)
+```json
+POST /agent/message
+{
+  "channel": "webui",
+  "text": "Alphonse, please meet Gaby",
+  "correlation_id": "ui-124",
+  "metadata": {
+    "reply_to_user": "8553589429",
+    "reply_to_user_name": "Gaby",
+    "reply_to_message_id": "777"
+  }
+}
+```
+
+Manual authorization without reply metadata
+```json
+POST /agent/message
+{
+  "channel": "webui",
+  "text": "Authorize Gaby on Telegram 8553589429",
+  "correlation_id": "ui-125"
+}
+```
+
 ## Intents
 
 Create intent
