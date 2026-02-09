@@ -52,6 +52,22 @@ from alphonse.agent.nervous_system.tool_configs import (
     list_tool_configs,
     upsert_tool_config,
 )
+from alphonse.agent.nervous_system.terminal_tools import (
+    create_terminal_command,
+    create_terminal_session,
+    delete_terminal_sandbox,
+    get_terminal_command,
+    get_terminal_sandbox,
+    get_terminal_session,
+    list_terminal_commands,
+    list_terminal_sandboxes,
+    list_terminal_sessions,
+    patch_terminal_sandbox,
+    record_terminal_command_output,
+    update_terminal_command_status,
+    update_terminal_session_status,
+    upsert_terminal_sandbox,
+)
 from alphonse.agent.nervous_system.users import (
     delete_user,
     get_user,
@@ -198,6 +214,41 @@ class IntentPatch(BaseModel):
     intent_version: str | None = None
     origin: str | None = None
     parent_intent: str | None = None
+
+
+class TerminalSandboxUpsert(BaseModel):
+    sandbox_id: str | None = None
+    owner_principal_id: str
+    label: str
+    path: str
+    is_active: bool = True
+
+
+class TerminalSandboxPatch(BaseModel):
+    label: str | None = None
+    path: str | None = None
+    is_active: bool | None = None
+
+
+class TerminalCommandCreate(BaseModel):
+    session_id: str | None = None
+    principal_id: str
+    sandbox_id: str
+    command: str
+    cwd: str
+    requested_by: str | None = None
+    status: str | None = None
+
+
+class TerminalCommandApprove(BaseModel):
+    approved_by: str | None = None
+
+
+class TerminalCommandFinalize(BaseModel):
+    stdout: str | None = None
+    stderr: str | None = None
+    exit_code: int | None = None
+    status: str = "executed"
 
 
 class UserCreate(BaseModel):
@@ -863,6 +914,215 @@ def delete_agent_user(
     if not ok:
         raise HTTPException(status_code=404, detail="User not found")
     return {"deleted": True, "user_id": user_id}
+
+
+@app.get("/agent/terminal/sandboxes")
+def list_agent_terminal_sandboxes(
+    owner_principal_id: str | None = None,
+    active_only: bool = False,
+    limit: int = 200,
+    x_alphonse_api_token: str | None = Header(default=None),
+) -> dict[str, Any]:
+    _assert_api_token(x_alphonse_api_token)
+    return {
+        "items": list_terminal_sandboxes(
+            owner_principal_id=owner_principal_id,
+            active_only=active_only,
+            limit=limit,
+        )
+    }
+
+
+@app.get("/agent/terminal/sandboxes/{sandbox_id}")
+def get_agent_terminal_sandbox(
+    sandbox_id: str,
+    x_alphonse_api_token: str | None = Header(default=None),
+) -> dict[str, Any]:
+    _assert_api_token(x_alphonse_api_token)
+    item = get_terminal_sandbox(sandbox_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Terminal sandbox not found")
+    return {"item": item}
+
+
+@app.post("/agent/terminal/sandboxes", status_code=201)
+def upsert_agent_terminal_sandbox(
+    payload: TerminalSandboxUpsert,
+    x_alphonse_api_token: str | None = Header(default=None),
+) -> dict[str, Any]:
+    _assert_api_token(x_alphonse_api_token)
+    sandbox_id = upsert_terminal_sandbox(payload.model_dump())
+    return {"item": get_terminal_sandbox(sandbox_id)}
+
+
+@app.patch("/agent/terminal/sandboxes/{sandbox_id}")
+def patch_agent_terminal_sandbox(
+    sandbox_id: str,
+    payload: TerminalSandboxPatch,
+    x_alphonse_api_token: str | None = Header(default=None),
+) -> dict[str, Any]:
+    _assert_api_token(x_alphonse_api_token)
+    item = patch_terminal_sandbox(sandbox_id, payload.model_dump(exclude_unset=True))
+    if not item:
+        raise HTTPException(status_code=404, detail="Terminal sandbox not found")
+    return {"item": item}
+
+
+@app.delete("/agent/terminal/sandboxes/{sandbox_id}")
+def delete_agent_terminal_sandbox(
+    sandbox_id: str,
+    x_alphonse_api_token: str | None = Header(default=None),
+) -> dict[str, Any]:
+    _assert_api_token(x_alphonse_api_token)
+    ok = delete_terminal_sandbox(sandbox_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Terminal sandbox not found")
+    return {"deleted": True, "sandbox_id": sandbox_id}
+
+
+@app.get("/agent/terminal/sessions")
+def list_agent_terminal_sessions(
+    principal_id: str | None = None,
+    sandbox_id: str | None = None,
+    status: str | None = None,
+    limit: int = 200,
+    x_alphonse_api_token: str | None = Header(default=None),
+) -> dict[str, Any]:
+    _assert_api_token(x_alphonse_api_token)
+    return {
+        "items": list_terminal_sessions(
+            principal_id=principal_id,
+            sandbox_id=sandbox_id,
+            status=status,
+            limit=limit,
+        )
+    }
+
+
+@app.get("/agent/terminal/sessions/{session_id}")
+def get_agent_terminal_session(
+    session_id: str,
+    x_alphonse_api_token: str | None = Header(default=None),
+) -> dict[str, Any]:
+    _assert_api_token(x_alphonse_api_token)
+    item = get_terminal_session(session_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Terminal session not found")
+    return {"item": item}
+
+
+@app.post("/agent/terminal/commands", status_code=201)
+def create_agent_terminal_command(
+    payload: TerminalCommandCreate,
+    x_alphonse_api_token: str | None = Header(default=None),
+) -> dict[str, Any]:
+    _assert_api_token(x_alphonse_api_token)
+    data = payload.model_dump()
+    session_id = data.get("session_id")
+    if not session_id:
+        session_id = create_terminal_session(
+            {
+                "principal_id": data.get("principal_id"),
+                "sandbox_id": data.get("sandbox_id"),
+                "status": "pending",
+            }
+        )
+    command_id = create_terminal_command(
+        {
+            "session_id": session_id,
+            "command": data.get("command"),
+            "cwd": data.get("cwd"),
+            "requested_by": data.get("requested_by"),
+            "status": data.get("status") or "pending",
+        }
+    )
+    return {
+        "item": get_terminal_command(command_id),
+        "session": get_terminal_session(session_id),
+    }
+
+
+@app.get("/agent/terminal/commands")
+def list_agent_terminal_commands(
+    session_id: str | None = None,
+    status: str | None = None,
+    limit: int = 200,
+    x_alphonse_api_token: str | None = Header(default=None),
+) -> dict[str, Any]:
+    _assert_api_token(x_alphonse_api_token)
+    return {
+        "items": list_terminal_commands(
+            session_id=session_id,
+            status=status,
+            limit=limit,
+        )
+    }
+
+
+@app.get("/agent/terminal/commands/{command_id}")
+def get_agent_terminal_command(
+    command_id: str,
+    x_alphonse_api_token: str | None = Header(default=None),
+) -> dict[str, Any]:
+    _assert_api_token(x_alphonse_api_token)
+    item = get_terminal_command(command_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Terminal command not found")
+    return {"item": item}
+
+
+@app.post("/agent/terminal/commands/{command_id}/approve")
+def approve_agent_terminal_command(
+    command_id: str,
+    payload: TerminalCommandApprove = Body(default=TerminalCommandApprove()),
+    x_alphonse_api_token: str | None = Header(default=None),
+) -> dict[str, Any]:
+    _assert_api_token(x_alphonse_api_token)
+    item = update_terminal_command_status(command_id, "approved", approved_by=payload.approved_by)
+    if not item:
+        raise HTTPException(status_code=404, detail="Terminal command not found")
+    session = get_terminal_session(item.get("session_id"))
+    if session:
+        update_terminal_session_status(session["session_id"], "approved")
+    return {"item": item, "session": session}
+
+
+@app.post("/agent/terminal/commands/{command_id}/reject")
+def reject_agent_terminal_command(
+    command_id: str,
+    payload: TerminalCommandApprove = Body(default=TerminalCommandApprove()),
+    x_alphonse_api_token: str | None = Header(default=None),
+) -> dict[str, Any]:
+    _assert_api_token(x_alphonse_api_token)
+    item = update_terminal_command_status(command_id, "rejected", approved_by=payload.approved_by)
+    if not item:
+        raise HTTPException(status_code=404, detail="Terminal command not found")
+    session = get_terminal_session(item.get("session_id"))
+    if session:
+        update_terminal_session_status(session["session_id"], "rejected")
+    return {"item": item, "session": session}
+
+
+@app.post("/agent/terminal/commands/{command_id}/finalize")
+def finalize_agent_terminal_command(
+    command_id: str,
+    payload: TerminalCommandFinalize,
+    x_alphonse_api_token: str | None = Header(default=None),
+) -> dict[str, Any]:
+    _assert_api_token(x_alphonse_api_token)
+    item = record_terminal_command_output(
+        command_id,
+        stdout=payload.stdout,
+        stderr=payload.stderr,
+        exit_code=payload.exit_code,
+        status=payload.status,
+    )
+    if not item:
+        raise HTTPException(status_code=404, detail="Terminal command not found")
+    session = get_terminal_session(item.get("session_id"))
+    if session:
+        update_terminal_session_status(session["session_id"], payload.status)
+    return {"item": item, "session": session}
 
 
 def _as_optional_str(value: object | None) -> str | None:

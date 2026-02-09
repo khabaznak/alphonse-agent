@@ -101,6 +101,43 @@ CREATE TABLE IF NOT EXISTS users (
 
 CREATE INDEX IF NOT EXISTS idx_users_principal ON users (principal_id);
 
+----------------------------------------------------------------------
+-- 2.4.1) TERMINAL SANDBOXES + COMMANDS
+----------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS terminal_sandboxes (
+  sandbox_id         TEXT PRIMARY KEY,
+  owner_principal_id TEXT NOT NULL,
+  label              TEXT NOT NULL,
+  path               TEXT NOT NULL,
+  is_active          INTEGER NOT NULL DEFAULT 1,
+  created_at         TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at         TEXT NOT NULL DEFAULT (datetime('now'))
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS terminal_sessions (
+  session_id   TEXT PRIMARY KEY,
+  principal_id TEXT NOT NULL,
+  sandbox_id   TEXT NOT NULL,
+  status       TEXT NOT NULL DEFAULT 'pending',
+  created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at   TEXT NOT NULL DEFAULT (datetime('now'))
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS terminal_commands (
+  command_id   TEXT PRIMARY KEY,
+  session_id   TEXT NOT NULL,
+  command      TEXT NOT NULL,
+  cwd          TEXT NOT NULL,
+  status       TEXT NOT NULL DEFAULT 'pending',
+  stdout       TEXT,
+  stderr       TEXT,
+  exit_code    INTEGER,
+  requested_by TEXT,
+  approved_by  TEXT,
+  created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at   TEXT NOT NULL DEFAULT (datetime('now'))
+) STRICT;
+
 CREATE UNIQUE INDEX IF NOT EXISTS idx_principals_channel_unique
   ON principals (channel_type, channel_id)
   WHERE channel_type IS NOT NULL AND channel_id IS NOT NULL;

@@ -254,6 +254,74 @@ Delete intent (disables)
 DELETE /agent/intents/time.current
 ```
 
+## Terminal Sandboxes
+
+Create sandbox
+```json
+POST /agent/terminal/sandboxes
+{
+  "owner_principal_id": "principal-123",
+  "label": "Projects",
+  "path": "/Users/alex/Projects",
+  "is_active": true
+}
+```
+
+List sandboxes
+```json
+GET /agent/terminal/sandboxes?owner_principal_id=principal-123&active_only=true&limit=200
+```
+
+Patch sandbox
+```json
+PATCH /agent/terminal/sandboxes/{sandbox_id}
+{
+  "label": "Work",
+  "is_active": true
+}
+```
+
+## Terminal Commands
+
+Create command (sync flow is handled by the runtime; this stores the request + approval state)
+```json
+POST /agent/terminal/commands
+{
+  "principal_id": "principal-123",
+  "sandbox_id": "sandbox-1",
+  "command": "ls -la",
+  "cwd": ".",
+  "requested_by": "principal-123"
+}
+```
+
+Approve command
+```json
+POST /agent/terminal/commands/{command_id}/approve
+{
+  "approved_by": "principal-123"
+}
+```
+
+Reject command
+```json
+POST /agent/terminal/commands/{command_id}/reject
+{
+  "approved_by": "principal-123"
+}
+```
+
+Finalize command (store output)
+```json
+POST /agent/terminal/commands/{command_id}/finalize
+{
+  "stdout": "file1.txt\nfile2.txt\n",
+  "stderr": "",
+  "exit_code": 0,
+  "status": "executed"
+}
+```
+
 ## Locations (home/work/other)
 
 Create or update location
