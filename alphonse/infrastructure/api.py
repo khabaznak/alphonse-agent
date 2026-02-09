@@ -54,11 +54,11 @@ from alphonse.agent.nervous_system.tool_configs import (
 )
 from alphonse.agent.nervous_system.terminal_tools import (
     create_terminal_command,
-    create_terminal_session,
     delete_terminal_sandbox,
     get_terminal_command,
     get_terminal_sandbox,
     get_terminal_session,
+    ensure_terminal_session,
     list_terminal_commands,
     list_terminal_sandboxes,
     list_terminal_sessions,
@@ -68,6 +68,7 @@ from alphonse.agent.nervous_system.terminal_tools import (
     update_terminal_session_status,
     upsert_terminal_sandbox,
 )
+from alphonse.agent.tools.terminal import TerminalTool
 from alphonse.agent.nervous_system.users import (
     delete_user,
     get_user,
@@ -238,6 +239,7 @@ class TerminalCommandCreate(BaseModel):
     cwd: str
     requested_by: str | None = None
     status: str | None = None
+    timeout_seconds: float | None = None
 
 
 class TerminalCommandApprove(BaseModel):
@@ -249,6 +251,11 @@ class TerminalCommandFinalize(BaseModel):
     stderr: str | None = None
     exit_code: int | None = None
     status: str = "executed"
+
+
+class TerminalCommandExecute(BaseModel):
+    approved_by: str | None = None
+    timeout_seconds: float | None = None
 
 
 class UserCreate(BaseModel):
@@ -1018,24 +1025,37 @@ def create_agent_terminal_command(
 ) -> dict[str, Any]:
     _assert_api_token(x_alphonse_api_token)
     data = payload.model_dump()
-    session_id = data.get("session_id")
-    if not session_id:
-        session_id = create_terminal_session(
-            {
-                "principal_id": data.get("principal_id"),
-                "sandbox_id": data.get("sandbox_id"),
-                "status": "pending",
-            }
-        )
+    sandbox = get_terminal_sandbox(str(data.get("sandbox_id")))
+    if not sandbox or not sandbox.get("is_active"):
+        raise HTTPException(status_code=400, detail="Terminal sandbox not found or inactive")
+    terminal_tool = TerminalTool()
+    command_status = terminal_tool.classify_command(data.get("command") or "")
+    session_id = data.get("session_id") or ensure_terminal_session(
+        principal_id=data.get("principal_id"),
+        sandbox_id=data.get("sandbox_id"),
+    )
     command_id = create_terminal_command(
         {
             "session_id": session_id,
             "command": data.get("command"),
             "cwd": data.get("cwd"),
             "requested_by": data.get("requested_by"),
-            "status": data.get("status") or "pending",
+            "status": data.get("status") or ("approved" if command_status == "auto" else "pending"),
+            "approved_by": data.get("requested_by") if command_status == "auto" else None,
+            "timeout_seconds": data.get("timeout_seconds"),
         }
     )
+    if command_status == "reject":
+        record_terminal_command_output(
+            command_id,
+            stdout="",
+            stderr="Command rejected by policy",
+            exit_code=None,
+            status="rejected",
+        )
+        update_terminal_session_status(session_id, "rejected")
+    elif command_status == "auto":
+        update_terminal_session_status(session_id, "approved")
     return {
         "item": get_terminal_command(command_id),
         "session": get_terminal_session(session_id),
@@ -1123,6 +1143,26 @@ def finalize_agent_terminal_command(
     if session:
         update_terminal_session_status(session["session_id"], payload.status)
     return {"item": item, "session": session}
+
+
+@app.post("/agent/terminal/commands/{command_id}/execute", status_code=202)
+def execute_agent_terminal_command(
+    command_id: str,
+    payload: TerminalCommandExecute = Body(default=TerminalCommandExecute()),
+    x_alphonse_api_token: str | None = Header(default=None),
+) -> dict[str, Any]:
+    _assert_api_token(x_alphonse_api_token)
+    command = get_terminal_command(command_id)
+    if not command:
+        raise HTTPException(status_code=404, detail="Terminal command not found")
+    if command.get("status") not in {"approved", "auto", "pending"}:
+        raise HTTPException(status_code=400, detail="Command cannot be executed in its current state")
+    if command.get("status") == "pending":
+        raise HTTPException(status_code=409, detail="Command approval required")
+    update_terminal_command_status(command_id, "approved", approved_by=payload.approved_by)
+    if command.get("session_id"):
+        update_terminal_session_status(command["session_id"], "approved")
+    return {"item": get_terminal_command(command_id), "queued": True}
 
 
 def _as_optional_str(value: object | None) -> str | None:

@@ -86,6 +86,8 @@ CREATE TABLE IF NOT EXISTS principals (
   CHECK (principal_type IN ('person', 'channel_chat', 'household', 'office', 'system'))
 ) STRICT;
 
+CREATE INDEX IF NOT EXISTS idx_principals_channel ON principals (channel_type, channel_id);
+
 CREATE TABLE IF NOT EXISTS users (
   user_id      TEXT PRIMARY KEY,
   principal_id TEXT,
@@ -132,11 +134,15 @@ CREATE TABLE IF NOT EXISTS terminal_commands (
   stdout       TEXT,
   stderr       TEXT,
   exit_code    INTEGER,
+  timeout_seconds REAL,
   requested_by TEXT,
   approved_by  TEXT,
   created_at   TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at   TEXT NOT NULL DEFAULT (datetime('now'))
 ) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_terminal_commands_status
+  ON terminal_commands (status, updated_at);
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_principals_channel_unique
   ON principals (channel_type, channel_id)

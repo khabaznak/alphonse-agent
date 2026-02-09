@@ -291,7 +291,8 @@ POST /agent/terminal/commands
   "sandbox_id": "sandbox-1",
   "command": "ls -la",
   "cwd": ".",
-  "requested_by": "principal-123"
+  "requested_by": "principal-123",
+  "timeout_seconds": 30
 }
 ```
 
@@ -320,6 +321,41 @@ POST /agent/terminal/commands/{command_id}/finalize
   "exit_code": 0,
   "status": "executed"
 }
+```
+
+Execute command (async queue)
+```json
+POST /agent/terminal/commands/{command_id}/execute
+{
+  "approved_by": "principal-123",
+  "timeout_seconds": 30
+}
+```
+
+Notes
+- `timeout_seconds` is read by the background executor (if enabled).
+
+Executor config (stored via tool-configs)
+```json
+POST /agent/tool-configs
+{
+  "tool_key": "terminal_executor",
+  "name": "Default executor",
+  "config": {
+    "enabled": true,
+    "poll_seconds": 2,
+    "timeout_seconds": 30,
+    "batch": 10
+  },
+  "is_active": true
+}
+```
+
+CLI toggle
+```bash
+python -m alphonse.agent.cli terminal executor enable --poll-seconds 2 --timeout-seconds 30 --batch 10
+python -m alphonse.agent.cli terminal executor disable
+python -m alphonse.agent.cli terminal executor status
 ```
 
 ## Terminal CLI

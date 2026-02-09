@@ -3,6 +3,7 @@ from __future__ import annotations
 from alphonse.agent.io.adapters import AdapterRegistry
 from alphonse.agent.io.api_channel import ApiSenseAdapter
 from alphonse.agent.io.cli_channel import CliSenseAdapter, CliExtremityAdapter
+from alphonse.agent.io.terminal_channel import TerminalSenseAdapter, TerminalExtremityAdapter
 from alphonse.agent.io.telegram_channel import (
     TelegramSenseAdapter,
     TelegramExtremityAdapter,
@@ -19,10 +20,12 @@ def build_default_io_registry() -> AdapterRegistry:
     registry.register_sense(CliSenseAdapter())
     registry.register_sense(WebSenseAdapter())
     registry.register_sense(ApiSenseAdapter())
+    registry.register_sense(TerminalSenseAdapter())
 
     registry.register_extremity(TelegramExtremityAdapter())
     registry.register_extremity(CliExtremityAdapter())
     registry.register_extremity(WebExtremityAdapter())
+    registry.register_extremity(TerminalExtremityAdapter())
     return registry
 
 

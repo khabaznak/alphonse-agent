@@ -45,10 +45,12 @@ def test_terminal_api_crud(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> N
             "command": "ls -la",
             "cwd": ".",
             "requested_by": "principal-123",
+            "timeout_seconds": 5,
         },
     )
     assert created.status_code == 201
     command_id = created.json()["item"]["command_id"]
+    assert created.json()["item"]["status"] in {"approved", "pending", "rejected"}
 
     approved = client.post(
         f"/agent/terminal/commands/{command_id}/approve",
@@ -56,6 +58,13 @@ def test_terminal_api_crud(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> N
     )
     assert approved.status_code == 200
     assert approved.json()["item"]["status"] == "approved"
+
+    executed = client.post(
+        f"/agent/terminal/commands/{command_id}/execute",
+        json={"approved_by": "principal-123", "timeout_seconds": 1},
+    )
+    assert executed.status_code == 202
+    assert executed.json()["item"]["status"] == "approved"
 
     finalized = client.post(
         f"/agent/terminal/commands/{command_id}/finalize",

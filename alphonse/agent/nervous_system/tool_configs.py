@@ -66,6 +66,13 @@ def list_tool_configs(
     return [_row_to_tool_config(row) for row in rows]
 
 
+def get_active_tool_config(tool_key: str) -> dict[str, Any] | None:
+    rows = list_tool_configs(tool_key=tool_key, active_only=True, limit=1)
+    if not rows:
+        return None
+    return rows[0]
+
+
 def get_tool_config(config_id: str) -> dict[str, Any] | None:
     with sqlite3.connect(resolve_nervous_system_db_path()) as conn:
         row = conn.execute(
@@ -120,4 +127,3 @@ def _parse_json(value: str | None) -> Any:
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
-

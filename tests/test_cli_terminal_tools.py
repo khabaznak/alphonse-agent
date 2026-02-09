@@ -93,6 +93,7 @@ def test_cli_terminal_commands_flow(
             command="ls -la",
             cwd=".",
             requested_by="principal-123",
+            timeout_seconds=None,
         )
     )
     out = capsys.readouterr().out
@@ -121,3 +122,14 @@ def test_cli_terminal_commands_flow(
         )
     )
     assert '"status": "executed"' in capsys.readouterr().out
+
+    cli._command_terminal(
+        Namespace(
+            terminal_command="executor",
+            action="enable",
+            poll_seconds=1.0,
+            timeout_seconds=5.0,
+            batch=2,
+        )
+    )
+    assert "Terminal executor updated" in capsys.readouterr().out

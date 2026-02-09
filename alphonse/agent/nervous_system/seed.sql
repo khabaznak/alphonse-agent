@@ -14,7 +14,9 @@ VALUES
   ('timer', 'Timer Sense', 'Emits timer signals', 'system', 1, NULL),
   ('telegram', 'Telegram Sense', 'Receives Telegram messages', 'service', 1, NULL),
   ('cli', 'CLI Sense', 'Receives CLI messages', 'system', 1, NULL),
-  ('api', 'API Sense', 'Receives API messages', 'service', 1, NULL);
+  ('api', 'API Sense', 'Receives API messages', 'service', 1, NULL),
+  ('terminal', 'Terminal Sense', 'Emits terminal command updates', 'system', 0, NULL),
+  ('terminal_executor', 'Terminal Executor', 'Executes terminal commands asynchronously', 'system', 0, NULL);
 
 INSERT OR IGNORE INTO signals (key, name, source, description, is_enabled)
 VALUES
@@ -27,7 +29,9 @@ VALUES
   ('api.status_requested', 'API Status Requested', 'api', 'API status request', 1),
   ('api.timed_signals_requested', 'API Timed Signals Requested', 'api', 'API timed signals request', 1),
   ('timer.fired', 'Timer Fired', 'timer', 'Scheduled timer fired', 1),
-  ('timed_signal.fired', 'Timed Signal Fired', 'timer', 'Scheduled timed signal fired', 1);
+  ('timed_signal.fired', 'Timed Signal Fired', 'timer', 'Scheduled timed signal fired', 1),
+  ('terminal.command_updated', 'Terminal Command Updated', 'terminal', 'Terminal command updated', 1),
+  ('terminal.command_executed', 'Terminal Command Executed', 'terminal_executor', 'Terminal command executed', 1);
 
 INSERT OR IGNORE INTO timed_signals (
   id, trigger_at, next_trigger_at, rrule, timezone, status, fired_at, attempt_count, attempts,

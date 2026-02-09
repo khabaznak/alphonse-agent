@@ -119,6 +119,30 @@ def create_terminal_session(record: dict[str, Any]) -> str:
     return session_id
 
 
+def ensure_terminal_session(*, principal_id: str, sandbox_id: str) -> str:
+    """Return existing active session for principal + sandbox or create one."""
+    with sqlite3.connect(resolve_nervous_system_db_path()) as conn:
+        row = conn.execute(
+            """
+            SELECT session_id
+            FROM terminal_sessions
+            WHERE principal_id = ? AND sandbox_id = ?
+            ORDER BY updated_at DESC
+            LIMIT 1
+            """,
+            (principal_id, sandbox_id),
+        ).fetchone()
+    if row:
+        return row[0]
+    return create_terminal_session(
+        {
+            "principal_id": principal_id,
+            "sandbox_id": sandbox_id,
+            "status": "pending",
+        }
+    )
+
+
 def update_terminal_session_status(session_id: str, status: str) -> dict[str, Any] | None:
     with sqlite3.connect(resolve_nervous_system_db_path()) as conn:
         conn.execute(
@@ -179,14 +203,22 @@ def create_terminal_command(record: dict[str, Any]) -> str:
     if not session_id or not command or not cwd:
         raise ValueError("session_id, command, and cwd are required")
     status = str(record.get("status") or "pending")
+    requested_by = record.get("requested_by")
+    approved_by = record.get("approved_by")
+    timeout_seconds = record.get("timeout_seconds")
+    if timeout_seconds is not None:
+        try:
+            timeout_seconds = float(timeout_seconds)
+        except (TypeError, ValueError):
+            timeout_seconds = None
     now = _now_iso()
     with sqlite3.connect(resolve_nervous_system_db_path()) as conn:
         conn.execute(
             """
             INSERT INTO terminal_commands (
               command_id, session_id, command, cwd, status, stdout, stderr, exit_code,
-              requested_by, approved_by, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              timeout_seconds, requested_by, approved_by, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 command_id,
@@ -197,8 +229,9 @@ def create_terminal_command(record: dict[str, Any]) -> str:
                 record.get("stdout"),
                 record.get("stderr"),
                 record.get("exit_code"),
-                record.get("requested_by"),
-                record.get("approved_by"),
+                timeout_seconds,
+                requested_by,
+                approved_by,
                 now,
                 now,
             ),
@@ -247,7 +280,7 @@ def get_terminal_command(command_id: str) -> dict[str, Any] | None:
         row = conn.execute(
             """
             SELECT command_id, session_id, command, cwd, status, stdout, stderr, exit_code,
-                   requested_by, approved_by, created_at, updated_at
+                   timeout_seconds, requested_by, approved_by, created_at, updated_at
             FROM terminal_commands
             WHERE command_id = ?
             """,
@@ -260,6 +293,7 @@ def list_terminal_commands(
     *,
     session_id: str | None = None,
     status: str | None = None,
+    approved_only: bool | None = None,
     limit: int = 200,
 ) -> list[dict[str, Any]]:
     filters: list[str] = []
@@ -270,10 +304,12 @@ def list_terminal_commands(
     if status:
         filters.append("status = ?")
         values.append(status)
+    if approved_only:
+        filters.append("status = 'approved'")
     where = f"WHERE {' AND '.join(filters)}" if filters else ""
     query = (
         "SELECT command_id, session_id, command, cwd, status, stdout, stderr, exit_code, "
-        "requested_by, approved_by, created_at, updated_at "
+        "timeout_seconds, requested_by, approved_by, created_at, updated_at "
         f"FROM terminal_commands {where} ORDER BY updated_at DESC LIMIT ?"
     )
     values.append(limit)
@@ -327,10 +363,11 @@ def _row_to_command(row: sqlite3.Row | tuple | None) -> dict[str, Any]:
         "stdout": row[5],
         "stderr": row[6],
         "exit_code": row[7],
-        "requested_by": row[8],
-        "approved_by": row[9],
-        "created_at": row[10],
-        "updated_at": row[11],
+        "timeout_seconds": row[8],
+        "requested_by": row[9],
+        "approved_by": row[10],
+        "created_at": row[11],
+        "updated_at": row[12],
     }
 
 

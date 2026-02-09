@@ -61,6 +61,7 @@ from alphonse.agent.nervous_system.terminal_tools import (
     create_terminal_command,
     create_terminal_session,
     delete_terminal_sandbox,
+    ensure_terminal_session,
     get_terminal_command,
     get_terminal_sandbox,
     list_terminal_commands,
@@ -80,6 +81,7 @@ from alphonse.agent.nervous_system.location_profiles import (
 )
 from alphonse.agent.nervous_system.tool_configs import (
     delete_tool_config,
+    get_active_tool_config,
     get_tool_config,
     list_tool_configs,
     upsert_tool_config,
@@ -420,6 +422,15 @@ def build_parser() -> argparse.ArgumentParser:
     tool_configs_delete = tool_configs_sub.add_parser("delete", help="Delete tool config")
     tool_configs_delete.add_argument("config_id")
 
+    terminal_executor = terminal_sub.add_parser(
+        "executor",
+        help="Toggle terminal executor via tool-configs",
+    )
+    terminal_executor.add_argument("action", choices=["enable", "disable", "status"])
+    terminal_executor.add_argument("--poll-seconds", type=float, default=None)
+    terminal_executor.add_argument("--timeout-seconds", type=float, default=None)
+    terminal_executor.add_argument("--batch", type=int, default=None)
+
     terminal_parser = sub.add_parser("terminal", help="Terminal sandbox + command utilities")
     terminal_sub = terminal_parser.add_subparsers(dest="terminal_command", required=True)
 
@@ -460,6 +471,7 @@ def build_parser() -> argparse.ArgumentParser:
     terminal_commands_create.add_argument("--command", required=True)
     terminal_commands_create.add_argument("--cwd", default=".")
     terminal_commands_create.add_argument("--requested-by", default=None)
+    terminal_commands_create.add_argument("--timeout-seconds", type=float, default=None)
     terminal_commands_approve = terminal_commands_sub.add_parser("approve", help="Approve terminal command")
     terminal_commands_approve.add_argument("command_id")
     terminal_commands_approve.add_argument("--approved-by", default=None)
@@ -1545,6 +1557,33 @@ def _command_tool_configs(args: argparse.Namespace) -> None:
 
 
 def _command_terminal(args: argparse.Namespace) -> None:
+    if args.terminal_command == "executor":
+        config = get_active_tool_config("terminal_executor")
+        current = config.get("config") if config else {}
+        if args.action == "status":
+            print(json.dumps({"config": current or {}}, indent=2, ensure_ascii=True))
+            return
+        enabled = args.action == "enable"
+        payload = dict(current or {})
+        payload["enabled"] = enabled
+        if args.poll_seconds is not None:
+            payload["poll_seconds"] = args.poll_seconds
+        if args.timeout_seconds is not None:
+            payload["timeout_seconds"] = args.timeout_seconds
+        if args.batch is not None:
+            payload["batch"] = args.batch
+        config_id = upsert_tool_config(
+            {
+                "config_id": config.get("config_id") if config else None,
+                "tool_key": "terminal_executor",
+                "name": config.get("name") if config else "Terminal Executor",
+                "config": payload,
+                "is_active": True,
+            }
+        )
+        print(f"Terminal executor updated: {config_id}")
+        return
+
     if args.terminal_command == "sandboxes":
         if args.terminal_sandboxes_command == "list":
             rows = list_terminal_sandboxes(
@@ -1629,12 +1668,9 @@ def _command_terminal(args: argparse.Namespace) -> None:
         if args.terminal_commands_command == "create":
             session_id = args.session_id
             if not session_id:
-                session_id = create_terminal_session(
-                    {
-                        "principal_id": args.principal_id,
-                        "sandbox_id": args.sandbox_id,
-                        "status": "pending",
-                    }
+                session_id = ensure_terminal_session(
+                    principal_id=args.principal_id,
+                    sandbox_id=args.sandbox_id,
                 )
             command_id = create_terminal_command(
                 {
@@ -1643,6 +1679,7 @@ def _command_terminal(args: argparse.Namespace) -> None:
                     "cwd": args.cwd,
                     "requested_by": args.requested_by,
                     "status": "pending",
+                    "timeout_seconds": args.timeout_seconds,
                 }
             )
             print(f"Created terminal command: {command_id} (session {session_id})")

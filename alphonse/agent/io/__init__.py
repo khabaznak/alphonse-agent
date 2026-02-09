@@ -17,6 +17,7 @@ __all__ += [
 from alphonse.agent.io.api_channel import ApiSenseAdapter
 from alphonse.agent.io.cli_channel import CliSenseAdapter, CliExtremityAdapter
 from alphonse.agent.io.web_channel import WebSenseAdapter, WebExtremityAdapter
+from alphonse.agent.io.terminal_channel import TerminalSenseAdapter, TerminalExtremityAdapter
 
 __all__ += [
     "ApiSenseAdapter",
@@ -24,6 +25,8 @@ __all__ += [
     "CliExtremityAdapter",
     "WebSenseAdapter",
     "WebExtremityAdapter",
+    "TerminalSenseAdapter",
+    "TerminalExtremityAdapter",
 ]
 from alphonse.agent.io.registry import build_default_io_registry, get_io_registry
 
