@@ -43,6 +43,7 @@ class PromptStore(Protocol):
         channel: str,
         variant: str,
         policy_tier: str,
+        purpose: str = "general",
         template: str,
         enabled: bool,
         priority: int,
@@ -53,6 +54,22 @@ class PromptStore(Protocol):
     def list_templates(
         self, key: str | None = None, enabled_only: bool = False
     ) -> list[dict[str, Any]]: ...
+
+    def get_template_by_id(self, template_id: str) -> dict[str, Any] | None: ...
+
+    def update_template_by_id(
+        self,
+        template_id: str,
+        *,
+        template: str | None,
+        enabled: bool | None,
+        priority: int | None,
+        purpose: str | None,
+        changed_by: str,
+        reason: str | None = None,
+    ) -> dict[str, Any] | None: ...
+
+    def delete_template(self, template_id: str) -> None: ...
 
     def rollback_template(
         self,
@@ -88,6 +105,7 @@ class SqlitePromptStore:
                 "channel": match["channel"],
                 "variant": match["variant"],
                 "policy_tier": match["policy_tier"],
+                "purpose": match.get("purpose"),
                 "priority": match["priority"],
                 "updated_at": match["updated_at"],
             },
@@ -118,6 +136,7 @@ class SqlitePromptStore:
             "channel",
             "variant",
             "policy_tier",
+            "purpose",
             "template",
             "enabled",
             "priority",
@@ -136,6 +155,7 @@ class SqlitePromptStore:
         channel: str,
         variant: str,
         policy_tier: str,
+        purpose: str = "general",
         template: str,
         enabled: bool,
         priority: int,
@@ -152,10 +172,10 @@ class SqlitePromptStore:
                 conn.execute(
                     """
                     UPDATE prompt_templates
-                    SET template = ?, enabled = ?, priority = ?, updated_at = ?
+                    SET template = ?, enabled = ?, priority = ?, purpose = ?, updated_at = ?
                     WHERE id = ?
                     """,
-                    (template, 1 if enabled else 0, priority, now, template_id),
+                    (template, 1 if enabled else 0, priority, purpose, now, template_id),
                 )
             else:
                 template_id = str(uuid.uuid4())
@@ -163,8 +183,8 @@ class SqlitePromptStore:
                     """
                     INSERT INTO prompt_templates (
                       id, key, locale, address_style, tone, channel, variant,
-                      policy_tier, template, enabled, priority, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                      policy_tier, purpose, template, enabled, priority, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         template_id,
@@ -175,6 +195,7 @@ class SqlitePromptStore:
                         channel,
                         variant,
                         policy_tier,
+                        purpose,
                         template,
                         1 if enabled else 0,
                         priority,
@@ -219,6 +240,73 @@ class SqlitePromptStore:
             conn.row_factory = sqlite3.Row
             rows = conn.execute(sql, tuple(params)).fetchall()
         return [dict(row) for row in rows]
+
+    def get_template_by_id(self, template_id: str) -> dict[str, Any] | None:
+        with sqlite3.connect(self._db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            row = conn.execute(
+                "SELECT * FROM prompt_templates WHERE id = ?",
+                (template_id,),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def update_template_by_id(
+        self,
+        template_id: str,
+        *,
+        template: str | None,
+        enabled: bool | None,
+        priority: int | None,
+        purpose: str | None,
+        changed_by: str,
+        reason: str | None = None,
+    ) -> dict[str, Any] | None:
+        existing = self.get_template_by_id(template_id)
+        if not existing:
+            return None
+        next_template = template if template is not None else existing.get("template")
+        next_enabled = enabled if enabled is not None else bool(existing.get("enabled"))
+        next_priority = priority if priority is not None else int(existing.get("priority") or 0)
+        next_purpose = purpose if purpose is not None else str(existing.get("purpose") or "general")
+        now = _timestamp()
+        with sqlite3.connect(self._db_path) as conn:
+            conn.execute(
+                """
+                UPDATE prompt_templates
+                SET template = ?, enabled = ?, priority = ?, purpose = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    next_template,
+                    1 if next_enabled else 0,
+                    next_priority,
+                    next_purpose,
+                    now,
+                    template_id,
+                ),
+            )
+            version = _next_version(conn, template_id)
+            conn.execute(
+                """
+                INSERT INTO prompt_versions (
+                  id, template_id, version, template, changed_by, change_reason, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    str(uuid.uuid4()),
+                    template_id,
+                    version,
+                    str(next_template),
+                    changed_by,
+                    reason,
+                    now,
+                ),
+            )
+        return self.get_template_by_id(template_id)
+
+    def delete_template(self, template_id: str) -> None:
+        with sqlite3.connect(self._db_path) as conn:
+            conn.execute("DELETE FROM prompt_templates WHERE id = ?", (template_id,))
 
     def rollback_template(
         self,
@@ -313,6 +401,25 @@ class NullPromptStore:
     def list_templates(self, key: str | None = None, enabled_only: bool = False) -> list[dict[str, Any]]:
         return []
 
+    def get_template_by_id(self, template_id: str) -> dict[str, Any] | None:
+        return None
+
+    def update_template_by_id(
+        self,
+        template_id: str,
+        *,
+        template: str | None,
+        enabled: bool | None,
+        priority: int | None,
+        purpose: str | None,
+        changed_by: str,
+        reason: str | None = None,
+    ) -> dict[str, Any] | None:
+        return None
+
+    def delete_template(self, template_id: str) -> None:
+        return None
+
     def rollback_template(
         self, template_id: str, version: int, changed_by: str, reason: str | None = None
     ) -> None:
@@ -331,6 +438,7 @@ def seed_default_templates(db_path: str | None = None) -> None:
                 channel=seed["channel"],
                 variant=seed["variant"],
                 policy_tier=seed["policy_tier"],
+                purpose=seed.get("purpose", "general"),
                 template=seed["template"],
                 enabled=True,
                 priority=0,
@@ -360,7 +468,11 @@ def _load_seed_templates() -> list[dict[str, str]]:
         if not required.issubset(item.keys()):
             missing = sorted(required - set(item.keys()))
             raise ValueError(f"prompt template seed row missing fields: {missing}")
-        rows.append({name: str(item[name]) for name in required})
+        row = {name: str(item[name]) for name in required}
+        purpose = item.get("purpose")
+        if purpose is not None:
+            row["purpose"] = str(purpose)
+        rows.append(row)
     return rows
 
 

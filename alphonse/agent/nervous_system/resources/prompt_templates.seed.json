@@ -1,5 +1,27 @@
 [
   {
+    "key": "message_map.system.v1",
+    "locale": "any",
+    "address_style": "any",
+    "tone": "any",
+    "channel": "any",
+    "variant": "default",
+    "policy_tier": "safe",
+    "purpose": "routing",
+    "template": "You are a message dissection engine for a personal AI assistant. Your job is to convert the user message into a compact JSON map that downstream code can route and plan from. Output MUST be valid JSON only. No markdown. No explanations."
+  },
+  {
+    "key": "message_map.user.v1",
+    "locale": "any",
+    "address_style": "any",
+    "tone": "any",
+    "channel": "any",
+    "variant": "default",
+    "policy_tier": "safe",
+    "purpose": "routing",
+    "template": "Dissect the message into these components:\\n\\nReturn a JSON object with exactly these keys:\\n\\n\\\"language\\\": string (e.g., \\\"en\\\", \\\"es\\\", \\\"mixed\\\")\\n\\n\\\"social\\\": object with:\\n\\n\\\"is_greeting\\\": boolean\\n\\n\\\"is_farewell\\\": boolean\\n\\n\\\"is_thanks\\\": boolean\\n\\n\\\"text\\\": string | null\\n\\n\\\"actions\\\": array of objects, each with:\\n\\n\\\"verb\\\": string\\n\\n\\\"object\\\": string | null\\n\\n\\\"target\\\": string | null\\n\\n\\\"details\\\": string | null\\n\\n\\\"priority\\\": \\\"low\\\" | \\\"normal\\\" | \\\"high\\\"\\n\\n\\\"entities\\\": array of strings\\n\\n\\\"constraints\\\": object with:\\n\\n\\\"times\\\": array of strings\\n\\n\\\"numbers\\\": array of strings\\n\\n\\\"locations\\\": array of strings\\n\\n\\\"questions\\\": array of strings\\n\\n\\\"commands\\\": array of strings\\n\\n\\\"raw_intent_hint\\\": string (one of: \\\"social_only\\\", \\\"single_action\\\", \\\"multi_action\\\", \\\"question_only\\\", \\\"command_only\\\", \\\"mixed\\\", \\\"other\\\")\\n\\n\\\"confidence\\\": \\\"low\\\" | \\\"medium\\\" | \\\"high\\\"\\n\\nRules:\\n\\nDo NOT choose intents from any catalog. Just dissect structure.\\n\\nIf the message contains multiple imperatives, create multiple \\\"actions\\\".\\n\\nKeep strings short. Prefer null over empty strings for missing fields.\\n\\nIf unsure, set confidence lower but still output valid JSON.\\n\\nMessage:\\n<<<\\n{MESSAGE_TEXT}\\n"
+  },
+  {
     "key": "core.location.current",
     "locale": "en-US",
     "address_style": "tu",

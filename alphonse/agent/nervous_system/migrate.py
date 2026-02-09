@@ -24,6 +24,7 @@ def apply_schema(db_path: Path) -> None:
         _ensure_intent_specs_columns(conn)
         _ensure_principals_constraints(conn)
         _ensure_users_table(conn)
+        _ensure_prompt_template_columns(conn)
     try:
         from alphonse.agent.cognition.prompt_store import seed_default_templates
 
@@ -193,6 +194,17 @@ def _ensure_users_table(conn: sqlite3.Connection) -> None:
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_users_principal ON users (principal_id)"
     )
+
+
+def _ensure_prompt_template_columns(conn: sqlite3.Connection) -> None:
+    columns = {
+        "purpose": "TEXT NOT NULL DEFAULT 'general'",
+    }
+    for name, definition in columns.items():
+        try:
+            conn.execute(f"ALTER TABLE prompt_templates ADD COLUMN {name} {definition}")
+        except sqlite3.OperationalError:
+            continue
 
 
 def _rebuild_delivery_receipts(conn: sqlite3.Connection) -> None:

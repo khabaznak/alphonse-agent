@@ -176,6 +176,7 @@ CREATE TABLE IF NOT EXISTS prompt_templates (
   channel       TEXT NOT NULL,
   variant       TEXT NOT NULL,
   policy_tier   TEXT NOT NULL,
+  purpose       TEXT NOT NULL DEFAULT 'general',
   template      TEXT NOT NULL,
   enabled       INTEGER NOT NULL DEFAULT 1,
   priority      INTEGER NOT NULL DEFAULT 0,

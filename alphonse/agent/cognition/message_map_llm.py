@@ -7,6 +7,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
+from alphonse.agent.cognition.prompt_store import PromptContext, SqlitePromptStore
+
 logger = logging.getLogger(__name__)
 
 
@@ -68,13 +70,13 @@ class MessageMapResult:
     latency_ms: int
 
 
-_SYSTEM_PROMPT = (
+_SYSTEM_PROMPT_FALLBACK = (
     "You are a message dissection engine for a personal AI assistant. "
     "Your job is to convert the user message into a compact JSON map that downstream "
     "code can route and plan from. Output MUST be valid JSON only. No markdown. No explanations."
 )
 
-_USER_PROMPT_TEMPLATE = """Dissect the message into these components:
+_USER_PROMPT_FALLBACK = """Dissect the message into these components:
 
 Return a JSON object with exactly these keys:
 
@@ -136,12 +138,33 @@ Message:
 """
 
 
-def build_message_map_prompt(text: str) -> str:
+_SYSTEM_PROMPT_KEY = "message_map.system.v1"
+_USER_PROMPT_KEY = "message_map.user.v1"
+
+
+def build_message_map_prompt(
+    text: str,
+    *,
+    prompt_store: SqlitePromptStore | None = None,
+    locale: str | None = None,
+) -> str:
+    store = prompt_store or SqlitePromptStore()
+    context = PromptContext(
+        locale=locale or "any",
+        address_style="any",
+        tone="any",
+        channel="any",
+        variant="default",
+        policy_tier="safe",
+    )
+    system_template = _get_prompt_template(store, _SYSTEM_PROMPT_KEY, context, _SYSTEM_PROMPT_FALLBACK)
+    user_template = _get_prompt_template(store, _USER_PROMPT_KEY, context, _USER_PROMPT_FALLBACK)
+    user_prompt = _render_user_template(user_template, text)
     return (
         "SYSTEM:\n"
-        f"{_SYSTEM_PROMPT}\n\n"
+        f"{system_template}\n\n"
         "USER:\n"
-        f"{_USER_PROMPT_TEMPLATE.replace('{MESSAGE_TEXT}', text)}"
+        f"{user_prompt}"
     )
 
 
@@ -165,11 +188,23 @@ def dissect_message(
     raw_content = ""
     errors: list[str] = []
     payload: dict[str, Any] = {}
+    store = SqlitePromptStore()
+    context = PromptContext(
+        locale="any",
+        address_style="any",
+        tone="any",
+        channel="any",
+        variant="default",
+        policy_tier="safe",
+    )
+    system_prompt = _get_prompt_template(store, _SYSTEM_PROMPT_KEY, context, _SYSTEM_PROMPT_FALLBACK)
+    user_template = _get_prompt_template(store, _USER_PROMPT_KEY, context, _USER_PROMPT_FALLBACK)
+    user_prompt = _render_user_template(user_template, text)
     try:
         raw_content = str(
             llm_client.complete(
-                system_prompt=_SYSTEM_PROMPT,
-                user_prompt=_USER_PROMPT_TEMPLATE.replace("{MESSAGE_TEXT}", text),
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
             )
         )
     except Exception as exc:
@@ -248,6 +283,24 @@ def _extract_first_json_object(text: str) -> str | None:
             if depth == 0:
                 return text[start : idx + 1]
     return None
+
+
+def _get_prompt_template(
+    store: SqlitePromptStore,
+    key: str,
+    context: PromptContext,
+    fallback: str,
+) -> str:
+    match = store.get_template(key, context)
+    if match and match.template:
+        return str(match.template)
+    return fallback
+
+
+def _render_user_template(template: str, text: str) -> str:
+    if "{MESSAGE_TEXT}" in template:
+        return template.replace("{MESSAGE_TEXT}", text)
+    return template
 
 
 def _coerce_message_map(payload: dict[str, Any], *, text: str) -> MessageMap:
