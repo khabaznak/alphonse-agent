@@ -198,6 +198,66 @@ POST /agent/message
 }
 ```
 
+## Prompts (Prompt Store)
+
+Create prompt template
+```json
+POST /agent/prompts
+{
+  "key": "message_map.system.v1",
+  "locale": "any",
+  "address_style": "any",
+  "tone": "any",
+  "channel": "any",
+  "variant": "default",
+  "policy_tier": "safe",
+  "purpose": "routing",
+  "template": "You are a message dissection engine...",
+  "enabled": true,
+  "priority": 0,
+  "changed_by": "admin",
+  "reason": "initial_seed"
+}
+```
+
+Patch prompt template
+```json
+PATCH /agent/prompts/{template_id}
+{
+  "template": "Updated prompt text",
+  "enabled": true,
+  "priority": 10,
+  "purpose": "routing",
+  "changed_by": "admin",
+  "reason": "tuning"
+}
+```
+
+Get prompt template
+```json
+GET /agent/prompts/{template_id}
+```
+
+List prompt templates
+```json
+GET /agent/prompts?key=message_map.system.v1&enabled_only=true&purpose=routing
+```
+
+Delete prompt template
+```json
+DELETE /agent/prompts/{template_id}
+```
+
+Rollback prompt template
+```json
+POST /agent/prompts/{template_id}/rollback
+{
+  "version": 2,
+  "changed_by": "admin",
+  "reason": "revert"
+}
+```
+
 Send a message that replies to a Telegram user (use reply metadata to capture the user_id)
 ```json
 POST /agent/message
