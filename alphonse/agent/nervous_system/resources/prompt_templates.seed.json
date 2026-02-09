@@ -1,5 +1,105 @@
 [
   {
+    "key": "core.location.current",
+    "locale": "en-US",
+    "address_style": "tu",
+    "tone": "friendly",
+    "channel": "default",
+    "variant": "default",
+    "policy_tier": "default",
+    "template": "Your current location is {location}."
+  },
+  {
+    "key": "core.location.current",
+    "locale": "es-MX",
+    "address_style": "tu",
+    "tone": "friendly",
+    "channel": "default",
+    "variant": "default",
+    "policy_tier": "default",
+    "template": "Tu ubicacion actual es {location}."
+  },
+  {
+    "key": "core.location.current.ask_label",
+    "locale": "en-US",
+    "address_style": "tu",
+    "tone": "friendly",
+    "channel": "default",
+    "variant": "default",
+    "policy_tier": "default",
+    "template": "Which location do you mean: home, work, or other?"
+  },
+  {
+    "key": "core.location.current.ask_label",
+    "locale": "es-MX",
+    "address_style": "tu",
+    "tone": "friendly",
+    "channel": "default",
+    "variant": "default",
+    "policy_tier": "default",
+    "template": "Que ubicacion quieres: casa, trabajo u otra?"
+  },
+  {
+    "key": "core.location.set.ask_label",
+    "locale": "en-US",
+    "address_style": "tu",
+    "tone": "friendly",
+    "channel": "default",
+    "variant": "default",
+    "policy_tier": "default",
+    "template": "Should I save this as home, work, or other?"
+  },
+  {
+    "key": "core.location.set.ask_label",
+    "locale": "es-MX",
+    "address_style": "tu",
+    "tone": "friendly",
+    "channel": "default",
+    "variant": "default",
+    "policy_tier": "default",
+    "template": "Quieres guardarlo como casa, trabajo u otra?"
+  },
+  {
+    "key": "core.location.set.ask_address",
+    "locale": "en-US",
+    "address_style": "tu",
+    "tone": "friendly",
+    "channel": "default",
+    "variant": "default",
+    "policy_tier": "default",
+    "template": "What address should I save?"
+  },
+  {
+    "key": "core.location.set.ask_address",
+    "locale": "es-MX",
+    "address_style": "tu",
+    "tone": "friendly",
+    "channel": "default",
+    "variant": "default",
+    "policy_tier": "default",
+    "template": "Que direccion quieres guardar?"
+  },
+  {
+    "key": "core.location.set.completed",
+    "locale": "en-US",
+    "address_style": "tu",
+    "tone": "friendly",
+    "channel": "default",
+    "variant": "default",
+    "policy_tier": "default",
+    "template": "Saved your {label} location."
+  },
+  {
+    "key": "core.location.set.completed",
+    "locale": "es-MX",
+    "address_style": "tu",
+    "tone": "friendly",
+    "channel": "default",
+    "variant": "default",
+    "policy_tier": "default",
+    "template": "Guarde tu ubicacion de {label}."
+  },
+  {
     "key": "core.greeting",
     "locale": "en",
     "address_style": "any",

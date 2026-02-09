@@ -150,6 +150,16 @@ Ability: list users
 User says: "list users"
 ```
 
+Ability: current location
+```json
+User says: "what's current location"
+```
+
+Ability: set location
+```json
+User says: "my home is avenida vallarta 123"
+```
+
 Delete user
 ```json
 DELETE /agent/users/principal-123

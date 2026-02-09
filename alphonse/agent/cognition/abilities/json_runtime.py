@@ -24,6 +24,12 @@ from alphonse.agent.cognition.preferences.store import (
     set_preference,
 )
 from alphonse.agent.nervous_system.onboarding_profiles import upsert_onboarding_profile
+from alphonse.agent.nervous_system.location_profiles import (
+    insert_device_location,
+    list_device_locations,
+    list_location_profiles,
+    upsert_location_profile,
+)
 from alphonse.agent.nervous_system.users import get_user_by_display_name, list_users, upsert_user
 from alphonse.agent.nervous_system.telegram_invites import update_invite_status
 from alphonse.agent.identity.store import upsert_person, upsert_channel
@@ -133,7 +139,7 @@ def _build_ability_flow_executor(spec: dict[str, Any]):
                 _merge_pending_result(params, pending.key, resolution.result or {})
                 ability_state["pending_param"] = None
                 state["pending_interaction"] = None
-        _extract_params_from_text(params, parameters, last_text)
+        _extract_params_from_text(params, parameters, last_text, state)
         missing = _missing_required_params(params, parameters)
         if missing:
             next_param = missing[0]
@@ -150,11 +156,12 @@ def _build_ability_flow_executor(spec: dict[str, Any]):
             }
         step_result = _execute_steps(steps, params, state)
         if isinstance(step_result, dict) and step_result.get("response_key"):
+            pending_interaction = step_result.get("pending_interaction")
             return {
                 "response_key": step_result.get("response_key"),
                 "response_vars": step_result.get("response_vars") or {},
-                "pending_interaction": None,
-                "ability_state": {},
+                "pending_interaction": pending_interaction,
+                "ability_state": ability_state if pending_interaction else {},
             }
         response_key = str(outputs.get("success") or "ack.confirmed")
         response_vars = dict(step_result.get("response_vars") or {})
@@ -226,6 +233,7 @@ def _extract_params_from_text(
     params: dict[str, Any],
     parameters: list[dict[str, Any]],
     text: str,
+    state: dict[str, Any],
 ) -> None:
     if not text:
         return
@@ -259,6 +267,14 @@ def _extract_params_from_text(
         chat_id = state.get("channel_target") or state.get("chat_id")
         if chat_id:
             params.setdefault("channel_address", str(chat_id))
+    if "label" in missing_required:
+        label = _extract_location_label(text)
+        if label:
+            params.setdefault("label", label)
+    if "address_text" in missing_required:
+        address = _extract_address_text(text)
+        if address:
+            params.setdefault("address_text", address)
 
 
 def _param_type(parameters: list[dict[str, Any]], key: str) -> str:
@@ -351,6 +367,31 @@ def _extract_channel_address(text: str) -> str | None:
     if len(digits) >= 5:
         return digits
     return None
+
+
+def _extract_location_label(text: str) -> str | None:
+    normalized = text.lower()
+    mapping = {
+        "home": "home",
+        "house": "home",
+        "casa": "home",
+        "work": "work",
+        "office": "work",
+        "trabajo": "work",
+        "other": "other",
+        "otra": "other",
+    }
+    for key, value in mapping.items():
+        if key in normalized:
+            return value
+    return None
+
+
+def _extract_address_text(text: str) -> str | None:
+    stripped = text.strip()
+    if len(stripped) < 6:
+        return None
+    return stripped
 
 
 def _execute_steps(steps: list[dict[str, Any]], params: dict[str, Any], state: dict[str, Any]) -> dict[str, Any]:
@@ -494,6 +535,57 @@ def _execute_steps(steps: list[dict[str, Any]], params: dict[str, Any], state: d
                     bits.append(admin)
                 lines.append(" - ".join(bits))
             return {"response_key": "core.users.list", "response_vars": {"lines": lines}}
+        if action == "location.current":
+            principal_id = _principal_id_from_state(state)
+            label = str(params.get("label") or "").strip().lower() or None
+            location_text = None
+            if principal_id:
+                device = list_device_locations(principal_id=principal_id, limit=1)
+                if device:
+                    entry = device[0]
+                    location_text = f"{entry.get('latitude')}, {entry.get('longitude')}"
+            if not location_text and principal_id and label:
+                profiles = list_location_profiles(principal_id=principal_id, label=label, active_only=True, limit=1)
+                if profiles:
+                    profile = profiles[0]
+                    location_text = profile.get("address_text") or f"{profile.get('latitude')}, {profile.get('longitude')}"
+            if not location_text:
+                pending = build_pending_interaction(
+                    PendingInteractionType.SLOT_FILL,
+                    key="label",
+                    context={"ability_intent": "core.location.current", "param": "label"},
+                )
+                return {
+                    "response_key": "core.location.current.ask_label",
+                    "pending_interaction": serialize_pending_interaction(pending),
+                }
+            return {
+                "response_key": "core.location.current",
+                "response_vars": {"location": location_text},
+            }
+        if action == "location.set":
+            principal_id = _principal_id_from_state(state)
+            if not principal_id:
+                return {"response_key": "generic.unknown"}
+            label = str(params.get("label") or "").strip().lower()
+            if label not in {"home", "work", "other"}:
+                return {"response_key": "core.location.set.ask_label"}
+            address_text = str(params.get("address_text") or "").strip()
+            if not address_text:
+                return {"response_key": "core.location.set.ask_address"}
+            upsert_location_profile(
+                {
+                    "principal_id": principal_id,
+                    "label": label,
+                    "address_text": address_text,
+                    "source": "user",
+                    "confidence": 0.9,
+                }
+            )
+            return {
+                "response_key": "core.location.set.completed",
+                "response_vars": {"label": label},
+            }
     return {}
 
 

@@ -1,5 +1,67 @@
 [
   {
+    "intent_name": "core.location.current",
+    "kind": "ability_flow",
+    "tools": [],
+    "input_parameters": [
+      {
+        "name": "label",
+        "type": "location_label",
+        "description": "Location label (home, work, other)",
+        "required": false,
+        "order": 1
+      }
+    ],
+    "prompts": {
+      "label": "core.location.current.ask_label"
+    },
+    "step_sequence": [
+      {
+        "order": 1,
+        "action": "location.current",
+        "input": ["label"]
+      }
+    ],
+    "outputs": {
+      "success": "core.location.current"
+    }
+  },
+  {
+    "intent_name": "core.location.set",
+    "kind": "ability_flow",
+    "tools": [],
+    "input_parameters": [
+      {
+        "name": "label",
+        "type": "location_label",
+        "description": "Location label (home, work, other)",
+        "required": true,
+        "order": 1
+      },
+      {
+        "name": "address_text",
+        "type": "address_text",
+        "description": "Address to store",
+        "required": true,
+        "order": 2
+      }
+    ],
+    "prompts": {
+      "label": "core.location.set.ask_label",
+      "address_text": "core.location.set.ask_address"
+    },
+    "step_sequence": [
+      {
+        "order": 1,
+        "action": "location.set",
+        "input": ["label", "address_text"]
+      }
+    ],
+    "outputs": {
+      "success": "core.location.set.completed"
+    }
+  },
+  {
     "intent_name": "core.users.list",
     "kind": "ability_flow",
     "tools": [],
