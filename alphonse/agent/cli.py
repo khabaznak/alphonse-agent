@@ -247,9 +247,9 @@ def build_parser() -> argparse.ArgumentParser:
     catalog_prompt.add_argument("--text", required=True, help="User message to render")
     catalog_prompt.add_argument(
         "--mode",
-        choices=("map", "legacy"),
+        choices=("map",),
         default="map",
-        help="Prompt mode: map (default runtime) or legacy detector",
+        help="Prompt mode: map (default runtime)",
     )
     catalog_template = catalog_sub.add_parser("template", help="Show prompt template by key")
     catalog_template.add_argument("key", help="Prompt template key")
@@ -857,17 +857,6 @@ def _command_catalog(args: argparse.Namespace) -> None:
         return
 
     if args.catalog_command == "prompt":
-        if args.mode == "legacy":
-            from alphonse.agent.cognition.intent_detector_llm import build_detector_prompt
-
-            service = get_catalog_service()
-            prompt = build_detector_prompt(args.text, service)
-            if prompt is None:
-                print("No enabled intents; prompt not available.")
-                return
-            print("Mode: legacy")
-            print(prompt)
-            return
         from alphonse.agent.cognition.message_map_llm import build_message_map_prompt
 
         prompt = build_message_map_prompt(args.text)
@@ -961,28 +950,12 @@ def _command_debug_wiring() -> None:
 
 
 def _command_debug_intent(args: argparse.Namespace) -> None:
-    from alphonse.agent.cognition.intent_catalog import get_catalog_service
-    from alphonse.agent.cognition.intent_detector_llm import IntentDetectorLLM
+    from alphonse.agent.cognition.message_map_llm import build_message_map_prompt
 
     text = " ".join(args.text)
-    service = get_catalog_service()
-    detector = IntentDetectorLLM(service)
-    detection = detector.detect(text, llm_client=None)
-    print("Intent routing (catalog):")
-    if not detection:
-        print("- intent: unknown")
-        print("- category: task_plane")
-        print("- confidence: 0.00")
-        print("- rationale: catalog_unavailable_or_no_match")
-        print("- needs_clarification: True")
-        return
-    spec = service.get_intent(detection.intent_name)
-    category = spec.category if spec else "task_plane"
-    print(f"- intent: {detection.intent_name}")
-    print(f"- category: {category}")
-    print(f"- confidence: {detection.confidence:.2f}")
-    print("- rationale: catalog_detector")
-    print(f"- needs_clarification: {detection.needs_clarification}")
+    prompt = build_message_map_prompt(text)
+    print("Intent routing (map prompt):")
+    print(prompt)
 
 
 def _command_agent(args: argparse.Namespace, *, supervisor: "AgentSupervisor | None") -> None:
