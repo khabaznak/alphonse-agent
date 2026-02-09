@@ -1680,41 +1680,6 @@ def _command_terminal(args: argparse.Namespace) -> None:
                 return
             print(json.dumps(item, indent=2, ensure_ascii=True))
             return
-
-
-def _command_telegram(args: argparse.Namespace) -> None:
-    if args.telegram_command != "invites":
-        return
-    from alphonse.agent.nervous_system.telegram_invites import (
-        get_invite,
-        list_invites,
-        update_invite_status,
-    )
-
-    if args.telegram_invites_command == "list":
-        rows = list_invites(status=args.status, limit=args.limit)
-        if not rows:
-            print("No telegram invites found.")
-            return
-        for row in rows:
-            print(
-                f"- {row.get('chat_id')} status={row.get('status')} from={row.get('from_user_name')}"
-            )
-        return
-    if args.telegram_invites_command == "show":
-        item = get_invite(args.chat_id)
-        if not item:
-            print("Invite not found.")
-            return
-        print(json.dumps(item, indent=2, ensure_ascii=True))
-        return
-    if args.telegram_invites_command == "update":
-        item = update_invite_status(args.chat_id, args.status)
-        if not item:
-            print("Invite not found.")
-            return
-        print(json.dumps(item, indent=2, ensure_ascii=True))
-        return
         if args.terminal_commands_command == "create":
             session_id = args.session_id
             if not session_id:
@@ -1765,6 +1730,41 @@ def _command_telegram(args: argparse.Namespace) -> None:
                 return
             print(json.dumps(item, indent=2, ensure_ascii=True))
             return
+
+
+def _command_telegram(args: argparse.Namespace) -> None:
+    if args.telegram_command != "invites":
+        return
+    from alphonse.agent.nervous_system.telegram_invites import (
+        get_invite,
+        list_invites,
+        update_invite_status,
+    )
+
+    if args.telegram_invites_command == "list":
+        rows = list_invites(status=args.status, limit=args.limit)
+        if not rows:
+            print("No telegram invites found.")
+            return
+        for row in rows:
+            print(
+                f"- {row.get('chat_id')} status={row.get('status')} from={row.get('from_user_name')}"
+            )
+        return
+    if args.telegram_invites_command == "show":
+        item = get_invite(args.chat_id)
+        if not item:
+            print("Invite not found.")
+            return
+        print(json.dumps(item, indent=2, ensure_ascii=True))
+        return
+    if args.telegram_invites_command == "update":
+        item = update_invite_status(args.chat_id, args.status)
+        if not item:
+            print("Invite not found.")
+            return
+        print(json.dumps(item, indent=2, ensure_ascii=True))
+        return
 
 
 def _conversation_key_from_args(channel_type: str, channel_id: str) -> str:

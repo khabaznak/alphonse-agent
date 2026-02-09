@@ -647,9 +647,11 @@ def seed_default_intents(db_path: str | None = None) -> None:
             category="core_conversational",
             description="Tell the current or labeled location.",
             examples=[
+                "location",
                 "what's current location",
                 "where am I",
                 "current location",
+                "ubicación",
                 "ubicacion actual",
                 "donde estoy",
             ],
