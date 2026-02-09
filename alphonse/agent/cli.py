@@ -422,6 +422,9 @@ def build_parser() -> argparse.ArgumentParser:
     tool_configs_delete = tool_configs_sub.add_parser("delete", help="Delete tool config")
     tool_configs_delete.add_argument("config_id")
 
+    terminal_parser = sub.add_parser("terminal", help="Terminal sandbox + command utilities")
+    terminal_sub = terminal_parser.add_subparsers(dest="terminal_command", required=True)
+
     terminal_executor = terminal_sub.add_parser(
         "executor",
         help="Toggle terminal executor via tool-configs",
@@ -430,9 +433,6 @@ def build_parser() -> argparse.ArgumentParser:
     terminal_executor.add_argument("--poll-seconds", type=float, default=None)
     terminal_executor.add_argument("--timeout-seconds", type=float, default=None)
     terminal_executor.add_argument("--batch", type=int, default=None)
-
-    terminal_parser = sub.add_parser("terminal", help="Terminal sandbox + command utilities")
-    terminal_sub = terminal_parser.add_subparsers(dest="terminal_command", required=True)
 
     terminal_sandboxes = terminal_sub.add_parser("sandboxes", help="Terminal sandboxes CRUD")
     terminal_sandboxes_sub = terminal_sandboxes.add_subparsers(dest="terminal_sandboxes_command", required=True)
