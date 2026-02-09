@@ -23,6 +23,8 @@ from alphonse.agent.cognition.preferences.store import (
     get_preference,
     set_preference,
 )
+from alphonse.agent.cognition.routing_primitives import extract_preference_updates
+from alphonse.agent.cognition.status_summaries import summarize_capabilities
 from alphonse.agent.nervous_system.onboarding_profiles import upsert_onboarding_profile
 from alphonse.agent.nervous_system.location_profiles import (
     insert_device_location,
@@ -155,6 +157,16 @@ def _build_ability_flow_executor(spec: dict[str, Any]):
                 "ability_state": ability_state,
             }
         step_result = _execute_steps(steps, params, state)
+        if isinstance(step_result, dict) and step_result.get("response_text"):
+            pending_interaction = step_result.get("pending_interaction")
+            return {
+                "response_text": step_result.get("response_text"),
+                "response_key": None,
+                "response_vars": step_result.get("response_vars") or {},
+                "pending_interaction": pending_interaction,
+                "ability_state": ability_state if pending_interaction else {},
+                "plans": step_result.get("plans") or [],
+            }
         if isinstance(step_result, dict) and step_result.get("response_key"):
             pending_interaction = step_result.get("pending_interaction")
             return {
@@ -162,6 +174,7 @@ def _build_ability_flow_executor(spec: dict[str, Any]):
                 "response_vars": step_result.get("response_vars") or {},
                 "pending_interaction": pending_interaction,
                 "ability_state": ability_state if pending_interaction else {},
+                "plans": step_result.get("plans") or [],
             }
         response_key = str(outputs.get("success") or "ack.confirmed")
         response_vars = dict(step_result.get("response_vars") or {})
@@ -550,6 +563,40 @@ def _execute_steps(steps: list[dict[str, Any]], params: dict[str, Any], state: d
                     bits.append(admin)
                 lines.append(" - ".join(bits))
             return {"response_key": "core.users.list", "response_vars": {"lines": lines}}
+        if action == "greeting":
+            return {"response_key": "core.greeting"}
+        if action == "help":
+            return {"response_key": "help"}
+        if action == "status":
+            return {"response_key": "status"}
+        if action == "cancel":
+            return {"response_key": "ack.cancelled"}
+        if action == "meta.capabilities":
+            locale = str(state.get("locale") or "en-US")
+            return {"response_text": summarize_capabilities(locale)}
+        if action == "update_preferences":
+            updates = extract_preference_updates(state.get("last_user_message", ""))
+            if not updates:
+                return {"response_key": "preference.missing"}
+            channel_type = state.get("channel_type")
+            channel_id = state.get("channel_target") or state.get("chat_id")
+            if not channel_type or not channel_id:
+                return {"response_key": "preference.no_channel"}
+            plan = CortexPlan(
+                plan_type=PlanType.UPDATE_PREFERENCES,
+                payload={
+                    "principal": {
+                        "channel_type": str(channel_type),
+                        "channel_id": str(channel_id),
+                    },
+                    "updates": updates,
+                },
+            )
+            return {
+                "response_key": "ack.preference_updated",
+                "response_vars": {"updates": updates},
+                "plans": [plan.model_dump()],
+            }
         if action == "location.current":
             principal_id = _principal_id_from_state(state)
             label = str(params.get("label") or "").strip().lower() or None

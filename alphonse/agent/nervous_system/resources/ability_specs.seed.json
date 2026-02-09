@@ -78,6 +78,102 @@
     }
   },
   {
+    "intent_name": "greeting",
+    "kind": "ability_flow",
+    "tools": [],
+    "input_parameters": [],
+    "step_sequence": [
+      {
+        "order": 1,
+        "action": "greeting",
+        "input": []
+      }
+    ],
+    "outputs": {
+      "success": "core.greeting"
+    }
+  },
+  {
+    "intent_name": "help",
+    "kind": "ability_flow",
+    "tools": [],
+    "input_parameters": [],
+    "step_sequence": [
+      {
+        "order": 1,
+        "action": "help",
+        "input": []
+      }
+    ],
+    "outputs": {
+      "success": "help"
+    }
+  },
+  {
+    "intent_name": "get_status",
+    "kind": "ability_flow",
+    "tools": [],
+    "input_parameters": [],
+    "step_sequence": [
+      {
+        "order": 1,
+        "action": "status",
+        "input": []
+      }
+    ],
+    "outputs": {
+      "success": "status"
+    }
+  },
+  {
+    "intent_name": "meta.capabilities",
+    "kind": "ability_flow",
+    "tools": [],
+    "input_parameters": [],
+    "step_sequence": [
+      {
+        "order": 1,
+        "action": "meta.capabilities",
+        "input": []
+      }
+    ],
+    "outputs": {
+      "success": "meta.capabilities"
+    }
+  },
+  {
+    "intent_name": "update_preferences",
+    "kind": "ability_flow",
+    "tools": [],
+    "input_parameters": [],
+    "step_sequence": [
+      {
+        "order": 1,
+        "action": "update_preferences",
+        "input": []
+      }
+    ],
+    "outputs": {
+      "success": "ack.preference_updated"
+    }
+  },
+  {
+    "intent_name": "cancel",
+    "kind": "ability_flow",
+    "tools": [],
+    "input_parameters": [],
+    "step_sequence": [
+      {
+        "order": 1,
+        "action": "cancel",
+        "input": []
+      }
+    ],
+    "outputs": {
+      "success": "ack.cancelled"
+    }
+  },
+  {
     "intent_name": "time.current",
     "kind": "tool_call_then_response",
     "tools": ["clock"],
