@@ -322,6 +322,28 @@ POST /agent/terminal/commands/{command_id}/finalize
 }
 ```
 
+## Terminal CLI
+
+List sandboxes
+```bash
+python -m alphonse.agent.cli terminal sandboxes list --owner-principal-id principal-123
+```
+
+Create sandbox
+```bash
+python -m alphonse.agent.cli terminal sandboxes upsert --owner-principal-id principal-123 --label Projects --path /Users/alex/Projects
+```
+
+Create command
+```bash
+python -m alphonse.agent.cli terminal commands create --principal-id principal-123 --sandbox-id sandbox-1 --command "ls -la" --cwd .
+```
+
+Approve command
+```bash
+python -m alphonse.agent.cli terminal commands approve <command_id> --approved-by principal-123
+```
+
 ## Locations (home/work/other)
 
 Create or update location

@@ -57,6 +57,19 @@ from alphonse.agent.cognition.preferences.store import (
     get_principal_for_channel,
 )
 from alphonse.agent.nervous_system.users import list_users
+from alphonse.agent.nervous_system.terminal_tools import (
+    create_terminal_command,
+    create_terminal_session,
+    delete_terminal_sandbox,
+    get_terminal_command,
+    get_terminal_sandbox,
+    list_terminal_commands,
+    list_terminal_sandboxes,
+    patch_terminal_sandbox,
+    record_terminal_command_output,
+    update_terminal_command_status,
+    upsert_terminal_sandbox,
+)
 from alphonse.agent.nervous_system.location_profiles import (
     delete_location_profile,
     get_location_profile,
@@ -407,6 +420,59 @@ def build_parser() -> argparse.ArgumentParser:
     tool_configs_delete = tool_configs_sub.add_parser("delete", help="Delete tool config")
     tool_configs_delete.add_argument("config_id")
 
+    terminal_parser = sub.add_parser("terminal", help="Terminal sandbox + command utilities")
+    terminal_sub = terminal_parser.add_subparsers(dest="terminal_command", required=True)
+
+    terminal_sandboxes = terminal_sub.add_parser("sandboxes", help="Terminal sandboxes CRUD")
+    terminal_sandboxes_sub = terminal_sandboxes.add_subparsers(dest="terminal_sandboxes_command", required=True)
+    terminal_sandboxes_list = terminal_sandboxes_sub.add_parser("list", help="List terminal sandboxes")
+    terminal_sandboxes_list.add_argument("--owner-principal-id", default=None)
+    terminal_sandboxes_list.add_argument("--active-only", action="store_true")
+    terminal_sandboxes_list.add_argument("--limit", type=int, default=200)
+    terminal_sandboxes_show = terminal_sandboxes_sub.add_parser("show", help="Show terminal sandbox")
+    terminal_sandboxes_show.add_argument("sandbox_id")
+    terminal_sandboxes_upsert = terminal_sandboxes_sub.add_parser("upsert", help="Create/update sandbox")
+    terminal_sandboxes_upsert.add_argument("--sandbox-id", default=None)
+    terminal_sandboxes_upsert.add_argument("--owner-principal-id", required=True)
+    terminal_sandboxes_upsert.add_argument("--label", required=True)
+    terminal_sandboxes_upsert.add_argument("--path", required=True)
+    terminal_sandboxes_upsert.add_argument("--inactive", action="store_true")
+    terminal_sandboxes_patch = terminal_sandboxes_sub.add_parser("patch", help="Patch sandbox")
+    terminal_sandboxes_patch.add_argument("sandbox_id")
+    terminal_sandboxes_patch.add_argument("--label", default=None)
+    terminal_sandboxes_patch.add_argument("--path", default=None)
+    terminal_sandboxes_patch.add_argument("--inactive", action="store_true")
+    terminal_sandboxes_delete = terminal_sandboxes_sub.add_parser("delete", help="Delete sandbox")
+    terminal_sandboxes_delete.add_argument("sandbox_id")
+
+    terminal_commands = terminal_sub.add_parser("commands", help="Terminal commands CRUD")
+    terminal_commands_sub = terminal_commands.add_subparsers(dest="terminal_commands_command", required=True)
+    terminal_commands_list = terminal_commands_sub.add_parser("list", help="List terminal commands")
+    terminal_commands_list.add_argument("--session-id", default=None)
+    terminal_commands_list.add_argument("--status", default=None)
+    terminal_commands_list.add_argument("--limit", type=int, default=200)
+    terminal_commands_show = terminal_commands_sub.add_parser("show", help="Show terminal command")
+    terminal_commands_show.add_argument("command_id")
+    terminal_commands_create = terminal_commands_sub.add_parser("create", help="Create terminal command")
+    terminal_commands_create.add_argument("--session-id", default=None)
+    terminal_commands_create.add_argument("--principal-id", required=True)
+    terminal_commands_create.add_argument("--sandbox-id", required=True)
+    terminal_commands_create.add_argument("--command", required=True)
+    terminal_commands_create.add_argument("--cwd", default=".")
+    terminal_commands_create.add_argument("--requested-by", default=None)
+    terminal_commands_approve = terminal_commands_sub.add_parser("approve", help="Approve terminal command")
+    terminal_commands_approve.add_argument("command_id")
+    terminal_commands_approve.add_argument("--approved-by", default=None)
+    terminal_commands_reject = terminal_commands_sub.add_parser("reject", help="Reject terminal command")
+    terminal_commands_reject.add_argument("command_id")
+    terminal_commands_reject.add_argument("--approved-by", default=None)
+    terminal_commands_finalize = terminal_commands_sub.add_parser("finalize", help="Finalize command output")
+    terminal_commands_finalize.add_argument("command_id")
+    terminal_commands_finalize.add_argument("--stdout", default=None)
+    terminal_commands_finalize.add_argument("--stderr", default=None)
+    terminal_commands_finalize.add_argument("--exit-code", type=int, default=None)
+    terminal_commands_finalize.add_argument("--status", default="executed")
+
     return parser
 
 
@@ -513,6 +579,9 @@ def _dispatch_command(
         return
     if args.command == "tool-configs":
         _command_tool_configs(args)
+        return
+    if args.command == "terminal":
+        _command_terminal(args)
         return
     if args.command == "repl":
         _command_repl(parser, db_path)
@@ -1473,6 +1542,142 @@ def _command_tool_configs(args: argparse.Namespace) -> None:
             return
         print(f"Deleted tool config: {args.config_id}")
         return
+
+
+def _command_terminal(args: argparse.Namespace) -> None:
+    if args.terminal_command == "sandboxes":
+        if args.terminal_sandboxes_command == "list":
+            rows = list_terminal_sandboxes(
+                owner_principal_id=args.owner_principal_id,
+                active_only=args.active_only,
+                limit=args.limit,
+            )
+            if not rows:
+                print("No terminal sandboxes found.")
+                return
+            for row in rows:
+                state = "active" if row.get("is_active") else "inactive"
+                print(
+                    f"- {row.get('sandbox_id')} owner={row.get('owner_principal_id')} "
+                    f"label={row.get('label')} path={row.get('path')} {state}"
+                )
+            return
+        if args.terminal_sandboxes_command == "show":
+            item = get_terminal_sandbox(args.sandbox_id)
+            if not item:
+                print("Terminal sandbox not found.")
+                return
+            print(json.dumps(item, indent=2, ensure_ascii=True))
+            return
+        if args.terminal_sandboxes_command == "upsert":
+            sandbox_id = upsert_terminal_sandbox(
+                {
+                    "sandbox_id": args.sandbox_id,
+                    "owner_principal_id": args.owner_principal_id,
+                    "label": args.label,
+                    "path": args.path,
+                    "is_active": not args.inactive,
+                }
+            )
+            print(f"Upserted terminal sandbox: {sandbox_id}")
+            return
+        if args.terminal_sandboxes_command == "patch":
+            item = patch_terminal_sandbox(
+                args.sandbox_id,
+                {
+                    "label": args.label,
+                    "path": args.path,
+                    "is_active": None if not args.inactive else False,
+                },
+            )
+            if not item:
+                print("Terminal sandbox not found.")
+                return
+            print(json.dumps(item, indent=2, ensure_ascii=True))
+            return
+        if args.terminal_sandboxes_command == "delete":
+            ok = delete_terminal_sandbox(args.sandbox_id)
+            if not ok:
+                print("Terminal sandbox not found.")
+                return
+            print(f"Deleted terminal sandbox: {args.sandbox_id}")
+            return
+
+    if args.terminal_command == "commands":
+        if args.terminal_commands_command == "list":
+            rows = list_terminal_commands(
+                session_id=args.session_id,
+                status=args.status,
+                limit=args.limit,
+            )
+            if not rows:
+                print("No terminal commands found.")
+                return
+            for row in rows:
+                print(
+                    f"- {row.get('command_id')} session={row.get('session_id')} "
+                    f"status={row.get('status')} cwd={row.get('cwd')} cmd={row.get('command')}"
+                )
+            return
+        if args.terminal_commands_command == "show":
+            item = get_terminal_command(args.command_id)
+            if not item:
+                print("Terminal command not found.")
+                return
+            print(json.dumps(item, indent=2, ensure_ascii=True))
+            return
+        if args.terminal_commands_command == "create":
+            session_id = args.session_id
+            if not session_id:
+                session_id = create_terminal_session(
+                    {
+                        "principal_id": args.principal_id,
+                        "sandbox_id": args.sandbox_id,
+                        "status": "pending",
+                    }
+                )
+            command_id = create_terminal_command(
+                {
+                    "session_id": session_id,
+                    "command": args.command,
+                    "cwd": args.cwd,
+                    "requested_by": args.requested_by,
+                    "status": "pending",
+                }
+            )
+            print(f"Created terminal command: {command_id} (session {session_id})")
+            return
+        if args.terminal_commands_command == "approve":
+            item = update_terminal_command_status(
+                args.command_id, "approved", approved_by=args.approved_by
+            )
+            if not item:
+                print("Terminal command not found.")
+                return
+            print(json.dumps(item, indent=2, ensure_ascii=True))
+            return
+        if args.terminal_commands_command == "reject":
+            item = update_terminal_command_status(
+                args.command_id, "rejected", approved_by=args.approved_by
+            )
+            if not item:
+                print("Terminal command not found.")
+                return
+            print(json.dumps(item, indent=2, ensure_ascii=True))
+            return
+        if args.terminal_commands_command == "finalize":
+            item = record_terminal_command_output(
+                args.command_id,
+                stdout=args.stdout,
+                stderr=args.stderr,
+                exit_code=args.exit_code,
+                status=args.status,
+            )
+            if not item:
+                print("Terminal command not found.")
+                return
+            print(json.dumps(item, indent=2, ensure_ascii=True))
+            return
 
 
 def _conversation_key_from_args(channel_type: str, channel_id: str) -> str:
