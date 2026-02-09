@@ -512,7 +512,11 @@ def _prefill_params(params: dict[str, Any], parameters: list[dict[str, Any]], st
                 if existing:
                     params[name] = existing
         if name == "channel_provider":
-            params[name] = "telegram"
+            channel_hint = str(state.get("channel_type") or "").strip().lower()
+            if channel_hint:
+                params[name] = channel_hint
+            else:
+                params[name] = "telegram"
         if name == "channel_address":
             reply_id = state.get("incoming_reply_to_user_id")
             if reply_id:

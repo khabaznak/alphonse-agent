@@ -107,12 +107,20 @@
         "description": "Household role",
         "required": false,
         "order": 3
+      },
+      {
+        "name": "channel_provider",
+        "type": "channel_provider",
+        "description": "Channel provider (telegram, discord, etc)",
+        "required": true,
+        "order": 4
       }
     ],
     "prompts": {
       "display_name": "core.onboarding.secondary.ask_name",
       "relationship": "core.onboarding.secondary.ask_relationship",
-      "role": "core.onboarding.secondary.ask_role"
+      "role": "core.onboarding.secondary.ask_role",
+      "channel_provider": "core.onboarding.authorize.ask_channel_type"
     },
     "step_sequence": [
       {
