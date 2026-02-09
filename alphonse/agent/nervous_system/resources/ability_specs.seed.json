@@ -426,5 +426,91 @@
     "outputs": {
       "success": "core.identity.user.known"
     }
+  },
+  {
+    "intent_name": "core.identity.query_agent_name",
+    "kind": "ability_flow",
+    "tools": [],
+    "input_parameters": [],
+    "step_sequence": [
+      {
+        "order": 1,
+        "action": "identity.agent",
+        "input": []
+      }
+    ],
+    "outputs": {
+      "success": "core.identity.agent"
+    }
+  },
+  {
+    "intent_name": "onboarding.location.set_home",
+    "kind": "ability_flow",
+    "tools": [],
+    "input_parameters": [
+      {
+        "name": "label",
+        "type": "location_label",
+        "description": "Location label (home, work, other)",
+        "required": false,
+        "order": 1,
+        "default": "home"
+      },
+      {
+        "name": "address_text",
+        "type": "address_text",
+        "description": "Address to store",
+        "required": true,
+        "order": 2
+      }
+    ],
+    "prompts": {
+      "address_text": "core.location.set.ask_address"
+    },
+    "step_sequence": [
+      {
+        "order": 1,
+        "action": "location.set_geocode",
+        "input": ["label", "address_text"]
+      }
+    ],
+    "outputs": {
+      "success": "ack.location.saved"
+    }
+  },
+  {
+    "intent_name": "onboarding.location.set_work",
+    "kind": "ability_flow",
+    "tools": [],
+    "input_parameters": [
+      {
+        "name": "label",
+        "type": "location_label",
+        "description": "Location label (home, work, other)",
+        "required": false,
+        "order": 1,
+        "default": "work"
+      },
+      {
+        "name": "address_text",
+        "type": "address_text",
+        "description": "Address to store",
+        "required": true,
+        "order": 2
+      }
+    ],
+    "prompts": {
+      "address_text": "core.location.set.ask_address"
+    },
+    "step_sequence": [
+      {
+        "order": 1,
+        "action": "location.set_geocode",
+        "input": ["label", "address_text"]
+      }
+    ],
+    "outputs": {
+      "success": "ack.location.saved"
+    }
   }
 ]

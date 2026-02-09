@@ -32,6 +32,7 @@ from alphonse.agent.nervous_system.location_profiles import (
     list_location_profiles,
     upsert_location_profile,
 )
+from alphonse.agent.nervous_system.senses.location import LocationSense
 from alphonse.agent.nervous_system.users import get_user_by_display_name, list_users, upsert_user
 from alphonse.agent.nervous_system.telegram_invites import update_invite_status
 from alphonse.agent.identity.store import upsert_person, upsert_channel
@@ -597,6 +598,8 @@ def _execute_steps(steps: list[dict[str, Any]], params: dict[str, Any], state: d
                 "response_vars": {"updates": updates},
                 "plans": [plan.model_dump()],
             }
+        if action == "identity.agent":
+            return {"response_key": "core.identity.agent"}
         if action == "location.current":
             principal_id = _principal_id_from_state(state)
             label = str(params.get("label") or "").strip().lower() or None
@@ -655,10 +658,46 @@ def _execute_steps(steps: list[dict[str, Any]], params: dict[str, Any], state: d
                 "response_key": "core.location.set.completed",
                 "response_vars": {"label": label},
             }
+        if action == "location.set_geocode":
+            principal_id = _principal_id_from_state(state)
+            if not principal_id:
+                return {"response_key": "generic.unknown"}
+            label = _normalize_location_label(params.get("label")) or str(params.get("label") or "").strip().lower()
+            if label not in {"home", "work", "other"}:
+                return {"response_key": "core.location.set.ask_label"}
+            address_text = str(params.get("address_text") or "").strip()
+            if not address_text:
+                return {"response_key": "core.location.set.ask_address"}
+            locale = str(state.get("locale") or "")
+            language = "es" if locale.startswith("es") else "en"
+            sense = LocationSense()
+            try:
+                sense.ingest_address(
+                    principal_id=principal_id,
+                    label=label,
+                    address_text=address_text,
+                    source="user",
+                    language=language,
+                )
+            except Exception:
+                return {"response_key": "generic.unknown"}
+            return {
+                "response_key": "ack.location.saved",
+                "response_vars": {"label": label},
+            }
     return {}
 
 
 def _prefill_params(params: dict[str, Any], parameters: list[dict[str, Any]], state: dict[str, Any]) -> None:
+    slots = state.get("slots")
+    if isinstance(slots, dict):
+        for key, value in slots.items():
+            if key not in params:
+                params[key] = value
+        if "label" in params:
+            normalized = _normalize_location_label(params.get("label"))
+            if normalized:
+                params["label"] = normalized
     for param in parameters:
         name = str(param.get("name") or "")
         if not name or name in params:

@@ -824,17 +824,8 @@ def _ability_registry() -> AbilityRegistry:
     registry = AbilityRegistry()
     for ability in load_json_abilities():
         registry.register(ability)
-    _register_fallback_ability(registry, Ability("core.identity.query_agent_name", tuple(), _ability_identity_agent))
     _register_fallback_ability(registry, Ability("timed_signals.list", tuple(), _ability_timed_signals_list))
     _register_fallback_ability(registry, Ability("timed_signals.create", tuple(), _ability_noop))
-    _register_fallback_ability(
-        registry,
-        Ability("onboarding.location.set_home", ("geocoder",), _ability_set_home_location),
-    )
-    _register_fallback_ability(
-        registry,
-        Ability("onboarding.location.set_work", ("geocoder",), _ability_set_work_location),
-    )
     _register_fallback_ability(registry, Ability("lan.arm", tuple(), _ability_lan_arm))
     _register_fallback_ability(registry, Ability("lan.disarm", tuple(), _ability_lan_disarm))
     _register_fallback_ability(registry, Ability("pair.approve", tuple(), _ability_pair_approve))
