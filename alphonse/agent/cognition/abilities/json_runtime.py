@@ -242,10 +242,10 @@ def _extract_params_from_text(
         param_type = _param_type(parameters, key)
         if param_type == "person_name" and _looks_like_name(text):
             params.setdefault(key, text)
-    if "channel_type" in missing_required:
-        channel_type = _extract_channel_type(text)
-        if channel_type:
-            params.setdefault("channel_type", channel_type)
+    if "channel_provider" in missing_required:
+        channel_provider = _extract_channel_type(text)
+        if channel_provider:
+            params.setdefault("channel_provider", channel_provider)
     if "channel_address" in missing_required:
         channel_address = _extract_channel_address(text)
         if channel_address:
@@ -426,7 +426,7 @@ def _execute_steps(steps: list[dict[str, Any]], params: dict[str, Any], state: d
                     "response_key": "core.onboarding.authorize.user_not_found",
                     "response_vars": {"user_name": display_name},
                 }
-            channel_type = str(params.get("channel_type") or "telegram").strip()
+            channel_provider = str(params.get("channel_provider") or "telegram").strip()
             channel_address = str(params.get("channel_address") or "").strip()
             if not channel_address:
                 channel_address = str(state.get("incoming_reply_to_user_id") or "").strip()
@@ -444,11 +444,11 @@ def _execute_steps(steps: list[dict[str, Any]], params: dict[str, Any], state: d
                         "is_active": user.get("is_active", True),
                     }
                 )
-                channel_id = f"{channel_type}:{channel_address}"
+                channel_id = f"{channel_provider}:{channel_address}"
                 upsert_channel(
                     {
                         "channel_id": channel_id,
-                        "channel_type": channel_type,
+                        "channel_type": channel_provider,
                         "person_id": person_id,
                         "address": channel_address,
                         "is_enabled": True,
@@ -458,7 +458,7 @@ def _execute_steps(steps: list[dict[str, Any]], params: dict[str, Any], state: d
             return {
                 "response_vars": {
                     "user_name": display_name,
-                    "channel_type": channel_type,
+                    "channel_provider": channel_provider,
                 }
             }
     return {}
@@ -478,7 +478,7 @@ def _prefill_params(params: dict[str, Any], parameters: list[dict[str, Any]], st
                 existing = identity_profile.get_display_name(conversation_key)
                 if existing:
                     params[name] = existing
-        if name == "channel_type":
+        if name == "channel_provider":
             params[name] = "telegram"
         if name == "channel_address":
             reply_id = state.get("incoming_reply_to_user_id")

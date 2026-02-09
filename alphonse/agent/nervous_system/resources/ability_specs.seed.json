@@ -122,9 +122,9 @@
         "order": 1
       },
       {
-        "name": "channel_type",
-        "type": "channel_type",
-        "description": "Channel integration (telegram, discord, etc)",
+        "name": "channel_provider",
+        "type": "channel_provider",
+        "description": "Channel provider (telegram, discord, etc)",
         "required": true,
         "order": 2,
         "default": "telegram"
@@ -139,14 +139,14 @@
     ],
     "prompts": {
       "display_name": "core.onboarding.authorize.ask_user",
-      "channel_type": "core.onboarding.authorize.ask_channel_type",
+      "channel_provider": "core.onboarding.authorize.ask_channel_type",
       "channel_address": "core.onboarding.authorize.ask_channel_address"
     },
     "step_sequence": [
       {
         "order": 1,
         "action": "channels.authorize",
-        "input": ["display_name", "channel_type", "channel_address"]
+        "input": ["display_name", "channel_provider", "channel_address"]
       }
     ],
     "outputs": {
@@ -180,9 +180,9 @@
         "order": 3
       },
       {
-        "name": "channel_type",
-        "type": "channel_type",
-        "description": "Channel integration (telegram, discord, etc)",
+        "name": "channel_provider",
+        "type": "channel_provider",
+        "description": "Channel provider (telegram, discord, etc)",
         "required": true,
         "order": 4,
         "default": "telegram"
@@ -199,7 +199,7 @@
       "display_name": "core.onboarding.secondary.ask_name",
       "relationship": "core.onboarding.secondary.ask_relationship",
       "role": "core.onboarding.secondary.ask_role",
-      "channel_type": "core.onboarding.authorize.ask_channel_type",
+      "channel_provider": "core.onboarding.authorize.ask_channel_type",
       "channel_address": "core.onboarding.authorize.ask_channel_address"
     },
     "step_sequence": [
@@ -211,7 +211,7 @@
       {
         "order": 2,
         "action": "channels.authorize",
-        "input": ["display_name", "channel_type", "channel_address"]
+        "input": ["display_name", "channel_provider", "channel_address"]
       }
     ],
     "outputs": {
