@@ -1,5 +1,21 @@
 [
   {
+    "intent_name": "core.users.list",
+    "kind": "ability_flow",
+    "tools": [],
+    "input_parameters": [],
+    "step_sequence": [
+      {
+        "order": 1,
+        "action": "users.list",
+        "input": []
+      }
+    ],
+    "outputs": {
+      "success": "core.users.list.completed"
+    }
+  },
+  {
     "intent_name": "time.current",
     "kind": "tool_call_then_response",
     "tools": ["clock"],

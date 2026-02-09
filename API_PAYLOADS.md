@@ -145,6 +145,11 @@ List users
 GET /agent/users?active_only=false&limit=200
 ```
 
+Ability: list users
+```json
+User says: "list users"
+```
+
 Delete user
 ```json
 DELETE /agent/users/principal-123

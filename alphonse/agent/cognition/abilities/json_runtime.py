@@ -24,7 +24,7 @@ from alphonse.agent.cognition.preferences.store import (
     set_preference,
 )
 from alphonse.agent.nervous_system.onboarding_profiles import upsert_onboarding_profile
-from alphonse.agent.nervous_system.users import get_user_by_display_name, upsert_user
+from alphonse.agent.nervous_system.users import get_user_by_display_name, list_users, upsert_user
 from alphonse.agent.nervous_system.telegram_invites import update_invite_status
 from alphonse.agent.identity.store import upsert_person, upsert_channel
 from alphonse.agent.identity import profile as identity_profile
@@ -475,6 +475,25 @@ def _execute_steps(steps: list[dict[str, Any]], params: dict[str, Any], state: d
             if channel_address:
                 update_invite_status(channel_address, "approved")
             return {}
+        if action == "users.list":
+            rows = list_users(active_only=True, limit=50)
+            if not rows:
+                return {"response_text": "No users yet."}
+            lines = []
+            for row in rows:
+                name = row.get("display_name") or "Unknown"
+                role = row.get("role") or ""
+                relationship = row.get("relationship") or ""
+                admin = "admin" if row.get("is_admin") else ""
+                bits = [name]
+                if role:
+                    bits.append(role)
+                if relationship:
+                    bits.append(relationship)
+                if admin:
+                    bits.append(admin)
+                lines.append(" - ".join(bits))
+            return {"response_key": "core.users.list", "response_vars": {"lines": lines}}
     return {}
 
 
