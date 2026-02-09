@@ -10,6 +10,58 @@ def get_person(person_id: str) -> dict[str, Any] | None:
     return _fetch_one("SELECT * FROM persons WHERE person_id = ?", (person_id,))
 
 
+def upsert_person(record: dict[str, Any]) -> str:
+    person_id = str(record.get("person_id") or "")
+    display_name = str(record.get("display_name") or "").strip()
+    if not person_id or not display_name:
+        raise ValueError("person_id and display_name are required")
+    relationship = record.get("relationship")
+    timezone = record.get("timezone")
+    is_active = 1 if bool(record.get("is_active", True)) else 0
+    with _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO persons (person_id, display_name, relationship, timezone, is_active)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(person_id) DO UPDATE SET
+              display_name = excluded.display_name,
+              relationship = excluded.relationship,
+              timezone = excluded.timezone,
+              is_active = excluded.is_active
+            """,
+            (person_id, display_name, relationship, timezone, is_active),
+        )
+        conn.commit()
+    return person_id
+
+
+def upsert_channel(record: dict[str, Any]) -> str:
+    channel_id = str(record.get("channel_id") or "")
+    channel_type = str(record.get("channel_type") or "")
+    address = str(record.get("address") or "")
+    person_id = record.get("person_id")
+    if not channel_id or not channel_type or not address:
+        raise ValueError("channel_id, channel_type, and address are required")
+    is_enabled = 1 if bool(record.get("is_enabled", True)) else 0
+    priority = int(record.get("priority") or 100)
+    with _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO channels (channel_id, channel_type, person_id, address, is_enabled, priority)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(channel_id) DO UPDATE SET
+              channel_type = excluded.channel_type,
+              person_id = excluded.person_id,
+              address = excluded.address,
+              is_enabled = excluded.is_enabled,
+              priority = excluded.priority
+            """,
+            (channel_id, channel_type, person_id, address, is_enabled, priority),
+        )
+        conn.commit()
+    return channel_id
+
+
 def list_groups() -> list[dict[str, Any]]:
     return _fetch_all("SELECT * FROM groups WHERE is_active = 1", ())
 

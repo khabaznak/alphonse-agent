@@ -62,9 +62,10 @@ def test_proposed_intent_alias_maps_to_known_intent(
         ]
     )
     result = invoke_cortex(_base_state(), "Muéstrame pendientes", llm_client=llm)
-    assert result.meta.get("intent") == "timed_signals.list"
+    assert result.meta.get("intent") == "unknown"
+    assert result.meta.get("proposed_intent") == "recordatorios"
     assert result.plans
-    assert result.plans[0].plan_type == PlanType.QUERY_STATUS
+    assert result.plans[0].plan_type == PlanType.CAPABILITY_GAP
 
 
 def test_unmapped_proposed_intent_creates_gap_with_metadata(

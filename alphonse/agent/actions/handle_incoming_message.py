@@ -12,19 +12,9 @@ from alphonse.agent.cognition.response_composer import ResponseComposer
 from alphonse.agent.cognition.response_spec import ResponseSpec
 from alphonse.agent.cognition.plans import CortexPlan, PlanType
 from alphonse.agent.cognition.preferences.store import (
-    get_or_create_scope_principal,
     get_or_create_principal_for_channel,
-    get_preference,
     resolve_preference_with_precedence,
-    set_preference,
 )
-from alphonse.agent.nervous_system.onboarding_profiles import (
-    get_onboarding_profile,
-    upsert_onboarding_profile,
-)
-from alphonse.agent.nervous_system.users import patch_user, upsert_user
-from alphonse.agent.nervous_system.users import upsert_user
-from alphonse.agent.nervous_system.senses.location import LocationSense
 from alphonse.config import settings
 from alphonse.agent.cognition.plan_executor import PlanExecutionContext, PlanExecutor
 from alphonse.agent.cortex.graph import invoke_cortex
@@ -32,28 +22,9 @@ from alphonse.agent.cortex.state_store import load_state, save_state
 from alphonse.agent.cognition.skills.interpretation.skills import build_ollama_client
 from alphonse.agent.identity import store as identity_store
 from alphonse.agent.identity import profile as identity_profile
-from alphonse.agent.cognition.pending_interaction import (
-    PendingInteraction,
-    PendingInteractionType,
-    build_pending_interaction,
-    serialize_pending_interaction,
-    try_consume,
-)
-from alphonse.agent.cognition.routing_primitives import extract_preference_updates
 from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
-
-_PRIMARY_ONBOARDING_COMPLETED_KEY = "onboarding.primary.completed"
-_PRIMARY_ONBOARDING_ADMIN_PRINCIPAL_KEY = "onboarding.primary.admin_principal_id"
-_ONBOARDING_STATE_KEY = "onboarding.state"
-_ONBOARDING_STATE_AWAITING_NAME = "awaiting_name"
-_ONBOARDING_STATE_COMPLETED = "completed"
-_ONBOARDING_STEP_ROLE = "role"
-_ONBOARDING_STEP_RELATIONSHIP = "relationship"
-_ONBOARDING_STEP_HOME = "home_location"
-_ONBOARDING_STEP_WORK = "work_location"
-
 
 @dataclass(frozen=True)
 class IncomingContext:
@@ -112,99 +83,8 @@ class HandleIncomingMessageAction(Action):
         )
         chat_key = conversation_key
         stored_state = load_state(chat_key) or {}
-        pending_raw = stored_state.get("pending_interaction")
-        if pending_raw is not None:
-            logger.info(
-                "HandleIncomingMessageAction pending_raw=%s",
-                pending_raw,
-            )
-        pending = _parse_pending_interaction(pending_raw)
-        if pending:
-            logger.info(
-                "HandleIncomingMessageAction pending_interaction type=%s key=%s created_at=%s expires_at=%s",
-                pending.type.value,
-                pending.key,
-                pending.created_at,
-                pending.expires_at,
-            )
-            resolution = try_consume(text, pending)
-            logger.info(
-                "HandleIncomingMessageAction pending_resolution consumed=%s error=%s",
-                resolution.consumed,
-                resolution.error,
-            )
-            if resolution.consumed:
-                _apply_pending_result(
-                    resolution.result or {},
-                    incoming,
-                    stored_state,
-                    pending,
-                )
-                _finalize_primary_onboarding_if_needed(
-                    pending=pending,
-                    incoming=incoming,
-                )
-                stored_state.pop("pending_interaction", None)
-                save_state(chat_key, stored_state)
-                logger.info(
-                    "HandleIncomingMessageAction pending_consumed cleared=true stored_keys=%s",
-                    ",".join(sorted(stored_state.keys())),
-                )
-                response_vars = resolution.result or {}
-                response_key = None
-                if pending.key == "user_name":
-                    response_key = "ack.user_name"
-                elif pending.key == "user_role":
-                    response_key = "ack.user_role"
-                    response_vars = {"role": str(resolution.result.get("user_role") or "")}
-                elif pending.key == "user_relationship":
-                    response_key = "ack.user_relationship"
-                    response_vars = {
-                        "relationship": str(
-                            resolution.result.get("user_relationship") or ""
-                        )
-                    }
-                elif pending.key == "address_text":
-                    response_key = "ack.location.saved"
-                    label = str(pending.context.get("label") or "home")
-                    response_vars = {"label": label}
-                rendered, outgoing_locale = _render_pending_ack(
-                    response_key or "ack.confirmed",
-                    response_vars,
-                    incoming,
-                    text,
-                    stored_state,
-                )
-                reply_plan = CortexPlan(
-                    plan_type=PlanType.COMMUNICATE,
-                    payload={
-                        "message": rendered,
-                        "locale": outgoing_locale,
-                    },
-                )
-                executor = PlanExecutor()
-                exec_context = PlanExecutionContext(
-                    channel_type=incoming.channel_type,
-                    channel_target=incoming.address,
-                    actor_person_id=incoming.person_id,
-                    correlation_id=incoming.correlation_id,
-                )
-                executor.execute([reply_plan], context, exec_context)
-                return _noop_result(incoming)
-            if resolution.error == "expired":
-                stored_state.pop("pending_interaction", None)
-                save_state(chat_key, stored_state)
-                logger.info(
-                    "HandleIncomingMessageAction pending_expired cleared=true"
-                )
-
         _ensure_conversation_locale(chat_key, text, stored_state, incoming)
-        if _maybe_prompt_onboarding_step(text, stored_state, incoming, context):
-            return _noop_result(incoming)
-        if _should_start_primary_onboarding(incoming) and not _has_preference_update(text):
-            _start_primary_onboarding(chat_key, stored_state, incoming, context)
-            return _noop_result(incoming)
-        state = _build_cortex_state(stored_state, incoming, correlation_id, payload)
+        state = _build_cortex_state(stored_state, incoming, correlation_id, payload, normalized)
         llm_client = _build_llm_client()
         result = invoke_cortex(state, text, llm_client=llm_client)
         logger.info(
@@ -292,92 +172,6 @@ def _resolve_person_id_from_normalized(
     return None
 
 
-def _parse_pending_interaction(raw: dict | None) -> PendingInteraction | None:
-    if not isinstance(raw, dict):
-        return None
-    try:
-        raw_type = str(raw.get("type") or "")
-        normalized_type = raw_type.split(".")[-1].upper()
-        pending_type = PendingInteractionType(normalized_type)
-        created_at = str(raw.get("created_at") or "") or datetime.now(timezone.utc).isoformat()
-        return PendingInteraction(
-            type=pending_type,
-            key=str(raw.get("key") or ""),
-            context=raw.get("context") or {},
-            created_at=created_at,
-            expires_at=raw.get("expires_at"),
-        )
-    except Exception:
-        return None
-
-
-def _apply_pending_result(
-    result: dict[str, object],
-    incoming: IncomingContext,
-    stored_state: dict[str, Any],
-    pending: PendingInteraction,
-) -> None:
-    if "user_name" in result and incoming.channel_type and incoming.address:
-        conversation_key = _conversation_key(incoming)
-        identity_profile.set_display_name(conversation_key, str(result["user_name"]))
-        stored = identity_profile.get_display_name(conversation_key)
-        logger.info(
-            "HandleIncomingMessageAction pending_identity conversation_key=%s display_name=%s",
-            conversation_key,
-            stored,
-        )
-        stored_state["display_name"] = str(result["user_name"])
-    if "address_text" in result and incoming.channel_type and incoming.address:
-        label = str(pending.context.get("label") or "home")
-        channel_type = str(incoming.channel_type or "")
-        channel_target = str(incoming.address or "")
-        principal_id = None
-        if channel_type and channel_target:
-            principal_id = get_or_create_principal_for_channel(channel_type, channel_target)
-        if principal_id:
-            try:
-                LocationSense().ingest_address(
-                    principal_id=principal_id,
-                    label=label,
-                    address_text=str(result["address_text"]),
-                    source="user",
-                )
-                _advance_onboarding_location_step(principal_id, label)
-            except Exception:
-                logger.exception("HandleIncomingMessageAction location ingest failed")
-    if "user_role" in result or "user_relationship" in result:
-        channel_type = str(incoming.channel_type or "")
-        channel_target = str(incoming.address or "")
-        principal_id = None
-        if channel_type and channel_target:
-            principal_id = get_or_create_principal_for_channel(channel_type, channel_target)
-        if principal_id:
-            updates: dict[str, Any] = {}
-            if "user_role" in result:
-                updates["role"] = str(result["user_role"])
-                _advance_onboarding_step(principal_id, _ONBOARDING_STEP_ROLE)
-            if "user_relationship" in result:
-                updates["relationship"] = str(result["user_relationship"])
-                _advance_onboarding_step(principal_id, _ONBOARDING_STEP_RELATIONSHIP)
-            if updates:
-                try:
-                    updated = patch_user(principal_id, updates)
-                    if updated is None:
-                        display_name = identity_profile.get_display_name(
-                            _conversation_key(incoming)
-                        )
-                        if display_name:
-                            payload = {
-                                "user_id": principal_id,
-                                "principal_id": principal_id,
-                                "display_name": display_name,
-                                **updates,
-                            }
-                            upsert_user(payload)
-                except Exception:
-                    logger.exception("HandleIncomingMessageAction user profile update failed")
-
-
 def _conversation_key(incoming: IncomingContext) -> str:
     if incoming.channel_type == "telegram":
         return f"telegram:{incoming.address or ''}"
@@ -387,313 +181,6 @@ def _conversation_key(incoming: IncomingContext) -> str:
         return f"api:{incoming.address or 'api'}"
     return f"{incoming.channel_type}:{incoming.address or incoming.channel_type}"
 
-
-def _should_start_primary_onboarding(incoming: IncomingContext) -> bool:
-    if _is_primary_onboarding_completed():
-        return False
-    principal_id = _principal_id_for_incoming(incoming)
-    if not principal_id:
-        return False
-    conversation_key = _conversation_key(incoming)
-    if identity_profile.get_display_name(conversation_key):
-        _complete_primary_onboarding(principal_id)
-        return False
-    onboarding_state = get_preference(principal_id, _ONBOARDING_STATE_KEY)
-    if onboarding_state == _ONBOARDING_STATE_COMPLETED:
-        _complete_primary_onboarding(principal_id)
-        return False
-    return True
-
-
-def _start_primary_onboarding(
-    chat_key: str,
-    stored_state: dict[str, Any],
-    incoming: IncomingContext,
-    context: dict[str, Any],
-) -> None:
-    principal_id = _principal_id_for_incoming(incoming)
-    if principal_id:
-        set_preference(
-            principal_id,
-            _ONBOARDING_STATE_KEY,
-            _ONBOARDING_STATE_AWAITING_NAME,
-            source="system",
-        )
-    pending = build_pending_interaction(
-        PendingInteractionType.SLOT_FILL,
-        key="user_name",
-        context={"origin_intent": "core.onboarding.primary"},
-    )
-    stored_state["pending_interaction"] = serialize_pending_interaction(pending)
-    save_state(chat_key, stored_state)
-    rendered, outgoing_locale = _render_outgoing_message(
-        "core.onboarding.primary.ask_name",
-        None,
-        incoming,
-        "",
-    )
-    reply_plan = CortexPlan(
-        plan_type=PlanType.COMMUNICATE,
-        payload={
-            "message": rendered,
-            "locale": outgoing_locale,
-        },
-    )
-    executor = PlanExecutor()
-    exec_context = PlanExecutionContext(
-        channel_type=incoming.channel_type,
-        channel_target=incoming.address,
-        actor_person_id=incoming.person_id,
-        correlation_id=incoming.correlation_id,
-    )
-    executor.execute([reply_plan], context, exec_context)
-
-
-def _finalize_primary_onboarding_if_needed(
-    *,
-    pending: PendingInteraction,
-    incoming: IncomingContext,
-) -> None:
-    if pending.key != "user_name":
-        return
-    if _is_primary_onboarding_completed():
-        return
-    principal_id = _principal_id_for_incoming(incoming)
-    if not principal_id:
-        return
-    _upsert_admin_user(incoming, principal_id)
-    _complete_primary_onboarding(principal_id)
-
-
-def _upsert_admin_user(incoming: IncomingContext, principal_id: str) -> None:
-    display_name = identity_profile.get_display_name(_conversation_key(incoming))
-    if not display_name:
-        return
-    upsert_user(
-        {
-            "user_id": principal_id,
-            "principal_id": principal_id,
-            "display_name": display_name,
-            "is_admin": True,
-            "is_active": True,
-            "onboarded_at": datetime.now(timezone.utc).isoformat(),
-        }
-    )
-
-
-def _complete_primary_onboarding(admin_principal_id: str) -> None:
-    system_principal_id = get_or_create_scope_principal("system", "default")
-    if not system_principal_id:
-        return
-    set_preference(
-        system_principal_id,
-        _PRIMARY_ONBOARDING_COMPLETED_KEY,
-        True,
-        source="system",
-    )
-    set_preference(
-        system_principal_id,
-        _PRIMARY_ONBOARDING_ADMIN_PRINCIPAL_KEY,
-        admin_principal_id,
-        source="system",
-    )
-    set_preference(
-        admin_principal_id,
-        _ONBOARDING_STATE_KEY,
-        _ONBOARDING_STATE_COMPLETED,
-        source="system",
-    )
-    _ensure_onboarding_profile(admin_principal_id)
-
-
-def _ensure_onboarding_profile(principal_id: str) -> None:
-    existing = get_onboarding_profile(principal_id)
-    if existing and existing.get("state") in {"in_progress", "completed"}:
-        return
-    upsert_onboarding_profile(
-        {
-            "principal_id": principal_id,
-            "state": "in_progress",
-            "primary_role": "admin",
-            "next_steps": [
-                _ONBOARDING_STEP_ROLE,
-                _ONBOARDING_STEP_RELATIONSHIP,
-                _ONBOARDING_STEP_HOME,
-                _ONBOARDING_STEP_WORK,
-            ],
-        }
-    )
-
-
-def _advance_onboarding_location_step(principal_id: str, label: str) -> None:
-    profile = get_onboarding_profile(principal_id)
-    if not profile:
-        return
-    next_steps = list(profile.get("next_steps") or [])
-    step = _ONBOARDING_STEP_HOME if label == "home" else _ONBOARDING_STEP_WORK
-    _advance_onboarding_step(principal_id, step)
-
-
-def _advance_onboarding_step(principal_id: str, step: str) -> None:
-    profile = get_onboarding_profile(principal_id)
-    if not profile:
-        return
-    next_steps = list(profile.get("next_steps") or [])
-    if step in next_steps:
-        next_steps.remove(step)
-    state = "completed" if not next_steps else str(profile.get("state") or "in_progress")
-    upsert_onboarding_profile(
-        {
-            "principal_id": principal_id,
-            "state": state,
-            "primary_role": profile.get("primary_role"),
-            "next_steps": next_steps,
-            "resume_token": profile.get("resume_token"),
-            "completed_at": profile.get("completed_at") if next_steps else None,
-        }
-    )
-
-
-def _maybe_prompt_onboarding_step(
-    text: str,
-    stored_state: dict[str, Any],
-    incoming: IncomingContext,
-    context: dict[str, Any],
-) -> bool:
-    principal_id = _principal_id_for_incoming(incoming)
-    if not principal_id:
-        return False
-    profile = get_onboarding_profile(principal_id)
-    if not profile or profile.get("state") != "in_progress":
-        return False
-    if stored_state.get("pending_interaction"):
-        return False
-    next_steps = list(profile.get("next_steps") or [])
-    if not next_steps:
-        return False
-    if not _is_greeting_text(text):
-        return False
-    step = next_steps[0]
-    pending_key, prompt_key, pending_context = _resolve_onboarding_step(step)
-    if not pending_key or not prompt_key:
-        return False
-    pending = build_pending_interaction(
-        PendingInteractionType.SLOT_FILL,
-        key=pending_key,
-        context=pending_context,
-    )
-    stored_state["pending_interaction"] = serialize_pending_interaction(pending)
-    save_state(_conversation_key(incoming), stored_state)
-    rendered, outgoing_locale = _render_outgoing_message(
-        prompt_key,
-        None,
-        incoming,
-        text,
-    )
-    reply_plan = CortexPlan(
-        plan_type=PlanType.COMMUNICATE,
-        payload={
-            "message": rendered,
-            "locale": outgoing_locale,
-        },
-    )
-    executor = PlanExecutor()
-    exec_context = PlanExecutionContext(
-        channel_type=incoming.channel_type,
-        channel_target=incoming.address,
-        actor_person_id=incoming.person_id,
-        correlation_id=incoming.correlation_id,
-    )
-    executor.execute([reply_plan], context, exec_context)
-    return True
-
-
-def _resolve_onboarding_step(step: str) -> tuple[str | None, str | None, dict[str, Any]]:
-    if step == _ONBOARDING_STEP_ROLE:
-        return "user_role", "clarify.user_role", {"onboarding_step": step}
-    if step == _ONBOARDING_STEP_RELATIONSHIP:
-        return "user_relationship", "clarify.user_relationship", {"onboarding_step": step}
-    if step == _ONBOARDING_STEP_HOME:
-        return "address_text", "clarify.location_address", {"label": "home", "onboarding_step": step}
-    if step == _ONBOARDING_STEP_WORK:
-        return "address_text", "clarify.location_work", {"label": "work", "onboarding_step": step}
-    return None, None, {}
-
-
-def _is_greeting_text(text: str) -> bool:
-    normalized = str(text or "").strip().lower()
-    return normalized in {
-        "hi",
-        "hello",
-        "hola",
-        "hey",
-        "buenas",
-        "buenos dias",
-        "buenas tardes",
-        "buenas noches",
-    }
-
-
-def _has_preference_update(text: str) -> bool:
-    try:
-        return bool(extract_preference_updates(text))
-    except Exception:
-        logger.exception("HandleIncomingMessageAction preference update detection failed")
-        return False
-
-
-def _is_primary_onboarding_completed() -> bool:
-    system_principal_id = get_or_create_scope_principal("system", "default")
-    if not system_principal_id:
-        return False
-    value = get_preference(system_principal_id, _PRIMARY_ONBOARDING_COMPLETED_KEY)
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        return value.strip().lower() in {"1", "true", "yes", "on"}
-    if isinstance(value, int):
-        return value == 1
-    return False
-
-
-def _render_pending_ack(
-    key: str,
-    response_vars: dict[str, Any] | None,
-    incoming: IncomingContext,
-    text: str,
-    stored_state: dict[str, Any],
-) -> tuple[str, str]:
-    locale_hint = stored_state.get("locale")
-    if isinstance(locale_hint, str) and locale_hint:
-        locale = locale_hint
-    else:
-        locale = _preferred_locale(incoming, text)
-    tone = _effective_tone(incoming)
-    address_style = _effective_address_style(incoming)
-    vars: dict[str, Any] = {
-        "tone": tone,
-        "address_style": address_style,
-    }
-    if isinstance(response_vars, dict):
-        vars.update(response_vars)
-    logger.info(
-        "HandleIncomingMessageAction pending_ack key=%s locale=%s address=%s",
-        key,
-        locale,
-        address_style,
-    )
-    spec = ResponseSpec(
-        kind="ack",
-        key=key,
-        locale=locale,
-        address_style=address_style,
-        tone=tone,
-        channel=incoming.channel_type,
-        variant="default",
-        policy_tier="safe",
-        variables=vars,
-    )
-    return ResponseComposer().compose(spec), locale
 
 
 def _ensure_conversation_locale(
@@ -720,6 +207,7 @@ def _build_cortex_state(
     incoming: IncomingContext,
     correlation_id: str,
     payload: dict[str, Any],
+    normalized: object | None,
 ) -> dict[str, Any]:
     try:
         from alphonse.agent.nervous_system.migrate import apply_schema
@@ -781,12 +269,20 @@ def _build_cortex_state(
         state_locale = identity_profile.get_locale(conversation_key)
     if not state_locale:
         state_locale = effective_locale
+    incoming_user_id = _as_optional_str(getattr(normalized, "user_id", None))
+    incoming_user_name = _as_optional_str(getattr(normalized, "user_name", None))
+    incoming_meta = getattr(normalized, "metadata", {}) if normalized is not None else {}
+    incoming_meta = incoming_meta if isinstance(incoming_meta, dict) else {}
     return {
         "chat_id": incoming.address or incoming.channel_type,
         "channel_type": incoming.channel_type,
         "channel_target": incoming.address or incoming.channel_type,
         "conversation_key": _conversation_key(incoming),
         "actor_person_id": incoming.person_id,
+        "incoming_user_id": incoming_user_id,
+        "incoming_user_name": incoming_user_name,
+        "incoming_reply_to_user_id": _as_optional_str(incoming_meta.get("reply_to_user")),
+        "incoming_reply_to_user_name": _as_optional_str(incoming_meta.get("reply_to_user_name")),
         "slots": stored_state.get("slots_collected") or {},
         "intent": stored_state.get("last_intent"),
         "locale": state_locale,
@@ -796,6 +292,7 @@ def _build_cortex_state(
         "routing_rationale": stored_state.get("routing_rationale"),
         "routing_needs_clarification": stored_state.get("routing_needs_clarification"),
         "pending_interaction": stored_state.get("pending_interaction"),
+        "ability_state": stored_state.get("ability_state"),
         "slot_machine": stored_state.get("slot_machine"),
         "correlation_id": correlation_id,
         "timezone": timezone,

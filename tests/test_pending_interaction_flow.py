@@ -29,7 +29,7 @@ def test_pending_name_consumes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
             "pending_interaction": {
                 "type": "SLOT_FILL",
                 "key": "user_name",
-                "context": {},
+                "context": {"ability_intent": "core.onboarding.start"},
                 "created_at": "now",
             }
         },
@@ -56,7 +56,7 @@ def test_pending_non_consumable_falls_through(tmp_path: Path, monkeypatch: pytes
             "pending_interaction": {
                 "type": "SLOT_FILL",
                 "key": "user_name",
-                "context": {},
+                "context": {"ability_intent": "core.onboarding.start"},
                 "created_at": "now",
             }
         },

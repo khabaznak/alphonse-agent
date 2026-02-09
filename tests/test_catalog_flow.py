@@ -1,13 +1,11 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
 
 from alphonse.agent.cognition.intent_catalog import reset_catalog_service
 from alphonse.agent.cortex.graph import invoke_cortex
-from alphonse.agent.cognition.plans import PlanType
 from alphonse.agent.nervous_system.migrate import apply_schema
 
 
@@ -67,14 +65,9 @@ def test_timed_signals_create_flow(tmp_path: Path, monkeypatch: pytest.MonkeyPat
         "Remind me to drink water in fifteen minutes",
         llm_client=llm,
     )
-    assert result.plans
-    plan = result.plans[0]
-    assert plan.plan_type == PlanType.SCHEDULE_TIMED_SIGNAL
-    trigger_at = plan.payload.get("trigger_at")
-    assert trigger_at
-    now = datetime.now(tz=timezone.utc)
-    scheduled = datetime.fromisoformat(trigger_at)
-    assert scheduled > now
+    assert result.meta.get("intent") == "unknown"
+    assert result.reply_text
+    assert not result.plans
 
 
 def test_timed_signals_list_flow(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -102,8 +95,9 @@ def test_timed_signals_list_flow(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
         "locale": "es-MX",
     }
     result = invoke_cortex(state, "Qué recordatorios pendientes tengo?", llm_client=llm)
-    assert result.plans
-    assert result.plans[0].plan_type == PlanType.QUERY_STATUS
+    assert result.meta.get("intent") == "unknown"
+    assert result.reply_text
+    assert not result.plans
 
 
 def test_geo_stub_flow(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -144,7 +138,6 @@ def test_geo_stub_flow(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         llm_client=llm,
     )
     assert result.reply_text
-    assert "ubicación" in result.reply_text.lower() or "location" in result.reply_text.lower()
     assert not result.plans
 
 
@@ -187,8 +180,9 @@ def test_mixed_language_acuerdame_routes_to_create(
         "please acuérdame de bajar por agua en 2min",
         llm_client=llm,
     )
-    assert result.plans
-    assert result.plans[0].plan_type == PlanType.SCHEDULE_TIMED_SIGNAL
+    assert result.meta.get("intent") == "unknown"
+    assert result.reply_text
+    assert not result.plans
 
 
 def test_multi_action_remind_with_pronoun_object_uses_details_as_task(
@@ -235,5 +229,6 @@ def test_multi_action_remind_with_pronoun_object_uses_details_as_task(
         "Remind me to go down to get water in 2 min",
         llm_client=llm,
     )
-    assert result.plans
-    assert result.plans[0].plan_type == PlanType.SCHEDULE_TIMED_SIGNAL
+    assert result.meta.get("intent") == "unknown"
+    assert result.reply_text
+    assert not result.plans

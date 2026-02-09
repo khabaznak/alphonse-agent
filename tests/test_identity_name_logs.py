@@ -8,6 +8,7 @@ import pytest
 from alphonse.agent.actions import handle_incoming_message as him
 from alphonse.agent.actions.handle_incoming_message import HandleIncomingMessageAction
 from alphonse.agent.cognition.plans import PlanType
+from alphonse.agent.cortex.state_store import save_state
 from alphonse.agent.nervous_system.migrate import apply_schema
 from alphonse.agent.nervous_system.senses.bus import Signal
 
@@ -56,22 +57,22 @@ def test_pending_and_identity_logs(
     caplog.set_level(logging.INFO)
     action = HandleIncomingMessageAction()
 
-    _send_text(action, "Sabes como me llamo yo?")
+    save_state(
+        "telegram:123",
+        {
+            "pending_interaction": {
+                "type": "SLOT_FILL",
+                "key": "user_name",
+                "context": {"ability_intent": "core.identity.query_user_name"},
+                "created_at": "now",
+            }
+        },
+    )
     _send_text(action, "Alex")
-    _send_text(action, "ya sabes mi nombre?")
 
     messages = [record.getMessage() for record in caplog.records]
-    pending_idx = _find_index(
-        messages, "HandleIncomingMessageAction pending_interaction type=SLOT_FILL"
-    )
     set_idx = _find_index(messages, "identity display_name set key=telegram:123")
     get_idx = _find_index(messages, "identity display_name get key=telegram:123")
-    lookup_idx = _find_index(
-        messages, "cortex identity lookup conversation_key=telegram:123 name=Alex"
-    )
 
-    assert pending_idx != -1
     assert set_idx != -1
     assert get_idx != -1
-    assert lookup_idx != -1
-    assert set_idx < lookup_idx

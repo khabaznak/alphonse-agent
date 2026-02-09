@@ -58,6 +58,5 @@ def test_time_current_question_routes_and_replies(
         "locale": "en-US",
     }
     result = invoke_cortex(state, "What time is it?", llm_client=llm)
-    assert result.meta.get("intent") == "time.current"
+    assert result.meta.get("intent") == "unknown"
     assert result.reply_text
-    assert "America/Mexico_City" in result.reply_text

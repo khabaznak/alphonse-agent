@@ -29,5 +29,220 @@
         "locale": "{locale}"
       }
     }
+  },
+  {
+    "intent_name": "core.onboarding.start",
+    "kind": "ability_flow",
+    "tools": [],
+    "input_parameters": [
+      {
+        "name": "user_name",
+        "type": "person_name",
+        "description": "Name of the primary admin user",
+        "required": true,
+        "order": 1
+      }
+    ],
+    "prompts": {
+      "user_name": "core.onboarding.primary.ask_name"
+    },
+    "step_sequence": [
+      {
+        "order": 1,
+        "action": "identity.set_display_name",
+        "input": ["user_name"]
+      },
+      {
+        "order": 2,
+        "action": "users.upsert_admin",
+        "input": ["user_name"]
+      },
+      {
+        "order": 3,
+        "action": "onboarding.mark_primary_complete"
+      }
+    ],
+    "outputs": {
+      "success": "ack.user_name"
+    }
+  },
+  {
+    "intent_name": "core.onboarding.add_user",
+    "kind": "ability_flow",
+    "tools": [],
+    "input_parameters": [
+      {
+        "name": "display_name",
+        "type": "person_name",
+        "description": "Name of the new user",
+        "required": true,
+        "order": 1
+      },
+      {
+        "name": "relationship",
+        "type": "relationship",
+        "description": "Relationship to the admin",
+        "required": true,
+        "order": 2
+      },
+      {
+        "name": "role",
+        "type": "role",
+        "description": "Household role",
+        "required": false,
+        "order": 3
+      }
+    ],
+    "prompts": {
+      "display_name": "core.onboarding.secondary.ask_name",
+      "relationship": "core.onboarding.secondary.ask_relationship",
+      "role": "core.onboarding.secondary.ask_role"
+    },
+    "step_sequence": [
+      {
+        "order": 1,
+        "action": "users.upsert_secondary",
+        "input": ["display_name", "relationship", "role"]
+      }
+    ],
+    "outputs": {
+      "success": "core.onboarding.secondary.completed"
+    }
+  },
+  {
+    "intent_name": "core.onboarding.authorize_channel",
+    "kind": "ability_flow",
+    "tools": [],
+    "input_parameters": [
+      {
+        "name": "display_name",
+        "type": "person_name",
+        "description": "Name of the user to authorize",
+        "required": true,
+        "order": 1
+      },
+      {
+        "name": "channel_type",
+        "type": "channel_type",
+        "description": "Channel integration (telegram, discord, etc)",
+        "required": true,
+        "order": 2,
+        "default": "telegram"
+      },
+      {
+        "name": "channel_address",
+        "type": "channel_address",
+        "description": "Channel address or chat id",
+        "required": true,
+        "order": 3
+      }
+    ],
+    "prompts": {
+      "display_name": "core.onboarding.authorize.ask_user",
+      "channel_type": "core.onboarding.authorize.ask_channel_type",
+      "channel_address": "core.onboarding.authorize.ask_channel_address"
+    },
+    "step_sequence": [
+      {
+        "order": 1,
+        "action": "channels.authorize",
+        "input": ["display_name", "channel_type", "channel_address"]
+      }
+    ],
+    "outputs": {
+      "success": "core.onboarding.authorize.completed"
+    }
+  },
+  {
+    "intent_name": "core.onboarding.introduce_authorize",
+    "kind": "ability_flow",
+    "tools": [],
+    "input_parameters": [
+      {
+        "name": "display_name",
+        "type": "person_name",
+        "description": "Name of the new user",
+        "required": true,
+        "order": 1
+      },
+      {
+        "name": "relationship",
+        "type": "relationship",
+        "description": "Relationship to the admin",
+        "required": true,
+        "order": 2
+      },
+      {
+        "name": "role",
+        "type": "role",
+        "description": "Household role",
+        "required": false,
+        "order": 3
+      },
+      {
+        "name": "channel_type",
+        "type": "channel_type",
+        "description": "Channel integration (telegram, discord, etc)",
+        "required": true,
+        "order": 4,
+        "default": "telegram"
+      },
+      {
+        "name": "channel_address",
+        "type": "channel_address",
+        "description": "Channel address or chat id",
+        "required": true,
+        "order": 5
+      }
+    ],
+    "prompts": {
+      "display_name": "core.onboarding.secondary.ask_name",
+      "relationship": "core.onboarding.secondary.ask_relationship",
+      "role": "core.onboarding.secondary.ask_role",
+      "channel_type": "core.onboarding.authorize.ask_channel_type",
+      "channel_address": "core.onboarding.authorize.ask_channel_address"
+    },
+    "step_sequence": [
+      {
+        "order": 1,
+        "action": "users.upsert_secondary",
+        "input": ["display_name", "relationship", "role"]
+      },
+      {
+        "order": 2,
+        "action": "channels.authorize",
+        "input": ["display_name", "channel_type", "channel_address"]
+      }
+    ],
+    "outputs": {
+      "success": "core.onboarding.introduce_authorize.completed"
+    }
+  },
+  {
+    "intent_name": "core.identity.query_user_name",
+    "kind": "ability_flow",
+    "tools": [],
+    "input_parameters": [
+      {
+        "name": "user_name",
+        "type": "person_name",
+        "description": "Name of the current user",
+        "required": true,
+        "order": 1
+      }
+    ],
+    "prompts": {
+      "user_name": "core.identity.user.ask_name"
+    },
+    "step_sequence": [
+      {
+        "order": 1,
+        "action": "identity.set_display_name",
+        "input": ["user_name"]
+      }
+    ],
+    "outputs": {
+      "success": "core.identity.user.known"
+    }
   }
 ]

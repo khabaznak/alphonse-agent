@@ -169,6 +169,10 @@ class TelegramAdapter(IntegrationAdapter):
         from_user_payload = message.get("from") if isinstance(message.get("from"), dict) else {}
         from_user = from_user_payload.get("username") or from_user_payload.get("id")
         from_user_name = from_user_payload.get("first_name") or from_user_payload.get("username")
+        reply_to = message.get("reply_to_message") if isinstance(message.get("reply_to_message"), dict) else {}
+        reply_from = reply_to.get("from") if isinstance(reply_to.get("from"), dict) else {}
+        reply_to_user = reply_from.get("id")
+        reply_to_user_name = reply_from.get("first_name") or reply_from.get("username")
 
         logger.info(
             "TelegramAdapter accepted message update_id=%s chat_id=%s from=%s text=%s",
@@ -185,6 +189,9 @@ class TelegramAdapter(IntegrationAdapter):
                 "chat_id": chat_id,
                 "from_user": from_user,
                 "from_user_name": from_user_name,
+                "reply_to_user": reply_to_user,
+                "reply_to_user_name": reply_to_user_name,
+                "reply_to_message_id": reply_to.get("message_id") if isinstance(reply_to, dict) else None,
                 "message_id": message.get("message_id"),
                 "update_id": update_id,
             },

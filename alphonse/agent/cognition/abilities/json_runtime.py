@@ -2,12 +2,31 @@ from __future__ import annotations
 
 import json
 import logging
+import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from alphonse.agent.cognition.abilities.registry import Ability
 from alphonse.agent.cognition.abilities.store import AbilitySpecStore
 from alphonse.agent.cognition.plans import CortexPlan, PlanType
+from alphonse.agent.cognition.pending_interaction import (
+    PendingInteraction,
+    PendingInteractionType,
+    build_pending_interaction,
+    serialize_pending_interaction,
+    try_consume,
+)
+from alphonse.agent.cognition.preferences.store import (
+    get_or_create_principal_for_channel,
+    get_or_create_scope_principal,
+    get_preference,
+    set_preference,
+)
+from alphonse.agent.nervous_system.onboarding_profiles import upsert_onboarding_profile
+from alphonse.agent.nervous_system.users import get_user_by_display_name, upsert_user
+from alphonse.agent.identity.store import upsert_person, upsert_channel
+from alphonse.agent.identity import profile as identity_profile
 from alphonse.agent.tools.registry import ToolRegistry
 from alphonse.config import settings
 
@@ -87,8 +106,400 @@ def _ability_from_spec(spec: dict[str, Any]) -> Ability | None:
         return Ability(intent_name=intent_name, tools=tools, execute=_build_plan_emit_executor(spec))
     if kind == "tool_call_then_response":
         return Ability(intent_name=intent_name, tools=tools, execute=_build_tool_call_then_response_executor(spec))
+    if kind == "ability_flow":
+        return Ability(intent_name=intent_name, tools=tools, execute=_build_ability_flow_executor(spec))
     logger.warning("unsupported ability spec kind=%s intent=%s", kind, intent_name)
     return None
+
+
+def _build_ability_flow_executor(spec: dict[str, Any]):
+    intent_name = str(spec.get("intent_name") or "")
+    parameters = spec.get("input_parameters") if isinstance(spec.get("input_parameters"), list) else []
+    steps = spec.get("step_sequence") if isinstance(spec.get("step_sequence"), list) else []
+    prompts = spec.get("prompts") if isinstance(spec.get("prompts"), dict) else {}
+    outputs = spec.get("outputs") if isinstance(spec.get("outputs"), dict) else {}
+
+    def _execute(state: dict[str, Any], tools: ToolRegistry) -> dict[str, Any]:
+        _ = tools
+        ability_state = _load_ability_state(state, intent_name)
+        params = ability_state["params"]
+        last_text = str(state.get("last_user_message") or "").strip()
+        pending = _parse_pending_interaction(state.get("pending_interaction"))
+        _prefill_params(params, parameters, state)
+        if pending and pending.context.get("ability_intent") == intent_name:
+            resolution = try_consume(last_text, pending)
+            if resolution.consumed:
+                _merge_pending_result(params, pending.key, resolution.result or {})
+                ability_state["pending_param"] = None
+                state["pending_interaction"] = None
+        _extract_params_from_text(params, parameters, last_text)
+        missing = _missing_required_params(params, parameters)
+        if missing:
+            next_param = missing[0]
+            pending = build_pending_interaction(
+                PendingInteractionType.SLOT_FILL,
+                key=next_param,
+                context={"ability_intent": intent_name, "param": next_param},
+            )
+            ability_state["pending_param"] = next_param
+            return {
+                "response_key": str(prompts.get(next_param) or "clarify.intent"),
+                "pending_interaction": serialize_pending_interaction(pending),
+                "ability_state": ability_state,
+            }
+        step_result = _execute_steps(steps, params, state)
+        if isinstance(step_result, dict) and step_result.get("response_key"):
+            return {
+                "response_key": step_result.get("response_key"),
+                "response_vars": step_result.get("response_vars") or {},
+                "pending_interaction": None,
+                "ability_state": {},
+            }
+        response_key = str(outputs.get("success") or "ack.confirmed")
+        response_vars = dict(step_result.get("response_vars") or {})
+        if "user_name" not in response_vars:
+            if isinstance(params.get("user_name"), str):
+                response_vars["user_name"] = params.get("user_name")
+            elif isinstance(params.get("display_name"), str):
+                response_vars["user_name"] = params.get("display_name")
+        return {
+            "response_key": response_key,
+            "response_vars": response_vars,
+            "pending_interaction": None,
+            "ability_state": {},
+        }
+
+    return _execute
+
+
+def _load_ability_state(state: dict[str, Any], intent_name: str) -> dict[str, Any]:
+    ability_state = state.get("ability_state")
+    if not isinstance(ability_state, dict):
+        ability_state = {}
+    if ability_state.get("intent") != intent_name:
+        return {"intent": intent_name, "params": {}, "pending_param": None}
+    params = ability_state.get("params")
+    if not isinstance(params, dict):
+        ability_state["params"] = {}
+    return ability_state
+
+
+def _parse_pending_interaction(raw: dict[str, Any] | None) -> PendingInteraction | None:
+    if not isinstance(raw, dict):
+        return None
+    try:
+        raw_type = str(raw.get("type") or "")
+        pending_type = PendingInteractionType(raw_type.split(".")[-1].upper())
+        return PendingInteraction(
+            type=pending_type,
+            key=str(raw.get("key") or ""),
+            context=raw.get("context") or {},
+            created_at=str(raw.get("created_at") or ""),
+            expires_at=raw.get("expires_at"),
+        )
+    except Exception:
+        return None
+
+
+def _merge_pending_result(params: dict[str, Any], key: str, result: dict[str, Any]) -> None:
+    if key in result:
+        params[key] = result.get(key)
+        return
+    if result:
+        params[key] = list(result.values())[0]
+
+
+def _missing_required_params(params: dict[str, Any], parameters: list[dict[str, Any]]) -> list[str]:
+    missing: list[str] = []
+    for param in sorted(parameters, key=lambda p: int(p.get("order") or 0)):
+        name = str(param.get("name") or "").strip()
+        if not name:
+            continue
+        required = bool(param.get("required", False))
+        if required and name not in params:
+            missing.append(name)
+    return missing
+
+
+def _extract_params_from_text(
+    params: dict[str, Any],
+    parameters: list[dict[str, Any]],
+    text: str,
+) -> None:
+    if not text:
+        return
+    missing_required = _missing_required_params(params, parameters)
+    if not missing_required:
+        return
+    relationship = _extract_relationship(text)
+    if relationship and "relationship" in missing_required:
+        params.setdefault("relationship", relationship)
+    name = _extract_name_after_relationship(text)
+    if name and "display_name" in missing_required:
+        params.setdefault("display_name", name)
+    if len(missing_required) == 1:
+        key = missing_required[0]
+        param_type = _param_type(parameters, key)
+        if param_type == "person_name" and _looks_like_name(text):
+            params.setdefault(key, text)
+    if "channel_type" in missing_required:
+        channel_type = _extract_channel_type(text)
+        if channel_type:
+            params.setdefault("channel_type", channel_type)
+    if "channel_address" in missing_required:
+        channel_address = _extract_channel_address(text)
+        if channel_address:
+            params.setdefault("channel_address", channel_address)
+
+
+def _param_type(parameters: list[dict[str, Any]], key: str) -> str:
+    for param in parameters:
+        if str(param.get("name") or "") == key:
+            return str(param.get("type") or "")
+    return ""
+
+
+def _looks_like_name(text: str) -> bool:
+    stripped = text.strip()
+    if not stripped or len(stripped) > 40:
+        return False
+    parts = [p for p in stripped.split() if p]
+    if len(parts) > 3:
+        return False
+    for part in parts:
+        if not part[0].isalpha():
+            return False
+    return True
+
+
+def _extract_relationship(text: str) -> str | None:
+    normalized = text.lower()
+    mapping = {
+        "wife": "wife",
+        "husband": "husband",
+        "son": "son",
+        "daughter": "daughter",
+        "mom": "mother",
+        "mother": "mother",
+        "dad": "father",
+        "father": "father",
+        "esposa": "wife",
+        "esposo": "husband",
+        "hijo": "son",
+        "hija": "daughter",
+        "madre": "mother",
+        "padre": "father",
+    }
+    for key, value in mapping.items():
+        if key in normalized:
+            return value
+    return None
+
+
+def _extract_name_after_relationship(text: str) -> str | None:
+    tokens = [t for t in text.replace(",", " ").split() if t]
+    if not tokens:
+        return None
+    for idx, token in enumerate(tokens):
+        lower = token.lower()
+        if lower in {
+            "wife",
+            "husband",
+            "son",
+            "daughter",
+            "mom",
+            "mother",
+            "dad",
+            "father",
+            "esposa",
+            "esposo",
+            "hijo",
+            "hija",
+            "madre",
+            "padre",
+        }:
+            if idx + 1 < len(tokens):
+                return tokens[idx + 1]
+    return None
+
+
+def _extract_channel_type(text: str) -> str | None:
+    normalized = text.lower()
+    if "telegram" in normalized:
+        return "telegram"
+    if "discord" in normalized:
+        return "discord"
+    if "whatsapp" in normalized:
+        return "whatsapp"
+    if "sms" in normalized:
+        return "sms"
+    return None
+
+
+def _extract_channel_address(text: str) -> str | None:
+    cleaned = "".join(ch for ch in text if ch.isdigit() or ch == " ")
+    digits = "".join(cleaned.split())
+    if len(digits) >= 5:
+        return digits
+    return None
+
+
+def _execute_steps(steps: list[dict[str, Any]], params: dict[str, Any], state: dict[str, Any]) -> dict[str, Any]:
+    for step in sorted(steps, key=lambda s: int(s.get("order") or 0)):
+        action = str(step.get("action") or "").strip()
+        if not action:
+            continue
+        if action == "identity.set_display_name":
+            name = str(params.get("user_name") or params.get("display_name") or "")
+            if name:
+                identity_profile.set_display_name(str(state.get("conversation_key") or ""), name)
+            continue
+        if action == "users.upsert_admin":
+            name = str(params.get("user_name") or params.get("display_name") or "")
+            principal_id = _principal_id_from_state(state)
+            if principal_id and name:
+                upsert_user(
+                    {
+                        "user_id": principal_id,
+                        "principal_id": principal_id,
+                        "display_name": name,
+                        "is_admin": True,
+                        "is_active": True,
+                        "onboarded_at": _now(),
+                    }
+                )
+            continue
+        if action == "users.upsert_secondary":
+            name = str(params.get("display_name") or "")
+            if name:
+                user_id = str(params.get("user_id") or "")
+                if not user_id:
+                    user_id = str(uuid.uuid4())
+                    params["user_id"] = user_id
+                upsert_user(
+                    {
+                        "user_id": user_id,
+                        "principal_id": None,
+                        "display_name": name,
+                        "role": str(params.get("role") or ""),
+                        "relationship": str(params.get("relationship") or ""),
+                        "is_admin": False,
+                        "is_active": True,
+                        "onboarded_at": _now(),
+                    }
+                )
+            continue
+        if action == "onboarding.mark_primary_complete":
+            principal_id = _principal_id_from_state(state)
+            system_principal_id = get_or_create_scope_principal("system", "default")
+            if principal_id and system_principal_id:
+                set_preference(system_principal_id, "onboarding.primary.completed", True, source="system")
+                set_preference(system_principal_id, "onboarding.primary.admin_principal_id", principal_id, source="system")
+                set_preference(principal_id, "onboarding.state", "completed", source="system")
+                upsert_onboarding_profile(
+                    {
+                        "principal_id": principal_id,
+                        "state": "in_progress",
+                        "primary_role": "admin",
+                        "next_steps": [
+                            "role",
+                            "relationship",
+                            "home_location",
+                            "work_location",
+                        ],
+                    }
+                )
+            continue
+        if action == "channels.authorize":
+            display_name = str(params.get("display_name") or params.get("user_name") or "").strip()
+            if not display_name:
+                return {"response_key": "core.onboarding.authorize.user_not_found"}
+            principal_id = _principal_id_from_state(state)
+            system_principal_id = get_or_create_scope_principal("system", "default")
+            if system_principal_id and principal_id:
+                admin_id = get_preference(system_principal_id, "onboarding.primary.admin_principal_id")
+                if admin_id and str(admin_id) != str(principal_id):
+                    return {"response_key": "policy.authorize.restricted"}
+            user = get_user_by_display_name(display_name)
+            if not user:
+                return {
+                    "response_key": "core.onboarding.authorize.user_not_found",
+                    "response_vars": {"user_name": display_name},
+                }
+            channel_type = str(params.get("channel_type") or "telegram").strip()
+            channel_address = str(params.get("channel_address") or "").strip()
+            if not channel_address:
+                channel_address = str(state.get("incoming_reply_to_user_id") or "").strip()
+            if not channel_address:
+                return {"response_key": "core.onboarding.authorize.ask_channel_address"}
+            if not display_name:
+                display_name = str(state.get("incoming_reply_to_user_name") or "").strip()
+            person_id = str(user.get("user_id") or "")
+            if person_id:
+                upsert_person(
+                    {
+                        "person_id": person_id,
+                        "display_name": user.get("display_name") or display_name,
+                        "relationship": user.get("relationship"),
+                        "is_active": user.get("is_active", True),
+                    }
+                )
+                channel_id = f"{channel_type}:{channel_address}"
+                upsert_channel(
+                    {
+                        "channel_id": channel_id,
+                        "channel_type": channel_type,
+                        "person_id": person_id,
+                        "address": channel_address,
+                        "is_enabled": True,
+                        "priority": 100,
+                    }
+                )
+            return {
+                "response_vars": {
+                    "user_name": display_name,
+                    "channel_type": channel_type,
+                }
+            }
+    return {}
+
+
+def _prefill_params(params: dict[str, Any], parameters: list[dict[str, Any]], state: dict[str, Any]) -> None:
+    for param in parameters:
+        name = str(param.get("name") or "")
+        if not name or name in params:
+            continue
+        if "default" in param:
+            params[name] = param.get("default")
+            continue
+        if name == "user_name":
+            conversation_key = str(state.get("conversation_key") or "")
+            if conversation_key:
+                existing = identity_profile.get_display_name(conversation_key)
+                if existing:
+                    params[name] = existing
+        if name == "channel_type":
+            params[name] = "telegram"
+        if name == "channel_address":
+            reply_id = state.get("incoming_reply_to_user_id")
+            if reply_id:
+                params[name] = str(reply_id)
+        if name == "display_name":
+            reply_name = state.get("incoming_reply_to_user_name")
+            if reply_name:
+                params[name] = str(reply_name)
+
+
+def _principal_id_from_state(state: dict[str, Any]) -> str | None:
+    channel_type = str(state.get("channel_type") or "")
+    channel_target = str(state.get("channel_target") or state.get("chat_id") or "")
+    if not channel_type or not channel_target:
+        return None
+    return get_or_create_principal_for_channel(channel_type, channel_target)
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 
 def _build_clock_time_executor(spec: dict[str, Any]):

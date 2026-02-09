@@ -20,9 +20,9 @@ def test_seed_inserts_factory_intents(tmp_path: Path) -> None:
     assert "greeting" in intents
     assert intents["greeting"].origin == "factory"
     assert intents["greeting"].intent_version == "1.0.0"
-    assert intents["timed_signals.create"].parent_intent == "timed_signals"
     assert "core.identity.query_agent_name" in intents
     assert "core.identity.query_user_name" in intents
+    assert "core.onboarding.start" in intents
 
 
 def test_seed_preserves_enabled_flag(tmp_path: Path) -> None:

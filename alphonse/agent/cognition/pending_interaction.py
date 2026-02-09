@@ -110,6 +110,8 @@ def _consume_slot_fill(text: str, pending: PendingInteraction) -> PendingResolut
         if len(text) > 60:
             return PendingResolution(consumed=False, error="too_long")
         return PendingResolution(consumed=True, result={"user_relationship": text})
+    if text:
+        return PendingResolution(consumed=True, result={pending.key: text})
     return PendingResolution(consumed=False)
 
 

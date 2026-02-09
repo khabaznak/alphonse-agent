@@ -200,6 +200,22 @@ Alphonse uses a two-phase onboarding model:
 Primary onboarding and secondary onboarding are intentionally separated so each can evolve
 independently without mixing first-run bootstrap concerns with household growth flows.
 
+### Introduce + Authorize (Telegram)
+
+You can introduce and authorize a new user directly inside a Telegram group chat.
+Alphonse uses the replied-to user's Telegram `user_id` as the stable channel address.
+
+Flow:
+
+1. In a Telegram group with Alphonse, reply to the new user's message.
+2. Say: "Alphonse, please meet Gaby" (or "Introduce and authorize Gaby on Telegram").
+3. Alphonse will:
+   - Create the user record if needed.
+   - Link the user's Telegram `user_id` to the `channels` registry.
+   - Mark the channel as enabled for communication.
+
+If you do not reply to a message, Alphonse will ask for the Telegram chat id.
+
 ### Onboarding + Location Persistence (nerve-db)
 
 New persistence tables:

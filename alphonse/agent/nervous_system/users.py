@@ -35,6 +35,20 @@ def get_user(user_id: str) -> dict[str, Any] | None:
     return _row_to_user(row) if row else None
 
 
+def get_user_by_display_name(display_name: str) -> dict[str, Any] | None:
+    name = str(display_name or "").strip()
+    if not name:
+        return None
+    with sqlite3.connect(resolve_nervous_system_db_path()) as conn:
+        row = conn.execute(
+            "SELECT user_id, principal_id, display_name, role, relationship, is_admin, is_active, "
+            "onboarded_at, created_at, updated_at FROM users WHERE lower(display_name) = lower(?) "
+            "ORDER BY updated_at DESC LIMIT 1",
+            (name,),
+        ).fetchone()
+    return _row_to_user(row) if row else None
+
+
 def upsert_user(record: dict[str, Any]) -> str:
     user_id = str(record.get("user_id") or record.get("principal_id") or uuid.uuid4())
     display_name = str(record.get("display_name") or "").strip()

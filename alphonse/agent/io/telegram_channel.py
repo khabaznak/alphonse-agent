@@ -34,6 +34,9 @@ class TelegramSenseAdapter(SenseAdapter):
         metadata = {
             "message_id": payload.get("message_id") or metadata.get("message_id"),
             "update_id": payload.get("update_id") or metadata.get("update_id"),
+            "reply_to_user": payload.get("reply_to_user") or metadata.get("reply_to_user"),
+            "reply_to_user_name": payload.get("reply_to_user_name") or metadata.get("reply_to_user_name"),
+            "reply_to_message_id": payload.get("reply_to_message_id") or metadata.get("reply_to_message_id"),
             "raw": payload,
         }
 
