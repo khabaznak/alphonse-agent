@@ -1098,7 +1098,7 @@ def _heuristic_intent(text: str) -> str | None:
     if not lowered:
         return None
     if _looks_like_greeting(lowered):
-        return "greeting"
+        return "core.greeting"
     if extract_preference_updates(text):
         return "update_preferences"
     if _looks_like_onboarding_start(lowered):
