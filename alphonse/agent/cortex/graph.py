@@ -131,14 +131,30 @@ def _ingest_node(state: CortexState) -> dict[str, Any]:
 def _respond_node_impl(state: CortexState, llm_client: OllamaClient | None) -> dict[str, Any]:
     if state.get("response_text") or state.get("response_key"):
         return {}
-    discovery = _run_intent_discovery(state, llm_client)
+    try:
+        discovery = _run_intent_discovery(state, llm_client)
+    except Exception:
+        logger.exception(
+            "cortex intent discovery failed chat_id=%s text=%s",
+            state.get("chat_id"),
+            _snippet(str(state.get("last_user_message") or "")),
+        )
+        return {"response_key": "generic.unknown"}
     if discovery:
         return discovery
     intent = state.get("intent")
     if intent:
         ability = _ability_registry().get(str(intent))
         if ability is not None:
-            return ability.execute(state, _TOOL_REGISTRY)
+            try:
+                return ability.execute(state, _TOOL_REGISTRY)
+            except Exception:
+                logger.exception(
+                    "cortex ability execution failed intent=%s chat_id=%s",
+                    intent,
+                    state.get("chat_id"),
+                )
+                return {"response_key": "generic.unknown"}
     result: dict[str, Any] = {"response_key": "generic.unknown"}
     guard_input = GapGuardInput(
         category=_category_from_state(state),
@@ -159,6 +175,11 @@ def _run_intent_discovery(
 ) -> dict[str, Any] | None:
     pending = state.get("pending_interaction")
     if isinstance(pending, dict):
+        ask_context = pending.get("context") if isinstance(pending.get("context"), dict) else {}
+        if ask_context.get("tool") == "askQuestion":
+            resumed = _resume_discovery_from_answer(state, pending)
+            if resumed is not None:
+                return resumed
         intent_name = str(pending.get("context", {}).get("ability_intent") or "")
         if intent_name:
             ability = _ability_registry().get(intent_name)
@@ -167,6 +188,8 @@ def _run_intent_discovery(
                 return ability.execute(state, _TOOL_REGISTRY)
     ability_state = state.get("ability_state")
     if isinstance(ability_state, dict):
+        if _is_discovery_loop_state(ability_state):
+            return _run_discovery_loop_step(state, ability_state)
         intent_name = str(ability_state.get("intent") or "")
         if intent_name:
             ability = _ability_registry().get(intent_name)
@@ -186,7 +209,7 @@ def _run_intent_discovery(
                 return ability.execute(state, _TOOL_REGISTRY)
 
     if not llm_client:
-        return {"response_key": "clarify.intent"}
+        return {"response_key": "generic.unknown"}
 
     if not text:
         return {"response_key": "clarify.repeat_input"}
@@ -201,28 +224,12 @@ def _run_intent_discovery(
     )
     plans = discovery.get("plans") if isinstance(discovery, dict) else None
     if not isinstance(plans, list):
-        return {"response_key": "clarify.intent"}
-    next_call = _select_next_tool_call(plans)
-    if not next_call:
-        return {"response_key": "clarify.intent"}
-    tool_name = str(next_call.get("tool") or "")
-    params = next_call.get("parameters") if isinstance(next_call.get("parameters"), dict) else {}
-    if tool_name == "askQuestion":
-        question = _render_ask_question(params)
-        if question:
-            return {"response_text": question}
-        return {"response_key": "clarify.intent"}
-    ability = _ability_registry().get(tool_name)
-    if ability is None:
-        state["intent"] = tool_name
-        plan = _build_gap_plan(state, reason="missing_handler")
-        return {"response_key": "generic.unknown", "plans": [plan.model_dump()]}
-    state["intent"] = tool_name
-    state["intent_confidence"] = 0.6
-    state["intent_category"] = IntentCategory.TASK_PLANE.value
-    if params:
-        state["slots"] = params
-    return ability.execute(state, _TOOL_REGISTRY)
+        return {"response_key": "generic.unknown"}
+    loop_state = _build_discovery_loop_state(discovery)
+    if not loop_state.get("steps"):
+        return {"response_key": "generic.unknown"}
+    state["ability_state"] = loop_state
+    return _run_discovery_loop_step(state, loop_state)
 
 
 def _select_next_tool_call(plans: list[dict[str, Any]]) -> dict[str, Any] | None:
@@ -241,14 +248,215 @@ def _select_next_tool_call(plans: list[dict[str, Any]]) -> dict[str, Any] | None
     return None
 
 
-def _render_ask_question(params: dict[str, Any]) -> str | None:
-    message = params.get("message")
-    if isinstance(message, str) and message.strip():
-        return message.strip()
-    intent = params.get("intent")
-    if isinstance(intent, str) and intent.strip():
-        return intent.strip()
+def _is_discovery_loop_state(ability_state: dict[str, Any]) -> bool:
+    return str(ability_state.get("kind") or "") == "discovery_loop"
+
+
+def _build_discovery_loop_state(discovery: dict[str, Any]) -> dict[str, Any]:
+    steps: list[dict[str, Any]] = []
+    plans = discovery.get("plans") if isinstance(discovery.get("plans"), list) else []
+    for chunk_idx, chunk_plan in enumerate(plans):
+        if not isinstance(chunk_plan, dict):
+            continue
+        execution = chunk_plan.get("executionPlan")
+        if not isinstance(execution, list):
+            continue
+        for seq, raw_step in enumerate(execution):
+            if not isinstance(raw_step, dict):
+                continue
+            step = dict(raw_step)
+            params = step.get("parameters")
+            if not isinstance(params, dict):
+                params = {}
+            step["parameters"] = params
+            if step.get("executed") is True:
+                step["status"] = "executed"
+            elif str(step.get("status") or "").strip():
+                step["status"] = str(step.get("status")).strip().lower()
+            else:
+                step["status"] = "incomplete" if _has_missing_params(params) else "ready"
+            step["chunk_index"] = chunk_idx
+            step["sequence"] = seq
+            steps.append(step)
+    return {"kind": "discovery_loop", "steps": steps}
+
+
+def _has_missing_params(params: dict[str, Any]) -> bool:
+    for value in params.values():
+        if value is None:
+            return True
+        if isinstance(value, str) and not value.strip():
+            return True
+    return False
+
+
+def _run_discovery_loop_step(
+    state: CortexState, loop_state: dict[str, Any]
+) -> dict[str, Any]:
+    steps = loop_state.get("steps")
+    if not isinstance(steps, list) or not steps:
+        return {"response_key": "generic.unknown", "ability_state": {}}
+    next_idx = _next_step_index(steps, allowed_statuses={"ready"})
+    if next_idx is None:
+        if _next_step_index(steps, allowed_statuses={"incomplete", "waiting"}) is not None:
+            return {"response_key": "generic.unknown", "ability_state": loop_state}
+        return {"response_key": "ack.confirmed", "ability_state": {}}
+    step = steps[next_idx]
+    tool_name = str(step.get("tool") or "").strip()
+    if not tool_name:
+        step["status"] = "failed"
+        step["outcome"] = "missing_tool_name"
+        return {"response_key": "generic.unknown", "ability_state": loop_state}
+    if tool_name == "askQuestion":
+        return _run_ask_question_step(state, step, loop_state, next_idx)
+    ability = _ability_registry().get(tool_name)
+    if ability is None:
+        step["status"] = "failed"
+        step["outcome"] = "unknown_tool"
+        state["intent"] = tool_name
+        gap = _build_gap_plan(state, reason="unknown_tool_in_plan")
+        return {
+            "response_key": "generic.unknown",
+            "ability_state": loop_state,
+            "plans": [gap.model_dump()],
+        }
+    params = step.get("parameters") if isinstance(step.get("parameters"), dict) else {}
+    state["intent"] = tool_name
+    state["intent_confidence"] = 0.6
+    state["intent_category"] = IntentCategory.TASK_PLANE.value
+    state["slots"] = params
+    result = ability.execute(state, _TOOL_REGISTRY) or {}
+    step["status"] = "executed"
+    step["executed"] = True
+    step["outcome"] = "success"
+    merged = dict(result)
+    incoming_plans = merged.get("plans") if isinstance(merged.get("plans"), list) else []
+    merged["plans"] = incoming_plans
+    # Keep the loop alive until all steps are done or explicitly waiting for input.
+    if merged.get("pending_interaction"):
+        merged["ability_state"] = loop_state
+        return merged
+    if _next_step_index(steps, allowed_statuses={"ready"}) is None:
+        if _next_step_index(steps, allowed_statuses={"incomplete", "waiting"}) is None:
+            merged["ability_state"] = {}
+            return merged
+    merged["ability_state"] = loop_state
+    return merged
+
+
+def _next_step_index(steps: list[dict[str, Any]], allowed_statuses: set[str]) -> int | None:
+    for idx, step in enumerate(steps):
+        status = str(step.get("status") or "").strip().lower()
+        if status in allowed_statuses:
+            return idx
     return None
+
+
+def _resume_discovery_from_answer(
+    state: CortexState, pending: dict[str, Any]
+) -> dict[str, Any] | None:
+    ability_state = state.get("ability_state")
+    if not isinstance(ability_state, dict) or not _is_discovery_loop_state(ability_state):
+        return None
+    steps = ability_state.get("steps")
+    if not isinstance(steps, list):
+        return None
+    context = pending.get("context") if isinstance(pending.get("context"), dict) else {}
+    pending_key = str(pending.get("key") or "answer")
+    answer = str(state.get("last_user_message") or "").strip()
+    if not answer:
+        return None
+    step_index_raw = context.get("step_index")
+    ask_idx = int(step_index_raw) if isinstance(step_index_raw, int) else _next_step_index(steps, {"waiting"})
+    if ask_idx is not None and 0 <= ask_idx < len(steps):
+        ask_step = steps[ask_idx]
+        ask_step["status"] = "executed"
+        ask_step["executed"] = True
+        ask_step["outcome"] = "answered"
+    bind = context.get("bind") if isinstance(context.get("bind"), dict) else {}
+    _bind_answer_to_steps(steps, bind, pending_key, answer)
+    state["pending_interaction"] = None
+    state["ability_state"] = ability_state
+    return _run_discovery_loop_step(state, ability_state)
+
+
+def _bind_answer_to_steps(
+    steps: list[dict[str, Any]],
+    bind: dict[str, Any],
+    pending_key: str,
+    answer: str,
+) -> None:
+    bound = False
+    step_index = bind.get("step_index")
+    param = str(bind.get("param") or pending_key or "answer").strip()
+    if isinstance(step_index, int) and 0 <= step_index < len(steps):
+        target = steps[step_index]
+        params = target.get("parameters") if isinstance(target.get("parameters"), dict) else {}
+        params[param] = answer
+        target["parameters"] = params
+        if target.get("status") == "incomplete" and not _has_missing_params(params):
+            target["status"] = "ready"
+        bound = True
+    if bound:
+        return
+    for step in steps:
+        if str(step.get("status") or "").lower() not in {"incomplete", "ready"}:
+            continue
+        params = step.get("parameters") if isinstance(step.get("parameters"), dict) else {}
+        if param in params and (params[param] is None or (isinstance(params[param], str) and not params[param].strip())):
+            params[param] = answer
+            step["parameters"] = params
+            if step.get("status") == "incomplete" and not _has_missing_params(params):
+                step["status"] = "ready"
+            return
+    for step in steps:
+        if str(step.get("status") or "").lower() != "incomplete":
+            continue
+        params = step.get("parameters") if isinstance(step.get("parameters"), dict) else {}
+        for key, value in params.items():
+            if value is None or (isinstance(value, str) and not value.strip()):
+                params[key] = answer
+                step["parameters"] = params
+                if not _has_missing_params(params):
+                    step["status"] = "ready"
+                return
+
+
+def _run_ask_question_step(
+    state: CortexState,
+    step: dict[str, Any],
+    loop_state: dict[str, Any] | None = None,
+    step_index: int | None = None,
+) -> dict[str, Any]:
+    params = step.get("parameters") if isinstance(step.get("parameters"), dict) else {}
+    question = ""
+    for key in ("question", "message", "prompt"):
+        value = params.get(key)
+        if isinstance(value, str) and value.strip():
+            question = value.strip()
+            break
+    if not question:
+        plan = _build_gap_plan(state, reason="invalid_ask_question_step")
+        return {"response_key": "generic.unknown", "plans": [plan.model_dump()]}
+    key = str(params.get("slot") or params.get("param") or "answer").strip() or "answer"
+    bind = params.get("bind") if isinstance(params.get("bind"), dict) else {}
+    pending = build_pending_interaction(
+        PendingInteractionType.SLOT_FILL,
+        key=key,
+        context={
+            "origin_intent": "askQuestion",
+            "tool": "askQuestion",
+            "step": step,
+            "step_index": step_index,
+            "bind": bind,
+        },
+    )
+    step["status"] = "waiting"
+    return {
+        "response_text": question,
+        "pending_interaction": serialize_pending_interaction(pending),
+        "ability_state": loop_state or {},
+    }
 
 
 def _respond_node(arg: OllamaClient | CortexState | None = None):
@@ -913,6 +1121,13 @@ def _extract_pairing_decision(text: str) -> tuple[str | None, str | None]:
     pairing_id = parts[0]
     otp = parts[1] if len(parts) > 1 else None
     return pairing_id, otp
+
+
+def _snippet(text: str, limit: int = 140) -> str:
+    text = text.strip().replace("\n", " ")
+    if len(text) <= limit:
+        return text
+    return f"{text[:limit]}..."
 
 
 def _locale_for_state(state: CortexState) -> str:
