@@ -127,10 +127,11 @@ Start the interactive CLI REPL:
 python -m alphonse.agent.cli repl
 ```
 
-Inside the REPL you can inspect intent routing:
+Inside the REPL you can inspect or change routing strategy:
 
 ```text
-alphonse> debug intent "Cuál es mi nombre?"
+alphonse> routing get
+alphonse> routing set multi_pass
 ```
 
 Inside the REPL you can also manage a **managed** agent process (started by the REPL):

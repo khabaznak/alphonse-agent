@@ -49,6 +49,7 @@ from alphonse.agent.nervous_system.location_profiles import (
 from alphonse.agent.nervous_system.tool_configs import (
     delete_tool_config,
     get_tool_config,
+    get_active_tool_config,
     list_tool_configs,
     upsert_tool_config,
 )
@@ -177,6 +178,10 @@ class ToolConfigUpsert(BaseModel):
     name: str | None = None
     config: dict[str, Any]
     is_active: bool = True
+
+
+class RoutingStrategyUpdate(BaseModel):
+    strategy: str
 
 
 class PromptTemplateCreate(BaseModel):
@@ -1009,6 +1014,39 @@ def delete_agent_tool_config(
     if not ok:
         raise HTTPException(status_code=404, detail="Tool config not found")
     return {"deleted": True, "config_id": config_id}
+
+
+@app.get("/agent/routing/strategy")
+def get_routing_strategy(
+    x_alphonse_api_token: str | None = Header(default=None),
+) -> dict[str, Any]:
+    _assert_api_token(x_alphonse_api_token)
+    config = get_active_tool_config("routing_strategy")
+    strategy = "multi_pass"
+    if config and isinstance(config.get("config"), dict):
+        raw = config.get("config") or {}
+        strategy = str(raw.get("strategy") or strategy)
+    return {"strategy": strategy, "config": config}
+
+
+@app.post("/agent/routing/strategy")
+def set_routing_strategy(
+    payload: RoutingStrategyUpdate,
+    x_alphonse_api_token: str | None = Header(default=None),
+) -> dict[str, Any]:
+    _assert_api_token(x_alphonse_api_token)
+    strategy = str(payload.strategy or "").strip()
+    if strategy not in {"multi_pass", "single_pass"}:
+        raise HTTPException(status_code=400, detail="Invalid strategy")
+    config_id = upsert_tool_config(
+        {
+            "tool_key": "routing_strategy",
+            "name": "Routing strategy",
+            "config": {"strategy": strategy},
+            "is_active": True,
+        }
+    )
+    return {"item": get_tool_config(config_id)}
 
 
 @app.get("/agent/users")

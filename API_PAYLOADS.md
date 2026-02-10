@@ -78,6 +78,21 @@ Delete tool config
 DELETE /agent/tool-configs/{config_id}
 ```
 
+## Routing Strategy
+
+Get routing strategy
+```json
+GET /agent/routing/strategy
+```
+
+Set routing strategy
+```json
+POST /agent/routing/strategy
+{
+  "strategy": "multi_pass"
+}
+```
+
 ## Onboarding Profiles
 
 Upsert onboarding profile
@@ -204,7 +219,7 @@ Create prompt template
 ```json
 POST /agent/prompts
 {
-  "key": "message_map.system.v1",
+  "key": "intent_discovery.dissector.v1",
   "locale": "any",
   "address_style": "any",
   "tone": "any",
@@ -240,7 +255,7 @@ GET /agent/prompts/{template_id}
 
 List prompt templates
 ```json
-GET /agent/prompts?key=message_map.system.v1&enabled_only=true&purpose=routing
+GET /agent/prompts?key=intent_discovery.dissector.v1&enabled_only=true&purpose=routing
 ```
 
 Delete prompt template

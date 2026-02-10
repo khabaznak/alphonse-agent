@@ -139,10 +139,6 @@ def build_parser() -> argparse.ArgumentParser:
     debug_wiring = debug_sub.add_parser(
         "wiring", help="Show DB path and timed signals API status"
     )
-    debug_intent = debug_sub.add_parser(
-        "intent", help="Inspect intent routing for a message"
-    )
-    debug_intent.add_argument("text", nargs="+", help="Message text to route")
 
     agent_parser = sub.add_parser("agent", help="Manage agent process (REPL-only)")
     agent_sub = agent_parser.add_subparsers(dest="agent_command", required=True)
@@ -243,14 +239,6 @@ def build_parser() -> argparse.ArgumentParser:
     catalog_sub.add_parser("seed", help="Seed factory intents into the catalog")
     catalog_sub.add_parser("validate", help="Validate catalog entries")
     catalog_sub.add_parser("stats", help="Show catalog diagnostics")
-    catalog_prompt = catalog_sub.add_parser("prompt", help="Render routing prompt")
-    catalog_prompt.add_argument("--text", required=True, help="User message to render")
-    catalog_prompt.add_argument(
-        "--mode",
-        choices=("map",),
-        default="map",
-        help="Prompt mode: map (default runtime)",
-    )
     catalog_template = catalog_sub.add_parser("template", help="Show prompt template by key")
     catalog_template.add_argument("key", help="Prompt template key")
 
@@ -318,6 +306,14 @@ def build_parser() -> argparse.ArgumentParser:
     abilities_disable.add_argument("intent_name", help="Intent name")
     abilities_delete = abilities_sub.add_parser("delete", help="Delete ability spec")
     abilities_delete.add_argument("intent_name", help="Intent name")
+
+    routing_parser = sub.add_parser("routing", help="Routing strategy")
+    routing_sub = routing_parser.add_subparsers(dest="routing_command", required=True)
+    routing_sub.add_parser("get", help="Show routing strategy")
+    routing_set = routing_sub.add_parser("set", help="Set routing strategy")
+    routing_set.add_argument(
+        "strategy", choices=["multi_pass", "single_pass"], help="Routing strategy"
+    )
 
     onboarding_parser = sub.add_parser("onboarding", help="Onboarding profile CRUD")
     onboarding_sub = onboarding_parser.add_subparsers(
@@ -605,6 +601,9 @@ def _dispatch_command(
     if args.command == "tool-configs":
         _command_tool_configs(args)
         return
+    if args.command == "routing":
+        _command_routing(args)
+        return
     if args.command == "terminal":
         _command_terminal(args)
     if args.command == "telegram":
@@ -856,14 +855,6 @@ def _command_catalog(args: argparse.Namespace) -> None:
                 print(f"  - {key}: {value}")
         return
 
-    if args.catalog_command == "prompt":
-        from alphonse.agent.cognition.message_map_llm import build_message_map_prompt
-
-        prompt = build_message_map_prompt(args.text)
-        print("Mode: map")
-        print(prompt)
-        return
-
     if args.catalog_command == "template":
         from alphonse.agent.cognition.prompt_store import SqlitePromptStore, PromptContext
 
@@ -917,9 +908,6 @@ def _command_debug(args: argparse.Namespace) -> None:
     if args.debug_command == "wiring":
         _command_debug_wiring()
         return
-    if args.debug_command == "intent":
-        _command_debug_intent(args)
-        return
 
 
 def _command_debug_wiring() -> None:
@@ -949,13 +937,31 @@ def _command_debug_wiring() -> None:
         print(f"API timed signals error: {exc}")
 
 
-def _command_debug_intent(args: argparse.Namespace) -> None:
-    from alphonse.agent.cognition.message_map_llm import build_message_map_prompt
+def _command_routing(args: argparse.Namespace) -> None:
+    from alphonse.agent.nervous_system.tool_configs import (
+        get_active_tool_config,
+        upsert_tool_config,
+    )
 
-    text = " ".join(args.text)
-    prompt = build_message_map_prompt(text)
-    print("Intent routing (map prompt):")
-    print(prompt)
+    if args.routing_command == "get":
+        config = get_active_tool_config("routing_strategy")
+        if not config or not isinstance(config.get("config"), dict):
+            print("Routing strategy: multi_pass (default)")
+            return
+        raw = config.get("config") or {}
+        strategy = raw.get("strategy") or "multi_pass"
+        print(f"Routing strategy: {strategy}")
+        return
+    if args.routing_command == "set":
+        record = {
+            "tool_key": "routing_strategy",
+            "name": "Routing strategy",
+            "config": {"strategy": args.strategy},
+            "is_active": True,
+        }
+        config_id = upsert_tool_config(record)
+        print(f"Routing strategy updated: {args.strategy} (config_id={config_id})")
+        return
 
 
 def _command_agent(args: argparse.Namespace, *, supervisor: "AgentSupervisor | None") -> None:
