@@ -280,6 +280,7 @@ def _build_cortex_state(
     incoming_user_name = _as_optional_str(getattr(normalized, "user_name", None))
     incoming_meta = getattr(normalized, "metadata", {}) if normalized is not None else {}
     incoming_meta = incoming_meta if isinstance(incoming_meta, dict) else {}
+    pending_interaction, ability_state = _sanitize_interaction_state(stored_state)
     return {
         "chat_id": incoming.address or incoming.channel_type,
         "channel_type": incoming.channel_type,
@@ -298,12 +299,44 @@ def _build_cortex_state(
         "intent_category": stored_state.get("intent_category"),
         "routing_rationale": stored_state.get("routing_rationale"),
         "routing_needs_clarification": stored_state.get("routing_needs_clarification"),
-        "pending_interaction": stored_state.get("pending_interaction"),
-        "ability_state": stored_state.get("ability_state"),
+        "pending_interaction": pending_interaction,
+        "ability_state": ability_state,
         "slot_machine": stored_state.get("slot_machine"),
         "correlation_id": correlation_id,
         "timezone": timezone,
     }
+
+
+def _sanitize_interaction_state(
+    stored_state: dict[str, Any],
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    pending = stored_state.get("pending_interaction")
+    ability_state = stored_state.get("ability_state")
+    if not isinstance(pending, dict):
+        return None, ability_state if isinstance(ability_state, dict) else None
+    if _is_pending_interaction_expired(pending):
+        logger.info("HandleIncomingMessageAction clearing expired pending_interaction")
+        # Discovery-loop state is coupled to pending askQuestion follow-ups.
+        if (
+            isinstance(ability_state, dict)
+            and str(ability_state.get("kind") or "") == "discovery_loop"
+        ):
+            return None, None
+        return None, ability_state if isinstance(ability_state, dict) else None
+    return pending, ability_state if isinstance(ability_state, dict) else None
+
+
+def _is_pending_interaction_expired(pending: dict[str, Any]) -> bool:
+    expires_at = pending.get("expires_at")
+    if not isinstance(expires_at, str) or not expires_at.strip():
+        return False
+    try:
+        expires_dt = datetime.fromisoformat(expires_at.strip())
+    except ValueError:
+        return False
+    if expires_dt.tzinfo is None:
+        expires_dt = expires_dt.replace(tzinfo=timezone.utc)
+    return datetime.now(timezone.utc) >= expires_dt
 
 
 def _effective_locale(incoming: IncomingContext) -> str:

@@ -78,6 +78,19 @@ _PLANNER_USER_FALLBACK = (
     "AVAILABLE TOOLS:\n{AVAILABLE_TOOLS}\n"
 )
 
+_DISSECTOR_GUARDRAILS = (
+    "Hard constraints:\n"
+    "- If the user message contains one goal, return exactly one chunk.\n"
+    "- Do not split a single an action chunk into separate chunks for action/time/purpose.\n"
+)
+
+_PLANNER_GUARDRAILS = (
+    "Hard constraints:\n"
+    "- Never invent tool names. Use only tools that appear exactly in AVAILABLE TOOLS.\n"
+    "- If no single listed tool can achieve the goal, produce the shortest valid multi-step sequence of listed tool calls that satisfies the acceptance criteria.\n"
+    "- Prefer the shortest plan (one step when enough information is present).\n"
+)
+
 
 def discover_plan(
     *,
@@ -134,6 +147,7 @@ def discover_plan(
         ),
         {"MESSAGE_TEXT": text},
     )
+    dissector_user = f"{dissector_user}\n\n{_DISSECTOR_GUARDRAILS}"
 
     raw_chunks = _call_llm(llm_client, dissector_system, dissector_user)
     chunks = _parse_chunks(raw_chunks)
@@ -161,6 +175,7 @@ def discover_plan(
                 "AVAILABLE_TOOLS": available_tools,
             },
         )
+        planner_user = f"{planner_user}\n\n{_PLANNER_GUARDRAILS}"
         raw_plan = _call_llm(llm_client, planner_system, planner_user)
         execution_plan = _parse_execution_plan(raw_plan)
         plans.append(
@@ -192,6 +207,7 @@ def _single_pass_plan(
             "AVAILABLE_TOOLS": available_tools,
         },
     )
+    planner_user = f"{planner_user}\n\n{_PLANNER_GUARDRAILS}"
     raw_plan = _call_llm(llm_client, planner_system, planner_user)
     execution_plan = _parse_execution_plan(raw_plan)
     return {
@@ -235,12 +251,70 @@ def format_available_abilities() -> str:
     return "\n".join(lines)
 
 
+def format_available_ability_catalog() -> str:
+    specs = _load_ability_specs()
+    catalog: list[dict[str, Any]] = [
+        {
+            "tool": "askQuestion",
+            "summary": "Ask the user for missing parameters to continue.",
+            "input_parameters": [
+                {"name": "question", "type": "string", "required": True},
+                {"name": "slot", "type": "string", "required": False},
+                {"name": "bind", "type": "object", "required": False},
+            ],
+        }
+    ]
+    for spec in specs:
+        tool = str(spec.get("intent_name") or "").strip()
+        if not tool:
+            continue
+        raw_params = (
+            spec.get("input_parameters")
+            if isinstance(spec.get("input_parameters"), list)
+            else []
+        )
+        params: list[dict[str, Any]] = []
+        for item in raw_params:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("name") or "").strip()
+            if not name:
+                continue
+            params.append(
+                {
+                    "name": name,
+                    "type": str(item.get("type") or "string"),
+                    "required": bool(item.get("required", False)),
+                }
+            )
+        catalog.append(
+            {
+                "tool": tool,
+                "summary": _ability_summary(spec),
+                "input_parameters": params,
+            }
+        )
+    return json.dumps(catalog, ensure_ascii=False)
+
+
 def _call_llm(llm_client: object, system_prompt: str, user_prompt: str) -> str:
     try:
         return str(llm_client.complete(system_prompt=system_prompt, user_prompt=user_prompt))
     except Exception as exc:
         logger.warning("intent discovery LLM call failed: %s", exc)
         return ""
+
+
+def _ability_summary(spec: dict[str, Any]) -> str:
+    kind = str(spec.get("kind") or "").strip()
+    steps = spec.get("step_sequence") if isinstance(spec.get("step_sequence"), list) else []
+    if steps:
+        first = steps[0]
+        if isinstance(first, dict):
+            action = str(first.get("action") or "").strip()
+            if action:
+                return f"{kind or 'ability'} via action {action}"
+    return kind or "ability"
 
 
 def _get_template(store: SqlitePromptStore, key: str, context: PromptContext, fallback: str) -> str:

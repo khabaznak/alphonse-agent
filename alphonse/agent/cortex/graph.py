@@ -15,6 +15,7 @@ from alphonse.agent.cognition.providers.ollama import OllamaClient
 from alphonse.agent.cognition.intent_types import IntentCategory
 from alphonse.agent.cognition.intent_discovery_engine import (
     discover_plan,
+    format_available_ability_catalog,
     format_available_abilities,
     get_discovery_strategy,
 )
@@ -32,6 +33,12 @@ logger = logging.getLogger(__name__)
 
 _TOOL_REGISTRY: ToolRegistry = build_default_tool_registry()
 _ABILITY_REGISTRY: AbilityRegistry | None = None
+
+_PLAN_CRITIC_SYSTEM_PROMPT = (
+    "You are a strict plan-step critic and repairer. "
+    "Your job is to repair one invalid tool call step. "
+    "You must choose only from AVAILABLE TOOLS CATALOG and output JSON only."
+)
 
 
 class CortexState(TypedDict, total=False):
@@ -320,6 +327,35 @@ def _run_discovery_loop_step(
         return _run_ask_question_step(state, step, loop_state, next_idx)
     ability = _ability_registry().get(tool_name)
     if ability is None:
+        if not bool(step.get("critic_attempted")):
+            repaired = _critic_repair_invalid_step(
+                state=state,
+                step=step,
+                llm_client=llm_client,
+            )
+            if repaired is not None:
+                repaired["chunk_index"] = step.get("chunk_index")
+                repaired["sequence"] = step.get("sequence")
+                repaired["critic_attempted"] = True
+                repaired["executed"] = False
+                repaired_params = (
+                    repaired.get("parameters")
+                    if isinstance(repaired.get("parameters"), dict)
+                    else {}
+                )
+                repaired["parameters"] = repaired_params
+                repaired["status"] = (
+                    "incomplete" if _has_missing_params(repaired_params) else "ready"
+                )
+                steps[next_idx] = repaired
+                logger.info(
+                    "cortex plan critic repaired chat_id=%s correlation_id=%s from=%s to=%s",
+                    state.get("chat_id"),
+                    state.get("correlation_id"),
+                    tool_name,
+                    str(repaired.get("tool") or "unknown"),
+                )
+                return _run_discovery_loop_step(state, loop_state, llm_client)
         step["status"] = "failed"
         step["outcome"] = "unknown_tool"
         state["intent"] = tool_name
@@ -349,6 +385,85 @@ def _run_discovery_loop_step(
     merged["ability_state"] = loop_state
     merged["pending_interaction"] = None
     return merged
+
+
+def _critic_repair_invalid_step(
+    *,
+    state: CortexState,
+    step: dict[str, Any],
+    llm_client: OllamaClient | None,
+) -> dict[str, Any] | None:
+    if llm_client is None:
+        return None
+    user_prompt = _build_plan_critic_prompt(state, step)
+    try:
+        raw = str(
+            llm_client.complete(
+                system_prompt=_PLAN_CRITIC_SYSTEM_PROMPT,
+                user_prompt=user_prompt,
+            )
+        )
+    except Exception:
+        logger.exception(
+            "cortex plan critic failed chat_id=%s correlation_id=%s",
+            state.get("chat_id"),
+            state.get("correlation_id"),
+        )
+        return None
+    repaired = _parse_critic_step(raw)
+    if repaired is None:
+        return None
+    tool_name = str(repaired.get("tool") or "").strip()
+    if not tool_name:
+        return None
+    if tool_name != "askQuestion" and _ability_registry().get(tool_name) is None:
+        return None
+    params = repaired.get("parameters")
+    repaired["parameters"] = params if isinstance(params, dict) else {}
+    return repaired
+
+
+def _build_plan_critic_prompt(state: CortexState, step: dict[str, Any]) -> str:
+    return (
+        "Repair this invalid execution step.\n"
+        "Rules:\n"
+        "- Select exactly one tool from AVAILABLE TOOLS CATALOG.\n"
+        "- Keep the original user goal.\n"
+        "- If required parameters are missing, choose askQuestion and ask for only the missing data.\n"
+        "- Output JSON only with shape: "
+        '{"tool":"<tool_name>","parameters":{...}}'
+        "\n\n"
+        f"User message:\n{str(state.get('last_user_message') or '')}\n\n"
+        f"Invalid step:\n{_safe_json(step, limit=800)}\n\n"
+        f"AVAILABLE TOOLS SIGNATURES:\n{format_available_abilities()}\n\n"
+        f"AVAILABLE TOOLS CATALOG:\n{format_available_ability_catalog()}\n"
+    )
+
+
+def _parse_critic_step(raw: str) -> dict[str, Any] | None:
+    candidate = str(raw or "").strip()
+    if not candidate:
+        return None
+    if candidate.startswith("```"):
+        candidate = candidate.strip("`")
+        if candidate.startswith("json"):
+            candidate = candidate[4:].strip()
+    payload: Any = None
+    try:
+        payload = json.loads(candidate)
+    except json.JSONDecodeError:
+        pass
+    if not isinstance(payload, dict):
+        start = candidate.find("{")
+        end = candidate.rfind("}")
+        if start >= 0 and end > start:
+            try:
+                payload = json.loads(candidate[start : end + 1])
+            except json.JSONDecodeError:
+                payload = None
+    if not isinstance(payload, dict):
+        return None
+    return payload
 
 
 def _log_discovery_plan(state: CortexState, discovery: dict[str, Any] | None) -> None:
