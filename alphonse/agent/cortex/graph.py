@@ -97,10 +97,13 @@ def invoke_cortex(
 
 
 def _compose_response_from_state(state: dict[str, Any]) -> str:
+    key = state.get("response_key")
+    if not isinstance(key, str) or not key.strip():
+        return ""
     composer = ResponseComposer()
     spec = ResponseSpec(
         kind="answer",
-        key=str(state.get("response_key") or "generic.unknown"),
+        key=key.strip(),
         locale=_locale_for_state(state),
         channel=str(state.get("channel_type") or "telegram"),
         variables=state.get("response_vars") or {},
@@ -140,9 +143,8 @@ def _respond_node_impl(state: CortexState, llm_client: OllamaClient | None) -> d
             state.get("chat_id"),
             _snippet(str(state.get("last_user_message") or "")),
         )
-        return _fallback_ask_question_response(
-            state, reason="intent_discovery_exception"
-        )
+        plan = _build_gap_plan(state, reason="intent_discovery_exception")
+        return {"plans": [plan.model_dump()]}
     if discovery:
         return discovery
     intent = state.get("intent")
@@ -157,12 +159,9 @@ def _respond_node_impl(state: CortexState, llm_client: OllamaClient | None) -> d
                     intent,
                     state.get("chat_id"),
                 )
-                return _fallback_ask_question_response(
-                    state, reason="ability_execution_exception"
-                )
-    result: dict[str, Any] = _fallback_ask_question_response(
-        state, reason="missing_capability"
-    )
+                plan = _build_gap_plan(state, reason="ability_execution_exception")
+                return {"plans": [plan.model_dump()]}
+    result: dict[str, Any] = {}
     guard_input = GapGuardInput(
         category=_category_from_state(state),
         plan_status=None,
@@ -181,21 +180,6 @@ def _run_intent_discovery(
     state: CortexState, llm_client: OllamaClient | None
 ) -> dict[str, Any] | None:
     text = str(state.get("last_user_message") or "").strip()
-    if text:
-        heuristic_intent = _heuristic_intent(text)
-        if heuristic_intent:
-            ability = _ability_registry().get(heuristic_intent)
-            if ability is not None:
-                state["intent"] = heuristic_intent
-                state["intent_confidence"] = 0.85
-                state["intent_category"] = IntentCategory.TASK_PLANE.value
-                result = ability.execute(state, _TOOL_REGISTRY) or {}
-                if isinstance(result, dict):
-                    if "pending_interaction" not in result:
-                        result["pending_interaction"] = None
-                    if "ability_state" not in result:
-                        result["ability_state"] = {}
-                return result
 
     pending = state.get("pending_interaction")
     if isinstance(pending, dict):
@@ -222,10 +206,11 @@ def _run_intent_discovery(
                 return ability.execute(state, _TOOL_REGISTRY)
 
     if not llm_client:
-        return _fallback_ask_question_response(state, reason="no_llm_client")
+        plan = _build_gap_plan(state, reason="no_llm_client")
+        return {"plans": [plan.model_dump()]}
 
     if not text:
-        return {"response_key": "clarify.repeat_input"}
+        return {}
 
     available_tools = format_available_abilities()
     discovery = discover_plan(
@@ -237,10 +222,12 @@ def _run_intent_discovery(
     )
     plans = discovery.get("plans") if isinstance(discovery, dict) else None
     if not isinstance(plans, list):
-        return _fallback_ask_question_response(state, reason="invalid_plan_payload")
+        plan = _build_gap_plan(state, reason="invalid_plan_payload")
+        return {"plans": [plan.model_dump()]}
     loop_state = _build_discovery_loop_state(discovery)
     if not loop_state.get("steps"):
-        return _fallback_ask_question_response(state, reason="empty_execution_plan")
+        plan = _build_gap_plan(state, reason="empty_execution_plan")
+        return {"plans": [plan.model_dump()]}
     state["ability_state"] = loop_state
     return _run_discovery_loop_step(state, loop_state, llm_client)
 
@@ -308,28 +295,20 @@ def _run_discovery_loop_step(
 ) -> dict[str, Any]:
     steps = loop_state.get("steps")
     if not isinstance(steps, list) or not steps:
-        result = _fallback_ask_question_response(state, reason="loop_missing_steps")
-        result["ability_state"] = {}
-        return result
+        plan = _build_gap_plan(state, reason="loop_missing_steps")
+        return {"ability_state": {}, "plans": [plan.model_dump()]}
     next_idx = _next_step_index(steps, allowed_statuses={"ready"})
     if next_idx is None:
         if _next_step_index(steps, allowed_statuses={"incomplete", "waiting"}) is not None:
-            result = _fallback_ask_question_response(state, reason="loop_waiting_or_incomplete")
-            result["ability_state"] = loop_state
-            return result
-        return {
-            "response_key": "ack.confirmed",
-            "ability_state": {},
-            "pending_interaction": None,
-        }
+            return {"ability_state": loop_state}
+        return {"ability_state": {}, "pending_interaction": None}
     step = steps[next_idx]
     tool_name = str(step.get("tool") or "").strip()
     if not tool_name:
         step["status"] = "failed"
         step["outcome"] = "missing_tool_name"
-        result = _fallback_ask_question_response(state, reason="step_missing_tool_name")
-        result["ability_state"] = loop_state
-        return result
+        plan = _build_gap_plan(state, reason="step_missing_tool_name")
+        return {"ability_state": loop_state, "plans": [plan.model_dump()]}
     if tool_name == "askQuestion":
         return _run_ask_question_step(state, step, loop_state, next_idx)
     ability = _ability_registry().get(tool_name)
@@ -338,10 +317,7 @@ def _run_discovery_loop_step(
         step["outcome"] = "unknown_tool"
         state["intent"] = tool_name
         gap = _build_gap_plan(state, reason="unknown_tool_in_plan")
-        result = _fallback_ask_question_response(state, reason=f"unknown_tool:{tool_name}")
-        result["ability_state"] = loop_state
-        result["plans"] = [gap.model_dump()]
-        return result
+        return {"ability_state": loop_state, "plans": [gap.model_dump()]}
     params = step.get("parameters") if isinstance(step.get("parameters"), dict) else {}
     state["intent"] = tool_name
     state["intent_confidence"] = 0.6
@@ -461,7 +437,7 @@ def _run_ask_question_step(
             break
     if not question:
         plan = _build_gap_plan(state, reason="invalid_ask_question_step")
-        return {"response_key": "generic.unknown", "plans": [plan.model_dump()]}
+        return {"plans": [plan.model_dump()]}
     key = str(params.get("slot") or params.get("param") or "answer").strip() or "answer"
     bind = params.get("bind") if isinstance(params.get("bind"), dict) else {}
     pending = build_pending_interaction(
@@ -481,31 +457,6 @@ def _run_ask_question_step(
         "pending_interaction": serialize_pending_interaction(pending),
         "ability_state": loop_state or {},
     }
-
-
-def _fallback_ask_question_response(state: CortexState, *, reason: str) -> dict[str, Any]:
-    question = _clarification_question_text(state, reason)
-    step = {
-        "tool": "askQuestion",
-        "parameters": {
-            "question": question,
-            "slot": "clarification",
-            "bind": {"param": "clarification"},
-        },
-        "status": "ready",
-    }
-    return _run_ask_question_step(state, step, {"kind": "discovery_loop", "steps": [step]}, 0)
-
-
-def _clarification_question_text(state: CortexState, reason: str) -> str:
-    locale = _locale_for_state(state)
-    if locale.startswith("es"):
-        if reason.startswith("unknown_tool:"):
-            return "Puedo ayudarte, pero necesito que me digas exactamente qué acción quieres que realice."
-        return "¿Qué te gustaría que haga exactamente?"
-    if reason.startswith("unknown_tool:"):
-        return "I can help, but I need you to tell me exactly what action you want me to perform."
-    return "What exactly would you like me to do?"
 
 
 def _respond_node(arg: OllamaClient | CortexState | None = None):
@@ -640,7 +591,7 @@ def _handle_time_current(state: CortexState, tools: ToolRegistry) -> dict[str, A
     timezone_name = str(state.get("timezone") or get_timezone())
     clock = tools.get("clock")
     if clock is None:
-        return {"response_key": "generic.unknown"}
+        return {"plans": [_build_gap_plan(state, reason="clock_tool_unavailable").model_dump()]}
     now = clock.current_time(timezone_name)
     rendered = now.strftime("%H:%M")
     locale = _locale_for_state(state)
@@ -793,7 +744,7 @@ def _handle_set_home_location(state: CortexState) -> dict[str, Any]:
     if channel_type and channel_target:
         principal_id = get_or_create_principal_for_channel(channel_type, channel_target)
     if not principal_id:
-        return {"response_key": "generic.unknown"}
+        return {"plans": [_build_gap_plan(state, reason="set_home_missing_principal").model_dump()]}
     locale = str(state.get("locale") or "")
     language = "es" if locale.startswith("es") else "en"
     sense = LocationSense()
@@ -806,7 +757,7 @@ def _handle_set_home_location(state: CortexState) -> dict[str, Any]:
             language=language,
         )
     except Exception:
-        return {"response_key": "generic.unknown"}
+        return {"plans": [_build_gap_plan(state, reason="set_home_ingest_failed").model_dump()]}
     return {"response_key": "ack.location.saved", "response_vars": {"label": "home"}}
 
 
@@ -821,7 +772,7 @@ def _handle_set_work_location(state: CortexState) -> dict[str, Any]:
     if channel_type and channel_target:
         principal_id = get_or_create_principal_for_channel(channel_type, channel_target)
     if not principal_id:
-        return {"response_key": "generic.unknown"}
+        return {"plans": [_build_gap_plan(state, reason="set_work_missing_principal").model_dump()]}
     locale = str(state.get("locale") or "")
     language = "es" if locale.startswith("es") else "en"
     sense = LocationSense()
@@ -834,7 +785,7 @@ def _handle_set_work_location(state: CortexState) -> dict[str, Any]:
             language=language,
         )
     except Exception:
-        return {"response_key": "generic.unknown"}
+        return {"plans": [_build_gap_plan(state, reason="set_work_ingest_failed").model_dump()]}
     return {"response_key": "ack.location.saved", "response_vars": {"label": "work"}}
 
 
@@ -882,7 +833,7 @@ def _handle_pair_deny(state: CortexState) -> dict[str, Any]:
 def _handle_pairing_decision(state: CortexState, plan_type: PlanType) -> dict[str, Any]:
     pairing_id, otp = _extract_pairing_decision(state.get("last_user_message", ""))
     if not pairing_id:
-        return {"response_key": "generic.unknown"}
+        return {"plans": [_build_gap_plan(state, reason="pairing_id_missing").model_dump()]}
     plan = CortexPlan(
         plan_type=plan_type,
         target=str(state.get("channel_target") or state.get("chat_id") or ""),
@@ -1103,64 +1054,6 @@ def _build_meta(state: CortexState) -> dict[str, Any]:
         "intent_category": state.get("intent_category"),
         "events": state.get("events") or [],
     }
-
-
-def _heuristic_intent(text: str) -> str | None:
-    lowered = text.strip().lower()
-    if not lowered:
-        return None
-    if _looks_like_greeting(lowered):
-        return "core.greeting"
-    if extract_preference_updates(text):
-        return "update_preferences"
-    if _looks_like_onboarding_start(lowered):
-        return "core.onboarding.start"
-    if _looks_like_user_name_query(lowered):
-        return "core.identity.query_user_name"
-    if _looks_like_agent_name_query(lowered):
-        return "core.identity.query_agent_name"
-    return None
-
-
-def _looks_like_greeting(text: str) -> bool:
-    return bool(
-        re.search(
-            r"\b(hi|hello|hey|hola|buenos dias|buen día|buen dia|good morning|good afternoon|good evening)\b",
-            text,
-        )
-    )
-
-
-def _looks_like_onboarding_start(text: str) -> bool:
-    return bool(
-        re.search(
-            r"\b(begin|start|inicia|comienza|iniciar|comenzar)\b.*\bonboarding\b",
-            text,
-        )
-    )
-
-
-def _looks_like_user_name_query(text: str) -> bool:
-    patterns = [
-        r"\b(what'?s|what is|do you know|do you remember)\b.*\bmy name\b",
-        r"\bmy name\b.*\b(what|remember|know)\b",
-        r"\b(sabes|sabe|recuerdas|recuerdas)\b.*\b(mi nombre|como me llamo)\b",
-        r"\b(te acuerdas|te acuerdas)\b.*\b(mi nombre|como me llamo)\b",
-        r"\bya sabes\b.*\bmi nombre\b",
-        r"\bte acuerdas\b.*\bmi nombre\b",
-        r"\bcomo me llamo\b",
-    ]
-    return any(re.search(pattern, text) for pattern in patterns)
-
-
-def _looks_like_agent_name_query(text: str) -> bool:
-    patterns = [
-        r"\b(what'?s|what is)\b.*\byour name\b",
-        r"\bwho are you\b",
-        r"\bcomo te llamas\b",
-        r"\bquien eres\b",
-    ]
-    return any(re.search(pattern, text) for pattern in patterns)
 
 
 def _extract_device_id(text: str) -> str | None:

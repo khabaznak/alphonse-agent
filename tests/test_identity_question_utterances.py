@@ -14,18 +14,15 @@ from alphonse.agent.nervous_system.senses.bus import Signal
 
 class FakeLLM:
     def complete(self, *, system_prompt: str, user_prompt: str) -> str:
-        if "Dissect the message into these components" in user_prompt:
-            return (
-                '{"language":"mixed","social":{"is_greeting":false,'
-                '"is_farewell":false,"is_thanks":false,"text":null},'
-                '"actions":[],"entities":[],"constraints":{"times":[],"numbers":[],"locations":[]},'
-                '"questions":["identity"],"commands":[],"raw_intent_hint":"question_only","confidence":"high"}'
-            )
-        if "Classify the user question into one intent name" in user_prompt:
-            return '{"intent":"core.identity.query_user_name"}'
-        if "Given the user message, ask one short clarifying question" in user_prompt:
-            return "Can you clarify what you mean?"
-        return "{}"
+        _ = system_prompt
+        if "Message:" in user_prompt:
+            return '[{"chunk":"identity query","intention":"identity_name","confidence":"high"}]'
+        if "acceptanceCriteria" in user_prompt:
+            return '{"acceptanceCriteria":["Resolve user name"]}'
+        return (
+            '{"executionPlan":[{"tool":"core.identity.query_user_name","parameters":{},'
+            '"status":"ready"}]}'
+        )
 
 
 def _prepare_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

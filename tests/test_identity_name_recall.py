@@ -13,6 +13,19 @@ from alphonse.agent.nervous_system.migrate import apply_schema
 from alphonse.agent.nervous_system.senses.bus import Signal
 
 
+class _IdentityRoutingLLM:
+    def complete(self, *, system_prompt: str, user_prompt: str) -> str:
+        _ = system_prompt
+        if "Message:" in user_prompt:
+            return '[{"chunk":"identity query","intention":"identity_name","confidence":"high"}]'
+        if "acceptanceCriteria" in user_prompt:
+            return '{"acceptanceCriteria":["Resolve user name"]}'
+        return (
+            '{"executionPlan":[{"tool":"core.identity.query_user_name","parameters":{},'
+            '"status":"ready"}]}'
+        )
+
+
 def _prepare_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     db_path = tmp_path / "nerve-db"
     monkeypatch.setenv("NERVE_DB_PATH", str(db_path))
@@ -46,6 +59,7 @@ def test_capture_then_recall_name(
                     captured.append(plan)
 
     monkeypatch.setattr(him, "PlanExecutor", FakePlanExecutor)
+    monkeypatch.setattr(him, "_build_llm_client", lambda: _IdentityRoutingLLM())
 
     action = HandleIncomingMessageAction()
     _send_text(action, "Sabes como me llamo yo?")
@@ -67,6 +81,7 @@ def test_query_name_sets_pending_when_missing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _prepare_db(tmp_path, monkeypatch)
+    monkeypatch.setattr(him, "_build_llm_client", lambda: _IdentityRoutingLLM())
     action = HandleIncomingMessageAction()
     _send_text(action, "ya sabes mi nombre?", chat_id="456")
     state = load_state("telegram:456")

@@ -177,13 +177,19 @@ def _build_ability_flow_executor(spec: dict[str, Any]):
                 "ability_state": ability_state if pending_interaction else {},
                 "plans": step_result.get("plans") or [],
             }
-        response_key = str(outputs.get("success") or "ack.confirmed")
+        response_key = str(outputs.get("success") or "").strip()
         response_vars = dict(step_result.get("response_vars") or {})
         if "user_name" not in response_vars:
             if isinstance(params.get("user_name"), str):
                 response_vars["user_name"] = params.get("user_name")
             elif isinstance(params.get("display_name"), str):
                 response_vars["user_name"] = params.get("display_name")
+        if not response_key:
+            return {
+                "response_vars": response_vars,
+                "pending_interaction": None,
+                "ability_state": {},
+            }
         return {
             "response_key": response_key,
             "response_vars": response_vars,
@@ -638,7 +644,7 @@ def _execute_steps(steps: list[dict[str, Any]], params: dict[str, Any], state: d
         if action == "location.set":
             principal_id = _principal_id_from_state(state)
             if not principal_id:
-                return {"response_key": "generic.unknown"}
+                return {}
             label = str(params.get("label") or "").strip().lower()
             if label not in {"home", "work", "other"}:
                 return {"response_key": "core.location.set.ask_label"}
@@ -661,7 +667,7 @@ def _execute_steps(steps: list[dict[str, Any]], params: dict[str, Any], state: d
         if action == "location.set_geocode":
             principal_id = _principal_id_from_state(state)
             if not principal_id:
-                return {"response_key": "generic.unknown"}
+                return {}
             label = _normalize_location_label(params.get("label")) or str(params.get("label") or "").strip().lower()
             if label not in {"home", "work", "other"}:
                 return {"response_key": "core.location.set.ask_label"}
@@ -680,7 +686,7 @@ def _execute_steps(steps: list[dict[str, Any]], params: dict[str, Any], state: d
                     language=language,
                 )
             except Exception:
-                return {"response_key": "generic.unknown"}
+                return {}
             return {
                 "response_key": "ack.location.saved",
                 "response_vars": {"label": label},
@@ -747,7 +753,7 @@ def _build_clock_time_executor(spec: dict[str, Any]):
     def _execute(state: dict[str, Any], tools: ToolRegistry) -> dict[str, Any]:
         clock = tools.get("clock")
         if clock is None:
-            return {"response_key": "generic.unknown"}
+            return {}
         timezone_name = str(state.get(timezone_key) or timezone_default)
         now = clock.current_time(timezone_name)
         locale = str(state.get("locale") or "")
@@ -775,11 +781,11 @@ def _build_plan_emit_executor(spec: dict[str, Any]):
     def _execute(state: dict[str, Any], tools: ToolRegistry) -> dict[str, Any]:
         _ = tools
         if not plan_type_raw:
-            return {"response_key": "generic.unknown"}
+            return {}
         try:
             plan_type = PlanType(plan_type_raw)
         except ValueError:
-            return {"response_key": "generic.unknown"}
+            return {}
 
         target = _resolve_target(state, target_from, fallback_target)
         channels = _resolve_channels(state, channels_from)
@@ -808,7 +814,7 @@ def _build_tool_call_then_response_executor(spec: dict[str, Any]):
         if output is None:
             if isinstance(response_key, str) and response_key.strip():
                 return {"response_key": response_key.strip()}
-            return {"response_key": "generic.unknown"}
+            return {}
         locale = str(state.get("locale") or "")
         language = "es" if locale.startswith("es") else "default"
         template = str(

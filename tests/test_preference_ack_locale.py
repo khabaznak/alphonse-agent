@@ -22,6 +22,20 @@ class DummySignal:
         self.correlation_id = "test-correlation"
 
 
+class _PreferenceLLM:
+    def complete(self, *, system_prompt: str, user_prompt: str) -> str:
+        _ = system_prompt
+        lower = user_prompt.lower()
+        if "message:" in lower:
+            return '[{"chunk":"update locale","intention":"update_preferences","confidence":"high"}]'
+        if "acceptancecriteria" in lower:
+            return '{"acceptanceCriteria":["Requested preference is updated"]}'
+        return (
+            '{"executionPlan":[{"tool":"update_preferences","parameters":{},'
+            '"status":"ready"}]}'
+        )
+
+
 def _prepare_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     db_path = tmp_path / "nerve-db"
     monkeypatch.setenv("NERVE_DB_PATH", str(db_path))
@@ -51,6 +65,7 @@ def _run_message(monkeypatch: pytest.MonkeyPatch, text: str) -> list:
                     captured.append(plan)
 
     monkeypatch.setattr(him, "PlanExecutor", FakePlanExecutor)
+    monkeypatch.setattr(him, "_build_llm_client", lambda: _PreferenceLLM())
 
     context = {
         "signal": DummySignal(
