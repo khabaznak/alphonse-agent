@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-import re
 from datetime import datetime, timezone
 from typing import Any, TypedDict
 
@@ -27,7 +26,7 @@ from alphonse.agent.cognition.pending_interaction import (
     serialize_pending_interaction,
 )
 from alphonse.agent.cognition.preferences.store import get_or_create_principal_for_channel
-from alphonse.agent.cognition.abilities.registry import Ability, AbilityRegistry
+from alphonse.agent.cognition.abilities.registry import AbilityRegistry
 from alphonse.agent.cognition.abilities.json_runtime import load_json_abilities
 from alphonse.agent.tools.registry import ToolRegistry, build_default_tool_registry
 
@@ -479,19 +478,8 @@ def _ability_registry() -> AbilityRegistry:
     registry = AbilityRegistry()
     for ability in load_json_abilities():
         registry.register(ability)
-    _register_fallback_ability(registry, Ability("timed_signals.list", tuple(), _ability_timed_signals_list))
-    _register_fallback_ability(registry, Ability("timed_signals.create", tuple(), _ability_noop))
-    _register_fallback_ability(registry, Ability("lan.arm", tuple(), _ability_lan_arm))
-    _register_fallback_ability(registry, Ability("lan.disarm", tuple(), _ability_lan_disarm))
-    _register_fallback_ability(registry, Ability("pair.approve", tuple(), _ability_pair_approve))
-    _register_fallback_ability(registry, Ability("pair.deny", tuple(), _ability_pair_deny))
     _ABILITY_REGISTRY = registry
     return registry
-
-
-def _register_fallback_ability(registry: AbilityRegistry, ability: Ability) -> None:
-    if registry.get(ability.intent_name) is None:
-        registry.register(ability)
 
 
 def _ability_get_status(state: dict[str, Any], tools: ToolRegistry) -> dict[str, Any]:
@@ -790,12 +778,12 @@ def _handle_set_work_location(state: CortexState) -> dict[str, Any]:
 
 
 def _handle_lan_arm(state: CortexState) -> dict[str, Any]:
-    device_id = _extract_device_id(state.get("last_user_message", ""))
+    device_id = _slot_str(state, "device_id")
     return _handle_lan_plan(state, PlanType.LAN_ARM, device_id)
 
 
 def _handle_lan_disarm(state: CortexState) -> dict[str, Any]:
-    device_id = _extract_device_id(state.get("last_user_message", ""))
+    device_id = _slot_str(state, "device_id")
     return _handle_lan_plan(state, PlanType.LAN_DISARM, device_id)
 
 
@@ -831,7 +819,8 @@ def _handle_pair_deny(state: CortexState) -> dict[str, Any]:
 
 
 def _handle_pairing_decision(state: CortexState, plan_type: PlanType) -> dict[str, Any]:
-    pairing_id, otp = _extract_pairing_decision(state.get("last_user_message", ""))
+    pairing_id = _slot_str(state, "pairing_id")
+    otp = _slot_str(state, "otp")
     if not pairing_id:
         return {"plans": [_build_gap_plan(state, reason="pairing_id_missing").model_dump()]}
     plan = CortexPlan(
@@ -1056,24 +1045,15 @@ def _build_meta(state: CortexState) -> dict[str, Any]:
     }
 
 
-def _extract_device_id(text: str) -> str | None:
-    candidate = re.search(r"\bdevice\s+([A-Za-z0-9_-]{4,})\b", text, re.IGNORECASE)
-    if candidate:
-        return candidate.group(1)
-    return None
-
-
-def _extract_pairing_decision(text: str) -> tuple[str | None, str | None]:
-    parts = text.strip().split()
-    if not parts:
-        return None, None
-    if parts[0].startswith("/"):
-        parts = parts[1:]
-    if not parts:
-        return None, None
-    pairing_id = parts[0]
-    otp = parts[1] if len(parts) > 1 else None
-    return pairing_id, otp
+def _slot_str(state: CortexState, key: str) -> str | None:
+    slots = state.get("slots")
+    if not isinstance(slots, dict):
+        return None
+    value = slots.get(key)
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
 
 
 def _snippet(text: str, limit: int = 140) -> str:
