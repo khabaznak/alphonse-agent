@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import uuid
 from dataclasses import dataclass
@@ -93,6 +94,12 @@ class HandleIncomingMessageAction(Action):
             len(result.plans or []),
             incoming.correlation_id,
         )
+        if result.plans:
+            logger.info(
+                "HandleIncomingMessageAction cortex_plans correlation_id=%s payload=%s",
+                incoming.correlation_id,
+                _safe_json([plan.model_dump() for plan in result.plans], limit=1400),
+            )
         save_state(chat_key, result.cognition_state)
         if isinstance(result.cognition_state, dict):
             logger.info(
@@ -363,6 +370,16 @@ def _principal_id_for_incoming(incoming: IncomingContext) -> str | None:
             channel_id,
         )
     return None
+
+
+def _safe_json(value: Any, limit: int = 1400) -> str:
+    try:
+        rendered = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+    except Exception:
+        rendered = str(value)
+    if len(rendered) <= limit:
+        return rendered
+    return f"{rendered[:limit]}..."
 
 
 def _render_outgoing_message(

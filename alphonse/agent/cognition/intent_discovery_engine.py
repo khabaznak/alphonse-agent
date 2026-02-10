@@ -218,7 +218,7 @@ def get_discovery_strategy(default: str = "multi_pass") -> str:
 def format_available_abilities() -> str:
     specs = _load_ability_specs()
     lines: list[str] = [
-        "- askQuestion(intent, context, to, from): Ask the user for missing parameters.",
+        "- askQuestion(question:string, slot?:string, bind?:object): Ask the user for missing parameters.",
     ]
     for spec in specs:
         intent = str(spec.get("intent_name") or "").strip()

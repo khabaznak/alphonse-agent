@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 from datetime import datetime, timezone
 from typing import Any, TypedDict
@@ -11,15 +12,12 @@ from alphonse.agent.cognition.response_composer import ResponseComposer
 from alphonse.agent.cognition.response_spec import ResponseSpec
 from alphonse.agent.cognition.status_summaries import summarize_capabilities
 from alphonse.agent.cognition.providers.ollama import OllamaClient
-from alphonse.agent.cognition.planning import PlanningMode, parse_planning_mode
-from alphonse.agent.cognition.planning_engine import propose_plan
 from alphonse.agent.cognition.intent_types import IntentCategory
 from alphonse.agent.cognition.intent_discovery_engine import (
     discover_plan,
     format_available_abilities,
     get_discovery_strategy,
 )
-from alphonse.agent.cognition.routing_primitives import extract_preference_updates
 from alphonse.agent.cognition.pending_interaction import (
     PendingInteractionType,
     build_pending_interaction,
@@ -219,6 +217,7 @@ def _run_intent_discovery(
         locale=_locale_for_state(state),
         strategy=get_discovery_strategy(),
     )
+    _log_discovery_plan(state, discovery)
     plans = discovery.get("plans") if isinstance(discovery, dict) else None
     if not isinstance(plans, list):
         plan = _build_gap_plan(state, reason="invalid_plan_payload")
@@ -303,6 +302,15 @@ def _run_discovery_loop_step(
         return {"ability_state": {}, "pending_interaction": None}
     step = steps[next_idx]
     tool_name = str(step.get("tool") or "").strip()
+    logger.info(
+        "cortex plan step chat_id=%s correlation_id=%s idx=%s tool=%s status=%s params=%s",
+        state.get("chat_id"),
+        state.get("correlation_id"),
+        next_idx,
+        tool_name or "unknown",
+        str(step.get("status") or "").strip().lower() or "unknown",
+        _safe_json(step.get("parameters") if isinstance(step.get("parameters"), dict) else {}, limit=280),
+    )
     if not tool_name:
         step["status"] = "failed"
         step["outcome"] = "missing_tool_name"
@@ -341,6 +349,42 @@ def _run_discovery_loop_step(
     merged["ability_state"] = loop_state
     merged["pending_interaction"] = None
     return merged
+
+
+def _log_discovery_plan(state: CortexState, discovery: dict[str, Any] | None) -> None:
+    if not isinstance(discovery, dict):
+        logger.info(
+            "cortex discovery chat_id=%s correlation_id=%s payload=non_dict",
+            state.get("chat_id"),
+            state.get("correlation_id"),
+        )
+        return
+    chunks = discovery.get("chunks")
+    plans = discovery.get("plans")
+    chunk_count = len(chunks) if isinstance(chunks, list) else 0
+    plan_count = len(plans) if isinstance(plans, list) else 0
+    total_steps = 0
+    if isinstance(plans, list):
+        for item in plans:
+            if not isinstance(item, dict):
+                continue
+            execution = item.get("executionPlan")
+            if isinstance(execution, list):
+                total_steps += len(execution)
+    logger.info(
+        "cortex discovery chat_id=%s correlation_id=%s chunks=%s plans=%s steps=%s",
+        state.get("chat_id"),
+        state.get("correlation_id"),
+        chunk_count,
+        plan_count,
+        total_steps,
+    )
+    logger.info(
+        "cortex discovery payload chat_id=%s correlation_id=%s payload=%s",
+        state.get("chat_id"),
+        state.get("correlation_id"),
+        _safe_json(discovery, limit=1200),
+    )
 
 
 def _next_step_index(steps: list[dict[str, Any]], allowed_statuses: set[str]) -> int | None:
@@ -429,14 +473,13 @@ def _run_ask_question_step(
 ) -> dict[str, Any]:
     params = step.get("parameters") if isinstance(step.get("parameters"), dict) else {}
     question = ""
-    for key in ("question", "message", "prompt"):
+    for key in ("question", "message", "prompt", "text", "ask"):
         value = params.get(key)
         if isinstance(value, str) and value.strip():
             question = value.strip()
             break
     if not question:
-        plan = _build_gap_plan(state, reason="invalid_ask_question_step")
-        return {"plans": [plan.model_dump()]}
+        question = _default_ask_question_prompt(state)
     key = str(params.get("slot") or params.get("param") or "answer").strip() or "answer"
     bind = params.get("bind") if isinstance(params.get("bind"), dict) else {}
     pending = build_pending_interaction(
@@ -456,6 +499,13 @@ def _run_ask_question_step(
         "pending_interaction": serialize_pending_interaction(pending),
         "ability_state": loop_state or {},
     }
+
+
+def _default_ask_question_prompt(state: CortexState) -> str:
+    locale = _locale_for_state(state)
+    if locale.startswith("es"):
+        return "¿Me puedes dar un poco más de detalle para continuar?"
+    return "Could you share a bit more detail so I can continue?"
 
 
 def _respond_node(arg: OllamaClient | CortexState | None = None):
@@ -534,11 +584,6 @@ def _ability_timed_signals_list(state: dict[str, Any], tools: ToolRegistry) -> d
 def _ability_noop(state: dict[str, Any], tools: ToolRegistry) -> dict[str, Any]:
     _ = tools
     return _handle_noop(state)
-
-
-def _ability_update_preferences(state: dict[str, Any], tools: ToolRegistry) -> dict[str, Any]:
-    _ = tools
-    return _handle_update_preferences(state)
 
 
 def _ability_pair_approve(state: dict[str, Any], tools: ToolRegistry) -> dict[str, Any]:
@@ -661,51 +706,6 @@ def _handle_timed_signals_list(state: CortexState) -> dict[str, Any]:
     return {"plans": plans}
 
 
-def _handle_update_preferences(state: CortexState) -> dict[str, Any]:
-    updates = extract_preference_updates(state.get("last_user_message", ""))
-    if not updates:
-        return {"response_key": "preference.missing"}
-    channel_type = state.get("channel_type")
-    channel_id = state.get("channel_target") or state.get("chat_id")
-    if not channel_type or not channel_id:
-        return {"response_key": "preference.no_channel"}
-    plan = CortexPlan(
-        plan_type=PlanType.UPDATE_PREFERENCES,
-        payload={
-            "principal": {
-                "channel_type": str(channel_type),
-                "channel_id": str(channel_id),
-            },
-            "updates": updates,
-        },
-    )
-    plans = list(state.get("plans") or [])
-    _attach_planning_scaffold(
-        state,
-        intent="update_preferences",
-        draft_steps=[
-            "Apply the requested preference updates.",
-            "Confirm which preferences were updated.",
-        ],
-        acceptance_criteria=[
-            "All requested preferences are updated for the principal.",
-        ],
-        plans=plans,
-    )
-    plans.append(plan.model_dump())
-    logger.info(
-        "cortex plans chat_id=%s plan_type=%s plan_id=%s",
-        state.get("chat_id"),
-        plan.plan_type,
-        plan.plan_id,
-    )
-    return {
-        "plans": plans,
-        "response_key": "ack.preference_updated",
-        "response_vars": {"updates": updates},
-    }
-
-
 def _handle_pair_approve(state: CortexState) -> dict[str, Any]:
     return _handle_pairing_decision(state, PlanType.PAIR_APPROVE)
 
@@ -789,51 +789,6 @@ def _append_event(
     return events
 
 
-def _attach_planning_scaffold(
-    state: CortexState,
-    *,
-    intent: str,
-    draft_steps: list[str],
-    acceptance_criteria: list[str],
-    plans: list[dict[str, Any]],
-) -> None:
-    requested_mode = _planning_mode_request(state)
-    hint = _lifecycle_hint_for_state(state, intent)
-    proposal = propose_plan(
-        intent=intent,
-        autonomy_level=state.get("autonomy_level"),
-        requested_mode=requested_mode,
-        draft_steps=draft_steps,
-        acceptance_criteria=acceptance_criteria,
-        lifecycle_hint=hint,
-    )
-    scaffold = CortexPlan(
-        plan_type=PlanType.PLANNING,
-        payload={
-            "plan": proposal.plan.model_dump(),
-            "mode": proposal.plan.planning_mode.value,
-            "autonomy_level": proposal.plan.autonomy_level,
-        },
-    )
-    plans.append(scaffold.model_dump())
-    logger.info(
-        "cortex planning scaffold chat_id=%s mode=%s autonomy=%.2f plan_id=%s",
-        state.get("chat_id"),
-        proposal.plan.planning_mode.value,
-        proposal.plan.autonomy_level,
-        scaffold.plan_id,
-    )
-
-
-def _planning_mode_request(state: CortexState) -> PlanningMode | None:
-    raw = state.get("planning_mode")
-    if not raw:
-        return None
-    if isinstance(raw, PlanningMode):
-        return raw
-    return parse_planning_mode(str(raw))
-
-
 def _category_from_state(state: CortexState) -> IntentCategory | None:
     raw = state.get("intent_category")
     if isinstance(raw, IntentCategory):
@@ -889,12 +844,6 @@ def _build_signature(
 
 
 def _signature_slots(intent: str, state: CortexState) -> dict[str, Any]:
-    slots = state.get("slots") or {}
-    if intent == "update_preferences":
-        return {
-            "channel": state.get("channel_type"),
-            "keys": [update.get("key") for update in extract_preference_updates(state.get("last_user_message", ""))],
-        }
     return {
         "channel": state.get("channel_type"),
     }
@@ -945,6 +894,16 @@ def _snippet(text: str, limit: int = 140) -> str:
     if len(text) <= limit:
         return text
     return f"{text[:limit]}..."
+
+
+def _safe_json(value: Any, limit: int = 1200) -> str:
+    try:
+        rendered = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+    except Exception:
+        rendered = str(value)
+    if len(rendered) <= limit:
+        return rendered
+    return f"{rendered[:limit]}..."
 
 
 def _locale_for_state(state: CortexState) -> str:
