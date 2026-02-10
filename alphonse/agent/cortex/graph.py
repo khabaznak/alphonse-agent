@@ -541,26 +541,6 @@ def _ability_update_preferences(state: dict[str, Any], tools: ToolRegistry) -> d
     return _handle_update_preferences(state)
 
 
-def _ability_set_home_location(state: dict[str, Any], tools: ToolRegistry) -> dict[str, Any]:
-    _ = tools
-    return _handle_set_home_location(state)
-
-
-def _ability_set_work_location(state: dict[str, Any], tools: ToolRegistry) -> dict[str, Any]:
-    _ = tools
-    return _handle_set_work_location(state)
-
-
-def _ability_lan_arm(state: dict[str, Any], tools: ToolRegistry) -> dict[str, Any]:
-    _ = tools
-    return _handle_lan_arm(state)
-
-
-def _ability_lan_disarm(state: dict[str, Any], tools: ToolRegistry) -> dict[str, Any]:
-    _ = tools
-    return _handle_lan_disarm(state)
-
-
 def _ability_pair_approve(state: dict[str, Any], tools: ToolRegistry) -> dict[str, Any]:
     _ = tools
     return _handle_pair_approve(state)
@@ -597,7 +577,12 @@ def _handle_identity_agent(state: CortexState) -> dict[str, Any]:
 
 
 def _handle_identity_user(state: CortexState) -> dict[str, Any]:
-    conversation_key = _conversation_key_from_state(state)
+    conversation_key = str(
+        state.get("conversation_key")
+        or state.get("channel_target")
+        or state.get("chat_id")
+        or "unknown"
+    )
     name = identity_profile.get_display_name(conversation_key)
     logger.info(
         "cortex identity lookup conversation_key=%s name=%s",
@@ -719,95 +704,6 @@ def _handle_update_preferences(state: CortexState) -> dict[str, Any]:
         "response_key": "ack.preference_updated",
         "response_vars": {"updates": updates},
     }
-
-
-def _handle_set_home_location(state: CortexState) -> dict[str, Any]:
-    slots = state.get("slots") or {}
-    address_text = slots.get("address_text")
-    if not isinstance(address_text, str) or not address_text.strip():
-        return {"response_key": "clarify.location_address"}
-    channel_type = str(state.get("channel_type") or "")
-    channel_target = str(state.get("channel_target") or state.get("chat_id") or "")
-    principal_id = None
-    if channel_type and channel_target:
-        principal_id = get_or_create_principal_for_channel(channel_type, channel_target)
-    if not principal_id:
-        return {"plans": [_build_gap_plan(state, reason="set_home_missing_principal").model_dump()]}
-    locale = str(state.get("locale") or "")
-    language = "es" if locale.startswith("es") else "en"
-    sense = LocationSense()
-    try:
-        sense.ingest_address(
-            principal_id=principal_id,
-            label="home",
-            address_text=str(address_text),
-            source="user",
-            language=language,
-        )
-    except Exception:
-        return {"plans": [_build_gap_plan(state, reason="set_home_ingest_failed").model_dump()]}
-    return {"response_key": "ack.location.saved", "response_vars": {"label": "home"}}
-
-
-def _handle_set_work_location(state: CortexState) -> dict[str, Any]:
-    slots = state.get("slots") or {}
-    address_text = slots.get("address_text")
-    if not isinstance(address_text, str) or not address_text.strip():
-        return {"response_key": "clarify.location_work"}
-    channel_type = str(state.get("channel_type") or "")
-    channel_target = str(state.get("channel_target") or state.get("chat_id") or "")
-    principal_id = None
-    if channel_type and channel_target:
-        principal_id = get_or_create_principal_for_channel(channel_type, channel_target)
-    if not principal_id:
-        return {"plans": [_build_gap_plan(state, reason="set_work_missing_principal").model_dump()]}
-    locale = str(state.get("locale") or "")
-    language = "es" if locale.startswith("es") else "en"
-    sense = LocationSense()
-    try:
-        sense.ingest_address(
-            principal_id=principal_id,
-            label="work",
-            address_text=str(address_text),
-            source="user",
-            language=language,
-        )
-    except Exception:
-        return {"plans": [_build_gap_plan(state, reason="set_work_ingest_failed").model_dump()]}
-    return {"response_key": "ack.location.saved", "response_vars": {"label": "work"}}
-
-
-def _handle_lan_arm(state: CortexState) -> dict[str, Any]:
-    device_id = _slot_str(state, "device_id")
-    return _handle_lan_plan(state, PlanType.LAN_ARM, device_id)
-
-
-def _handle_lan_disarm(state: CortexState) -> dict[str, Any]:
-    device_id = _slot_str(state, "device_id")
-    return _handle_lan_plan(state, PlanType.LAN_DISARM, device_id)
-
-
-def _handle_lan_plan(
-    state: CortexState, plan_type: PlanType, device_id: str | None
-) -> dict[str, Any]:
-    plan = CortexPlan(
-        plan_type=plan_type,
-        target=str(state.get("channel_target") or state.get("chat_id") or ""),
-        channels=[str(state.get("channel_type") or "telegram")],
-        payload={
-            "device_id": device_id,
-            "locale": _locale_for_state(state),
-        },
-    )
-    plans = list(state.get("plans") or [])
-    plans.append(plan.model_dump())
-    logger.info(
-        "cortex plans chat_id=%s plan_type=%s plan_id=%s",
-        state.get("chat_id"),
-        plan.plan_type,
-        plan.plan_id,
-    )
-    return {"plans": plans}
 
 
 def _handle_pair_approve(state: CortexState) -> dict[str, Any]:
@@ -1002,18 +898,6 @@ def _signature_slots(intent: str, state: CortexState) -> dict[str, Any]:
     return {
         "channel": state.get("channel_type"),
     }
-
-
-def _conversation_key_from_state(state: CortexState) -> str:
-    channel_type = str(state.get("channel_type") or "unknown")
-    channel_id = str(state.get("channel_target") or state.get("chat_id") or "")
-    if channel_type == "telegram":
-        return f"telegram:{channel_id}"
-    if channel_type == "cli":
-        return f"cli:{channel_id or 'cli'}"
-    if channel_type == "api":
-        return f"api:{channel_id or 'api'}"
-    return f"{channel_type}:{channel_id}"
 
 
 def _build_cognition_state(state: CortexState) -> dict[str, Any]:
