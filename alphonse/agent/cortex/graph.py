@@ -26,6 +26,7 @@ from alphonse.agent.cognition.pending_interaction import (
     build_pending_interaction,
     serialize_pending_interaction,
 )
+from alphonse.agent.cognition.preferences.store import get_or_create_principal_for_channel
 from alphonse.agent.cognition.abilities.registry import Ability, AbilityRegistry
 from alphonse.agent.cognition.abilities.json_runtime import load_json_abilities
 from alphonse.agent.tools.registry import ToolRegistry, build_default_tool_registry
