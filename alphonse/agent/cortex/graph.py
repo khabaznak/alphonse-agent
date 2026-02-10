@@ -180,6 +180,23 @@ def _respond_node_impl(state: CortexState, llm_client: OllamaClient | None) -> d
 def _run_intent_discovery(
     state: CortexState, llm_client: OllamaClient | None
 ) -> dict[str, Any] | None:
+    text = str(state.get("last_user_message") or "").strip()
+    if text:
+        heuristic_intent = _heuristic_intent(text)
+        if heuristic_intent:
+            ability = _ability_registry().get(heuristic_intent)
+            if ability is not None:
+                state["intent"] = heuristic_intent
+                state["intent_confidence"] = 0.85
+                state["intent_category"] = IntentCategory.TASK_PLANE.value
+                result = ability.execute(state, _TOOL_REGISTRY) or {}
+                if isinstance(result, dict):
+                    if "pending_interaction" not in result:
+                        result["pending_interaction"] = None
+                    if "ability_state" not in result:
+                        result["ability_state"] = {}
+                return result
+
     pending = state.get("pending_interaction")
     if isinstance(pending, dict):
         ask_context = pending.get("context") if isinstance(pending.get("context"), dict) else {}
@@ -202,17 +219,6 @@ def _run_intent_discovery(
             ability = _ability_registry().get(intent_name)
             if ability is not None:
                 state["intent"] = intent_name
-                return ability.execute(state, _TOOL_REGISTRY)
-
-    text = str(state.get("last_user_message") or "").strip()
-    if text:
-        heuristic_intent = _heuristic_intent(text)
-        if heuristic_intent:
-            ability = _ability_registry().get(heuristic_intent)
-            if ability is not None:
-                state["intent"] = heuristic_intent
-                state["intent_confidence"] = 0.85
-                state["intent_category"] = IntentCategory.TASK_PLANE.value
                 return ability.execute(state, _TOOL_REGISTRY)
 
     if not llm_client:
@@ -311,7 +317,11 @@ def _run_discovery_loop_step(
             result = _fallback_ask_question_response(state, reason="loop_waiting_or_incomplete")
             result["ability_state"] = loop_state
             return result
-        return {"response_key": "ack.confirmed", "ability_state": {}}
+        return {
+            "response_key": "ack.confirmed",
+            "ability_state": {},
+            "pending_interaction": None,
+        }
     step = steps[next_idx]
     tool_name = str(step.get("tool") or "").strip()
     if not tool_name:
@@ -351,8 +361,10 @@ def _run_discovery_loop_step(
     if _next_step_index(steps, allowed_statuses={"ready"}) is None:
         if _next_step_index(steps, allowed_statuses={"incomplete", "waiting"}) is None:
             merged["ability_state"] = {}
+            merged["pending_interaction"] = None
             return merged
     merged["ability_state"] = loop_state
+    merged["pending_interaction"] = None
     return merged
 
 
