@@ -140,7 +140,9 @@ def _respond_node_impl(state: CortexState, llm_client: OllamaClient | None) -> d
             state.get("chat_id"),
             _snippet(str(state.get("last_user_message") or "")),
         )
-        return {"response_key": "generic.unknown"}
+        return _fallback_ask_question_response(
+            state, reason="intent_discovery_exception"
+        )
     if discovery:
         return discovery
     intent = state.get("intent")
@@ -155,8 +157,12 @@ def _respond_node_impl(state: CortexState, llm_client: OllamaClient | None) -> d
                     intent,
                     state.get("chat_id"),
                 )
-                return {"response_key": "generic.unknown"}
-    result: dict[str, Any] = {"response_key": "generic.unknown"}
+                return _fallback_ask_question_response(
+                    state, reason="ability_execution_exception"
+                )
+    result: dict[str, Any] = _fallback_ask_question_response(
+        state, reason="missing_capability"
+    )
     guard_input = GapGuardInput(
         category=_category_from_state(state),
         plan_status=None,
@@ -178,7 +184,7 @@ def _run_intent_discovery(
     if isinstance(pending, dict):
         ask_context = pending.get("context") if isinstance(pending.get("context"), dict) else {}
         if ask_context.get("tool") == "askQuestion":
-            resumed = _resume_discovery_from_answer(state, pending)
+            resumed = _resume_discovery_from_answer(state, pending, llm_client)
             if resumed is not None:
                 return resumed
         intent_name = str(pending.get("context", {}).get("ability_intent") or "")
@@ -190,7 +196,7 @@ def _run_intent_discovery(
     ability_state = state.get("ability_state")
     if isinstance(ability_state, dict):
         if _is_discovery_loop_state(ability_state):
-            return _run_discovery_loop_step(state, ability_state)
+            return _run_discovery_loop_step(state, ability_state, llm_client)
         intent_name = str(ability_state.get("intent") or "")
         if intent_name:
             ability = _ability_registry().get(intent_name)
@@ -210,7 +216,7 @@ def _run_intent_discovery(
                 return ability.execute(state, _TOOL_REGISTRY)
 
     if not llm_client:
-        return {"response_key": "generic.unknown"}
+        return _fallback_ask_question_response(state, reason="no_llm_client")
 
     if not text:
         return {"response_key": "clarify.repeat_input"}
@@ -225,12 +231,12 @@ def _run_intent_discovery(
     )
     plans = discovery.get("plans") if isinstance(discovery, dict) else None
     if not isinstance(plans, list):
-        return {"response_key": "generic.unknown"}
+        return _fallback_ask_question_response(state, reason="invalid_plan_payload")
     loop_state = _build_discovery_loop_state(discovery)
     if not loop_state.get("steps"):
-        return {"response_key": "generic.unknown"}
+        return _fallback_ask_question_response(state, reason="empty_execution_plan")
     state["ability_state"] = loop_state
-    return _run_discovery_loop_step(state, loop_state)
+    return _run_discovery_loop_step(state, loop_state, llm_client)
 
 
 def _select_next_tool_call(plans: list[dict[str, Any]]) -> dict[str, Any] | None:
@@ -292,22 +298,28 @@ def _has_missing_params(params: dict[str, Any]) -> bool:
 
 
 def _run_discovery_loop_step(
-    state: CortexState, loop_state: dict[str, Any]
+    state: CortexState, loop_state: dict[str, Any], llm_client: OllamaClient | None
 ) -> dict[str, Any]:
     steps = loop_state.get("steps")
     if not isinstance(steps, list) or not steps:
-        return {"response_key": "generic.unknown", "ability_state": {}}
+        result = _fallback_ask_question_response(state, reason="loop_missing_steps")
+        result["ability_state"] = {}
+        return result
     next_idx = _next_step_index(steps, allowed_statuses={"ready"})
     if next_idx is None:
         if _next_step_index(steps, allowed_statuses={"incomplete", "waiting"}) is not None:
-            return {"response_key": "generic.unknown", "ability_state": loop_state}
+            result = _fallback_ask_question_response(state, reason="loop_waiting_or_incomplete")
+            result["ability_state"] = loop_state
+            return result
         return {"response_key": "ack.confirmed", "ability_state": {}}
     step = steps[next_idx]
     tool_name = str(step.get("tool") or "").strip()
     if not tool_name:
         step["status"] = "failed"
         step["outcome"] = "missing_tool_name"
-        return {"response_key": "generic.unknown", "ability_state": loop_state}
+        result = _fallback_ask_question_response(state, reason="step_missing_tool_name")
+        result["ability_state"] = loop_state
+        return result
     if tool_name == "askQuestion":
         return _run_ask_question_step(state, step, loop_state, next_idx)
     ability = _ability_registry().get(tool_name)
@@ -316,11 +328,10 @@ def _run_discovery_loop_step(
         step["outcome"] = "unknown_tool"
         state["intent"] = tool_name
         gap = _build_gap_plan(state, reason="unknown_tool_in_plan")
-        return {
-            "response_key": "generic.unknown",
-            "ability_state": loop_state,
-            "plans": [gap.model_dump()],
-        }
+        result = _fallback_ask_question_response(state, reason=f"unknown_tool:{tool_name}")
+        result["ability_state"] = loop_state
+        result["plans"] = [gap.model_dump()]
+        return result
     params = step.get("parameters") if isinstance(step.get("parameters"), dict) else {}
     state["intent"] = tool_name
     state["intent_confidence"] = 0.6
@@ -354,7 +365,7 @@ def _next_step_index(steps: list[dict[str, Any]], allowed_statuses: set[str]) ->
 
 
 def _resume_discovery_from_answer(
-    state: CortexState, pending: dict[str, Any]
+    state: CortexState, pending: dict[str, Any], llm_client: OllamaClient | None
 ) -> dict[str, Any] | None:
     ability_state = state.get("ability_state")
     if not isinstance(ability_state, dict) or not _is_discovery_loop_state(ability_state):
@@ -378,7 +389,7 @@ def _resume_discovery_from_answer(
     _bind_answer_to_steps(steps, bind, pending_key, answer)
     state["pending_interaction"] = None
     state["ability_state"] = ability_state
-    return _run_discovery_loop_step(state, ability_state)
+    return _run_discovery_loop_step(state, ability_state, llm_client)
 
 
 def _bind_answer_to_steps(
@@ -458,6 +469,31 @@ def _run_ask_question_step(
         "pending_interaction": serialize_pending_interaction(pending),
         "ability_state": loop_state or {},
     }
+
+
+def _fallback_ask_question_response(state: CortexState, *, reason: str) -> dict[str, Any]:
+    question = _clarification_question_text(state, reason)
+    step = {
+        "tool": "askQuestion",
+        "parameters": {
+            "question": question,
+            "slot": "clarification",
+            "bind": {"param": "clarification"},
+        },
+        "status": "ready",
+    }
+    return _run_ask_question_step(state, step, {"kind": "discovery_loop", "steps": [step]}, 0)
+
+
+def _clarification_question_text(state: CortexState, reason: str) -> str:
+    locale = _locale_for_state(state)
+    if locale.startswith("es"):
+        if reason.startswith("unknown_tool:"):
+            return "Puedo ayudarte, pero necesito que me digas exactamente qué acción quieres que realice."
+        return "¿Qué te gustaría que haga exactamente?"
+    if reason.startswith("unknown_tool:"):
+        return "I can help, but I need you to tell me exactly what action you want me to perform."
+    return "What exactly would you like me to do?"
 
 
 def _respond_node(arg: OllamaClient | CortexState | None = None):
@@ -1061,6 +1097,8 @@ def _heuristic_intent(text: str) -> str | None:
     lowered = text.strip().lower()
     if not lowered:
         return None
+    if _looks_like_greeting(lowered):
+        return "greeting"
     if extract_preference_updates(text):
         return "update_preferences"
     if _looks_like_onboarding_start(lowered):
@@ -1070,6 +1108,15 @@ def _heuristic_intent(text: str) -> str | None:
     if _looks_like_agent_name_query(lowered):
         return "core.identity.query_agent_name"
     return None
+
+
+def _looks_like_greeting(text: str) -> bool:
+    return bool(
+        re.search(
+            r"\b(hi|hello|hey|hola|buenos dias|buen día|buen dia|good morning|good afternoon|good evening)\b",
+            text,
+        )
+    )
 
 
 def _looks_like_onboarding_start(text: str) -> bool:
