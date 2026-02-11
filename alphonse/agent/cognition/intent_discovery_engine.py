@@ -547,7 +547,6 @@ def _story_discover_plan(
         return _interrupt_discovery_payload(text=text, plan_a=plan_a, interrupt=interrupt)
 
     execution_plan = _execution_plan_from_refined(plan_c, tool_map)
-    execution_plan = _prune_execution_plan(execution_plan)
     if not execution_plan:
         interrupt = _derive_interrupt_from_bindings(plan_b)
         if interrupt is None:
@@ -599,34 +598,6 @@ def _story_discover_plan(
             }
         ],
     }
-
-
-def _prune_execution_plan(execution: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    if not isinstance(execution, list) or not execution:
-        return []
-    has_ready_reminder = False
-    for step in execution:
-        if not isinstance(step, dict):
-            continue
-        if str(step.get("tool") or "").strip() != "reminder.schedule":
-            continue
-        params = step.get("parameters") if isinstance(step.get("parameters"), dict) else {}
-        reminder_text = str(params.get("reminder_text") or "").strip()
-        trigger_at = str(params.get("trigger_at") or "").strip()
-        if reminder_text and trigger_at:
-            has_ready_reminder = True
-            break
-    if not has_ready_reminder:
-        return execution
-    pruned: list[dict[str, Any]] = []
-    for step in execution:
-        if not isinstance(step, dict):
-            continue
-        tool = str(step.get("tool") or "").strip()
-        if tool == "time.current":
-            continue
-        pruned.append(step)
-    return pruned
 
 
 def _run_step_a_plan_synth(
