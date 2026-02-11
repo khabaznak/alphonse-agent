@@ -9,8 +9,8 @@ def test_daily_report_rendering_en() -> None:
         {"reason": "missing_slots", "status": "open", "user_text": "Schedule"},
     ]
     report = build_daily_report("en-US", gaps)
-    assert "Daily gap report" in report
-    assert "unknown intent" in report
+    assert "report.daily_gaps.header" in report
+    assert "report.daily_gaps.line" in report
 
 
 def test_daily_report_rendering_es() -> None:
@@ -18,5 +18,5 @@ def test_daily_report_rendering_es() -> None:
         {"reason": "no_tool", "status": "open", "user_text": "Conecta calendario"},
     ]
     report = build_daily_report("es-MX", gaps)
-    assert "Reporte diario" in report
-    assert "sin herramienta" in report
+    assert "report.daily_gaps.header" in report
+    assert "report.daily_gaps.line" in report

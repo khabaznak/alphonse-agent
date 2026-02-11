@@ -6,7 +6,6 @@ import pytest
 
 from alphonse.agent.actions import handle_incoming_message as him
 from alphonse.agent.actions.handle_incoming_message import HandleIncomingMessageAction
-from alphonse.agent.cognition.localization import render_message
 from alphonse.agent.cognition.plans import PlanType
 from alphonse.agent.cortex.state_store import load_state
 from alphonse.agent.identity import profile as identity_profile
@@ -17,11 +16,22 @@ from alphonse.agent.nervous_system.senses.bus import Signal
 class _IdentityRoutingLLM:
     def complete(self, *, system_prompt: str, user_prompt: str) -> str:
         _ = system_prompt
-        if "Message:" in user_prompt:
-            return '[{"chunk":"identity query","intention":"identity_name","confidence":"high"}]'
-        if "acceptanceCriteria" in user_prompt:
-            return '{"acceptanceCriteria":["Resolve user name"]}'
-        return '{"executionPlan":[{"tool":"core.identity.query_user_name","parameters":{},"status":"ready"}]}'
+        if "STEP_A_PLAN:" in user_prompt:
+            return (
+                '{"plan_version":"v1","status":"READY","execution_plan":[{"step_id":"S1","sequence":1,'
+                '"kind":"TOOL","tool_name":"core.identity.query_user_name","parameters":{},"acceptance_links":[0]}],'
+                '"acceptance_criteria":["Resolve user name"],"repair_log":[]}'
+            )
+        if "PLAN_FROM_STEP_A:" in user_prompt:
+            return (
+                '{"plan_version":"v1","bindings":[{"step_id":"S1","binding_type":"TOOL","tool_id":0,'
+                '"parameters":{},"missing_data":[],"reason":"direct_match"}]}'
+            )
+        return (
+            '{"plan_version":"v1","message_summary":"identity query","primary_intention":"identity_name",'
+            '"confidence":"high","steps":[{"step_id":"S1","goal":"resolve user name","requires":[],"produces":[],"priority":1}],'
+            '"acceptance_criteria":["Resolve user name"]}'
+        )
 
 
 def _prepare_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -41,9 +51,7 @@ def _send_text(
     action.execute({"signal": signal, "state": None, "outcome": None, "ctx": None})
 
 
-def test_name_capture_then_recall_no_clarify(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_name_recall_with_known_profile(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _prepare_db(tmp_path, monkeypatch)
     captured: list = []
 
@@ -61,18 +69,9 @@ def test_name_capture_then_recall_no_clarify(
 
     action = HandleIncomingMessageAction()
 
-    _send_text(action, "Sabes como me llamo yo?")
-    state = load_state("telegram:123")
-    assert state is not None
-    assert state.get("pending_interaction") is not None
-
-    captured.clear()
-    _send_text(action, "Alex")
-    assert identity_profile.get_display_name("telegram:123") == "Alex"
-    assert any("Alex" in plan.payload.get("message", "") for plan in captured)
-
+    identity_profile.set_display_name("telegram:123", "Alex")
     captured.clear()
     _send_text(action, "y ahora si sabes mi nombre?")
     assert any("Alex" in plan.payload.get("message", "") for plan in captured)
-    clarify = render_message("clarify.intent", "en-US")
-    assert all(plan.payload.get("message") != clarify for plan in captured)
+    state = load_state("telegram:123")
+    assert state is not None

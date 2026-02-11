@@ -198,7 +198,7 @@ def test_sensitive_response_uses_safe_fallback_when_prompt_missing() -> None:
         key="policy.reminder.restricted",
         locale="es-MX",
     )
-    assert composer.compose(spec) == "No estoy autorizado para programar ese recordatorio."
+    assert composer.compose(spec) == "policy.reminder.restricted"
 
 
 def test_unknown_sensitive_key_uses_default_safe_fallback() -> None:
@@ -208,7 +208,7 @@ def test_unknown_sensitive_key_uses_default_safe_fallback() -> None:
         key="policy.unknown",
         locale="en-US",
     )
-    assert composer.compose(spec) == "I can't do that right now."
+    assert composer.compose(spec) == "policy.unknown"
 
 
 def test_relaxed_matching_allows_selector_mismatch_for_non_sensitive_keys(

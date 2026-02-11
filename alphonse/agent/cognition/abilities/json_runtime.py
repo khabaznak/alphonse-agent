@@ -25,7 +25,6 @@ from alphonse.agent.cognition.preferences.store import (
     resolve_preference_with_precedence,
     set_preference,
 )
-from alphonse.agent.cognition.routing_primitives import extract_preference_updates
 from alphonse.agent.cognition.status_summaries import summarize_capabilities
 from alphonse.agent.nervous_system.onboarding_profiles import upsert_onboarding_profile
 from alphonse.agent.nervous_system.location_profiles import (
@@ -613,7 +612,7 @@ def _execute_steps(steps: list[dict[str, Any]], params: dict[str, Any], state: d
         if action == "facts.agent.get":
             return _build_agent_facts_result(state)
         if action == "update_preferences":
-            updates = extract_preference_updates(state.get("last_user_message", ""))
+            updates = _updates_from_params(params, state)
             if not updates:
                 return {"response_key": "preference.missing"}
             channel_type = state.get("channel_type")
@@ -787,6 +786,37 @@ def _coerce_trigger_at_iso(value: str, fallback_text: Any) -> str | None:
         hours = int(match.group(1))
         return (datetime.now(timezone.utc) + timedelta(hours=hours)).isoformat()
     return None
+
+
+def _updates_from_params(params: dict[str, Any], state: dict[str, Any]) -> list[dict[str, Any]]:
+    raw = params.get("updates")
+    if isinstance(raw, list):
+        updates: list[dict[str, Any]] = []
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            key = str(item.get("key") or "").strip()
+            if not key:
+                continue
+            updates.append({"key": key, "value": item.get("value")})
+        if updates:
+            return updates
+
+    updates: list[dict[str, Any]] = []
+    for source in (params, state.get("slots") if isinstance(state.get("slots"), dict) else {}):
+        for key in ("locale", "tone", "address_style"):
+            if key in source:
+                value = source.get(key)
+                if value is None:
+                    continue
+                updates.append({"key": key, "value": value})
+
+    deduped: dict[str, Any] = {}
+    for item in updates:
+        key = str(item.get("key") or "").strip()
+        if key:
+            deduped[key] = item.get("value")
+    return [{"key": key, "value": value} for key, value in deduped.items()]
 
 
 def _build_user_facts_result(state: dict[str, Any]) -> dict[str, Any]:

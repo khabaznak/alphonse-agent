@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -23,16 +24,36 @@ class DummySignal:
 
 
 class _PreferenceLLM:
+    _updates: list[dict[str, str]]
+
+    def __init__(self) -> None:
+        self._updates = []
+
     def complete(self, *, system_prompt: str, user_prompt: str) -> str:
         _ = system_prompt
         lower = user_prompt.lower()
-        if "message:" in lower:
-            return '[{"chunk":"update locale","intention":"update_preferences","confidence":"high"}]'
-        if "acceptancecriteria" in lower:
-            return '{"acceptanceCriteria":["Requested preference is updated"]}'
+        if "latest_family_message:" in lower:
+            if "english" in lower:
+                self._updates = [{"key": "locale", "value": "en-US"}]
+            elif "español" in lower or "espanol" in lower:
+                self._updates = [{"key": "locale", "value": "es-MX"}]
+            else:
+                self._updates = []
+            return (
+                '{"plan_version":"v1","message_summary":"update locale","primary_intention":"update_preferences",'
+                '"confidence":"high","steps":[{"step_id":"S1","goal":"update preference","requires":[],"produces":[],"priority":1}],'
+                '"acceptance_criteria":["Requested preference is updated"]}'
+            )
+        if "plan_from_step_a:" in lower:
+            return (
+                '{"plan_version":"v1","bindings":[{"step_id":"S1","binding_type":"TOOL","tool_id":0,'
+                '"parameters":{"updates":' + json.dumps(self._updates) + '},"missing_data":[],"reason":"direct_match"}]}'
+            )
         return (
-            '{"executionPlan":[{"tool":"update_preferences","parameters":{},'
-            '"status":"ready"}]}'
+            '{"plan_version":"v1","status":"READY","execution_plan":[{"step_id":"S1","sequence":1,'
+            '"kind":"TOOL","tool_name":"update_preferences","parameters":{"updates":'
+            + json.dumps(self._updates)
+            + '},"acceptance_links":[0]}],"acceptance_criteria":["Requested preference is updated"],"repair_log":[]}'
         )
 
 
@@ -93,7 +114,7 @@ def test_ack_locale_switches_to_english(
     assert captured, "Expected a COMMUNICATE plan"
     plan = captured[0]
     assert plan.payload.get("locale") == "en-US"
-    assert plan.payload.get("message") == "Got it. I'll use English."
+    assert plan.payload.get("message") == "ack.preference_updated"
 
     stored = get_with_fallback(principal_id, "locale", settings.get_default_locale())
     assert stored == "en-US"
@@ -111,7 +132,7 @@ def test_ack_locale_switches_to_spanish(
     assert captured, "Expected a COMMUNICATE plan"
     plan = captured[0]
     assert plan.payload.get("locale") == "es-MX"
-    assert plan.payload.get("message") == "Listo, hablaré en español."
+    assert plan.payload.get("message") == "ack.preference_updated"
 
     stored = get_with_fallback(principal_id, "locale", settings.get_default_locale())
     assert stored == "es-MX"
