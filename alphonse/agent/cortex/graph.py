@@ -17,7 +17,6 @@ from alphonse.agent.cognition.intent_discovery_engine import (
     discover_plan,
     format_available_ability_catalog,
     format_available_abilities,
-    get_discovery_strategy,
 )
 from alphonse.agent.cognition.pending_interaction import (
     PendingInteractionType,
@@ -286,6 +285,9 @@ def _run_intent_discovery(
 
     if not text:
         return {}
+    quick_identity = _fast_user_name_answer(state, text)
+    if quick_identity is not None:
+        return quick_identity
 
     available_tools = format_available_abilities()
     planning_context = _planning_context_for_discovery(state, text)
@@ -294,7 +296,6 @@ def _run_intent_discovery(
         llm_client=llm_client,
         available_tools=available_tools,
         locale=_locale_for_state(state),
-        strategy=get_discovery_strategy(),
         planning_context=planning_context,
     )
     _log_discovery_plan(state, discovery)
@@ -683,9 +684,11 @@ def _log_discovery_plan(state: CortexState, discovery: dict[str, Any] | None) ->
             state.get("correlation_id"),
         )
         return
-    chunks = discovery.get("chunks")
+    messages = discovery.get("messages")
+    if not isinstance(messages, list):
+        messages = discovery.get("chunks")
     plans = discovery.get("plans")
-    chunk_count = len(chunks) if isinstance(chunks, list) else 0
+    message_count = len(messages) if isinstance(messages, list) else 0
     plan_count = len(plans) if isinstance(plans, list) else 0
     total_steps = 0
     if isinstance(plans, list):
@@ -696,10 +699,10 @@ def _log_discovery_plan(state: CortexState, discovery: dict[str, Any] | None) ->
             if isinstance(execution, list):
                 total_steps += len(execution)
     logger.info(
-        "cortex discovery chat_id=%s correlation_id=%s chunks=%s plans=%s steps=%s",
+        "cortex discovery chat_id=%s correlation_id=%s messages=%s plans=%s steps=%s",
         state.get("chat_id"),
         state.get("correlation_id"),
-        chunk_count,
+        message_count,
         plan_count,
         total_steps,
     )
@@ -954,7 +957,6 @@ def _replan_discovery_after_step(
         llm_client=llm_client,
         available_tools=format_available_abilities(),
         locale=_locale_for_state(state),
-        strategy=get_discovery_strategy(),
         planning_context=planning_context,
     )
     if not isinstance(discovery, dict):
@@ -1133,6 +1135,48 @@ def _default_ask_question_prompt(state: CortexState) -> str:
     if locale.startswith("es"):
         return "¿Me puedes dar un poco más de detalle para continuar?"
     return "Could you share a bit more detail so I can continue?"
+
+
+def _fast_user_name_answer(state: CortexState, text: str) -> dict[str, Any] | None:
+    if not _is_user_name_question(text):
+        return None
+    conversation_key = str(
+        state.get("conversation_key")
+        or state.get("channel_target")
+        or state.get("chat_id")
+        or ""
+    ).strip()
+    if not conversation_key:
+        return None
+    name = identity_profile.get_display_name(conversation_key)
+    if not name:
+        return None
+    return {
+        "response_key": "core.identity.user.known",
+        "response_vars": {"user_name": name},
+        "ability_state": {},
+        "pending_interaction": None,
+    }
+
+
+def _is_user_name_question(text: str) -> bool:
+    normalized = str(text or "").strip().lower()
+    if not normalized:
+        return False
+    english_patterns = (
+        "what's my name",
+        "what is my name",
+        "do you know my name",
+        "tell me my name",
+    )
+    spanish_patterns = (
+        "como me llamo",
+        "cómo me llamo",
+        "cual es mi nombre",
+        "cuál es mi nombre",
+        "sabes mi nombre",
+    )
+    return any(pattern in normalized for pattern in (*english_patterns, *spanish_patterns))
 
 
 def _respond_node(arg: OllamaClient | CortexState | None = None):

@@ -10,7 +10,6 @@ from pathlib import Path
 
 from alphonse.agent.cognition.prompt_store import PromptContext, SqlitePromptStore
 from alphonse.agent.io import get_io_registry
-from alphonse.agent.nervous_system.tool_configs import get_active_tool_config
 
 logger = logging.getLogger(__name__)
 
@@ -200,25 +199,22 @@ def discover_plan(
     llm_client: object | None,
     available_tools: str,
     locale: str | None = None,
-    strategy: str | None = None,
     planning_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Return a dict with discovered execution plans per chunk.
+    """Return a dict with discovered execution plans.
 
     Output shape:
     {
-      "chunks": [
-        {"chunk": "...", "intention": "...", "confidence": "low"},
+      "messages": [
+        {"message": "...", "intention": "...", "confidence": "low"},
       ],
       "plans": [
-        {"chunk_index": 0, "acceptanceCriteria": [...], "executionPlan": [...]},
+        {"message_index": 0, "acceptanceCriteria": [...], "executionPlan": [...]},
       ]
     }
     """
     if not llm_client:
-        return {"chunks": [], "plans": []}
-
-    strategy = (strategy or get_discovery_strategy()).strip().lower()
+        return {"messages": [], "plans": []}
     store = SqlitePromptStore()
     context = PromptContext(
         locale=locale or "any",
@@ -229,12 +225,7 @@ def discover_plan(
         policy_tier="safe",
     )
 
-    if strategy == "single_pass":
-        logger.info(
-            "intent discovery strategy=single_pass is deprecated; using story pipeline"
-        )
-
-    story_discovery = _story_discover_plan(
+    return _story_discover_plan(
         text=text,
         llm_client=llm_client,
         store=store,
@@ -242,92 +233,6 @@ def discover_plan(
         locale=locale or "any",
         planning_context=planning_context,
     )
-    if story_discovery is not None:
-        return story_discovery
-    logger.info("intent discovery story pipeline failed; returning controlled interrupt")
-    return {
-        "chunks": [
-            {
-                "action": "overall",
-                "chunk": text,
-                "intention": "overall",
-                "confidence": "low",
-            }
-        ],
-        "plans": [
-            {
-                "chunk_index": 0,
-                "acceptanceCriteria": [],
-                "executionPlan": [],
-            }
-        ],
-        "planning_interrupt": {
-            "tool_id": 0,
-            "tool_name": "askQuestion",
-            "question": _default_story_interrupt_question(locale or "any"),
-            "slot": "answer",
-            "bind": {},
-            "missing_data": [],
-            "reason": "story_pipeline_failure",
-        },
-    }
-
-
-def _single_pass_plan(
-    *,
-    text: str,
-    llm_client: object,
-    available_tools: str,
-    store: SqlitePromptStore,
-    context: PromptContext,
-) -> dict[str, Any]:
-    planner_system = _get_template(store, _PLANNER_KEY, context, _PLANNER_SYSTEM_FALLBACK)
-    planner_user = _render_template(
-        _get_template(store, _PLANNER_KEY + ".user", context, _PLANNER_USER_FALLBACK),
-        {
-            "CHUNK_TEXT": text,
-            "INTENTION": "overall",
-            "ACCEPTANCE_CRITERIA": "[]",
-            "AVAILABLE_TOOLS": available_tools,
-        },
-    )
-    planner_user = f"{planner_user}\n\n{_PLANNER_GUARDRAILS}"
-    raw_plan = _call_llm(
-        llm_client,
-        planner_system,
-        planner_user,
-        stage="planner[single_pass]",
-    )
-    execution_plan = _parse_execution_plan(raw_plan)
-    execution_plan = _repair_invalid_execution_plan(
-        execution_plan=execution_plan,
-        llm_client=llm_client,
-        store=store,
-        context=context,
-        chunk_text=text,
-        intention="overall",
-        acceptance=[],
-        available_tools=available_tools,
-    )
-    return {
-        "chunks": [{"chunk": text, "intention": "overall", "confidence": "medium"}],
-        "plans": [
-            {
-                "chunk_index": 0,
-                "acceptanceCriteria": [],
-                "executionPlan": execution_plan,
-            }
-        ],
-    }
-
-
-def get_discovery_strategy(default: str = "multi_pass") -> str:
-    config = get_active_tool_config("routing_strategy")
-    if not config or not isinstance(config.get("config"), dict):
-        return default
-    raw = config.get("config") or {}
-    strategy = str(raw.get("strategy") or "").strip()
-    return strategy or default
 
 
 def format_available_abilities() -> str:
@@ -428,7 +333,7 @@ def _story_discover_plan(
     context: PromptContext,
     locale: str,
     planning_context: dict[str, Any] | None = None,
-) -> dict[str, Any] | None:
+) -> dict[str, Any]:
     exception_history: list[dict[str, Any]] = []
     context_payload: dict[str, Any] = {
         "locale": locale,
@@ -485,8 +390,7 @@ def _story_discover_plan(
         exception_history=exception_history,
     )
     if not isinstance(plan_a, dict):
-        logger.info("intent discovery story fallback reason=step_a_non_dict")
-        return None
+        raise RuntimeError("plan_synth returned non-dict payload")
     interrupt = _extract_planning_interrupt(plan_a)
     if interrupt is not None:
         interrupt = _sanitize_planning_interrupt(interrupt, locale=locale)
@@ -504,8 +408,7 @@ def _story_discover_plan(
         exception_history=exception_history,
     )
     if not isinstance(plan_b, dict):
-        logger.info("intent discovery story fallback reason=step_b_non_dict")
-        return None
+        raise RuntimeError("tool_binder returned non-dict payload")
     interrupt = _extract_planning_interrupt(plan_b)
     if interrupt is not None:
         interrupt = _sanitize_planning_interrupt(interrupt, locale=locale)
@@ -524,8 +427,7 @@ def _story_discover_plan(
         exception_history=exception_history,
     )
     if not isinstance(plan_c, dict):
-        logger.info("intent discovery story fallback reason=step_c_non_dict")
-        return None
+        raise RuntimeError("plan_refiner returned non-dict payload")
     interrupt = _extract_planning_interrupt(plan_c)
     if interrupt is not None:
         interrupt = _sanitize_planning_interrupt(interrupt, locale=locale)
@@ -540,26 +442,7 @@ def _story_discover_plan(
             interrupt = _derive_interrupt_from_bindings(plan_c)
         interrupt = _sanitize_planning_interrupt(interrupt, locale=locale)
         if interrupt is None:
-            logger.info(
-                "intent discovery story no_executable_steps -> capability_gap path reason=no_safe_user_question",
-            )
-            return {
-                "chunks": [
-                    {
-                        "action": str(plan_a.get("primary_intention") or "overall").strip() or "overall",
-                        "chunk": text,
-                        "intention": str(plan_a.get("primary_intention") or "overall").strip() or "overall",
-                        "confidence": str(plan_a.get("confidence") or "medium").strip().lower() or "medium",
-                    }
-                ],
-                "plans": [
-                    {
-                        "chunk_index": 0,
-                        "acceptanceCriteria": _extract_acceptance_criteria(plan_c, plan_a),
-                        "executionPlan": [],
-                    }
-                ],
-            }
+            raise RuntimeError("plan_refiner produced no executable steps and no interrupt")
         logger.info(
             "intent discovery story no_executable_steps -> planning_interrupt reason=%s",
             interrupt.get("reason"),
@@ -569,17 +452,17 @@ def _story_discover_plan(
     confidence = str(plan_a.get("confidence") or "medium").strip().lower() or "medium"
     acceptance = _extract_acceptance_criteria(plan_c, plan_a)
     return {
-        "chunks": [
+        "messages": [
             {
                 "action": primary_intention,
-                "chunk": text,
+                "message": text,
                 "intention": primary_intention,
                 "confidence": confidence,
             }
         ],
         "plans": [
             {
-                "chunk_index": 0,
+                "message_index": 0,
                 "acceptanceCriteria": acceptance,
                 "executionPlan": execution_plan,
             }
@@ -931,17 +814,17 @@ def _interrupt_discovery_payload(
     confidence = str(plan_a.get("confidence") or "medium").strip().lower() or "medium"
     acceptance = _extract_acceptance_criteria({}, plan_a)
     return {
-        "chunks": [
+        "messages": [
             {
                 "action": intention,
-                "chunk": text,
+                "message": text,
                 "intention": intention,
                 "confidence": confidence,
             }
         ],
         "plans": [
             {
-                "chunk_index": 0,
+                "message_index": 0,
                 "acceptanceCriteria": acceptance,
                 "executionPlan": [],
             }

@@ -31,20 +31,34 @@ class _SeqLlm:
         return value
 
 
-def test_single_pass_repairs_invalid_execution_plan() -> None:
+def test_story_pipeline_returns_executable_plan() -> None:
     llm = _SeqLlm(
         responses=[
-            '{"executionPlan":[{"action":"schedule_reminder","parameters":{}}]}',
-            '{"executionPlan":[{"action":"askQuestion","parameters":{"question":"When should I remind you?"}}]}',
+            (
+                '{"plan_version":"v1","message_summary":"identity","primary_intention":"core.identity.query_user_name",'
+                '"confidence":"high","steps":[{"step_id":"S1","goal":"answer user identity","requires":[],"produces":[],"priority":1}],'
+                '"acceptance_criteria":["user name returned"]}'
+            ),
+            (
+                '{"plan_version":"v1","bindings":[{"step_id":"S1","binding_type":"TOOL","tool_id":7,'
+                '"parameters":{},"missing_data":[],"reason":"direct_match"}]}'
+            ),
+            (
+                '{"plan_version":"v1","status":"READY","execution_plan":[{"step_id":"S1","sequence":1,'
+                '"kind":"TOOL","tool_name":"core.identity.query_user_name","parameters":{},"acceptance_links":[0]}],'
+                '"acceptance_criteria":["user name returned"],"repair_log":[]}'
+            ),
         ]
     )
 
     result = discover_plan(
-        text="remind me in 1 min",
+        text="what's my name",
         llm_client=llm,
-        available_tools="- askQuestion(question:string, slot?:string, bind?:object)",
+        available_tools=(
+            "- askQuestion(question:string, slot?:string, bind?:object)\n"
+            "- core.identity.query_user_name() -> identity"
+        ),
         locale="en-US",
-        strategy="single_pass",
     )
 
     plans = result.get("plans")
@@ -53,5 +67,4 @@ def test_single_pass_repairs_invalid_execution_plan() -> None:
     execution = plans[0].get("executionPlan")
     assert isinstance(execution, list)
     assert execution
-    assert execution[0].get("action") == "askQuestion"
-    assert execution[0].get("parameters", {}).get("question")
+    assert execution[0].get("tool") == "core.identity.query_user_name"
