@@ -43,6 +43,7 @@ from alphonse.agent.tools.registry import ToolRegistry
 from alphonse.config import settings
 
 logger = logging.getLogger(__name__)
+_AGENT_RUNTIME_STARTED_AT = datetime.now(timezone.utc).isoformat()
 
 
 def load_json_abilities(db_path: str | None = None) -> list[Ability]:
@@ -162,7 +163,7 @@ def _build_ability_flow_executor(spec: dict[str, Any]):
         step_result = _execute_steps(steps, params, state)
         if isinstance(step_result, dict) and step_result.get("response_text"):
             pending_interaction = step_result.get("pending_interaction")
-            return {
+            payload = {
                 "response_text": step_result.get("response_text"),
                 "response_key": None,
                 "response_vars": step_result.get("response_vars") or {},
@@ -170,41 +171,60 @@ def _build_ability_flow_executor(spec: dict[str, Any]):
                 "ability_state": ability_state if pending_interaction else {},
                 "plans": step_result.get("plans") or [],
             }
+            payload.update(_step_result_extras(step_result))
+            return payload
         if isinstance(step_result, dict) and step_result.get("response_key"):
             pending_interaction = step_result.get("pending_interaction")
-            return {
+            payload = {
                 "response_key": step_result.get("response_key"),
                 "response_vars": step_result.get("response_vars") or {},
                 "pending_interaction": pending_interaction,
                 "ability_state": ability_state if pending_interaction else {},
                 "plans": step_result.get("plans") or [],
             }
+            payload.update(_step_result_extras(step_result))
+            return payload
         response_key = str(outputs.get("success") or "").strip()
         response_vars = dict(step_result.get("response_vars") or {})
         emitted_plans = step_result.get("plans") if isinstance(step_result, dict) else []
         if not isinstance(emitted_plans, list):
             emitted_plans = []
+        extras = _step_result_extras(step_result if isinstance(step_result, dict) else {})
         if "user_name" not in response_vars:
             if isinstance(params.get("user_name"), str):
                 response_vars["user_name"] = params.get("user_name")
             elif isinstance(params.get("display_name"), str):
                 response_vars["user_name"] = params.get("display_name")
         if not response_key:
-            return {
+            payload = {
                 "response_vars": response_vars,
                 "pending_interaction": None,
                 "ability_state": {},
                 "plans": emitted_plans,
             }
-        return {
+            payload.update(extras)
+            return payload
+        payload = {
             "response_key": response_key,
             "response_vars": response_vars,
             "pending_interaction": None,
             "ability_state": {},
             "plans": emitted_plans,
         }
+        payload.update(extras)
+        return payload
 
     return _execute
+
+
+def _step_result_extras(step_result: dict[str, Any]) -> dict[str, Any]:
+    extras: dict[str, Any] = {}
+    if not isinstance(step_result, dict):
+        return extras
+    for key in ("fact_updates", "tool_output"):
+        if key in step_result:
+            extras[key] = step_result.get(key)
+    return extras
 
 
 def _load_ability_state(state: dict[str, Any], intent_name: str) -> dict[str, Any]:
@@ -588,6 +608,10 @@ def _execute_steps(steps: list[dict[str, Any]], params: dict[str, Any], state: d
         if action == "meta.capabilities":
             locale = str(state.get("locale") or "en-US")
             return {"response_text": summarize_capabilities(locale)}
+        if action == "facts.user.get":
+            return _build_user_facts_result(state)
+        if action == "facts.agent.get":
+            return _build_agent_facts_result(state)
         if action == "update_preferences":
             updates = extract_preference_updates(state.get("last_user_message", ""))
             if not updates:
@@ -763,6 +787,75 @@ def _coerce_trigger_at_iso(value: str, fallback_text: Any) -> str | None:
         hours = int(match.group(1))
         return (datetime.now(timezone.utc) + timedelta(hours=hours)).isoformat()
     return None
+
+
+def _build_user_facts_result(state: dict[str, Any]) -> dict[str, Any]:
+    conversation_key = str(state.get("conversation_key") or "").strip()
+    display_name = identity_profile.get_display_name(conversation_key) if conversation_key else None
+    incoming_name = str(state.get("incoming_user_name") or "").strip() or None
+    principal_id = _principal_id_from_state(state)
+    locations: list[dict[str, Any]] = []
+    if principal_id:
+        rows = list_location_profiles(
+            principal_id=principal_id,
+            label=None,
+            active_only=True,
+            limit=10,
+        )
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            location = {
+                "label": row.get("label"),
+                "address_text": row.get("address_text"),
+                "latitude": row.get("latitude"),
+                "longitude": row.get("longitude"),
+            }
+            locations.append(location)
+    relationships: list[dict[str, Any]] = []
+    for row in list_users(active_only=True, limit=50):
+        if not isinstance(row, dict):
+            continue
+        relationships.append(
+            {
+                "display_name": row.get("display_name"),
+                "relationship": row.get("relationship"),
+                "role": row.get("role"),
+                "is_admin": bool(row.get("is_admin", False)),
+            }
+        )
+    facts = {
+        "user": {
+            "name": display_name or incoming_name,
+            "conversation_key": conversation_key or None,
+            "person_id": state.get("actor_person_id"),
+            "principal_id": principal_id,
+            "channel_type": state.get("channel_type"),
+            "channel_target": state.get("channel_target"),
+            "locale": state.get("locale"),
+            "timezone": state.get("timezone"),
+            "locations": locations,
+            "relationships": relationships,
+        }
+    }
+    return {"fact_updates": facts, "tool_output": facts}
+
+
+def _build_agent_facts_result(state: dict[str, Any]) -> dict[str, Any]:
+    facts = {
+        "agent": {
+            "name": "Alphonse",
+            "role": "personal_ai_assistant",
+            "status": "online",
+            "on_since": _AGENT_RUNTIME_STARTED_AT,
+            "installed_since": None,
+            "locale_default": settings.get_default_locale(),
+            "timezone_default": settings.get_timezone(),
+            "channel_type": state.get("channel_type"),
+            "channel_target": state.get("channel_target"),
+        }
+    }
+    return {"fact_updates": facts, "tool_output": facts}
 
 
 def _prefill_params(params: dict[str, Any], parameters: list[dict[str, Any]], state: dict[str, Any]) -> None:

@@ -126,6 +126,34 @@
     }
   },
   {
+    "intent_name": "facts.user.get",
+    "kind": "ability_flow",
+    "tools": [],
+    "input_parameters": [],
+    "step_sequence": [
+      {
+        "order": 1,
+        "action": "facts.user.get",
+        "input": []
+      }
+    ],
+    "outputs": {}
+  },
+  {
+    "intent_name": "facts.agent.get",
+    "kind": "ability_flow",
+    "tools": [],
+    "input_parameters": [],
+    "step_sequence": [
+      {
+        "order": 1,
+        "action": "facts.agent.get",
+        "input": []
+      }
+    ],
+    "outputs": {}
+  },
+  {
     "intent_name": "meta.capabilities",
     "kind": "ability_flow",
     "tools": [],

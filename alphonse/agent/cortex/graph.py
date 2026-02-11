@@ -32,6 +32,7 @@ from alphonse.agent.cognition.step_validation import (
 )
 from alphonse.agent.cognition.abilities.registry import AbilityRegistry
 from alphonse.agent.cognition.abilities.json_runtime import load_json_abilities
+from alphonse.agent.identity import profile as identity_profile
 from alphonse.agent.tools.registry import ToolRegistry, build_default_tool_registry
 
 logger = logging.getLogger(__name__)
@@ -73,6 +74,7 @@ class CortexState(TypedDict, total=False):
     events: list[dict[str, Any]]
     pending_interaction: dict[str, Any] | None
     ability_state: dict[str, Any] | None
+    planning_context: dict[str, Any] | None
 
 
 def build_cortex_graph(llm_client: OllamaClient | None = None) -> StateGraph:
@@ -286,15 +288,14 @@ def _run_intent_discovery(
         return {}
 
     available_tools = format_available_abilities()
+    planning_context = _planning_context_for_discovery(state, text)
     discovery = discover_plan(
         text=text,
         llm_client=llm_client,
         available_tools=available_tools,
         locale=_locale_for_state(state),
         strategy=get_discovery_strategy(),
-        planning_context=state.get("planning_context")
-        if isinstance(state.get("planning_context"), dict)
-        else None,
+        planning_context=planning_context,
     )
     _log_discovery_plan(state, discovery)
     if isinstance(discovery, dict):
@@ -371,6 +372,8 @@ def _build_discovery_loop_state(
         "kind": "discovery_loop",
         "steps": steps,
         "source_message": str(source_message or "").strip(),
+        "fact_bag": {},
+        "replan_count": 0,
     }
 
 
@@ -479,6 +482,23 @@ def _run_discovery_loop_step(
     if merged.get("pending_interaction"):
         merged["ability_state"] = loop_state
         return merged
+    fact_updates = merged.get("fact_updates") if isinstance(merged.get("fact_updates"), dict) else {}
+    if fact_updates:
+        fact_bag = loop_state.get("fact_bag")
+        if not isinstance(fact_bag, dict):
+            fact_bag = {}
+        fact_bag.update(fact_updates)
+        loop_state["fact_bag"] = fact_bag
+    replan_result = _replan_discovery_after_step(
+        state=state,
+        loop_state=loop_state,
+        last_step=step,
+        llm_client=llm_client,
+    )
+    if isinstance(replan_result, dict):
+        return replan_result
+    if isinstance(loop_state.get("steps"), list):
+        steps = loop_state["steps"]
     if _next_step_index(steps, allowed_statuses={"ready"}) is None:
         if _next_step_index(steps, allowed_statuses={"incomplete", "waiting"}) is None:
             merged["ability_state"] = {}
@@ -820,6 +840,139 @@ def _run_ask_question_step(
         "pending_interaction": serialize_pending_interaction(pending),
         "ability_state": loop_state or {},
     }
+
+
+def _planning_context_for_discovery(
+    state: CortexState,
+    text: str,
+) -> dict[str, Any] | None:
+    existing = (
+        state.get("planning_context")
+        if isinstance(state.get("planning_context"), dict)
+        else {}
+    )
+    facts = existing.get("facts") if isinstance(existing.get("facts"), dict) else {}
+    baseline_facts = _build_initial_fact_snapshot(state)
+    merged_facts = {**facts, **baseline_facts}
+    return {
+        "original_message": str(existing.get("original_message") or text),
+        "latest_user_answer": str(existing.get("latest_user_answer") or ""),
+        "clarifications": existing.get("clarifications")
+        if isinstance(existing.get("clarifications"), list)
+        else [],
+        "facts": merged_facts,
+        "fact_bag": existing.get("fact_bag")
+        if isinstance(existing.get("fact_bag"), dict)
+        else merged_facts,
+        "last_tool_output": existing.get("last_tool_output")
+        if isinstance(existing.get("last_tool_output"), dict)
+        else {},
+        "completed_steps": existing.get("completed_steps")
+        if isinstance(existing.get("completed_steps"), list)
+        else [],
+        "remaining_steps": existing.get("remaining_steps")
+        if isinstance(existing.get("remaining_steps"), list)
+        else [],
+        "replan_on_answer": bool(existing.get("replan_on_answer")),
+    }
+
+
+def _build_initial_fact_snapshot(state: CortexState) -> dict[str, Any]:
+    conversation_key = str(state.get("conversation_key") or "").strip()
+    channel_type = str(state.get("channel_type") or "").strip()
+    channel_target = str(state.get("channel_target") or state.get("chat_id") or "").strip()
+    user_name = None
+    if conversation_key:
+        user_name = identity_profile.get_display_name(conversation_key)
+    if not user_name and state.get("incoming_user_name"):
+        user_name = str(state.get("incoming_user_name") or "").strip() or None
+    principal_id = None
+    if channel_type and channel_target:
+        principal_id = get_or_create_principal_for_channel(channel_type, channel_target)
+    return {
+        "agent": {
+            "name": "Alphonse",
+            "role": "personal_ai_assistant",
+            "status": "online",
+        },
+        "user": {
+            "name": user_name,
+            "person_id": state.get("actor_person_id"),
+            "principal_id": principal_id,
+        },
+        "channel": {
+            "type": channel_type,
+            "target": channel_target,
+            "locale": _locale_for_state(state),
+            "timezone": state.get("timezone"),
+        },
+    }
+
+
+def _replan_discovery_after_step(
+    *,
+    state: CortexState,
+    loop_state: dict[str, Any],
+    last_step: dict[str, Any],
+    llm_client: OllamaClient | None,
+) -> dict[str, Any] | None:
+    if llm_client is None:
+        return None
+    source_message = str(loop_state.get("source_message") or "").strip()
+    if not source_message:
+        return None
+    replan_count = int(loop_state.get("replan_count") or 0)
+    if replan_count >= 6:
+        return None
+    steps = loop_state.get("steps")
+    if not isinstance(steps, list):
+        return None
+    completed_steps = [step for step in steps if str(step.get("status") or "").lower() == "executed"]
+    remaining_steps = [
+        step
+        for step in steps
+        if str(step.get("status") or "").lower() in {"ready", "incomplete", "waiting"}
+    ]
+    planning_context = _planning_context_for_discovery(state, source_message) or {}
+    fact_bag = loop_state.get("fact_bag")
+    if isinstance(fact_bag, dict):
+        planning_context["facts"] = {
+            **(planning_context.get("facts") if isinstance(planning_context.get("facts"), dict) else {}),
+            **fact_bag,
+        }
+        planning_context["fact_bag"] = fact_bag
+    planning_context["completed_steps"] = completed_steps
+    planning_context["remaining_steps"] = remaining_steps
+    last_tool_output = {
+        "tool": str(last_step.get("tool") or ""),
+        "parameters": last_step.get("parameters") if isinstance(last_step.get("parameters"), dict) else {},
+        "outcome": str(last_step.get("outcome") or ""),
+    }
+    planning_context["last_tool_output"] = last_tool_output
+    discovery = discover_plan(
+        text=source_message,
+        llm_client=llm_client,
+        available_tools=format_available_abilities(),
+        locale=_locale_for_state(state),
+        strategy=get_discovery_strategy(),
+        planning_context=planning_context,
+    )
+    if not isinstance(discovery, dict):
+        return None
+    interrupt = discovery.get("planning_interrupt")
+    if isinstance(interrupt, dict):
+        return _run_planning_interrupt(state, interrupt)
+    refreshed = _build_discovery_loop_state(discovery, source_message=source_message)
+    refreshed_steps = refreshed.get("steps") if isinstance(refreshed.get("steps"), list) else []
+    refreshed["steps"] = [*completed_steps, *refreshed_steps]
+    refreshed["fact_bag"] = (
+        loop_state.get("fact_bag") if isinstance(loop_state.get("fact_bag"), dict) else {}
+    )
+    refreshed["replan_count"] = replan_count + 1
+    loop_state.clear()
+    loop_state.update(refreshed)
+    state["planning_context"] = planning_context
+    return None
 
 
 def _run_planning_interrupt(
@@ -1333,6 +1486,7 @@ def _build_cognition_state(state: CortexState) -> dict[str, Any]:
         "intent_category": state.get("intent_category"),
         "pending_interaction": state.get("pending_interaction"),
         "ability_state": state.get("ability_state"),
+        "planning_context": state.get("planning_context"),
         "last_updated_at": datetime.now(timezone.utc).isoformat(),
     }
 

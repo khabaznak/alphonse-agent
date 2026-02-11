@@ -108,6 +108,7 @@ _PLACEHOLDER_PATTERNS = (
     r"\bplaceholder\b",
     r"\[unknown\]",
 )
+_DISCOVERY_EXCLUDED_TOOLS: set[str] = set()
 
 _PLAN_SYNTH_KEY = "intent_discovery.plan_synth.v1"
 _TOOL_BINDER_KEY = "intent_discovery.tool_binder.v1"
@@ -338,6 +339,8 @@ def format_available_abilities() -> str:
         intent = str(spec.get("intent_name") or "").strip()
         if not intent:
             continue
+        if intent in _DISCOVERY_EXCLUDED_TOOLS:
+            continue
         params = spec.get("input_parameters") if isinstance(spec.get("input_parameters"), list) else []
         summary = _ability_summary(spec)
         if params:
@@ -368,6 +371,8 @@ def format_available_ability_catalog() -> str:
     for spec in specs:
         tool = str(spec.get("intent_name") or "").strip()
         if not tool:
+            continue
+        if tool in _DISCOVERY_EXCLUDED_TOOLS:
             continue
         raw_params = (
             spec.get("input_parameters")
@@ -431,6 +436,12 @@ def _story_discover_plan(
         "mode": "planning",
     }
     if isinstance(planning_context, dict):
+        planning_facts = planning_context.get("facts")
+        if not isinstance(planning_facts, dict):
+            planning_facts = {}
+        planning_fact_bag = planning_context.get("fact_bag")
+        if isinstance(planning_fact_bag, dict):
+            planning_facts = {**planning_facts, **planning_fact_bag}
         context_payload.update(
             {
                 "original_message": str(
@@ -442,9 +453,19 @@ def _story_discover_plan(
                 "clarifications": planning_context.get("clarifications")
                 if isinstance(planning_context.get("clarifications"), list)
                 else [],
-                "facts": planning_context.get("facts")
-                if isinstance(planning_context.get("facts"), dict)
+                "facts": planning_facts,
+                "fact_bag": planning_context.get("fact_bag")
+                if isinstance(planning_context.get("fact_bag"), dict)
+                else planning_facts,
+                "last_tool_output": planning_context.get("last_tool_output")
+                if isinstance(planning_context.get("last_tool_output"), dict)
                 else {},
+                "completed_steps": planning_context.get("completed_steps")
+                if isinstance(planning_context.get("completed_steps"), list)
+                else [],
+                "remaining_steps": planning_context.get("remaining_steps")
+                if isinstance(planning_context.get("remaining_steps"), list)
+                else [],
                 "replan_on_answer": bool(planning_context.get("replan_on_answer")),
             }
         )
