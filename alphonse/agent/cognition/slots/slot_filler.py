@@ -10,10 +10,6 @@ from alphonse.agent.cognition.slots.slot_fsm import (
     create_machine,
     serialize_machine,
 )
-from alphonse.agent.cognition.slots.utterance_guard import (
-    is_core_conversational_utterance,
-    is_resume_utterance,
-)
 from alphonse.agent.cognition.plans import CortexPlan, PlanType
 from alphonse.agent.core.settings_store import get_timezone
 
@@ -54,23 +50,13 @@ def fill_slots(
                 needs_clarification=True,
                 abort_flow=True,
             )
-        if machine.paused_at and not is_resume_utterance(text):
+        if machine.paused_at:
             return SlotFillResult(
                 intent_name=intent.intent_name,
                 slots=slots,
                 response_key=None,
                 slot_machine=serialize_machine(machine),
                 needs_clarification=False,
-            )
-        if machine.paused_at and is_resume_utterance(text):
-            machine.paused_at = None
-            prompt_key = _prompt_for_slot(intent, machine.slot_name) or "clarify.intent"
-            return SlotFillResult(
-                intent_name=intent.intent_name,
-                slots=slots,
-                response_key=prompt_key,
-                slot_machine=serialize_machine(machine),
-                needs_clarification=True,
             )
         machine, parsed = apply_input(machine, text, registry)
         if parsed.ok:
@@ -148,8 +134,6 @@ def _parse_guess(
         text_value = str(guess or "").strip()
         if spec.min_length and len(text_value) < spec.min_length:
             return ParseResult(ok=False, error="too_short")
-        if spec.reject_if_core_conversational and is_core_conversational_utterance(text_value):
-            return ParseResult(ok=False, error="core_conversational")
     resolver = registry.get(spec.type)
     if not resolver:
         return ParseResult(ok=False, error="missing_resolver")
