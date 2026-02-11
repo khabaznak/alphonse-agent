@@ -25,6 +25,11 @@ from alphonse.agent.cognition.pending_interaction import (
     serialize_pending_interaction,
 )
 from alphonse.agent.cognition.preferences.store import get_or_create_principal_for_channel
+from alphonse.agent.cognition.step_validation import (
+    StepValidationResult,
+    is_internal_tool_question,
+    validate_step,
+)
 from alphonse.agent.cognition.abilities.registry import AbilityRegistry
 from alphonse.agent.cognition.abilities.json_runtime import load_json_abilities
 from alphonse.agent.tools.registry import ToolRegistry, build_default_tool_registry
@@ -323,15 +328,15 @@ def _run_discovery_loop_step(
         step["outcome"] = "missing_tool_name"
         plan = _build_gap_plan(state, reason="step_missing_tool_name")
         return {"ability_state": loop_state, "plans": [plan.model_dump()]}
-    if tool_name == "askQuestion":
-        return _run_ask_question_step(state, step, loop_state, next_idx)
-    ability = _ability_registry().get(tool_name)
-    if ability is None:
+    catalog = _available_tool_catalog_data()
+    validation = _validate_loop_step(step, catalog)
+    if not validation.is_valid:
         if not bool(step.get("critic_attempted")):
             repaired = _critic_repair_invalid_step(
                 state=state,
                 step=step,
                 llm_client=llm_client,
+                validation=validation,
             )
             if repaired is not None:
                 repaired["chunk_index"] = step.get("chunk_index")
@@ -347,15 +352,29 @@ def _run_discovery_loop_step(
                 repaired["status"] = (
                     "incomplete" if _has_missing_params(repaired_params) else "ready"
                 )
+                repaired["validation_error_history"] = list(step.get("validation_error_history") or [])
                 steps[next_idx] = repaired
                 logger.info(
-                    "cortex plan critic repaired chat_id=%s correlation_id=%s from=%s to=%s",
+                    "cortex plan critic repaired chat_id=%s correlation_id=%s from=%s to=%s issue=%s",
                     state.get("chat_id"),
                     state.get("correlation_id"),
                     tool_name,
                     str(repaired.get("tool") or "unknown"),
+                    validation.issue.error_type.value if validation.issue else "unknown",
                 )
                 return _run_discovery_loop_step(state, loop_state, llm_client)
+        step["status"] = "failed"
+        step["outcome"] = "validation_failed"
+        state["intent"] = tool_name
+        reason = "step_validation_failed"
+        if validation.issue is not None:
+            reason = f"step_validation_{validation.issue.error_type.value.lower()}"
+        gap = _build_gap_plan(state, reason=reason)
+        return {"ability_state": loop_state, "plans": [gap.model_dump()]}
+    if tool_name == "askQuestion":
+        return _run_ask_question_step(state, step, loop_state, next_idx)
+    ability = _ability_registry().get(tool_name)
+    if ability is None:
         step["status"] = "failed"
         step["outcome"] = "unknown_tool"
         state["intent"] = tool_name
@@ -392,10 +411,11 @@ def _critic_repair_invalid_step(
     state: CortexState,
     step: dict[str, Any],
     llm_client: OllamaClient | None,
+    validation: StepValidationResult,
 ) -> dict[str, Any] | None:
     if llm_client is None:
         return None
-    user_prompt = _build_plan_critic_prompt(state, step)
+    user_prompt = _build_plan_critic_prompt(state, step, validation)
     try:
         raw = str(
             llm_client.complete(
@@ -420,21 +440,33 @@ def _critic_repair_invalid_step(
         return None
     params = repaired.get("parameters")
     repaired["parameters"] = params if isinstance(params, dict) else {}
+    if tool_name == "askQuestion":
+        question = str(repaired["parameters"].get("question") or "").strip()
+        if not question or is_internal_tool_question(question):
+            return None
     return repaired
 
 
-def _build_plan_critic_prompt(state: CortexState, step: dict[str, Any]) -> str:
+def _build_plan_critic_prompt(
+    state: CortexState,
+    step: dict[str, Any],
+    validation: StepValidationResult,
+) -> str:
+    exception_payload = _build_critic_exception_payload(validation)
     return (
         "Repair this invalid execution step.\n"
         "Rules:\n"
         "- Select exactly one tool from AVAILABLE TOOLS CATALOG.\n"
         "- Keep the original user goal.\n"
         "- If required parameters are missing, choose askQuestion and ask for only the missing data.\n"
+        "- Never ask the user to choose or confirm tool/function names.\n"
+        "- Keep output minimal and executable now.\n"
         "- Output JSON only with shape: "
         '{"tool":"<tool_name>","parameters":{...}}'
         "\n\n"
         f"User message:\n{str(state.get('last_user_message') or '')}\n\n"
         f"Invalid step:\n{_safe_json(step, limit=800)}\n\n"
+        f"Validation exception:\n{_safe_json(exception_payload, limit=1000)}\n\n"
         f"AVAILABLE TOOLS SIGNATURES:\n{format_available_abilities()}\n\n"
         f"AVAILABLE TOOLS CATALOG:\n{format_available_ability_catalog()}\n"
     )
@@ -464,6 +496,57 @@ def _parse_critic_step(raw: str) -> dict[str, Any] | None:
     if not isinstance(payload, dict):
         return None
     return payload
+
+
+def _build_critic_exception_payload(validation: StepValidationResult) -> dict[str, Any]:
+    issue = validation.issue
+    if issue is None:
+        return {
+            "summary": "Validation failed with unknown reason.",
+            "issues": [],
+            "error_history": validation.error_history,
+            "guidance": [],
+        }
+    guidance = [
+        "Use only tools from AVAILABLE TOOLS CATALOG.",
+        "Ask only for missing end-user data; never ask for internal tool selection.",
+        "Output one corrected step only.",
+    ]
+    examples = {
+        "wrong": {"tool": "setTimer", "parameters": {"time": "$ remindTime"}},
+        "right": {
+            "tool": "askQuestion",
+            "parameters": {"question": "When should I remind you?"},
+        },
+    }
+    return {
+        "summary": issue.message,
+        "issues": [issue.error_type.value],
+        "details": issue.details,
+        "error_history": validation.error_history,
+        "guidance": guidance,
+        "examples": examples,
+    }
+
+
+def _available_tool_catalog_data() -> dict[str, Any]:
+    raw = format_available_ability_catalog()
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return {"tools": []}
+    return parsed if isinstance(parsed, dict) else {"tools": []}
+
+
+def _validate_loop_step(
+    step: dict[str, Any],
+    catalog: dict[str, Any],
+) -> StepValidationResult:
+    history_raw = step.get("validation_error_history")
+    history = history_raw if isinstance(history_raw, list) else []
+    result = validate_step(step, catalog, error_history=[str(item) for item in history])
+    step["validation_error_history"] = result.error_history
+    return result
 
 
 def _log_discovery_plan(state: CortexState, discovery: dict[str, Any] | None) -> None:

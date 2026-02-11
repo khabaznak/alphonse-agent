@@ -8,6 +8,7 @@ from typing import Any
 from pathlib import Path
 
 from alphonse.agent.cognition.prompt_store import PromptContext, SqlitePromptStore
+from alphonse.agent.io import get_io_registry
 from alphonse.agent.nervous_system.tool_configs import get_active_tool_config
 
 logger = logging.getLogger(__name__)
@@ -88,6 +89,8 @@ _PLANNER_GUARDRAILS = (
     "Hard constraints:\n"
     "- Never invent tool names. Use only tools that appear exactly in AVAILABLE TOOLS.\n"
     "- If no single listed tool can achieve the goal, produce the shortest valid multi-step sequence of listed tool calls that satisfies the acceptance criteria.\n"
+    "- Never ask the user to choose or confirm internal tool/function names.\n"
+    "- Ask questions only for missing end-user data, not implementation choices.\n"
     "- Prefer the shortest plan (one step when enough information is present).\n"
 )
 
@@ -234,29 +237,32 @@ def get_discovery_strategy(default: str = "multi_pass") -> str:
 def format_available_abilities() -> str:
     specs = _load_ability_specs()
     lines: list[str] = [
-        "- askQuestion(question:string, slot?:string, bind?:object): Ask the user for missing parameters.",
+        "- askQuestion(question:string, slot?:string, bind?:object): Ask for missing end-user data only. Never ask about internal tool names.",
     ]
     for spec in specs:
         intent = str(spec.get("intent_name") or "").strip()
         if not intent:
             continue
         params = spec.get("input_parameters") if isinstance(spec.get("input_parameters"), list) else []
+        summary = _ability_summary(spec)
         if params:
             params_desc = ", ".join(
-                f"{p.get('name')}:{p.get('type')}" for p in params if p.get("name")
+                _render_param_signature(p) for p in params if p.get("name")
             )
-            lines.append(f"- {intent}({params_desc})")
+            lines.append(f"- {intent}({params_desc}) -> {summary}")
         else:
-            lines.append(f"- {intent}()")
+            lines.append(f"- {intent}() -> {summary}")
     return "\n".join(lines)
 
 
 def format_available_ability_catalog() -> str:
     specs = _load_ability_specs()
-    catalog: list[dict[str, Any]] = [
+    tools: list[dict[str, Any]] = [
         {
             "tool": "askQuestion",
             "summary": "Ask the user for missing parameters to continue.",
+            "intents_covered": ["clarification", "slot_fill"],
+            "examples": ["Ask only for missing user data."],
             "input_parameters": [
                 {"name": "question", "type": "string", "required": True},
                 {"name": "slot", "type": "string", "required": False},
@@ -287,14 +293,31 @@ def format_available_ability_catalog() -> str:
                     "required": bool(item.get("required", False)),
                 }
             )
-        catalog.append(
+        tools.append(
             {
                 "tool": tool,
                 "summary": _ability_summary(spec),
+                "intents_covered": _ability_intents_covered(spec),
+                "examples": _ability_examples(spec),
+                "actions": _ability_actions(spec),
+                "required_parameters": [
+                    p["name"] for p in params if bool(p.get("required"))
+                ],
                 "input_parameters": params,
+                "uses_tools": [
+                    str(item).strip()
+                    for item in (spec.get("tools") if isinstance(spec.get("tools"), list) else [])
+                    if str(item).strip()
+                ],
             }
         )
-    return json.dumps(catalog, ensure_ascii=False)
+    return json.dumps(
+        {
+            "tools": tools,
+            "io_channels": _io_channel_catalog(),
+        },
+        ensure_ascii=False,
+    )
 
 
 def _call_llm(llm_client: object, system_prompt: str, user_prompt: str) -> str:
@@ -315,6 +338,81 @@ def _ability_summary(spec: dict[str, Any]) -> str:
             if action:
                 return f"{kind or 'ability'} via action {action}"
     return kind or "ability"
+
+
+def _ability_intents_covered(spec: dict[str, Any]) -> list[str]:
+    intent = str(spec.get("intent_name") or "").strip()
+    if not intent:
+        return []
+    aliases = [intent]
+    parts = intent.split(".")
+    if len(parts) > 1:
+        aliases.append(parts[-1])
+    return aliases
+
+
+def _ability_examples(spec: dict[str, Any]) -> list[str]:
+    prompts = spec.get("prompts") if isinstance(spec.get("prompts"), dict) else {}
+    outputs = spec.get("outputs") if isinstance(spec.get("outputs"), dict) else {}
+    step_sequence = spec.get("step_sequence") if isinstance(spec.get("step_sequence"), list) else []
+    examples: list[str] = []
+    if prompts:
+        examples.append(
+            "Prompts: " + ", ".join(sorted(str(k) for k in prompts.keys()))
+        )
+    if outputs:
+        examples.append(
+            "Outputs: " + ", ".join(sorted(str(k) for k in outputs.keys()))
+        )
+    if step_sequence:
+        action_names = [
+            str(step.get("action") or "").strip()
+            for step in step_sequence
+            if isinstance(step, dict) and str(step.get("action") or "").strip()
+        ]
+        if action_names:
+            examples.append("Actions: " + ", ".join(action_names))
+    if not examples:
+        examples.append("No explicit examples provided.")
+    return examples
+
+
+def _ability_actions(spec: dict[str, Any]) -> list[str]:
+    step_sequence = spec.get("step_sequence") if isinstance(spec.get("step_sequence"), list) else []
+    actions: list[str] = []
+    for step in step_sequence:
+        if not isinstance(step, dict):
+            continue
+        action = str(step.get("action") or "").strip()
+        if action:
+            actions.append(action)
+    return actions
+
+
+def _render_param_signature(param: dict[str, Any]) -> str:
+    name = str(param.get("name") or "").strip()
+    ptype = str(param.get("type") or "string").strip()
+    required = bool(param.get("required", False))
+    suffix = "" if required else "?"
+    return f"{name}{suffix}:{ptype}"
+
+
+def _io_channel_catalog() -> dict[str, Any]:
+    try:
+        registry = get_io_registry()
+        senses = sorted(str(name) for name in registry.senses.keys())
+        extremities = sorted(str(name) for name in registry.extremities.keys())
+    except Exception:
+        senses = []
+        extremities = []
+    return {
+        "senses": senses,
+        "extremities": extremities,
+        "notes": [
+            "senses = inbound channels that read/normalize external input",
+            "extremities = outbound channels that deliver responses/actions",
+        ],
+    }
 
 
 def _get_template(store: SqlitePromptStore, key: str, context: PromptContext, fallback: str) -> str:

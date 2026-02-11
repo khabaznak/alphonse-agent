@@ -75,4 +75,4 @@ def test_plan_critic_unrepaired_unknown_tool_creates_gap() -> None:
     assert isinstance(plans, list)
     assert plans
     assert plans[0]["plan_type"] == PlanType.CAPABILITY_GAP
-    assert plans[0]["payload"]["reason"] == "unknown_tool_in_plan"
+    assert plans[0]["payload"]["reason"] == "step_validation_tool_not_found"
