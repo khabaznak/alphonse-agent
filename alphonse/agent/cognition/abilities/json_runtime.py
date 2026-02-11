@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -21,6 +22,7 @@ from alphonse.agent.cognition.preferences.store import (
     get_or_create_principal_for_channel,
     get_or_create_scope_principal,
     get_preference,
+    resolve_preference_with_precedence,
     set_preference,
 )
 from alphonse.agent.cognition.routing_primitives import extract_preference_updates
@@ -179,6 +181,9 @@ def _build_ability_flow_executor(spec: dict[str, Any]):
             }
         response_key = str(outputs.get("success") or "").strip()
         response_vars = dict(step_result.get("response_vars") or {})
+        emitted_plans = step_result.get("plans") if isinstance(step_result, dict) else []
+        if not isinstance(emitted_plans, list):
+            emitted_plans = []
         if "user_name" not in response_vars:
             if isinstance(params.get("user_name"), str):
                 response_vars["user_name"] = params.get("user_name")
@@ -189,12 +194,14 @@ def _build_ability_flow_executor(spec: dict[str, Any]):
                 "response_vars": response_vars,
                 "pending_interaction": None,
                 "ability_state": {},
+                "plans": emitted_plans,
             }
         return {
             "response_key": response_key,
             "response_vars": response_vars,
             "pending_interaction": None,
             "ability_state": {},
+            "plans": emitted_plans,
         }
 
     return _execute
@@ -691,7 +698,71 @@ def _execute_steps(steps: list[dict[str, Any]], params: dict[str, Any], state: d
                 "response_key": "ack.location.saved",
                 "response_vars": {"label": label},
             }
+        if action == "reminder.schedule":
+            reminder_text = str(
+                params.get("reminder_text")
+                or params.get("message")
+                or params.get("task")
+                or state.get("last_user_message")
+                or ""
+            ).strip()
+            trigger_raw = str(
+                params.get("trigger_at")
+                or params.get("when")
+                or params.get("time")
+                or params.get("delay")
+                or ""
+            ).strip()
+            trigger_at = _coerce_trigger_at_iso(trigger_raw, state.get("last_user_message"))
+            if not reminder_text or not trigger_at:
+                return {"response_key": "clarify.intent"}
+            timezone_name = str(state.get("timezone") or settings.get_timezone())
+            locale_hint = _effective_locale_hint(state)
+            origin = str(state.get("channel_type") or "telegram")
+            chat_id = str(state.get("channel_target") or state.get("chat_id") or "").strip()
+            if not chat_id:
+                return {}
+            correlation_id = str(state.get("correlation_id") or str(uuid.uuid4()))
+            plan = CortexPlan(
+                plan_type=PlanType.SCHEDULE_TIMED_SIGNAL,
+                payload={
+                    "signal_type": "reminder",
+                    "trigger_at": trigger_at,
+                    "timezone": timezone_name,
+                    "reminder_text": reminder_text,
+                    "reminder_text_raw": reminder_text,
+                    "origin": origin,
+                    "chat_id": chat_id,
+                    "origin_channel": origin,
+                    "locale_hint": locale_hint,
+                    "created_at": _now(),
+                    "correlation_id": correlation_id,
+                },
+            )
+            return {"plans": [plan.model_dump()]}
     return {}
+
+
+def _coerce_trigger_at_iso(value: str, fallback_text: Any) -> str | None:
+    raw = str(value or "").strip()
+    if raw:
+        try:
+            parsed = datetime.fromisoformat(raw)
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            return parsed.astimezone(timezone.utc).isoformat()
+        except ValueError:
+            pass
+    source = f"{raw} {str(fallback_text or '')}".strip().lower()
+    match = re.search(r"\bin\s+(\d+)\s*(m|min|mins|minute|minutes)\b", source)
+    if match:
+        minutes = int(match.group(1))
+        return (datetime.now(timezone.utc) + timedelta(minutes=minutes)).isoformat()
+    match = re.search(r"\bin\s+(\d+)\s*(h|hr|hrs|hour|hours)\b", source)
+    if match:
+        hours = int(match.group(1))
+        return (datetime.now(timezone.utc) + timedelta(hours=hours)).isoformat()
+    return None
 
 
 def _prefill_params(params: dict[str, Any], parameters: list[dict[str, Any]], state: dict[str, Any]) -> None:
@@ -739,6 +810,23 @@ def _principal_id_from_state(state: dict[str, Any]) -> str | None:
     if not channel_type or not channel_target:
         return None
     return get_or_create_principal_for_channel(channel_type, channel_target)
+
+
+def _effective_locale_hint(state: dict[str, Any]) -> str:
+    principal_id = _principal_id_from_state(state)
+    default_locale = settings.get_default_locale()
+    if principal_id:
+        resolved = resolve_preference_with_precedence(
+            key="locale",
+            default=default_locale,
+            channel_principal_id=principal_id,
+        )
+        if isinstance(resolved, str) and resolved.strip():
+            return resolved.strip()
+    locale = str(state.get("locale") or "").strip()
+    if locale:
+        return locale
+    return default_locale
 
 
 def _now() -> str:

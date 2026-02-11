@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import time
 from typing import Any
 
 from pathlib import Path
@@ -108,6 +109,89 @@ _PLACEHOLDER_PATTERNS = (
     r"\[unknown\]",
 )
 
+_PLAN_SYNTH_KEY = "intent_discovery.plan_synth.v1"
+_TOOL_BINDER_KEY = "intent_discovery.tool_binder.v1"
+_PLAN_REFINER_KEY = "intent_discovery.plan_refiner.v1"
+
+_QUESTION_POLICY_BLOCK = (
+    "GLOBAL QUESTION POLICY (APPLIES TO ALL STEPS A/B/C):\n"
+    "- askQuestion is not part of the execution plan.\n"
+    "- askQuestion is a planning interrupt for missing end-user data.\n"
+    "- If missing data is detected, emit planning_interrupt and stop further planning this turn.\n"
+    "- Do not place askQuestion inside execution_plan.\n"
+    "- Never ask the user to choose internal tool/function names.\n"
+)
+
+_PLAN_SYNTH_SYSTEM_FALLBACK = (
+    "You are Alphonse Plan Synthesizer. Build a concise success-oriented plan for one user message. "
+    "Output valid JSON only."
+)
+
+_PLAN_SYNTH_USER_FALLBACK = (
+    "{QUESTION_POLICY}\n"
+    "Return JSON:\n"
+    "{\n"
+    "  \"plan_version\":\"v1\",\n"
+    "  \"message_summary\":\"...\",\n"
+    "  \"primary_intention\":\"...\",\n"
+    "  \"confidence\":\"low|medium|high\",\n"
+    "  \"steps\":[{\"step_id\":\"S1\",\"goal\":\"...\",\"requires\":[],\"produces\":[],\"priority\":1}],\n"
+    "  \"acceptance_criteria\":[\"...\"],\n"
+    "  \"planning_interrupt\":{\"tool_id\":0,\"tool_name\":\"askQuestion\",\"question\":\"...\",\"slot\":\"...\",\"bind\":{},\"missing_data\":[],\"reason\":\"...\"}\n"
+    "}\n\n"
+    "CONTEXT:\n{CONTEXT_JSON}\n\n"
+    "LATEST_FAMILY_MESSAGE:\n{MESSAGE_TEXT}\n\n"
+    "EXCEPTION_HISTORY:\n{EXCEPTION_HISTORY_JSON}\n"
+)
+
+_TOOL_BINDER_SYSTEM_FALLBACK = (
+    "You are Alphonse Tool Binder. Bind each plan step using only allowed tool IDs. "
+    "Output valid JSON only."
+)
+
+_TOOL_BINDER_USER_FALLBACK = (
+    "{QUESTION_POLICY}\n"
+    "Rules:\n"
+    "- Choose one tool_id per step from TOOL_MENU only.\n"
+    "- If no safe match exists, emit planning_interrupt.\n\n"
+    "Return JSON:\n"
+    "{\n"
+    "  \"plan_version\":\"v1\",\n"
+    "  \"bindings\":[{\"step_id\":\"S1\",\"binding_type\":\"TOOL|QUESTION\",\"tool_id\":0,\"parameters\":{},\"missing_data\":[],\"reason\":\"...\"}],\n"
+    "  \"planning_interrupt\":{\"tool_id\":0,\"tool_name\":\"askQuestion\",\"question\":\"...\",\"slot\":\"...\",\"bind\":{},\"missing_data\":[],\"reason\":\"...\"}\n"
+    "}\n\n"
+    "PLAN_FROM_STEP_A:\n{PLAN_JSON}\n\n"
+    "TOOL_MENU:\n{TOOL_MENU_JSON}\n\n"
+    "CONTEXT:\n{CONTEXT_JSON}\n\n"
+    "EXCEPTION_HISTORY:\n{EXCEPTION_HISTORY_JSON}\n"
+)
+
+_PLAN_REFINER_SYSTEM_FALLBACK = (
+    "You are Alphonse Plan Refiner. Produce the final execution-ready plan using tool IDs only. "
+    "Output valid JSON only."
+)
+
+_PLAN_REFINER_USER_FALLBACK = (
+    "{QUESTION_POLICY}\n"
+    "Rules:\n"
+    "- Preserve step_id continuity.\n"
+    "- If planning_interrupt is needed, set status=NEEDS_USER_INPUT and execution_plan=[].\n\n"
+    "Return JSON:\n"
+    "{\n"
+    "  \"plan_version\":\"v1\",\n"
+    "  \"status\":\"READY|NEEDS_USER_INPUT|BLOCKED\",\n"
+    "  \"execution_plan\":[{\"step_id\":\"S1\",\"sequence\":1,\"kind\":\"TOOL|QUESTION\",\"tool_id\":0,\"parameters\":{},\"acceptance_links\":[]}],\n"
+    "  \"planning_interrupt\":{\"tool_id\":0,\"tool_name\":\"askQuestion\",\"question\":\"...\",\"slot\":\"...\",\"bind\":{},\"missing_data\":[],\"reason\":\"...\"},\n"
+    "  \"acceptance_criteria\":[\"...\"],\n"
+    "  \"repair_log\":[]\n"
+    "}\n\n"
+    "STEP_A_PLAN:\n{PLAN_A_JSON}\n\n"
+    "STEP_B_BINDINGS:\n{BINDINGS_B_JSON}\n\n"
+    "TOOL_MENU:\n{TOOL_MENU_JSON}\n\n"
+    "CONTEXT:\n{CONTEXT_JSON}\n\n"
+    "EXCEPTION_HISTORY:\n{EXCEPTION_HISTORY_JSON}\n"
+)
+
 
 def discover_plan(
     *,
@@ -152,6 +236,16 @@ def discover_plan(
             context=context,
         )
 
+    story_discovery = _story_discover_plan(
+        text=text,
+        llm_client=llm_client,
+        store=store,
+        context=context,
+        locale=locale or "any",
+    )
+    if story_discovery is not None:
+        return story_discovery
+
     dissector_system = _get_template(
         store, _DISSECTOR_KEY, context, _DISSECTOR_SYSTEM_FALLBACK
     )
@@ -166,7 +260,12 @@ def discover_plan(
     )
     dissector_user = f"{dissector_user}\n\n{_DISSECTOR_GUARDRAILS}"
 
-    raw_chunks = _call_llm(llm_client, dissector_system, dissector_user)
+    raw_chunks = _call_llm(
+        llm_client,
+        dissector_system,
+        dissector_user,
+        stage="dissector",
+    )
     chunks = _parse_chunks(raw_chunks)
 
     plans: list[dict[str, Any]] = []
@@ -179,7 +278,12 @@ def discover_plan(
             _get_template(store, _VISIONARY_KEY + ".user", context, _VISIONARY_USER_FALLBACK),
             {"CHUNK_TEXT": chunk_text, "INTENTION": intention},
         )
-        raw_acceptance = _call_llm(llm_client, visionary_system, visionary_user)
+        raw_acceptance = _call_llm(
+            llm_client,
+            visionary_system,
+            visionary_user,
+            stage=f"visionary[{idx}]",
+        )
         acceptance = _parse_acceptance(raw_acceptance)
 
         planner_system = _get_template(store, _PLANNER_KEY, context, _PLANNER_SYSTEM_FALLBACK)
@@ -193,7 +297,12 @@ def discover_plan(
             },
         )
         planner_user = f"{planner_user}\n\n{_PLANNER_GUARDRAILS}"
-        raw_plan = _call_llm(llm_client, planner_system, planner_user)
+        raw_plan = _call_llm(
+            llm_client,
+            planner_system,
+            planner_user,
+            stage=f"planner[{idx}]",
+        )
         execution_plan = _parse_execution_plan(raw_plan)
         execution_plan = _repair_invalid_execution_plan(
             execution_plan=execution_plan,
@@ -235,7 +344,12 @@ def _single_pass_plan(
         },
     )
     planner_user = f"{planner_user}\n\n{_PLANNER_GUARDRAILS}"
-    raw_plan = _call_llm(llm_client, planner_system, planner_user)
+    raw_plan = _call_llm(
+        llm_client,
+        planner_system,
+        planner_user,
+        stage="planner[single_pass]",
+    )
     execution_plan = _parse_execution_plan(raw_plan)
     execution_plan = _repair_invalid_execution_plan(
         execution_plan=execution_plan,
@@ -354,11 +468,564 @@ def format_available_ability_catalog() -> str:
     )
 
 
-def _call_llm(llm_client: object, system_prompt: str, user_prompt: str) -> str:
+def _story_discover_plan(
+    *,
+    text: str,
+    llm_client: object,
+    store: SqlitePromptStore,
+    context: PromptContext,
+    locale: str,
+) -> dict[str, Any] | None:
+    exception_history: list[dict[str, Any]] = []
+    context_payload = {
+        "locale": locale,
+        "channel": "any",
+        "mode": "planning",
+    }
+    tool_menu = _tool_menu_with_ids()
+    tool_map = {
+        int(item["tool_id"]): str(item["name"])
+        for item in tool_menu.get("tools", [])
+        if isinstance(item, dict) and isinstance(item.get("tool_id"), int)
+    }
+
+    plan_a = _run_step_a_plan_synth(
+        text=text,
+        llm_client=llm_client,
+        store=store,
+        context=context,
+        context_payload=context_payload,
+        exception_history=exception_history,
+    )
+    if not isinstance(plan_a, dict):
+        logger.info("intent discovery story fallback reason=step_a_non_dict")
+        return None
+    interrupt = _extract_planning_interrupt(plan_a)
+    if interrupt is not None:
+        interrupt = _sanitize_planning_interrupt(interrupt, locale=locale)
+    if interrupt is not None:
+        logger.info("intent discovery story interrupt source=step_a")
+        return _interrupt_discovery_payload(text=text, plan_a=plan_a, interrupt=interrupt)
+
+    plan_b = _run_step_b_tool_binder(
+        llm_client=llm_client,
+        store=store,
+        context=context,
+        plan_a=plan_a,
+        tool_menu=tool_menu,
+        context_payload=context_payload,
+        exception_history=exception_history,
+    )
+    if not isinstance(plan_b, dict):
+        logger.info("intent discovery story fallback reason=step_b_non_dict")
+        return None
+    interrupt = _extract_planning_interrupt(plan_b)
+    if interrupt is not None:
+        interrupt = _sanitize_planning_interrupt(interrupt, locale=locale)
+    if interrupt is not None:
+        logger.info("intent discovery story interrupt source=step_b")
+        return _interrupt_discovery_payload(text=text, plan_a=plan_a, interrupt=interrupt)
+
+    plan_c = _run_step_c_plan_refiner(
+        llm_client=llm_client,
+        store=store,
+        context=context,
+        plan_a=plan_a,
+        plan_b=plan_b,
+        tool_menu=tool_menu,
+        context_payload=context_payload,
+        exception_history=exception_history,
+    )
+    if not isinstance(plan_c, dict):
+        logger.info("intent discovery story fallback reason=step_c_non_dict")
+        return None
+    interrupt = _extract_planning_interrupt(plan_c)
+    if interrupt is not None:
+        interrupt = _sanitize_planning_interrupt(interrupt, locale=locale)
+    if interrupt is not None:
+        logger.info("intent discovery story interrupt source=step_c")
+        return _interrupt_discovery_payload(text=text, plan_a=plan_a, interrupt=interrupt)
+
+    execution_plan = _execution_plan_from_refined(plan_c, tool_map)
+    execution_plan = _prune_execution_plan(execution_plan)
+    if not execution_plan:
+        interrupt = _derive_interrupt_from_bindings(plan_b)
+        if interrupt is None:
+            interrupt = _derive_interrupt_from_bindings(plan_c)
+        interrupt = _sanitize_planning_interrupt(interrupt, locale=locale)
+        if interrupt is None:
+            logger.info(
+                "intent discovery story no_executable_steps -> capability_gap path reason=no_safe_user_question",
+            )
+            return {
+                "chunks": [
+                    {
+                        "action": str(plan_a.get("primary_intention") or "overall").strip() or "overall",
+                        "chunk": text,
+                        "intention": str(plan_a.get("primary_intention") or "overall").strip() or "overall",
+                        "confidence": str(plan_a.get("confidence") or "medium").strip().lower() or "medium",
+                    }
+                ],
+                "plans": [
+                    {
+                        "chunk_index": 0,
+                        "acceptanceCriteria": _extract_acceptance_criteria(plan_c, plan_a),
+                        "executionPlan": [],
+                    }
+                ],
+            }
+        logger.info(
+            "intent discovery story no_executable_steps -> planning_interrupt reason=%s",
+            interrupt.get("reason"),
+        )
+        return _interrupt_discovery_payload(text=text, plan_a=plan_a, interrupt=interrupt)
+    primary_intention = str(plan_a.get("primary_intention") or "overall").strip() or "overall"
+    confidence = str(plan_a.get("confidence") or "medium").strip().lower() or "medium"
+    acceptance = _extract_acceptance_criteria(plan_c, plan_a)
+    return {
+        "chunks": [
+            {
+                "action": primary_intention,
+                "chunk": text,
+                "intention": primary_intention,
+                "confidence": confidence,
+            }
+        ],
+        "plans": [
+            {
+                "chunk_index": 0,
+                "acceptanceCriteria": acceptance,
+                "executionPlan": execution_plan,
+            }
+        ],
+    }
+
+
+def _prune_execution_plan(execution: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if not isinstance(execution, list) or not execution:
+        return []
+    has_ready_reminder = False
+    for step in execution:
+        if not isinstance(step, dict):
+            continue
+        if str(step.get("tool") or "").strip() != "reminder.schedule":
+            continue
+        params = step.get("parameters") if isinstance(step.get("parameters"), dict) else {}
+        reminder_text = str(params.get("reminder_text") or "").strip()
+        trigger_at = str(params.get("trigger_at") or "").strip()
+        if reminder_text and trigger_at:
+            has_ready_reminder = True
+            break
+    if not has_ready_reminder:
+        return execution
+    pruned: list[dict[str, Any]] = []
+    for step in execution:
+        if not isinstance(step, dict):
+            continue
+        tool = str(step.get("tool") or "").strip()
+        if tool == "time.current":
+            continue
+        pruned.append(step)
+    return pruned
+
+
+def _run_step_a_plan_synth(
+    *,
+    text: str,
+    llm_client: object,
+    store: SqlitePromptStore,
+    context: PromptContext,
+    context_payload: dict[str, Any],
+    exception_history: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    system_prompt = _get_template(
+        store, _PLAN_SYNTH_KEY, context, _PLAN_SYNTH_SYSTEM_FALLBACK
+    )
+    user_prompt = _render_template(
+        _get_template(
+            store,
+            _PLAN_SYNTH_KEY + ".user",
+            context,
+            _PLAN_SYNTH_USER_FALLBACK,
+        ),
+        {
+            "QUESTION_POLICY": _QUESTION_POLICY_BLOCK,
+            "MESSAGE_TEXT": text,
+            "CONTEXT_JSON": json.dumps(context_payload, ensure_ascii=False),
+            "EXCEPTION_HISTORY_JSON": json.dumps(exception_history, ensure_ascii=False),
+        },
+    )
+    raw = _call_llm(llm_client, system_prompt, user_prompt, stage="plan_synth")
+    payload = _parse_json(raw)
+    return payload if isinstance(payload, dict) else None
+
+
+def _run_step_b_tool_binder(
+    *,
+    llm_client: object,
+    store: SqlitePromptStore,
+    context: PromptContext,
+    plan_a: dict[str, Any],
+    tool_menu: dict[str, Any],
+    context_payload: dict[str, Any],
+    exception_history: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    system_prompt = _get_template(
+        store, _TOOL_BINDER_KEY, context, _TOOL_BINDER_SYSTEM_FALLBACK
+    )
+    user_prompt = _render_template(
+        _get_template(
+            store,
+            _TOOL_BINDER_KEY + ".user",
+            context,
+            _TOOL_BINDER_USER_FALLBACK,
+        ),
+        {
+            "QUESTION_POLICY": _QUESTION_POLICY_BLOCK,
+            "PLAN_JSON": json.dumps(plan_a, ensure_ascii=False),
+            "TOOL_MENU_JSON": json.dumps(tool_menu, ensure_ascii=False),
+            "CONTEXT_JSON": json.dumps(context_payload, ensure_ascii=False),
+            "EXCEPTION_HISTORY_JSON": json.dumps(exception_history, ensure_ascii=False),
+        },
+    )
+    raw = _call_llm(llm_client, system_prompt, user_prompt, stage="tool_binder")
+    payload = _parse_json(raw)
+    return payload if isinstance(payload, dict) else None
+
+
+def _run_step_c_plan_refiner(
+    *,
+    llm_client: object,
+    store: SqlitePromptStore,
+    context: PromptContext,
+    plan_a: dict[str, Any],
+    plan_b: dict[str, Any],
+    tool_menu: dict[str, Any],
+    context_payload: dict[str, Any],
+    exception_history: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    system_prompt = _get_template(
+        store, _PLAN_REFINER_KEY, context, _PLAN_REFINER_SYSTEM_FALLBACK
+    )
+    user_prompt = _render_template(
+        _get_template(
+            store,
+            _PLAN_REFINER_KEY + ".user",
+            context,
+            _PLAN_REFINER_USER_FALLBACK,
+        ),
+        {
+            "QUESTION_POLICY": _QUESTION_POLICY_BLOCK,
+            "PLAN_A_JSON": json.dumps(plan_a, ensure_ascii=False),
+            "BINDINGS_B_JSON": json.dumps(plan_b, ensure_ascii=False),
+            "TOOL_MENU_JSON": json.dumps(tool_menu, ensure_ascii=False),
+            "CONTEXT_JSON": json.dumps(context_payload, ensure_ascii=False),
+            "EXCEPTION_HISTORY_JSON": json.dumps(exception_history, ensure_ascii=False),
+        },
+    )
+    raw = _call_llm(llm_client, system_prompt, user_prompt, stage="plan_refiner")
+    payload = _parse_json(raw)
+    return payload if isinstance(payload, dict) else None
+
+
+def _tool_menu_with_ids() -> dict[str, Any]:
+    parsed = _parse_json(format_available_ability_catalog())
+    tools_raw = parsed.get("tools") if isinstance(parsed, dict) else []
+    tools: list[dict[str, Any]] = []
+    tool_id = 0
+    saw_ask = False
+    for item in tools_raw if isinstance(tools_raw, list) else []:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("tool") or "").strip()
+        if not name:
+            continue
+        if name == "askQuestion":
+            saw_ask = True
+        params = item.get("input_parameters") if isinstance(item.get("input_parameters"), list) else []
+        params_map: dict[str, str] = {}
+        for param in params:
+            if not isinstance(param, dict):
+                continue
+            pname = str(param.get("name") or "").strip()
+            if not pname:
+                continue
+            ptype = str(param.get("type") or "string").strip()
+            req = bool(param.get("required", False))
+            params_map[pname] = f"{ptype}{' (required)' if req else ''}"
+        tools.append(
+            {
+                "tool_id": tool_id,
+                "name": name,
+                "params": params_map,
+                "returns": str(item.get("summary") or "result"),
+                "description": str(item.get("summary") or "ability"),
+            }
+        )
+        tool_id += 1
+    if not saw_ask:
+        tools.insert(
+            0,
+            {
+                "tool_id": 0,
+                "name": "askQuestion",
+                "params": {
+                    "question": "string (required)",
+                    "slot": "string",
+                    "bind": "object",
+                },
+                "returns": "user_answer_captured",
+                "description": "Ask only for missing end-user data.",
+            },
+        )
+        for idx, item in enumerate(tools):
+            item["tool_id"] = idx
+    return {"tools": tools}
+
+
+def _extract_planning_interrupt(payload: dict[str, Any]) -> dict[str, Any] | None:
+    interrupt = payload.get("planning_interrupt")
+    if not isinstance(interrupt, dict):
+        return None
+    question = str(interrupt.get("question") or "").strip()
+    if not question:
+        return None
+    return {
+        "tool_id": _coerce_tool_id(interrupt.get("tool_id"), default=0),
+        "tool_name": "askQuestion",
+        "question": question,
+        "slot": _normalize_interrupt_slot(interrupt.get("slot")),
+        "bind": interrupt.get("bind") if isinstance(interrupt.get("bind"), dict) else {},
+        "missing_data": interrupt.get("missing_data") if isinstance(interrupt.get("missing_data"), list) else [],
+        "reason": str(interrupt.get("reason") or "missing_data").strip() or "missing_data",
+    }
+
+
+def _execution_plan_from_refined(
+    refined: dict[str, Any],
+    tool_map: dict[int, str],
+) -> list[dict[str, Any]]:
+    raw_steps = refined.get("execution_plan")
+    if not isinstance(raw_steps, list):
+        raw_steps = refined.get("executionPlan")
+    if not isinstance(raw_steps, list):
+        raw_steps = refined.get("steps")
+    if not isinstance(raw_steps, list):
+        raw_steps = refined.get("bindings")
+    if not isinstance(raw_steps, list):
+        return []
+    reverse_map = {name: tool_id for tool_id, name in tool_map.items()}
+    execution: list[dict[str, Any]] = []
+    for step in raw_steps:
+        if not isinstance(step, dict):
+            continue
+        tool_id_raw = step.get("tool_id")
+        tool_id = _coerce_tool_id(tool_id_raw)
+        if tool_id is None:
+            name_hint = str(
+                step.get("tool_name") or step.get("tool") or step.get("name") or ""
+            ).strip()
+            if name_hint:
+                tool_id = reverse_map.get(name_hint)
+        if tool_id is None:
+            continue
+        if str(step.get("binding_type") or "").strip().upper() == "QUESTION":
+            continue
+        tool_name = tool_map.get(tool_id)
+        if not tool_name or tool_name == "askQuestion":
+            continue
+        params = step.get("parameters") if isinstance(step.get("parameters"), dict) else {}
+        execution.append(
+            {
+                "tool": tool_name,
+                "parameters": params,
+                "executed": False,
+            }
+        )
+    return execution
+
+
+def _derive_interrupt_from_bindings(payload: dict[str, Any]) -> dict[str, Any] | None:
+    bindings = payload.get("bindings")
+    if not isinstance(bindings, list):
+        steps = payload.get("execution_plan")
+        bindings = steps if isinstance(steps, list) else []
+    for item in bindings:
+        if not isinstance(item, dict):
+            continue
+        binding_type = str(item.get("binding_type") or "").strip().upper()
+        tool_id = _coerce_tool_id(item.get("tool_id"))
+        if binding_type == "QUESTION" or tool_id == 0:
+            params = item.get("parameters") if isinstance(item.get("parameters"), dict) else {}
+            question = str(
+                params.get("question")
+                or item.get("question")
+                or item.get("prompt")
+                or ""
+            ).strip()
+            if not question:
+                continue
+            return {
+                "tool_id": 0,
+                "tool_name": "askQuestion",
+                "question": question,
+                "slot": _normalize_interrupt_slot(params.get("slot") or item.get("slot")),
+                "bind": params.get("bind") if isinstance(params.get("bind"), dict) else {},
+                "missing_data": item.get("missing_data") if isinstance(item.get("missing_data"), list) else [],
+                "reason": str(item.get("reason") or "missing_data").strip() or "missing_data",
+            }
+    return None
+
+
+def _coerce_tool_id(value: Any, default: int | None = None) -> int | None:
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        candidate = value.strip()
+        if candidate.isdigit():
+            return int(candidate)
+    return default
+
+
+def _default_story_interrupt_question(locale: str) -> str:
+    if str(locale or "").lower().startswith("es"):
+        return "¿Me puedes dar el dato faltante para continuar con el plan?"
+    return "Could you share the missing detail so I can continue the plan?"
+
+
+def _normalize_interrupt_slot(raw: Any) -> str:
+    slot = str(raw or "answer").strip().lower()
+    if not slot or slot in {"none", "null", "n/a", "na", "-"}:
+        return "answer"
+    return slot
+
+
+def _sanitize_planning_interrupt(
+    interrupt: dict[str, Any] | None,
+    *,
+    locale: str,
+) -> dict[str, Any] | None:
+    if not isinstance(interrupt, dict):
+        return None
+    question = str(interrupt.get("question") or "").strip()
+    missing_data = [
+        str(item).strip().lower()
+        for item in (interrupt.get("missing_data") if isinstance(interrupt.get("missing_data"), list) else [])
+        if str(item).strip()
+    ]
+    if not question:
+        question = _default_story_interrupt_question(locale)
+    if _is_internal_tool_question(question):
+        if any(item in {"time", "datetime", "when", "duration"} for item in missing_data):
+            question = (
+                "¿Para cuándo quieres el recordatorio?"
+                if str(locale or "").lower().startswith("es")
+                else "When should I set the reminder?"
+            )
+        elif any(item in {"task", "message", "title", "what"} for item in missing_data):
+            question = (
+                "¿Qué exactamente quieres que te recuerde?"
+                if str(locale or "").lower().startswith("es")
+                else "What exactly should I remind you about?"
+            )
+        else:
+            return None
+    sanitized = dict(interrupt)
+    sanitized["tool_id"] = 0
+    sanitized["tool_name"] = "askQuestion"
+    sanitized["question"] = question
+    sanitized["slot"] = _normalize_interrupt_slot(interrupt.get("slot"))
+    sanitized["bind"] = interrupt.get("bind") if isinstance(interrupt.get("bind"), dict) else {}
+    sanitized["missing_data"] = missing_data
+    return sanitized
+
+
+def _extract_acceptance_criteria(
+    refined: dict[str, Any],
+    plan_a: dict[str, Any],
+) -> list[str]:
+    items = refined.get("acceptance_criteria")
+    if not isinstance(items, list):
+        items = plan_a.get("acceptance_criteria")
+    if not isinstance(items, list):
+        return []
+    out: list[str] = []
+    for item in items:
+        if isinstance(item, str):
+            text = item.strip()
+            if text:
+                out.append(text)
+            continue
+        if isinstance(item, dict):
+            text = str(item.get("text") or "").strip()
+            if text:
+                out.append(text)
+    return out
+
+
+def _interrupt_discovery_payload(
+    *,
+    text: str,
+    plan_a: dict[str, Any],
+    interrupt: dict[str, Any],
+) -> dict[str, Any]:
+    intention = str(plan_a.get("primary_intention") or "overall").strip() or "overall"
+    confidence = str(plan_a.get("confidence") or "medium").strip().lower() or "medium"
+    acceptance = _extract_acceptance_criteria({}, plan_a)
+    return {
+        "chunks": [
+            {
+                "action": intention,
+                "chunk": text,
+                "intention": intention,
+                "confidence": confidence,
+            }
+        ],
+        "plans": [
+            {
+                "chunk_index": 0,
+                "acceptanceCriteria": acceptance,
+                "executionPlan": [],
+            }
+        ],
+        "planning_interrupt": interrupt,
+    }
+
+
+def _call_llm(
+    llm_client: object,
+    system_prompt: str,
+    user_prompt: str,
+    *,
+    stage: str = "unknown",
+) -> str:
+    started = time.perf_counter()
+    logger.info(
+        "intent discovery llm start stage=%s system_len=%s user_len=%s",
+        stage,
+        len(system_prompt or ""),
+        len(user_prompt or ""),
+    )
     try:
-        return str(llm_client.complete(system_prompt=system_prompt, user_prompt=user_prompt))
+        response = str(
+            llm_client.complete(system_prompt=system_prompt, user_prompt=user_prompt)
+        )
+        elapsed_ms = int((time.perf_counter() - started) * 1000)
+        logger.info(
+            "intent discovery llm done stage=%s elapsed_ms=%s response_len=%s",
+            stage,
+            elapsed_ms,
+            len(response),
+        )
+        return response
     except Exception as exc:
-        logger.warning("intent discovery LLM call failed: %s", exc)
+        elapsed_ms = int((time.perf_counter() - started) * 1000)
+        logger.warning(
+            "intent discovery LLM call failed stage=%s elapsed_ms=%s error=%s",
+            stage,
+            elapsed_ms,
+            exc,
+        )
         return ""
 
 
@@ -533,6 +1200,11 @@ def _repair_invalid_execution_plan(
     issue = _validate_execution_plan(current)
     retries = 0
     while issue is not None and retries < max_retries:
+        logger.info(
+            "intent discovery plan repair attempt=%s issue=%s",
+            retries + 1,
+            issue.get("code"),
+        )
         retries += 1
         critic_system = _get_template(
             store,
@@ -548,7 +1220,12 @@ def _repair_invalid_execution_plan(
             invalid_plan=current,
             issue=issue,
         )
-        raw = _call_llm(llm_client, critic_system, critic_user)
+        raw = _call_llm(
+            llm_client,
+            critic_system,
+            critic_user,
+            stage=f"plan_critic[{retries}]",
+        )
         current = _parse_execution_plan(raw)
         issue = _validate_execution_plan(current)
     if issue is not None:
@@ -690,7 +1367,7 @@ def _load_ability_specs() -> list[dict[str, Any]]:
 
 def _load_specs_file() -> list[dict[str, Any]]:
     path = (
-        Path(__file__).resolve().parents[2]
+        Path(__file__).resolve().parents[1]
         / "nervous_system"
         / "resources"
         / "ability_specs.seed.json"

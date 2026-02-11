@@ -174,6 +174,39 @@
     }
   },
   {
+    "intent_name": "reminder.schedule",
+    "kind": "ability_flow",
+    "tools": [],
+    "input_parameters": [
+      {
+        "name": "reminder_text",
+        "type": "string",
+        "description": "What should be reminded",
+        "required": true,
+        "order": 1
+      },
+      {
+        "name": "trigger_at",
+        "type": "datetime_or_relative",
+        "description": "When to trigger the reminder",
+        "required": true,
+        "order": 2
+      }
+    ],
+    "prompts": {
+      "reminder_text": "clarify.intent",
+      "trigger_at": "clarify.intent"
+    },
+    "step_sequence": [
+      {
+        "order": 1,
+        "action": "reminder.schedule",
+        "input": ["reminder_text", "trigger_at"]
+      }
+    ],
+    "outputs": {}
+  },
+  {
     "intent_name": "time.current",
     "kind": "tool_call_then_response",
     "tools": ["clock"],

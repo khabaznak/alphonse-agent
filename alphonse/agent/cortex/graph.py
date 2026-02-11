@@ -194,9 +194,35 @@ def _run_intent_discovery(
     if isinstance(pending, dict):
         ask_context = pending.get("context") if isinstance(pending.get("context"), dict) else {}
         if ask_context.get("tool") == "askQuestion":
-            resumed = _resume_discovery_from_answer(state, pending, llm_client)
-            if resumed is not None:
-                return resumed
+            if bool(ask_context.get("replan_on_answer")):
+                answer = text
+                source_message = str(ask_context.get("source_message") or "").strip()
+                if answer:
+                    text = (
+                        f"{source_message}\n\nUser clarification:\n{answer}"
+                        if source_message
+                        else answer
+                    )
+                    state["last_user_message"] = text
+                state["pending_interaction"] = None
+                state["ability_state"] = {}
+                logger.info(
+                    "cortex planning interrupt answered chat_id=%s correlation_id=%s replan=true",
+                    state.get("chat_id"),
+                    state.get("correlation_id"),
+                )
+            else:
+                resumed = _resume_discovery_from_answer(state, pending, llm_client)
+                if resumed is not None:
+                    if not _is_effectively_empty_discovery_result(resumed):
+                        return resumed
+                    state["pending_interaction"] = None
+                    state["ability_state"] = {}
+                    logger.info(
+                        "cortex pending answer consumed with noop chat_id=%s correlation_id=%s fallback=fresh_discovery",
+                        state.get("chat_id"),
+                        state.get("correlation_id"),
+                    )
         intent_name = str(pending.get("context", {}).get("ability_intent") or "")
         if intent_name:
             ability = _ability_registry().get(intent_name)
@@ -230,6 +256,10 @@ def _run_intent_discovery(
         strategy=get_discovery_strategy(),
     )
     _log_discovery_plan(state, discovery)
+    if isinstance(discovery, dict):
+        interrupt = discovery.get("planning_interrupt")
+        if isinstance(interrupt, dict):
+            return _run_planning_interrupt(state, interrupt)
     plans = discovery.get("plans") if isinstance(discovery, dict) else None
     if not isinstance(plans, list):
         plan = _build_gap_plan(state, reason="invalid_plan_payload")
@@ -648,6 +678,23 @@ def _resume_discovery_from_answer(
     return _run_discovery_loop_step(state, ability_state, llm_client)
 
 
+def _is_effectively_empty_discovery_result(result: dict[str, Any]) -> bool:
+    if not isinstance(result, dict):
+        return False
+    if result.get("response_text") or result.get("response_key"):
+        return False
+    plans = result.get("plans")
+    if isinstance(plans, list) and plans:
+        return False
+    pending = result.get("pending_interaction")
+    if pending:
+        return False
+    ability_state = result.get("ability_state")
+    if isinstance(ability_state, dict) and ability_state:
+        return False
+    return True
+
+
 def _bind_answer_to_steps(
     steps: list[dict[str, Any]],
     bind: dict[str, Any],
@@ -723,6 +770,34 @@ def _run_ask_question_step(
         "response_text": question,
         "pending_interaction": serialize_pending_interaction(pending),
         "ability_state": loop_state or {},
+    }
+
+
+def _run_planning_interrupt(
+    state: CortexState,
+    interrupt: dict[str, Any],
+) -> dict[str, Any]:
+    question = str(interrupt.get("question") or "").strip()
+    if not question:
+        question = _default_ask_question_prompt(state)
+    slot = str(interrupt.get("slot") or "answer").strip() or "answer"
+    bind = interrupt.get("bind") if isinstance(interrupt.get("bind"), dict) else {}
+    pending = build_pending_interaction(
+        PendingInteractionType.SLOT_FILL,
+        key=slot,
+        context={
+            "origin_intent": "planning_interrupt",
+            "tool": "askQuestion",
+            "replan_on_answer": True,
+            "source_message": str(state.get("last_user_message") or ""),
+            "bind": bind,
+            "interrupt": interrupt,
+        },
+    )
+    return {
+        "response_text": question,
+        "pending_interaction": serialize_pending_interaction(pending),
+        "ability_state": {},
     }
 
 

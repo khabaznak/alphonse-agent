@@ -41,6 +41,8 @@ def main() -> None:
     load_env()
     log_level = os.getenv("ALPHONSE_LOG_LEVEL", "INFO").upper()
     logging.basicConfig(level=getattr(logging, log_level, logging.INFO))
+    llm_model = os.getenv("LOCAL_LLM_MODEL", "mistral:7b-instruct")
+    logging.info("LLM model=%s", llm_model)
 
     init_settings_db()
 
