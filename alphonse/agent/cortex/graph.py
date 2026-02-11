@@ -232,7 +232,19 @@ def _run_intent_discovery(
     ability_state = state.get("ability_state")
     if isinstance(ability_state, dict):
         if _is_discovery_loop_state(ability_state):
-            return _run_discovery_loop_step(state, ability_state, llm_client)
+            source_message = str(ability_state.get("source_message") or "").strip()
+            if source_message and source_message != text:
+                logger.info(
+                    "cortex clearing stale discovery_loop chat_id=%s correlation_id=%s prev_message=%s new_message=%s",
+                    state.get("chat_id"),
+                    state.get("correlation_id"),
+                    _snippet(source_message),
+                    _snippet(text),
+                )
+                state["ability_state"] = {}
+                ability_state = {}
+            else:
+                return _run_discovery_loop_step(state, ability_state, llm_client)
         intent_name = str(ability_state.get("intent") or "")
         if intent_name:
             ability = _ability_registry().get(intent_name)
@@ -264,7 +276,7 @@ def _run_intent_discovery(
     if not isinstance(plans, list):
         plan = _build_gap_plan(state, reason="invalid_plan_payload")
         return {"plans": [plan.model_dump()]}
-    loop_state = _build_discovery_loop_state(discovery)
+    loop_state = _build_discovery_loop_state(discovery, source_message=text)
     if not loop_state.get("steps"):
         plan = _build_gap_plan(state, reason="empty_execution_plan")
         return {"plans": [plan.model_dump()]}
@@ -292,7 +304,11 @@ def _is_discovery_loop_state(ability_state: dict[str, Any]) -> bool:
     return str(ability_state.get("kind") or "") == "discovery_loop"
 
 
-def _build_discovery_loop_state(discovery: dict[str, Any]) -> dict[str, Any]:
+def _build_discovery_loop_state(
+    discovery: dict[str, Any],
+    *,
+    source_message: str | None = None,
+) -> dict[str, Any]:
     steps: list[dict[str, Any]] = []
     plans = discovery.get("plans") if isinstance(discovery.get("plans"), list) else []
     for chunk_idx, chunk_plan in enumerate(plans):
@@ -322,7 +338,11 @@ def _build_discovery_loop_state(discovery: dict[str, Any]) -> dict[str, Any]:
             step["chunk_index"] = chunk_idx
             step["sequence"] = seq
             steps.append(step)
-    return {"kind": "discovery_loop", "steps": steps}
+    return {
+        "kind": "discovery_loop",
+        "steps": steps,
+        "source_message": str(source_message or "").strip(),
+    }
 
 
 def _has_missing_params(params: dict[str, Any]) -> bool:
