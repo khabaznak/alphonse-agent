@@ -138,6 +138,7 @@ def _ingest_node(state: CortexState) -> dict[str, Any]:
         "plans": [],
         "locale": locale,
         "events": [],
+        "planning_context": None,
     }
 
 
@@ -192,18 +193,43 @@ def _run_intent_discovery(
 
     pending = state.get("pending_interaction")
     if isinstance(pending, dict):
+        if _is_abort_confirmation_pending(pending):
+            return _handle_abort_confirmation(state, pending, text)
+        if _looks_like_abort_request(text):
+            return _run_abort_confirmation(state, pending)
         ask_context = pending.get("context") if isinstance(pending.get("context"), dict) else {}
         if ask_context.get("tool") == "askQuestion":
             if bool(ask_context.get("replan_on_answer")):
                 answer = text
-                source_message = str(ask_context.get("source_message") or "").strip()
+                original_message = str(
+                    ask_context.get("original_message")
+                    or ask_context.get("source_message")
+                    or ""
+                ).strip()
+                clarifications = (
+                    ask_context.get("clarifications")
+                    if isinstance(ask_context.get("clarifications"), list)
+                    else []
+                )
+                clarification_entry = {
+                    "answer": answer,
+                    "slot": str(pending.get("key") or "answer"),
+                    "at": datetime.now(timezone.utc).isoformat(),
+                }
                 if answer:
-                    text = (
-                        f"{source_message}\n\nUser clarification:\n{answer}"
-                        if source_message
-                        else answer
-                    )
-                    state["last_user_message"] = text
+                    clarifications = [*clarifications, clarification_entry]
+                state["planning_context"] = {
+                    "original_message": original_message or text,
+                    "latest_user_answer": answer,
+                    "clarifications": clarifications,
+                    "facts": {
+                        str(item.get("slot") or "answer"): item.get("answer")
+                        for item in clarifications
+                        if isinstance(item, dict)
+                    },
+                    "replan_on_answer": True,
+                }
+                state["last_user_message"] = original_message or text
                 state["pending_interaction"] = None
                 state["ability_state"] = {}
                 logger.info(
@@ -266,6 +292,9 @@ def _run_intent_discovery(
         available_tools=available_tools,
         locale=_locale_for_state(state),
         strategy=get_discovery_strategy(),
+        planning_context=state.get("planning_context")
+        if isinstance(state.get("planning_context"), dict)
+        else None,
     )
     _log_discovery_plan(state, discovery)
     if isinstance(discovery, dict):
@@ -802,6 +831,19 @@ def _run_planning_interrupt(
         question = _default_ask_question_prompt(state)
     slot = str(interrupt.get("slot") or "answer").strip() or "answer"
     bind = interrupt.get("bind") if isinstance(interrupt.get("bind"), dict) else {}
+    planning_context = (
+        state.get("planning_context")
+        if isinstance(state.get("planning_context"), dict)
+        else {}
+    )
+    original_message = str(
+        planning_context.get("original_message") or state.get("last_user_message") or ""
+    )
+    prior_clarifications = (
+        planning_context.get("clarifications")
+        if isinstance(planning_context.get("clarifications"), list)
+        else []
+    )
     pending = build_pending_interaction(
         PendingInteractionType.SLOT_FILL,
         key=slot,
@@ -810,6 +852,8 @@ def _run_planning_interrupt(
             "tool": "askQuestion",
             "replan_on_answer": True,
             "source_message": str(state.get("last_user_message") or ""),
+            "original_message": original_message,
+            "clarifications": prior_clarifications,
             "bind": bind,
             "interrupt": interrupt,
         },
@@ -818,6 +862,116 @@ def _run_planning_interrupt(
         "response_text": question,
         "pending_interaction": serialize_pending_interaction(pending),
         "ability_state": {},
+    }
+
+
+def _is_abort_confirmation_pending(pending: dict[str, Any]) -> bool:
+    context = pending.get("context") if isinstance(pending.get("context"), dict) else {}
+    return bool(context.get("abort_confirmation"))
+
+
+def _looks_like_abort_request(text: str) -> bool:
+    normalized = str(text or "").strip().lower()
+    if not normalized:
+        return False
+    keywords = {
+        "cancel",
+        "abort",
+        "stop",
+        "forget it",
+        "never mind",
+        "olvídalo",
+        "cancela",
+        "cancelar",
+        "detén",
+        "detener",
+        "para",
+    }
+    return any(token in normalized for token in keywords)
+
+
+def _is_affirmative(text: str) -> bool:
+    normalized = str(text or "").strip().lower()
+    if not normalized:
+        return False
+    affirmatives = {"yes", "y", "yeah", "correct", "sí", "si", "claro", "confirmo", "ok", "okay"}
+    return normalized in affirmatives or any(
+        phrase in normalized for phrase in ("yes ", "that's correct", "es correcto", "sí ")
+    )
+
+
+def _is_negative(text: str) -> bool:
+    normalized = str(text or "").strip().lower()
+    if not normalized:
+        return False
+    negatives = {"no", "nope", "nah", "negativo"}
+    return normalized in negatives or normalized.startswith("no ")
+
+
+def _run_abort_confirmation(state: CortexState, pending: dict[str, Any]) -> dict[str, Any]:
+    locale = _locale_for_state(state)
+    question = (
+        "¿Quieres cancelar la solicitud actual y empezar de nuevo?"
+        if locale.startswith("es")
+        else "Do you want to cancel the current request and start over?"
+    )
+    confirmation_pending = build_pending_interaction(
+        PendingInteractionType.SLOT_FILL,
+        key="abort_confirmation",
+        context={
+            "abort_confirmation": True,
+            "tool": "askQuestion",
+            "original_pending": pending,
+        },
+    )
+    return {
+        "response_text": question,
+        "pending_interaction": serialize_pending_interaction(confirmation_pending),
+        "ability_state": state.get("ability_state") if isinstance(state.get("ability_state"), dict) else {},
+    }
+
+
+def _handle_abort_confirmation(
+    state: CortexState,
+    pending: dict[str, Any],
+    text: str,
+) -> dict[str, Any]:
+    locale = _locale_for_state(state)
+    context = pending.get("context") if isinstance(pending.get("context"), dict) else {}
+    if _is_affirmative(text):
+        state["pending_interaction"] = None
+        state["ability_state"] = {}
+        state["planning_context"] = None
+        return {
+            "response_key": "ack.cancelled",
+            "pending_interaction": None,
+            "ability_state": {},
+        }
+    if _is_negative(text):
+        original_pending = (
+            context.get("original_pending")
+            if isinstance(context.get("original_pending"), dict)
+            else None
+        )
+        continue_text = (
+            "Perfecto, continuamos con la solicitud anterior."
+            if locale.startswith("es")
+            else "Okay, we will continue with the previous request."
+        )
+        return {
+            "response_text": continue_text,
+            "pending_interaction": original_pending,
+            "ability_state": state.get("ability_state") if isinstance(state.get("ability_state"), dict) else {},
+        }
+    repeat = (
+        "Responde sí para cancelar o no para continuar con la solicitud actual."
+        if locale.startswith("es")
+        else "Reply yes to cancel or no to continue the current request."
+    )
+    return {
+        "response_text": repeat,
+        "pending_interaction": pending,
+        "ability_state": state.get("ability_state") if isinstance(state.get("ability_state"), dict) else {},
     }
 
 

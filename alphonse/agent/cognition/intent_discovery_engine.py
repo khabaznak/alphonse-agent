@@ -200,6 +200,7 @@ def discover_plan(
     available_tools: str,
     locale: str | None = None,
     strategy: str | None = None,
+    planning_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Return a dict with discovered execution plans per chunk.
 
@@ -228,12 +229,8 @@ def discover_plan(
     )
 
     if strategy == "single_pass":
-        return _single_pass_plan(
-            text=text,
-            llm_client=llm_client,
-            available_tools=available_tools,
-            store=store,
-            context=context,
+        logger.info(
+            "intent discovery strategy=single_pass is deprecated; using story pipeline"
         )
 
     story_discovery = _story_discover_plan(
@@ -242,87 +239,37 @@ def discover_plan(
         store=store,
         context=context,
         locale=locale or "any",
+        planning_context=planning_context,
     )
     if story_discovery is not None:
         return story_discovery
-
-    dissector_system = _get_template(
-        store, _DISSECTOR_KEY, context, _DISSECTOR_SYSTEM_FALLBACK
-    )
-    dissector_user = _render_template(
-        _get_template(
-            store,
-            _DISSECTOR_KEY + ".user",
-            context,
-            _DISSECTOR_USER_FALLBACK,
-        ),
-        {"MESSAGE_TEXT": text},
-    )
-    dissector_user = f"{dissector_user}\n\n{_DISSECTOR_GUARDRAILS}"
-
-    raw_chunks = _call_llm(
-        llm_client,
-        dissector_system,
-        dissector_user,
-        stage="dissector",
-    )
-    chunks = _parse_chunks(raw_chunks)
-
-    plans: list[dict[str, Any]] = []
-    for idx, chunk in enumerate(chunks):
-        chunk_text = str(chunk.get("chunk") or "")
-        intention = str(chunk.get("intention") or "")
-
-        visionary_system = _get_template(store, _VISIONARY_KEY, context, _VISIONARY_SYSTEM_FALLBACK)
-        visionary_user = _render_template(
-            _get_template(store, _VISIONARY_KEY + ".user", context, _VISIONARY_USER_FALLBACK),
-            {"CHUNK_TEXT": chunk_text, "INTENTION": intention},
-        )
-        raw_acceptance = _call_llm(
-            llm_client,
-            visionary_system,
-            visionary_user,
-            stage=f"visionary[{idx}]",
-        )
-        acceptance = _parse_acceptance(raw_acceptance)
-
-        planner_system = _get_template(store, _PLANNER_KEY, context, _PLANNER_SYSTEM_FALLBACK)
-        planner_user = _render_template(
-            _get_template(store, _PLANNER_KEY + ".user", context, _PLANNER_USER_FALLBACK),
+    logger.info("intent discovery story pipeline failed; returning controlled interrupt")
+    return {
+        "chunks": [
             {
-                "CHUNK_TEXT": chunk_text,
-                "INTENTION": intention,
-                "ACCEPTANCE_CRITERIA": json.dumps(acceptance, ensure_ascii=False),
-                "AVAILABLE_TOOLS": available_tools,
-            },
-        )
-        planner_user = f"{planner_user}\n\n{_PLANNER_GUARDRAILS}"
-        raw_plan = _call_llm(
-            llm_client,
-            planner_system,
-            planner_user,
-            stage=f"planner[{idx}]",
-        )
-        execution_plan = _parse_execution_plan(raw_plan)
-        execution_plan = _repair_invalid_execution_plan(
-            execution_plan=execution_plan,
-            llm_client=llm_client,
-            store=store,
-            context=context,
-            chunk_text=chunk_text,
-            intention=intention,
-            acceptance=acceptance,
-            available_tools=available_tools,
-        )
-        plans.append(
-            {
-                "chunk_index": idx,
-                "acceptanceCriteria": acceptance,
-                "executionPlan": execution_plan,
+                "action": "overall",
+                "chunk": text,
+                "intention": "overall",
+                "confidence": "low",
             }
-        )
-
-    return {"chunks": chunks, "plans": plans}
+        ],
+        "plans": [
+            {
+                "chunk_index": 0,
+                "acceptanceCriteria": [],
+                "executionPlan": [],
+            }
+        ],
+        "planning_interrupt": {
+            "tool_id": 0,
+            "tool_name": "askQuestion",
+            "question": _default_story_interrupt_question(locale or "any"),
+            "slot": "answer",
+            "bind": {},
+            "missing_data": [],
+            "reason": "story_pipeline_failure",
+        },
+    }
 
 
 def _single_pass_plan(
@@ -475,13 +422,32 @@ def _story_discover_plan(
     store: SqlitePromptStore,
     context: PromptContext,
     locale: str,
+    planning_context: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     exception_history: list[dict[str, Any]] = []
-    context_payload = {
+    context_payload: dict[str, Any] = {
         "locale": locale,
         "channel": "any",
         "mode": "planning",
     }
+    if isinstance(planning_context, dict):
+        context_payload.update(
+            {
+                "original_message": str(
+                    planning_context.get("original_message") or text
+                ),
+                "latest_user_answer": str(
+                    planning_context.get("latest_user_answer") or ""
+                ),
+                "clarifications": planning_context.get("clarifications")
+                if isinstance(planning_context.get("clarifications"), list)
+                else [],
+                "facts": planning_context.get("facts")
+                if isinstance(planning_context.get("facts"), dict)
+                else {},
+                "replan_on_answer": bool(planning_context.get("replan_on_answer")),
+            }
+        )
     tool_menu = _tool_menu_with_ids()
     tool_map = {
         int(item["tool_id"]): str(item["name"])

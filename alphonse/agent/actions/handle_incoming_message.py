@@ -313,6 +313,14 @@ def _sanitize_interaction_state(
     pending = stored_state.get("pending_interaction")
     ability_state = stored_state.get("ability_state")
     if not isinstance(pending, dict):
+        if (
+            isinstance(ability_state, dict)
+            and str(ability_state.get("kind") or "") == "discovery_loop"
+        ):
+            logger.info(
+                "HandleIncomingMessageAction clearing stale discovery_loop without pending_interaction"
+            )
+            return None, None
         return None, ability_state if isinstance(ability_state, dict) else None
     if _is_pending_interaction_expired(pending):
         logger.info("HandleIncomingMessageAction clearing expired pending_interaction")
