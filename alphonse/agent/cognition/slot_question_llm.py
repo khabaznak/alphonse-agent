@@ -3,15 +3,13 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from alphonse.agent.cognition.intent_catalog import SlotSpec
-
 logger = logging.getLogger(__name__)
 
 
 def generate_slot_question(
     *,
     intent_name: str,
-    slot_spec: SlotSpec,
+    slot_spec: Any,
     locale: str,
     llm_client: Any | None,
 ) -> str | None:
@@ -24,8 +22,8 @@ def generate_slot_question(
     )
     user_prompt = (
         f"Intent: {intent_name}\n"
-        f"Missing slot name: {slot_spec.name}\n"
-        f"Missing slot type: {slot_spec.type}\n"
+        f"Missing slot name: {getattr(slot_spec, 'name', '')}\n"
+        f"Missing slot type: {getattr(slot_spec, 'type', '')}\n"
         f"Locale: {locale}\n"
         "Ask exactly one natural question to collect this slot."
     )

@@ -31,12 +31,6 @@ def apply_schema(db_path: Path) -> None:
         seed_default_templates(str(db_path))
     except Exception:
         pass
-    try:
-        from alphonse.agent.cognition.intent_catalog import seed_default_intents
-
-        seed_default_intents(str(db_path))
-    except Exception:
-        pass
 
 
 def main() -> None:

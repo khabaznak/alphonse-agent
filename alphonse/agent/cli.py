@@ -223,25 +223,6 @@ def build_parser() -> argparse.ArgumentParser:
 
     repl_parser = sub.add_parser("repl", help="Start interactive CLI session")
 
-    catalog_parser = sub.add_parser("catalog", help="Intent catalog admin")
-    catalog_sub = catalog_parser.add_subparsers(dest="catalog_command", required=True)
-    catalog_list = catalog_sub.add_parser("list", help="List catalog intents")
-    catalog_list.add_argument(
-        "--all", action="store_true", help="Include disabled intents"
-    )
-    catalog_show = catalog_sub.add_parser("show", help="Show an intent spec")
-    catalog_show.add_argument("intent_name", help="Intent name")
-    catalog_enable = catalog_sub.add_parser("enable", help="Enable an intent")
-    catalog_enable.add_argument("intent_name", help="Intent name")
-    catalog_disable = catalog_sub.add_parser("disable", help="Disable an intent")
-    catalog_disable.add_argument("intent_name", help="Intent name")
-    catalog_sub.add_parser("refresh", help="Refresh catalog cache")
-    catalog_sub.add_parser("seed", help="Seed factory intents into the catalog")
-    catalog_sub.add_parser("validate", help="Validate catalog entries")
-    catalog_sub.add_parser("stats", help="Show catalog diagnostics")
-    catalog_template = catalog_sub.add_parser("template", help="Show prompt template by key")
-    catalog_template.add_argument("key", help="Prompt template key")
-
     abilities_parser = sub.add_parser("abilities", help="Abilities CRUD")
     abilities_sub = abilities_parser.add_subparsers(
         dest="abilities_command", required=True
@@ -583,9 +564,6 @@ def _dispatch_command(
     if args.command == "lan":
         _command_lan(args)
         return
-    if args.command == "catalog":
-        _command_catalog(args)
-        return
     if args.command == "abilities":
         _command_abilities(args)
         return
@@ -741,167 +719,6 @@ def _command_lan(args: argparse.Namespace) -> None:
     print(f"- next_trigger_at: {row[4]}")
     print(f"- fired_at: {row[5]}")
     print(f"- rrule: {row[6]}")
-
-
-def _command_catalog(args: argparse.Namespace) -> None:
-    from alphonse.agent.cognition.intent_catalog import (
-        IntentCatalogStore,
-        get_catalog_service,
-        seed_default_intents,
-    )
-
-    store = IntentCatalogStore()
-    if args.catalog_command == "list":
-        if args.all:
-            rows = store.list_all()
-        else:
-            rows = store.list_enabled()
-        if not rows:
-            print("No intents found.")
-            return
-        print("Intent catalog:")
-        for spec in rows:
-            status = "enabled" if spec.enabled else "disabled"
-            print(f"- {spec.intent_name} ({spec.category}) {status}")
-        return
-
-    if args.catalog_command == "show":
-        spec = store.get(args.intent_name)
-        if not spec:
-            print(f"Intent not found: {args.intent_name}")
-            return
-        print(f"Intent: {spec.intent_name}")
-        print(f"- category: {spec.category}")
-        print(f"- enabled: {spec.enabled}")
-        print(f"- description: {spec.description}")
-        print(f"- default_mode: {spec.default_mode}")
-        print(f"- risk_level: {spec.risk_level}")
-        print(f"- handler: {spec.handler}")
-        if spec.examples:
-            print("- examples:")
-            for example in spec.examples:
-                print(f"  - {example}")
-        if spec.required_slots:
-            print("- required_slots:")
-            for slot in spec.required_slots:
-                print(
-                    f"  - {slot.name} ({slot.type}) required={slot.required} critical={slot.critical}"
-                )
-        if spec.optional_slots:
-            print("- optional_slots:")
-            for slot in spec.optional_slots:
-                print(
-                    f"  - {slot.name} ({slot.type}) required={slot.required} critical={slot.critical}"
-                )
-        return
-
-    if args.catalog_command in {"enable", "disable"}:
-        enabled = args.catalog_command == "enable"
-        spec = store.get(args.intent_name)
-        if not spec:
-            print(f"Intent not found: {args.intent_name}")
-            return
-        updated = type(spec)(
-            intent_name=spec.intent_name,
-            category=spec.category,
-            description=spec.description,
-            examples=spec.examples,
-            required_slots=spec.required_slots,
-            optional_slots=spec.optional_slots,
-            default_mode=spec.default_mode,
-            risk_level=spec.risk_level,
-            handler=spec.handler,
-            enabled=enabled,
-        )
-        store.upsert(updated)
-        state = "enabled" if enabled else "disabled"
-        print(f"{spec.intent_name} -> {state}")
-        return
-
-    if args.catalog_command == "refresh":
-        service = get_catalog_service()
-        intents = service.refresh()
-        diag = service.diagnostics()
-        print(f"Catalog refreshed: enabled={len(intents)} total={diag.total_count}")
-        return
-
-    if args.catalog_command == "seed":
-        seed_default_intents()
-        print("Catalog seeded.")
-        return
-
-    if args.catalog_command == "validate":
-        errors = _validate_catalog(store)
-        if not errors:
-            print("Catalog validation passed.")
-            return
-        print("Catalog validation errors:")
-        for err in errors:
-            print(f"- {err}")
-        return
-
-    if args.catalog_command == "stats":
-        service = get_catalog_service()
-        diag = service.diagnostics()
-        print("Catalog diagnostics:")
-        print(f"- db_path: {diag.db_path}")
-        print(f"- available: {diag.available}")
-        print(f"- enabled_count: {diag.enabled_count}")
-        print(f"- total_count: {diag.total_count}")
-        print(f"- last_refresh_at: {diag.last_refresh_at}")
-        if diag.categories:
-            print("- categories:")
-            for key, value in sorted(diag.categories.items()):
-                print(f"  - {key}: {value}")
-        return
-
-    if args.catalog_command == "template":
-        from alphonse.agent.cognition.prompt_store import SqlitePromptStore, PromptContext
-
-        store = SqlitePromptStore()
-        match = store.get_template(
-            args.key,
-            PromptContext(
-                locale="any",
-                address_style="any",
-                tone="any",
-                channel="any",
-                variant="default",
-                policy_tier="safe",
-            ),
-        )
-        if not match:
-            print(f"Template not found: {args.key}")
-            return
-        print(match.template)
-        return
-
-
-def _validate_catalog(store: IntentCatalogStore) -> list[str]:
-    errors: list[str] = []
-    try:
-        specs = store.list_all()
-    except Exception as exc:
-        return [f"catalog unavailable: {exc}"]
-    for spec in specs:
-        if not spec.intent_name:
-            errors.append("intent_name missing")
-        if not spec.category:
-            errors.append(f"{spec.intent_name}: category missing")
-        if not spec.handler:
-            errors.append(f"{spec.intent_name}: handler missing")
-        if not spec.intent_version:
-            errors.append(f"{spec.intent_name}: intent_version missing")
-        if not spec.origin:
-            errors.append(f"{spec.intent_name}: origin missing")
-        for slot in spec.required_slots + spec.optional_slots:
-            if not slot.name:
-                errors.append(f"{spec.intent_name}: slot name missing")
-            if not slot.type:
-                errors.append(f"{spec.intent_name}: slot type missing")
-            if not slot.prompt_key:
-                errors.append(f"{spec.intent_name}: slot prompt_key missing")
-    return errors
 
 
 def _command_debug(args: argparse.Namespace) -> None:

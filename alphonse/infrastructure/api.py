@@ -10,12 +10,6 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from alphonse.agent.cognition.abilities.store import AbilitySpecStore
-from alphonse.agent.cognition.intent_catalog import (
-    IntentCatalogStore,
-    IntentSpec,
-    SlotSpec,
-    reset_catalog_service,
-)
 from alphonse.agent.cognition.capability_gaps.coalescing import (
     coalesce_open_intent_gaps,
 )
@@ -213,50 +207,6 @@ class PromptTemplateRollback(BaseModel):
     version: int
     changed_by: str
     reason: str | None = None
-
-
-class SlotPayload(BaseModel):
-    name: str
-    type: str
-    required: bool = True
-    prompt_key: str
-    examples: list[str] = Field(default_factory=list)
-    constraints: dict[str, Any] = Field(default_factory=dict)
-    critical: bool = True
-    semantic_text: bool = False
-    min_length: int | None = None
-    reject_if_core_conversational: bool = False
-
-
-class IntentCreate(BaseModel):
-    intent_name: str
-    category: str
-    description: str
-    examples: list[str] = Field(default_factory=list)
-    required_slots: list[SlotPayload] = Field(default_factory=list)
-    optional_slots: list[SlotPayload] = Field(default_factory=list)
-    default_mode: str
-    risk_level: str
-    handler: str
-    enabled: bool = True
-    intent_version: str = "1.0.0"
-    origin: str = "user"
-    parent_intent: str | None = None
-
-
-class IntentPatch(BaseModel):
-    category: str | None = None
-    description: str | None = None
-    examples: list[str] | None = None
-    required_slots: list[SlotPayload] | None = None
-    optional_slots: list[SlotPayload] | None = None
-    default_mode: str | None = None
-    risk_level: str | None = None
-    handler: str | None = None
-    enabled: bool | None = None
-    intent_version: str | None = None
-    origin: str | None = None
-    parent_intent: str | None = None
 
 
 class TerminalSandboxUpsert(BaseModel):
@@ -547,113 +497,6 @@ def list_agent_abilities(
     _assert_api_token(x_alphonse_api_token)
     store = AbilitySpecStore()
     return {"items": store.list_specs(enabled_only=enabled_only, limit=limit)}
-
-
-@app.get("/agent/intents")
-def list_agent_intents(
-    enabled_only: bool = False,
-    limit: int = 200,
-    x_alphonse_api_token: str | None = Header(default=None),
-) -> dict[str, Any]:
-    _assert_api_token(x_alphonse_api_token)
-    store = IntentCatalogStore()
-    intents = store.list_enabled() if enabled_only else store.list_all()
-    return {"items": [_spec_to_dict(spec) for spec in intents[:limit]]}
-
-
-@app.get("/agent/intents/{intent_name}")
-def get_agent_intent(
-    intent_name: str,
-    x_alphonse_api_token: str | None = Header(default=None),
-) -> dict[str, Any]:
-    _assert_api_token(x_alphonse_api_token)
-    store = IntentCatalogStore()
-    spec = store.get(intent_name)
-    if not spec:
-        raise HTTPException(status_code=404, detail="Intent not found")
-    return {"item": _spec_to_dict(spec)}
-
-
-@app.post("/agent/intents", status_code=201)
-def create_agent_intent(
-    payload: IntentCreate,
-    x_alphonse_api_token: str | None = Header(default=None),
-) -> dict[str, Any]:
-    _assert_api_token(x_alphonse_api_token)
-    store = IntentCatalogStore()
-    spec = _spec_from_payload(payload)
-    store.upsert(spec)
-    reset_catalog_service()
-    return {"item": _spec_to_dict(store.get(payload.intent_name))}
-
-
-@app.patch("/agent/intents/{intent_name}")
-def patch_agent_intent(
-    intent_name: str,
-    payload: IntentPatch,
-    x_alphonse_api_token: str | None = Header(default=None),
-) -> dict[str, Any]:
-    _assert_api_token(x_alphonse_api_token)
-    store = IntentCatalogStore()
-    current = store.get(intent_name)
-    if not current:
-        raise HTTPException(status_code=404, detail="Intent not found")
-    updated = IntentSpec(
-        intent_name=intent_name,
-        category=payload.category if payload.category is not None else current.category,
-        description=payload.description if payload.description is not None else current.description,
-        examples=payload.examples if payload.examples is not None else current.examples,
-        required_slots=_slots_from_payload(payload.required_slots)
-        if payload.required_slots is not None
-        else current.required_slots,
-        optional_slots=_slots_from_payload(payload.optional_slots)
-        if payload.optional_slots is not None
-        else current.optional_slots,
-        default_mode=payload.default_mode if payload.default_mode is not None else current.default_mode,
-        risk_level=payload.risk_level if payload.risk_level is not None else current.risk_level,
-        handler=payload.handler if payload.handler is not None else current.handler,
-        enabled=payload.enabled if payload.enabled is not None else current.enabled,
-        intent_version=payload.intent_version if payload.intent_version is not None else current.intent_version,
-        origin=payload.origin if payload.origin is not None else current.origin,
-        parent_intent=payload.parent_intent if payload.parent_intent is not None else current.parent_intent,
-        created_at=current.created_at,
-        updated_at=current.updated_at,
-    )
-    store.upsert(updated)
-    reset_catalog_service()
-    return {"item": _spec_to_dict(store.get(intent_name))}
-
-
-@app.delete("/agent/intents/{intent_name}")
-def delete_agent_intent(
-    intent_name: str,
-    x_alphonse_api_token: str | None = Header(default=None),
-) -> dict[str, Any]:
-    _assert_api_token(x_alphonse_api_token)
-    store = IntentCatalogStore()
-    current = store.get(intent_name)
-    if not current:
-        raise HTTPException(status_code=404, detail="Intent not found")
-    disabled = IntentSpec(
-        intent_name=current.intent_name,
-        category=current.category,
-        description=current.description,
-        examples=current.examples,
-        required_slots=current.required_slots,
-        optional_slots=current.optional_slots,
-        default_mode=current.default_mode,
-        risk_level=current.risk_level,
-        handler=current.handler,
-        enabled=False,
-        intent_version=current.intent_version,
-        origin=current.origin,
-        parent_intent=current.parent_intent,
-        created_at=current.created_at,
-        updated_at=current.updated_at,
-    )
-    store.upsert(disabled)
-    reset_catalog_service()
-    return {"deleted": True, "intent_name": intent_name}
 
 
 @app.get("/agent/abilities/{intent_name}")
@@ -1387,79 +1230,6 @@ def _as_optional_str(value: object | None) -> str | None:
     if value is None:
         return None
     return str(value)
-
-
-def _slots_from_payload(slots: list[SlotPayload]) -> list[SlotSpec]:
-    return [
-        SlotSpec(
-            name=slot.name,
-            type=slot.type,
-            required=slot.required,
-            prompt_key=slot.prompt_key,
-            examples=list(slot.examples),
-            constraints=dict(slot.constraints),
-            critical=slot.critical,
-            semantic_text=slot.semantic_text,
-            min_length=slot.min_length,
-            reject_if_core_conversational=slot.reject_if_core_conversational,
-        )
-        for slot in slots
-    ]
-
-
-def _spec_from_payload(payload: IntentCreate) -> IntentSpec:
-    return IntentSpec(
-        intent_name=payload.intent_name,
-        category=payload.category,
-        description=payload.description,
-        examples=list(payload.examples),
-        required_slots=_slots_from_payload(payload.required_slots),
-        optional_slots=_slots_from_payload(payload.optional_slots),
-        default_mode=payload.default_mode,
-        risk_level=payload.risk_level,
-        handler=payload.handler,
-        enabled=payload.enabled,
-        intent_version=payload.intent_version,
-        origin=payload.origin,
-        parent_intent=payload.parent_intent,
-    )
-
-
-def _spec_to_dict(spec: IntentSpec | None) -> dict[str, Any] | None:
-    if spec is None:
-        return None
-    return {
-        "intent_name": spec.intent_name,
-        "category": spec.category,
-        "description": spec.description,
-        "examples": list(spec.examples),
-        "required_slots": [_slot_to_dict(slot) for slot in spec.required_slots],
-        "optional_slots": [_slot_to_dict(slot) for slot in spec.optional_slots],
-        "default_mode": spec.default_mode,
-        "risk_level": spec.risk_level,
-        "handler": spec.handler,
-        "enabled": spec.enabled,
-        "intent_version": spec.intent_version,
-        "origin": spec.origin,
-        "parent_intent": spec.parent_intent,
-        "created_at": spec.created_at,
-        "updated_at": spec.updated_at,
-    }
-
-
-def _slot_to_dict(slot: SlotSpec) -> dict[str, Any]:
-    return {
-        "name": slot.name,
-        "type": slot.type,
-        "required": slot.required,
-        "prompt_key": slot.prompt_key,
-        "examples": list(slot.examples),
-        "constraints": dict(slot.constraints),
-        "critical": slot.critical,
-        "semantic_text": slot.semantic_text,
-        "min_length": slot.min_length,
-        "reject_if_core_conversational": slot.reject_if_core_conversational,
-    }
 
 
 def _assert_api_token(provided: str | None) -> None:

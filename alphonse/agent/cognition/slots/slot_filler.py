@@ -3,8 +3,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
-
-from alphonse.agent.cognition.intent_catalog import IntentSpec, SlotSpec
 from alphonse.agent.cognition.slots.resolvers import ResolverRegistry, ParseResult
 from alphonse.agent.cognition.slots.slot_fsm import (
     SlotMachine,
@@ -34,7 +32,7 @@ class SlotFillResult:
 
 
 def fill_slots(
-    intent: IntentSpec,
+    intent: Any,
     *,
     text: str,
     slot_guesses: dict[str, Any],
@@ -141,7 +139,7 @@ def fill_slots(
 
 
 def _parse_guess(
-    spec: SlotSpec,
+    spec: Any,
     guess: Any,
     registry: ResolverRegistry,
     context: dict[str, Any],
@@ -158,7 +156,7 @@ def _parse_guess(
     return resolver.parse(str(guess), context)
 
 
-def _missing_required(intent: IntentSpec, slots: dict[str, Any]) -> list[str]:
+def _missing_required(intent: Any, slots: dict[str, Any]) -> list[str]:
     missing: list[str] = []
     for spec in intent.required_slots:
         if spec.name not in slots:
@@ -166,7 +164,7 @@ def _missing_required(intent: IntentSpec, slots: dict[str, Any]) -> list[str]:
     return missing
 
 
-def _next_missing_slot(intent: IntentSpec, missing: list[str]) -> SlotSpec | None:
+def _next_missing_slot(intent: Any, missing: list[str]) -> Any | None:
     for spec in intent.required_slots:
         if spec.name in missing and spec.critical:
             return spec
@@ -177,7 +175,7 @@ def _next_missing_slot(intent: IntentSpec, missing: list[str]) -> SlotSpec | Non
     return None
 
 
-def _prompt_for_slot(intent: IntentSpec, slot_name: str) -> str | None:
+def _prompt_for_slot(intent: Any, slot_name: str) -> str | None:
     for spec in intent.required_slots + intent.optional_slots:
         if spec.name == slot_name:
             return spec.prompt_key
@@ -192,7 +190,7 @@ def _geo_stub_present(slots: dict[str, Any]) -> bool:
 
 
 def _build_plans(
-    intent: IntentSpec, slots: dict[str, Any], context: dict[str, Any]
+    intent: Any, slots: dict[str, Any], context: dict[str, Any]
 ) -> list[dict[str, Any]]:
     if intent.handler == "timed_signals.create":
         reminder_text = slots.get("reminder_text")

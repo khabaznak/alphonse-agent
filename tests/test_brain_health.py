@@ -17,7 +17,6 @@ def test_check_brain_health_reports_unavailable_on_empty_db(tmp_path: Path) -> N
     with sqlite3.connect(db_path):
         pass
     health = check_brain_health(db_path)
-    assert health.catalog_available is False
     assert health.prompt_store_available is False
 
 
@@ -25,7 +24,6 @@ def test_require_brain_health_passes_after_schema(tmp_path: Path) -> None:
     db_path = tmp_path / "nerve-db"
     apply_schema(db_path)
     health = require_brain_health(db_path)
-    assert health.catalog_available is True
     assert health.prompt_store_available is True
 
 
