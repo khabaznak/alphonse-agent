@@ -17,6 +17,7 @@ logger = logging.getLogger(__name__)
 _DISSECTOR_KEY = "intent_discovery.dissector.v1"
 _VISIONARY_KEY = "intent_discovery.visionary.v1"
 _PLANNER_KEY = "intent_discovery.planner.v1"
+_PLAN_CRITIC_KEY = "intent_discovery.plan_critic.v1"
 
 
 _DISSECTOR_SYSTEM_FALLBACK = (
@@ -62,6 +63,12 @@ _PLANNER_SYSTEM_FALLBACK = (
     "Output valid JSON only. No markdown. No explanations."
 )
 
+_PLAN_CRITIC_SYSTEM_FALLBACK = (
+    "You are Alphonse, a strict plan-shape repairer. "
+    "Fix only structural issues in an executionPlan. "
+    "Output valid JSON only."
+)
+
 _PLANNER_USER_FALLBACK = (
     "Rules:\n"
     "- Split the message into components and keep each component short.\n"
@@ -92,6 +99,13 @@ _PLANNER_GUARDRAILS = (
     "- Never ask the user to choose or confirm internal tool/function names.\n"
     "- Ask questions only for missing end-user data, not implementation choices.\n"
     "- Prefer the shortest plan (one step when enough information is present).\n"
+)
+
+_PLACEHOLDER_PATTERNS = (
+    r"<[^>]+>",
+    r"\byour\s+\w+\s+name\b",
+    r"\bplaceholder\b",
+    r"\[unknown\]",
 )
 
 
@@ -181,6 +195,16 @@ def discover_plan(
         planner_user = f"{planner_user}\n\n{_PLANNER_GUARDRAILS}"
         raw_plan = _call_llm(llm_client, planner_system, planner_user)
         execution_plan = _parse_execution_plan(raw_plan)
+        execution_plan = _repair_invalid_execution_plan(
+            execution_plan=execution_plan,
+            llm_client=llm_client,
+            store=store,
+            context=context,
+            chunk_text=chunk_text,
+            intention=intention,
+            acceptance=acceptance,
+            available_tools=available_tools,
+        )
         plans.append(
             {
                 "chunk_index": idx,
@@ -213,6 +237,16 @@ def _single_pass_plan(
     planner_user = f"{planner_user}\n\n{_PLANNER_GUARDRAILS}"
     raw_plan = _call_llm(llm_client, planner_system, planner_user)
     execution_plan = _parse_execution_plan(raw_plan)
+    execution_plan = _repair_invalid_execution_plan(
+        execution_plan=execution_plan,
+        llm_client=llm_client,
+        store=store,
+        context=context,
+        chunk_text=text,
+        intention="overall",
+        acceptance=[],
+        available_tools=available_tools,
+    )
     return {
         "chunks": [{"chunk": text, "intention": "overall", "confidence": "medium"}],
         "plans": [
@@ -397,6 +431,27 @@ def _render_param_signature(param: dict[str, Any]) -> str:
     return f"{name}{suffix}:{ptype}"
 
 
+def _is_internal_tool_question(question: str) -> bool:
+    normalized = str(question or "").lower().strip()
+    if not normalized:
+        return True
+    forbidden = (
+        "tool",
+        "function",
+        "api",
+        "endpoint",
+        "method",
+        "setreminder",
+        "reminderset",
+        "notification tool",
+    )
+    if any(token in normalized for token in forbidden):
+        return True
+    return bool(
+        re.search(r"\b(confirm|choose|pick|specify)\b.{0,24}\b(tool|function|api)\b", normalized)
+    )
+
+
 def _io_channel_catalog() -> dict[str, Any]:
     try:
         registry = get_io_registry()
@@ -460,6 +515,115 @@ def _parse_execution_plan(raw: str) -> list[dict[str, Any]]:
     if isinstance(payload, list):
         return [item for item in payload if isinstance(item, dict)]
     return []
+
+
+def _repair_invalid_execution_plan(
+    *,
+    execution_plan: list[dict[str, Any]],
+    llm_client: object,
+    store: SqlitePromptStore,
+    context: PromptContext,
+    chunk_text: str,
+    intention: str,
+    acceptance: list[str],
+    available_tools: str,
+    max_retries: int = 2,
+) -> list[dict[str, Any]]:
+    current = execution_plan
+    issue = _validate_execution_plan(current)
+    retries = 0
+    while issue is not None and retries < max_retries:
+        retries += 1
+        critic_system = _get_template(
+            store,
+            _PLAN_CRITIC_KEY,
+            context,
+            _PLAN_CRITIC_SYSTEM_FALLBACK,
+        )
+        critic_user = _build_plan_critic_user_prompt(
+            chunk_text=chunk_text,
+            intention=intention,
+            acceptance=acceptance,
+            available_tools=available_tools,
+            invalid_plan=current,
+            issue=issue,
+        )
+        raw = _call_llm(llm_client, critic_system, critic_user)
+        current = _parse_execution_plan(raw)
+        issue = _validate_execution_plan(current)
+    if issue is not None:
+        logger.info(
+            "intent discovery plan validation failed issue=%s detail=%s",
+            issue.get("code"),
+            issue.get("message"),
+        )
+    return current
+
+
+def _build_plan_critic_user_prompt(
+    *,
+    chunk_text: str,
+    intention: str,
+    acceptance: list[str],
+    available_tools: str,
+    invalid_plan: list[dict[str, Any]],
+    issue: dict[str, str],
+) -> str:
+    return (
+        "Repair this executionPlan.\n"
+        "Rules:\n"
+        "- Return JSON with shape {\"executionPlan\": [{\"tool\"|\"action\": \"...\", \"parameters\": {...}}]}.\n"
+        "- Keep the same intent and acceptance criteria direction.\n"
+        "- If missing data, use askQuestion with user-facing question only.\n"
+        "- Never ask user to choose internal tool/function names.\n"
+        "- Do not output explanations.\n\n"
+        f"Message:\n{chunk_text}\n\n"
+        f"Intention:\n{intention}\n\n"
+        f"Acceptance:\n{json.dumps(acceptance, ensure_ascii=False)}\n\n"
+        f"Validation issue:\n{json.dumps(issue, ensure_ascii=False)}\n\n"
+        f"Invalid plan:\n{json.dumps(invalid_plan, ensure_ascii=False)}\n\n"
+        f"AVAILABLE TOOLS:\n{available_tools}\n"
+    )
+
+
+def _validate_execution_plan(plan: list[dict[str, Any]]) -> dict[str, str] | None:
+    if not isinstance(plan, list) or not plan:
+        return {"code": "EMPTY_PLAN", "message": "executionPlan must contain at least one step."}
+    for idx, step in enumerate(plan):
+        if not isinstance(step, dict):
+            return {"code": "INVALID_STEP_SHAPE", "message": f"step[{idx}] must be an object."}
+        tool = str(step.get("tool") or step.get("action") or "").strip()
+        if not tool:
+            return {"code": "MISSING_TOOL", "message": f"step[{idx}] must include tool or action."}
+        params = step.get("parameters")
+        if params is None:
+            return {"code": "MISSING_PARAMETERS", "message": f"step[{idx}] parameters are required."}
+        if not isinstance(params, dict):
+            return {"code": "INVALID_PARAMETERS", "message": f"step[{idx}] parameters must be an object."}
+        for key, value in params.items():
+            if value is None:
+                return {"code": "EMPTY_PARAMETER", "message": f"step[{idx}] parameter '{key}' is null."}
+            if isinstance(value, str):
+                if not value.strip():
+                    return {"code": "EMPTY_PARAMETER", "message": f"step[{idx}] parameter '{key}' is empty."}
+                if any(re.search(pattern, value, flags=re.IGNORECASE) for pattern in _PLACEHOLDER_PATTERNS):
+                    return {
+                        "code": "PLACEHOLDER_PARAMETER",
+                        "message": f"step[{idx}] parameter '{key}' contains placeholder text.",
+                    }
+        if tool == "askQuestion":
+            question = str(params.get("question") or "").strip()
+            if not question:
+                return {"code": "ASK_QUESTION_MISSING_QUESTION", "message": f"step[{idx}] askQuestion needs question."}
+            if _is_internal_tool_question(question):
+                return {"code": "ASK_QUESTION_INTERNAL_TOOL", "message": f"step[{idx}] asks about internal tool selection."}
+        else:
+            if not params:
+                return {
+                    "code": "NON_ASKQUESTION_EMPTY_PARAMETERS",
+                    "message": f"step[{idx}] non-askQuestion actions must include parameters.",
+                }
+    return None
 
 
 def _parse_json(raw: str) -> Any:

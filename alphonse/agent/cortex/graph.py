@@ -275,6 +275,10 @@ def _build_discovery_loop_state(discovery: dict[str, Any]) -> dict[str, Any]:
             if not isinstance(raw_step, dict):
                 continue
             step = dict(raw_step)
+            if not str(step.get("tool") or "").strip():
+                action_name = str(step.get("action") or "").strip()
+                if action_name:
+                    step["tool"] = action_name
             params = step.get("parameters")
             if not isinstance(params, dict):
                 params = {}
@@ -534,8 +538,31 @@ def _available_tool_catalog_data() -> dict[str, Any]:
     try:
         parsed = json.loads(raw)
     except json.JSONDecodeError:
-        return {"tools": []}
-    return parsed if isinstance(parsed, dict) else {"tools": []}
+        parsed = {"tools": []}
+    if not isinstance(parsed, dict):
+        parsed = {"tools": []}
+    tools = parsed.get("tools")
+    if not isinstance(tools, list):
+        tools = []
+    known = {
+        str(item.get("tool") or "").strip()
+        for item in tools
+        if isinstance(item, dict)
+    }
+    for intent in _ability_registry().list_intents():
+        name = str(intent).strip()
+        if not name or name in known:
+            continue
+        tools.append(
+            {
+                "tool": name,
+                "summary": "runtime-registered ability",
+                "required_parameters": [],
+                "input_parameters": [],
+            }
+        )
+    parsed["tools"] = tools
+    return parsed
 
 
 def _validate_loop_step(
