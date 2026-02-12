@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import logging
 from datetime import datetime, timezone
-from typing import Any, TypedDict
+from typing import Any, Protocol, TypedDict
 
 from langgraph.graph import END, StateGraph
 
@@ -11,7 +11,6 @@ from alphonse.agent.cognition.plans import CortexPlan, CortexResult, PlanType
 from alphonse.agent.cognition.response_composer import ResponseComposer
 from alphonse.agent.cognition.response_spec import ResponseSpec
 from alphonse.agent.cognition.status_summaries import summarize_capabilities
-from alphonse.agent.cognition.providers.ollama import OllamaClient
 from alphonse.agent.cognition.intent_types import IntentCategory
 from alphonse.agent.cognition.intent_discovery_engine import (
     discover_plan,
@@ -46,13 +45,18 @@ _PLAN_CRITIC_SYSTEM_PROMPT = (
 )
 
 
+class LLMClient(Protocol):
+    def complete(self, *, system_prompt: str, user_prompt: str) -> str:
+        ...
+
+
 class CortexState(TypedDict, total=False):
     chat_id: str
     channel_type: str
     channel_target: str
     conversation_key: str
     actor_person_id: str | None
-    incoming_text: str
+    incoming_raw_message: dict[str, Any] | None
     last_user_message: str
     intent: str | None
     intent_category: str | None
@@ -76,9 +80,14 @@ class CortexState(TypedDict, total=False):
     planning_context: dict[str, Any] | None
 
 
-def build_cortex_graph(llm_client: OllamaClient | None = None) -> StateGraph:
+def build_cortex_graph(llm_client: LLMClient | None = None) -> StateGraph:
     graph = StateGraph(CortexState)
     graph.add_node("ingest_node", _ingest_node)
+    # Greedy-loop stubs (planned topology expansion).
+    graph.add_node("plan_node", _plan_node)
+    graph.add_node("select_next_step_node", _select_next_step_node)
+    graph.add_node("execute_tool_node", _execute_tool_node)
+    graph.add_node("ask_question_node", _ask_question_node)
     graph.add_node("respond_node", _respond_node(llm_client))
 
     graph.set_entry_point("ingest_node")
@@ -88,10 +97,10 @@ def build_cortex_graph(llm_client: OllamaClient | None = None) -> StateGraph:
 
 
 def invoke_cortex(
-    state: dict[str, Any], text: str, *, llm_client: OllamaClient | None = None
+    state: dict[str, Any], text: str, *, llm_client: LLMClient | None = None
 ) -> CortexResult:
     graph = build_cortex_graph(llm_client).compile()
-    result_state = graph.invoke({**state, "incoming_text": text})
+    result_state = graph.invoke({**state, "last_user_message": text})
     plans = [
         CortexPlan.model_validate(plan) for plan in result_state.get("plans") or []
     ]
@@ -122,40 +131,64 @@ def _compose_response_from_state(state: dict[str, Any]) -> str:
 
 
 def _ingest_node(state: CortexState) -> dict[str, Any]:
-    text = state.get("incoming_text", "").strip()
-    messages = list(state.get("messages") or [])
-    if text:
-        messages.append({"role": "user", "content": text})
-    messages = messages[-8:]
-    locale = _locale_for_state(state)
-    logger.info("cortex ingest chat_id=%s text=%s", state.get("chat_id"), text)
+    message = state.get("last_user_message")
+    if not _is_payload_cannonical(message):
+        error = ValueError("last_user_message is not cannonical JSON payload")
+        logger.exception(
+            "cortex ingest invalid payload chat_id=%s payload=%s error=%s",
+            state.get("chat_id"),
+            _snippet(str(message)),
+            error,
+        )
+        raise error
+    logger.info(
+        "cortex ingest chat_id=%s text=%s",
+        state.get("chat_id"),
+        _snippet(str(message)),
+    )
     return {
-        "last_user_message": text,
-        "messages": messages,
-        "timezone": state.get("timezone") or "UTC",
-        "response_text": None,
-        "response_key": None,
-        "response_vars": None,
-        "plans": [],
-        "locale": locale,
-        "events": [],
-        "planning_context": None,
+        "last_user_message": message,
     }
 
 
-def _respond_node_impl(state: CortexState, llm_client: OllamaClient | None) -> dict[str, Any]:
+def _is_payload_cannonical(payload: Any) -> bool:
+    try:
+        if isinstance(payload, str):
+            return bool(payload.strip())
+        json.dumps(payload, ensure_ascii=False)
+        return True
+    except Exception:
+        return False
+
+
+def _plan_node(state: CortexState) -> dict[str, Any]:
+    """Stub: plan/refine phase for future greedy graph topology."""
+    _ = state
+    return {}
+
+
+def _select_next_step_node(state: CortexState) -> dict[str, Any]:
+    """Stub: select next executable step in greedy loop."""
+    _ = state
+    return {}
+
+
+def _execute_tool_node(state: CortexState) -> dict[str, Any]:
+    """Stub: execute selected tool step."""
+    _ = state
+    return {}
+
+
+def _ask_question_node(state: CortexState) -> dict[str, Any]:
+    """Stub: emit clarification question and wait for user answer."""
+    _ = state
+    return {}
+
+
+def _respond_node_impl(state: CortexState, llm_client: LLMClient | None) -> dict[str, Any]:
     if state.get("response_text") or state.get("response_key"):
         return {}
-    try:
-        discovery = _run_intent_discovery(state, llm_client)
-    except Exception:
-        logger.exception(
-            "cortex intent discovery failed chat_id=%s text=%s",
-            state.get("chat_id"),
-            _snippet(str(state.get("last_user_message") or "")),
-        )
-        plan = _build_gap_plan(state, reason="intent_discovery_exception")
-        return {"plans": [plan.model_dump()]}
+    discovery = _run_intent_discovery(state, llm_client)
     if discovery:
         return discovery
     intent = state.get("intent")
@@ -188,97 +221,37 @@ def _respond_node_impl(state: CortexState, llm_client: OllamaClient | None) -> d
 
 
 def _run_intent_discovery(
-    state: CortexState, llm_client: OllamaClient | None
+    state: CortexState, llm_client: LLMClient | None
 ) -> dict[str, Any] | None:
-    text = str(state.get("last_user_message") or "").strip()
+    text = _require_last_user_message(state)
 
-    pending = state.get("pending_interaction")
-    if isinstance(pending, dict):
-        if _is_abort_confirmation_pending(pending):
-            return _handle_abort_confirmation(state, pending, text)
-        if _looks_like_abort_request(text):
-            return _run_abort_confirmation(state, pending)
-        ask_context = pending.get("context") if isinstance(pending.get("context"), dict) else {}
-        if ask_context.get("tool") == "askQuestion":
-            if bool(ask_context.get("replan_on_answer")):
-                answer = text
-                original_message = str(
-                    ask_context.get("original_message")
-                    or ask_context.get("source_message")
-                    or ""
-                ).strip()
-                clarifications = (
-                    ask_context.get("clarifications")
-                    if isinstance(ask_context.get("clarifications"), list)
-                    else []
-                )
-                clarification_entry = {
-                    "answer": answer,
-                    "slot": str(pending.get("key") or "answer"),
-                    "at": datetime.now(timezone.utc).isoformat(),
-                }
-                if answer:
-                    clarifications = [*clarifications, clarification_entry]
-                state["planning_context"] = {
-                    "original_message": original_message or text,
-                    "latest_user_answer": answer,
-                    "clarifications": clarifications,
-                    "facts": {
-                        str(item.get("slot") or "answer"): item.get("answer")
-                        for item in clarifications
-                        if isinstance(item, dict)
-                    },
-                    "replan_on_answer": True,
-                }
-                state["last_user_message"] = original_message or text
-                state["pending_interaction"] = None
-                state["ability_state"] = {}
-                logger.info(
-                    "cortex planning interrupt answered chat_id=%s correlation_id=%s replan=true",
-                    state.get("chat_id"),
-                    state.get("correlation_id"),
-                )
-            else:
-                resumed = _resume_discovery_from_answer(state, pending, llm_client)
-                if resumed is not None:
-                    if not _is_effectively_empty_discovery_result(resumed):
-                        return resumed
-                    state["pending_interaction"] = None
-                    state["ability_state"] = {}
-                    logger.info(
-                        "cortex pending answer consumed with noop chat_id=%s correlation_id=%s fallback=fresh_discovery",
-                        state.get("chat_id"),
-                        state.get("correlation_id"),
-                    )
-        intent_name = str(pending.get("context", {}).get("ability_intent") or "")
-        if intent_name:
-            ability = _ability_registry().get(intent_name)
-            if ability is not None:
-                state["intent"] = intent_name
-                return ability.execute(state, _TOOL_REGISTRY)
-    ability_state = state.get("ability_state")
-    if isinstance(ability_state, dict):
-        if _is_discovery_loop_state(ability_state):
-            source_message = str(ability_state.get("source_message") or "").strip()
-            if source_message and source_message != text:
-                logger.info(
-                    "cortex clearing stale discovery_loop chat_id=%s correlation_id=%s prev_message=%s new_message=%s",
-                    state.get("chat_id"),
-                    state.get("correlation_id"),
-                    _snippet(source_message),
-                    _snippet(text),
-                )
-                state["ability_state"] = {}
-                ability_state = {}
-            else:
-                return _run_discovery_loop_step(state, ability_state, llm_client)
-        intent_name = str(ability_state.get("intent") or "")
-        if intent_name:
-            ability = _ability_registry().get(intent_name)
-            if ability is not None:
-                state["intent"] = intent_name
-                return ability.execute(state, _TOOL_REGISTRY)
+    pending_result = _handle_pending_interaction_for_discovery(
+        state=state,
+        llm_client=llm_client,
+        text=text,
+    )
+    if pending_result is not None:
+        return pending_result
+    ability_state_result = _handle_ability_state_for_discovery(
+        state=state,
+        llm_client=llm_client,
+        text=text,
+    )
+    if ability_state_result is not None:
+        return ability_state_result
+    return _run_fresh_discovery_for_message(
+        state=state,
+        llm_client=llm_client,
+        text=text,
+    )
 
+
+def _run_fresh_discovery_for_message(
+    *,
+    state: CortexState,
+    llm_client: LLMClient | None,
+    text: str,
+) -> dict[str, Any] | None:
     if not llm_client:
         plan = _build_gap_plan(state, reason="no_llm_client")
         return {"plans": [plan.model_dump()]}
@@ -298,7 +271,22 @@ def _run_intent_discovery(
         locale=_locale_for_state(state),
         planning_context=planning_context,
     )
-    _log_discovery_plan(state, discovery)
+    return _dispatch_discovery_result(
+        state=state,
+        llm_client=llm_client,
+        source_text=text,
+        discovery=discovery,
+    )
+
+
+def _dispatch_discovery_result(
+    *,
+    state: CortexState,
+    llm_client: LLMClient | None,
+    source_text: str,
+    discovery: dict[str, Any] | None,
+) -> dict[str, Any]:
+    _log_discovery_plan(state, discovery if isinstance(discovery, dict) else None)
     if isinstance(discovery, dict):
         interrupt = discovery.get("planning_interrupt")
         if isinstance(interrupt, dict):
@@ -307,12 +295,128 @@ def _run_intent_discovery(
     if not isinstance(plans, list):
         plan = _build_gap_plan(state, reason="invalid_plan_payload")
         return {"plans": [plan.model_dump()]}
-    loop_state = _build_discovery_loop_state(discovery, source_message=text)
+    loop_state = _build_discovery_loop_state(discovery, source_message=source_text)
     if not loop_state.get("steps"):
         plan = _build_gap_plan(state, reason="empty_execution_plan")
         return {"plans": [plan.model_dump()]}
     state["ability_state"] = loop_state
-    return _run_discovery_loop_step(state, loop_state, llm_client)
+    return _run_discovery_loop_until_blocked(state, loop_state, llm_client)
+
+
+def _handle_ability_state_for_discovery(
+    *,
+    state: CortexState,
+    llm_client: LLMClient | None,
+    text: str,
+) -> dict[str, Any] | None:
+    ability_state = state.get("ability_state")
+    if not isinstance(ability_state, dict):
+        return None
+    if _is_discovery_loop_state(ability_state):
+        source_message = str(ability_state.get("source_message") or "").strip()
+        if source_message and source_message != text:
+            logger.info(
+                "cortex clearing stale discovery_loop chat_id=%s correlation_id=%s prev_message=%s new_message=%s",
+                state.get("chat_id"),
+                state.get("correlation_id"),
+                _snippet(source_message),
+                _snippet(text),
+            )
+            state["ability_state"] = {}
+            ability_state = {}
+        else:
+            return _run_discovery_loop_until_blocked(state, ability_state, llm_client)
+    intent_name = str(ability_state.get("intent") or "")
+    if intent_name:
+        ability = _ability_registry().get(intent_name)
+        if ability is not None:
+            state["intent"] = intent_name
+            return ability.execute(state, _TOOL_REGISTRY)
+    return None
+
+
+def _handle_pending_interaction_for_discovery(
+    *,
+    state: CortexState,
+    llm_client: LLMClient | None,
+    text: str,
+) -> dict[str, Any] | None:
+    pending = state.get("pending_interaction")
+    if not isinstance(pending, dict):
+        return None
+    if _is_abort_confirmation_pending(pending):
+        return _handle_abort_confirmation(state, pending, text)
+    if _looks_like_abort_request(text):
+        return _run_abort_confirmation(state, pending)
+    ask_context = pending.get("context") if isinstance(pending.get("context"), dict) else {}
+    if ask_context.get("tool") == "askQuestion":
+        if bool(ask_context.get("replan_on_answer")):
+            answer = text
+            original_message = str(
+                ask_context.get("original_message")
+                or ask_context.get("source_message")
+                or ""
+            ).strip()
+            clarifications = (
+                ask_context.get("clarifications")
+                if isinstance(ask_context.get("clarifications"), list)
+                else []
+            )
+            clarification_entry = {
+                "answer": answer,
+                "slot": str(pending.get("key") or "answer"),
+                "at": datetime.now(timezone.utc).isoformat(),
+            }
+            if answer:
+                clarifications = [*clarifications, clarification_entry]
+            state["planning_context"] = {
+                "original_message": original_message or text,
+                "latest_user_answer": answer,
+                "clarifications": clarifications,
+                "facts": {
+                    str(item.get("slot") or "answer"): item.get("answer")
+                    for item in clarifications
+                    if isinstance(item, dict)
+                },
+                "replan_on_answer": True,
+            }
+            state["last_user_message"] = original_message or text
+            state["pending_interaction"] = None
+            state["ability_state"] = {}
+            logger.info(
+                "cortex planning interrupt answered chat_id=%s correlation_id=%s replan=true",
+                state.get("chat_id"),
+                state.get("correlation_id"),
+            )
+        else:
+            resumed = _resume_discovery_from_answer(state, pending, llm_client)
+            if resumed is not None:
+                if not _is_effectively_empty_discovery_result(resumed):
+                    return resumed
+                state["pending_interaction"] = None
+                state["ability_state"] = {}
+                logger.info(
+                    "cortex pending answer consumed with noop chat_id=%s correlation_id=%s fallback=fresh_discovery",
+                    state.get("chat_id"),
+                    state.get("correlation_id"),
+                )
+    intent_name = str(pending.get("context", {}).get("ability_intent") or "")
+    if intent_name:
+        ability = _ability_registry().get(intent_name)
+        if ability is not None:
+            state["intent"] = intent_name
+            return ability.execute(state, _TOOL_REGISTRY)
+    return None
+
+
+def _require_last_user_message(state: CortexState) -> str:
+    raw = state.get("last_user_message")
+    if not isinstance(raw, str):
+        raise TypeError("last_user_message must be a string in CortexState")
+    text = raw.strip()
+    if not text:
+        raise ValueError("last_user_message must be non-empty")
+    return text
 
 
 def _select_next_tool_call(plans: list[dict[str, Any]]) -> dict[str, Any] | None:
@@ -388,7 +492,7 @@ def _has_missing_params(params: dict[str, Any]) -> bool:
 
 
 def _run_discovery_loop_step(
-    state: CortexState, loop_state: dict[str, Any], llm_client: OllamaClient | None
+    state: CortexState, loop_state: dict[str, Any], llm_client: LLMClient | None
 ) -> dict[str, Any]:
     steps = loop_state.get("steps")
     if not isinstance(steps, list) or not steps:
@@ -510,11 +614,48 @@ def _run_discovery_loop_step(
     return merged
 
 
+def _run_discovery_loop_until_blocked(
+    state: CortexState,
+    loop_state: dict[str, Any],
+    llm_client: LLMClient | None,
+) -> dict[str, Any]:
+    max_iterations = 6
+    iteration = 0
+    current_loop_state = loop_state
+    latest_result: dict[str, Any] = {"ability_state": current_loop_state}
+    while iteration < max_iterations:
+        iteration += 1
+        step_result = _run_discovery_loop_step(state, current_loop_state, llm_client)
+        if not isinstance(step_result, dict):
+            return latest_result
+        latest_result = step_result
+        if (
+            step_result.get("response_text")
+            or step_result.get("response_key")
+            or step_result.get("pending_interaction")
+        ):
+            return step_result
+        plans = step_result.get("plans")
+        if isinstance(plans, list) and plans:
+            return step_result
+        next_loop_state = step_result.get("ability_state")
+        if not isinstance(next_loop_state, dict) or not _is_discovery_loop_state(next_loop_state):
+            return step_result
+        steps = next_loop_state.get("steps")
+        if not isinstance(steps, list) or not steps:
+            return step_result
+        if _next_step_index(steps, allowed_statuses={"ready"}) is None:
+            return step_result
+        current_loop_state = next_loop_state
+        state["ability_state"] = current_loop_state
+    return latest_result
+
+
 def _critic_repair_invalid_step(
     *,
     state: CortexState,
     step: dict[str, Any],
-    llm_client: OllamaClient | None,
+    llm_client: LLMClient | None,
     validation: StepValidationResult,
 ) -> dict[str, Any] | None:
     if llm_client is None:
@@ -723,7 +864,7 @@ def _next_step_index(steps: list[dict[str, Any]], allowed_statuses: set[str]) ->
 
 
 def _resume_discovery_from_answer(
-    state: CortexState, pending: dict[str, Any], llm_client: OllamaClient | None
+    state: CortexState, pending: dict[str, Any], llm_client: LLMClient | None
 ) -> dict[str, Any] | None:
     ability_state = state.get("ability_state")
     if not isinstance(ability_state, dict) or not _is_discovery_loop_state(ability_state):
@@ -747,7 +888,7 @@ def _resume_discovery_from_answer(
     _bind_answer_to_steps(steps, bind, pending_key, answer)
     state["pending_interaction"] = None
     state["ability_state"] = ability_state
-    return _run_discovery_loop_step(state, ability_state, llm_client)
+    return _run_discovery_loop_until_blocked(state, ability_state, llm_client)
 
 
 def _is_effectively_empty_discovery_result(result: dict[str, Any]) -> bool:
@@ -917,7 +1058,7 @@ def _replan_discovery_after_step(
     state: CortexState,
     loop_state: dict[str, Any],
     last_step: dict[str, Any],
-    llm_client: OllamaClient | None,
+    llm_client: LLMClient | None,
 ) -> dict[str, Any] | None:
     if llm_client is None:
         return None
@@ -1179,7 +1320,7 @@ def _is_user_name_question(text: str) -> bool:
     return any(pattern in normalized for pattern in (*english_patterns, *spanish_patterns))
 
 
-def _respond_node(arg: OllamaClient | CortexState | None = None):
+def _respond_node(arg: LLMClient | CortexState | None = None):
     # Backward-compatible call shape for tests: _respond_node(state_dict)
     if isinstance(arg, dict):
         return _respond_node_impl(arg, None)
