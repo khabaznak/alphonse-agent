@@ -3,6 +3,12 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from alphonse.agent.cognition.prompt_templates_runtime import (
+    SLOT_QUESTION_SYSTEM_PROMPT,
+    SLOT_QUESTION_USER_TEMPLATE,
+    render_prompt_template,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -15,17 +21,15 @@ def generate_slot_question(
 ) -> str | None:
     if llm_client is None:
         return None
-    system_prompt = (
-        "You generate one concise clarification question for an assistant.\n"
-        "Return plain text only.\n"
-        "Do not include extra explanations."
-    )
-    user_prompt = (
-        f"Intent: {intent_name}\n"
-        f"Missing slot name: {getattr(slot_spec, 'name', '')}\n"
-        f"Missing slot type: {getattr(slot_spec, 'type', '')}\n"
-        f"Locale: {locale}\n"
-        "Ask exactly one natural question to collect this slot."
+    system_prompt = SLOT_QUESTION_SYSTEM_PROMPT
+    user_prompt = render_prompt_template(
+        SLOT_QUESTION_USER_TEMPLATE,
+        {
+            "INTENT_NAME": intent_name,
+            "SLOT_NAME": getattr(slot_spec, "name", ""),
+            "SLOT_TYPE": getattr(slot_spec, "type", ""),
+            "LOCALE": locale,
+        },
     )
     try:
         raw = llm_client.complete(system_prompt, user_prompt)

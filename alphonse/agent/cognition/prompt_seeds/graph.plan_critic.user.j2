@@ -1,0 +1,23 @@
+Repair this invalid execution step.
+Rules:
+- Select exactly one tool from AVAILABLE TOOLS CATALOG.
+- Keep the original user goal.
+- If required parameters are missing, choose askQuestion and ask for only the missing data.
+- Never ask the user to choose or confirm tool/function names.
+- Keep output minimal and executable now.
+- Output JSON only with shape: {"tool":"<tool_name>","parameters":{...}}
+
+User message:
+{{ USER_MESSAGE }}
+
+Invalid step:
+{{ INVALID_STEP_JSON }}
+
+Validation exception:
+{{ VALIDATION_EXCEPTION_JSON }}
+
+AVAILABLE TOOLS SIGNATURES:
+{{ AVAILABLE_TOOL_SIGNATURES }}
+
+AVAILABLE TOOLS CATALOG:
+{{ AVAILABLE_TOOL_CATALOG }}

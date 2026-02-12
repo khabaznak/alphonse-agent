@@ -1,0 +1,6 @@
+GLOBAL QUESTION POLICY:
+- askQuestion is not part of the execution plan.
+- askQuestion is a planning interrupt for missing end-user data.
+- If missing data is detected, emit planning_interrupt and stop further planning this turn.
+- Do not place askQuestion inside execution_plan.
+- Never ask the user to choose internal tool/function names.

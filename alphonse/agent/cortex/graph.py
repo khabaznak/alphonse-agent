@@ -10,12 +10,18 @@ from langgraph.graph import END, StateGraph
 from alphonse.agent.cognition.plans import CortexPlan, CortexResult, PlanType
 from alphonse.agent.cognition.response_composer import ResponseComposer
 from alphonse.agent.cognition.response_spec import ResponseSpec
-from alphonse.agent.cognition.status_summaries import summarize_capabilities
 from alphonse.agent.cognition.intent_types import IntentCategory
 from alphonse.agent.cognition.intent_discovery_engine import (
     discover_plan,
     format_available_ability_catalog,
     format_available_abilities,
+)
+from alphonse.agent.cognition.prompt_templates_runtime import (
+    CAPABILITY_GAP_APOLOGY_SYSTEM_PROMPT,
+    CAPABILITY_GAP_APOLOGY_USER_TEMPLATE,
+    GRAPH_PLAN_CRITIC_SYSTEM_PROMPT,
+    GRAPH_PLAN_CRITIC_USER_TEMPLATE,
+    render_prompt_template,
 )
 from alphonse.agent.cognition.pending_interaction import (
     PendingInteractionType,
@@ -37,13 +43,6 @@ logger = logging.getLogger(__name__)
 
 _TOOL_REGISTRY: ToolRegistry = build_default_tool_registry()
 _ABILITY_REGISTRY: AbilityRegistry | None = None
-
-_PLAN_CRITIC_SYSTEM_PROMPT = (
-    "You are a strict plan-step critic and repairer. "
-    "Your job is to repair one invalid tool call step. "
-    "You must choose only from AVAILABLE TOOLS CATALOG and output JSON only."
-)
-
 
 class LLMClient(Protocol):
     def complete(self, *, system_prompt: str, user_prompt: str) -> str:
@@ -78,6 +77,7 @@ class CortexState(TypedDict, total=False):
     pending_interaction: dict[str, Any] | None
     ability_state: dict[str, Any] | None
     planning_context: dict[str, Any] | None
+    selected_step_index: int | None
 
 
 def build_cortex_graph(llm_client: LLMClient | None = None) -> StateGraph:
@@ -174,8 +174,23 @@ def _select_next_step_node(state: CortexState) -> dict[str, Any]:
 
 
 def _execute_tool_node(state: CortexState) -> dict[str, Any]:
-    """Stub: execute selected tool step."""
-    _ = state
+    """Execute currently selected step from discovery loop state."""
+    loop_state = state.get("ability_state")
+    if not isinstance(loop_state, dict):
+        return {}
+    steps = loop_state.get("steps")
+    if not isinstance(steps, list) or not steps:
+        return {}
+    idx_raw = state.get("selected_step_index")
+    idx = idx_raw if isinstance(idx_raw, int) else _next_step_index(steps, {"ready"})
+    if idx is None or idx < 0 or idx >= len(steps):
+        return {}
+    step = steps[idx]
+    if not isinstance(step, dict):
+        return {}
+    tool_name = str(step.get("tool") or "").strip()
+    if tool_name == "askQuestion":
+        return _run_ask_question_step(state, step, loop_state, idx)
     return {}
 
 
@@ -203,21 +218,12 @@ def _respond_node_impl(state: CortexState, llm_client: LLMClient | None) -> dict
                     intent,
                     state.get("chat_id"),
                 )
-                plan = _build_gap_plan(state, reason="ability_execution_exception")
-                return {"plans": [plan.model_dump()]}
-    result: dict[str, Any] = {}
-    guard_input = GapGuardInput(
-        category=_category_from_state(state),
-        plan_status=None,
-        needs_clarification=False,
-        reason="missing_capability",
-    )
-    if should_create_gap(guard_input):
-        plan = _build_gap_plan(state, reason="missing_capability")
-        plans = list(state.get("plans") or [])
-        plans.append(plan.model_dump())
-        result["plans"] = plans
-    return result
+                return _run_capability_gap_tool(
+                    state,
+                    llm_client=llm_client,
+                    reason="ability_execution_exception",
+                )
+    return {}
 
 
 def _run_intent_discovery(
@@ -253,15 +259,10 @@ def _run_fresh_discovery_for_message(
     text: str,
 ) -> dict[str, Any] | None:
     if not llm_client:
-        plan = _build_gap_plan(state, reason="no_llm_client")
-        return {"plans": [plan.model_dump()]}
+        return _run_capability_gap_tool(state, llm_client=None, reason="no_llm_client")
 
     if not text:
         return {}
-    quick_identity = _fast_user_name_answer(state, text)
-    if quick_identity is not None:
-        return quick_identity
-
     available_tools = format_available_abilities()
     planning_context = _planning_context_for_discovery(state, text)
     discovery = discover_plan(
@@ -293,12 +294,18 @@ def _dispatch_discovery_result(
             return _run_planning_interrupt(state, interrupt)
     plans = discovery.get("plans") if isinstance(discovery, dict) else None
     if not isinstance(plans, list):
-        plan = _build_gap_plan(state, reason="invalid_plan_payload")
-        return {"plans": [plan.model_dump()]}
+        return _run_capability_gap_tool(
+            state,
+            llm_client=llm_client,
+            reason="invalid_plan_payload",
+        )
     loop_state = _build_discovery_loop_state(discovery, source_message=source_text)
     if not loop_state.get("steps"):
-        plan = _build_gap_plan(state, reason="empty_execution_plan")
-        return {"plans": [plan.model_dump()]}
+        return _run_capability_gap_tool(
+            state,
+            llm_client=llm_client,
+            reason="empty_execution_plan",
+        )
     state["ability_state"] = loop_state
     return _run_discovery_loop_until_blocked(state, loop_state, llm_client)
 
@@ -344,10 +351,6 @@ def _handle_pending_interaction_for_discovery(
     pending = state.get("pending_interaction")
     if not isinstance(pending, dict):
         return None
-    if _is_abort_confirmation_pending(pending):
-        return _handle_abort_confirmation(state, pending, text)
-    if _looks_like_abort_request(text):
-        return _run_abort_confirmation(state, pending)
     ask_context = pending.get("context") if isinstance(pending.get("context"), dict) else {}
     if ask_context.get("tool") == "askQuestion":
         if bool(ask_context.get("replan_on_answer")):
@@ -419,22 +422,6 @@ def _require_last_user_message(state: CortexState) -> str:
     return text
 
 
-def _select_next_tool_call(plans: list[dict[str, Any]]) -> dict[str, Any] | None:
-    for plan in plans:
-        if not isinstance(plan, dict):
-            continue
-        execution_plan = plan.get("executionPlan")
-        if not isinstance(execution_plan, list):
-            continue
-        for step in execution_plan:
-            if not isinstance(step, dict):
-                continue
-            if step.get("executed") is True:
-                continue
-            return step
-    return None
-
-
 def _is_discovery_loop_state(ability_state: dict[str, Any]) -> bool:
     return str(ability_state.get("kind") or "") == "discovery_loop"
 
@@ -496,8 +483,11 @@ def _run_discovery_loop_step(
 ) -> dict[str, Any]:
     steps = loop_state.get("steps")
     if not isinstance(steps, list) or not steps:
-        plan = _build_gap_plan(state, reason="loop_missing_steps")
-        return {"ability_state": {}, "plans": [plan.model_dump()]}
+        return _run_capability_gap_tool(
+            state,
+            llm_client=llm_client,
+            reason="loop_missing_steps",
+        )
     next_idx = _next_step_index(steps, allowed_statuses={"ready"})
     if next_idx is None:
         if _next_step_index(steps, allowed_statuses={"incomplete", "waiting"}) is not None:
@@ -517,8 +507,11 @@ def _run_discovery_loop_step(
     if not tool_name:
         step["status"] = "failed"
         step["outcome"] = "missing_tool_name"
-        plan = _build_gap_plan(state, reason="step_missing_tool_name")
-        return {"ability_state": loop_state, "plans": [plan.model_dump()]}
+        return _run_capability_gap_tool(
+            state,
+            llm_client=llm_client,
+            reason="step_missing_tool_name",
+        )
     catalog = _available_tool_catalog_data()
     validation = _validate_loop_step(step, catalog)
     if not validation.is_valid:
@@ -560,17 +553,25 @@ def _run_discovery_loop_step(
         reason = "step_validation_failed"
         if validation.issue is not None:
             reason = f"step_validation_{validation.issue.error_type.value.lower()}"
-        gap = _build_gap_plan(state, reason=reason)
-        return {"ability_state": loop_state, "plans": [gap.model_dump()]}
+        return _run_capability_gap_tool(
+            state,
+            llm_client=llm_client,
+            reason=reason,
+        )
     if tool_name == "askQuestion":
-        return _run_ask_question_step(state, step, loop_state, next_idx)
+        state["ability_state"] = loop_state
+        state["selected_step_index"] = next_idx
+        return _execute_tool_node(state)
     ability = _ability_registry().get(tool_name)
     if ability is None:
         step["status"] = "failed"
         step["outcome"] = "unknown_tool"
         state["intent"] = tool_name
-        gap = _build_gap_plan(state, reason="unknown_tool_in_plan")
-        return {"ability_state": loop_state, "plans": [gap.model_dump()]}
+        return _run_capability_gap_tool(
+            state,
+            llm_client=llm_client,
+            reason="unknown_tool_in_plan",
+        )
     params = step.get("parameters") if isinstance(step.get("parameters"), dict) else {}
     state["intent"] = tool_name
     state["intent_confidence"] = 0.6
@@ -664,7 +665,7 @@ def _critic_repair_invalid_step(
     try:
         raw = str(
             llm_client.complete(
-                system_prompt=_PLAN_CRITIC_SYSTEM_PROMPT,
+                system_prompt=GRAPH_PLAN_CRITIC_SYSTEM_PROMPT,
                 user_prompt=user_prompt,
             )
         )
@@ -698,22 +699,15 @@ def _build_plan_critic_prompt(
     validation: StepValidationResult,
 ) -> str:
     exception_payload = _build_critic_exception_payload(validation)
-    return (
-        "Repair this invalid execution step.\n"
-        "Rules:\n"
-        "- Select exactly one tool from AVAILABLE TOOLS CATALOG.\n"
-        "- Keep the original user goal.\n"
-        "- If required parameters are missing, choose askQuestion and ask for only the missing data.\n"
-        "- Never ask the user to choose or confirm tool/function names.\n"
-        "- Keep output minimal and executable now.\n"
-        "- Output JSON only with shape: "
-        '{"tool":"<tool_name>","parameters":{...}}'
-        "\n\n"
-        f"User message:\n{str(state.get('last_user_message') or '')}\n\n"
-        f"Invalid step:\n{_safe_json(step, limit=800)}\n\n"
-        f"Validation exception:\n{_safe_json(exception_payload, limit=1000)}\n\n"
-        f"AVAILABLE TOOLS SIGNATURES:\n{format_available_abilities()}\n\n"
-        f"AVAILABLE TOOLS CATALOG:\n{format_available_ability_catalog()}\n"
+    return render_prompt_template(
+        GRAPH_PLAN_CRITIC_USER_TEMPLATE,
+        {
+            "USER_MESSAGE": str(state.get("last_user_message") or ""),
+            "INVALID_STEP_JSON": _safe_json(step, limit=800),
+            "VALIDATION_EXCEPTION_JSON": _safe_json(exception_payload, limit=1000),
+            "AVAILABLE_TOOL_SIGNATURES": format_available_abilities(),
+            "AVAILABLE_TOOL_CATALOG": format_available_ability_catalog(),
+        },
     )
 
 
@@ -963,8 +957,6 @@ def _run_ask_question_step(
         if isinstance(value, str) and value.strip():
             question = value.strip()
             break
-    if not question:
-        question = _default_ask_question_prompt(state)
     key = str(params.get("slot") or params.get("param") or "answer").strip() or "answer"
     bind = params.get("bind") if isinstance(params.get("bind"), dict) else {}
     pending = build_pending_interaction(
@@ -979,8 +971,14 @@ def _run_ask_question_step(
         },
     )
     step["status"] = "waiting"
+    if question:
+        return {
+            "response_text": question,
+            "pending_interaction": serialize_pending_interaction(pending),
+            "ability_state": loop_state or {},
+        }
     return {
-        "response_text": question,
+        "response_key": "clarify.repeat_input",
         "pending_interaction": serialize_pending_interaction(pending),
         "ability_state": loop_state or {},
     }
@@ -1123,8 +1121,6 @@ def _run_planning_interrupt(
     interrupt: dict[str, Any],
 ) -> dict[str, Any]:
     question = str(interrupt.get("question") or "").strip()
-    if not question:
-        question = _default_ask_question_prompt(state)
     slot = str(interrupt.get("slot") or "answer").strip() or "answer"
     bind = interrupt.get("bind") if isinstance(interrupt.get("bind"), dict) else {}
     planning_context = (
@@ -1154,170 +1150,17 @@ def _run_planning_interrupt(
             "interrupt": interrupt,
         },
     )
+    if question:
+        return {
+            "response_text": question,
+            "pending_interaction": serialize_pending_interaction(pending),
+            "ability_state": {},
+        }
     return {
-        "response_text": question,
+        "response_key": "clarify.repeat_input",
         "pending_interaction": serialize_pending_interaction(pending),
         "ability_state": {},
     }
-
-
-def _is_abort_confirmation_pending(pending: dict[str, Any]) -> bool:
-    context = pending.get("context") if isinstance(pending.get("context"), dict) else {}
-    return bool(context.get("abort_confirmation"))
-
-
-def _looks_like_abort_request(text: str) -> bool:
-    normalized = str(text or "").strip().lower()
-    if not normalized:
-        return False
-    keywords = {
-        "cancel",
-        "abort",
-        "stop",
-        "forget it",
-        "never mind",
-        "olvídalo",
-        "cancela",
-        "cancelar",
-        "detén",
-        "detener",
-        "para",
-    }
-    return any(token in normalized for token in keywords)
-
-
-def _is_affirmative(text: str) -> bool:
-    normalized = str(text or "").strip().lower()
-    if not normalized:
-        return False
-    affirmatives = {"yes", "y", "yeah", "correct", "sí", "si", "claro", "confirmo", "ok", "okay"}
-    return normalized in affirmatives or any(
-        phrase in normalized for phrase in ("yes ", "that's correct", "es correcto", "sí ")
-    )
-
-
-def _is_negative(text: str) -> bool:
-    normalized = str(text or "").strip().lower()
-    if not normalized:
-        return False
-    negatives = {"no", "nope", "nah", "negativo"}
-    return normalized in negatives or normalized.startswith("no ")
-
-
-def _run_abort_confirmation(state: CortexState, pending: dict[str, Any]) -> dict[str, Any]:
-    locale = _locale_for_state(state)
-    question = (
-        "¿Quieres cancelar la solicitud actual y empezar de nuevo?"
-        if locale.startswith("es")
-        else "Do you want to cancel the current request and start over?"
-    )
-    confirmation_pending = build_pending_interaction(
-        PendingInteractionType.SLOT_FILL,
-        key="abort_confirmation",
-        context={
-            "abort_confirmation": True,
-            "tool": "askQuestion",
-            "original_pending": pending,
-        },
-    )
-    return {
-        "response_text": question,
-        "pending_interaction": serialize_pending_interaction(confirmation_pending),
-        "ability_state": state.get("ability_state") if isinstance(state.get("ability_state"), dict) else {},
-    }
-
-
-def _handle_abort_confirmation(
-    state: CortexState,
-    pending: dict[str, Any],
-    text: str,
-) -> dict[str, Any]:
-    locale = _locale_for_state(state)
-    context = pending.get("context") if isinstance(pending.get("context"), dict) else {}
-    if _is_affirmative(text):
-        state["pending_interaction"] = None
-        state["ability_state"] = {}
-        state["planning_context"] = None
-        return {
-            "response_key": "ack.cancelled",
-            "pending_interaction": None,
-            "ability_state": {},
-        }
-    if _is_negative(text):
-        original_pending = (
-            context.get("original_pending")
-            if isinstance(context.get("original_pending"), dict)
-            else None
-        )
-        continue_text = (
-            "Perfecto, continuamos con la solicitud anterior."
-            if locale.startswith("es")
-            else "Okay, we will continue with the previous request."
-        )
-        return {
-            "response_text": continue_text,
-            "pending_interaction": original_pending,
-            "ability_state": state.get("ability_state") if isinstance(state.get("ability_state"), dict) else {},
-        }
-    repeat = (
-        "Responde sí para cancelar o no para continuar con la solicitud actual."
-        if locale.startswith("es")
-        else "Reply yes to cancel or no to continue the current request."
-    )
-    return {
-        "response_text": repeat,
-        "pending_interaction": pending,
-        "ability_state": state.get("ability_state") if isinstance(state.get("ability_state"), dict) else {},
-    }
-
-
-def _default_ask_question_prompt(state: CortexState) -> str:
-    locale = _locale_for_state(state)
-    if locale.startswith("es"):
-        return "¿Me puedes dar un poco más de detalle para continuar?"
-    return "Could you share a bit more detail so I can continue?"
-
-
-def _fast_user_name_answer(state: CortexState, text: str) -> dict[str, Any] | None:
-    if not _is_user_name_question(text):
-        return None
-    conversation_key = str(
-        state.get("conversation_key")
-        or state.get("channel_target")
-        or state.get("chat_id")
-        or ""
-    ).strip()
-    if not conversation_key:
-        return None
-    name = identity_profile.get_display_name(conversation_key)
-    if not name:
-        return None
-    return {
-        "response_key": "core.identity.user.known",
-        "response_vars": {"user_name": name},
-        "ability_state": {},
-        "pending_interaction": None,
-    }
-
-
-def _is_user_name_question(text: str) -> bool:
-    normalized = str(text or "").strip().lower()
-    if not normalized:
-        return False
-    english_patterns = (
-        "what's my name",
-        "what is my name",
-        "do you know my name",
-        "tell me my name",
-    )
-    spanish_patterns = (
-        "como me llamo",
-        "cómo me llamo",
-        "cual es mi nombre",
-        "cuál es mi nombre",
-        "sabes mi nombre",
-    )
-    return any(pattern in normalized for pattern in (*english_patterns, *spanish_patterns))
 
 
 def _respond_node(arg: LLMClient | CortexState | None = None):
@@ -1342,219 +1185,6 @@ def _ability_registry() -> AbilityRegistry:
         registry.register(ability)
     _ABILITY_REGISTRY = registry
     return registry
-
-
-def _ability_get_status(state: dict[str, Any], tools: ToolRegistry) -> dict[str, Any]:
-    _ = tools
-    return _handle_get_status(state)
-
-
-def _ability_time_current(state: dict[str, Any], tools: ToolRegistry) -> dict[str, Any]:
-    return _handle_time_current(state, tools)
-
-
-def _ability_help(state: dict[str, Any], tools: ToolRegistry) -> dict[str, Any]:
-    _ = tools
-    return _handle_help(state)
-
-
-def _ability_identity_agent(state: dict[str, Any], tools: ToolRegistry) -> dict[str, Any]:
-    _ = tools
-    return _handle_identity_agent(state)
-
-
-def _ability_identity_user(state: dict[str, Any], tools: ToolRegistry) -> dict[str, Any]:
-    _ = tools
-    return _handle_identity_user(state)
-
-
-def _ability_greeting(state: dict[str, Any], tools: ToolRegistry) -> dict[str, Any]:
-    _ = tools
-    return _handle_greeting(state)
-
-
-def _ability_cancel(state: dict[str, Any], tools: ToolRegistry) -> dict[str, Any]:
-    _ = tools
-    return _handle_cancel(state)
-
-
-def _ability_meta_capabilities(state: dict[str, Any], tools: ToolRegistry) -> dict[str, Any]:
-    _ = tools
-    return _handle_meta_capabilities(state)
-
-
-def _ability_meta_gaps_list(state: dict[str, Any], tools: ToolRegistry) -> dict[str, Any]:
-    _ = tools
-    return _handle_meta_gaps_list(state)
-
-
-def _ability_timed_signals_list(state: dict[str, Any], tools: ToolRegistry) -> dict[str, Any]:
-    _ = tools
-    return _handle_timed_signals_list(state)
-
-
-def _ability_noop(state: dict[str, Any], tools: ToolRegistry) -> dict[str, Any]:
-    _ = tools
-    return _handle_noop(state)
-
-
-def _ability_pair_approve(state: dict[str, Any], tools: ToolRegistry) -> dict[str, Any]:
-    _ = tools
-    return _handle_pair_approve(state)
-
-
-def _ability_pair_deny(state: dict[str, Any], tools: ToolRegistry) -> dict[str, Any]:
-    _ = tools
-    return _handle_pair_deny(state)
-
-
-def _handle_get_status(state: CortexState) -> dict[str, Any]:
-    return {"response_key": "status"}
-
-
-def _handle_time_current(state: CortexState, tools: ToolRegistry) -> dict[str, Any]:
-    timezone_name = str(state.get("timezone") or get_timezone())
-    clock = tools.get("clock")
-    if clock is None:
-        return {"plans": [_build_gap_plan(state, reason="clock_tool_unavailable").model_dump()]}
-    now = clock.current_time(timezone_name)
-    rendered = now.strftime("%H:%M")
-    locale = _locale_for_state(state)
-    if locale.startswith("es"):
-        return {"response_text": f"Son las {rendered} en {timezone_name}."}
-    return {"response_text": f"It is {rendered} in {timezone_name}."}
-
-
-def _handle_help(state: CortexState) -> dict[str, Any]:
-    return {"response_key": "help"}
-
-
-def _handle_identity_agent(state: CortexState) -> dict[str, Any]:
-    return {"response_key": "core.identity.agent"}
-
-
-def _handle_identity_user(state: CortexState) -> dict[str, Any]:
-    conversation_key = str(
-        state.get("conversation_key")
-        or state.get("channel_target")
-        or state.get("chat_id")
-        or "unknown"
-    )
-    name = identity_profile.get_display_name(conversation_key)
-    logger.info(
-        "cortex identity lookup conversation_key=%s name=%s",
-        conversation_key,
-        name,
-    )
-    if name:
-        return {
-            "response_key": "core.identity.user.known",
-            "response_vars": {"user_name": name},
-        }
-    pending = build_pending_interaction(
-        PendingInteractionType.SLOT_FILL,
-        key="user_name",
-        context={"origin_intent": "identity.learn_user_name"},
-    )
-    return {
-        "response_key": "core.identity.user.ask_name",
-        "pending_interaction": serialize_pending_interaction(pending),
-    }
-
-
-def _handle_greeting(state: CortexState) -> dict[str, Any]:
-    return {"response_key": "core.greeting"}
-
-
-def _handle_cancel(state: CortexState) -> dict[str, Any]:
-    return {"response_key": "ack.cancelled"}
-
-
-def _handle_meta_capabilities(state: CortexState) -> dict[str, Any]:
-    return {"response_text": summarize_capabilities(_locale_for_state(state))}
-
-
-def _handle_meta_gaps_list(state: CortexState) -> dict[str, Any]:
-    plan = CortexPlan(
-        plan_type=PlanType.QUERY_STATUS,
-        target=str(state.get("channel_target") or state.get("chat_id") or ""),
-        channels=[str(state.get("channel_type") or "telegram")],
-        payload={
-            "include": ["gaps_summary"],
-            "limit": 5,
-            "locale": _locale_for_state(state),
-        },
-    )
-    plans = list(state.get("plans") or [])
-    plans.append(plan.model_dump())
-    logger.info(
-        "cortex plans chat_id=%s plan_type=%s plan_id=%s",
-        state.get("chat_id"),
-        plan.plan_type,
-        plan.plan_id,
-    )
-    return {"plans": plans}
-
-
-def _handle_timed_signals_list(state: CortexState) -> dict[str, Any]:
-    plan = CortexPlan(
-        plan_type=PlanType.QUERY_STATUS,
-        target=str(state.get("channel_target") or state.get("chat_id") or ""),
-        channels=[str(state.get("channel_type") or "telegram")],
-        payload={
-            "include": ["timed_signals"],
-            "limit": 10,
-            "locale": _locale_for_state(state),
-        },
-    )
-    plans = list(state.get("plans") or [])
-    plans.append(plan.model_dump())
-    logger.info(
-        "cortex plans chat_id=%s plan_type=%s plan_id=%s",
-        state.get("chat_id"),
-        plan.plan_type,
-        plan.plan_id,
-    )
-    return {"plans": plans}
-
-
-def _handle_pair_approve(state: CortexState) -> dict[str, Any]:
-    return _handle_pairing_decision(state, PlanType.PAIR_APPROVE)
-
-
-def _handle_pair_deny(state: CortexState) -> dict[str, Any]:
-    return _handle_pairing_decision(state, PlanType.PAIR_DENY)
-
-
-def _handle_pairing_decision(state: CortexState, plan_type: PlanType) -> dict[str, Any]:
-    pairing_id = _slot_str(state, "pairing_id")
-    otp = _slot_str(state, "otp")
-    if not pairing_id:
-        return {"plans": [_build_gap_plan(state, reason="pairing_id_missing").model_dump()]}
-    plan = CortexPlan(
-        plan_type=plan_type,
-        target=str(state.get("channel_target") or state.get("chat_id") or ""),
-        channels=[str(state.get("channel_type") or "telegram")],
-        payload={
-            "pairing_id": pairing_id,
-            "otp": otp,
-            "locale": _locale_for_state(state),
-        },
-    )
-    plans = list(state.get("plans") or [])
-    plans.append(plan.model_dump())
-    logger.info(
-        "cortex plans chat_id=%s plan_type=%s plan_id=%s",
-        state.get("chat_id"),
-        plan.plan_type,
-        plan.plan_id,
-    )
-    return {"plans": plans}
-
-
-def _handle_noop(state: CortexState) -> dict[str, Any]:
-    _ = state
-    return {}
 
 
 def _build_gap_plan(
@@ -1591,74 +1221,82 @@ def _build_gap_plan(
     )
 
 
-def _append_event(
-    existing: list[dict[str, Any]] | None,
-    event_type: str,
-    payload: dict[str, Any],
-) -> list[dict[str, Any]]:
-    events = list(existing or [])
-    events.append({"type": event_type, "payload": payload})
-    return events
-
-
-def _category_from_state(state: CortexState) -> IntentCategory | None:
-    raw = state.get("intent_category")
-    if isinstance(raw, IntentCategory):
-        return raw
-    if isinstance(raw, str):
-        for category in IntentCategory:
-            if category.value == raw:
-                return category
-    return None
-
-
-def _lifecycle_hint_for_state(state: CortexState, intent: str) -> LifecycleHint | None:
-    category = _category_from_state(state)
-    if category is None:
-        return None
-    signature = _build_signature(intent=intent, category=category, state=state)
-    record = get_record(signature_key(signature))
-    if record is None:
-        return lifecycle_hint(LifecycleState.DISCOVERED, category)  # type: ignore[name-defined]
-    return lifecycle_hint(record.state, record.category)
-
-
-def _record_intent_detected(intent: str, category: str | IntentCategory, state: CortexState) -> None:
-    normalized_category = category
-    if isinstance(category, str):
-        normalized_category = _category_from_state({"intent_category": category})
-    if not isinstance(normalized_category, IntentCategory):
-        return
-    signature = _build_signature(intent=intent, category=normalized_category, state=state)
-    record_event(
-        signature,
-        LifecycleEvent(
-            event_type=LifecycleEventType.INTENT_DETECTED,
-            recognized=intent != "unknown",
-        ),
-    )
-
-
-def _build_signature(
-    *,
-    intent: str,
-    category: IntentCategory,
+def _run_capability_gap_tool(
     state: CortexState,
-) -> IntentSignature:
-    slots = _signature_slots(intent, state)
-    scope = str(state.get("chat_id") or state.get("channel_target") or "global")
-    return IntentSignature(
-        intent_name=intent,
-        category=category,
-        slots=slots,
-        user_scope=scope,
+    *,
+    llm_client: LLMClient | None,
+    reason: str,
+    missing_slots: list[str] | None = None,
+    append_existing_plans: bool = False,
+) -> dict[str, Any]:
+    logger.info(
+        "cortex tool capability_gap.create chat_id=%s correlation_id=%s reason=%s",
+        state.get("chat_id"),
+        state.get("correlation_id"),
+        reason,
     )
-
-
-def _signature_slots(intent: str, state: CortexState) -> dict[str, Any]:
-    return {
-        "channel": state.get("channel_type"),
+    plan = _build_gap_plan(state, reason=reason, missing_slots=missing_slots)
+    plans = list(state.get("plans") or []) if append_existing_plans else []
+    plans.append(plan.model_dump())
+    apology = _build_capability_gap_apology(
+        state=state,
+        llm_client=llm_client,
+        reason=reason,
+        missing_slots=missing_slots,
+    )
+    payload: dict[str, Any] = {
+        "plans": plans,
+        "ability_state": {},
+        "pending_interaction": None,
     }
+    if apology:
+        payload["response_text"] = apology
+    return payload
+
+
+def _build_capability_gap_apology(
+    *,
+    state: CortexState,
+    llm_client: LLMClient | None,
+    reason: str,
+    missing_slots: list[str] | None,
+) -> str:
+    fallback = (
+        "I am sorry, I cannot complete that request yet because I am missing a required ability or tool."
+    )
+    if llm_client is None:
+        return fallback
+    try:
+        user_prompt = render_prompt_template(
+            CAPABILITY_GAP_APOLOGY_USER_TEMPLATE,
+            {
+                "USER_MESSAGE": str(state.get("last_user_message") or ""),
+                "INTENT": str(state.get("intent") or ""),
+                "GAP_REASON": reason,
+                "MISSING_SLOTS": json.dumps(missing_slots or [], ensure_ascii=False),
+                "LOCALE": _locale_for_state(state),
+            },
+        )
+        raw = llm_client.complete(
+            system_prompt=CAPABILITY_GAP_APOLOGY_SYSTEM_PROMPT,
+            user_prompt=user_prompt,
+        )
+    except Exception:
+        logger.exception(
+            "cortex capability gap apology generation failed chat_id=%s correlation_id=%s reason=%s",
+            state.get("chat_id"),
+            state.get("correlation_id"),
+            reason,
+        )
+        return fallback
+    message = str(raw or "").strip()
+    if not message:
+        return fallback
+    if message.startswith("{") and message.endswith("}"):
+        return fallback
+    if message.startswith("[") and message.endswith("]"):
+        return fallback
+    return message
 
 
 def _build_cognition_state(state: CortexState) -> dict[str, Any]:
@@ -1689,17 +1327,6 @@ def _build_meta(state: CortexState) -> dict[str, Any]:
         "intent_category": state.get("intent_category"),
         "events": state.get("events") or [],
     }
-
-
-def _slot_str(state: CortexState, key: str) -> str | None:
-    slots = state.get("slots")
-    if not isinstance(slots, dict):
-        return None
-    value = slots.get(key)
-    if value is None:
-        return None
-    text = str(value).strip()
-    return text or None
 
 
 def _snippet(text: str, limit: int = 140) -> str:

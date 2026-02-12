@@ -1,0 +1,25 @@
+Repair this executionPlan.
+Rules:
+- Return JSON with shape {"executionPlan": [{"tool"|"action": "...", "parameters": {...}}]}.
+- Keep the same intent and acceptance criteria direction.
+- If missing data, use askQuestion with user-facing question only.
+- Never ask user to choose internal tool/function names.
+- Do not output explanations.
+
+Message:
+{{ CHUNK_TEXT }}
+
+Intention:
+{{ INTENTION }}
+
+Acceptance:
+{{ ACCEPTANCE_JSON }}
+
+Validation issue:
+{{ ISSUE_JSON }}
+
+Invalid plan:
+{{ INVALID_PLAN_JSON }}
+
+AVAILABLE TOOLS:
+{{ AVAILABLE_TOOLS }}

@@ -1,0 +1,29 @@
+{QUESTION_POLICY}
+Rules:
+- Preserve step_id continuity.
+- If planning_interrupt is needed, set status=NEEDS_USER_INPUT and execution_plan=[].
+
+Return JSON:
+{
+  "plan_version":"v1",
+  "status":"READY|NEEDS_USER_INPUT|BLOCKED",
+  "execution_plan":[{"step_id":"S1","sequence":1,"kind":"TOOL|QUESTION","tool_id":0,"parameters":{},"acceptance_links":[]}],
+  "planning_interrupt":{"tool_id":0,"tool_name":"askQuestion","question":"...","slot":"...","bind":{},"missing_data":[],"reason":"..."},
+  "acceptance_criteria":["..."],
+  "repair_log":[]
+}
+
+STEP_A_PLAN:
+{PLAN_A_JSON}
+
+STEP_B_BINDINGS:
+{BINDINGS_B_JSON}
+
+TOOL_MENU:
+{TOOL_MENU_JSON}
+
+CONTEXT:
+{CONTEXT_JSON}
+
+EXCEPTION_HISTORY:
+{EXCEPTION_HISTORY_JSON}

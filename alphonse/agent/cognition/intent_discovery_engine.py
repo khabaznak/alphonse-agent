@@ -8,20 +8,22 @@ from typing import Any
 
 from pathlib import Path
 
-from alphonse.agent.cognition.prompt_store import PromptContext, SqlitePromptStore
+from alphonse.agent.cognition.prompt_templates_runtime import (
+    INTENT_DISCOVERY_PLAN_CRITIC_SYSTEM_FALLBACK,
+    INTENT_DISCOVERY_PLAN_CRITIC_USER_TEMPLATE,
+    INTENT_DISCOVERY_PLAN_REFINER_SYSTEM_FALLBACK,
+    INTENT_DISCOVERY_PLAN_REFINER_USER_FALLBACK,
+    INTENT_DISCOVERY_PLAN_SYNTH_SYSTEM_FALLBACK,
+    INTENT_DISCOVERY_PLAN_SYNTH_USER_FALLBACK,
+    INTENT_DISCOVERY_QUESTION_POLICY_BLOCK,
+    INTENT_DISCOVERY_TOOL_BINDER_SYSTEM_FALLBACK,
+    INTENT_DISCOVERY_TOOL_BINDER_USER_FALLBACK,
+    render_prompt_template,
+)
 from alphonse.agent.io import get_io_registry
 
 logger = logging.getLogger(__name__)
 
-
-_PLAN_CRITIC_KEY = "intent_discovery.plan_critic.v1"
-
-
-_PLAN_CRITIC_SYSTEM_FALLBACK = (
-    "You are Alphonse, a strict plan-shape repairer. "
-    "Fix only structural issues in an executionPlan. "
-    "Output valid JSON only."
-)
 
 _PLACEHOLDER_PATTERNS = (
     r"<[^>]+>",
@@ -31,86 +33,14 @@ _PLACEHOLDER_PATTERNS = (
 )
 _DISCOVERY_EXCLUDED_TOOLS: set[str] = {"cancel"}
 
-_PLAN_SYNTH_KEY = "intent_discovery.plan_synth.v1"
-_TOOL_BINDER_KEY = "intent_discovery.tool_binder.v1"
-_PLAN_REFINER_KEY = "intent_discovery.plan_refiner.v1"
-
-_QUESTION_POLICY_BLOCK = (
-    "GLOBAL QUESTION POLICY:\n"
-    "- askQuestion is not part of the execution plan.\n"
-    "- askQuestion is a planning interrupt for missing end-user data.\n"
-    "- If missing data is detected, emit planning_interrupt and stop further planning this turn.\n"
-    "- Do not place askQuestion inside execution_plan.\n"
-    "- Never ask the user to choose internal tool/function names.\n"
-)
-
-_PLAN_SYNTH_SYSTEM_FALLBACK = (
-    "Your name is Alphonse, you are the genius virtual butler for the family."
-    "The family members talk to you via messages, sometimes short messages, sometimes long paragraphs."
-    "Some of them have instructions, others are favors they ask of you but you are tremendously helpful"
-    " for the family. Your objective is to determine what to do with the provided message "
-    "and create a plan for you to execute as a virtual agent. you must guarantee success."
-    "RULES:\n"
-    "- You will create a plan as a sequence of discrete steps.  "
-    "- Your output is only the sequence of discrete and well defined steps. no explanations or anything else.  "
-    "- for better readability use <ol> and <li> html tags to enumerate the steps.  "
-)
-
-_PLAN_SYNTH_USER_FALLBACK = (
-    "USER:\n"
-    "{\"message\": \"{MESSAGE_TEXT}\", \"message_author\": \"{USER}\"}\n\n"
-)
-
-_TOOL_BINDER_SYSTEM_FALLBACK = (
-    "You are Alphonse a master planner. Your mission is to prune the following plan of steps which "
-    "may not be necessary when compared agains a tool menu. "
-    "The previous agent who created the plan did not know the existence of such tools but you have "
-    "that information. "
-    "You must output a revised plan with only the steps which make use of the provided tools. "
-    "Do not output any explanations or justifications; only output the plan."
-    "RULES: \n"
-    "- Review the plan and compare against the tool menu. The main objective is to determine "
-    "if the plan has unnecessary or invalid steps given the tools at your disposal. "
-    "For example, a plan might have 2 steps and a tool might achieve it with only 1.  \n"
-    "- Output the new revised plan, same format as it is right now but verified by you.  \n"
-    "- PRO Tip: if a plan step has been executed or does not require or does not match a tool "
-    "it means that it is an invalid plan step and should be pruned."
-)
-
-_TOOL_BINDER_USER_FALLBACK = (
-    "{QUESTION_POLICY}\n"
-    "PLAN TO REVIEW:\n"
-    "{PLAN}\n\n"
-    "TOOL_MENU:\n{TOOL_MENU}\n\n"
-    "CONTEXT:\n{CONTEXT_JSON}\n\n"
-    "EXCEPTION_HISTORY:\n{EXCEPTION_HISTORY_JSON}\n"
-)
-
-_PLAN_REFINER_SYSTEM_FALLBACK = (
-    "You are Alphonse Plan Refiner. Produce the final execution-ready plan using tool IDs only. "
-    "Output valid JSON only."
-)
-
-_PLAN_REFINER_USER_FALLBACK = (
-    "{QUESTION_POLICY}\n"
-    "Rules:\n"
-    "- Preserve step_id continuity.\n"
-    "- If planning_interrupt is needed, set status=NEEDS_USER_INPUT and execution_plan=[].\n\n"
-    "Return JSON:\n"
-    "{\n"
-    "  \"plan_version\":\"v1\",\n"
-    "  \"status\":\"READY|NEEDS_USER_INPUT|BLOCKED\",\n"
-    "  \"execution_plan\":[{\"step_id\":\"S1\",\"sequence\":1,\"kind\":\"TOOL|QUESTION\",\"tool_id\":0,\"parameters\":{},\"acceptance_links\":[]}],\n"
-    "  \"planning_interrupt\":{\"tool_id\":0,\"tool_name\":\"askQuestion\",\"question\":\"...\",\"slot\":\"...\",\"bind\":{},\"missing_data\":[],\"reason\":\"...\"},\n"
-    "  \"acceptance_criteria\":[\"...\"],\n"
-    "  \"repair_log\":[]\n"
-    "}\n\n"
-    "STEP_A_PLAN:\n{PLAN_A_JSON}\n\n"
-    "STEP_B_BINDINGS:\n{BINDINGS_B_JSON}\n\n"
-    "TOOL_MENU:\n{TOOL_MENU_JSON}\n\n"
-    "CONTEXT:\n{CONTEXT_JSON}\n\n"
-    "EXCEPTION_HISTORY:\n{EXCEPTION_HISTORY_JSON}\n"
-)
+_QUESTION_POLICY_BLOCK = INTENT_DISCOVERY_QUESTION_POLICY_BLOCK
+_PLAN_CRITIC_SYSTEM_FALLBACK = INTENT_DISCOVERY_PLAN_CRITIC_SYSTEM_FALLBACK
+_PLAN_SYNTH_SYSTEM_FALLBACK = INTENT_DISCOVERY_PLAN_SYNTH_SYSTEM_FALLBACK
+_PLAN_SYNTH_USER_FALLBACK = INTENT_DISCOVERY_PLAN_SYNTH_USER_FALLBACK
+_TOOL_BINDER_SYSTEM_FALLBACK = INTENT_DISCOVERY_TOOL_BINDER_SYSTEM_FALLBACK
+_TOOL_BINDER_USER_FALLBACK = INTENT_DISCOVERY_TOOL_BINDER_USER_FALLBACK
+_PLAN_REFINER_SYSTEM_FALLBACK = INTENT_DISCOVERY_PLAN_REFINER_SYSTEM_FALLBACK
+_PLAN_REFINER_USER_FALLBACK = INTENT_DISCOVERY_PLAN_REFINER_USER_FALLBACK
 
 
 def discover_plan(
@@ -124,21 +54,9 @@ def discover_plan(
     
     if not llm_client:
         return {"messages": [], "plans": []}
-    store = SqlitePromptStore()
-    context = PromptContext(
-        locale=locale or "any",
-        address_style="any",
-        tone="any",
-        channel="any",
-        variant="default",
-        policy_tier="safe",
-    )
-
     return _story_discover_plan(
         text=text,
         llm_client=llm_client,
-        store=store,
-        context=context,
         locale=locale or "any",
         planning_context=planning_context,
     )
@@ -227,8 +145,6 @@ def _story_discover_plan(
     *,
     text: str,
     llm_client: object,
-    store: SqlitePromptStore,
-    context: PromptContext,
     locale: str,
     planning_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -282,8 +198,6 @@ def _story_discover_plan(
     plan_a = _run_step_a_plan_synth(
         text=text,
         llm_client=llm_client,
-        store=store,
-        context=context,
         context_payload=context_payload,
         exception_history=exception_history,
     )
@@ -298,8 +212,6 @@ def _story_discover_plan(
 
     plan_b = _run_step_b_tool_binder(
         llm_client=llm_client,
-        store=store,
-        context=context,
         plan_a=plan_a,
         tool_menu=tool_menu,
         context_payload=context_payload,
@@ -316,8 +228,6 @@ def _story_discover_plan(
 
     plan_c = _run_step_c_plan_refiner(
         llm_client=llm_client,
-        store=store,
-        context=context,
         plan_a=plan_a,
         plan_b=plan_b,
         tool_menu=tool_menu,
@@ -372,21 +282,12 @@ def _run_step_a_plan_synth(
     *,
     text: str,
     llm_client: object,
-    store: SqlitePromptStore,
-    context: PromptContext,
     context_payload: dict[str, Any],
     exception_history: list[dict[str, Any]],
 ) -> dict[str, Any] | None:
-    system_prompt = _get_template(
-        store, _PLAN_SYNTH_KEY, context, _PLAN_SYNTH_SYSTEM_FALLBACK
-    )
+    system_prompt = _PLAN_SYNTH_SYSTEM_FALLBACK
     user_prompt = _render_template(
-        _get_template(
-            store,
-            _PLAN_SYNTH_KEY + ".user",
-            context,
-            _PLAN_SYNTH_USER_FALLBACK,
-        ),
+        _PLAN_SYNTH_USER_FALLBACK,
         {
             "QUESTION_POLICY": _QUESTION_POLICY_BLOCK,
             "MESSAGE_TEXT": text,
@@ -409,23 +310,14 @@ def _run_step_a_plan_synth(
 def _run_step_b_tool_binder(
     *,
     llm_client: object,
-    store: SqlitePromptStore,
-    context: PromptContext,
     plan_a: dict[str, Any],
     tool_menu: dict[str, Any],
     context_payload: dict[str, Any],
     exception_history: list[dict[str, Any]],
 ) -> dict[str, Any] | None:
-    system_prompt = _get_template(
-        store, _TOOL_BINDER_KEY, context, _TOOL_BINDER_SYSTEM_FALLBACK
-    )
+    system_prompt = _TOOL_BINDER_SYSTEM_FALLBACK
     user_prompt = _render_template(
-        _get_template(
-            store,
-            _TOOL_BINDER_KEY + ".user",
-            context,
-            _TOOL_BINDER_USER_FALLBACK,
-        ),
+        _TOOL_BINDER_USER_FALLBACK,
         {
             "QUESTION_POLICY": _QUESTION_POLICY_BLOCK,
             "PLAN": _plan_for_review_text(plan_a, context_payload),
@@ -489,24 +381,15 @@ def _tool_menu_plain_text(tool_menu: dict[str, Any]) -> str:
 def _run_step_c_plan_refiner(
     *,
     llm_client: object,
-    store: SqlitePromptStore,
-    context: PromptContext,
     plan_a: dict[str, Any],
     plan_b: dict[str, Any],
     tool_menu: dict[str, Any],
     context_payload: dict[str, Any],
     exception_history: list[dict[str, Any]],
 ) -> dict[str, Any] | None:
-    system_prompt = _get_template(
-        store, _PLAN_REFINER_KEY, context, _PLAN_REFINER_SYSTEM_FALLBACK
-    )
+    system_prompt = _PLAN_REFINER_SYSTEM_FALLBACK
     user_prompt = _render_template(
-        _get_template(
-            store,
-            _PLAN_REFINER_KEY + ".user",
-            context,
-            _PLAN_REFINER_USER_FALLBACK,
-        ),
+        _PLAN_REFINER_USER_FALLBACK,
         {
             "QUESTION_POLICY": _QUESTION_POLICY_BLOCK,
             "PLAN_A_JSON": json.dumps(plan_a, ensure_ascii=False),
@@ -1133,18 +1016,8 @@ def _io_channel_catalog() -> dict[str, Any]:
     }
 
 
-def _get_template(store: SqlitePromptStore, key: str, context: PromptContext, fallback: str) -> str:
-    match = store.get_template(key, context)
-    if match and match.template:
-        return str(match.template)
-    return fallback
-
-
 def _render_template(template: str, variables: dict[str, Any]) -> str:
-    rendered = template
-    for name, value in variables.items():
-        rendered = rendered.replace("{" + name + "}", str(value))
-    return rendered
+    return render_prompt_template(template, variables)
 
 
 def _parse_chunks(raw: str) -> list[dict[str, Any]]:
@@ -1184,8 +1057,6 @@ def _repair_invalid_execution_plan(
     *,
     execution_plan: list[dict[str, Any]],
     llm_client: object,
-    store: SqlitePromptStore,
-    context: PromptContext,
     chunk_text: str,
     intention: str,
     acceptance: list[str],
@@ -1202,12 +1073,7 @@ def _repair_invalid_execution_plan(
             issue.get("code"),
         )
         retries += 1
-        critic_system = _get_template(
-            store,
-            _PLAN_CRITIC_KEY,
-            context,
-            _PLAN_CRITIC_SYSTEM_FALLBACK,
-        )
+        critic_system = _PLAN_CRITIC_SYSTEM_FALLBACK
         critic_user = _build_plan_critic_user_prompt(
             chunk_text=chunk_text,
             intention=intention,
@@ -1242,20 +1108,16 @@ def _build_plan_critic_user_prompt(
     invalid_plan: list[dict[str, Any]],
     issue: dict[str, str],
 ) -> str:
-    return (
-        "Repair this executionPlan.\n"
-        "Rules:\n"
-        "- Return JSON with shape {\"executionPlan\": [{\"tool\"|\"action\": \"...\", \"parameters\": {...}}]}.\n"
-        "- Keep the same intent and acceptance criteria direction.\n"
-        "- If missing data, use askQuestion with user-facing question only.\n"
-        "- Never ask user to choose internal tool/function names.\n"
-        "- Do not output explanations.\n\n"
-        f"Message:\n{chunk_text}\n\n"
-        f"Intention:\n{intention}\n\n"
-        f"Acceptance:\n{json.dumps(acceptance, ensure_ascii=False)}\n\n"
-        f"Validation issue:\n{json.dumps(issue, ensure_ascii=False)}\n\n"
-        f"Invalid plan:\n{json.dumps(invalid_plan, ensure_ascii=False)}\n\n"
-        f"AVAILABLE TOOLS:\n{available_tools}\n"
+    return render_prompt_template(
+        INTENT_DISCOVERY_PLAN_CRITIC_USER_TEMPLATE,
+        {
+            "CHUNK_TEXT": chunk_text,
+            "INTENTION": intention,
+            "ACCEPTANCE_JSON": json.dumps(acceptance, ensure_ascii=False),
+            "ISSUE_JSON": json.dumps(issue, ensure_ascii=False),
+            "INVALID_PLAN_JSON": json.dumps(invalid_plan, ensure_ascii=False),
+            "AVAILABLE_TOOLS": available_tools,
+        },
     )
 
 

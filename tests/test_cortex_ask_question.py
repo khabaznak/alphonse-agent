@@ -1,7 +1,7 @@
 from alphonse.agent.cortex import graph
 
 
-def test_ask_question_step_falls_back_to_default_prompt_in_spanish() -> None:
+def test_ask_question_step_falls_back_to_response_key() -> None:
     state = {
         "locale": "es-MX",
         "channel_type": "telegram",
@@ -14,8 +14,8 @@ def test_ask_question_step_falls_back_to_default_prompt_in_spanish() -> None:
     result = graph._run_ask_question_step(state, step, loop_state, 0)
 
     assert "plans" not in result
-    assert result.get("response_text")
-    assert result["response_text"].startswith("¿")
+    assert result.get("response_text") is None
+    assert result.get("response_key") == "clarify.repeat_input"
     pending = result.get("pending_interaction")
     assert isinstance(pending, dict)
     assert pending.get("key") == "time_text"

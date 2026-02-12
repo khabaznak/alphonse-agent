@@ -25,12 +25,6 @@ def apply_schema(db_path: Path) -> None:
         _ensure_principals_constraints(conn)
         _ensure_users_table(conn)
         _ensure_prompt_template_columns(conn)
-    try:
-        from alphonse.agent.cognition.prompt_store import seed_default_templates
-
-        seed_default_templates(str(db_path))
-    except Exception:
-        pass
 
 
 def main() -> None:

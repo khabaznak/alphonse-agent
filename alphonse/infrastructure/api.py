@@ -52,7 +52,10 @@ from alphonse.agent.nervous_system.telegram_invites import (
     list_invites,
     update_invite_status,
 )
-from alphonse.agent.cognition.prompt_store import SqlitePromptStore
+from alphonse.agent.cognition.prompt_templates_runtime import (
+    get_prompt_seed_template,
+    list_prompt_seed_templates,
+)
 from alphonse.agent.nervous_system.terminal_tools import (
     create_terminal_command,
     delete_terminal_sandbox,
@@ -586,10 +589,9 @@ def list_agent_prompts(
     x_alphonse_api_token: str | None = Header(default=None),
 ) -> dict[str, Any]:
     _assert_api_token(x_alphonse_api_token)
-    store = SqlitePromptStore()
-    prompts = store.list_templates(key=key, enabled_only=enabled_only)
-    if purpose:
-        prompts = [row for row in prompts if str(row.get("purpose") or "") == purpose]
+    prompts = list_prompt_seed_templates()
+    if key:
+        prompts = [row for row in prompts if str(row.get("key") or "") == key]
     return {"items": prompts}
 
 
@@ -599,8 +601,7 @@ def get_agent_prompt(
     x_alphonse_api_token: str | None = Header(default=None),
 ) -> dict[str, Any]:
     _assert_api_token(x_alphonse_api_token)
-    store = SqlitePromptStore()
-    row = store.get_template_by_id(template_id)
+    row = get_prompt_seed_template(template_id)
     if not row:
         raise HTTPException(status_code=404, detail="Prompt template not found")
     return {"item": row}
@@ -612,23 +613,13 @@ def create_agent_prompt(
     x_alphonse_api_token: str | None = Header(default=None),
 ) -> dict[str, Any]:
     _assert_api_token(x_alphonse_api_token)
-    store = SqlitePromptStore()
-    template_id = store.upsert_template(
-        key=payload.key,
-        locale=payload.locale,
-        address_style=payload.address_style,
-        tone=payload.tone,
-        channel=payload.channel,
-        variant=payload.variant,
-        policy_tier=payload.policy_tier,
-        purpose=payload.purpose,
-        template=payload.template,
-        enabled=payload.enabled,
-        priority=payload.priority,
-        changed_by=payload.changed_by,
-        reason=payload.reason,
+    raise HTTPException(
+        status_code=410,
+        detail=(
+            "Prompt DB templates are deprecated. Edit file seeds under "
+            "alphonse/agent/cognition/prompt_seeds/ instead."
+        ),
     )
-    return {"item": store.get_template_by_id(template_id)}
 
 
 @app.patch("/agent/prompts/{template_id}")
@@ -638,19 +629,13 @@ def patch_agent_prompt(
     x_alphonse_api_token: str | None = Header(default=None),
 ) -> dict[str, Any]:
     _assert_api_token(x_alphonse_api_token)
-    store = SqlitePromptStore()
-    row = store.update_template_by_id(
-        template_id,
-        template=payload.template,
-        enabled=payload.enabled,
-        priority=payload.priority,
-        purpose=payload.purpose,
-        changed_by=payload.changed_by,
-        reason=payload.reason,
+    raise HTTPException(
+        status_code=410,
+        detail=(
+            "Prompt DB templates are deprecated. Edit file seeds under "
+            "alphonse/agent/cognition/prompt_seeds/ instead."
+        ),
     )
-    if not row:
-        raise HTTPException(status_code=404, detail="Prompt template not found")
-    return {"item": row}
 
 
 @app.delete("/agent/prompts/{template_id}")
@@ -659,12 +644,13 @@ def delete_agent_prompt(
     x_alphonse_api_token: str | None = Header(default=None),
 ) -> dict[str, Any]:
     _assert_api_token(x_alphonse_api_token)
-    store = SqlitePromptStore()
-    row = store.get_template_by_id(template_id)
-    if not row:
-        raise HTTPException(status_code=404, detail="Prompt template not found")
-    store.delete_template(template_id)
-    return {"deleted": True, "template_id": template_id}
+    raise HTTPException(
+        status_code=410,
+        detail=(
+            "Prompt DB templates are deprecated. Edit file seeds under "
+            "alphonse/agent/cognition/prompt_seeds/ instead."
+        ),
+    )
 
 
 @app.post("/agent/prompts/{template_id}/rollback")
@@ -674,12 +660,13 @@ def rollback_agent_prompt(
     x_alphonse_api_token: str | None = Header(default=None),
 ) -> dict[str, Any]:
     _assert_api_token(x_alphonse_api_token)
-    store = SqlitePromptStore()
-    row = store.get_template_by_id(template_id)
-    if not row:
-        raise HTTPException(status_code=404, detail="Prompt template not found")
-    store.rollback_template(template_id, payload.version, payload.changed_by, payload.reason)
-    return {"item": store.get_template_by_id(template_id)}
+    raise HTTPException(
+        status_code=410,
+        detail=(
+            "Prompt DB templates are deprecated. Edit file seeds under "
+            "alphonse/agent/cognition/prompt_seeds/ instead."
+        ),
+    )
 
 
 @app.get("/agent/onboarding/profiles")
