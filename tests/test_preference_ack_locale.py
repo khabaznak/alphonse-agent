@@ -32,7 +32,7 @@ class _PreferenceLLM:
     def complete(self, *, system_prompt: str, user_prompt: str) -> str:
         _ = system_prompt
         lower = user_prompt.lower()
-        if "latest_family_message:" in lower:
+        if "latest_family_message:" in lower or '"message":' in lower:
             if "english" in lower:
                 self._updates = [{"key": "locale", "value": "en-US"}]
             elif "español" in lower or "espanol" in lower:
@@ -44,7 +44,7 @@ class _PreferenceLLM:
                 '"confidence":"high","steps":[{"step_id":"S1","goal":"update preference","requires":[],"produces":[],"priority":1}],'
                 '"acceptance_criteria":["Requested preference is updated"]}'
             )
-        if "plan_from_step_a:" in lower:
+        if "plan_from_step_a:" in lower or "plan to review:" in lower:
             return (
                 '{"plan_version":"v1","bindings":[{"step_id":"S1","binding_type":"TOOL","tool_id":0,'
                 '"parameters":{"updates":' + json.dumps(self._updates) + '},"missing_data":[],"reason":"direct_match"}]}'

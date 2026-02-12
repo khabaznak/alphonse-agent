@@ -91,3 +91,27 @@ class ExampleSense(Sense):
         if self._thread:
             self._thread.join(timeout=2)
 ```
+
+## Service Integrations as Tools
+
+Integration APIs should be exposed as capability tools for planning and execution.
+Rule: if Alphonse integrates with a service, that service's API surface should map to tool-like operations.
+
+Examples:
+- Telegram integration can expose tools such as:
+  - `getTelegramMessageFile(file_id: string)` -> resolves Telegram file metadata/path for download.
+  - `downloadTelegramFile(file_path: string)` -> retrieves raw bytes for transcription or vision processing.
+- Similar mapping should apply to other integrations (email, calendar, web providers, etc.).
+
+Guidelines:
+- Keep tool names explicit and action-oriented.
+- Keep parameter names aligned to provider API fields.
+- Return typed data objects (metadata + payload references), not UI text.
+- Document each integration's tool surface in the same style.
+
+### Telegram raw update shape
+
+Telegram updates are JSON objects. The root includes `update_id` and one event payload such as
+`message`, `edited_message`, `callback_query`, or `message_reaction`.
+
+Media messages include `file_id` handles, not local file paths.

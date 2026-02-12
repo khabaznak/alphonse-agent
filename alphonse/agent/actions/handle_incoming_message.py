@@ -286,6 +286,9 @@ def _build_cortex_state(
         "channel_type": incoming.channel_type,
         "channel_target": incoming.address or incoming.channel_type,
         "conversation_key": _conversation_key(incoming),
+        "incoming_raw_message": incoming_meta.get("raw")
+        if isinstance(incoming_meta.get("raw"), dict)
+        else None,
         "actor_person_id": incoming.person_id,
         "incoming_user_id": incoming_user_id,
         "incoming_user_name": incoming_user_name,

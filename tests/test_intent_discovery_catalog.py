@@ -11,19 +11,25 @@ from alphonse.agent.cognition.intent_discovery_engine import (
 def test_available_abilities_include_summary_and_optional_marker() -> None:
     rendered = format_available_abilities()
     assert "askQuestion(" in rendered
-    assert "missing end-user data" in rendered
+    assert "clarifying questions" in rendered
     assert "?:" in rendered
 
 
-def test_available_ability_catalog_includes_io_channels() -> None:
+def test_available_ability_catalog_is_llm_focused() -> None:
     payload = json.loads(format_available_ability_catalog())
     assert isinstance(payload, dict)
     assert "tools" in payload
-    assert "io_channels" in payload
-    io_channels = payload["io_channels"]
-    assert isinstance(io_channels, dict)
-    assert "senses" in io_channels
-    assert "extremities" in io_channels
+    assert "io_channels" not in payload
+    tools = payload["tools"]
+    assert isinstance(tools, list)
+    ask = next(
+        (item for item in tools if isinstance(item, dict) and item.get("tool") == "askQuestion"),
+        None,
+    )
+    assert isinstance(ask, dict)
+    assert "description" in ask
+    assert "when_to_use" in ask
+    assert "returns" in ask
 
 
 def test_available_ability_catalog_includes_fact_tools() -> None:

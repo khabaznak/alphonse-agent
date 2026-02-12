@@ -14,91 +14,13 @@ from alphonse.agent.io import get_io_registry
 logger = logging.getLogger(__name__)
 
 
-_DISSECTOR_KEY = "intent_discovery.dissector.v1"
-_VISIONARY_KEY = "intent_discovery.visionary.v1"
-_PLANNER_KEY = "intent_discovery.planner.v1"
 _PLAN_CRITIC_KEY = "intent_discovery.plan_critic.v1"
 
-
-_DISSECTOR_SYSTEM_FALLBACK = (
-    "You are Alphonse, a message dissection engine for a personal AI assistant. "
-    "Your job is to split the user message into chunks, each with a single clear intention. "
-    "Output valid JSON only. No markdown. No explanations."
-)
-
-_DISSECTOR_USER_FALLBACK = (
-    "Rules:\n"
-    "- Just dissect structure; do not solve or execute.\n"
-    "- If the message contains multiple intents, return an array with multiple objects.\n"
-    "- Keep strings short. Prefer null for missing fields.\n"
-    "- If unsure, lower confidence but still output valid JSON.\n"
-    "- Use verb names for actions (function-like).\n\n"
-    "Return JSON with this shape:\n"
-    "[\n"
-    "  {\n"
-    "    \"action\": \"<verb>\",\n"
-    "    \"chunk\": \"<short text>\",\n"
-    "    \"intention\": \"<short intention>\",\n"
-    "    \"confidence\": \"low|medium|high\"\n"
-    "  }\n"
-    "]\n\n"
-    "Message:\n<<<\n{MESSAGE_TEXT}\n>>>"
-)
-
-_VISIONARY_SYSTEM_FALLBACK = (
-    "You are Alphonse, a mission designer. "
-    "Given one chunk and its intention, produce acceptance criteria for success. "
-    "Output valid JSON only. No markdown. No explanations."
-)
-
-_VISIONARY_USER_FALLBACK = (
-    "Chunk:\n{CHUNK_TEXT}\n\n"
-    "Intention:\n{INTENTION}\n\n"
-    "Return JSON:\n{\n  \"acceptanceCriteria\": [\"...\"]\n}"
-)
-
-_PLANNER_SYSTEM_FALLBACK = (
-    "You are Alphonse, a master tool user. "
-    "Your mission is to produce the shortest, best execution plan to accomplish the user's objective. "
-    "Output valid JSON only. No markdown. No explanations."
-)
 
 _PLAN_CRITIC_SYSTEM_FALLBACK = (
     "You are Alphonse, a strict plan-shape repairer. "
     "Fix only structural issues in an executionPlan. "
     "Output valid JSON only."
-)
-
-_PLANNER_USER_FALLBACK = (
-    "Rules:\n"
-    "- Split the message into components and keep each component short.\n"
-    "- For each component, infer a single intention.\n"
-    "- Create an executionPlan as ordered tool calls. Include only necessary calls.\n"
-    "- If a tool call depends on missing data, include a question using askQuestion.\n"
-    "- If a tool requires parameters you do not have, do NOT emit that tool call. "
-    "Instead emit askQuestion for the missing parameter(s).\n"
-    "- Tool names must match exactly as listed in AVAILABLE TOOLS.\n"
-    "- Output schema:\n"
-    "  {\"executionPlan\": [{\"tool\": \"...\", \"parameters\": { ... }, \"executed\": false}]}\n\n"
-    "Chunk:\n{CHUNK_TEXT}\n\n"
-    "Intention:\n{INTENTION}\n\n"
-    "Acceptance criteria:\n{ACCEPTANCE_CRITERIA}\n\n"
-    "AVAILABLE TOOLS:\n{AVAILABLE_TOOLS}\n"
-)
-
-_DISSECTOR_GUARDRAILS = (
-    "Hard constraints:\n"
-    "- If the user message contains one goal, return exactly one chunk.\n"
-    "- Do not split a single an action chunk into separate chunks for action/time/purpose.\n"
-)
-
-_PLANNER_GUARDRAILS = (
-    "Hard constraints:\n"
-    "- Never invent tool names. Use only tools that appear exactly in AVAILABLE TOOLS.\n"
-    "- If no single listed tool can achieve the goal, produce the shortest valid multi-step sequence of listed tool calls that satisfies the acceptance criteria.\n"
-    "- Never ask the user to choose or confirm internal tool/function names.\n"
-    "- Ask questions only for missing end-user data, not implementation choices.\n"
-    "- Prefer the shortest plan (one step when enough information is present).\n"
 )
 
 _PLACEHOLDER_PATTERNS = (
@@ -107,14 +29,14 @@ _PLACEHOLDER_PATTERNS = (
     r"\bplaceholder\b",
     r"\[unknown\]",
 )
-_DISCOVERY_EXCLUDED_TOOLS: set[str] = set()
+_DISCOVERY_EXCLUDED_TOOLS: set[str] = {"cancel"}
 
 _PLAN_SYNTH_KEY = "intent_discovery.plan_synth.v1"
 _TOOL_BINDER_KEY = "intent_discovery.tool_binder.v1"
 _PLAN_REFINER_KEY = "intent_discovery.plan_refiner.v1"
 
 _QUESTION_POLICY_BLOCK = (
-    "GLOBAL QUESTION POLICY (APPLIES TO ALL STEPS A/B/C):\n"
+    "GLOBAL QUESTION POLICY:\n"
     "- askQuestion is not part of the execution plan.\n"
     "- askQuestion is a planning interrupt for missing end-user data.\n"
     "- If missing data is detected, emit planning_interrupt and stop further planning this turn.\n"
@@ -123,45 +45,43 @@ _QUESTION_POLICY_BLOCK = (
 )
 
 _PLAN_SYNTH_SYSTEM_FALLBACK = (
-    "You are Alphonse Plan Synthesizer. Build a concise success-oriented plan for one user message. "
-    "Output valid JSON only."
+    "Your name is Alphonse, you are the genius virtual butler for the family."
+    "The family members talk to you via messages, sometimes short messages, sometimes long paragraphs."
+    "Some of them have instructions, others are favors they ask of you but you are tremendously helpful"
+    " for the family. Your objective is to determine what to do with the provided message "
+    "and create a plan for you to execute as a virtual agent. you must guarantee success."
+    "RULES:\n"
+    "- You will create a plan as a sequence of discrete steps.  "
+    "- Your output is only the sequence of discrete and well defined steps. no explanations or anything else.  "
+    "- for better readability use <ol> and <li> html tags to enumerate the steps.  "
 )
 
 _PLAN_SYNTH_USER_FALLBACK = (
-    "{QUESTION_POLICY}\n"
-    "Return JSON:\n"
-    "{\n"
-    "  \"plan_version\":\"v1\",\n"
-    "  \"message_summary\":\"...\",\n"
-    "  \"primary_intention\":\"...\",\n"
-    "  \"confidence\":\"low|medium|high\",\n"
-    "  \"steps\":[{\"step_id\":\"S1\",\"goal\":\"...\",\"requires\":[],\"produces\":[],\"priority\":1}],\n"
-    "  \"acceptance_criteria\":[\"...\"],\n"
-    "  \"planning_interrupt\":{\"tool_id\":0,\"tool_name\":\"askQuestion\",\"question\":\"...\",\"slot\":\"...\",\"bind\":{},\"missing_data\":[],\"reason\":\"...\"}\n"
-    "}\n\n"
-    "CONTEXT:\n{CONTEXT_JSON}\n\n"
-    "LATEST_FAMILY_MESSAGE:\n{MESSAGE_TEXT}\n\n"
-    "EXCEPTION_HISTORY:\n{EXCEPTION_HISTORY_JSON}\n"
+    "USER:\n"
+    "{\"message\": \"{MESSAGE_TEXT}\", \"message_author\": \"{USER}\"}\n\n"
 )
 
 _TOOL_BINDER_SYSTEM_FALLBACK = (
-    "You are Alphonse Tool Binder. Bind each plan step using only allowed tool IDs. "
-    "Output valid JSON only."
+    "You are Alphonse a master planner. Your mission is to prune the following plan of steps which "
+    "may not be necessary when compared agains a tool menu. "
+    "The previous agent who created the plan did not know the existence of such tools but you have "
+    "that information. "
+    "You must output a revised plan with only the steps which make use of the provided tools. "
+    "Do not output any explanations or justifications; only output the plan."
+    "RULES: \n"
+    "- Review the plan and compare against the tool menu. The main objective is to determine "
+    "if the plan has unnecessary or invalid steps given the tools at your disposal. "
+    "For example, a plan might have 2 steps and a tool might achieve it with only 1.  \n"
+    "- Output the new revised plan, same format as it is right now but verified by you.  \n"
+    "- PRO Tip: if a plan step has been executed or does not require or does not match a tool "
+    "it means that it is an invalid plan step and should be pruned."
 )
 
 _TOOL_BINDER_USER_FALLBACK = (
     "{QUESTION_POLICY}\n"
-    "Rules:\n"
-    "- Choose one tool_id per step from TOOL_MENU only.\n"
-    "- If no safe match exists, emit planning_interrupt.\n\n"
-    "Return JSON:\n"
-    "{\n"
-    "  \"plan_version\":\"v1\",\n"
-    "  \"bindings\":[{\"step_id\":\"S1\",\"binding_type\":\"TOOL|QUESTION\",\"tool_id\":0,\"parameters\":{},\"missing_data\":[],\"reason\":\"...\"}],\n"
-    "  \"planning_interrupt\":{\"tool_id\":0,\"tool_name\":\"askQuestion\",\"question\":\"...\",\"slot\":\"...\",\"bind\":{},\"missing_data\":[],\"reason\":\"...\"}\n"
-    "}\n\n"
-    "PLAN_FROM_STEP_A:\n{PLAN_JSON}\n\n"
-    "TOOL_MENU:\n{TOOL_MENU_JSON}\n\n"
+    "PLAN TO REVIEW:\n"
+    "{PLAN}\n\n"
+    "TOOL_MENU:\n{TOOL_MENU}\n\n"
     "CONTEXT:\n{CONTEXT_JSON}\n\n"
     "EXCEPTION_HISTORY:\n{EXCEPTION_HISTORY_JSON}\n"
 )
@@ -201,18 +121,7 @@ def discover_plan(
     locale: str | None = None,
     planning_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Return a dict with discovered execution plans.
-
-    Output shape:
-    {
-      "messages": [
-        {"message": "...", "intention": "...", "confidence": "low"},
-      ],
-      "plans": [
-        {"message_index": 0, "acceptanceCriteria": [...], "executionPlan": [...]},
-      ]
-    }
-    """
+    
     if not llm_client:
         return {"messages": [], "plans": []}
     store = SqlitePromptStore()
@@ -238,7 +147,7 @@ def discover_plan(
 def format_available_abilities() -> str:
     specs = _load_ability_specs()
     lines: list[str] = [
-        "- askQuestion(question:string, slot?:string, bind?:object): Ask for missing end-user data only. Never ask about internal tool names.",
+        "- askQuestion(question:string, slot?:string, bind?:object) -> Use it to ask clarifying questions to the message author user. Only ask questions about missing data, never for missing tools.",
     ]
     for spec in specs:
         intent = str(spec.get("intent_name") or "").strip()
@@ -263,14 +172,15 @@ def format_available_ability_catalog() -> str:
     tools: list[dict[str, Any]] = [
         {
             "tool": "askQuestion",
-            "summary": "Ask the user for missing parameters to continue.",
-            "intents_covered": ["clarification", "slot_fill"],
-            "examples": ["Ask only for missing user data."],
+            "description": "Ask the user for missing parameters to continue.",
+            "when_to_use": "Use when required end-user data is missing.",
+            "returns": "user_answer_captured",
             "input_parameters": [
                 {"name": "question", "type": "string", "required": True},
                 {"name": "slot", "type": "string", "required": False},
                 {"name": "bind", "type": "object", "required": False},
             ],
+            "required_parameters": ["question"],
         }
     ]
     for spec in specs:
@@ -301,28 +211,16 @@ def format_available_ability_catalog() -> str:
         tools.append(
             {
                 "tool": tool,
-                "summary": _ability_summary(spec),
-                "intents_covered": _ability_intents_covered(spec),
-                "examples": _ability_examples(spec),
-                "actions": _ability_actions(spec),
+                "description": _ability_summary(spec),
+                "when_to_use": "Use when this tool directly satisfies the user request.",
+                "returns": "result",
                 "required_parameters": [
                     p["name"] for p in params if bool(p.get("required"))
                 ],
                 "input_parameters": params,
-                "uses_tools": [
-                    str(item).strip()
-                    for item in (spec.get("tools") if isinstance(spec.get("tools"), list) else [])
-                    if str(item).strip()
-                ],
             }
         )
-    return json.dumps(
-        {
-            "tools": tools,
-            "io_channels": _io_channel_catalog(),
-        },
-        ensure_ascii=False,
-    )
+    return json.dumps({"tools": tools}, ensure_ascii=False)
 
 
 def _story_discover_plan(
@@ -498,7 +396,14 @@ def _run_step_a_plan_synth(
     )
     raw = _call_llm(llm_client, system_prompt, user_prompt, stage="plan_synth")
     payload = _parse_json(raw)
-    return payload if isinstance(payload, dict) else None
+    if isinstance(payload, dict):
+        return payload
+    return {
+        "plan_text": str(raw or "").strip(),
+        "primary_intention": "overall",
+        "confidence": "medium",
+        "acceptance_criteria": [],
+    }
 
 
 def _run_step_b_tool_binder(
@@ -523,15 +428,62 @@ def _run_step_b_tool_binder(
         ),
         {
             "QUESTION_POLICY": _QUESTION_POLICY_BLOCK,
-            "PLAN_JSON": json.dumps(plan_a, ensure_ascii=False),
-            "TOOL_MENU_JSON": json.dumps(tool_menu, ensure_ascii=False),
+            "PLAN": _plan_for_review_text(plan_a, context_payload),
+            "TOOL_MENU": _tool_menu_plain_text(tool_menu),
             "CONTEXT_JSON": json.dumps(context_payload, ensure_ascii=False),
             "EXCEPTION_HISTORY_JSON": json.dumps(exception_history, ensure_ascii=False),
         },
     )
     raw = _call_llm(llm_client, system_prompt, user_prompt, stage="tool_binder")
     payload = _parse_json(raw)
-    return payload if isinstance(payload, dict) else None
+    if isinstance(payload, dict):
+        return payload
+    parsed = _parse_text_plan_to_payload(str(raw or ""), tool_menu)
+    if parsed is not None:
+        return parsed
+    return {"plan_text": str(raw or "").strip()}
+
+
+def _plan_for_review_text(
+    plan: dict[str, Any],
+    context_payload: dict[str, Any],
+) -> str:
+    base = json.dumps(plan, ensure_ascii=False)
+    completed = context_payload.get("completed_steps")
+    if not isinstance(completed, list) or not completed:
+        return base
+    notes: list[str] = []
+    for step in completed:
+        if not isinstance(step, dict):
+            continue
+        tool = str(step.get("tool") or "").strip()
+        if not tool:
+            continue
+        outcome = step.get("outcome")
+        outcome_txt = json.dumps(outcome, ensure_ascii=False) if isinstance(outcome, (dict, list)) else str(outcome or "")
+        note = f"[NOTE: this has been executed. This was the output: {outcome_txt}]"
+        notes.append(f"- {tool} {note}")
+    if not notes:
+        return base
+    return base + "\n\nEXECUTED_STEPS:\n" + "\n".join(notes)
+
+
+def _tool_menu_plain_text(tool_menu: dict[str, Any]) -> str:
+    tools = tool_menu.get("tools") if isinstance(tool_menu.get("tools"), list) else []
+    lines: list[str] = []
+    for item in tools:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or "").strip()
+        if not name:
+            continue
+        params = item.get("params") if isinstance(item.get("params"), dict) else {}
+        params_desc = ", ".join(f"{k}: {v}" for k, v in params.items())
+        returns = str(item.get("returns") or "result").strip()
+        desc = _natural_tool_description(name, str(item.get("description") or "").strip())
+        signature = f"{name}({params_desc})" if params_desc else f"{name}()"
+        lines.append(f"- {signature} -> {desc} Returns: {returns}.")
+    return "\n".join(lines)
 
 
 def _run_step_c_plan_refiner(
@@ -566,7 +518,179 @@ def _run_step_c_plan_refiner(
     )
     raw = _call_llm(llm_client, system_prompt, user_prompt, stage="plan_refiner")
     payload = _parse_json(raw)
-    return payload if isinstance(payload, dict) else None
+    if isinstance(payload, dict):
+        return payload
+    parsed = _parse_text_plan_to_payload(str(raw or ""), tool_menu)
+    if parsed is not None:
+        return parsed
+    return {"plan_text": str(raw or "").strip()}
+
+
+def _parse_text_plan_to_payload(
+    raw_text: str,
+    tool_menu: dict[str, Any],
+) -> dict[str, Any] | None:
+    steps = _extract_text_plan_steps(raw_text)
+    if not steps:
+        return None
+    param_names_map = _tool_param_names_map(tool_menu)
+    execution: list[dict[str, Any]] = []
+    interrupt: dict[str, Any] | None = None
+    for step in steps:
+        parsed = _parse_tool_call_text(step, param_names_map)
+        if parsed is None:
+            continue
+        tool = str(parsed.get("tool") or "").strip()
+        params = parsed.get("parameters") if isinstance(parsed.get("parameters"), dict) else {}
+        if tool == "askQuestion":
+            question = str(params.get("question") or params.get("arg1") or "").strip()
+            if question:
+                interrupt = {
+                    "tool_id": 0,
+                    "tool_name": "askQuestion",
+                    "question": question,
+                    "slot": str(params.get("slot") or "answer").strip() or "answer",
+                    "bind": params.get("bind") if isinstance(params.get("bind"), dict) else {},
+                    "missing_data": ["answer"],
+                    "reason": "missing_data",
+                }
+            continue
+        execution.append({"tool": tool, "parameters": params, "executed": False})
+    if not execution and interrupt is None:
+        return {"plan_text": raw_text.strip()}
+    payload: dict[str, Any] = {"executionPlan": execution}
+    if interrupt is not None:
+        payload["planning_interrupt"] = interrupt
+    return payload
+
+
+def _extract_text_plan_steps(raw_text: str) -> list[str]:
+    text = str(raw_text or "").strip()
+    if not text:
+        return []
+    steps: list[str] = []
+    li_matches = re.findall(r"<li[^>]*>(.*?)</li\s*>", text, flags=re.IGNORECASE | re.DOTALL)
+    if li_matches:
+        for item in li_matches:
+            step = re.sub(r"<[^>]+>", " ", item)
+            step = re.sub(r"\s+", " ", step).strip(" -\t\r\n")
+            if step:
+                steps.append(step)
+        return steps
+    for line in text.splitlines():
+        clean = str(line).strip()
+        if not clean:
+            continue
+        clean = re.sub(r"^\d+[\).\-\s]+", "", clean).strip()
+        if clean:
+            steps.append(clean)
+    return steps
+
+
+def _tool_param_names_map(tool_menu: dict[str, Any]) -> dict[str, list[str]]:
+    mapping: dict[str, list[str]] = {}
+    tools = tool_menu.get("tools") if isinstance(tool_menu.get("tools"), list) else []
+    for item in tools:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or "").strip()
+        if not name:
+            continue
+        params = item.get("params") if isinstance(item.get("params"), dict) else {}
+        mapping[name] = [str(k) for k in params.keys() if str(k).strip()]
+    if "askQuestion" not in mapping:
+        mapping["askQuestion"] = ["question", "slot", "bind"]
+    return mapping
+
+
+def _parse_tool_call_text(
+    step: str,
+    param_names_map: dict[str, list[str]],
+) -> dict[str, Any] | None:
+    text = str(step or "").strip()
+    if not text:
+        return None
+    match = re.search(r"([A-Za-z0-9_.]+)\s*\((.*)\)", text)
+    if match:
+        tool = str(match.group(1) or "").strip()
+        args_raw = str(match.group(2) or "").strip()
+    else:
+        tool = text.split(" ", 1)[0].strip()
+        args_raw = ""
+    if tool not in param_names_map:
+        return None
+    tokens = _split_tool_args(args_raw)
+    param_names = param_names_map.get(tool) or []
+    params: dict[str, Any] = {}
+    for idx, token in enumerate(tokens):
+        name = param_names[idx] if idx < len(param_names) else f"arg{idx + 1}"
+        params[name] = _coerce_arg_value(token)
+    return {"tool": tool, "parameters": params}
+
+
+def _split_tool_args(args_raw: str) -> list[str]:
+    raw = str(args_raw or "").strip()
+    if not raw:
+        return []
+    out: list[str] = []
+    buff: list[str] = []
+    quote: str | None = None
+    depth = 0
+    for ch in raw:
+        if quote is not None:
+            buff.append(ch)
+            if ch == quote:
+                quote = None
+            continue
+        if ch in {"'", '"'}:
+            quote = ch
+            buff.append(ch)
+            continue
+        if ch in "([{":
+            depth += 1
+            buff.append(ch)
+            continue
+        if ch in ")]}":
+            depth = max(0, depth - 1)
+            buff.append(ch)
+            continue
+        if ch == "," and depth == 0:
+            token = "".join(buff).strip()
+            if token:
+                out.append(token)
+            buff = []
+            continue
+        buff.append(ch)
+    token = "".join(buff).strip()
+    if token:
+        out.append(token)
+    return out
+
+
+def _coerce_arg_value(token: str) -> Any:
+    value = str(token or "").strip()
+    if not value:
+        return ""
+    if (value.startswith('"') and value.endswith('"')) or (value.startswith("'") and value.endswith("'")):
+        return value[1:-1]
+    if value.lower() in {"true", "false"}:
+        return value.lower() == "true"
+    if value.lower() in {"null", "none"}:
+        return None
+    if re.fullmatch(r"-?\d+", value):
+        try:
+            return int(value)
+        except Exception:
+            return value
+    if re.fullmatch(r"-?\d+\.\d+", value):
+        try:
+            return float(value)
+        except Exception:
+            return value
+    parsed = _parse_json(value)
+    if isinstance(parsed, (dict, list)):
+        return parsed
+    return value
 
 
 def _tool_menu_with_ids() -> dict[str, Any]:
@@ -599,8 +723,8 @@ def _tool_menu_with_ids() -> dict[str, Any]:
                 "tool_id": tool_id,
                 "name": name,
                 "params": params_map,
-                "returns": str(item.get("summary") or "result"),
-                "description": str(item.get("summary") or "ability"),
+                "returns": str(item.get("returns") or "result"),
+                "description": str(item.get("description") or ""),
             }
         )
         tool_id += 1
@@ -871,15 +995,46 @@ def _call_llm(
 
 
 def _ability_summary(spec: dict[str, Any]) -> str:
-    kind = str(spec.get("kind") or "").strip()
-    steps = spec.get("step_sequence") if isinstance(spec.get("step_sequence"), list) else []
-    if steps:
-        first = steps[0]
-        if isinstance(first, dict):
-            action = str(first.get("action") or "").strip()
-            if action:
-                return f"{kind or 'ability'} via action {action}"
-    return kind or "ability"
+    intent = str(spec.get("intent_name") or "").strip()
+    if not intent:
+        return "Use it to complete the requested task."
+    return _natural_tool_description(intent, "")
+
+
+def _natural_tool_description(tool_name: str, fallback: str) -> str:
+    name = str(tool_name or "").strip()
+    if not name:
+        return fallback or "Use it to complete the requested task."
+    predefined = {
+        "askQuestion": "Use it to ask clarifying questions to the message author user. Only ask questions about missing data, never for missing tools.",
+        "facts.agent.get": "Use it to find your own agent status, details, given name, and capabilities.",
+        "facts.user.get": "Use it to find details about the provided user, including profile and preferences.",
+        "reminder.schedule": "Use it to trigger reminders at a specific time and deliver a message in the specified channel.",
+        "time.current": "Use it to know and report the current time.",
+        "get_status": "Use it to retrieve your current runtime status and health summary.",
+        "core.identity.query_agent_name": "Use it to get your agent name and identity label.",
+        "core.identity.query_user_name": "Use it to get or confirm the user name.",
+        "core.location.current": "Use it to retrieve the current saved location details for a label such as home or work.",
+        "core.location.set": "Use it to save a user location, including label and address.",
+        "core.users.list": "Use it to list known users in the household profile.",
+        "core.onboarding.start": "Use it to start onboarding for the primary user.",
+        "core.onboarding.add_user": "Use it to add a secondary user with relationship and role details.",
+        "core.onboarding.authorize_channel": "Use it to authorize and link a communication channel for a user.",
+        "core.onboarding.introduce_authorize": "Use it to introduce a user and authorize their channel in one flow.",
+        "onboarding.location.set_home": "Use it to save or update the home location.",
+        "onboarding.location.set_work": "Use it to save or update the work location.",
+        "update_preferences": "Use it to update user preferences such as locale, tone, and address style.",
+        "greeting": "Use it to send a simple greeting response.",
+        "help": "Use it to provide help and guidance on supported capabilities.",
+        "meta.capabilities": "Use it to summarize available capabilities.",
+        "meta.gaps_list": "Use it to list currently known capability gaps.",
+    }
+    if name in predefined:
+        return predefined[name]
+    normalized = name.replace(".", " ").replace("_", " ").strip().lower()
+    if not normalized:
+        return fallback or "Use it to complete the requested task."
+    return f"Use it to {normalized}."
 
 
 def _ability_intents_covered(spec: dict[str, Any]) -> list[str]:
