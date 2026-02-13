@@ -597,7 +597,10 @@ def _execute_steps(steps: list[dict[str, Any]], params: dict[str, Any], state: d
                 lines.append(" - ".join(bits))
             return {"response_key": "core.users.list", "response_vars": {"lines": lines}}
         if action == "greeting":
-            return {"response_key": "core.greeting"}
+            locale = str(state.get("locale") or "")
+            if locale.lower().startswith("es"):
+                return {"response_text": "Hola. ¿En qué te ayudo?"}
+            return {"response_text": "Hello. How can I help?"}
         if action == "help":
             return {"response_key": "help"}
         if action == "status":

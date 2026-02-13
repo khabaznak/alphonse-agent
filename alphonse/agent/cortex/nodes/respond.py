@@ -2,13 +2,18 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
+from alphonse.agent.cognition.response_keys import render_response_key
 from alphonse.agent.cortex.nodes.capability_gap import has_capability_gap_plan
 
 def compose_response_from_state(state: dict[str, Any]) -> str:
     key = state.get("response_key")
     if not isinstance(key, str) or not key.strip():
-        return ""
-    return key.strip()
+        return str(state.get("response_text") or "").strip()
+    return render_response_key(
+        key,
+        state.get("response_vars") if isinstance(state.get("response_vars"), dict) else None,
+        locale=str(state.get("locale") or ""),
+    )
 
 
 def respond_node_impl(

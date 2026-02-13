@@ -15,6 +15,7 @@ from alphonse.agent.cognition.preferences.store import (
     get_or_create_principal_for_channel,
     resolve_preference_with_precedence,
 )
+from alphonse.agent.cognition.response_keys import render_response_key
 from alphonse.config import settings
 from alphonse.agent.cognition.plan_executor import PlanExecutionContext, PlanExecutor
 from alphonse.agent.cortex.graph import CortexGraph
@@ -464,10 +465,12 @@ def _render_outgoing_message(
         locale,
         address_style,
     )
+    rendered = render_response_key(key, vars, locale=locale)
+    if not rendered.strip():
+        rendered = str(key or "").strip()
     _ = address_style
     _ = tone
-    _ = vars
-    return key, locale
+    return rendered, locale
 
 
 def _updated_preferences_from_vars(vars: dict[str, Any]) -> dict[str, str]:
