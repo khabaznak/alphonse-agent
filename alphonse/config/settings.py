@@ -72,10 +72,3 @@ def get_planning_mode() -> str | None:
     if isinstance(configured, str) and configured.strip():
         return configured.strip()
     return None
-
-
-def get_enable_json_ability_runtime() -> bool:
-    configured = os.getenv("ALPHONSE_ENABLE_JSON_ABILITY_RUNTIME")
-    if configured is None:
-        return False
-    return configured.strip().lower() in {"1", "true", "yes", "on"}
