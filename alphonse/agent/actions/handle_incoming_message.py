@@ -17,7 +17,7 @@ from alphonse.agent.cognition.preferences.store import (
 )
 from alphonse.config import settings
 from alphonse.agent.cognition.plan_executor import PlanExecutionContext, PlanExecutor
-from alphonse.agent.cortex.graph import invoke_cortex
+from alphonse.agent.cortex.graph import CortexGraph
 from alphonse.agent.cortex.state_store import load_state, save_state
 from alphonse.agent.cognition.providers.factory import build_llm_client
 from alphonse.agent.identity import store as identity_store
@@ -25,6 +25,7 @@ from alphonse.agent.identity import profile as identity_profile
 from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
+_CORTEX_GRAPH = CortexGraph()
 
 @dataclass(frozen=True)
 class IncomingContext:
@@ -88,7 +89,7 @@ class HandleIncomingMessageAction(Action):
         state = _build_cortex_state(stored_state, incoming, correlation_id, payload, normalized)
         llm_client = _build_llm_client()
         try:
-            result = invoke_cortex(state, text, llm_client=llm_client)
+            result = _CORTEX_GRAPH.invoke(state, text, llm_client=llm_client)
         finally:
             stop_heartbeat()
         _emit_agent_transitions_from_meta(

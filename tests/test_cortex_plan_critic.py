@@ -37,9 +37,14 @@ def test_plan_critic_repairs_unknown_tool_to_ask_question() -> None:
     }
     llm = _FakeLlm('{"tool":"askQuestion","parameters":{"question":"When should I remind you?"}}')
 
-    state["ability_state"] = loop_state
-    state["_llm_client"] = llm
-    result = graph._execute_tool_node_impl_stateful(state)
+    runner = graph.CortexGraph().build().compile()
+    result = runner.invoke(
+        {
+            **state,
+            "_llm_client": llm,
+            "ability_state": loop_state,
+        }
+    )
 
     assert "plans" not in result
     assert result.get("response_text") == "When should I remind you?"
@@ -71,9 +76,14 @@ def test_plan_critic_unrepaired_unknown_tool_creates_gap() -> None:
     }
     llm = _FakeLlm('{"tool":"still_fake","parameters":{"x":1}}')
 
-    state["ability_state"] = loop_state
-    state["_llm_client"] = llm
-    result = graph._execute_tool_node_impl_stateful(state)
+    runner = graph.CortexGraph().build().compile()
+    result = runner.invoke(
+        {
+            **state,
+            "_llm_client": llm,
+            "ability_state": loop_state,
+        }
+    )
 
     plans = result.get("plans")
     assert isinstance(plans, list)
