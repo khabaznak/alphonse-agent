@@ -13,6 +13,7 @@ def build_cognition_state(state: dict[str, Any]) -> dict[str, Any]:
         "autonomy_level": state.get("autonomy_level"),
         "planning_mode": state.get("planning_mode"),
         "intent_category": state.get("intent_category"),
+        "route_decision": state.get("route_decision"),
         "pending_interaction": state.get("pending_interaction"),
         "ability_state": state.get("ability_state"),
         "planning_context": state.get("planning_context"),
@@ -31,6 +32,7 @@ def build_meta(state: dict[str, Any]) -> dict[str, Any]:
         "autonomy_level": state.get("autonomy_level"),
         "planning_mode": state.get("planning_mode"),
         "intent_category": state.get("intent_category"),
+        "route_decision": state.get("route_decision"),
         "events": state.get("events") or [],
     }
 

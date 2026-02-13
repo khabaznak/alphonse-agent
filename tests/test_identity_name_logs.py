@@ -72,7 +72,7 @@ def test_pending_and_identity_logs(
 
     messages = [record.getMessage() for record in caplog.records]
     set_idx = _find_index(messages, "identity display_name set key=telegram:123")
-    get_idx = _find_index(messages, "identity display_name get key=telegram:123")
+    known_key_idx = _find_index(messages, "outgoing key=core.identity.user.known")
 
     assert set_idx != -1
-    assert get_idx != -1
+    assert known_key_idx != -1

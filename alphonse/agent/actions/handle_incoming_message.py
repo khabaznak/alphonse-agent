@@ -52,7 +52,6 @@ class HandleIncomingMessageAction(Action):
         normalized = _normalize_incoming_payload(payload, signal)
         if not normalized:
             logger.warning("HandleIncomingMessageAction missing normalized payload")
-            rendered = "system.unavailable.catalog"
             incoming = IncomingContext(
                 channel_type="system",
                 address=None,
@@ -61,7 +60,7 @@ class HandleIncomingMessageAction(Action):
                 update_id=None,
                 message_id=None,
             )
-            return _message_result(rendered, incoming)
+            return _noop_result(incoming)
         text = str(normalized.text or "").strip()
         incoming = _build_incoming_context_from_normalized(normalized, correlation_id)
         logger.info(
@@ -71,8 +70,7 @@ class HandleIncomingMessageAction(Action):
             _snippet(text),
         )
         if not text:
-            rendered = "clarify.repeat_input"
-            return _message_result(rendered, incoming)
+            return _noop_result(incoming)
 
         conversation_key = _conversation_key(incoming)
         logger.info(
@@ -91,6 +89,14 @@ class HandleIncomingMessageAction(Action):
         llm_client = _build_llm_client()
         try:
             result = _CORTEX_GRAPH.invoke(state, text, llm_client=llm_client)
+        except Exception:
+            logger.exception(
+                "HandleIncomingMessageAction cortex_invoke_failed channel=%s target=%s correlation_id=%s",
+                incoming.channel_type,
+                incoming.address,
+                incoming.correlation_id,
+            )
+            raise
         finally:
             stop_heartbeat()
         _emit_agent_transitions_from_meta(
@@ -136,14 +142,15 @@ class HandleIncomingMessageAction(Action):
                 incoming,
                 text,
             )
-            reply_plan = CortexPlan(
-                plan_type=PlanType.COMMUNICATE,
-                payload={
-                    "message": rendered,
-                    "locale": outgoing_locale,
-                },
-            )
-            executor.execute([reply_plan], context, exec_context)
+            if rendered.strip():
+                reply_plan = CortexPlan(
+                    plan_type=PlanType.COMMUNICATE,
+                    payload={
+                        "message": rendered,
+                        "locale": outgoing_locale,
+                    },
+                )
+                executor.execute([reply_plan], context, exec_context)
         elif result.reply_text:
             locale = _preferred_locale(incoming, text)
             reply_plan = CortexPlan(
@@ -466,8 +473,6 @@ def _render_outgoing_message(
         address_style,
     )
     rendered = render_response_key(key, vars, locale=locale)
-    if not rendered.strip():
-        rendered = str(key or "").strip()
     _ = address_style
     _ = tone
     return rendered, locale
@@ -488,41 +493,12 @@ def _updated_preferences_from_vars(vars: dict[str, Any]) -> dict[str, str]:
     return extracted
 
 
-def _message_result(message: str, incoming: IncomingContext) -> ActionResult:
-    logger.info(
-        "HandleIncomingMessageAction response channel=%s message=%s",
-        incoming.channel_type,
-        _snippet(message),
-    )
-    payload: dict[str, Any] = {
-        "message": message,
-        "origin": incoming.channel_type,
-        "channel_hint": incoming.channel_type,
-        "correlation_id": incoming.correlation_id,
-        "audience": _audience_for(incoming.person_id),
-    }
-    if incoming.address:
-        payload["target"] = incoming.address
-    return ActionResult(
-        intention_key="MESSAGE_READY",
-        payload=payload,
-        urgency="normal",
-    )
-
-
 def _noop_result(incoming: IncomingContext) -> ActionResult:
     logger.info(
         "HandleIncomingMessageAction response channel=%s message=noop",
         incoming.channel_type,
     )
     return ActionResult(intention_key="NOOP", payload={}, urgency=None)
-
-
-def _audience_for(person_id: str | None) -> dict[str, str]:
-    if person_id:
-        return {"kind": "person", "id": person_id}
-    return {"kind": "system", "id": "system"}
-
 
 def _snippet(text: str, limit: int = 80) -> str:
     return text if len(text) <= limit else f"{text[:limit]}..."
@@ -532,6 +508,7 @@ def _build_llm_client():
     try:
         return build_llm_client()
     except Exception:
+        logger.exception("HandleIncomingMessageAction failed to build llm client")
         return None
 
 

@@ -1,26 +1,23 @@
 from __future__ import annotations
 
-from functools import partial
 from typing import Any, Protocol, TypedDict
 
 from langgraph.graph import END, StateGraph
 
+from alphonse.agent.cognition.planning_catalog import discover_plan
+from alphonse.agent.cognition.planning_catalog import format_available_abilities
 from alphonse.agent.cognition.plans import CortexPlan, CortexResult
 from alphonse.agent.cortex.nodes import build_apology_node
-from alphonse.agent.cortex.nodes import build_ask_question_node
-from alphonse.agent.cortex.nodes import build_critic_node
-from alphonse.agent.cortex.nodes import build_planning_cycle_runner
+from alphonse.agent.cortex.nodes import build_first_decision_node
 from alphonse.agent.cortex.nodes import compose_response_from_state
-from alphonse.agent.cortex.nodes import build_execute_stage_node
-from alphonse.agent.cortex.nodes import ingest_node
+from alphonse.agent.cortex.nodes import run_capability_gap_tool
 from alphonse.agent.cortex.nodes import plan_node_stateful
 from alphonse.agent.cortex.nodes import respond_finalize_node
+from alphonse.agent.cortex.nodes import route_after_first_decision
 from alphonse.agent.cortex.nodes import route_after_plan
-from alphonse.agent.cortex.nodes import route_after_critic
-from alphonse.agent.cortex.nodes import route_after_step_selection
-from alphonse.agent.cortex.nodes import select_next_step_node_stateful
 from alphonse.agent.cortex.transitions import emit_transition_event
 from alphonse.agent.cortex.utils import build_cognition_state, build_meta
+from alphonse.agent.cortex.providers import get_ability_registry
 from alphonse.agent.tools.registry import ToolRegistry, build_default_tool_registry
 
 class LLMClient(Protocol):
@@ -67,30 +64,24 @@ class CortexGraph:
 
     def build(self) -> StateGraph:
         graph = StateGraph(CortexState)
-        planning_cycle_runner = build_planning_cycle_runner(
-            tool_registry=self._tool_registry,
+        graph.add_node(
+            "first_decision_node",
+            build_first_decision_node(
+                llm_client_from_state=self._llm_client_from_state,
+                ability_registry_getter=get_ability_registry,
+            ),
         )
-        graph.add_node("ingest_node", ingest_node)
         graph.add_node(
             "plan_node",
-            partial(
-                plan_node_stateful,
+            lambda state: plan_node_stateful(
+                state,
                 llm_client_from_state=self._llm_client_from_state,
-                run_planning_cycle_with_llm=planning_cycle_runner,
-            ),
-        )
-        graph.add_node("select_next_step_node", select_next_step_node_stateful)
-        graph.add_node("critic_node", build_critic_node())
-        graph.add_node(
-            "execute_tool_node",
-            build_execute_stage_node(
                 tool_registry=self._tool_registry,
-                llm_client_from_state=self._llm_client_from_state,
+                ability_registry_getter=get_ability_registry,
+                discover_plan=discover_plan,
+                format_available_abilities=format_available_abilities,
+                run_capability_gap_tool=run_capability_gap_tool,
             ),
-        )
-        graph.add_node(
-            "ask_question_node",
-            build_ask_question_node(),
         )
         graph.add_node(
             "apology_node",
@@ -100,45 +91,29 @@ class CortexGraph:
         )
         graph.add_node(
             "respond_node",
-            partial(
-                respond_finalize_node,
+            lambda state: respond_finalize_node(
+                state,
                 emit_transition_event=emit_transition_event,
             ),
         )
 
-        graph.set_entry_point("ingest_node")
-        graph.add_edge("ingest_node", "plan_node")
+        graph.set_entry_point("first_decision_node")
+        graph.add_conditional_edges(
+            "first_decision_node",
+            route_after_first_decision,
+            {
+                "plan_node": "plan_node",
+                "respond_node": "respond_node",
+            },
+        )
         graph.add_conditional_edges(
             "plan_node",
             route_after_plan,
             {
-                "select_next_step_node": "select_next_step_node",
                 "apology_node": "apology_node",
                 "respond_node": "respond_node",
             },
         )
-        graph.add_conditional_edges(
-            "select_next_step_node",
-            route_after_step_selection,
-            {
-                "critic_node": "critic_node",
-                "ask_question_node": "ask_question_node",
-                "apology_node": "apology_node",
-                "respond_node": "respond_node",
-            },
-        )
-        graph.add_conditional_edges(
-            "critic_node",
-            route_after_critic,
-            {
-                "execute_tool_node": "execute_tool_node",
-                "select_next_step_node": "select_next_step_node",
-                "apology_node": "apology_node",
-                "respond_node": "respond_node",
-            },
-        )
-        graph.add_edge("execute_tool_node", "select_next_step_node")
-        graph.add_edge("ask_question_node", "respond_node")
         graph.add_edge("apology_node", "respond_node")
         graph.add_edge("respond_node", END)
         return graph

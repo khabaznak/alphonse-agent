@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from typing import Any
 
+from alphonse.agent.cognition.providers.llamafarm import LlamaFarmClient
 from alphonse.agent.cognition.providers.ollama import OllamaClient
 from alphonse.agent.cognition.providers.opencode import OpenCodeClient
 from alphonse.agent.cognition.providers.openai import OpenAIClient
@@ -14,6 +15,8 @@ def build_llm_client() -> Any:
         return _build_openai_client()
     if provider == "opencode":
         return _build_opencode_client()
+    if provider in {"llamafarm", "llama_farm"}:
+        return _build_llamafarm_client()
     return _build_ollama_client()
 
 
@@ -59,6 +62,21 @@ def _build_opencode_client() -> OpenCodeClient:
         api_key_env=os.getenv("OPENCODE_API_KEY_ENV", "OPENCODE_API_KEY"),
         username_env=os.getenv("OPENCODE_USERNAME_ENV", "OPENCODE_SERVER_USERNAME"),
         password_env=os.getenv("OPENCODE_PASSWORD_ENV", "OPENCODE_SERVER_PASSWORD"),
+    )
+
+
+def _build_llamafarm_client() -> LlamaFarmClient:
+    base_url = os.getenv("LLAMAFARM_BASE_URL", "http://127.0.0.1:8002/v1")
+    model = os.getenv("LLAMAFARM_MODEL") or os.getenv(
+        "LOCAL_LLM_MODEL",
+        "mistral:7b-instruct",
+    )
+    timeout_seconds = _parse_float(os.getenv("LLAMAFARM_TIMEOUT_SECONDS"), default=120.0)
+    return LlamaFarmClient(
+        base_url=base_url,
+        model=model,
+        api_key_env=os.getenv("LLAMAFARM_API_KEY_ENV", "LLAMAFARM_API_KEY"),
+        timeout=timeout_seconds,
     )
 
 

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 
-from alphonse.agent.cognition.intent_discovery_engine import (
+from alphonse.agent.cognition.planning_engine import (
     format_available_abilities,
     format_available_ability_catalog,
 )

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from alphonse.agent.cognition.intent_discovery_engine import (
+from alphonse.agent.cognition.planning_engine import (
     _validate_execution_plan,
     discover_plan,
 )
@@ -35,18 +35,9 @@ def test_story_pipeline_returns_executable_plan() -> None:
     llm = _SeqLlm(
         responses=[
             (
-                '{"plan_version":"v1","message_summary":"identity","primary_intention":"core.identity.query_user_name",'
-                '"confidence":"high","steps":[{"step_id":"S1","goal":"answer user identity","requires":[],"produces":[],"priority":1}],'
-                '"acceptance_criteria":["user name returned"]}'
-            ),
-            (
-                '{"plan_version":"v1","bindings":[{"step_id":"S1","binding_type":"TOOL","tool_id":7,'
-                '"parameters":{},"missing_data":[],"reason":"direct_match"}]}'
-            ),
-            (
-                '{"plan_version":"v1","status":"READY","execution_plan":[{"step_id":"S1","sequence":1,'
-                '"kind":"TOOL","tool_name":"core.identity.query_user_name","parameters":{},"acceptance_links":[0]}],'
-                '"acceptance_criteria":["user name returned"],"repair_log":[]}'
+                '{"intention":"core.identity.query_user_name","confidence":"high",'
+                '"acceptance_criteria":["user name returned"],'
+                '"execution_plan":[{"tool":"core.identity.query_user_name","parameters":{"target":"current_user"}}]}'
             ),
         ]
     )
