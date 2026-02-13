@@ -9,8 +9,7 @@ from alphonse.agent.cognition.capability_gaps.triage import (
     detect_language,
     triage_gap_text,
 )
-from alphonse.agent.cognition.providers.ollama import OllamaClient
-from alphonse.agent.cognition.skills.interpretation.skills import build_ollama_client
+from alphonse.agent.cognition.providers.factory import build_llm_client
 from alphonse.agent.nervous_system.capability_gaps import list_gaps
 from alphonse.agent.nervous_system.gap_proposals import (
     get_pending_proposal_for_gap,
@@ -36,7 +35,7 @@ def reflect_gaps(limit: int = 50) -> list[str]:
     return created
 
 
-def _build_proposal(gap: dict[str, Any], llm_client: OllamaClient | None) -> dict[str, Any]:
+def _build_proposal(gap: dict[str, Any], llm_client: Any | None) -> dict[str, Any]:
     text = str(gap.get("user_text") or "").strip()
     language = detect_language(text)
     triage = triage_gap_text(text) if text else {"category": "intent_missing", "confidence": 0.2}
@@ -103,7 +102,7 @@ def _proposal_from_llm(
 
 
 def _llm_proposal(
-    text: str, language: str, llm_client: OllamaClient | None
+    text: str, language: str, llm_client: Any | None
 ) -> dict[str, Any] | None:
     if not llm_client or not text:
         return None
@@ -143,9 +142,9 @@ def _parse_json(text: str) -> dict[str, Any] | None:
     return parsed if isinstance(parsed, dict) else None
 
 
-def _safe_build_llm() -> OllamaClient | None:
+def _safe_build_llm() -> Any | None:
     try:
-        return build_ollama_client()
+        return build_llm_client()
     except Exception as exc:
         logger.warning("Gap reflection LLM unavailable: %s", exc)
         return None

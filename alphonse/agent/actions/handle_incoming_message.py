@@ -20,7 +20,7 @@ from alphonse.config import settings
 from alphonse.agent.cognition.plan_executor import PlanExecutionContext, PlanExecutor
 from alphonse.agent.cortex.graph import invoke_cortex
 from alphonse.agent.cortex.state_store import load_state, save_state
-from alphonse.agent.cognition.skills.interpretation.skills import build_ollama_client
+from alphonse.agent.cognition.providers.factory import build_llm_client
 from alphonse.agent.identity import store as identity_store
 from alphonse.agent.identity import profile as identity_profile
 from datetime import datetime, timezone
@@ -524,7 +524,7 @@ def _snippet(text: str, limit: int = 80) -> str:
 
 def _build_llm_client():
     try:
-        return build_ollama_client()
+        return build_llm_client()
     except Exception:
         return None
 
