@@ -13,7 +13,7 @@ def respond_node_impl(
     state: dict[str, Any],
     llm_client: Any,
     *,
-    run_intent_discovery: Callable[[dict[str, Any], Any], dict[str, Any] | None],
+    run_planning_cycle: Callable[[dict[str, Any], Any], dict[str, Any] | None],
     ability_registry_getter: Callable[[], Any],
     tool_registry: Any,
     run_capability_gap_tool: Callable[..., dict[str, Any]],
@@ -22,7 +22,7 @@ def respond_node_impl(
     if state.get("response_text") or state.get("response_key"):
         return {}
     emit_transition_event(state, "thinking")
-    discovery = run_intent_discovery(state, llm_client)
+    discovery = run_planning_cycle(state, llm_client)
     if discovery:
         if isinstance(discovery, dict):
             plans = discovery.get("plans")
@@ -72,3 +72,27 @@ def respond_node(
         return impl(state, llm_client)
 
     return _node
+
+
+def respond_finalize_node(
+    state: dict[str, Any],
+    *,
+    emit_transition_event: Callable[[dict[str, Any], str, dict[str, Any] | None], None],
+) -> dict[str, Any]:
+    plans = state.get("plans")
+    pending = state.get("pending_interaction")
+    if isinstance(plans, list):
+        has_gap = any(
+            isinstance(item, dict)
+            and str(item.get("plan_type") or "") == "CAPABILITY_GAP"
+            for item in plans
+        )
+        if has_gap:
+            emit_transition_event(state, "failed")
+            return {}
+    if pending:
+        emit_transition_event(state, "waiting_user")
+        return {}
+    if state.get("response_text") or state.get("response_key"):
+        emit_transition_event(state, "done")
+    return {}

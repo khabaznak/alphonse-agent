@@ -8,7 +8,7 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
-class DiscoveryLoopDeps:
+class PlanningLoopDeps:
     next_step_index: Callable[[list[dict[str, Any]], set[str]], int | None]
     safe_json: Callable[[Any, int], str]
     available_tool_catalog_data: Callable[[], dict[str, Any]]
@@ -20,16 +20,16 @@ class DiscoveryLoopDeps:
     tool_registry: Any
     emit_transition_event: Callable[[dict[str, Any], str, dict[str, Any] | None], None]
     has_missing_params: Callable[[dict[str, Any]], bool]
-    is_discovery_loop_state: Callable[[dict[str, Any]], bool]
+    is_planning_loop_state: Callable[[dict[str, Any]], bool]
     task_plane_category: str
 
 
-def run_discovery_loop_step(
+def run_planning_loop_step(
     state: dict[str, Any],
     loop_state: dict[str, Any],
     llm_client: Any,
     *,
-    deps: DiscoveryLoopDeps,
+    deps: PlanningLoopDeps,
 ) -> dict[str, Any]:
     steps = loop_state.get("steps")
     if not isinstance(steps, list) or not steps:
@@ -89,7 +89,7 @@ def run_discovery_loop_step(
                     str(repaired.get("tool") or "unknown"),
                     validation.issue.error_type.value if validation.issue else "unknown",
                 )
-                return run_discovery_loop_step(state, loop_state, llm_client, deps=deps)
+                return run_planning_loop_step(state, loop_state, llm_client, deps=deps)
         step["status"] = "failed"
         step["outcome"] = "validation_failed"
         state["intent"] = tool_name
@@ -144,7 +144,7 @@ def run_discovery_loop_step(
 def _capability_gap_result(
     state: dict[str, Any],
     *,
-    deps: DiscoveryLoopDeps,
+    deps: PlanningLoopDeps,
     reason: str,
 ) -> dict[str, Any]:
     deps.emit_transition_event(state, "failed", {"reason": reason})
@@ -152,4 +152,3 @@ def _capability_gap_result(
     plans = list(state.get("plans") or [])
     plans.append(plan)
     return {"plans": plans, "ability_state": {}, "pending_interaction": None}
-

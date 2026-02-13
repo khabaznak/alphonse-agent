@@ -11,19 +11,19 @@ logger = logging.getLogger(__name__)
 class FreshPlanningDeps:
     run_capability_gap_tool: Callable[..., dict[str, Any]]
     format_available_abilities: Callable[[], str]
-    planning_context_for_discovery: Callable[[dict[str, Any], str], dict[str, Any] | None]
+    planning_context_for_cycle: Callable[[dict[str, Any], str], dict[str, Any] | None]
     discover_plan: Callable[..., dict[str, Any] | None]
     locale_for_state: Callable[[dict[str, Any]], str]
-    dispatch_discovery_result: Callable[..., dict[str, Any]]
+    dispatch_cycle_result: Callable[..., dict[str, Any]]
 
 
 @dataclass(frozen=True)
-class DispatchDiscoveryDeps:
+class DispatchCycleDeps:
     run_capability_gap_tool: Callable[..., dict[str, Any]]
-    build_discovery_loop_state: Callable[..., dict[str, Any]]
+    build_planning_loop_state: Callable[..., dict[str, Any]]
 
 
-def run_fresh_discovery_for_message(
+def run_fresh_planning_pass(
     *,
     state: dict[str, Any],
     llm_client: Any,
@@ -37,7 +37,7 @@ def run_fresh_discovery_for_message(
         return {}
 
     available_tools = deps.format_available_abilities()
-    planning_context = deps.planning_context_for_discovery(state, text)
+    planning_context = deps.planning_context_for_cycle(state, text)
     discovery = deps.discover_plan(
         text=text,
         llm_client=llm_client,
@@ -45,7 +45,7 @@ def run_fresh_discovery_for_message(
         locale=deps.locale_for_state(state),
         planning_context=planning_context,
     )
-    return deps.dispatch_discovery_result(
+    return deps.dispatch_cycle_result(
         state=state,
         llm_client=llm_client,
         source_text=text,
@@ -53,15 +53,15 @@ def run_fresh_discovery_for_message(
     )
 
 
-def dispatch_discovery_result(
+def dispatch_cycle_result(
     *,
     state: dict[str, Any],
     llm_client: Any,
     source_text: str,
     discovery: dict[str, Any] | None,
-    deps: DispatchDiscoveryDeps,
+    deps: DispatchCycleDeps,
 ) -> dict[str, Any]:
-    discovery = coerce_planning_interrupt_to_discovery(discovery)
+    discovery = coerce_planning_interrupt_to_plan(discovery)
     if not isinstance(discovery, dict):
         logger.info(
             "cortex planning dispatch non-dict chat_id=%s correlation_id=%s",
@@ -82,7 +82,7 @@ def dispatch_discovery_result(
             reason="invalid_plan_payload",
         )
 
-    loop_state = deps.build_discovery_loop_state(discovery, source_message=source_text)
+    loop_state = deps.build_planning_loop_state(discovery, source_message=source_text)
     if not loop_state.get("steps"):
         logger.info(
             "cortex planning dispatch empty steps chat_id=%s correlation_id=%s",
@@ -106,7 +106,7 @@ def dispatch_discovery_result(
     return {"ability_state": loop_state, "pending_interaction": None}
 
 
-def coerce_planning_interrupt_to_discovery(
+def coerce_planning_interrupt_to_plan(
     discovery: dict[str, Any] | None,
 ) -> dict[str, Any] | None:
     if not isinstance(discovery, dict):
@@ -139,7 +139,7 @@ def coerce_planning_interrupt_to_discovery(
     return normalized
 
 
-def build_discovery_loop_state(
+def build_planning_loop_state(
     discovery: dict[str, Any],
     *,
     source_message: str | None = None,

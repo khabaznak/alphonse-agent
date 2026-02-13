@@ -47,6 +47,19 @@ def apology_node(
     return {}
 
 
+def apology_node_stateful(
+    state: dict[str, Any],
+    *,
+    build_capability_gap_apology: Callable[..., str],
+    llm_client_from_state: Callable[[dict[str, Any]], Any],
+) -> dict[str, Any]:
+    return apology_node(
+        state,
+        build_capability_gap_apology=build_capability_gap_apology,
+        llm_client=llm_client_from_state(state),
+    )
+
+
 def run_capability_gap_tool(
     state: dict[str, Any],
     *,

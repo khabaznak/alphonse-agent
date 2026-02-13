@@ -5,10 +5,10 @@ from typing import Any, Callable
 
 
 @dataclass(frozen=True)
-class PendingDiscoveryDeps:
+class PendingCycleDeps:
     now_iso_utc: Callable[[], str]
-    is_effectively_empty_discovery_result: Callable[[dict[str, Any]], bool]
-    is_discovery_loop_state: Callable[[dict[str, Any]], bool]
+    is_effectively_empty_cycle_result: Callable[[dict[str, Any]], bool]
+    is_planning_loop_state: Callable[[dict[str, Any]], bool]
     next_step_index: Callable[[list[dict[str, Any]], set[str]], int | None]
     bind_answer_to_steps: Callable[[list[dict[str, Any]], dict[str, Any], str, str], None]
     ability_registry_getter: Callable[[], Any]
@@ -16,12 +16,12 @@ class PendingDiscoveryDeps:
     logger_info: Callable[[str, Any, Any], None]
 
 
-def handle_pending_interaction_for_discovery(
+def handle_pending_interaction_for_cycle(
     *,
     state: dict[str, Any],
     llm_client: Any,
     text: str,
-    deps: PendingDiscoveryDeps,
+    deps: PendingCycleDeps,
 ) -> dict[str, Any] | None:
     pending = state.get("pending_interaction")
     if not isinstance(pending, dict):
@@ -70,7 +70,7 @@ def handle_pending_interaction_for_discovery(
         else:
             ability_state = state.get("ability_state")
             resumed: dict[str, Any] | None = None
-            if isinstance(ability_state, dict) and deps.is_discovery_loop_state(ability_state):
+            if isinstance(ability_state, dict) and deps.is_planning_loop_state(ability_state):
                 steps = ability_state.get("steps")
                 if isinstance(steps, list):
                     context = (
@@ -106,12 +106,12 @@ def handle_pending_interaction_for_discovery(
                             "pending_interaction": None,
                         }
             if resumed is not None:
-                if not deps.is_effectively_empty_discovery_result(resumed):
+                if not deps.is_effectively_empty_cycle_result(resumed):
                     return resumed
                 state["pending_interaction"] = None
                 state["ability_state"] = {}
                 deps.logger_info(
-                    "cortex pending answer consumed with noop chat_id=%s correlation_id=%s fallback=fresh_discovery",
+                    "cortex pending answer consumed with noop chat_id=%s correlation_id=%s fallback=fresh_planning",
                     state.get("chat_id"),
                     state.get("correlation_id"),
                 )
@@ -126,15 +126,15 @@ def handle_pending_interaction_for_discovery(
 
 
 @dataclass(frozen=True)
-class EmptyDiscoveryResultDeps:
-    is_discovery_loop_state: Callable[[dict[str, Any]], bool]
+class EmptyCycleResultDeps:
+    is_planning_loop_state: Callable[[dict[str, Any]], bool]
     next_step_index: Callable[[list[dict[str, Any]], set[str]], int | None]
 
 
-def is_effectively_empty_discovery_result(
+def is_effectively_empty_cycle_result(
     result: dict[str, Any],
     *,
-    deps: EmptyDiscoveryResultDeps,
+    deps: EmptyCycleResultDeps,
 ) -> bool:
     if not isinstance(result, dict):
         return False
@@ -148,7 +148,7 @@ def is_effectively_empty_discovery_result(
         return False
     ability_state = result.get("ability_state")
     if isinstance(ability_state, dict) and ability_state:
-        if not deps.is_discovery_loop_state(ability_state):
+        if not deps.is_planning_loop_state(ability_state):
             return False
         steps = ability_state.get("steps")
         if not isinstance(steps, list):

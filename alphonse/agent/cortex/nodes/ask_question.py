@@ -28,6 +28,19 @@ def ask_question_node(
     return run_ask_question_step(state, step, loop_state, idx)
 
 
+def ask_question_node_stateful(
+    state: dict[str, Any],
+    *,
+    run_ask_question_step: Callable[[dict[str, Any], dict[str, Any], dict[str, Any] | None, int | None], dict[str, Any]],
+    next_step_index: Callable[[list[dict[str, Any]], set[str]], int | None],
+) -> dict[str, Any]:
+    return ask_question_node(
+        state,
+        run_ask_question_step=run_ask_question_step,
+        next_step_index=next_step_index,
+    )
+
+
 def bind_answer_to_steps(
     steps: list[dict[str, Any]],
     bind: dict[str, Any],

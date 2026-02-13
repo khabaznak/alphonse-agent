@@ -5,29 +5,29 @@ from typing import Any, Callable
 
 
 @dataclass(frozen=True)
-class PlanningDiscoveryDeps:
+class PlanningCycleDeps:
     require_last_user_message: Callable[[dict[str, Any]], str]
-    handle_pending_interaction_for_discovery: Callable[..., dict[str, Any] | None]
-    handle_ability_state_for_discovery: Callable[..., dict[str, Any] | None]
-    run_fresh_discovery_for_message: Callable[..., dict[str, Any] | None]
+    handle_pending_interaction_for_cycle: Callable[..., dict[str, Any] | None]
+    handle_ability_state_for_cycle: Callable[..., dict[str, Any] | None]
+    run_fresh_planning_pass: Callable[..., dict[str, Any] | None]
 
 
 @dataclass(frozen=True)
-class AbilityStateDiscoveryDeps:
-    is_discovery_loop_state: Callable[[dict[str, Any]], bool]
+class AbilityStateCycleDeps:
+    is_planning_loop_state: Callable[[dict[str, Any]], bool]
     ability_registry_getter: Callable[[], Any]
     tool_registry: Any
     logger_info: Callable[[str, Any, Any, str, str], None]
 
 
-def run_intent_discovery(
+def run_planning_cycle(
     state: dict[str, Any],
     llm_client: Any,
-    deps: PlanningDiscoveryDeps,
+    deps: PlanningCycleDeps,
 ) -> dict[str, Any] | None:
     text = deps.require_last_user_message(state)
 
-    pending_result = deps.handle_pending_interaction_for_discovery(
+    pending_result = deps.handle_pending_interaction_for_cycle(
         state=state,
         llm_client=llm_client,
         text=text,
@@ -35,7 +35,7 @@ def run_intent_discovery(
     if pending_result is not None:
         return pending_result
 
-    ability_state_result = deps.handle_ability_state_for_discovery(
+    ability_state_result = deps.handle_ability_state_for_cycle(
         state=state,
         llm_client=llm_client,
         text=text,
@@ -43,25 +43,25 @@ def run_intent_discovery(
     if ability_state_result is not None:
         return ability_state_result
 
-    return deps.run_fresh_discovery_for_message(
+    return deps.run_fresh_planning_pass(
         state=state,
         llm_client=llm_client,
         text=text,
     )
 
 
-def handle_ability_state_for_discovery(
+def handle_ability_state_for_cycle(
     *,
     state: dict[str, Any],
     llm_client: Any,
     text: str,
-    deps: AbilityStateDiscoveryDeps,
+    deps: AbilityStateCycleDeps,
 ) -> dict[str, Any] | None:
     _ = llm_client
     ability_state = state.get("ability_state")
     if not isinstance(ability_state, dict):
         return None
-    if deps.is_discovery_loop_state(ability_state):
+    if deps.is_planning_loop_state(ability_state):
         source_message = str(ability_state.get("source_message") or "").strip()
         if source_message and source_message != text:
             deps.logger_info(
