@@ -11,16 +11,11 @@ logger = logging.getLogger(__name__)
 class PlanningLoopDeps:
     next_step_index: Callable[[list[dict[str, Any]], set[str]], int | None]
     safe_json: Callable[[Any, int], str]
-    available_tool_catalog_data: Callable[[], dict[str, Any]]
-    validate_loop_step: Callable[[dict[str, Any], dict[str, Any]], Any]
-    critic_repair_invalid_step: Callable[..., dict[str, Any] | None]
     build_gap_plan: Callable[..., dict[str, Any]]
     execute_tool_node: Callable[[dict[str, Any]], dict[str, Any]]
     ability_registry_getter: Callable[[], Any]
     tool_registry: Any
     emit_transition_event: Callable[[dict[str, Any], str, dict[str, Any] | None], None]
-    has_missing_params: Callable[[dict[str, Any]], bool]
-    is_planning_loop_state: Callable[[dict[str, Any]], bool]
     task_plane_category: str
 
 
@@ -55,48 +50,6 @@ def run_planning_loop_step(
         step["status"] = "failed"
         step["outcome"] = "missing_tool_name"
         return _capability_gap_result(state, deps=deps, reason="step_missing_tool_name")
-    catalog = deps.available_tool_catalog_data()
-    validation = deps.validate_loop_step(step, catalog)
-    if not validation.is_valid:
-        if not bool(step.get("critic_attempted")):
-            repaired = deps.critic_repair_invalid_step(
-                state=state,
-                step=step,
-                llm_client=llm_client,
-                validation=validation,
-            )
-            if repaired is not None:
-                repaired["chunk_index"] = step.get("chunk_index")
-                repaired["sequence"] = step.get("sequence")
-                repaired["critic_attempted"] = True
-                repaired["executed"] = False
-                repaired_params = (
-                    repaired.get("parameters")
-                    if isinstance(repaired.get("parameters"), dict)
-                    else {}
-                )
-                repaired["parameters"] = repaired_params
-                repaired["status"] = (
-                    "incomplete" if deps.has_missing_params(repaired_params) else "ready"
-                )
-                repaired["validation_error_history"] = list(step.get("validation_error_history") or [])
-                steps[next_idx] = repaired
-                logger.info(
-                    "cortex plan critic repaired chat_id=%s correlation_id=%s from=%s to=%s issue=%s",
-                    state.get("chat_id"),
-                    state.get("correlation_id"),
-                    tool_name,
-                    str(repaired.get("tool") or "unknown"),
-                    validation.issue.error_type.value if validation.issue else "unknown",
-                )
-                return run_planning_loop_step(state, loop_state, llm_client, deps=deps)
-        step["status"] = "failed"
-        step["outcome"] = "validation_failed"
-        state["intent"] = tool_name
-        reason = "step_validation_failed"
-        if validation.issue is not None:
-            reason = f"step_validation_{validation.issue.error_type.value.lower()}"
-        return _capability_gap_result(state, deps=deps, reason=reason)
     if tool_name == "askQuestion":
         state["ability_state"] = loop_state
         state["selected_step_index"] = next_idx

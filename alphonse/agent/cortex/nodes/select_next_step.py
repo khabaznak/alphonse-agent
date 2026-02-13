@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
+from alphonse.agent.cortex.nodes.capability_gap import has_capability_gap_plan
 from alphonse.agent.cortex.nodes.plan import next_step_index as _next_step_index
 
 
@@ -34,6 +35,19 @@ def select_next_step_node_stateful(state: dict[str, Any]) -> dict[str, Any]:
         next_step_index=_next_step_index,
         is_planning_loop_state=_is_planning_loop_state,
     )
+
+
+def route_after_step_selection(state: dict[str, Any]) -> str:
+    if has_capability_gap_plan(state):
+        return "apology_node"
+    decision = str(state.get("route_decision") or "").strip()
+    if decision in {"execute_tool_node", "ask_question_node", "respond_node", "critic_node"}:
+        return decision
+    if decision == "execute_tool":
+        return "critic_node"
+    if decision == "ask_question":
+        return "ask_question_node"
+    return "respond_node"
 
 
 def _is_planning_loop_state(ability_state: dict[str, Any]) -> bool:

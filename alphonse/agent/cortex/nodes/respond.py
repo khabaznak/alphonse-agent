@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
+from alphonse.agent.cortex.nodes.capability_gap import has_capability_gap_plan
+
 def compose_response_from_state(state: dict[str, Any]) -> str:
     key = state.get("response_key")
     if not isinstance(key, str) or not key.strip():
@@ -25,16 +27,8 @@ def respond_node_impl(
     discovery = run_planning_cycle(state, llm_client)
     if discovery:
         if isinstance(discovery, dict):
-            plans = discovery.get("plans")
             pending = discovery.get("pending_interaction")
-            has_gap = False
-            if isinstance(plans, list):
-                has_gap = any(
-                    isinstance(item, dict)
-                    and str(item.get("plan_type") or "") == "CAPABILITY_GAP"
-                    for item in plans
-                )
-            if has_gap:
+            if has_capability_gap_plan(discovery):
                 emit_transition_event(state, "failed")
             elif pending:
                 emit_transition_event(state, "waiting_user")
@@ -79,17 +73,10 @@ def respond_finalize_node(
     *,
     emit_transition_event: Callable[[dict[str, Any], str, dict[str, Any] | None], None],
 ) -> dict[str, Any]:
-    plans = state.get("plans")
     pending = state.get("pending_interaction")
-    if isinstance(plans, list):
-        has_gap = any(
-            isinstance(item, dict)
-            and str(item.get("plan_type") or "") == "CAPABILITY_GAP"
-            for item in plans
-        )
-        if has_gap:
-            emit_transition_event(state, "failed")
-            return {}
+    if has_capability_gap_plan(state):
+        emit_transition_event(state, "failed")
+        return {}
     if pending:
         emit_transition_event(state, "waiting_user")
         return {}

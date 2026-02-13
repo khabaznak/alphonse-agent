@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
+from alphonse.agent.cortex.nodes.capability_gap import has_capability_gap_plan
+
 
 def plan_node(
     state: dict[str, Any],
@@ -39,3 +41,14 @@ def plan_node_stateful(
             llm_client_from_state(s),
         ),
     )
+
+
+def route_after_plan(state: dict[str, Any]) -> str:
+    if has_capability_gap_plan(state):
+        return "apology_node"
+    ability_state = state.get("ability_state")
+    if isinstance(ability_state, dict) and str(ability_state.get("kind") or "") == "discovery_loop":
+        steps = ability_state.get("steps")
+        if isinstance(steps, list) and steps:
+            return "select_next_step_node"
+    return "respond_node"

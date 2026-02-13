@@ -1,5 +1,10 @@
-from alphonse.agent.cortex import graph
+from alphonse.agent.cognition.pending_interaction import (
+    PendingInteractionType,
+    build_pending_interaction,
+    serialize_pending_interaction,
+)
 from alphonse.agent.cortex.nodes import execution_helpers
+from alphonse.agent.cortex.transitions import emit_transition_event
 
 
 def test_ask_question_step_falls_back_to_response_key() -> None:
@@ -17,10 +22,10 @@ def test_ask_question_step_falls_back_to_response_key() -> None:
         step,
         loop_state,
         0,
-        build_pending_interaction=graph.build_pending_interaction,
-        pending_interaction_type_slot_fill=graph.PendingInteractionType.SLOT_FILL,
-        serialize_pending_interaction=graph.serialize_pending_interaction,
-        emit_transition_event=graph._emit_transition_event,
+        build_pending_interaction=build_pending_interaction,
+        pending_interaction_type_slot_fill=PendingInteractionType.SLOT_FILL,
+        serialize_pending_interaction=serialize_pending_interaction,
+        emit_transition_event=emit_transition_event,
     )
 
     assert "plans" not in result

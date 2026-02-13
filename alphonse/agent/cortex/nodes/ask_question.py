@@ -1,6 +1,16 @@
 from __future__ import annotations
 
+from functools import partial
 from typing import Any, Callable
+
+from alphonse.agent.cognition.pending_interaction import (
+    PendingInteractionType,
+    build_pending_interaction,
+    serialize_pending_interaction,
+)
+from alphonse.agent.cortex.nodes.execution_helpers import run_ask_question_step
+from alphonse.agent.cortex.nodes.plan import next_step_index
+from alphonse.agent.cortex.transitions import emit_transition_event
 
 
 def ask_question_node(
@@ -37,6 +47,23 @@ def ask_question_node_stateful(
     return ask_question_node(
         state,
         run_ask_question_step=run_ask_question_step,
+        next_step_index=next_step_index,
+    )
+
+
+def build_ask_question_node() -> Callable[[dict[str, Any]], dict[str, Any]]:
+    return partial(
+        ask_question_node_stateful,
+        run_ask_question_step=lambda s, step, loop_state, step_index: run_ask_question_step(
+            s,
+            step,
+            loop_state,
+            step_index,
+            build_pending_interaction=build_pending_interaction,
+            pending_interaction_type_slot_fill=PendingInteractionType.SLOT_FILL,
+            serialize_pending_interaction=serialize_pending_interaction,
+            emit_transition_event=emit_transition_event,
+        ),
         next_step_index=next_step_index,
     )
 

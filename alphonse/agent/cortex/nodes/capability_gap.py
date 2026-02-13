@@ -5,6 +5,17 @@ from typing import Any, Callable
 from alphonse.agent.cognition.plans import CortexPlan, PlanType
 
 
+def has_capability_gap_plan(state: dict[str, Any]) -> bool:
+    plans = state.get("plans")
+    if not isinstance(plans, list):
+        return False
+    return any(
+        isinstance(item, dict)
+        and str(item.get("plan_type") or "") == PlanType.CAPABILITY_GAP.value
+        for item in plans
+    )
+
+
 def build_gap_plan(
     *,
     state: dict[str, Any],

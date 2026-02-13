@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from functools import partial
 from typing import Any, Callable
 
 from alphonse.agent.cognition.prompt_templates_runtime import (
@@ -57,6 +58,33 @@ def apology_node_stateful(
         state,
         build_capability_gap_apology=build_capability_gap_apology,
         llm_client=llm_client_from_state(state),
+    )
+
+
+def build_apology_node(
+    *,
+    llm_client_from_state: Callable[[dict[str, Any]], Any],
+) -> Callable[[dict[str, Any]], dict[str, Any]]:
+    return partial(
+        apology_node_stateful,
+        build_capability_gap_apology=lambda **kwargs: _execution_helpers.build_capability_gap_apology(
+            **kwargs,
+            render_prompt_template=render_prompt_template,
+            apology_user_template=CAPABILITY_GAP_APOLOGY_USER_TEMPLATE,
+            apology_system_prompt=CAPABILITY_GAP_APOLOGY_SYSTEM_PROMPT,
+            locale_for_state=lambda s: (
+                s.get("locale")
+                if isinstance(s.get("locale"), str) and s.get("locale")
+                else "en-US"
+            ),
+            logger_exception=lambda msg, chat_id, correlation_id, rsn: logger.exception(
+                msg,
+                chat_id,
+                correlation_id,
+                rsn,
+            ),
+        ),
+        llm_client_from_state=llm_client_from_state,
     )
 
 
