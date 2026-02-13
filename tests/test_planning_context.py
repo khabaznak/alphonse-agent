@@ -1,5 +1,5 @@
 from alphonse.agent.cognition.planning import PlanningMode, resolve_planning_context
-from alphonse.agent.cortex import graph
+from alphonse.agent.cortex import utils as cortex_utils
 
 
 def test_planning_context_respects_cli_override() -> None:
@@ -18,8 +18,8 @@ def test_cortex_state_persists_planning_fields() -> None:
         "autonomy_level": 0.8,
         "planning_mode": "aventurizacion",
     }
-    cognition_state = graph._build_cognition_state(state)
-    meta = graph._build_meta(state)
+    cognition_state = cortex_utils.build_cognition_state(state)
+    meta = cortex_utils.build_meta(state)
     assert cognition_state["autonomy_level"] == 0.8
     assert cognition_state["planning_mode"] == "aventurizacion"
     assert meta["autonomy_level"] == 0.8

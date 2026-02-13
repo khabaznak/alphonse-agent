@@ -57,7 +57,7 @@ def discover_plan(
     return _story_discover_plan(
         text=text,
         llm_client=llm_client,
-        locale=locale or "any",
+        locale=locale,
         planning_context=planning_context,
     )
 
@@ -145,7 +145,7 @@ def _story_discover_plan(
     *,
     text: str,
     llm_client: object,
-    locale: str,
+    locale: str | None,
     planning_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     exception_history: list[dict[str, Any]] = []

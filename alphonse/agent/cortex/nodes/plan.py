@@ -13,3 +13,14 @@ def plan_node(
         return {}
     result = run_intent_discovery(state)
     return result if isinstance(result, dict) else {}
+
+
+def next_step_index(
+    steps: list[dict[str, Any]],
+    allowed_statuses: set[str],
+) -> int | None:
+    for idx, step in enumerate(steps):
+        status = str(step.get("status") or "").strip().lower()
+        if status in allowed_statuses:
+            return idx
+    return None

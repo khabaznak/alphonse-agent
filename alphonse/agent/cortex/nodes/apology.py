@@ -1,6 +1,19 @@
 from __future__ import annotations
 
+import logging
 from typing import Any, Callable
+
+from alphonse.agent.cognition.prompt_templates_runtime import (
+    CAPABILITY_GAP_APOLOGY_SYSTEM_PROMPT,
+    CAPABILITY_GAP_APOLOGY_USER_TEMPLATE,
+    render_prompt_template,
+)
+from alphonse.agent.cognition.preferences.store import get_or_create_principal_for_channel
+import alphonse.agent.cortex.nodes.execution_helpers as _execution_helpers
+from alphonse.agent.cortex.nodes.capability_gap import run_capability_gap_tool as _run_capability_gap_tool_core
+from alphonse.agent.cortex.transitions import emit_transition_event as _emit_transition_event
+
+logger = logging.getLogger(__name__)
 
 
 def apology_node(
@@ -32,3 +45,43 @@ def apology_node(
             return {"response_text": apology}
         return {}
     return {}
+
+
+def run_capability_gap_tool(
+    state: dict[str, Any],
+    *,
+    llm_client: Any,
+    reason: str,
+    missing_slots: list[str] | None = None,
+    append_existing_plans: bool = False,
+) -> dict[str, Any]:
+    return _run_capability_gap_tool_core(
+        state=state,
+        llm_client=llm_client,
+        reason=reason,
+        missing_slots=missing_slots,
+        append_existing_plans=append_existing_plans,
+        emit_transition_event=_emit_transition_event,
+        logger_info=lambda msg, chat_id, correlation_id, rsn: logger.info(
+            msg,
+            chat_id,
+            correlation_id,
+            rsn,
+        ),
+        build_capability_gap_apology=lambda **kwargs: _execution_helpers.build_capability_gap_apology(
+            **kwargs,
+            render_prompt_template=render_prompt_template,
+            apology_user_template=CAPABILITY_GAP_APOLOGY_USER_TEMPLATE,
+            apology_system_prompt=CAPABILITY_GAP_APOLOGY_SYSTEM_PROMPT,
+            locale_for_state=lambda s: (
+                s.get("locale") if isinstance(s.get("locale"), str) and s.get("locale") else "en-US"
+            ),
+            logger_exception=lambda msg, chat_id, correlation_id, rsn: logger.exception(
+                msg,
+                chat_id,
+                correlation_id,
+                rsn,
+            ),
+        ),
+        get_or_create_principal_for_channel=get_or_create_principal_for_channel,
+    )

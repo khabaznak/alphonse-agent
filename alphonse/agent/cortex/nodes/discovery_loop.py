@@ -18,7 +18,6 @@ class DiscoveryLoopDeps:
     execute_tool_node: Callable[[dict[str, Any]], dict[str, Any]]
     ability_registry_getter: Callable[[], Any]
     tool_registry: Any
-    replan_discovery_after_step: Callable[..., dict[str, Any] | None]
     emit_transition_event: Callable[[dict[str, Any], str, dict[str, Any] | None], None]
     has_missing_params: Callable[[dict[str, Any]], bool]
     is_discovery_loop_state: Callable[[dict[str, Any]], bool]
@@ -146,14 +145,6 @@ def run_discovery_loop_step(
             fact_bag = {}
         fact_bag.update(fact_updates)
         loop_state["fact_bag"] = fact_bag
-    replan_result = deps.replan_discovery_after_step(
-        state=state,
-        loop_state=loop_state,
-        last_step=step,
-        llm_client=llm_client,
-    )
-    if isinstance(replan_result, dict):
-        return replan_result
     if isinstance(loop_state.get("steps"), list):
         steps = loop_state["steps"]
     if deps.next_step_index(steps, allowed_statuses={"ready"}) is None:
