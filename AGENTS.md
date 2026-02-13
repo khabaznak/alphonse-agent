@@ -1,15 +1,14 @@
 ## Project scope
-- Atrium is a FastAPI service that exposes Alphonse status over HTTP and a minimal HTMX UI.
+- Alphonse Agent is a FastAPI service that exposes Alphonse status and controls over HTTP APIs.
 
 ## Local setup
 - Run the server with `uvicorn interfaces.http.main:app --reload`.
 - Tests live in `tests/` and use pytest.
 
 ## Code style
-- Prefer small, explicit functions and avoid introducing new dependencies for UI.
-- Use HTMX patterns for UI interactions; avoid custom JavaScript unless necessary.
+- Prefer small, explicit functions and avoid introducing unnecessary dependencies.
 
 ## Repo layout
-- `interfaces/http/` holds the web entrypoints.
+- `interfaces/http/` holds legacy HTTP entrypoints.
 - `core/context/` provides time + system context snapshots.
 - `alphonse/` contains cognition, voice, and persona assets.

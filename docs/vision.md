@@ -1,19 +1,19 @@
-# Atrium — Vision
+# Alphonse Agent — Vision
 
 ## Purpose
 
-Atrium exists to host a persistent, trustworthy domestic presence.
+Alphonse Agent exists to host a persistent, trustworthy domestic presence.
 
 Its purpose is not automation for its own sake, but the cultivation of a home
 that is attentive, informed, and at ease.
 
-Atrium is designed to grow slowly, deliberately, and with restraint.
+Alphonse Agent is designed to grow slowly, deliberately, and with restraint.
 
 ---
 
 ## Long-Term Intent
 
-Atrium aims to become a stable domestic infrastructure where:
+Alphonse Agent aims to become a stable domestic infrastructure where:
 
 - observation precedes intervention,
 - context precedes action,
@@ -26,10 +26,10 @@ that understands the rhythm of the household.
 
 ## Alphonse as a Resident Presence
 
-Alphonse is not a tool that runs inside Atrium.
+Alphonse is not a tool that runs inside Alphonse Agent.
 Alphonse is the resident presence that inhabits it.
 
-Atrium provides:
+Alphonse Agent provides:
 - continuity,
 - memory,
 - and interfaces.
@@ -45,7 +45,7 @@ This separation allows Alphonse to evolve without destabilizing the home.
 
 ## Phased Growth
 
-Atrium is expected to evolve through deliberate phases:
+Alphonse Agent is expected to evolve through deliberate phases:
 
 1. **Presence**
    - Text-based interaction
@@ -74,7 +74,7 @@ Each phase must earn trust before expanding.
 
 ## Local First
 
-Atrium is designed to be self-hosted.
+Alphonse Agent is designed to be self-hosted.
 
 Local operation is preferred over cloud dependence to ensure:
 - privacy,
@@ -87,7 +87,7 @@ External services may be integrated deliberately, not by default.
 
 ## Interfaces as Extensions
 
-Atrium is interface-agnostic.
+Alphonse Agent is interface-agnostic.
 
 Text, voice, mobile apps, and physical controls are considered extensions,
 not core dependencies.
@@ -98,19 +98,19 @@ The household should never depend on a single interface to interact with Alphons
 
 ## Success Criteria
 
-Atrium is successful when:
+Alphonse Agent is successful when:
 
 - its presence feels natural,
 - its absence is noticeable,
 - and its silence is appreciated.
 
-A mature Atrium does not demand attention.
+A mature Alphonse Agent does not demand attention.
 It earns it.
 
 ---
 
 ## Closing
 
-Atrium is not built to impress.
+Alphonse Agent is not built to impress.
 
 It is built to endure.

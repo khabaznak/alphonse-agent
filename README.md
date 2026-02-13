@@ -1,16 +1,16 @@
-# Atrium Server
+# Alphonse Agent
 
-Atrium is a self-hosted domestic infrastructure designed to host **Alphonse**,
+Alphonse Agent is a self-hosted domestic infrastructure designed to host **Alphonse**,
 a resident digital butler that is proactive, educational, and protective.
 
-Atrium is not a smart-home gadget, nor a generic assistant.
+Alphonse Agent is not a smart-home gadget, nor a generic assistant.
 It is the persistent environment in which Alphonse exists, observes, learns, and serves.
 
 ---
 
 ## What is Alphonse?
 
-Alphonse is the resident butler of Atrium.
+Alphonse is the resident butler of Alphonse Agent.
 
 Alphonse:
 - observes household state without intruding,
@@ -23,9 +23,9 @@ and ethical orientation.
 
 ---
 
-## What Atrium Is
+## What Alphonse Agent Is
 
-Atrium is:
+Alphonse Agent is:
 
 - a **local-first** system
 - designed to be **self-hosted**
@@ -33,13 +33,13 @@ Atrium is:
 - extensible through multiple interfaces (apps, voice, services)
 - built to evolve gradually and deliberately
 
-Atrium prioritizes trust, clarity, and restraint over automation volume.
+Alphonse Agent prioritizes trust, clarity, and restraint over automation volume.
 
 ---
 
-## What Atrium Is Not
+## What Alphonse Agent Is Not
 
-Atrium is not:
+Alphonse Agent is not:
 
 - a cloud-dependent assistant
 - a surveillance system
@@ -50,7 +50,7 @@ Atrium is not:
 
 ## Repository Structure
 
-This repository hosts the **Atrium Server**, the core environment where Alphonse lives.
+This repository hosts the **Alphonse Agent**, the runtime environment where Alphonse lives.
 
 Key files:
 
@@ -88,7 +88,7 @@ The current focus is:
 
 ## Running Locally
 
-Expose Atrium to the local network with:
+Expose Alphonse Agent to the local network with:
 
 ```bash
 uvicorn interfaces.http.main:app --host 0.0.0.0 --port 8000
@@ -227,8 +227,8 @@ New persistence tables:
 
 These are managed via store modules:
 
-- `/Users/alex/Code Projects/atrium-server/alphonse/agent/nervous_system/onboarding_profiles.py`
-- `/Users/alex/Code Projects/atrium-server/alphonse/agent/nervous_system/location_profiles.py`
+- `/Users/alex/Code Projects/alphonse-agent/alphonse/agent/nervous_system/onboarding_profiles.py`
+- `/Users/alex/Code Projects/alphonse-agent/alphonse/agent/nervous_system/location_profiles.py`
 
 ### Onboarding + Location API Endpoints
 
@@ -338,7 +338,7 @@ Set these environment variables (see `.env.example`):
 
 - `SUPABASE_URL`
 - `SUPABASE_SERVICE_ROLE_KEY` (preferred) or `SUPABASE_ANON_KEY`
-- `ATRIUM_WEBHOOK_SECRET` (optional; required for webhook auth)
+- `ALPHONSE_WEBHOOK_SECRET` (optional; required for webhook auth)
 - `FCM_CREDENTIALS_JSON` (Firebase service account JSON, for push notifications)
 - `VAPID_PRIVATE_KEY` (Web Push private key)
 - `VAPID_PUBLIC_KEY` (Web Push public key)
@@ -360,8 +360,8 @@ For web push, send the subscription object as `token`.
 
 `owner_id` for push devices references the `users` table.
 
-Webhook auth (optional): if `ATRIUM_WEBHOOK_SECRET` is set, include the
-`X-Atrium-Webhook-Secret` header in webhook requests.
+Webhook auth (optional): if `ALPHONSE_WEBHOOK_SECRET` is set, include the
+`X-Alphonse-Webhook-Secret` header in webhook requests.
 
 ---
 
@@ -395,7 +395,7 @@ and `delivery_receipts`.
 
 ## Philosophy
 
-Atrium is built with the belief that:
+Alphonse Agent is built with the belief that:
 
 > A system that knows when to remain silent
 > is more intelligent than one that speaks constantly.

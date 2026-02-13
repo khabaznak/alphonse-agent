@@ -105,15 +105,15 @@ Example: `GeocoderTool` converts an address to lat/lng via Google Maps.
 - `alphonse.agent.cli tool-configs ...`
 
 ## Current Code Anchors
-- Senses: `/Users/alex/Code Projects/atrium-server/alphonse/agent/nervous_system/senses/`
-- Tools: `/Users/alex/Code Projects/atrium-server/alphonse/agent/tools/`
-- Abilities registry: `/Users/alex/Code Projects/atrium-server/alphonse/agent/cognition/abilities/registry.py`
-- Intent execution path: `/Users/alex/Code Projects/atrium-server/alphonse/agent/cortex/graph.py`
-- Channel extremities/adapters: `/Users/alex/Code Projects/atrium-server/alphonse/agent/io/`
-- Normalized contracts: `/Users/alex/Code Projects/atrium-server/alphonse/agent/io/contracts.py`
+- Senses: `/Users/alex/Code Projects/alphonse-agent/alphonse/agent/nervous_system/senses/`
+- Tools: `/Users/alex/Code Projects/alphonse-agent/alphonse/agent/tools/`
+- Abilities registry: `/Users/alex/Code Projects/alphonse-agent/alphonse/agent/cognition/abilities/registry.py`
+- Intent execution path: `/Users/alex/Code Projects/alphonse-agent/alphonse/agent/cortex/graph.py`
+- Channel extremities/adapters: `/Users/alex/Code Projects/alphonse-agent/alphonse/agent/io/`
+- Normalized contracts: `/Users/alex/Code Projects/alphonse-agent/alphonse/agent/io/contracts.py`
 
 ## How To Add A New Sense
-1. Create a new sense module in `/Users/alex/Code Projects/atrium-server/alphonse/agent/nervous_system/senses/`.
+1. Create a new sense module in `/Users/alex/Code Projects/alphonse-agent/alphonse/agent/nervous_system/senses/`.
 2. Define `key`, `signals`, `start()`, `stop()`, and emit `Signal(...)` on bus.
 3. Normalize incoming payload shape before emission (prefer IO adapters where applicable).
 4. Add tests for emission behavior and payload correctness.
@@ -124,9 +124,9 @@ Checklist:
 - [ ] Can start/stop cleanly.
 
 ## How To Add A New Tool
-1. Create tool module under `/Users/alex/Code Projects/atrium-server/alphonse/agent/tools/`.
+1. Create tool module under `/Users/alex/Code Projects/alphonse-agent/alphonse/agent/tools/`.
 2. Keep function signatures explicit and side effects limited.
-3. Register tool in `/Users/alex/Code Projects/atrium-server/alphonse/agent/tools/registry.py`.
+3. Register tool in `/Users/alex/Code Projects/alphonse-agent/alphonse/agent/tools/registry.py`.
 4. Add unit tests for success/error paths.
 
 Checklist:
@@ -135,8 +135,8 @@ Checklist:
 - [ ] Tool registered in default tool registry.
 
 ## How To Add A New Skill (Ability)
-1. Add intent spec in `/Users/alex/Code Projects/atrium-server/alphonse/agent/cognition/intent_catalog.py`.
-2. Implement ability executor in `/Users/alex/Code Projects/atrium-server/alphonse/agent/cortex/graph.py` (or a dedicated ability module if moved later).
+1. Add intent spec in `/Users/alex/Code Projects/alphonse-agent/alphonse/agent/cognition/intent_catalog.py`.
+2. Implement ability executor in `/Users/alex/Code Projects/alphonse-agent/alphonse/agent/cortex/graph.py` (or a dedicated ability module if moved later).
 3. Register ability in `AbilityRegistry` with required tools declared.
 4. If needed, produce plans for `PlanExecutor`.
 5. Add regression tests for:
@@ -150,9 +150,9 @@ Checklist:
 - [ ] End-to-end test passes.
 
 ## How To Add A New Extremity
-1. Add adapter in `/Users/alex/Code Projects/atrium-server/alphonse/agent/io/`.
+1. Add adapter in `/Users/alex/Code Projects/alphonse-agent/alphonse/agent/io/`.
 2. Implement `deliver(NormalizedOutboundMessage)`.
-3. Register in `/Users/alex/Code Projects/atrium-server/alphonse/agent/io/registry.py`.
+3. Register in `/Users/alex/Code Projects/alphonse-agent/alphonse/agent/io/registry.py`.
 4. Ensure no business logic leaks into adapter.
 5. Add delivery-path tests.
 

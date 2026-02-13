@@ -20,7 +20,7 @@ Separate Alphonse agent core from presentation layers and treat all UIs as extre
 - Allow the Web UI to run as a separate service.
 
 ## Phase 4 — Cleanup
-- Remove legacy Atrium-era artifacts from core.
+- Remove legacy Alphonse Agent-era artifacts from core.
 - Rename repo and update docs/scripts as needed.
 
 ## Guardrails

@@ -28,13 +28,13 @@ def remove_push_device(device_id: str):
 
 @trigger_router.post("/notifications/refresh", status_code=202)
 def trigger_notifications_refresh(
-    x_atrium_webhook_secret: str | None = Header(default=None),
+    x_alphonse_webhook_secret: str | None = Header(default=None),
 ):
-    _assert_webhook_secret(x_atrium_webhook_secret)
+    _assert_webhook_secret(x_alphonse_webhook_secret)
     return {"status": "accepted"}
 
 
 def _assert_webhook_secret(received: str | None) -> None:
-    expected = os.getenv("ATRIUM_WEBHOOK_SECRET")
+    expected = os.getenv("ALPHONSE_WEBHOOK_SECRET")
     if expected and received != expected:
         raise HTTPException(status_code=401, detail="Invalid webhook secret")

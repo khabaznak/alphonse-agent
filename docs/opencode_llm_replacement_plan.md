@@ -5,12 +5,12 @@
 - Deliver this as a drop-in provider swap first, without changing cognition behavior.
 
 ## What We Confirmed (Current State)
-- Alphonse currently builds an Ollama client from env vars in `/Users/alex/Code Projects/atrium-server/alphonse/agent/cognition/skills/interpretation/skills.py`.
+- Alphonse currently builds an Ollama client from env vars in `/Users/alex/Code Projects/alphonse-agent/alphonse/agent/cognition/skills/interpretation/skills.py`.
 - The LLM interface contract is effectively `complete(system_prompt, user_prompt) -> str`.
-- Message handling currently calls `_build_llm_client()` and falls back to `None` on provider construction failure in `/Users/alex/Code Projects/atrium-server/alphonse/agent/actions/handle_incoming_message.py`.
+- Message handling currently calls `_build_llm_client()` and falls back to `None` on provider construction failure in `/Users/alex/Code Projects/alphonse-agent/alphonse/agent/actions/handle_incoming_message.py`.
 - Default model remains `mistral:7b-instruct` in:
-  - `/Users/alex/Code Projects/atrium-server/config/alphonse.yaml`
-  - `/Users/alex/Code Projects/atrium-server/alphonse/config/__init__.py`
+  - `/Users/alex/Code Projects/alphonse-agent/config/alphonse.yaml`
+  - `/Users/alex/Code Projects/alphonse-agent/alphonse/config/__init__.py`
 
 ## OpenCode Modes (From Docs)
 ### 1) Serve mode (recommended for Alphonse/Python)
@@ -55,7 +55,7 @@
 - Add a small provider factory abstraction so caller code no longer imports Ollama-specific builders.
 
 ### Phase 1: OpenCode provider implementation
-- Create `/Users/alex/Code Projects/atrium-server/alphonse/agent/cognition/providers/opencode.py`.
+- Create `/Users/alex/Code Projects/alphonse-agent/alphonse/agent/cognition/providers/opencode.py`.
 - Implement:
   - HTTP auth handling (basic auth if configured)
   - Session creation/reuse policy
@@ -63,7 +63,7 @@
   - Timeouts + structured error logging
 
 ### Phase 2: Wiring
-- Update `/Users/alex/Code Projects/atrium-server/alphonse/agent/actions/handle_incoming_message.py` to build provider via selector, not Ollama-only.
+- Update `/Users/alex/Code Projects/alphonse-agent/alphonse/agent/actions/handle_incoming_message.py` to build provider via selector, not Ollama-only.
 - Preserve existing failure mode (`None` provider fallback) for safe rollout.
 - Add docs for launching OpenCode server locally.
 

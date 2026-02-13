@@ -1,7 +1,7 @@
-# Atrium — Architectural Decisions
+# Alphonse Agent — Architectural Decisions
 
 This document records deliberate architectural and philosophical decisions
-that shape Atrium.
+that shape Alphonse Agent.
 
 It exists to preserve intent and prevent unintentional drift.
 
@@ -9,7 +9,7 @@ It exists to preserve intent and prevent unintentional drift.
 
 ## Decision 001 — Local-First Architecture
 
-**Decision:** Atrium is designed to operate locally by default.
+**Decision:** Alphonse Agent is designed to operate locally by default.
 
 **Rationale:**
 Local operation preserves privacy, resilience, and household sovereignty.
