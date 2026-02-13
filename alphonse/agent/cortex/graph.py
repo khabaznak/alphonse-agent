@@ -9,7 +9,6 @@ from alphonse.agent.cognition.planning_catalog import format_available_abilities
 from alphonse.agent.cognition.plans import CortexPlan, CortexResult
 from alphonse.agent.cortex.nodes import build_apology_node
 from alphonse.agent.cortex.nodes import build_first_decision_node
-from alphonse.agent.cortex.nodes import compose_response_from_state
 from alphonse.agent.cortex.nodes import run_capability_gap_tool
 from alphonse.agent.cortex.nodes import plan_node_stateful
 from alphonse.agent.cortex.nodes import respond_finalize_node
@@ -36,11 +35,11 @@ class CortexState(TypedDict, total=False):
     intent: str | None
     intent_category: str | None
     intent_confidence: float
+    tone: str | None
+    address_style: str | None
     slots: dict[str, Any]
     messages: list[dict[str, str]]
     response_text: str | None
-    response_key: str | None
-    response_vars: dict[str, Any] | None
     timezone: str
     intent_evidence: dict[str, Any]
     correlation_id: str | None
@@ -133,8 +132,6 @@ class CortexGraph:
             CortexPlan.model_validate(plan) for plan in result_state.get("plans") or []
         ]
         response_text = result_state.get("response_text")
-        if not response_text and result_state.get("response_key"):
-            response_text = compose_response_from_state(result_state)
         return CortexResult(
             reply_text=response_text,
             plans=plans,

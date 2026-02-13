@@ -59,7 +59,7 @@ def run_ask_question_step(
             "events": state.get("events") or [],
         }
     return {
-        "response_key": "clarify.repeat_input",
+        "response_text": "Please repeat your answer so I can continue.",
         "pending_interaction": serialize_pending_interaction(pending),
         "ability_state": loop_state or {},
         "events": state.get("events") or [],

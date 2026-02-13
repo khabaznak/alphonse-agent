@@ -24,7 +24,7 @@ def plan_node(
     run_capability_gap_tool: Callable[..., dict[str, Any]],
 ) -> dict[str, Any]:
     """Single-pass planning and optional immediate tool execution."""
-    if state.get("response_text") or state.get("response_key"):
+    if state.get("response_text"):
         return {}
     text = str(state.get("last_user_message") or "").strip()
     if not text:
@@ -60,6 +60,9 @@ def plan_node(
         llm_client=llm_client,
         available_tools=format_available_abilities(),
         locale=state.get("locale"),
+        tone=state.get("tone"),
+        address_style=state.get("address_style"),
+        channel_type=state.get("channel_type"),
         planning_context=state.get("planning_context")
         if isinstance(state.get("planning_context"), dict)
         else None,

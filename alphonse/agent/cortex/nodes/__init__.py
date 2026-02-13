@@ -8,7 +8,6 @@ from alphonse.agent.cortex.nodes.first_decision import route_after_first_decisio
 from alphonse.agent.cortex.nodes.plan import plan_node
 from alphonse.agent.cortex.nodes.plan import plan_node_stateful
 from alphonse.agent.cortex.nodes.plan import route_after_plan
-from alphonse.agent.cortex.nodes.respond import compose_response_from_state
 from alphonse.agent.cortex.nodes.respond import respond_finalize_node
 
 __all__ = [
@@ -20,6 +19,5 @@ __all__ = [
     "plan_node",
     "plan_node_stateful",
     "route_after_plan",
-    "compose_response_from_state",
     "respond_finalize_node",
 ]

@@ -19,7 +19,7 @@ def _setup_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     apply_schema(db_path)
 
 
-def test_build_cortex_state_clears_expired_pending_and_discovery_loop(
+def test_build_cortex_state_clears_expired_pending_interaction(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _setup_db(tmp_path, monkeypatch)
@@ -51,7 +51,7 @@ def test_build_cortex_state_clears_expired_pending_and_discovery_loop(
     )
 
     assert state.get("pending_interaction") is None
-    assert state.get("ability_state") is None
+    assert state.get("ability_state") == stored_state["ability_state"]
 
 
 def test_build_cortex_state_keeps_active_pending_interaction(

@@ -4,6 +4,8 @@ import json
 import logging
 from typing import Any
 
+from alphonse.agent.cognition.utterance_policy import render_utterance_policy_block
+
 logger = logging.getLogger(__name__)
 
 _FIRST_DECISION_SYSTEM_PROMPT = (
@@ -21,7 +23,7 @@ _FIRST_DECISION_SYSTEM_PROMPT = (
 )
 
 _FIRST_DECISION_USER_PROMPT = (
-    "Locale: {locale}\n"
+    "{policy_block}\n"
     "Available tool names (for awareness only): {tool_names}\n"
     "User message:\n"
     "{message}\n"
@@ -33,6 +35,9 @@ def decide_first_action(
     text: str,
     llm_client: object | None,
     locale: str | None,
+    tone: str | None = None,
+    address_style: str | None = None,
+    channel_type: str | None = None,
     available_tool_names: list[str] | None = None,
 ) -> dict[str, Any]:
     if not llm_client:
@@ -40,7 +45,12 @@ def decide_first_action(
 
     tool_names = [str(name).strip() for name in (available_tool_names or []) if str(name).strip()]
     user_prompt = _FIRST_DECISION_USER_PROMPT.format(
-        locale=str(locale or "en-US"),
+        policy_block=render_utterance_policy_block(
+            locale=locale,
+            tone=tone,
+            address_style=address_style,
+            channel_type=channel_type,
+        ),
         tool_names=", ".join(tool_names[:24]) or "(none)",
         message=text.strip(),
     )

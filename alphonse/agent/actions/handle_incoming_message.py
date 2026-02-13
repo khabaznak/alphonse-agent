@@ -15,7 +15,6 @@ from alphonse.agent.cognition.preferences.store import (
     get_or_create_principal_for_channel,
     resolve_preference_with_precedence,
 )
-from alphonse.agent.cognition.response_keys import render_response_key
 from alphonse.config import settings
 from alphonse.agent.cognition.plan_executor import PlanExecutionContext, PlanExecutor
 from alphonse.agent.cortex.graph import CortexGraph
@@ -84,7 +83,7 @@ class HandleIncomingMessageAction(Action):
         stop_heartbeat = _start_typing_heartbeat(incoming)
         chat_key = conversation_key
         stored_state = load_state(chat_key) or {}
-        _ensure_conversation_locale(chat_key, text, stored_state, incoming)
+        _ensure_conversation_locale(chat_key, stored_state, incoming)
         state = _build_cortex_state(stored_state, incoming, correlation_id, payload, normalized)
         llm_client = _build_llm_client()
         try:
@@ -129,30 +128,8 @@ class HandleIncomingMessageAction(Action):
             actor_person_id=incoming.person_id,
             correlation_id=incoming.correlation_id,
         )
-        response_key = (
-            result.meta.get("response_key") if isinstance(result.meta, dict) else None
-        )
-        response_vars = (
-            result.meta.get("response_vars") if isinstance(result.meta, dict) else None
-        )
-        if response_key:
-            rendered, outgoing_locale = _render_outgoing_message(
-                response_key,
-                response_vars,
-                incoming,
-                text,
-            )
-            if rendered.strip():
-                reply_plan = CortexPlan(
-                    plan_type=PlanType.COMMUNICATE,
-                    payload={
-                        "message": rendered,
-                        "locale": outgoing_locale,
-                    },
-                )
-                executor.execute([reply_plan], context, exec_context)
-        elif result.reply_text:
-            locale = _preferred_locale(incoming, text)
+        if result.reply_text:
+            locale = _outgoing_locale(result.cognition_state)
             reply_plan = CortexPlan(
                 plan_type=PlanType.COMMUNICATE,
                 payload={
@@ -211,13 +188,12 @@ def _conversation_key(incoming: IncomingContext) -> str:
 
 def _ensure_conversation_locale(
     conversation_key: str,
-    text: str,
     stored_state: dict[str, Any],
     incoming: IncomingContext,
 ) -> None:
     if stored_state.get("locale"):
         return
-    channel_locale = _explicit_channel_locale(incoming)
+    channel_locale = _resolve_channel_locale_context(incoming)
     if channel_locale:
         stored_state["locale"] = channel_locale
         return
@@ -290,7 +266,7 @@ def _build_cortex_state(
     conversation_key = _conversation_key(incoming)
     state_locale = stored_state.get("locale")
     if not state_locale:
-        state_locale = _explicit_channel_locale(incoming)
+        state_locale = _resolve_channel_locale_context(incoming)
     if not state_locale:
         state_locale = identity_profile.get_locale(conversation_key)
     if not state_locale:
@@ -316,6 +292,8 @@ def _build_cortex_state(
         "slots": stored_state.get("slots_collected") or {},
         "intent": stored_state.get("last_intent"),
         "locale": state_locale,
+        "tone": effective_tone,
+        "address_style": effective_address,
         "autonomy_level": autonomy_level or stored_state.get("autonomy_level"),
         "planning_mode": planning_mode or stored_state.get("planning_mode"),
         "intent_category": stored_state.get("intent_category"),
@@ -335,23 +313,9 @@ def _sanitize_interaction_state(
     pending = stored_state.get("pending_interaction")
     ability_state = stored_state.get("ability_state")
     if not isinstance(pending, dict):
-        if (
-            isinstance(ability_state, dict)
-            and str(ability_state.get("kind") or "") == "discovery_loop"
-        ):
-            logger.info(
-                "HandleIncomingMessageAction clearing stale discovery_loop without pending_interaction"
-            )
-            return None, None
         return None, ability_state if isinstance(ability_state, dict) else None
     if _is_pending_interaction_expired(pending):
         logger.info("HandleIncomingMessageAction clearing expired pending_interaction")
-        # Discovery-loop state is coupled to pending askQuestion follow-ups.
-        if (
-            isinstance(ability_state, dict)
-            and str(ability_state.get("kind") or "") == "discovery_loop"
-        ):
-            return None, None
         return None, ability_state if isinstance(ability_state, dict) else None
     return pending, ability_state if isinstance(ability_state, dict) else None
 
@@ -369,40 +333,7 @@ def _is_pending_interaction_expired(pending: dict[str, Any]) -> bool:
     return datetime.now(timezone.utc) >= expires_dt
 
 
-def _effective_locale(incoming: IncomingContext) -> str:
-    explicit = _explicit_channel_locale(incoming)
-    if explicit:
-        return explicit
-    conversation_key = _conversation_key(incoming)
-    conversation_locale = identity_profile.get_locale(conversation_key)
-    if conversation_locale:
-        return conversation_locale
-    return settings.get_default_locale()
-
-
-def _effective_tone(incoming: IncomingContext) -> str:
-    principal_id = _principal_id_for_incoming(incoming)
-    if principal_id:
-        return resolve_preference_with_precedence(
-            key="tone",
-            default=settings.get_tone(),
-            channel_principal_id=principal_id,
-        )
-    return settings.get_tone()
-
-
-def _effective_address_style(incoming: IncomingContext) -> str:
-    principal_id = _principal_id_for_incoming(incoming)
-    if principal_id:
-        return resolve_preference_with_precedence(
-            key="address_style",
-            default=settings.get_address_style(),
-            channel_principal_id=principal_id,
-        )
-    return settings.get_address_style()
-
-
-def _explicit_channel_locale(incoming: IncomingContext) -> str | None:
+def _resolve_channel_locale_context(incoming: IncomingContext) -> str | None:
     principal_id = _principal_id_for_incoming(incoming)
     if not principal_id:
         return None
@@ -412,17 +343,6 @@ def _explicit_channel_locale(incoming: IncomingContext) -> str | None:
         channel_principal_id=principal_id,
     )
     return value if isinstance(value, str) else None
-
-
-def _preferred_locale(incoming: IncomingContext, text: str) -> str:
-    explicit = _explicit_channel_locale(incoming)
-    if explicit:
-        return explicit
-    conversation_key = _conversation_key(incoming)
-    conversation_locale = identity_profile.get_locale(conversation_key)
-    if conversation_locale:
-        return conversation_locale
-    return settings.get_default_locale()
 
 
 def _principal_id_for_incoming(incoming: IncomingContext) -> str | None:
@@ -445,52 +365,12 @@ def _safe_json(value: Any, limit: int = 1400) -> str:
     return f"{rendered[:limit]}..."
 
 
-def _render_outgoing_message(
-    key: str,
-    response_vars: dict[str, Any] | None,
-    incoming: IncomingContext,
-    text: str,
-) -> tuple[str, str]:
-    locale = _preferred_locale(incoming, text)
-    tone = _effective_tone(incoming)
-    address_style = _effective_address_style(incoming)
-    vars: dict[str, Any] = {
-        "tone": tone,
-        "address_style": address_style,
-    }
-    if isinstance(response_vars, dict):
-        vars.update(response_vars)
-        updated = _updated_preferences_from_vars(response_vars)
-        locale = updated.get("locale", locale)
-        tone = updated.get("tone", tone)
-        address_style = updated.get("address_style", address_style)
-        vars["tone"] = tone
-        vars["address_style"] = address_style
-    logger.info(
-        "HandleIncomingMessageAction outgoing key=%s locale=%s address=%s",
-        key,
-        locale,
-        address_style,
-    )
-    rendered = render_response_key(key, vars, locale=locale)
-    _ = address_style
-    _ = tone
-    return rendered, locale
-
-
-def _updated_preferences_from_vars(vars: dict[str, Any]) -> dict[str, str]:
-    updates = vars.get("updates")
-    if not isinstance(updates, list):
-        return {}
-    extracted: dict[str, str] = {}
-    for update in updates:
-        if not isinstance(update, dict):
-            continue
-        key = update.get("key")
-        value = update.get("value")
-        if isinstance(key, str) and isinstance(value, str):
-            extracted[key] = value
-    return extracted
+def _outgoing_locale(cognition_state: dict[str, Any] | None) -> str:
+    if isinstance(cognition_state, dict):
+        locale = cognition_state.get("locale")
+        if isinstance(locale, str) and locale.strip():
+            return locale.strip()
+    return settings.get_default_locale()
 
 
 def _noop_result(incoming: IncomingContext) -> ActionResult:

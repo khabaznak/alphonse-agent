@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 from pathlib import Path
 from typing import Any
 
 from alphonse.agent.cognition.abilities.store import AbilitySpecStore
+from alphonse.agent.cognition.utterance_policy import render_utterance_policy_block
 
 logger = logging.getLogger(__name__)
 
@@ -19,6 +19,9 @@ def discover_plan(
     llm_client: object | None,
     available_tools: str,
     locale: str | None = None,
+    tone: str | None = None,
+    address_style: str | None = None,
+    channel_type: str | None = None,
     planning_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if not llm_client:
@@ -42,6 +45,7 @@ def discover_plan(
         "- Keep execution_plan empty if planning_interrupt is present.\n"
     )
     user_prompt = (
+        f"{render_utterance_policy_block(locale=locale, tone=tone, address_style=address_style, channel_type=channel_type)}\n"
         "MESSAGE:\n"
         f"{text}\n\n"
         "LOCALE:\n"
@@ -335,4 +339,3 @@ def _load_specs_db() -> list[dict[str, Any]]:
         return AbilitySpecStore().list_enabled_specs()
     except Exception:
         return []
-

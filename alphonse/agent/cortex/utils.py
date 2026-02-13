@@ -27,8 +27,6 @@ def build_meta(state: dict[str, Any]) -> dict[str, Any]:
         "intent_confidence": state.get("intent_confidence"),
         "correlation_id": state.get("correlation_id"),
         "chat_id": state.get("chat_id"),
-        "response_key": state.get("response_key"),
-        "response_vars": state.get("response_vars"),
         "autonomy_level": state.get("autonomy_level"),
         "planning_mode": state.get("planning_mode"),
         "intent_category": state.get("intent_category"),

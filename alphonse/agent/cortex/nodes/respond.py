@@ -2,19 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
-from alphonse.agent.cognition.response_keys import render_response_key
 from alphonse.agent.cortex.nodes.capability_gap import has_capability_gap_plan
-
-def compose_response_from_state(state: dict[str, Any]) -> str:
-    key = state.get("response_key")
-    if not isinstance(key, str) or not key.strip():
-        return str(state.get("response_text") or "").strip()
-    return render_response_key(
-        key,
-        state.get("response_vars") if isinstance(state.get("response_vars"), dict) else None,
-        locale=str(state.get("locale") or ""),
-    )
-
 
 def respond_node_impl(
     state: dict[str, Any],
@@ -26,7 +14,7 @@ def respond_node_impl(
     run_capability_gap_tool: Callable[..., dict[str, Any]],
     emit_transition_event: Callable[[dict[str, Any], str, dict[str, Any] | None], None],
 ) -> dict[str, Any]:
-    if state.get("response_text") or state.get("response_key"):
+    if state.get("response_text"):
         return {}
     emit_transition_event(state, "thinking")
     discovery = run_planning_cycle(state, llm_client)
@@ -85,6 +73,6 @@ def respond_finalize_node(
     if pending:
         emit_transition_event(state, "waiting_user")
         return {}
-    if state.get("response_text") or state.get("response_key"):
+    if state.get("response_text"):
         emit_transition_event(state, "done")
     return {}

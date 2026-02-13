@@ -19,12 +19,11 @@ def first_decision_node(
     ability_registry_getter: Callable[[], Any],
     decide_first_action_fn: Callable[..., dict[str, Any]] = decide_first_action,
 ) -> dict[str, Any]:
-    if state.get("response_text") or state.get("response_key"):
+    if state.get("response_text"):
         return {"route_decision": "respond"}
 
     pending = state.get("pending_interaction")
-    ability_state = state.get("ability_state")
-    if pending or _is_planning_loop_state(ability_state):
+    if pending:
         return {"route_decision": "plan"}
 
     text = str(state.get("last_user_message") or "").strip()
@@ -42,6 +41,9 @@ def first_decision_node(
         text=text,
         llm_client=llm_client,
         locale=state.get("locale"),
+        tone=state.get("tone"),
+        address_style=state.get("address_style"),
+        channel_type=state.get("channel_type"),
         available_tool_names=tool_names,
     )
     route = str(decision.get("route") or "tool_plan").strip().lower()
@@ -104,9 +106,3 @@ def route_after_first_decision(state: dict[str, Any]) -> str:
     if decision == "respond":
         return "respond_node"
     return "plan_node"
-
-
-def _is_planning_loop_state(value: Any) -> bool:
-    if not isinstance(value, dict):
-        return False
-    return str(value.get("kind") or "") == "discovery_loop"
