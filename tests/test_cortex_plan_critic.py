@@ -37,7 +37,9 @@ def test_plan_critic_repairs_unknown_tool_to_ask_question() -> None:
     }
     llm = _FakeLlm('{"tool":"askQuestion","parameters":{"question":"When should I remind you?"}}')
 
-    result = graph._run_discovery_loop_step(state, loop_state, llm)
+    state["ability_state"] = loop_state
+    state["_llm_client"] = llm
+    result = graph._execute_tool_node_impl_stateful(state)
 
     assert "plans" not in result
     assert result.get("response_text") == "When should I remind you?"
@@ -69,7 +71,9 @@ def test_plan_critic_unrepaired_unknown_tool_creates_gap() -> None:
     }
     llm = _FakeLlm('{"tool":"still_fake","parameters":{"x":1}}')
 
-    result = graph._run_discovery_loop_step(state, loop_state, llm)
+    state["ability_state"] = loop_state
+    state["_llm_client"] = llm
+    result = graph._execute_tool_node_impl_stateful(state)
 
     plans = result.get("plans")
     assert isinstance(plans, list)

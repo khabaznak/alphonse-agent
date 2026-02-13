@@ -63,6 +63,13 @@ def test_pending_answer_noop_falls_back_to_fresh_discovery(
     result = graph._run_intent_discovery(state, _FakeLlm())
 
     assert isinstance(result, dict)
-    assert result.get("response_text") == "When should I remind you?"
-    pending = result.get("pending_interaction")
-    assert isinstance(pending, dict)
+    assert result.get("response_text") is None
+    assert result.get("pending_interaction") is None
+    ability_state = result.get("ability_state")
+    assert isinstance(ability_state, dict)
+    steps = ability_state.get("steps")
+    assert isinstance(steps, list) and len(steps) == 1
+    first = steps[0]
+    assert isinstance(first, dict)
+    assert first.get("tool") == "askQuestion"
+    assert first.get("status") == "ready"

@@ -2,24 +2,11 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
-from alphonse.agent.cognition.response_composer import ResponseComposer
-from alphonse.agent.cognition.response_spec import ResponseSpec
-
-
 def compose_response_from_state(state: dict[str, Any]) -> str:
     key = state.get("response_key")
     if not isinstance(key, str) or not key.strip():
         return ""
-    composer = ResponseComposer()
-    locale = state.get("locale")
-    spec = ResponseSpec(
-        kind="answer",
-        key=key.strip(),
-        locale=locale if isinstance(locale, str) and locale else "en-US",
-        channel=str(state.get("channel_type") or "telegram"),
-        variables=state.get("response_vars") or {},
-    )
-    return composer.compose(spec)
+    return key.strip()
 
 
 def respond_node_impl(

@@ -22,8 +22,6 @@ from alphonse.agent.cognition.plans import (
     LanArmPayload,
     PairingDecisionPayload,
 )
-from alphonse.agent.cognition.response_composer import ResponseComposer
-from alphonse.agent.cognition.response_spec import ResponseSpec
 from alphonse.agent.cognition.status_summaries import (
     summarize_gaps,
     summarize_timed_signals,
@@ -64,7 +62,6 @@ class PlanExecutor:
         _ = extremities
         self._coordinator = coordinator or build_default_coordinator()
         self._policy = policy_engine or PolicyEngine()
-        self._responses = ResponseComposer()
         self._scheduler = scheduler or SchedulerTool()
 
     def execute(
@@ -285,15 +282,10 @@ class PlanExecutor:
             locale,
             address_style,
         )
-        return self._responses.compose(
-            ResponseSpec(
-                kind="ack",
-                key="ack.reminder_scheduled",
-                locale=locale,
-                address_style=address_style,
-                tone=tone,
-            )
-        )
+        _ = locale
+        _ = address_style
+        _ = tone
+        return "ack.reminder_scheduled"
 
     def _execute_update_preferences(
         self,
@@ -335,15 +327,10 @@ class PlanExecutor:
             locale_hint=payload.locale,
         )
         if not device:
-            message = self._responses.compose(
-                ResponseSpec(
-                    kind="answer",
-                    key="lan.device.not_found",
-                    locale=locale,
-                    address_style=address_style,
-                    tone=tone,
-                )
-            )
+            _ = locale
+            _ = address_style
+            _ = tone
+            message = "lan.device.not_found"
             self._dispatch_message(
                 channel=exec_context.channel_type,
                 target=exec_context.channel_target,
@@ -359,19 +346,14 @@ class PlanExecutor:
         else:
             disarm_device(device.device_id)
             key = "lan.device.disarmed"
-        message = self._responses.compose(
-            ResponseSpec(
-                kind="ack",
-                key=key,
-                locale=locale,
-                address_style=address_style,
-                tone=tone,
-                variables={
-                    "device_name": device.device_name or "Unnamed device",
-                    "device_id": device.device_id,
-                },
-            )
-        )
+        _ = locale
+        _ = address_style
+        _ = tone
+        _ = {
+            "device_name": device.device_name or "Unnamed device",
+            "device_id": device.device_id,
+        }
+        message = key
         self._dispatch_message(
             channel=exec_context.channel_type,
             target=exec_context.channel_target,
@@ -412,16 +394,11 @@ class PlanExecutor:
             denied = deny_pairing(payload.pairing_id, exec_context.channel_type)
             key = "pairing.denied" if denied else "pairing.already_resolved"
             variables = {}
-        message = self._responses.compose(
-            ResponseSpec(
-                kind="answer",
-                key=key,
-                locale=locale,
-                address_style=address_style,
-                tone=tone,
-                variables=variables,
-            )
-        )
+        _ = locale
+        _ = address_style
+        _ = tone
+        _ = variables
+        message = key
         self._dispatch_message(
             channel=exec_context.channel_type,
             target=exec_context.channel_target,
@@ -461,15 +438,10 @@ class PlanExecutor:
             target=exec_context.channel_target,
             locale_hint=None,
         )
-        message = self._responses.compose(
-            ResponseSpec(
-                kind="error",
-                key="error.execution_failed",
-                locale=locale,
-                address_style=address_style,
-                tone=tone,
-            )
-        )
+        _ = locale
+        _ = address_style
+        _ = tone
+        message = "error.execution_failed"
         payload = _message_payload(
             message,
             exec_context.channel_type,
@@ -505,15 +477,10 @@ class PlanExecutor:
             target=exec_context.channel_target,
             locale_hint=None,
         )
-        message = self._responses.compose(
-            ResponseSpec(
-                kind="policy_block",
-                key="policy.reminder.restricted",
-                locale=locale,
-                address_style=address_style,
-                tone=tone,
-            )
-        )
+        _ = locale
+        _ = address_style
+        _ = tone
+        message = "policy.reminder.restricted"
         payload = _message_payload(
             message,
             exec_context.channel_type,

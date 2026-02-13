@@ -25,6 +25,7 @@ from alphonse.agent.cognition.pending_interaction import (
     build_pending_interaction,
     serialize_pending_interaction,
 )
+from alphonse.agent.cognition.preferences.store import get_or_create_principal_for_channel
 from alphonse.agent.cognition.step_validation import (
     StepValidationResult,
     is_internal_tool_question,
@@ -32,6 +33,7 @@ from alphonse.agent.cognition.step_validation import (
 )
 from alphonse.agent.cortex.nodes import ask_question_node as _ask_question_node
 from alphonse.agent.cortex.nodes import apology_node as _apology_node
+from alphonse.agent.cortex.nodes import build_gap_plan as _build_gap_plan_extracted
 from alphonse.agent.cortex.nodes import run_capability_gap_tool as _run_capability_gap_tool
 from alphonse.agent.cortex.nodes import DiscoveryLoopDeps as _DiscoveryLoopDeps
 from alphonse.agent.cortex.nodes import dispatch_discovery_result as _dispatch_discovery_result_extracted
@@ -53,7 +55,6 @@ from alphonse.agent.cortex.nodes import run_intent_discovery as _run_intent_disc
 from alphonse.agent.cortex.nodes import respond_node_impl as _respond_node_impl_extracted
 from alphonse.agent.cortex.nodes import compose_response_from_state as _compose_response_from_state
 from alphonse.agent.cortex.nodes import run_discovery_loop_step as _run_discovery_loop_step_extracted
-from alphonse.agent.cortex.nodes import run_discovery_loop_until_blocked as _run_discovery_loop_until_blocked_extracted
 from alphonse.agent.cortex.nodes import select_next_step_node as _select_next_step_node
 from alphonse.agent.cortex.providers import get_ability_registry as _ability_registry
 from alphonse.agent.cortex.transitions import emit_transition_event as _emit_transition_event
@@ -172,10 +173,61 @@ def _execute_tool_node_impl_stateful(state: CortexState) -> dict[str, Any]:
     llm_client = _llm_client_from_state(state)
     return _execute_tool_node_impl(
         state,
-        run_discovery_loop_step=lambda s, loop_state: _run_discovery_loop_step(
+        run_discovery_loop_step=lambda s, loop_state: _run_discovery_loop_step_extracted(
             s,
             loop_state,
             llm_client,
+            deps=_DiscoveryLoopDeps(
+                next_step_index=_next_step_index,
+                safe_json=lambda value, limit: _safe_json_util(value, limit=limit),
+                available_tool_catalog_data=_available_tool_catalog_data,
+                validate_loop_step=_validate_loop_step,
+                critic_repair_invalid_step=lambda *, state, step, llm_client, validation: _execution_helpers.critic_repair_invalid_step(
+                    state=state,
+                    step=step,
+                    llm_client=llm_client,
+                    validation=validation,
+                    render_prompt_template=render_prompt_template,
+                    plan_critic_user_template=GRAPH_PLAN_CRITIC_USER_TEMPLATE,
+                    plan_critic_system_prompt=GRAPH_PLAN_CRITIC_SYSTEM_PROMPT,
+                    safe_json=lambda value, limit: _safe_json_util(value, limit=limit),
+                    format_available_abilities=format_available_abilities,
+                    format_available_ability_catalog=format_available_ability_catalog,
+                    ability_exists=lambda tool_name: _ability_registry().get(tool_name) is not None,
+                    is_internal_tool_question=is_internal_tool_question,
+                ),
+                build_gap_plan=lambda *, state, reason, missing_slots: _build_gap_plan_extracted(
+                    state=state,
+                    reason=reason,
+                    missing_slots=missing_slots,
+                    get_or_create_principal_for_channel=get_or_create_principal_for_channel,
+                ),
+                execute_tool_node=lambda state: _execution_helpers.run_ask_question_step(
+                    state,
+                    (
+                        state.get("ability_state", {}).get("steps", [])[
+                            int(state.get("selected_step_index") or 0)
+                        ]
+                        if isinstance(state.get("ability_state"), dict)
+                        and isinstance(state.get("ability_state", {}).get("steps"), list)
+                        and isinstance(state.get("selected_step_index"), int)
+                        and 0 <= state["selected_step_index"] < len(state.get("ability_state", {}).get("steps", []))
+                        else {}
+                    ),
+                    state.get("ability_state") if isinstance(state.get("ability_state"), dict) else {},
+                    state.get("selected_step_index") if isinstance(state.get("selected_step_index"), int) else None,
+                    build_pending_interaction=build_pending_interaction,
+                    pending_interaction_type_slot_fill=PendingInteractionType.SLOT_FILL,
+                    serialize_pending_interaction=serialize_pending_interaction,
+                    emit_transition_event=_emit_transition_event,
+                ),
+                ability_registry_getter=_ability_registry,
+                tool_registry=_TOOL_REGISTRY,
+                emit_transition_event=_emit_transition_event,
+                has_missing_params=_has_missing_params,
+                is_discovery_loop_state=_is_discovery_loop_state,
+                task_plane_category=IntentCategory.TASK_PLANE.value,
+            ),
         ),
     )
 
@@ -183,7 +235,16 @@ def _execute_tool_node_impl_stateful(state: CortexState) -> dict[str, Any]:
 def _ask_question_node_impl(state: CortexState) -> dict[str, Any]:
     return _ask_question_node(
         state,
-        run_ask_question_step=_run_ask_question_step,
+        run_ask_question_step=lambda s, step, loop_state, step_index: _execution_helpers.run_ask_question_step(
+            s,
+            step,
+            loop_state,
+            step_index,
+            build_pending_interaction=build_pending_interaction,
+            pending_interaction_type_slot_fill=PendingInteractionType.SLOT_FILL,
+            serialize_pending_interaction=serialize_pending_interaction,
+            emit_transition_event=_emit_transition_event,
+        ),
         next_step_index=_next_step_index,
     )
 
@@ -222,11 +283,7 @@ def _select_next_step_node_impl(state: CortexState) -> dict[str, Any]:
 def _plan_node_impl(state: CortexState) -> dict[str, Any]:
     return _plan_node(
         state,
-        run_intent_discovery=lambda s: _run_intent_discovery(
-            s,
-            _llm_client_from_state(s),
-            execute_until_blocked=False,
-        ),
+        run_intent_discovery=lambda s: _run_intent_discovery(s, _llm_client_from_state(s)),
     )
 
 
@@ -265,28 +322,6 @@ def _has_capability_gap_plan(state: CortexState) -> bool:
     )
 
 
-def _maybe_run_discovery_loop_result(
-    *,
-    state: CortexState,
-    llm_client: LLMClient | None,
-    result: dict[str, Any] | None,
-    execute_until_blocked: bool,
-) -> dict[str, Any] | None:
-    if not execute_until_blocked:
-        return result
-    if not isinstance(result, dict):
-        return result
-    if result.get("response_text") or result.get("response_key") or result.get("pending_interaction"):
-        return result
-    plans = result.get("plans")
-    if isinstance(plans, list) and plans:
-        return result
-    ability_state = result.get("ability_state")
-    if not isinstance(ability_state, dict) or not _is_discovery_loop_state(ability_state):
-        return result
-    return _run_discovery_loop_until_blocked(state, ability_state, llm_client)
-
-
 def _respond_node_impl(state: CortexState, llm_client: LLMClient | None) -> dict[str, Any]:
     _ = llm_client
     plans = state.get("plans")
@@ -311,18 +346,14 @@ def _respond_node_impl(state: CortexState, llm_client: LLMClient | None) -> dict
 def _run_intent_discovery(
     state: CortexState,
     llm_client: LLMClient | None,
-    *,
-    execute_until_blocked: bool = True,
 ) -> dict[str, Any] | None:
     return _run_intent_discovery_extracted(
         state,
         llm_client,
-        execute_until_blocked=execute_until_blocked,
         deps=_PlanningDiscoveryDeps(
             require_last_user_message=_require_last_user_message,
             handle_pending_interaction_for_discovery=_handle_pending_interaction_for_discovery,
             handle_ability_state_for_discovery=_handle_ability_state_for_discovery,
-            maybe_run_discovery_loop_result=_maybe_run_discovery_loop_result,
             run_fresh_discovery_for_message=_run_fresh_discovery_for_message,
         ),
     )
@@ -499,76 +530,6 @@ def _build_discovery_loop_state(
 def _has_missing_params(params: dict[str, Any]) -> bool:
     return _execution_helpers.has_missing_params(params)
 
-
-def _discovery_loop_deps() -> _DiscoveryLoopDeps:
-    return _DiscoveryLoopDeps(
-        next_step_index=_next_step_index,
-        safe_json=lambda value, limit: _safe_json_util(value, limit=limit),
-        available_tool_catalog_data=_available_tool_catalog_data,
-        validate_loop_step=_validate_loop_step,
-        critic_repair_invalid_step=lambda *, state, step, llm_client, validation: _execution_helpers.critic_repair_invalid_step(
-            state=state,
-            step=step,
-            llm_client=llm_client,
-            validation=validation,
-            render_prompt_template=render_prompt_template,
-            plan_critic_user_template=GRAPH_PLAN_CRITIC_USER_TEMPLATE,
-            plan_critic_system_prompt=GRAPH_PLAN_CRITIC_SYSTEM_PROMPT,
-            safe_json=lambda value, limit: _safe_json_util(value, limit=limit),
-            format_available_abilities=format_available_abilities,
-            format_available_ability_catalog=format_available_ability_catalog,
-            ability_exists=lambda tool_name: _ability_registry().get(tool_name) is not None,
-            is_internal_tool_question=is_internal_tool_question,
-        ),
-        run_capability_gap_tool=_run_capability_gap_tool,
-        execute_tool_node=lambda state: _run_ask_question_step(
-            state,
-            (
-                state.get("ability_state", {}).get("steps", [])[
-                    int(state.get("selected_step_index") or 0)
-                ]
-                if isinstance(state.get("ability_state"), dict)
-                and isinstance(state.get("ability_state", {}).get("steps"), list)
-                and isinstance(state.get("selected_step_index"), int)
-                and 0 <= state["selected_step_index"] < len(state.get("ability_state", {}).get("steps", []))
-                else {}
-            ),
-            state.get("ability_state") if isinstance(state.get("ability_state"), dict) else {},
-            state.get("selected_step_index") if isinstance(state.get("selected_step_index"), int) else None,
-        ),
-        ability_registry_getter=_ability_registry,
-        tool_registry=_TOOL_REGISTRY,
-        emit_transition_event=_emit_transition_event,
-        has_missing_params=_has_missing_params,
-        is_discovery_loop_state=_is_discovery_loop_state,
-        task_plane_category=IntentCategory.TASK_PLANE.value,
-    )
-
-
-def _run_discovery_loop_step(
-    state: CortexState, loop_state: dict[str, Any], llm_client: LLMClient | None
-) -> dict[str, Any]:
-    return _run_discovery_loop_step_extracted(
-        state,
-        loop_state,
-        llm_client,
-        deps=_discovery_loop_deps(),
-    )
-
-
-def _run_discovery_loop_until_blocked(
-    state: CortexState,
-    loop_state: dict[str, Any],
-    llm_client: LLMClient | None,
-) -> dict[str, Any]:
-    return _run_discovery_loop_until_blocked_extracted(
-        state,
-        loop_state,
-        llm_client,
-        deps=_discovery_loop_deps(),
-    )
-
-
 def _available_tool_catalog_data() -> dict[str, Any]:
     return _execution_helpers.available_tool_catalog_data(
         format_available_ability_catalog=format_available_ability_catalog,
@@ -584,24 +545,6 @@ def _validate_loop_step(
         step,
         catalog,
         validate_step=validate_step,
-    )
-
-
-def _run_ask_question_step(
-    state: CortexState,
-    step: dict[str, Any],
-    loop_state: dict[str, Any] | None = None,
-    step_index: int | None = None,
-) -> dict[str, Any]:
-    return _execution_helpers.run_ask_question_step(
-        state,
-        step,
-        loop_state,
-        step_index,
-        build_pending_interaction=build_pending_interaction,
-        pending_interaction_type_slot_fill=PendingInteractionType.SLOT_FILL,
-        serialize_pending_interaction=serialize_pending_interaction,
-        emit_transition_event=_emit_transition_event,
     )
 
 

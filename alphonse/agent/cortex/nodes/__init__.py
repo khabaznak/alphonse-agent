@@ -7,7 +7,6 @@ from alphonse.agent.cortex.nodes.ask_question import bind_answer_to_steps
 from alphonse.agent.cortex.nodes.capability_gap import build_gap_plan
 from alphonse.agent.cortex.nodes.discovery_loop import DiscoveryLoopDeps
 from alphonse.agent.cortex.nodes.discovery_loop import run_discovery_loop_step
-from alphonse.agent.cortex.nodes.discovery_loop import run_discovery_loop_until_blocked
 from alphonse.agent.cortex.nodes.execute_tool import execute_tool_node
 from alphonse.agent.cortex.nodes.ingest import ingest_node
 from alphonse.agent.cortex.nodes.plan import plan_node
@@ -49,7 +48,6 @@ __all__ = [
     "ask_question_node",
     "DiscoveryLoopDeps",
     "run_discovery_loop_step",
-    "run_discovery_loop_until_blocked",
     "respond_node",
     "respond_node_impl",
     "compose_response_from_state",

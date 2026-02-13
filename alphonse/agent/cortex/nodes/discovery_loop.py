@@ -14,7 +14,7 @@ class DiscoveryLoopDeps:
     available_tool_catalog_data: Callable[[], dict[str, Any]]
     validate_loop_step: Callable[[dict[str, Any], dict[str, Any]], Any]
     critic_repair_invalid_step: Callable[..., dict[str, Any] | None]
-    run_capability_gap_tool: Callable[..., dict[str, Any]]
+    build_gap_plan: Callable[..., dict[str, Any]]
     execute_tool_node: Callable[[dict[str, Any]], dict[str, Any]]
     ability_registry_getter: Callable[[], Any]
     tool_registry: Any
@@ -33,11 +33,7 @@ def run_discovery_loop_step(
 ) -> dict[str, Any]:
     steps = loop_state.get("steps")
     if not isinstance(steps, list) or not steps:
-        return deps.run_capability_gap_tool(
-            state,
-            llm_client=llm_client,
-            reason="loop_missing_steps",
-        )
+        return _capability_gap_result(state, deps=deps, reason="loop_missing_steps")
     next_idx = deps.next_step_index(steps, allowed_statuses={"ready"})
     if next_idx is None:
         if deps.next_step_index(steps, allowed_statuses={"incomplete", "waiting"}) is not None:
@@ -58,11 +54,7 @@ def run_discovery_loop_step(
     if not tool_name:
         step["status"] = "failed"
         step["outcome"] = "missing_tool_name"
-        return deps.run_capability_gap_tool(
-            state,
-            llm_client=llm_client,
-            reason="step_missing_tool_name",
-        )
+        return _capability_gap_result(state, deps=deps, reason="step_missing_tool_name")
     catalog = deps.available_tool_catalog_data()
     validation = deps.validate_loop_step(step, catalog)
     if not validation.is_valid:
@@ -104,11 +96,7 @@ def run_discovery_loop_step(
         reason = "step_validation_failed"
         if validation.issue is not None:
             reason = f"step_validation_{validation.issue.error_type.value.lower()}"
-        return deps.run_capability_gap_tool(
-            state,
-            llm_client=llm_client,
-            reason=reason,
-        )
+        return _capability_gap_result(state, deps=deps, reason=reason)
     if tool_name == "askQuestion":
         state["ability_state"] = loop_state
         state["selected_step_index"] = next_idx
@@ -118,11 +106,7 @@ def run_discovery_loop_step(
         step["status"] = "failed"
         step["outcome"] = "unknown_tool"
         state["intent"] = tool_name
-        return deps.run_capability_gap_tool(
-            state,
-            llm_client=llm_client,
-            reason="unknown_tool_in_plan",
-        )
+        return _capability_gap_result(state, deps=deps, reason="unknown_tool_in_plan")
     params = step.get("parameters") if isinstance(step.get("parameters"), dict) else {}
     state["intent"] = tool_name
     state["intent_confidence"] = 0.6
@@ -157,40 +141,15 @@ def run_discovery_loop_step(
     return merged
 
 
-def run_discovery_loop_until_blocked(
+def _capability_gap_result(
     state: dict[str, Any],
-    loop_state: dict[str, Any],
-    llm_client: Any,
     *,
     deps: DiscoveryLoopDeps,
+    reason: str,
 ) -> dict[str, Any]:
-    max_iterations = 6
-    iteration = 0
-    current_loop_state = loop_state
-    latest_result: dict[str, Any] = {"ability_state": current_loop_state}
-    while iteration < max_iterations:
-        iteration += 1
-        step_result = run_discovery_loop_step(state, current_loop_state, llm_client, deps=deps)
-        if not isinstance(step_result, dict):
-            return latest_result
-        latest_result = step_result
-        if (
-            step_result.get("response_text")
-            or step_result.get("response_key")
-            or step_result.get("pending_interaction")
-        ):
-            return step_result
-        plans = step_result.get("plans")
-        if isinstance(plans, list) and plans:
-            return step_result
-        next_loop_state = step_result.get("ability_state")
-        if not isinstance(next_loop_state, dict) or not deps.is_discovery_loop_state(next_loop_state):
-            return step_result
-        steps = next_loop_state.get("steps")
-        if not isinstance(steps, list) or not steps:
-            return step_result
-        if deps.next_step_index(steps, allowed_statuses={"ready"}) is None:
-            return step_result
-        current_loop_state = next_loop_state
-        state["ability_state"] = current_loop_state
-    return latest_result
+    deps.emit_transition_event(state, "failed", {"reason": reason})
+    plan = deps.build_gap_plan(state=state, reason=reason, missing_slots=None)
+    plans = list(state.get("plans") or [])
+    plans.append(plan)
+    return {"plans": plans, "ability_state": {}, "pending_interaction": None}
+

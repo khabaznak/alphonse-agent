@@ -5,13 +5,9 @@ from pathlib import Path
 import pytest
 
 from alphonse.agent.cognition.prompt_store import (
-    NullPromptStore,
     PromptContext,
     SqlitePromptStore,
-    seed_default_templates,
 )
-from alphonse.agent.cognition.response_composer import ResponseComposer
-from alphonse.agent.cognition.response_spec import ResponseSpec
 from alphonse.agent.nervous_system.migrate import apply_schema
 
 
@@ -137,58 +133,6 @@ def test_rollback_restores_previous_template(
     )
     assert match is not None
     assert match.template == "Hello there"
-
-
-def test_response_composer_prefers_prompt_store(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    store = _prepare_db(tmp_path, monkeypatch)
-    store.upsert_template(
-        key="clarify.intent",
-        locale="en",
-        address_style="any",
-        tone="any",
-        channel="any",
-        variant="default",
-        policy_tier="safe",
-        template="Custom clarify",
-        enabled=True,
-        priority=5,
-        changed_by="test",
-        reason="override",
-    )
-    composer = ResponseComposer(prompt_store=store)
-    spec = ResponseSpec(
-        kind="clarify",
-        key="clarify.intent",
-        locale="en-US",
-        address_style="tu",
-        tone="casual",
-        channel="telegram",
-        variant="default",
-        policy_tier="safe",
-    )
-    assert composer.compose(spec) == "Custom clarify"
-
-
-def test_sensitive_response_uses_safe_fallback_when_prompt_missing() -> None:
-    composer = ResponseComposer(prompt_store=NullPromptStore())
-    spec = ResponseSpec(
-        kind="policy_block",
-        key="policy.reminder.restricted",
-        locale="es-MX",
-    )
-    assert composer.compose(spec) == "policy.reminder.restricted"
-
-
-def test_unknown_sensitive_key_uses_default_safe_fallback() -> None:
-    composer = ResponseComposer(prompt_store=NullPromptStore())
-    spec = ResponseSpec(
-        kind="policy_block",
-        key="policy.unknown",
-        locale="en-US",
-    )
-    assert composer.compose(spec) == "policy.unknown"
 
 
 def test_relaxed_matching_allows_selector_mismatch_for_non_sensitive_keys(

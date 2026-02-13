@@ -1,4 +1,5 @@
 from alphonse.agent.cortex import graph
+from alphonse.agent.cortex.nodes import execution_helpers
 
 
 def test_ask_question_step_falls_back_to_response_key() -> None:
@@ -11,7 +12,16 @@ def test_ask_question_step_falls_back_to_response_key() -> None:
     step = {"tool": "askQuestion", "parameters": {"slot": "time_text"}}
     loop_state = {"kind": "discovery_loop", "steps": [step]}
 
-    result = graph._run_ask_question_step(state, step, loop_state, 0)
+    result = execution_helpers.run_ask_question_step(
+        state,
+        step,
+        loop_state,
+        0,
+        build_pending_interaction=graph.build_pending_interaction,
+        pending_interaction_type_slot_fill=graph.PendingInteractionType.SLOT_FILL,
+        serialize_pending_interaction=graph.serialize_pending_interaction,
+        emit_transition_event=graph._emit_transition_event,
+    )
 
     assert "plans" not in result
     assert result.get("response_text") is None

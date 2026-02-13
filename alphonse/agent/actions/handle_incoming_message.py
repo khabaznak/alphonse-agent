@@ -10,8 +10,6 @@ from typing import Any
 from alphonse.agent.actions.base import Action
 from alphonse.agent.actions.models import ActionResult
 from alphonse.agent.io import get_io_registry
-from alphonse.agent.cognition.response_composer import ResponseComposer
-from alphonse.agent.cognition.response_spec import ResponseSpec
 from alphonse.agent.cognition.plans import CortexPlan, PlanType
 from alphonse.agent.cognition.preferences.store import (
     get_or_create_principal_for_channel,
@@ -52,9 +50,7 @@ class HandleIncomingMessageAction(Action):
         normalized = _normalize_incoming_payload(payload, signal)
         if not normalized:
             logger.warning("HandleIncomingMessageAction missing normalized payload")
-            locale = settings.get_default_locale()
-            spec = ResponseSpec(kind="error", key="system.unavailable.catalog", locale=locale)
-            rendered = ResponseComposer().compose(spec)
+            rendered = "system.unavailable.catalog"
             incoming = IncomingContext(
                 channel_type="system",
                 address=None,
@@ -73,9 +69,7 @@ class HandleIncomingMessageAction(Action):
             _snippet(text),
         )
         if not text:
-            locale = settings.get_default_locale()
-            spec = ResponseSpec(kind="clarify", key="clarify.repeat_input", locale=locale)
-            rendered = ResponseComposer().compose(spec)
+            rendered = "clarify.repeat_input"
             return _message_result(rendered, incoming)
 
         conversation_key = _conversation_key(incoming)
@@ -469,18 +463,10 @@ def _render_outgoing_message(
         locale,
         address_style,
     )
-    spec = ResponseSpec(
-        kind="answer",
-        key=key,
-        locale=locale,
-        address_style=address_style,
-        tone=tone,
-        channel=incoming.channel_type,
-        variant="default",
-        policy_tier="safe",
-        variables=vars,
-    )
-    return ResponseComposer().compose(spec), locale
+    _ = address_style
+    _ = tone
+    _ = vars
+    return key, locale
 
 
 def _updated_preferences_from_vars(vars: dict[str, Any]) -> dict[str, str]:
