@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 import uuid
 from dataclasses import dataclass
 from typing import Any
@@ -84,13 +85,23 @@ class HandleIncomingMessageAction(Action):
             incoming.channel_type,
             incoming.address,
         )
+        _emit_agent_transition(incoming, "acknowledged")
+        _emit_agent_transition(incoming, "thinking")
+        stop_heartbeat = _start_typing_heartbeat(incoming)
         chat_key = conversation_key
         stored_state = load_state(chat_key) or {}
         _ensure_conversation_locale(chat_key, text, stored_state, incoming)
         state = _build_cortex_state(stored_state, incoming, correlation_id, payload, normalized)
         llm_client = _build_llm_client()
-        result = invoke_cortex(state, text, llm_client=llm_client)
-        _emit_agent_transitions_from_meta(incoming, result.meta if isinstance(result.meta, dict) else {})
+        try:
+            result = invoke_cortex(state, text, llm_client=llm_client)
+        finally:
+            stop_heartbeat()
+        _emit_agent_transitions_from_meta(
+            incoming,
+            result.meta if isinstance(result.meta, dict) else {},
+            skip_phases={"acknowledged", "thinking", "executing", "done"},
+        )
         logger.info(
             "HandleIncomingMessageAction cortex_result reply_len=%s plans=%s correlation_id=%s",
             len(str(result.reply_text or "")),
@@ -149,6 +160,7 @@ class HandleIncomingMessageAction(Action):
             executor.execute([reply_plan], context, exec_context)
         if result.plans:
             executor.execute(result.plans, context, exec_context)
+        _emit_agent_transition(incoming, "done")
         return _noop_result(incoming)
 
 
@@ -533,7 +545,13 @@ def _build_llm_client():
         return None
 
 
-def _emit_agent_transitions_from_meta(incoming: IncomingContext, meta: dict[str, Any]) -> None:
+def _emit_agent_transitions_from_meta(
+    incoming: IncomingContext,
+    meta: dict[str, Any],
+    *,
+    skip_phases: set[str] | None = None,
+) -> None:
+    phases_to_skip = {str(item).lower() for item in (skip_phases or set())}
     events = meta.get("events")
     if not isinstance(events, list):
         return
@@ -544,6 +562,8 @@ def _emit_agent_transitions_from_meta(incoming: IncomingContext, meta: dict[str,
             continue
         phase = str(event.get("phase") or "").strip()
         if not phase:
+            continue
+        if phase.lower() in phases_to_skip:
             continue
         _emit_agent_transition(incoming, phase)
 
@@ -578,6 +598,48 @@ def _emit_agent_transition(incoming: IncomingContext, phase: str) -> None:
             "HandleIncomingMessageAction transition emit failed channel=%s phase=%s",
             incoming.channel_type,
             phase_value,
+        )
+
+
+def _start_typing_heartbeat(incoming: IncomingContext) -> callable:
+    if incoming.channel_type != "telegram" or not incoming.address:
+        return lambda: None
+
+    stop_event = threading.Event()
+
+    def _loop() -> None:
+        while not stop_event.wait(4.0):
+            _emit_typing_only(incoming)
+
+    thread = threading.Thread(target=_loop, daemon=True)
+    thread.start()
+
+    def _stop() -> None:
+        stop_event.set()
+        thread.join(timeout=0.2)
+
+    return _stop
+
+
+def _emit_typing_only(incoming: IncomingContext) -> None:
+    registry = get_io_registry()
+    adapter = registry.get_extremity(incoming.channel_type)
+    if adapter is None:
+        return
+    emit_fn = getattr(adapter, "emit_transition", None)
+    if not callable(emit_fn):
+        return
+    try:
+        emit_fn(
+            channel_target=incoming.address,
+            phase="thinking",
+            correlation_id=incoming.correlation_id,
+            message_id=None,
+        )
+    except Exception:
+        logger.exception(
+            "HandleIncomingMessageAction typing heartbeat emit failed channel=%s",
+            incoming.channel_type,
         )
 
 

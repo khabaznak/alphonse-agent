@@ -1,12 +1,10 @@
 from __future__ import annotations
 
 import logging
-import json
 import sqlite3
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any, Protocol
 
 from alphonse.agent.nervous_system.paths import resolve_nervous_system_db_path
@@ -427,53 +425,8 @@ class NullPromptStore:
 
 
 def seed_default_templates(db_path: str | None = None) -> None:
-    store = SqlitePromptStore(db_path=db_path)
-    for seed in _load_seed_templates():
-        try:
-            store.upsert_template(
-                key=seed["key"],
-                locale=seed["locale"],
-                address_style=seed["address_style"],
-                tone=seed["tone"],
-                channel=seed["channel"],
-                variant=seed["variant"],
-                policy_tier=seed["policy_tier"],
-                purpose=seed.get("purpose", "general"),
-                template=seed["template"],
-                enabled=True,
-                priority=0,
-                changed_by="seed",
-                reason="initial_seed",
-            )
-        except Exception:
-            logger.exception(
-                "prompt seed failed key=%s locale=%s",
-                seed.get("key"),
-                seed.get("locale"),
-            )
-
-
-def _load_seed_templates() -> list[dict[str, str]]:
-    seed_path = (
-        Path(__file__).resolve().parent.parent / "nervous_system" / "resources" / "prompt_templates.seed.json"
-    )
-    payload = json.loads(seed_path.read_text(encoding="utf-8"))
-    if not isinstance(payload, list):
-        raise ValueError("prompt template seed payload must be a list")
-    required = {"key", "locale", "address_style", "tone", "channel", "variant", "policy_tier", "template"}
-    rows: list[dict[str, str]] = []
-    for item in payload:
-        if not isinstance(item, dict):
-            raise ValueError("prompt template seed row must be an object")
-        if not required.issubset(item.keys()):
-            missing = sorted(required - set(item.keys()))
-            raise ValueError(f"prompt template seed row missing fields: {missing}")
-        row = {name: str(item[name]) for name in required}
-        purpose = item.get("purpose")
-        if purpose is not None:
-            row["purpose"] = str(purpose)
-        rows.append(row)
-    return rows
+    _ = db_path
+    logger.info("prompt seed loader disabled; no default templates seeded")
 
 
 def _score_template(row: dict[str, Any], context: PromptContext) -> float:

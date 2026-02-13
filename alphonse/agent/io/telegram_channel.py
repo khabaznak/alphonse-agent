@@ -150,9 +150,9 @@ def _telegram_reaction_for_phase(phase: str) -> str | None:
     mapped = {
         "acknowledged": "👀",
         "thinking": "🤔",
-        "executing": "⚙️",
+        "executing": "⚙",
         "waiting_user": "❓",
-        "done": "✅",
-        "failed": "❌",
+        "done": "👍",
+        "failed": "👎",
     }
     return mapped.get(str(phase or "").strip().lower())

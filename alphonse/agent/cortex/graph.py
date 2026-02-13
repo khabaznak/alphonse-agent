@@ -36,6 +36,17 @@ from alphonse.agent.cognition.step_validation import (
 )
 from alphonse.agent.cognition.abilities.registry import AbilityRegistry
 from alphonse.agent.cognition.abilities.json_runtime import load_json_abilities
+from alphonse.agent.cortex.nodes import ask_question_node as _ask_question_node
+from alphonse.agent.cortex.nodes import DiscoveryLoopDeps as _DiscoveryLoopDeps
+from alphonse.agent.cortex.nodes import execute_tool_node as _execute_tool_node_impl
+from alphonse.agent.cortex.nodes import ingest_node as _ingest_node
+from alphonse.agent.cortex.nodes import plan_node as _plan_node
+from alphonse.agent.cortex.nodes import respond_node as _respond_node_impl_factory
+from alphonse.agent.cortex.nodes import respond_node_impl as _respond_node_impl_extracted
+from alphonse.agent.cortex.nodes import run_discovery_loop_step as _run_discovery_loop_step_extracted
+from alphonse.agent.cortex.nodes import run_discovery_loop_until_blocked as _run_discovery_loop_until_blocked_extracted
+from alphonse.agent.cortex.nodes import select_next_step_node as _select_next_step_node
+from alphonse.agent.cortex.transitions import emit_transition_event as _emit_transition_event
 from alphonse.agent.identity import profile as identity_profile
 from alphonse.agent.tools.registry import ToolRegistry, build_default_tool_registry
 
@@ -130,119 +141,24 @@ def _compose_response_from_state(state: dict[str, Any]) -> str:
     return composer.compose(spec)
 
 
-def _ingest_node(state: CortexState) -> dict[str, Any]:
-    message = state.get("last_user_message")
-    if not _is_payload_cannonical(message):
-        error = ValueError("last_user_message is not cannonical JSON payload")
-        logger.exception(
-            "cortex ingest invalid payload chat_id=%s payload=%s error=%s",
-            state.get("chat_id"),
-            _snippet(str(message)),
-            error,
-        )
-        raise error
-    logger.info(
-        "cortex ingest chat_id=%s text=%s",
-        state.get("chat_id"),
-        _snippet(str(message)),
-    )
-    _emit_transition_event(state, "acknowledged")
-    return {
-        "last_user_message": message,
-        "events": state.get("events") or [],
-    }
-
-
-def _is_payload_cannonical(payload: Any) -> bool:
-    try:
-        if isinstance(payload, str):
-            return bool(payload.strip())
-        json.dumps(payload, ensure_ascii=False)
-        return True
-    except Exception:
-        return False
-
-
-def _plan_node(state: CortexState) -> dict[str, Any]:
-    """Stub: plan/refine phase for future greedy graph topology."""
-    _ = state
-    return {}
-
-
-def _select_next_step_node(state: CortexState) -> dict[str, Any]:
-    """Stub: select next executable step in greedy loop."""
-    _ = state
-    return {}
-
-
 def _execute_tool_node(state: CortexState) -> dict[str, Any]:
-    """Execute currently selected step from discovery loop state."""
-    loop_state = state.get("ability_state")
-    if not isinstance(loop_state, dict):
-        return {}
-    steps = loop_state.get("steps")
-    if not isinstance(steps, list) or not steps:
-        return {}
-    idx_raw = state.get("selected_step_index")
-    idx = idx_raw if isinstance(idx_raw, int) else _next_step_index(steps, {"ready"})
-    if idx is None or idx < 0 or idx >= len(steps):
-        return {}
-    step = steps[idx]
-    if not isinstance(step, dict):
-        return {}
-    tool_name = str(step.get("tool") or "").strip()
-    if tool_name == "askQuestion":
-        return _run_ask_question_step(state, step, loop_state, idx)
-    return {}
-
-
-def _ask_question_node(state: CortexState) -> dict[str, Any]:
-    """Stub: emit clarification question and wait for user answer."""
-    _ = state
-    return {}
+    return _execute_tool_node_impl(
+        state,
+        next_step_index=_next_step_index,
+        run_ask_question_step=_run_ask_question_step,
+    )
 
 
 def _respond_node_impl(state: CortexState, llm_client: LLMClient | None) -> dict[str, Any]:
-    if state.get("response_text") or state.get("response_key"):
-        return {}
-    _emit_transition_event(state, "thinking")
-    discovery = _run_intent_discovery(state, llm_client)
-    if discovery:
-        if isinstance(discovery, dict):
-            plans = discovery.get("plans")
-            pending = discovery.get("pending_interaction")
-            has_gap = False
-            if isinstance(plans, list):
-                has_gap = any(
-                    isinstance(item, dict) and str(item.get("plan_type") or "") == PlanType.CAPABILITY_GAP.value
-                    for item in plans
-                )
-            if has_gap:
-                _emit_transition_event(state, "failed")
-            elif pending:
-                _emit_transition_event(state, "waiting_user")
-            else:
-                _emit_transition_event(state, "done")
-        return discovery
-    intent = state.get("intent")
-    if intent:
-        ability = _ability_registry().get(str(intent))
-        if ability is not None:
-            try:
-                _emit_transition_event(state, "executing", {"tool": str(intent)})
-                return ability.execute(state, _TOOL_REGISTRY)
-            except Exception:
-                logger.exception(
-                    "cortex ability execution failed intent=%s chat_id=%s",
-                    intent,
-                    state.get("chat_id"),
-                )
-                return _run_capability_gap_tool(
-                    state,
-                    llm_client=llm_client,
-                    reason="ability_execution_exception",
-                )
-    return {}
+    return _respond_node_impl_extracted(
+        state,
+        llm_client,
+        run_intent_discovery=_run_intent_discovery,
+        ability_registry_getter=_ability_registry,
+        tool_registry=_TOOL_REGISTRY,
+        run_capability_gap_tool=_run_capability_gap_tool,
+        emit_transition_event=_emit_transition_event,
+    )
 
 
 def _run_intent_discovery(
@@ -497,142 +413,34 @@ def _has_missing_params(params: dict[str, Any]) -> bool:
     return False
 
 
+def _discovery_loop_deps() -> _DiscoveryLoopDeps:
+    return _DiscoveryLoopDeps(
+        next_step_index=_next_step_index,
+        safe_json=lambda value, limit: _safe_json(value, limit=limit),
+        available_tool_catalog_data=_available_tool_catalog_data,
+        validate_loop_step=_validate_loop_step,
+        critic_repair_invalid_step=_critic_repair_invalid_step,
+        run_capability_gap_tool=_run_capability_gap_tool,
+        execute_tool_node=_execute_tool_node,
+        ability_registry_getter=_ability_registry,
+        tool_registry=_TOOL_REGISTRY,
+        replan_discovery_after_step=_replan_discovery_after_step,
+        emit_transition_event=_emit_transition_event,
+        has_missing_params=_has_missing_params,
+        is_discovery_loop_state=_is_discovery_loop_state,
+        task_plane_category=IntentCategory.TASK_PLANE.value,
+    )
+
+
 def _run_discovery_loop_step(
     state: CortexState, loop_state: dict[str, Any], llm_client: LLMClient | None
 ) -> dict[str, Any]:
-    steps = loop_state.get("steps")
-    if not isinstance(steps, list) or not steps:
-        return _run_capability_gap_tool(
-            state,
-            llm_client=llm_client,
-            reason="loop_missing_steps",
-        )
-    next_idx = _next_step_index(steps, allowed_statuses={"ready"})
-    if next_idx is None:
-        if _next_step_index(steps, allowed_statuses={"incomplete", "waiting"}) is not None:
-            return {"ability_state": loop_state}
-        return {"ability_state": {}, "pending_interaction": None}
-    step = steps[next_idx]
-    tool_name = str(step.get("tool") or "").strip()
-    logger.info(
-        "cortex plan step chat_id=%s correlation_id=%s idx=%s tool=%s status=%s params=%s",
-        state.get("chat_id"),
-        state.get("correlation_id"),
-        next_idx,
-        tool_name or "unknown",
-        str(step.get("status") or "").strip().lower() or "unknown",
-        _safe_json(step.get("parameters") if isinstance(step.get("parameters"), dict) else {}, limit=280),
+    return _run_discovery_loop_step_extracted(
+        state,
+        loop_state,
+        llm_client,
+        deps=_discovery_loop_deps(),
     )
-    _emit_transition_event(state, "executing", {"tool": tool_name or "unknown"})
-    if not tool_name:
-        step["status"] = "failed"
-        step["outcome"] = "missing_tool_name"
-        return _run_capability_gap_tool(
-            state,
-            llm_client=llm_client,
-            reason="step_missing_tool_name",
-        )
-    catalog = _available_tool_catalog_data()
-    validation = _validate_loop_step(step, catalog)
-    if not validation.is_valid:
-        if not bool(step.get("critic_attempted")):
-            repaired = _critic_repair_invalid_step(
-                state=state,
-                step=step,
-                llm_client=llm_client,
-                validation=validation,
-            )
-            if repaired is not None:
-                repaired["chunk_index"] = step.get("chunk_index")
-                repaired["sequence"] = step.get("sequence")
-                repaired["critic_attempted"] = True
-                repaired["executed"] = False
-                repaired_params = (
-                    repaired.get("parameters")
-                    if isinstance(repaired.get("parameters"), dict)
-                    else {}
-                )
-                repaired["parameters"] = repaired_params
-                repaired["status"] = (
-                    "incomplete" if _has_missing_params(repaired_params) else "ready"
-                )
-                repaired["validation_error_history"] = list(step.get("validation_error_history") or [])
-                steps[next_idx] = repaired
-                logger.info(
-                    "cortex plan critic repaired chat_id=%s correlation_id=%s from=%s to=%s issue=%s",
-                    state.get("chat_id"),
-                    state.get("correlation_id"),
-                    tool_name,
-                    str(repaired.get("tool") or "unknown"),
-                    validation.issue.error_type.value if validation.issue else "unknown",
-                )
-                return _run_discovery_loop_step(state, loop_state, llm_client)
-        step["status"] = "failed"
-        step["outcome"] = "validation_failed"
-        state["intent"] = tool_name
-        reason = "step_validation_failed"
-        if validation.issue is not None:
-            reason = f"step_validation_{validation.issue.error_type.value.lower()}"
-        return _run_capability_gap_tool(
-            state,
-            llm_client=llm_client,
-            reason=reason,
-        )
-    if tool_name == "askQuestion":
-        state["ability_state"] = loop_state
-        state["selected_step_index"] = next_idx
-        return _execute_tool_node(state)
-    ability = _ability_registry().get(tool_name)
-    if ability is None:
-        step["status"] = "failed"
-        step["outcome"] = "unknown_tool"
-        state["intent"] = tool_name
-        return _run_capability_gap_tool(
-            state,
-            llm_client=llm_client,
-            reason="unknown_tool_in_plan",
-        )
-    params = step.get("parameters") if isinstance(step.get("parameters"), dict) else {}
-    state["intent"] = tool_name
-    state["intent_confidence"] = 0.6
-    state["intent_category"] = IntentCategory.TASK_PLANE.value
-    state["slots"] = params
-    result = ability.execute(state, _TOOL_REGISTRY) or {}
-    step["status"] = "executed"
-    step["executed"] = True
-    step["outcome"] = "success"
-    merged = dict(result)
-    incoming_plans = merged.get("plans") if isinstance(merged.get("plans"), list) else []
-    merged["plans"] = incoming_plans
-    # Keep the loop alive until all steps are done or explicitly waiting for input.
-    if merged.get("pending_interaction"):
-        merged["ability_state"] = loop_state
-        return merged
-    fact_updates = merged.get("fact_updates") if isinstance(merged.get("fact_updates"), dict) else {}
-    if fact_updates:
-        fact_bag = loop_state.get("fact_bag")
-        if not isinstance(fact_bag, dict):
-            fact_bag = {}
-        fact_bag.update(fact_updates)
-        loop_state["fact_bag"] = fact_bag
-    replan_result = _replan_discovery_after_step(
-        state=state,
-        loop_state=loop_state,
-        last_step=step,
-        llm_client=llm_client,
-    )
-    if isinstance(replan_result, dict):
-        return replan_result
-    if isinstance(loop_state.get("steps"), list):
-        steps = loop_state["steps"]
-    if _next_step_index(steps, allowed_statuses={"ready"}) is None:
-        if _next_step_index(steps, allowed_statuses={"incomplete", "waiting"}) is None:
-            merged["ability_state"] = {}
-            merged["pending_interaction"] = None
-            return merged
-    merged["ability_state"] = loop_state
-    merged["pending_interaction"] = None
-    return merged
 
 
 def _run_discovery_loop_until_blocked(
@@ -640,36 +448,12 @@ def _run_discovery_loop_until_blocked(
     loop_state: dict[str, Any],
     llm_client: LLMClient | None,
 ) -> dict[str, Any]:
-    max_iterations = 6
-    iteration = 0
-    current_loop_state = loop_state
-    latest_result: dict[str, Any] = {"ability_state": current_loop_state}
-    while iteration < max_iterations:
-        iteration += 1
-        step_result = _run_discovery_loop_step(state, current_loop_state, llm_client)
-        if not isinstance(step_result, dict):
-            return latest_result
-        latest_result = step_result
-        if (
-            step_result.get("response_text")
-            or step_result.get("response_key")
-            or step_result.get("pending_interaction")
-        ):
-            return step_result
-        plans = step_result.get("plans")
-        if isinstance(plans, list) and plans:
-            return step_result
-        next_loop_state = step_result.get("ability_state")
-        if not isinstance(next_loop_state, dict) or not _is_discovery_loop_state(next_loop_state):
-            return step_result
-        steps = next_loop_state.get("steps")
-        if not isinstance(steps, list) or not steps:
-            return step_result
-        if _next_step_index(steps, allowed_statuses={"ready"}) is None:
-            return step_result
-        current_loop_state = next_loop_state
-        state["ability_state"] = current_loop_state
-    return latest_result
+    return _run_discovery_loop_until_blocked_extracted(
+        state,
+        loop_state,
+        llm_client,
+        deps=_discovery_loop_deps(),
+    )
 
 
 def _critic_repair_invalid_step(
@@ -1187,16 +971,7 @@ def _run_planning_interrupt(
 
 
 def _respond_node(arg: LLMClient | CortexState | None = None):
-    # Backward-compatible call shape for tests: _respond_node(state_dict)
-    if isinstance(arg, dict):
-        return _respond_node_impl(arg, None)
-
-    llm_client = arg
-
-    def _node(state: CortexState) -> dict[str, Any]:
-        return _respond_node_impl(state, llm_client)
-
-    return _node
+    return _respond_node_impl_factory(arg, impl=_respond_node_impl)
 
 
 def _ability_registry() -> AbilityRegistry:
@@ -1352,30 +1127,6 @@ def _build_meta(state: CortexState) -> dict[str, Any]:
         "intent_category": state.get("intent_category"),
         "events": state.get("events") or [],
     }
-
-
-def _emit_transition_event(
-    state: CortexState,
-    phase: str,
-    detail: dict[str, Any] | None = None,
-) -> None:
-    events = state.get("events")
-    if not isinstance(events, list):
-        events = []
-        state["events"] = events
-    event: dict[str, Any] = {
-        "type": "agent.transition",
-        "phase": str(phase),
-        "at": datetime.now(timezone.utc).isoformat(),
-        "correlation_id": state.get("correlation_id"),
-    }
-    if isinstance(detail, dict) and detail:
-        event["detail"] = detail
-    if events:
-        last = events[-1]
-        if isinstance(last, dict) and last.get("type") == "agent.transition" and last.get("phase") == phase:
-            return
-    events.append(event)
 
 
 def _snippet(text: str, limit: int = 140) -> str:

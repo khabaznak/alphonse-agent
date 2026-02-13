@@ -171,26 +171,6 @@ def test_response_composer_prefers_prompt_store(
     assert composer.compose(spec) == "Custom clarify"
 
 
-def test_seed_includes_executor_response_keys(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    store = _prepare_db(tmp_path, monkeypatch)
-    seed_default_templates(str(tmp_path / "nerve-db"))
-    keys = [
-        "lan.device.not_found",
-        "lan.device.armed",
-        "pairing.not_found",
-        "error.execution_failed",
-        "policy.reminder.restricted",
-    ]
-    for key in keys:
-        match = store.get_template(
-            key,
-            PromptContext(locale="es-MX", address_style="tu", tone="friendly"),
-        )
-        assert match is not None, key
-
-
 def test_sensitive_response_uses_safe_fallback_when_prompt_missing() -> None:
     composer = ResponseComposer(prompt_store=NullPromptStore())
     spec = ResponseSpec(
