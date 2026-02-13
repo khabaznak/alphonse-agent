@@ -33,7 +33,8 @@ class IncomingContext:
     address: str | None
     person_id: str | None
     correlation_id: str
-    update_id: str | None
+    update_id: str | None = None
+    message_id: str | None = None
 
 
 class HandleIncomingMessageAction(Action):
@@ -59,6 +60,7 @@ class HandleIncomingMessageAction(Action):
                 person_id=None,
                 correlation_id=correlation_id,
                 update_id=None,
+                message_id=None,
             )
             return _message_result(rendered, incoming)
         text = str(normalized.text or "").strip()
@@ -88,6 +90,7 @@ class HandleIncomingMessageAction(Action):
         state = _build_cortex_state(stored_state, incoming, correlation_id, payload, normalized)
         llm_client = _build_llm_client()
         result = invoke_cortex(state, text, llm_client=llm_client)
+        _emit_agent_transitions_from_meta(incoming, result.meta if isinstance(result.meta, dict) else {})
         logger.info(
             "HandleIncomingMessageAction cortex_result reply_len=%s plans=%s correlation_id=%s",
             len(str(result.reply_text or "")),
@@ -163,6 +166,7 @@ def _build_incoming_context_from_normalized(
         person_id=person_id,
         correlation_id=correlation_id,
         update_id=str(update_id) if update_id is not None else None,
+        message_id=_as_optional_str(metadata.get("message_id")) if isinstance(metadata, dict) else None,
     )
 
 
@@ -527,6 +531,54 @@ def _build_llm_client():
         return build_llm_client()
     except Exception:
         return None
+
+
+def _emit_agent_transitions_from_meta(incoming: IncomingContext, meta: dict[str, Any]) -> None:
+    events = meta.get("events")
+    if not isinstance(events, list):
+        return
+    for event in events:
+        if not isinstance(event, dict):
+            continue
+        if str(event.get("type") or "") != "agent.transition":
+            continue
+        phase = str(event.get("phase") or "").strip()
+        if not phase:
+            continue
+        _emit_agent_transition(incoming, phase)
+
+
+def _emit_agent_transition(incoming: IncomingContext, phase: str) -> None:
+    phase_value = str(phase or "").strip().lower()
+    if not phase_value:
+        return
+    logger.info(
+        "HandleIncomingMessageAction transition channel=%s target=%s correlation_id=%s phase=%s",
+        incoming.channel_type,
+        incoming.address,
+        incoming.correlation_id,
+        phase_value,
+    )
+    registry = get_io_registry()
+    adapter = registry.get_extremity(incoming.channel_type)
+    if adapter is None:
+        return
+    emit_fn = getattr(adapter, "emit_transition", None)
+    if not callable(emit_fn):
+        return
+    try:
+        emit_fn(
+            channel_target=incoming.address,
+            phase=phase_value,
+            correlation_id=incoming.correlation_id,
+            message_id=incoming.message_id,
+        )
+    except Exception:
+        logger.exception(
+            "HandleIncomingMessageAction transition emit failed channel=%s phase=%s",
+            incoming.channel_type,
+            phase_value,
+        )
 
 
 def _normalize_incoming_payload(payload: dict, signal: object | None) -> object | None:

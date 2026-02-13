@@ -82,6 +82,45 @@ class TelegramExtremityAdapter(ExtremityAdapter):
             }
         )
 
+    def emit_transition(
+        self,
+        *,
+        channel_target: str | None,
+        phase: str,
+        correlation_id: str | None = None,
+        message_id: str | None = None,
+    ) -> None:
+        if not self._adapter or not channel_target:
+            return
+        action = _telegram_chat_action_for_phase(phase)
+        if action:
+            self._adapter.handle_action(
+                {
+                    "type": "send_chat_action",
+                    "payload": {
+                        "chat_id": channel_target,
+                        "action": action,
+                        "correlation_id": correlation_id,
+                    },
+                    "target_integration_id": "telegram",
+                }
+            )
+        reaction = _telegram_reaction_for_phase(phase)
+        if not reaction or not message_id:
+            return
+        self._adapter.handle_action(
+            {
+                "type": "set_message_reaction",
+                "payload": {
+                    "chat_id": channel_target,
+                    "message_id": message_id,
+                    "emoji": reaction,
+                    "correlation_id": correlation_id,
+                },
+                "target_integration_id": "telegram",
+            }
+        )
+
 
 def _as_optional_str(value: object | None) -> str | None:
     if value is None:
@@ -96,3 +135,24 @@ def _as_float(value: object | None, *, default: float) -> float:
         return float(value)
     except (TypeError, ValueError):
         return default
+
+
+def _telegram_chat_action_for_phase(phase: str) -> str | None:
+    mapped = {
+        "acknowledged": "typing",
+        "thinking": "typing",
+        "executing": "typing",
+    }
+    return mapped.get(str(phase or "").strip().lower())
+
+
+def _telegram_reaction_for_phase(phase: str) -> str | None:
+    mapped = {
+        "acknowledged": "👀",
+        "thinking": "🤔",
+        "executing": "⚙️",
+        "waiting_user": "❓",
+        "done": "✅",
+        "failed": "❌",
+    }
+    return mapped.get(str(phase or "").strip().lower())

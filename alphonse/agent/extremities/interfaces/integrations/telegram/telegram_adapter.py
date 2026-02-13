@@ -72,6 +72,52 @@ class TelegramAdapter(IntegrationAdapter):
 
     def handle_action(self, action: dict[str, Any]) -> None:
         action_type = action.get("type")
+        if action_type == "set_message_reaction":
+            payload = action.get("payload") or {}
+            chat_id = payload.get("chat_id")
+            message_id = payload.get("message_id")
+            emoji = str(payload.get("emoji") or "").strip()
+            if chat_id is None or message_id is None or not emoji:
+                logger.warning(
+                    "TelegramAdapter missing chat_id/message_id/emoji in set_message_reaction payload"
+                )
+                return
+            try:
+                chat_id_int = int(chat_id)
+                message_id_int = int(message_id)
+            except (TypeError, ValueError):
+                logger.warning(
+                    "TelegramAdapter invalid chat_id/message_id in set_message_reaction payload chat_id=%s message_id=%s",
+                    chat_id,
+                    message_id,
+                )
+                return
+            logger.info(
+                "TelegramAdapter setting reaction chat_id=%s message_id=%s emoji=%s",
+                chat_id,
+                message_id,
+                emoji,
+            )
+            self._set_message_reaction_http(
+                chat_id=chat_id_int,
+                message_id=message_id_int,
+                emoji=emoji,
+            )
+            return
+        if action_type == "send_chat_action":
+            payload = action.get("payload") or {}
+            chat_id = payload.get("chat_id")
+            chat_action = payload.get("action") or "typing"
+            if chat_id is None:
+                logger.warning("TelegramAdapter missing chat_id in chat_action payload")
+                return
+            logger.info(
+                "TelegramAdapter sending chat_action=%s to %s",
+                chat_action,
+                chat_id,
+            )
+            self._send_chat_action_http(chat_id, str(chat_action))
+            return
         if action_type != "send_message":
             logger.warning("TelegramAdapter ignoring action: %s", action_type)
             return
@@ -276,6 +322,55 @@ class TelegramAdapter(IntegrationAdapter):
         except Exception as exc:
             logger.error("TelegramAdapter %s failed: %s", endpoint, exc)
             raise
+
+    def _send_chat_action_http(self, chat_id: int, action: str) -> None:
+        endpoint = "sendChatAction"
+        url = f"https://api.telegram.org/bot{self._bot_token}/{endpoint}"
+        data = parse.urlencode({"chat_id": chat_id, "action": action}).encode("utf-8")
+        req = request.Request(url, data=data, method="POST")
+        try:
+            with request.urlopen(req, timeout=10) as response:
+                body = response.read().decode("utf-8", errors="ignore")
+                logger.info(
+                    "TelegramAdapter %s status=%s chat_id=%s body=%s",
+                    endpoint,
+                    response.status,
+                    chat_id,
+                    _snippet(body),
+                )
+        except Exception as exc:
+            logger.error("TelegramAdapter %s failed: %s", endpoint, exc)
+
+    def _set_message_reaction_http(self, chat_id: int, message_id: int, emoji: str) -> None:
+        endpoint = "setMessageReaction"
+        url = f"https://api.telegram.org/bot{self._bot_token}/{endpoint}"
+        reaction_payload = json.dumps(
+            [{"type": "emoji", "emoji": emoji}],
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        data = parse.urlencode(
+            {
+                "chat_id": chat_id,
+                "message_id": message_id,
+                "reaction": reaction_payload,
+                "is_big": "false",
+            }
+        ).encode("utf-8")
+        req = request.Request(url, data=data, method="POST")
+        try:
+            with request.urlopen(req, timeout=10) as response:
+                body = response.read().decode("utf-8", errors="ignore")
+                logger.info(
+                    "TelegramAdapter %s status=%s chat_id=%s message_id=%s body=%s",
+                    endpoint,
+                    response.status,
+                    chat_id,
+                    message_id,
+                    _snippet(body),
+                )
+        except Exception as exc:
+            logger.error("TelegramAdapter %s failed: %s", endpoint, exc)
 
 
 def _snippet(text: str) -> str:

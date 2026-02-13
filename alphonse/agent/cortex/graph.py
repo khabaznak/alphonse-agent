@@ -146,8 +146,10 @@ def _ingest_node(state: CortexState) -> dict[str, Any]:
         state.get("chat_id"),
         _snippet(str(message)),
     )
+    _emit_transition_event(state, "acknowledged")
     return {
         "last_user_message": message,
+        "events": state.get("events") or [],
     }
 
 
@@ -203,14 +205,31 @@ def _ask_question_node(state: CortexState) -> dict[str, Any]:
 def _respond_node_impl(state: CortexState, llm_client: LLMClient | None) -> dict[str, Any]:
     if state.get("response_text") or state.get("response_key"):
         return {}
+    _emit_transition_event(state, "thinking")
     discovery = _run_intent_discovery(state, llm_client)
     if discovery:
+        if isinstance(discovery, dict):
+            plans = discovery.get("plans")
+            pending = discovery.get("pending_interaction")
+            has_gap = False
+            if isinstance(plans, list):
+                has_gap = any(
+                    isinstance(item, dict) and str(item.get("plan_type") or "") == PlanType.CAPABILITY_GAP.value
+                    for item in plans
+                )
+            if has_gap:
+                _emit_transition_event(state, "failed")
+            elif pending:
+                _emit_transition_event(state, "waiting_user")
+            else:
+                _emit_transition_event(state, "done")
         return discovery
     intent = state.get("intent")
     if intent:
         ability = _ability_registry().get(str(intent))
         if ability is not None:
             try:
+                _emit_transition_event(state, "executing", {"tool": str(intent)})
                 return ability.execute(state, _TOOL_REGISTRY)
             except Exception:
                 logger.exception(
@@ -504,6 +523,7 @@ def _run_discovery_loop_step(
         str(step.get("status") or "").strip().lower() or "unknown",
         _safe_json(step.get("parameters") if isinstance(step.get("parameters"), dict) else {}, limit=280),
     )
+    _emit_transition_event(state, "executing", {"tool": tool_name or "unknown"})
     if not tool_name:
         step["status"] = "failed"
         step["outcome"] = "missing_tool_name"
@@ -971,16 +991,19 @@ def _run_ask_question_step(
         },
     )
     step["status"] = "waiting"
+    _emit_transition_event(state, "waiting_user", {"slot": key})
     if question:
         return {
             "response_text": question,
             "pending_interaction": serialize_pending_interaction(pending),
             "ability_state": loop_state or {},
+            "events": state.get("events") or [],
         }
     return {
         "response_key": "clarify.repeat_input",
         "pending_interaction": serialize_pending_interaction(pending),
         "ability_state": loop_state or {},
+        "events": state.get("events") or [],
     }
 
 
@@ -1229,6 +1252,7 @@ def _run_capability_gap_tool(
     missing_slots: list[str] | None = None,
     append_existing_plans: bool = False,
 ) -> dict[str, Any]:
+    _emit_transition_event(state, "failed", {"reason": reason})
     logger.info(
         "cortex tool capability_gap.create chat_id=%s correlation_id=%s reason=%s",
         state.get("chat_id"),
@@ -1248,6 +1272,7 @@ def _run_capability_gap_tool(
         "plans": plans,
         "ability_state": {},
         "pending_interaction": None,
+        "events": state.get("events") or [],
     }
     if apology:
         payload["response_text"] = apology
@@ -1327,6 +1352,30 @@ def _build_meta(state: CortexState) -> dict[str, Any]:
         "intent_category": state.get("intent_category"),
         "events": state.get("events") or [],
     }
+
+
+def _emit_transition_event(
+    state: CortexState,
+    phase: str,
+    detail: dict[str, Any] | None = None,
+) -> None:
+    events = state.get("events")
+    if not isinstance(events, list):
+        events = []
+        state["events"] = events
+    event: dict[str, Any] = {
+        "type": "agent.transition",
+        "phase": str(phase),
+        "at": datetime.now(timezone.utc).isoformat(),
+        "correlation_id": state.get("correlation_id"),
+    }
+    if isinstance(detail, dict) and detail:
+        event["detail"] = detail
+    if events:
+        last = events[-1]
+        if isinstance(last, dict) and last.get("type") == "agent.transition" and last.get("phase") == phase:
+            return
+    events.append(event)
 
 
 def _snippet(text: str, limit: int = 140) -> str:
