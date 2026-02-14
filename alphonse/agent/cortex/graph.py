@@ -4,7 +4,6 @@ from typing import Any, Protocol, TypedDict
 
 from langgraph.graph import END, StateGraph
 
-from alphonse.agent.cognition.planning_catalog import discover_plan
 from alphonse.agent.cognition.planning_catalog import format_available_abilities
 from alphonse.agent.cognition.plans import CortexPlan, CortexResult
 from alphonse.agent.cortex.nodes import build_apology_node
@@ -77,7 +76,6 @@ class CortexGraph:
                 state,
                 llm_client_from_state=self._llm_client_from_state,
                 tool_registry=self._tool_registry,
-                discover_plan=discover_plan,
                 format_available_abilities=format_available_abilities,
                 run_capability_gap_tool=run_capability_gap_tool,
             ),

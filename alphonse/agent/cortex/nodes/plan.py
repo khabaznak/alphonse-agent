@@ -30,15 +30,12 @@ from alphonse.agent.cortex.nodes.telemetry import emit_brain_state
 from alphonse.agent.nervous_system.paths import resolve_nervous_system_db_path
 from alphonse.config import settings
 
-_MAX_PLAN_REPAIR_ATTEMPTS = 2
-
 
 def plan_node(
     state: dict[str, Any],
     *,
     llm_client: Any,
     tool_registry: Any,
-    discover_plan: Callable[..., dict[str, Any]],
     format_available_abilities: Callable[[], str],
     run_capability_gap_tool: Callable[..., dict[str, Any]],
 ) -> dict[str, Any]:
@@ -76,190 +73,22 @@ def plan_node(
         result = run_capability_gap_tool(state, llm_client=None, reason="no_llm_client")
         result["plan_retry"] = False
         return _return(result)
-    if _supports_native_tool_calls(llm_client):
-        native_result = _run_native_tool_call_loop(
-            state=state,
-            llm_client=llm_client,
-            tool_registry=tool_registry,
-            format_available_abilities=format_available_abilities,
-            run_capability_gap_tool=run_capability_gap_tool,
-        )
-        if isinstance(native_result, dict):
-            return _return(native_result)
-
-    discovery = discover_plan(
-        text=text,
+    if not _supports_native_tool_calls(llm_client):
+        result = run_capability_gap_tool(state, llm_client=llm_client, reason="no_tool_call_support")
+        result["plan_retry"] = False
+        return _return(result)
+    native_result = _run_native_tool_call_loop(
+        state=state,
         llm_client=llm_client,
-        available_tools=format_available_abilities(),
-        locale=state.get("locale"),
-        tone=state.get("tone"),
-        address_style=state.get("address_style"),
-        channel_type=state.get("channel_type"),
-        planning_context=state.get("planning_context")
-        if isinstance(state.get("planning_context"), dict)
-        else None,
+        tool_registry=tool_registry,
+        format_available_abilities=format_available_abilities,
+        run_capability_gap_tool=run_capability_gap_tool,
     )
-    if not isinstance(discovery, dict):
-        retry = _request_plan_repair(
-            state,
-            code="invalid_plan_payload",
-            message="Planner returned non-dict payload.",
-        )
-        if retry is not None:
-            return _return(retry)
-        result = run_capability_gap_tool(state, llm_client=llm_client, reason="invalid_plan_payload")
-        result["plan_retry"] = False
-        return _return(result)
-
-    interrupt = discovery.get("planning_interrupt")
-    if isinstance(interrupt, dict):
-        question = str(interrupt.get("question") or "").strip()
-        if not question:
-            retry = _request_plan_repair(
-                state,
-                code="missing_interrupt_question",
-                message="Planner returned planning_interrupt without question.",
-            )
-            if retry is not None:
-                return _return(retry)
-            result = run_capability_gap_tool(state, llm_client=llm_client, reason="missing_interrupt_question")
-            result["plan_retry"] = False
-            return _return(result)
-        pending = build_pending_interaction(
-            PendingInteractionType.SLOT_FILL,
-            key=str(interrupt.get("slot") or "answer"),
-            context={"source": "plan_node", "bind": interrupt.get("bind") or {}},
-        )
-        return _return({
-            "response_text": question,
-            "pending_interaction": serialize_pending_interaction(pending),
-            "ability_state": {},
-            "plan_retry": False,
-        })
-
-    plans = discovery.get("plans")
-    if not isinstance(plans, list) or not plans:
-        planning_error = discovery.get("planning_error") if isinstance(discovery.get("planning_error"), dict) else {}
-        retry = _request_plan_repair(
-            state,
-            code=str(planning_error.get("code") or "empty_execution_plan"),
-            message=str(planning_error.get("message") or "Planner produced empty execution plan."),
-        )
-        if retry is not None:
-            return _return(retry)
-        result = run_capability_gap_tool(state, llm_client=llm_client, reason="empty_execution_plan")
-        result["plan_retry"] = False
-        return _return(result)
-    first_plan = plans[0] if isinstance(plans[0], dict) else {}
-    execution_plan = first_plan.get("executionPlan")
-    if not isinstance(execution_plan, list) or not execution_plan:
-        retry = _request_plan_repair(
-            state,
-            code="empty_execution_plan",
-            message="Planner produced empty executionPlan.",
-        )
-        if retry is not None:
-            return _return(retry)
-        result = run_capability_gap_tool(state, llm_client=llm_client, reason="empty_execution_plan")
-        result["plan_retry"] = False
-        return _return(result)
-
-    catalog = _tool_catalog(format_available_abilities)
-    steps_state: list[dict[str, Any]] = []
-    tool_facts: list[dict[str, Any]] = []
-    final_message: str | None = None
-    for idx, raw_step in enumerate(execution_plan[:8]):
-        step = raw_step if isinstance(raw_step, dict) else {}
-        tool_name = str(step.get("tool") or step.get("action") or "").strip()
-        params = step.get("parameters") if isinstance(step.get("parameters"), dict) else {}
-        steps_state.append({"idx": idx, "tool": tool_name, "status": "ready", "parameters": params})
-        validation = validate_step(
-            {"tool": tool_name, "parameters": params},
-            catalog,
-        )
-        if not validation.is_valid:
-            issue = validation.issue
-            retry = _request_plan_repair(
-                state,
-                code=str(issue.error_type.value if issue else "INVALID_STEP"),
-                message=str(issue.message if issue else "Step validation failed."),
-                step={"idx": idx, "tool": tool_name, "parameters": params},
-            )
-            if retry is not None:
-                retry["ability_state"] = {"kind": "greedy_plan", "steps": steps_state}
-                retry["plan_retry"] = True
-                return _return(retry)
-            result = run_capability_gap_tool(state, llm_client=llm_client, reason="invalid_execution_step")
-            result["ability_state"] = {"kind": "greedy_plan", "steps": steps_state}
-            result["plan_retry"] = False
-            return _return(result)
-
-        eligible, reason = is_tool_eligible(tool_name=tool_name, user_message=text)
-        if not eligible:
-            result = run_capability_gap_tool(
-                state, llm_client=llm_client, reason=str(reason or "tool_not_eligible")
-            )
-            result["ability_state"] = {"kind": "greedy_plan", "steps": steps_state}
-            result["plan_retry"] = False
-            return _return(result)
-
-        try:
-            outcome = _execute_tool_step(
-                state=state,
-                llm_client=llm_client,
-                tool_registry=tool_registry,
-                tool_name=tool_name,
-                params=params,
-                step_idx=idx,
-            )
-        except Exception as exc:
-            retry = _request_plan_repair(
-                state,
-                code="TOOL_EXECUTION_ERROR",
-                message=f"Tool execution failed for {tool_name}: {type(exc).__name__}",
-                step={"idx": idx, "tool": tool_name, "parameters": params},
-            )
-            if retry is not None:
-                retry["ability_state"] = {"kind": "greedy_plan", "steps": steps_state}
-                retry["plan_retry"] = True
-                return _return(retry)
-            result = run_capability_gap_tool(state, llm_client=llm_client, reason="tool_execution_error")
-            result["ability_state"] = {"kind": "greedy_plan", "steps": steps_state}
-            result["plan_retry"] = False
-            return _return(result)
-        steps_state[idx]["status"] = outcome.get("status") or "executed"
-        step_fact = outcome.get("fact")
-        if isinstance(step_fact, dict):
-            tool_facts.append(step_fact)
-        if outcome.get("pending_interaction"):
-            return _return(
-                {
-                    "response_text": outcome.get("response_text"),
-                    "pending_interaction": outcome.get("pending_interaction"),
-                    "ability_state": {"kind": "greedy_plan", "steps": steps_state},
-                    "plan_retry": False,
-                }
-            )
-        step_message = outcome.get("response_text")
-        if isinstance(step_message, str) and step_message.strip():
-            final_message = step_message.strip()
-
-    merged_context = dict(state.get("planning_context") or {})
-    facts = merged_context.get("facts") if isinstance(merged_context.get("facts"), dict) else {}
-    merged_facts = dict(facts)
-    merged_facts["tool_results"] = tool_facts
-    merged_context["facts"] = merged_facts
-    state["planning_context"] = merged_context
-    return _return(
-        {
-            "response_text": final_message,
-            "pending_interaction": None,
-            "ability_state": {"kind": "greedy_plan", "steps": steps_state},
-            "planning_context": merged_context,
-            "plan_retry": False,
-            "plan_repair_attempts": 0,
-        }
-    )
+    if isinstance(native_result, dict):
+        return _return(native_result)
+    result = run_capability_gap_tool(state, llm_client=llm_client, reason="tool_call_loop_failed")
+    result["plan_retry"] = False
+    return _return(result)
 
 
 def _principal_id_for_state(state: dict[str, Any]) -> str | None:
@@ -415,7 +244,6 @@ def plan_node_stateful(
     *,
     llm_client_from_state: Callable[[dict[str, Any]], Any],
     tool_registry: Any,
-    discover_plan: Callable[..., dict[str, Any]],
     format_available_abilities: Callable[[], str],
     run_capability_gap_tool: Callable[..., dict[str, Any]],
 ) -> dict[str, Any]:
@@ -423,7 +251,6 @@ def plan_node_stateful(
         state,
         llm_client=llm_client_from_state(state),
         tool_registry=tool_registry,
-        discover_plan=discover_plan,
         format_available_abilities=format_available_abilities,
         run_capability_gap_tool=run_capability_gap_tool,
     )
@@ -642,35 +469,6 @@ def _tool_catalog(format_available_abilities: Callable[[], str]) -> dict[str, An
 
     parsed = planner_tool_catalog_data()
     return parsed if isinstance(parsed, dict) else {"tools": []}
-
-
-def _request_plan_repair(
-    state: dict[str, Any],
-    *,
-    code: str,
-    message: str,
-    step: dict[str, Any] | None = None,
-) -> dict[str, Any] | None:
-    attempts = int(state.get("plan_repair_attempts") or 0)
-    if attempts >= _MAX_PLAN_REPAIR_ATTEMPTS:
-        return None
-    context = dict(state.get("planning_context") or {})
-    facts = context.get("facts") if isinstance(context.get("facts"), dict) else {}
-    merged_facts = dict(facts)
-    merged_facts["plan_validation_error"] = {
-        "code": code,
-        "message": message,
-        "step": step if isinstance(step, dict) else None,
-    }
-    context["facts"] = merged_facts
-    context["original_message"] = str(state.get("last_user_message") or "")
-    state["planning_context"] = context
-    return {
-        "plan_retry": True,
-        "plan_repair_attempts": attempts + 1,
-        "planning_context": context,
-        "response_text": None,
-    }
 
 
 def _execute_tool_step(

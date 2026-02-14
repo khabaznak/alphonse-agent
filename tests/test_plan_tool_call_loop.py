@@ -65,7 +65,6 @@ def test_plan_node_uses_native_tool_call_loop_when_supported() -> None:
         state,
         llm_client=_ToolCallLlm(),
         tool_registry=build_default_tool_registry(),
-        discover_plan=lambda **_: {"messages": [], "plans": []},
         format_available_abilities=lambda: "- getTime() -> current time",
         run_capability_gap_tool=_run_capability_gap_tool,
     )
