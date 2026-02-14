@@ -328,6 +328,56 @@ def _run_native_tool_call_loop(
 
         if not tool_calls:
             if not steps_state:
+                json_plan_call = _extract_json_plan_tool_call(content=content, catalog=catalog)
+                if json_plan_call is not None:
+                    tool_name, params = json_plan_call
+                    idx = len(steps_state)
+                    step_entry = {"idx": idx, "tool": tool_name, "status": "ready", "parameters": params}
+                    steps_state.append(step_entry)
+                    validation = validate_step({"tool": tool_name, "parameters": params}, catalog)
+                    if validation.is_valid:
+                        eligible, reason = is_tool_eligible(
+                            tool_name=tool_name,
+                            user_message=str(state.get("last_user_message") or ""),
+                        )
+                        if eligible:
+                            try:
+                                outcome = _execute_tool_step(
+                                    state=state,
+                                    llm_client=llm_client,
+                                    tool_registry=tool_registry,
+                                    tool_name=tool_name,
+                                    params=params,
+                                    step_idx=idx,
+                                )
+                            except Exception:
+                                step_entry["status"] = "failed"
+                            else:
+                                step_entry["status"] = str(outcome.get("status") or "executed")
+                                step_fact = outcome.get("fact")
+                                if isinstance(step_fact, dict):
+                                    tool_facts.append(step_fact)
+                                merged_context = _merge_tool_facts(state=state, tool_facts=tool_facts)
+                                return {
+                                    "response_text": outcome.get("response_text"),
+                                    "pending_interaction": outcome.get("pending_interaction"),
+                                    "ability_state": {"kind": "tool_calls", "steps": steps_state},
+                                    "planning_context": merged_context,
+                                    "plan_retry": False,
+                                    "plan_repair_attempts": 0,
+                                }
+                        else:
+                            step_entry["status"] = "failed"
+                            _append_tool_error_message(
+                                messages=messages,
+                                tool_call_id="json-plan-fallback",
+                                tool_name=tool_name,
+                                style=tool_result_style,
+                                code="TOOL_NOT_ELIGIBLE",
+                                message=str(reason or "tool not eligible"),
+                            )
+                    else:
+                        step_entry["status"] = "failed"
                 fallback_call = _translate_text_plan_to_tool_call(
                     llm_client=llm_client,
                     content=content,
@@ -840,6 +890,35 @@ def _translate_text_plan_to_tool_call(
     if tool_name not in known_names:
         return None
     return tool_name, parameters
+
+
+def _extract_json_plan_tool_call(
+    *,
+    content: str,
+    catalog: dict[str, Any],
+) -> tuple[str, dict[str, Any]] | None:
+    payload = _parse_json_payload(content)
+    if not isinstance(payload, dict):
+        return None
+    raw_steps = payload.get("execution_plan")
+    if not isinstance(raw_steps, list) or not raw_steps:
+        return None
+    first = raw_steps[0]
+    if not isinstance(first, dict):
+        return None
+    tool_name = str(first.get("tool") or "").strip()
+    params = first.get("parameters") if isinstance(first.get("parameters"), dict) else {}
+    if not tool_name:
+        return None
+    tools = catalog.get("tools") if isinstance(catalog.get("tools"), list) else []
+    known_names = {
+        str(item.get("tool") or "").strip()
+        for item in tools
+        if isinstance(item, dict) and str(item.get("tool") or "").strip()
+    }
+    if tool_name not in known_names:
+        return None
+    return tool_name, params
 
 
 
