@@ -40,4 +40,10 @@ def test_available_ability_catalog_has_minimal_tools_only() -> None:
         for item in (tools if isinstance(tools, list) else [])
         if isinstance(item, dict)
     }
-    assert names == {"askQuestion", "time.current", "schedule_event"}
+    assert names == {
+        "askQuestion",
+        "time.current",
+        "schedule_event",
+        "getMySettings",
+        "getUserDetails",
+    }

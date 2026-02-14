@@ -22,8 +22,8 @@ _PLANNER_TOOL_CARDS: list[dict[str, Any]] = [
     },
     {
         "tool": "time.current",
-        "description": "Get the current time in a timezone.",
-        "when_to_use": "Use when the user asks for current time/date.",
+        "description": "Get the current time now using your current settings.",
+        "when_to_use": "Use for current time/date and as a reference for scheduling or deadline calculations.",
         "returns": "current_time",
         "required_parameters": [],
         "input_parameters": [
@@ -44,6 +44,22 @@ _PLANNER_TOOL_CARDS: list[dict[str, Any]] = [
             {"name": "target", "type": "string", "required": False},
             {"name": "origin", "type": "string", "required": False},
         ],
+    },
+    {
+        "tool": "getMySettings",
+        "description": "Get your current runtime settings (timezone, locale, tone, address style, channel context).",
+        "when_to_use": "Use before time or language-sensitive decisions when settings are needed.",
+        "returns": "settings",
+        "required_parameters": [],
+        "input_parameters": [],
+    },
+    {
+        "tool": "getUserDetails",
+        "description": "Get known user/channel details for the current conversation context.",
+        "when_to_use": "Use when user identity/context details are needed before planning or scheduling.",
+        "returns": "user_details",
+        "required_parameters": [],
+        "input_parameters": [],
     },
 ]
 
@@ -93,7 +109,11 @@ def discover_plan(
     raw = _call_llm(llm_client, system_prompt=system_prompt, user_prompt=user_prompt)
     payload = _parse_json(raw)
     if not isinstance(payload, dict):
-        return {"messages": [], "plans": []}
+        return {
+            "messages": [],
+            "plans": [],
+            "planning_error": {"code": "INVALID_JSON", "message": "Planner returned invalid JSON."},
+        }
     interrupt = _extract_planning_interrupt(payload, locale=str(locale or "en-US"))
     if interrupt is not None:
         return {
@@ -112,7 +132,14 @@ def discover_plan(
     if not isinstance(execution_plan, list):
         execution_plan = payload.get("executionPlan")
     if not isinstance(execution_plan, list):
-        return {"messages": [], "plans": []}
+        return {
+            "messages": [],
+            "plans": [],
+            "planning_error": {
+                "code": "MISSING_EXECUTION_PLAN",
+                "message": "Planner did not provide execution_plan.",
+            },
+        }
     normalized: list[dict[str, Any]] = []
     for step in execution_plan:
         if not isinstance(step, dict):
@@ -129,7 +156,7 @@ def discover_plan(
             issue.get("code"),
             issue.get("message"),
         )
-        return {"messages": [], "plans": []}
+        return {"messages": [], "plans": [], "planning_error": issue}
     intention = str(payload.get("intention") or "overall").strip() or "overall"
     confidence = str(payload.get("confidence") or "medium").strip().lower() or "medium"
     acceptance = payload.get("acceptance_criteria")

@@ -6,6 +6,7 @@ from alphonse.agent.cognition.planning_engine import (
     _validate_execution_plan,
     discover_plan,
 )
+from alphonse.agent.cortex.nodes.plan import route_after_plan
 
 
 def test_validate_execution_plan_rejects_empty_non_askquestion_params() -> None:
@@ -59,3 +60,28 @@ def test_story_pipeline_returns_executable_plan() -> None:
     assert isinstance(execution, list)
     assert execution
     assert execution[0].get("tool") == "core.identity.query_user_name"
+
+
+def test_discover_plan_surfaces_planning_error_for_invalid_step() -> None:
+    llm = _SeqLlm(
+        responses=[
+            (
+                '{"intention":"reminder.schedule","confidence":"high",'
+                '"acceptance_criteria":["scheduled"],'
+                '"execution_plan":[{"tool":"schedule_event","parameters":{}}]}'
+            ),
+        ]
+    )
+    result = discover_plan(
+        text="Remind me in 1 minute",
+        llm_client=llm,
+        available_tools="- schedule_event(trigger_time:iso_datetime, signal_type:string)",
+        locale="en-US",
+    )
+    planning_error = result.get("planning_error")
+    assert isinstance(planning_error, dict)
+    assert planning_error.get("code") == "NON_ASKQUESTION_EMPTY_PARAMETERS"
+
+
+def test_route_after_plan_retries_when_flagged() -> None:
+    assert route_after_plan({"plan_retry": True}) == "plan_node"

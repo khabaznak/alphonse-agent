@@ -51,6 +51,8 @@ class CortexState(TypedDict, total=False):
     pending_interaction: dict[str, Any] | None
     ability_state: dict[str, Any] | None
     planning_context: dict[str, Any] | None
+    plan_retry: bool
+    plan_repair_attempts: int
     selected_step_index: int | None
     route_decision: str | None
     _llm_client: Any
@@ -107,6 +109,7 @@ class CortexGraph:
             "plan_node",
             route_after_plan,
             {
+                "plan_node": "plan_node",
                 "apology_node": "apology_node",
                 "respond_node": "respond_node",
             },
