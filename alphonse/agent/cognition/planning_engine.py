@@ -94,14 +94,15 @@ def discover_plan(
         "- Keep execution_plan empty if planning_interrupt is present.\n"
     )
     user_prompt = (
-        f"{render_utterance_policy_block(locale=locale, tone=tone, address_style=address_style, channel_type=channel_type)}\n"
-        "MESSAGE:\n"
+        "# Utterance Policy\n"
+        f"{render_utterance_policy_block(locale=locale, tone=tone, address_style=address_style, channel_type=channel_type)}\n\n"
+        "# User Message\n"
         f"{text}\n\n"
-        "LOCALE:\n"
-        f"{str(locale or 'en-US')}\n\n"
-        "COMPACT_CONTEXT_JSON:\n"
-        f"{json.dumps(compact_context, ensure_ascii=False)}\n\n"
-        "AVAILABLE_TOOLS:\n"
+        "# Locale\n"
+        f"- {str(locale or 'en-US')}\n\n"
+        "# Planning Context\n"
+        f"{_format_context_markdown(compact_context)}\n\n"
+        "# Available Tools\n"
         f"{available_tools}\n"
     )
     raw = _call_llm(llm_client, system_prompt=system_prompt, user_prompt=user_prompt)
@@ -303,6 +304,41 @@ def _compact_planning_context(
     if isinstance(facts, dict) and facts:
         compact["facts"] = facts
     return compact
+
+
+def _format_context_markdown(context: dict[str, Any]) -> str:
+    lines: list[str] = []
+    for key, value in context.items():
+        lines.extend(_markdown_lines_for_value(key=key, value=value, indent=0))
+    return "\n".join(lines) if lines else "- (none)"
+
+
+def _markdown_lines_for_value(*, key: str, value: Any, indent: int) -> list[str]:
+    prefix = "  " * indent
+    if isinstance(value, dict):
+        lines = [f"{prefix}- **{key}**:"]
+        if not value:
+            lines.append(f"{prefix}  - (empty)")
+            return lines
+        for child_key, child_value in value.items():
+            lines.extend(_markdown_lines_for_value(key=str(child_key), value=child_value, indent=indent + 1))
+        return lines
+    if isinstance(value, list):
+        lines = [f"{prefix}- **{key}**:"]
+        if not value:
+            lines.append(f"{prefix}  - (empty)")
+            return lines
+        for item in value:
+            if isinstance(item, dict):
+                lines.append(f"{prefix}  -")
+                for child_key, child_value in item.items():
+                    lines.extend(
+                        _markdown_lines_for_value(key=str(child_key), value=child_value, indent=indent + 2)
+                    )
+            else:
+                lines.append(f"{prefix}  - {str(item)}")
+        return lines
+    return [f"{prefix}- **{key}**: {str(value)}"]
 
 
 def _render_param_signature(param: dict[str, Any]) -> str:

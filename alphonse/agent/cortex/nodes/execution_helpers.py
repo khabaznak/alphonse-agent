@@ -132,17 +132,21 @@ def critic_repair_invalid_step(
 ) -> dict[str, Any] | None:
     if llm_client is None:
         return None
+    invalid_step_md = _markdown_from_json_text(safe_json(step, 800))
+    validation_exception_md = _markdown_from_json_text(
+        safe_json(
+            _build_critic_exception_payload(validation),
+            1000,
+        )
+    )
     user_prompt = render_prompt_template(
         plan_critic_user_template,
         {
             "USER_MESSAGE": str(state.get("last_user_message") or ""),
-            "INVALID_STEP_JSON": safe_json(step, 800),
-            "VALIDATION_EXCEPTION_JSON": safe_json(
-                _build_critic_exception_payload(validation),
-                1000,
-            ),
+            "INVALID_STEP_JSON": invalid_step_md,
+            "VALIDATION_EXCEPTION_JSON": validation_exception_md,
             "AVAILABLE_TOOL_SIGNATURES": format_available_abilities(),
-            "AVAILABLE_TOOL_CATALOG": format_available_ability_catalog(),
+            "AVAILABLE_TOOL_CATALOG": _markdown_from_json_text(format_available_ability_catalog()),
         },
     )
     try:
@@ -258,7 +262,7 @@ def build_capability_gap_apology(
                 "USER_MESSAGE": str(state.get("last_user_message") or ""),
                 "INTENT": str(state.get("intent") or ""),
                 "GAP_REASON": reason,
-                "MISSING_SLOTS": json.dumps(missing_slots or [], ensure_ascii=False),
+                "MISSING_SLOTS": _markdown_list(missing_slots or []),
                 "LOCALE": locale_for_state(state),
             },
         )
@@ -282,3 +286,49 @@ def build_capability_gap_apology(
     if message.startswith("[") and message.endswith("]"):
         return fallback
     return message
+
+
+def _markdown_list(values: list[str]) -> str:
+    cleaned = [str(item).strip() for item in values if str(item).strip()]
+    if not cleaned:
+        return "- (none)"
+    return "\n".join(f"- {item}" for item in cleaned)
+
+
+def _markdown_from_json_text(payload: str) -> str:
+    raw = str(payload or "").strip()
+    if not raw:
+        return "- (none)"
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return f"- {raw}"
+    lines = _markdown_lines(parsed, indent=0)
+    return "\n".join(lines) if lines else "- (none)"
+
+
+def _markdown_lines(value: Any, *, indent: int) -> list[str]:
+    prefix = "  " * indent
+    if isinstance(value, dict):
+        if not value:
+            return [f"{prefix}- (empty object)"]
+        lines: list[str] = []
+        for key, item in value.items():
+            if isinstance(item, (dict, list)):
+                lines.append(f"{prefix}- **{key}**:")
+                lines.extend(_markdown_lines(item, indent=indent + 1))
+            else:
+                lines.append(f"{prefix}- **{key}**: {item}")
+        return lines
+    if isinstance(value, list):
+        if not value:
+            return [f"{prefix}- (empty list)"]
+        lines = []
+        for item in value:
+            if isinstance(item, (dict, list)):
+                lines.append(f"{prefix}-")
+                lines.extend(_markdown_lines(item, indent=indent + 1))
+            else:
+                lines.append(f"{prefix}- {item}")
+        return lines
+    return [f"{prefix}- {value}"]

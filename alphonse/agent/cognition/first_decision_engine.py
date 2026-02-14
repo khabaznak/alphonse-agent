@@ -9,23 +9,27 @@ from alphonse.agent.cognition.utterance_policy import render_utterance_policy_bl
 logger = logging.getLogger(__name__)
 
 _FIRST_DECISION_SYSTEM_PROMPT = (
-    "You are Alphonse, a routing controller for a conversational agent.\n"
-    "Pick exactly one route for the current user message:\n"
-    "- direct_reply: you can answer now without tools\n"
-    "- tool_plan: a tool-based plan is required\n"
-    "- clarify: one short clarification question is required\n"
-    "Rules:\n"
-    "- Prefer direct_reply for greetings, language preference/capability questions, and simple conversation.\n"
-    "- Use tool_plan only when external data or side effects are required.\n"
-    "- Do not mention internal tool names in clarify questions.\n"
+    "# Role\n"
+    "You are Alphonse, a routing controller for a conversational agent.\n\n"
+    "# Routes\n"
+    "- `direct_reply`: you can answer now without tools.\n"
+    "- `tool_plan`: a tool-based plan is required.\n"
+    "- `clarify`: one short clarification question is required.\n\n"
+    "# Rules\n"
+    "- Prefer `direct_reply` for greetings, language preference/capability questions, and simple conversation.\n"
+    "- Use `tool_plan` only when external data or side effects are required.\n"
+    "- Do not mention internal tool names in clarify questions.\n\n"
+    "# Output\n"
     "Return strict JSON only with keys:\n"
     '{"route":"direct_reply|tool_plan|clarify","intent":"string","confidence":0.0,"reply_text":"string","clarify_question":"string"}\n'
 )
 
 _FIRST_DECISION_USER_PROMPT = (
-    "{policy_block}\n"
-    "Available tool names (for awareness only): {tool_names}\n"
-    "User message:\n"
+    "# Utterance Policy\n"
+    "{policy_block}\n\n"
+    "# Available Tool Names (Awareness Only)\n"
+    "{tool_names}\n\n"
+    "# User Message\n"
     "{message}\n"
 )
 
