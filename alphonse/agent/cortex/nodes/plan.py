@@ -293,6 +293,7 @@ def _run_native_tool_call_loop(
     steps_state: list[dict[str, Any]] = []
     tool_facts: list[dict[str, Any]] = []
     final_message: str | None = None
+    terminal_tools = {"getTime", "getMySettings", "getUserDetails"}
 
     for _ in range(6):
         try:
@@ -336,9 +337,11 @@ def _run_native_tool_call_loop(
                 "plan_repair_attempts": 0,
             }
 
+        iteration_tool_names: list[str] = []
         for call in tool_calls[:4]:
             call_id = str(call.get("id") or "").strip() if isinstance(call, dict) else ""
             tool_name = str(call.get("name") or "").strip() if isinstance(call, dict) else ""
+            iteration_tool_names.append(tool_name)
             params = call.get("arguments") if isinstance(call.get("arguments"), dict) else {}
             idx = len(steps_state)
             step_entry = {"idx": idx, "tool": tool_name, "status": "ready", "parameters": params}
@@ -409,6 +412,16 @@ def _run_native_tool_call_loop(
                 }
             if isinstance(outcome.get("response_text"), str) and str(outcome.get("response_text")).strip():
                 final_message = str(outcome.get("response_text")).strip()
+        if iteration_tool_names and all(name in terminal_tools for name in iteration_tool_names):
+            merged_context = _merge_tool_facts(state=state, tool_facts=tool_facts)
+            return {
+                "response_text": final_message,
+                "pending_interaction": None,
+                "ability_state": {"kind": "tool_calls", "steps": steps_state},
+                "planning_context": merged_context,
+                "plan_retry": False,
+                "plan_repair_attempts": 0,
+            }
 
     result = run_capability_gap_tool(state, llm_client=llm_client, reason="tool_execution_error")
     result["ability_state"] = {"kind": "tool_calls", "steps": steps_state}

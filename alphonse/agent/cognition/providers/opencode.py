@@ -68,13 +68,11 @@ class OpenCodeClient:
         tools: list[dict[str, Any]],
         tool_choice: str = "auto",
     ) -> dict[str, Any]:
-        force_chat = str(os.getenv("OPENCODE_FORCE_CHAT_COMPLETIONS", "")).strip().lower() in {
-            "1",
-            "true",
-            "yes",
-            "on",
-        }
-        if not force_chat:
+        mode = str(os.getenv("OPENCODE_TOOL_CALL_MODE", "session")).strip().lower()
+        if mode not in {"session", "chat", "auto"}:
+            mode = "session"
+
+        if mode in {"session", "auto"}:
             try:
                 return self._complete_with_tools_via_session_api(
                     messages=messages,
@@ -82,8 +80,22 @@ class OpenCodeClient:
                     tool_choice=tool_choice,
                 )
             except Exception:
-                pass
+                if mode == "session":
+                    raise
 
+        return self._complete_with_tools_via_chat_completions(
+            messages=messages,
+            tools=tools,
+            tool_choice=tool_choice,
+        )
+
+    def _complete_with_tools_via_chat_completions(
+        self,
+        *,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+        tool_choice: str,
+    ) -> dict[str, Any]:
         payload = {
             "model": self.model,
             "messages": messages,
@@ -109,6 +121,13 @@ class OpenCodeClient:
     ) -> dict[str, Any]:
         headers, auth = _build_auth(self.api_key_env, self.username_env, self.password_env)
         session_id = self._ensure_session(headers=headers, auth=auth)
+        tool_timeout_raw = os.getenv("OPENCODE_TOOL_CALL_TIMEOUT_SECONDS")
+        tool_timeout = self.timeout
+        if tool_timeout_raw:
+            try:
+                tool_timeout = max(5.0, float(tool_timeout_raw))
+            except ValueError:
+                tool_timeout = self.timeout
         rendered = _render_tool_call_markdown_prompt(
             messages=messages,
             tools=tools,
@@ -130,7 +149,7 @@ class OpenCodeClient:
                     headers=headers,
                     auth=auth,
                     json=payload,
-                    timeout=self.timeout,
+                    timeout=tool_timeout,
                 )
                 _raise_for_status_with_body(
                     response,

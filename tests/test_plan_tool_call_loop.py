@@ -44,6 +44,30 @@ class _ToolCallLlm:
         return {"content": "Done.", "tool_calls": [], "assistant_message": {"role": "assistant", "content": "Done."}}
 
 
+class _LoopingTimeToolCallLlm:
+    supports_tool_calls = True
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def complete_with_tools(
+        self,
+        *,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+        tool_choice: str = "auto",
+    ) -> dict[str, Any]:
+        _ = messages
+        _ = tools
+        _ = tool_choice
+        self.calls += 1
+        return {
+            "content": "",
+            "tool_calls": [{"id": f"tc-{self.calls}", "name": "getTime", "arguments": {}}],
+            "assistant_message": {"role": "assistant", "content": ""},
+        }
+
+
 def _run_capability_gap_tool(state: dict[str, Any], llm_client: Any, reason: str) -> dict[str, Any]:
     _ = state
     _ = llm_client
@@ -68,7 +92,33 @@ def test_plan_node_uses_native_tool_call_loop_when_supported() -> None:
         format_available_abilities=lambda: "- getTime() -> current time",
         run_capability_gap_tool=_run_capability_gap_tool,
     )
-    assert result.get("response_text") == "Done."
+    assert isinstance(result.get("response_text"), str)
+    assert result.get("response_text")
     ability = result.get("ability_state")
     assert isinstance(ability, dict)
     assert ability.get("kind") == "tool_calls"
+
+
+def test_plan_node_short_circuits_terminal_tool_loop() -> None:
+    llm = _LoopingTimeToolCallLlm()
+    state = {
+        "last_user_message": "What time is it?",
+        "timezone": "UTC",
+        "locale": "en-US",
+        "tone": "friendly",
+        "address_style": "tu",
+        "channel_type": "telegram",
+        "channel_target": "123",
+        "correlation_id": "corr-terminal-short-circuit",
+    }
+    result = plan_node(
+        state,
+        llm_client=llm,
+        tool_registry=build_default_tool_registry(),
+        format_available_abilities=lambda: "- getTime() -> current time",
+        run_capability_gap_tool=_run_capability_gap_tool,
+    )
+    assert llm.calls == 1
+    assert isinstance(result.get("response_text"), str)
+    assert result.get("response_text")
+    assert not result.get("plans")

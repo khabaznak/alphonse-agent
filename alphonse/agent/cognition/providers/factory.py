@@ -52,7 +52,7 @@ def _build_opencode_client() -> OpenCodeClient:
         "LOCAL_LLM_MODEL",
         "ollama/mistral:7b-instruct",
     )
-    timeout_seconds = _parse_float(os.getenv("OPENCODE_TIMEOUT_SECONDS"), default=120.0)
+    timeout_seconds = _parse_float(os.getenv("OPENCODE_TIMEOUT_SECONDS"), default=60.0)
     chat_path = os.getenv("OPENCODE_CHAT_COMPLETIONS_PATH", "/v1/chat/completions")
     return OpenCodeClient(
         base_url=base_url,
