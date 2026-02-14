@@ -164,7 +164,7 @@ def test_plan_node_short_circuits_terminal_tool_loop() -> None:
     assert not result.get("plans")
 
 
-def test_plan_node_repairs_tool_refusal_and_recovers_with_tool_call() -> None:
+def test_plan_node_reports_tool_refusal_without_silent_repair() -> None:
     llm = _RefusalThenToolCallLlm()
     state = {
         "last_user_message": "What time is it?",
@@ -183,6 +183,8 @@ def test_plan_node_repairs_tool_refusal_and_recovers_with_tool_call() -> None:
         format_available_abilities=lambda: "- getTime() -> current time",
         run_capability_gap_tool=_run_capability_gap_tool,
     )
-    assert llm.calls == 2
-    text = str(result.get("response_text") or "")
-    assert text.startswith("It is ")
+    assert llm.calls == 1
+    plans = result.get("plans") if isinstance(result.get("plans"), list) else []
+    assert plans
+    first = plans[0] if isinstance(plans[0], dict) else {}
+    assert first.get("reason") == "model_tool_refusal_no_tool_call"

@@ -294,7 +294,6 @@ def _run_native_tool_call_loop(
     tool_facts: list[dict[str, Any]] = []
     final_message: str | None = None
     terminal_tools = {"getTime", "getMySettings", "getUserDetails"}
-    refusal_repairs = 0
 
     for _ in range(6):
         try:
@@ -328,19 +327,15 @@ def _run_native_tool_call_loop(
             messages.append({"role": "assistant", "content": content})
 
         if not tool_calls:
-            if not steps_state and refusal_repairs < 1 and _looks_like_tool_refusal(content):
-                refusal_repairs += 1
-                messages.append(
-                    {
-                        "role": "system",
-                        "content": (
-                            "Tool usage is available in this environment. "
-                            "If your answer depends on a tool, you must return a valid tool call. "
-                            "Do not claim tool unavailability unless a tool execution error was returned."
-                        ),
-                    }
+            if not steps_state and _looks_like_tool_refusal(content):
+                result = run_capability_gap_tool(
+                    state,
+                    llm_client=llm_client,
+                    reason="model_tool_refusal_no_tool_call",
                 )
-                continue
+                result["ability_state"] = {"kind": "tool_calls", "steps": steps_state}
+                result["plan_retry"] = False
+                return result
             merged_context = _merge_tool_facts(state=state, tool_facts=tool_facts)
             return {
                 "response_text": content or final_message,
@@ -722,6 +717,9 @@ def _looks_like_tool_refusal(content: str) -> bool:
             "required tool",
         )
     )
+
+
+
 
 
 def _resolve_time_expression_with_llm(
