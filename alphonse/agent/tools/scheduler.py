@@ -9,6 +9,31 @@ from alphonse.agent.nervous_system.timed_store import insert_timed_signal
 
 @dataclass(frozen=True)
 class SchedulerTool:
+    def schedule_event(
+        self,
+        *,
+        trigger_time: str,
+        timezone_name: str,
+        signal_type: str,
+        payload: dict[str, Any] | None = None,
+        target: str | None = None,
+        origin: str | None = None,
+        correlation_id: str | None = None,
+    ) -> str:
+        event_payload = dict(payload or {})
+        event_payload.setdefault("created_at", datetime.now(dt_timezone.utc).isoformat())
+        event_payload.setdefault("trigger_at", trigger_time)
+        return insert_timed_signal(
+            trigger_at=trigger_time,
+            timezone=timezone_name,
+            signal_type=signal_type,
+            payload=event_payload,
+            target=str(target) if target is not None else None,
+            origin=origin,
+            correlation_id=correlation_id,
+        )
+
+    # Compatibility helper while reminder payloads are still being migrated.
     def schedule_reminder(
         self,
         *,
@@ -29,13 +54,11 @@ class SchedulerTool:
             "chat_id": chat_id,
             "origin_channel": channel_type,
             "locale_hint": locale_hint,
-            "created_at": datetime.now(dt_timezone.utc).isoformat(),
-            "trigger_at": trigger_time,
             "intent_evidence": intent_evidence,
         }
-        return insert_timed_signal(
-            trigger_at=trigger_time,
-            timezone=timezone_name,
+        return self.schedule_event(
+            trigger_time=trigger_time,
+            timezone_name=timezone_name,
             signal_type="reminder",
             payload=payload,
             target=str(actor_person_id or chat_id),

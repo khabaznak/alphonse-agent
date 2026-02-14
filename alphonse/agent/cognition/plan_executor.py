@@ -162,23 +162,30 @@ class PlanExecutor:
         if trigger_at is not None:
             eta_seconds = int((trigger_at - now_utc).total_seconds())
         logger.info(
-            "executor dispatch plan_id=%s plan_type=%s tool=scheduler trigger_at=%s now_utc=%s eta_seconds=%s",
+            "executor dispatch plan_id=%s plan_type=%s tool=schedule_event trigger_at=%s now_utc=%s eta_seconds=%s",
             plan.plan_id,
             plan.plan_type,
             payload.trigger_at,
             now_utc.isoformat(),
             eta_seconds if eta_seconds is not None else "unknown",
         )
-        result = self._scheduler.schedule_reminder(
-            reminder_text=payload.reminder_text,
+        schedule_payload = {
+            "message": payload.reminder_text,
+            "reminder_text_raw": payload.reminder_text,
+            "person_id": exec_context.actor_person_id or payload.chat_id,
+            "chat_id": payload.chat_id,
+            "origin_channel": payload.origin,
+            "locale_hint": payload.locale_hint,
+            "intent_evidence": {},
+        }
+        result = self._scheduler.schedule_event(
             trigger_time=payload.trigger_at,
-            chat_id=payload.chat_id,
-            channel_type=payload.origin,
-            actor_person_id=exec_context.actor_person_id,
-            intent_evidence={},
-            correlation_id=payload.correlation_id,
             timezone_name=payload.timezone,
-            locale_hint=payload.locale_hint,
+            signal_type="reminder",
+            payload=schedule_payload,
+            target=str(exec_context.actor_person_id or payload.chat_id),
+            origin=payload.origin,
+            correlation_id=payload.correlation_id,
         )
         logger.info(
             "executor dispatch plan_id=%s plan_type=%s outcome=scheduled schedule_id=%s",
