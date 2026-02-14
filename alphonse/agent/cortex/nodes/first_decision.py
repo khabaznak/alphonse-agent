@@ -10,6 +10,7 @@ from alphonse.agent.cognition.pending_interaction import (
     build_pending_interaction,
     serialize_pending_interaction,
 )
+from alphonse.agent.cortex.nodes.telemetry import emit_brain_state
 
 
 def first_decision_node(
@@ -19,16 +20,23 @@ def first_decision_node(
     ability_registry_getter: Callable[[], Any],
     decide_first_action_fn: Callable[..., dict[str, Any]] = decide_first_action,
 ) -> dict[str, Any]:
+    def _return(payload: dict[str, Any]) -> dict[str, Any]:
+        return emit_brain_state(
+            state=state,
+            node="first_decision_node",
+            updates=payload,
+        )
+
     if state.get("response_text"):
-        return {"route_decision": "respond"}
+        return _return({"route_decision": "respond"})
 
     pending = state.get("pending_interaction")
     if pending:
-        return {"route_decision": "plan"}
+        return _return({"route_decision": "plan"})
 
     text = str(state.get("last_user_message") or "").strip()
     if not text:
-        return {"route_decision": "respond"}
+        return _return({"route_decision": "respond"})
 
     llm_client = llm_client_from_state(state)
     ability_registry = ability_registry_getter()
@@ -53,7 +61,7 @@ def first_decision_node(
     if route == "direct_reply":
         reply_text = str(decision.get("reply_text") or "").strip()
         if reply_text:
-            return {
+            return _return({
                 "route_decision": "respond",
                 "intent": intent,
                 "intent_confidence": confidence,
@@ -61,8 +69,8 @@ def first_decision_node(
                 "response_text": reply_text,
                 "pending_interaction": None,
                 "ability_state": {},
-            }
-        return {"route_decision": "plan"}
+            })
+        return _return({"route_decision": "plan"})
 
     if route == "clarify":
         question = str(decision.get("clarify_question") or "").strip()
@@ -72,21 +80,21 @@ def first_decision_node(
                 key="answer",
                 context={"source": "first_decision", "intent": intent or "unknown"},
             )
-            return {
+            return _return({
                 "route_decision": "respond",
                 "intent": intent,
                 "intent_confidence": confidence,
                 "response_text": question,
                 "pending_interaction": serialize_pending_interaction(pending_interaction),
                 "ability_state": {},
-            }
-        return {"route_decision": "plan"}
+            })
+        return _return({"route_decision": "plan"})
 
-    return {
+    return _return({
         "route_decision": "plan",
         "intent": intent,
         "intent_confidence": confidence,
-    }
+    })
 
 
 def build_first_decision_node(

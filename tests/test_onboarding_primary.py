@@ -97,7 +97,7 @@ def test_primary_onboarding_prompts_for_name_on_first_contact(
 
     monkeypatch.setattr(him, "PlanExecutor", FakePlanExecutor)
     llm = SequenceLLM()
-    monkeypatch.setattr(him, "_build_llm_client", lambda: llm)
+    monkeypatch.setattr(him, "build_llm_client", lambda: llm)
 
     action = HandleIncomingMessageAction()
     _send_text(action, "Begin onboarding process")
@@ -131,7 +131,7 @@ def test_primary_onboarding_marks_bootstrap_complete_after_name_capture(
 
     monkeypatch.setattr(him, "PlanExecutor", FakePlanExecutor)
     llm = SequenceLLM()
-    monkeypatch.setattr(him, "_build_llm_client", lambda: llm)
+    monkeypatch.setattr(him, "build_llm_client", lambda: llm)
 
     action = HandleIncomingMessageAction()
     _send_text(action, "Begin onboarding process")

@@ -46,7 +46,7 @@ def test_pending_name_consumes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
     assert state.get("pending_interaction") is None
 
 
-def test_pending_non_consumable_falls_through(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_pending_non_consumable_empty_text_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     db_path = tmp_path / "nerve-db"
     monkeypatch.setenv("NERVE_DB_PATH", str(db_path))
     apply_schema(db_path)
@@ -67,7 +67,8 @@ def test_pending_non_consumable_falls_through(tmp_path: Path, monkeypatch: pytes
         payload={"text": "", "origin": "telegram", "chat_id": "123"},
         source="telegram",
     )
-    action.execute({"signal": signal, "state": None, "outcome": None, "ctx": None})
+    with pytest.raises(ValueError, match="normalized incoming text must be non-empty"):
+        action.execute({"signal": signal, "state": None, "outcome": None, "ctx": None})
     state = load_state("telegram:123")
     assert state is not None
     assert state.get("pending_interaction") is not None

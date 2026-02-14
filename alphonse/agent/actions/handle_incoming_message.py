@@ -1,40 +1,26 @@
 from __future__ import annotations
 
-import json
 import logging
-import threading
 import uuid
-from dataclasses import dataclass
-from typing import Any
 
 from alphonse.agent.actions.base import Action
 from alphonse.agent.actions.models import ActionResult
-from alphonse.agent.io import get_io_registry
-from alphonse.agent.cognition.plans import CortexPlan, PlanType
-from alphonse.agent.cognition.preferences.store import (
-    get_or_create_principal_for_channel,
-    resolve_preference_with_precedence,
-)
-from alphonse.config import settings
+from alphonse.agent.actions.session_context import IncomingContext
+from alphonse.agent.actions.session_context import build_incoming_context_from_normalized
+from alphonse.agent.actions.session_context import build_session_key
+from alphonse.agent.actions.state_context import build_cortex_state
+from alphonse.agent.actions.state_context import ensure_conversation_locale
+from alphonse.agent.actions.state_context import outgoing_locale
+from alphonse.agent.actions.transitions import emit_agent_transitions_from_meta
 from alphonse.agent.cognition.plan_executor import PlanExecutionContext, PlanExecutor
+from alphonse.agent.cognition.plans import CortexPlan, PlanType
+from alphonse.agent.cognition.providers.factory import build_llm_client
 from alphonse.agent.cortex.graph import CortexGraph
 from alphonse.agent.cortex.state_store import load_state, save_state
-from alphonse.agent.cognition.providers.factory import build_llm_client
-from alphonse.agent.identity import store as identity_store
-from alphonse.agent.identity import profile as identity_profile
-from datetime import datetime, timezone
+from alphonse.agent.io import get_io_registry
 
 logger = logging.getLogger(__name__)
 _CORTEX_GRAPH = CortexGraph()
-
-@dataclass(frozen=True)
-class IncomingContext:
-    channel_type: str
-    address: str | None
-    person_id: str | None
-    correlation_id: str
-    update_id: str | None = None
-    message_id: str | None = None
 
 
 class HandleIncomingMessageAction(Action):
@@ -49,43 +35,48 @@ class HandleIncomingMessageAction(Action):
         correlation_id = str(correlation_id or uuid.uuid4())
 
         normalized = _normalize_incoming_payload(payload, signal)
-        if not normalized:
-            logger.warning("HandleIncomingMessageAction missing normalized payload")
-            incoming = IncomingContext(
-                channel_type="system",
-                address=None,
-                person_id=None,
-                correlation_id=correlation_id,
-                update_id=None,
-                message_id=None,
-            )
-            return _noop_result(incoming)
-        text = str(normalized.text or "").strip()
-        incoming = _build_incoming_context_from_normalized(normalized, correlation_id)
+
+        raw_text = getattr(normalized, "text", None)
+        if not isinstance(raw_text, str):
+            raise TypeError("normalized incoming text must be a string")
+        text = raw_text.strip()
+        incoming = build_incoming_context_from_normalized(normalized, correlation_id)
         logger.info(
             "HandleIncomingMessageAction start channel=%s person=%s text=%s",
             incoming.channel_type,
             incoming.person_id,
-            _snippet(text),
+            _text_log_snippet(text),
         )
         if not text:
-            return _noop_result(incoming)
+            raise ValueError("normalized incoming text must be non-empty")
 
-        conversation_key = _conversation_key(incoming)
+        session_key = build_session_key(incoming)
         logger.info(
             "HandleIncomingMessageAction session_key=%s channel=%s address=%s",
-            conversation_key,
+            session_key,
             incoming.channel_type,
             incoming.address,
         )
-        _emit_agent_transition(incoming, "acknowledged")
-        _emit_agent_transition(incoming, "thinking")
-        stop_heartbeat = _start_typing_heartbeat(incoming)
-        chat_key = conversation_key
-        stored_state = load_state(chat_key) or {}
-        _ensure_conversation_locale(chat_key, stored_state, incoming)
-        state = _build_cortex_state(stored_state, incoming, correlation_id, payload, normalized)
-        llm_client = _build_llm_client()
+
+        stored_state = load_state(session_key) or {}
+        ensure_conversation_locale(
+            conversation_key=session_key,
+            stored_state=stored_state,
+            incoming=incoming,
+        )
+        state = build_cortex_state(
+            stored_state=stored_state,
+            incoming=incoming,
+            correlation_id=correlation_id,
+            payload=payload,
+            normalized=normalized,
+        )
+
+        try:
+            llm_client = build_llm_client()
+        except Exception:
+            logger.exception("HandleIncomingMessageAction failed to build llm client")
+            llm_client = None
         try:
             result = _CORTEX_GRAPH.invoke(state, text, llm_client=llm_client)
         except Exception:
@@ -96,12 +87,12 @@ class HandleIncomingMessageAction(Action):
                 incoming.correlation_id,
             )
             raise
-        finally:
-            stop_heartbeat()
-        _emit_agent_transitions_from_meta(
-            incoming,
-            result.meta if isinstance(result.meta, dict) else {},
-            skip_phases={"acknowledged", "thinking", "executing", "done"},
+
+        emit_agent_transitions_from_meta(
+            incoming=incoming,
+            meta=result.meta if isinstance(result.meta, dict) else {},
+            emit_transition=lambda ctx, phase: _emit_channel_transition(ctx, phase),
+            skip_phases=set(),
         )
         logger.info(
             "HandleIncomingMessageAction cortex_result reply_len=%s plans=%s correlation_id=%s",
@@ -111,16 +102,18 @@ class HandleIncomingMessageAction(Action):
         )
         if result.plans:
             logger.info(
-                "HandleIncomingMessageAction cortex_plans correlation_id=%s payload=%s",
+                "HandleIncomingMessageAction cortex_plans correlation_id=%s plan_types=%s",
                 incoming.correlation_id,
-                _safe_json([plan.model_dump() for plan in result.plans], limit=1400),
+                [str(getattr(plan, "plan_type", "unknown")) for plan in result.plans],
             )
-        save_state(chat_key, result.cognition_state)
+
+        save_state(session_key, result.cognition_state)
         if isinstance(result.cognition_state, dict):
             logger.info(
                 "HandleIncomingMessageAction saved_state pending_interaction=%s",
                 result.cognition_state.get("pending_interaction"),
             )
+
         executor = PlanExecutor()
         exec_context = PlanExecutionContext(
             channel_type=incoming.channel_type,
@@ -129,7 +122,7 @@ class HandleIncomingMessageAction(Action):
             correlation_id=incoming.correlation_id,
         )
         if result.reply_text:
-            locale = _outgoing_locale(result.cognition_state)
+            locale = outgoing_locale(result.cognition_state)
             reply_plan = CortexPlan(
                 plan_type=PlanType.COMMUNICATE,
                 payload={
@@ -140,292 +133,44 @@ class HandleIncomingMessageAction(Action):
             executor.execute([reply_plan], context, exec_context)
         if result.plans:
             executor.execute(result.plans, context, exec_context)
-        _emit_agent_transition(incoming, "done")
-        return _noop_result(incoming)
 
-
-def _build_incoming_context_from_normalized(
-    normalized: object, correlation_id: str
-) -> IncomingContext:
-    channel_type = str(getattr(normalized, "channel_type", "") or "system")
-    address = _as_optional_str(getattr(normalized, "channel_target", None))
-    metadata = getattr(normalized, "metadata", {}) or {}
-    person_id = _resolve_person_id_from_normalized(channel_type, address, metadata)
-    update_id = metadata.get("update_id") if isinstance(metadata, dict) else None
-    return IncomingContext(
-        channel_type=channel_type,
-        address=address,
-        person_id=person_id,
-        correlation_id=correlation_id,
-        update_id=str(update_id) if update_id is not None else None,
-        message_id=_as_optional_str(metadata.get("message_id")) if isinstance(metadata, dict) else None,
-    )
-
-
-def _resolve_person_id_from_normalized(
-    channel_type: str, address: str | None, metadata: dict[str, Any]
-) -> str | None:
-    person_id = metadata.get("person_id") if isinstance(metadata, dict) else None
-    if person_id:
-        return str(person_id)
-    if channel_type and address:
-        person = identity_store.resolve_person_by_channel(channel_type, address)
-        if person:
-            return str(person.get("person_id"))
-    return None
-
-
-def _conversation_key(incoming: IncomingContext) -> str:
-    if incoming.channel_type == "telegram":
-        return f"telegram:{incoming.address or ''}"
-    if incoming.channel_type == "cli":
-        return f"cli:{incoming.address or 'cli'}"
-    if incoming.channel_type == "api":
-        return f"api:{incoming.address or 'api'}"
-    return f"{incoming.channel_type}:{incoming.address or incoming.channel_type}"
-
-
-
-def _ensure_conversation_locale(
-    conversation_key: str,
-    stored_state: dict[str, Any],
-    incoming: IncomingContext,
-) -> None:
-    if stored_state.get("locale"):
-        return
-    channel_locale = _resolve_channel_locale_context(incoming)
-    if channel_locale:
-        stored_state["locale"] = channel_locale
-        return
-    existing = identity_profile.get_locale(conversation_key)
-    if existing:
-        stored_state["locale"] = existing
-        return
-    stored_state["locale"] = settings.get_default_locale()
-
-
-def _build_cortex_state(
-    stored_state: dict[str, Any],
-    incoming: IncomingContext,
-    correlation_id: str,
-    payload: dict[str, Any],
-    normalized: object | None,
-) -> dict[str, Any]:
-    try:
-        from alphonse.agent.nervous_system.migrate import apply_schema
-        from alphonse.agent.nervous_system.paths import resolve_nervous_system_db_path
-
-        apply_schema(resolve_nervous_system_db_path())
-    except Exception:
-        pass
-    principal_id = None
-    effective_locale = settings.get_default_locale()
-    effective_tone = settings.get_tone()
-    effective_address = settings.get_address_style()
-    if incoming.channel_type and (incoming.address or incoming.channel_type):
-        channel_id = str(incoming.address or incoming.channel_type)
-        principal_id = get_or_create_principal_for_channel(
-            str(incoming.channel_type),
-            channel_id,
+        logger.info(
+            "HandleIncomingMessageAction response channel=%s message=noop",
+            incoming.channel_type,
         )
-    timezone = settings.get_timezone()
-    if principal_id:
-        timezone = resolve_preference_with_precedence(
-            key="timezone",
-            default=timezone,
-            channel_principal_id=principal_id,
-        )
-        effective_locale = resolve_preference_with_precedence(
-            key="locale",
-            default=settings.get_default_locale(),
-            channel_principal_id=principal_id,
-        )
-        effective_tone = resolve_preference_with_precedence(
-            key="tone",
-            default=settings.get_tone(),
-            channel_principal_id=principal_id,
-        )
-        effective_address = resolve_preference_with_precedence(
-            key="address_style",
-            default=settings.get_address_style(),
-            channel_principal_id=principal_id,
-        )
-    logger.info(
-        "HandleIncomingMessageAction principal channel=%s channel_id=%s principal_id=%s locale=%s tone=%s address=%s",
-        incoming.channel_type,
-        incoming.address,
-        principal_id,
-        effective_locale,
-        effective_tone,
-        effective_address,
-    )
-    planning_mode = payload.get("planning_mode") if isinstance(payload, dict) else None
-    autonomy_level = (
-        payload.get("autonomy_level") if isinstance(payload, dict) else None
-    )
-    conversation_key = _conversation_key(incoming)
-    state_locale = stored_state.get("locale")
-    if not state_locale:
-        state_locale = _resolve_channel_locale_context(incoming)
-    if not state_locale:
-        state_locale = identity_profile.get_locale(conversation_key)
-    if not state_locale:
-        state_locale = effective_locale
-    incoming_user_id = _as_optional_str(getattr(normalized, "user_id", None))
-    incoming_user_name = _as_optional_str(getattr(normalized, "user_name", None))
-    incoming_meta = getattr(normalized, "metadata", {}) if normalized is not None else {}
-    incoming_meta = incoming_meta if isinstance(incoming_meta, dict) else {}
-    pending_interaction, ability_state = _sanitize_interaction_state(stored_state)
-    return {
-        "chat_id": incoming.address or incoming.channel_type,
-        "channel_type": incoming.channel_type,
-        "channel_target": incoming.address or incoming.channel_type,
-        "conversation_key": _conversation_key(incoming),
-        "incoming_raw_message": incoming_meta.get("raw")
-        if isinstance(incoming_meta.get("raw"), dict)
-        else None,
-        "actor_person_id": incoming.person_id,
-        "incoming_user_id": incoming_user_id,
-        "incoming_user_name": incoming_user_name,
-        "incoming_reply_to_user_id": _as_optional_str(incoming_meta.get("reply_to_user")),
-        "incoming_reply_to_user_name": _as_optional_str(incoming_meta.get("reply_to_user_name")),
-        "slots": stored_state.get("slots_collected") or {},
-        "intent": stored_state.get("last_intent"),
-        "locale": state_locale,
-        "tone": effective_tone,
-        "address_style": effective_address,
-        "autonomy_level": autonomy_level or stored_state.get("autonomy_level"),
-        "planning_mode": planning_mode or stored_state.get("planning_mode"),
-        "intent_category": stored_state.get("intent_category"),
-        "routing_rationale": stored_state.get("routing_rationale"),
-        "routing_needs_clarification": stored_state.get("routing_needs_clarification"),
-        "pending_interaction": pending_interaction,
-        "ability_state": ability_state,
-        "slot_machine": stored_state.get("slot_machine"),
-        "correlation_id": correlation_id,
-        "timezone": timezone,
-    }
+        return ActionResult(intention_key="NOOP", payload={}, urgency=None)
 
 
-def _sanitize_interaction_state(
-    stored_state: dict[str, Any],
-) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
-    pending = stored_state.get("pending_interaction")
-    ability_state = stored_state.get("ability_state")
-    if not isinstance(pending, dict):
-        return None, ability_state if isinstance(ability_state, dict) else None
-    if _is_pending_interaction_expired(pending):
-        logger.info("HandleIncomingMessageAction clearing expired pending_interaction")
-        return None, ability_state if isinstance(ability_state, dict) else None
-    return pending, ability_state if isinstance(ability_state, dict) else None
-
-
-def _is_pending_interaction_expired(pending: dict[str, Any]) -> bool:
-    expires_at = pending.get("expires_at")
-    if not isinstance(expires_at, str) or not expires_at.strip():
-        return False
-    try:
-        expires_dt = datetime.fromisoformat(expires_at.strip())
-    except ValueError:
-        return False
-    if expires_dt.tzinfo is None:
-        expires_dt = expires_dt.replace(tzinfo=timezone.utc)
-    return datetime.now(timezone.utc) >= expires_dt
-
-
-def _resolve_channel_locale_context(incoming: IncomingContext) -> str | None:
-    principal_id = _principal_id_for_incoming(incoming)
-    if not principal_id:
-        return None
-    value = resolve_preference_with_precedence(
-        key="locale",
-        default=None,
-        channel_principal_id=principal_id,
-    )
-    return value if isinstance(value, str) else None
-
-
-def _principal_id_for_incoming(incoming: IncomingContext) -> str | None:
-    if incoming.channel_type and (incoming.address or incoming.channel_type):
-        channel_id = str(incoming.address or incoming.channel_type)
-        return get_or_create_principal_for_channel(
-            str(incoming.channel_type),
-            channel_id,
-        )
-    return None
-
-
-def _safe_json(value: Any, limit: int = 1400) -> str:
-    try:
-        rendered = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
-    except Exception:
-        rendered = str(value)
-    if len(rendered) <= limit:
-        return rendered
-    return f"{rendered[:limit]}..."
-
-
-def _outgoing_locale(cognition_state: dict[str, Any] | None) -> str:
-    if isinstance(cognition_state, dict):
-        locale = cognition_state.get("locale")
-        if isinstance(locale, str) and locale.strip():
-            return locale.strip()
-    return settings.get_default_locale()
-
-
-def _noop_result(incoming: IncomingContext) -> ActionResult:
-    logger.info(
-        "HandleIncomingMessageAction response channel=%s message=noop",
-        incoming.channel_type,
-    )
-    return ActionResult(intention_key="NOOP", payload={}, urgency=None)
-
-def _snippet(text: str, limit: int = 80) -> str:
+def _text_log_snippet(text: str, limit: int = 80) -> str:
     return text if len(text) <= limit else f"{text[:limit]}..."
 
 
-def _build_llm_client():
+def _normalize_incoming_payload(payload: object, signal: object | None) -> object:
+    if not isinstance(payload, dict):
+        raise TypeError("incoming signal payload must be a dict")
+    channel_type = payload.get("channel") or payload.get("origin")
+    if not channel_type and signal is not None:
+        channel_type = getattr(signal, "source", None)
+    if channel_type == "api" and payload.get("channel"):
+        channel_type = payload.get("channel")
+    if not channel_type:
+        raise ValueError("incoming payload is missing channel/origin")
+
+    registry = get_io_registry()
+    adapter = registry.get_sense(str(channel_type))
+    if not adapter:
+        raise LookupError(f"no sense adapter registered for channel={channel_type}")
     try:
-        return build_llm_client()
+        return adapter.normalize(payload)
     except Exception:
-        logger.exception("HandleIncomingMessageAction failed to build llm client")
-        return None
+        logger.exception("Failed to normalize payload for channel=%s", channel_type)
+        raise
 
 
-def _emit_agent_transitions_from_meta(
-    incoming: IncomingContext,
-    meta: dict[str, Any],
-    *,
-    skip_phases: set[str] | None = None,
-) -> None:
-    phases_to_skip = {str(item).lower() for item in (skip_phases or set())}
-    events = meta.get("events")
-    if not isinstance(events, list):
-        return
-    for event in events:
-        if not isinstance(event, dict):
-            continue
-        if str(event.get("type") or "") != "agent.transition":
-            continue
-        phase = str(event.get("phase") or "").strip()
-        if not phase:
-            continue
-        if phase.lower() in phases_to_skip:
-            continue
-        _emit_agent_transition(incoming, phase)
-
-
-def _emit_agent_transition(incoming: IncomingContext, phase: str) -> None:
+def _emit_channel_transition(incoming: IncomingContext, phase: str) -> None:
     phase_value = str(phase or "").strip().lower()
     if not phase_value:
         return
-    logger.info(
-        "HandleIncomingMessageAction transition channel=%s target=%s correlation_id=%s phase=%s",
-        incoming.channel_type,
-        incoming.address,
-        incoming.correlation_id,
-        phase_value,
-    )
     registry = get_io_registry()
     adapter = registry.get_extremity(incoming.channel_type)
     if adapter is None:
@@ -446,72 +191,3 @@ def _emit_agent_transition(incoming: IncomingContext, phase: str) -> None:
             incoming.channel_type,
             phase_value,
         )
-
-
-def _start_typing_heartbeat(incoming: IncomingContext) -> callable:
-    if incoming.channel_type != "telegram" or not incoming.address:
-        return lambda: None
-
-    stop_event = threading.Event()
-
-    def _loop() -> None:
-        while not stop_event.wait(4.0):
-            _emit_typing_only(incoming)
-
-    thread = threading.Thread(target=_loop, daemon=True)
-    thread.start()
-
-    def _stop() -> None:
-        stop_event.set()
-        thread.join(timeout=0.2)
-
-    return _stop
-
-
-def _emit_typing_only(incoming: IncomingContext) -> None:
-    registry = get_io_registry()
-    adapter = registry.get_extremity(incoming.channel_type)
-    if adapter is None:
-        return
-    emit_fn = getattr(adapter, "emit_transition", None)
-    if not callable(emit_fn):
-        return
-    try:
-        emit_fn(
-            channel_target=incoming.address,
-            phase="thinking",
-            correlation_id=incoming.correlation_id,
-            message_id=None,
-        )
-    except Exception:
-        logger.exception(
-            "HandleIncomingMessageAction typing heartbeat emit failed channel=%s",
-            incoming.channel_type,
-        )
-
-
-def _normalize_incoming_payload(payload: dict, signal: object | None) -> object | None:
-    if not isinstance(payload, dict):
-        return None
-    channel_type = payload.get("channel") or payload.get("origin")
-    if not channel_type and signal is not None:
-        channel_type = getattr(signal, "source", None)
-    if channel_type == "api" and payload.get("channel"):
-        channel_type = payload.get("channel")
-    if not channel_type:
-        return None
-    registry = get_io_registry()
-    adapter = registry.get_sense(str(channel_type))
-    if not adapter:
-        return None
-    try:
-        return adapter.normalize(payload)
-    except Exception:
-        logger.exception("Failed to normalize payload for channel=%s", channel_type)
-        return None
-
-
-def _as_optional_str(value: object | None) -> str | None:
-    if value is None:
-        return None
-    return str(value)

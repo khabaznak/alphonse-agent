@@ -11,6 +11,7 @@ from alphonse.agent.cognition.pending_interaction import (
 )
 from alphonse.agent.cognition.tool_eligibility import is_tool_eligible
 from alphonse.agent.cortex.nodes.capability_gap import has_capability_gap_plan
+from alphonse.agent.cortex.nodes.telemetry import emit_brain_state
 
 
 def plan_node(
@@ -24,11 +25,18 @@ def plan_node(
     run_capability_gap_tool: Callable[..., dict[str, Any]],
 ) -> dict[str, Any]:
     """Single-pass planning and optional immediate tool execution."""
+    def _return(payload: dict[str, Any]) -> dict[str, Any]:
+        return emit_brain_state(
+            state=state,
+            node="plan_node",
+            updates=payload,
+        )
+
     if state.get("response_text"):
-        return {}
+        return _return({})
     text = str(state.get("last_user_message") or "").strip()
     if not text:
-        return {}
+        return _return({})
     pending = _parse_pending_interaction(state.get("pending_interaction"))
     if pending is not None:
         consumed = try_consume(text, pending)
@@ -50,10 +58,10 @@ def plan_node(
                     result = ability.execute(state, tool_registry)
                     if isinstance(result, dict):
                         result.setdefault("pending_interaction", None)
-                        return result
-            return {"pending_interaction": None, "slots": merged_slots}
+                        return _return(result)
+            return _return({"pending_interaction": None, "slots": merged_slots})
     if not llm_client:
-        return run_capability_gap_tool(state, llm_client=None, reason="no_llm_client")
+        return _return(run_capability_gap_tool(state, llm_client=None, reason="no_llm_client"))
 
     discovery = discover_plan(
         text=text,
@@ -68,65 +76,77 @@ def plan_node(
         else None,
     )
     if not isinstance(discovery, dict):
-        return run_capability_gap_tool(state, llm_client=llm_client, reason="invalid_plan_payload")
+        return _return(
+            run_capability_gap_tool(state, llm_client=llm_client, reason="invalid_plan_payload")
+        )
 
     interrupt = discovery.get("planning_interrupt")
     if isinstance(interrupt, dict):
         question = str(interrupt.get("question") or "").strip()
         if not question:
-            return run_capability_gap_tool(
+            return _return(run_capability_gap_tool(
                 state, llm_client=llm_client, reason="missing_interrupt_question"
-            )
+            ))
         pending = build_pending_interaction(
             PendingInteractionType.SLOT_FILL,
             key=str(interrupt.get("slot") or "answer"),
             context={"source": "plan_node", "bind": interrupt.get("bind") or {}},
         )
-        return {
+        return _return({
             "response_text": question,
             "pending_interaction": serialize_pending_interaction(pending),
             "ability_state": {},
-        }
+        })
 
     plans = discovery.get("plans")
     if not isinstance(plans, list) or not plans:
-        return run_capability_gap_tool(state, llm_client=llm_client, reason="empty_execution_plan")
+        return _return(
+            run_capability_gap_tool(state, llm_client=llm_client, reason="empty_execution_plan")
+        )
     first_plan = plans[0] if isinstance(plans[0], dict) else {}
     execution_plan = first_plan.get("executionPlan")
     if not isinstance(execution_plan, list) or not execution_plan:
-        return run_capability_gap_tool(state, llm_client=llm_client, reason="empty_execution_plan")
+        return _return(
+            run_capability_gap_tool(state, llm_client=llm_client, reason="empty_execution_plan")
+        )
     step = execution_plan[0] if isinstance(execution_plan[0], dict) else {}
     tool_name = str(step.get("tool") or step.get("action") or "").strip()
     params = step.get("parameters") if isinstance(step.get("parameters"), dict) else {}
     if not tool_name:
-        return run_capability_gap_tool(state, llm_client=llm_client, reason="step_missing_tool_name")
+        return _return(
+            run_capability_gap_tool(state, llm_client=llm_client, reason="step_missing_tool_name")
+        )
     if tool_name == "askQuestion":
         question = str(params.get("question") or "").strip()
         if not question:
-            return run_capability_gap_tool(state, llm_client=llm_client, reason="missing_interrupt_question")
+            return _return(
+                run_capability_gap_tool(state, llm_client=llm_client, reason="missing_interrupt_question")
+            )
         pending = build_pending_interaction(
             PendingInteractionType.SLOT_FILL,
             key=str(params.get("slot") or "answer"),
             context={"source": "plan_node", "bind": params.get("bind") or {}},
         )
-        return {
+        return _return({
             "response_text": question,
             "pending_interaction": serialize_pending_interaction(pending),
             "ability_state": {},
-        }
+        })
     eligible, reason = is_tool_eligible(tool_name=tool_name, user_message=text)
     if not eligible:
-        return run_capability_gap_tool(
+        return _return(run_capability_gap_tool(
             state, llm_client=llm_client, reason=str(reason or "tool_not_eligible")
-        )
+        ))
     ability = ability_registry_getter().get(tool_name)
     if ability is None:
         state["intent"] = tool_name
-        return run_capability_gap_tool(state, llm_client=llm_client, reason="unknown_tool_in_plan")
+        return _return(
+            run_capability_gap_tool(state, llm_client=llm_client, reason="unknown_tool_in_plan")
+        )
     state["intent"] = tool_name
     state["slots"] = params
     result = ability.execute(state, tool_registry)
-    return result if isinstance(result, dict) else {}
+    return _return(result if isinstance(result, dict) else {})
 
 
 def next_step_index(

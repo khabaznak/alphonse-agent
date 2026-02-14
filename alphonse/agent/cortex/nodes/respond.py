@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any, Callable
 
 from alphonse.agent.cortex.nodes.capability_gap import has_capability_gap_plan
+from alphonse.agent.cortex.nodes.telemetry import emit_brain_state
 
 def respond_node_impl(
     state: dict[str, Any],
@@ -14,8 +15,15 @@ def respond_node_impl(
     run_capability_gap_tool: Callable[..., dict[str, Any]],
     emit_transition_event: Callable[[dict[str, Any], str, dict[str, Any] | None], None],
 ) -> dict[str, Any]:
+    def _return(payload: dict[str, Any]) -> dict[str, Any]:
+        return emit_brain_state(
+            state=state,
+            node="respond_node",
+            updates=payload,
+        )
+
     if state.get("response_text"):
-        return {}
+        return _return({})
     emit_transition_event(state, "thinking")
     discovery = run_planning_cycle(state, llm_client)
     if discovery:
@@ -27,21 +35,22 @@ def respond_node_impl(
                 emit_transition_event(state, "waiting_user")
             else:
                 emit_transition_event(state, "done")
-        return discovery
+        return _return(discovery if isinstance(discovery, dict) else {})
     intent = state.get("intent")
     if intent:
         ability = ability_registry_getter().get(str(intent))
         if ability is not None:
             try:
                 emit_transition_event(state, "executing", {"tool": str(intent)})
-                return ability.execute(state, tool_registry)
+                result = ability.execute(state, tool_registry)
+                return _return(result if isinstance(result, dict) else {})
             except Exception:
-                return run_capability_gap_tool(
+                return _return(run_capability_gap_tool(
                     state,
                     llm_client=llm_client,
                     reason="ability_execution_exception",
-                )
-    return {}
+                ))
+    return _return({})
 
 
 def respond_node(
@@ -66,13 +75,20 @@ def respond_finalize_node(
     *,
     emit_transition_event: Callable[[dict[str, Any], str, dict[str, Any] | None], None],
 ) -> dict[str, Any]:
+    def _return(payload: dict[str, Any]) -> dict[str, Any]:
+        return emit_brain_state(
+            state=state,
+            node="respond_node",
+            updates=payload,
+        )
+
     pending = state.get("pending_interaction")
     if has_capability_gap_plan(state):
         emit_transition_event(state, "failed")
-        return {}
+        return _return({})
     if pending:
         emit_transition_event(state, "waiting_user")
-        return {}
+        return _return({})
     if state.get("response_text"):
         emit_transition_event(state, "done")
-    return {}
+    return _return({})

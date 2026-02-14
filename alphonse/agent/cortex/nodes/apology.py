@@ -12,6 +12,7 @@ from alphonse.agent.cognition.prompt_templates_runtime import (
 from alphonse.agent.cognition.preferences.store import get_or_create_principal_for_channel
 import alphonse.agent.cortex.nodes.execution_helpers as _execution_helpers
 from alphonse.agent.cortex.nodes.capability_gap import run_capability_gap_tool as _run_capability_gap_tool_core
+from alphonse.agent.cortex.nodes.telemetry import emit_brain_state
 from alphonse.agent.cortex.transitions import emit_transition_event as _emit_transition_event
 
 logger = logging.getLogger(__name__)
@@ -23,11 +24,18 @@ def apology_node(
     build_capability_gap_apology: Callable[..., str],
     llm_client: Any,
 ) -> dict[str, Any]:
+    def _return(payload: dict[str, Any]) -> dict[str, Any]:
+        return emit_brain_state(
+            state=state,
+            node="apology_node",
+            updates=payload,
+        )
+
     if state.get("response_text"):
-        return {}
+        return _return({})
     plans = state.get("plans")
     if not isinstance(plans, list):
-        return {}
+        return _return({})
     for plan in plans:
         if not isinstance(plan, dict):
             continue
@@ -43,9 +51,9 @@ def apology_node(
             missing_slots=missing_slots if isinstance(missing_slots, list) else None,
         )
         if apology:
-            return {"response_text": apology}
-        return {}
-    return {}
+            return _return({"response_text": apology})
+        return _return({})
+    return _return({})
 
 
 def apology_node_stateful(

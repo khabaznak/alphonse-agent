@@ -74,7 +74,7 @@ def test_identity_question_utterances_route_to_user_name_intent(
                     captured.append(plan)
 
     monkeypatch.setattr(him, "PlanExecutor", FakePlanExecutor)
-    monkeypatch.setattr(him, "_build_llm_client", lambda: FakeLLM())
+    monkeypatch.setattr(him, "build_llm_client", lambda: FakeLLM())
 
     action = HandleIncomingMessageAction()
     identity_profile.set_display_name("telegram:u-1", "Alex")

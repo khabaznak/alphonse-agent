@@ -6,10 +6,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from alphonse.agent.actions.handle_incoming_message import (
-    IncomingContext,
-    _build_cortex_state,
-)
+from alphonse.agent.actions.handle_incoming_message import IncomingContext
+from alphonse.agent.actions.state_context import build_cortex_state
 from alphonse.agent.nervous_system.migrate import apply_schema
 
 
@@ -42,12 +40,12 @@ def test_build_cortex_state_clears_expired_pending_interaction(
         update_id=None,
     )
 
-    state = _build_cortex_state(
-        stored_state,
-        incoming,
-        "corr-1",
-        {},
-        SimpleNamespace(user_id=None, user_name=None, metadata={}),
+    state = build_cortex_state(
+        stored_state=stored_state,
+        incoming=incoming,
+        correlation_id="corr-1",
+        payload={},
+        normalized=SimpleNamespace(user_id=None, user_name=None, metadata={}),
     )
 
     assert state.get("pending_interaction") is None
@@ -79,12 +77,12 @@ def test_build_cortex_state_keeps_active_pending_interaction(
         update_id=None,
     )
 
-    state = _build_cortex_state(
-        stored_state,
-        incoming,
-        "corr-1",
-        {},
-        SimpleNamespace(user_id=None, user_name=None, metadata={}),
+    state = build_cortex_state(
+        stored_state=stored_state,
+        incoming=incoming,
+        correlation_id="corr-1",
+        payload={},
+        normalized=SimpleNamespace(user_id=None, user_name=None, metadata={}),
     )
 
     assert state.get("pending_interaction") == pending
