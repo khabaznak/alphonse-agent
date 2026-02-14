@@ -1,9 +1,15 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime
 import sqlite3
 from typing import Any, Callable
 
+from alphonse.agent.cognition.prompt_templates_runtime import (
+    PLANNING_SYSTEM_PROMPT,
+    PLANNING_USER_TEMPLATE,
+    render_prompt_template,
+)
 from alphonse.agent.cognition.pending_interaction import (
     PendingInteraction,
     PendingInteractionType,
@@ -12,7 +18,9 @@ from alphonse.agent.cognition.pending_interaction import (
     try_consume,
 )
 from alphonse.agent.cognition.tool_eligibility import is_tool_eligible
+from alphonse.agent.cognition.tool_schemas import planner_tool_schemas
 from alphonse.agent.cognition.step_validation import validate_step
+from alphonse.agent.cognition.utterance_policy import render_utterance_policy_block
 from alphonse.agent.cognition.preferences.store import (
     get_or_create_principal_for_channel,
     resolve_preference_with_precedence,
@@ -68,6 +76,16 @@ def plan_node(
         result = run_capability_gap_tool(state, llm_client=None, reason="no_llm_client")
         result["plan_retry"] = False
         return _return(result)
+    if _supports_native_tool_calls(llm_client):
+        native_result = _run_native_tool_call_loop(
+            state=state,
+            llm_client=llm_client,
+            tool_registry=tool_registry,
+            format_available_abilities=format_available_abilities,
+            run_capability_gap_tool=run_capability_gap_tool,
+        )
+        if isinstance(native_result, dict):
+            return _return(native_result)
 
     discovery = discover_plan(
         text=text,
@@ -188,6 +206,7 @@ def plan_node(
         try:
             outcome = _execute_tool_step(
                 state=state,
+                llm_client=llm_client,
                 tool_registry=tool_registry,
                 tool_name=tool_name,
                 params=params,
@@ -418,6 +437,205 @@ def route_after_plan(state: dict[str, Any]) -> str:
     return "respond_node"
 
 
+def _supports_native_tool_calls(llm_client: Any) -> bool:
+    return bool(
+        llm_client is not None
+        and getattr(llm_client, "supports_tool_calls", False)
+        and callable(getattr(llm_client, "complete_with_tools", None))
+    )
+
+
+def _run_native_tool_call_loop(
+    *,
+    state: dict[str, Any],
+    llm_client: Any,
+    tool_registry: Any,
+    format_available_abilities: Callable[[], str],
+    run_capability_gap_tool: Callable[..., dict[str, Any]],
+) -> dict[str, Any] | None:
+    try:
+        messages = _build_tool_call_messages(state=state, format_available_abilities=format_available_abilities)
+    except Exception:
+        return None
+    catalog = _tool_catalog(format_available_abilities)
+    tools = planner_tool_schemas()
+    steps_state: list[dict[str, Any]] = []
+    tool_facts: list[dict[str, Any]] = []
+    final_message: str | None = None
+
+    for _ in range(6):
+        try:
+            response = llm_client.complete_with_tools(
+                messages=messages,
+                tools=tools,
+                tool_choice="auto",
+            )
+        except Exception:
+            return None
+        if not isinstance(response, dict):
+            return None
+        tool_calls = response.get("tool_calls") if isinstance(response.get("tool_calls"), list) else []
+        content = str(response.get("content") or "").strip()
+        assistant_message = response.get("assistant_message")
+        if isinstance(assistant_message, dict):
+            messages.append(assistant_message)
+        elif content:
+            messages.append({"role": "assistant", "content": content})
+
+        if not tool_calls:
+            merged_context = _merge_tool_facts(state=state, tool_facts=tool_facts)
+            return {
+                "response_text": content or final_message,
+                "pending_interaction": None,
+                "ability_state": {"kind": "tool_calls", "steps": steps_state},
+                "planning_context": merged_context,
+                "plan_retry": False,
+                "plan_repair_attempts": 0,
+            }
+
+        for call in tool_calls[:4]:
+            call_id = str(call.get("id") or "").strip() if isinstance(call, dict) else ""
+            tool_name = str(call.get("name") or "").strip() if isinstance(call, dict) else ""
+            params = call.get("arguments") if isinstance(call.get("arguments"), dict) else {}
+            idx = len(steps_state)
+            step_entry = {"idx": idx, "tool": tool_name, "status": "ready", "parameters": params}
+            steps_state.append(step_entry)
+            validation = validate_step({"tool": tool_name, "parameters": params}, catalog)
+            if not validation.is_valid:
+                step_entry["status"] = "failed"
+                _append_tool_error_message(
+                    messages=messages,
+                    tool_call_id=call_id,
+                    code="INVALID_STEP",
+                    message=str(validation.issue.message if validation.issue else "invalid step"),
+                )
+                continue
+            eligible, reason = is_tool_eligible(tool_name=tool_name, user_message=str(state.get("last_user_message") or ""))
+            if not eligible:
+                step_entry["status"] = "failed"
+                _append_tool_error_message(
+                    messages=messages,
+                    tool_call_id=call_id,
+                    code="TOOL_NOT_ELIGIBLE",
+                    message=str(reason or "tool not eligible"),
+                )
+                continue
+            try:
+                outcome = _execute_tool_step(
+                    state=state,
+                    llm_client=llm_client,
+                    tool_registry=tool_registry,
+                    tool_name=tool_name,
+                    params=params,
+                    step_idx=idx,
+                )
+            except Exception as exc:
+                step_entry["status"] = "failed"
+                _append_tool_error_message(
+                    messages=messages,
+                    tool_call_id=call_id,
+                    code="TOOL_EXECUTION_ERROR",
+                    message=f"{type(exc).__name__}",
+                )
+                continue
+            step_entry["status"] = str(outcome.get("status") or "executed")
+            step_fact = outcome.get("fact")
+            if isinstance(step_fact, dict):
+                tool_facts.append(step_fact)
+            _append_tool_success_message(messages=messages, tool_call_id=call_id, payload=outcome)
+            if outcome.get("pending_interaction"):
+                merged_context = _merge_tool_facts(state=state, tool_facts=tool_facts)
+                return {
+                    "response_text": outcome.get("response_text"),
+                    "pending_interaction": outcome.get("pending_interaction"),
+                    "ability_state": {"kind": "tool_calls", "steps": steps_state},
+                    "planning_context": merged_context,
+                    "plan_retry": False,
+                }
+            if isinstance(outcome.get("response_text"), str) and str(outcome.get("response_text")).strip():
+                final_message = str(outcome.get("response_text")).strip()
+
+    result = run_capability_gap_tool(state, llm_client=llm_client, reason="tool_execution_error")
+    result["ability_state"] = {"kind": "tool_calls", "steps": steps_state}
+    result["plan_retry"] = False
+    return result
+
+
+def _build_tool_call_messages(
+    *,
+    state: dict[str, Any],
+    format_available_abilities: Callable[[], str],
+) -> list[dict[str, Any]]:
+    planning_context = state.get("planning_context") if isinstance(state.get("planning_context"), dict) else {}
+    user_prompt = render_prompt_template(
+        PLANNING_USER_TEMPLATE,
+        {
+            "POLICY_BLOCK": render_utterance_policy_block(
+                locale=state.get("locale"),
+                tone=state.get("tone"),
+                address_style=state.get("address_style"),
+                channel_type=state.get("channel_type"),
+            ),
+            "USER_MESSAGE": str(state.get("last_user_message") or ""),
+            "LOCALE": str(state.get("locale") or "en-US"),
+            "PLANNING_CONTEXT": _render_context_markdown(planning_context),
+            "AVAILABLE_TOOLS": format_available_abilities(),
+        },
+    )
+    return [
+        {"role": "system", "content": PLANNING_SYSTEM_PROMPT},
+        {"role": "user", "content": user_prompt},
+    ]
+
+
+def _append_tool_success_message(
+    *,
+    messages: list[dict[str, Any]],
+    tool_call_id: str,
+    payload: dict[str, Any],
+) -> None:
+    content = json.dumps(
+        {
+            "ok": True,
+            "status": payload.get("status"),
+            "response_text": payload.get("response_text"),
+            "fact": payload.get("fact"),
+        },
+        ensure_ascii=False,
+    )
+    messages.append({"role": "tool", "tool_call_id": tool_call_id or "tool-call", "content": content})
+
+
+def _append_tool_error_message(
+    *,
+    messages: list[dict[str, Any]],
+    tool_call_id: str,
+    code: str,
+    message: str,
+) -> None:
+    content = json.dumps({"ok": False, "code": code, "message": message}, ensure_ascii=False)
+    messages.append({"role": "tool", "tool_call_id": tool_call_id or "tool-call", "content": content})
+
+
+def _merge_tool_facts(*, state: dict[str, Any], tool_facts: list[dict[str, Any]]) -> dict[str, Any]:
+    merged_context = dict(state.get("planning_context") or {})
+    facts = merged_context.get("facts") if isinstance(merged_context.get("facts"), dict) else {}
+    merged_facts = dict(facts)
+    merged_facts["tool_results"] = tool_facts
+    merged_context["facts"] = merged_facts
+    state["planning_context"] = merged_context
+    return merged_context
+
+
+def _render_context_markdown(context: dict[str, Any]) -> str:
+    if not isinstance(context, dict) or not context:
+        return "- (none)"
+    lines: list[str] = []
+    for key, value in context.items():
+        lines.append(f"- **{key}**: {value}")
+    return "\n".join(lines)
+
+
 def _tool_catalog(format_available_abilities: Callable[[], str]) -> dict[str, Any]:
     _ = format_available_abilities
     from alphonse.agent.cognition.planning_engine import planner_tool_catalog_data
@@ -458,6 +676,7 @@ def _request_plan_repair(
 def _execute_tool_step(
     *,
     state: dict[str, Any],
+    llm_client: Any,
     tool_registry: Any,
     tool_name: str,
     params: dict[str, Any],
@@ -514,7 +733,27 @@ def _execute_tool_step(
         time_expr = str(params.get("time") or "").strip()
         if not time_expr:
             raise RuntimeError("missing_time_expression")
-        event_trigger = scheduler_tool.create_time_event_trigger(time=time_expr)
+        resolved_time, clarify_question = _resolve_time_expression_with_llm(
+            llm_client=llm_client,
+            state=state,
+            time_expression=time_expr,
+        )
+        if not resolved_time:
+            pending = build_pending_interaction(
+                PendingInteractionType.SLOT_FILL,
+                key="answer",
+                context={"source": "plan_node"},
+            )
+            return {
+                "status": "waiting_user",
+                "response_text": clarify_question or "What exact time should I use for this reminder?",
+                "pending_interaction": serialize_pending_interaction(pending),
+                "fact": {"step": step_idx, "tool": tool_name, "question": clarify_question or ""},
+            }
+        event_trigger = scheduler_tool.create_time_event_trigger(
+            time=resolved_time,
+            timezone_name=str(state.get("timezone") or "UTC"),
+        )
         return {
             "status": "executed",
             "response_text": None,
@@ -602,6 +841,78 @@ def _is_iso_datetime(value: str) -> bool:
         return True
     except Exception:
         return False
+
+
+def _resolve_time_expression_with_llm(
+    *,
+    llm_client: Any,
+    state: dict[str, Any],
+    time_expression: str,
+) -> tuple[str | None, str | None]:
+    candidate = str(time_expression or "").strip()
+    if not candidate:
+        return None, "What exact time should I use?"
+    if _is_iso_datetime(candidate):
+        return candidate, None
+    if llm_client is None:
+        return None, "What exact time should I use for this reminder?"
+    timezone_name = str(state.get("timezone") or "UTC")
+    locale = str(state.get("locale") or "en-US")
+    now_iso = datetime.now().astimezone().isoformat()
+    system_prompt = (
+        "# Role\n"
+        "You normalize human time expressions into an ISO-8601 datetime.\n\n"
+        "# Rules\n"
+        "- Use the provided timezone when resolving relative expressions.\n"
+        "- If the expression is ambiguous, do not guess.\n"
+        "- Return strict JSON only.\n"
+        "- Output keys: `iso_datetime` (string or null), `clarify_question` (string or null).\n"
+    )
+    user_prompt = (
+        "# Time Expression\n"
+        f"{candidate}\n\n"
+        "# Context\n"
+        f"- Locale: {locale}\n"
+        f"- Timezone: {timezone_name}\n"
+        f"- Current time: {now_iso}\n"
+        f"- Original user message: {str(state.get('last_user_message') or '').strip()}\n"
+    )
+    try:
+        raw = str(llm_client.complete(system_prompt=system_prompt, user_prompt=user_prompt))
+    except Exception:
+        return None, "What exact time should I use for this reminder?"
+    payload = _parse_json_payload(raw)
+    if not isinstance(payload, dict):
+        return None, "What exact time should I use for this reminder?"
+    iso_time = str(payload.get("iso_datetime") or "").strip()
+    clarify = str(payload.get("clarify_question") or "").strip() or None
+    if iso_time and _is_iso_datetime(iso_time):
+        return iso_time, None
+    return None, clarify or "What exact time should I use for this reminder?"
+
+
+def _parse_json_payload(raw: str) -> dict[str, Any] | None:
+    candidate = str(raw or "").strip()
+    if not candidate:
+        return None
+    if candidate.startswith("```"):
+        candidate = candidate.strip("`")
+        if candidate.startswith("json"):
+            candidate = candidate[4:].strip()
+    try:
+        parsed = json.loads(candidate)
+        return parsed if isinstance(parsed, dict) else None
+    except json.JSONDecodeError:
+        pass
+    start = candidate.find("{")
+    end = candidate.rfind("}")
+    if start < 0 or end <= start:
+        return None
+    try:
+        parsed = json.loads(candidate[start : end + 1])
+    except json.JSONDecodeError:
+        return None
+    return parsed if isinstance(parsed, dict) else None
 
 
 def _parse_pending_interaction(raw: Any) -> PendingInteraction | None:

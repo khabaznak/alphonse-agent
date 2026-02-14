@@ -9,7 +9,13 @@ from alphonse.agent.nervous_system.timed_store import insert_timed_signal
 
 @dataclass(frozen=True)
 class SchedulerTool:
-    def create_time_event_trigger(self, *, time: str) -> dict[str, str]:
+    def create_time_event_trigger(
+        self,
+        *,
+        time: str,
+        timezone_name: str | None = None,
+    ) -> dict[str, str]:
+        _ = timezone_name
         value = str(time or "").strip()
         if not value:
             raise ValueError("time is required")
