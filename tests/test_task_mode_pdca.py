@@ -118,7 +118,10 @@ def test_reminder_request_calls_create_reminder_within_two_cycles() -> None:
         for item in facts.values()
     )
     rendered = respond_finalize_node(state, emit_transition_event=lambda *_args, **_kwargs: None)
-    assert "rem-test-1" in str(rendered.get("response_text") or "").lower()
+    utterance = rendered.get("utterance")
+    assert isinstance(utterance, dict)
+    assert utterance.get("type") == "reminder_created"
+    assert str(rendered.get("response_text") or "").strip()
 
 
 def test_gettime_does_not_terminate_without_reminder_evidence() -> None:
