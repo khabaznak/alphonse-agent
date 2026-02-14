@@ -474,8 +474,8 @@ def _execute_tool_step(
         question = str(params.get("question") or "").strip()
         pending = build_pending_interaction(
             PendingInteractionType.SLOT_FILL,
-            key=str(params.get("slot") or "answer"),
-            context={"source": "plan_node", "bind": params.get("bind") or {}},
+            key="answer",
+            context={"source": "plan_node"},
         )
         return {
             "status": "waiting_user",
@@ -483,14 +483,19 @@ def _execute_tool_step(
             "pending_interaction": serialize_pending_interaction(pending),
             "fact": {"step": step_idx, "tool": tool_name, "question": question},
         }
-    if tool_name == "time.current":
-        clock_tool = tool_registry.get("clock") if hasattr(tool_registry, "get") else None
-        if clock_tool is None or not hasattr(clock_tool, "current_time"):
+    if tool_name == "getTime":
+        clock_tool = tool_registry.get("getTime") if hasattr(tool_registry, "get") else None
+        if clock_tool is None:
+            clock_tool = tool_registry.get("clock") if hasattr(tool_registry, "get") else None
+        if clock_tool is None or (not hasattr(clock_tool, "get_time") and not hasattr(clock_tool, "current_time")):
             raise RuntimeError("missing_clock_tool")
-        timezone_name = str(params.get("timezone_name") or state.get("timezone") or "UTC")
-        now = clock_tool.current_time(timezone_name=timezone_name)
+        if hasattr(clock_tool, "get_time"):
+            now = clock_tool.get_time()
+        else:
+            now = clock_tool.current_time(str(state.get("timezone") or "UTC"))
         if not isinstance(now, datetime):
             raise RuntimeError("clock_tool_invalid_output")
+        timezone_name = str(getattr(now.tzinfo, "key", None) or state.get("timezone") or "UTC")
         locale = str(state.get("locale") or "en-US")
         message = (
             f"Son las {now.strftime('%H:%M')} en {timezone_name}."
@@ -507,6 +512,23 @@ def _execute_tool_step(
                 "timezone_name": timezone_name,
             },
         }
+    if tool_name == "createTimeEventTrigger":
+        scheduler_tool = tool_registry.get("createTimeEventTrigger") if hasattr(tool_registry, "get") else None
+        if scheduler_tool is None or not hasattr(scheduler_tool, "create_time_event_trigger"):
+            raise RuntimeError("missing_time_event_trigger_tool")
+        time_expr = str(params.get("time") or "").strip()
+        if not time_expr:
+            raise RuntimeError("missing_time_expression")
+        event_trigger = scheduler_tool.create_time_event_trigger(time=time_expr)
+        return {
+            "status": "executed",
+            "response_text": None,
+            "fact": {
+                "step": step_idx,
+                "tool": tool_name,
+                "event_trigger": event_trigger,
+            },
+        }
     if tool_name == "getMySettings":
         payload = _settings_payload_for_state(state)
         return {
@@ -521,31 +543,45 @@ def _execute_tool_step(
             "response_text": _format_user_details_message(payload),
             "fact": {"step": step_idx, "tool": tool_name, "user_details": payload},
         }
-    if tool_name == "schedule_event":
-        scheduler_tool = tool_registry.get("schedule_event") if hasattr(tool_registry, "get") else None
-        if scheduler_tool is None or not hasattr(scheduler_tool, "schedule_event"):
-            raise RuntimeError("missing_schedule_event_tool")
-        trigger_time = str(params.get("trigger_time") or "").strip()
-        signal_type = str(params.get("signal_type") or "").strip()
-        timezone_name = str(params.get("timezone_name") or state.get("timezone") or "UTC")
-        payload = params.get("payload") if isinstance(params.get("payload"), dict) else {}
-        target = params.get("target") or state.get("channel_target")
-        origin = params.get("origin") or state.get("channel_type")
+    if tool_name == "scheduleReminder":
+        scheduler_tool = tool_registry.get("scheduleReminder") if hasattr(tool_registry, "get") else None
+        if scheduler_tool is None or not hasattr(scheduler_tool, "schedule_reminder_event"):
+            raise RuntimeError("missing_schedule_reminder_tool")
+        message_text = str(params.get("Message") or params.get("message") or "").strip()
+        reminder_to = str(params.get("To") or params.get("to") or state.get("channel_target") or "").strip()
+        reminder_from = str(params.get("From") or params.get("from") or state.get("channel_type") or "").strip()
+        event_trigger = params.get("EventTrigger")
+        if not isinstance(event_trigger, dict):
+            event_trigger = {}
+        if not event_trigger:
+            facts = (
+                ((state.get("planning_context") or {}).get("facts") or {}).get("tool_results")
+                if isinstance((state.get("planning_context") or {}).get("facts"), dict)
+                else []
+            )
+            if isinstance(facts, list):
+                for item in reversed(facts):
+                    if isinstance(item, dict) and isinstance(item.get("event_trigger"), dict):
+                        event_trigger = item.get("event_trigger") or {}
+                        break
+        trigger_time = str(event_trigger.get("time") or "").strip() if isinstance(event_trigger, dict) else ""
+        if not _is_iso_datetime(trigger_time):
+            raise RuntimeError("invalid_trigger_time_format")
+        timezone_name = str(state.get("timezone") or "UTC")
         correlation_id = str(state.get("correlation_id") or "")
-        schedule_id = scheduler_tool.schedule_event(
-            trigger_time=trigger_time,
+        schedule_id = scheduler_tool.schedule_reminder_event(
+            message=message_text,
+            to=reminder_to,
+            from_=reminder_from,
+            event_trigger=event_trigger,
             timezone_name=timezone_name,
-            signal_type=signal_type,
-            payload=payload,
-            target=str(target) if target is not None else None,
-            origin=str(origin) if origin is not None else None,
             correlation_id=correlation_id or None,
         )
         locale = str(state.get("locale") or "en-US")
         message = (
-            f"Evento programado para {trigger_time}. ID: {schedule_id}."
+            f"Recordatorio programado para {trigger_time}. ID: {schedule_id}."
             if locale.lower().startswith("es")
-            else f"Scheduled event for {trigger_time}. ID: {schedule_id}."
+            else f"Scheduled reminder for {trigger_time}. ID: {schedule_id}."
         )
         return {
             "status": "executed",
@@ -555,10 +591,22 @@ def _execute_tool_step(
                 "tool": tool_name,
                 "schedule_id": schedule_id,
                 "trigger_time": trigger_time,
-                "signal_type": signal_type,
+                "event_trigger": event_trigger,
             },
         }
     raise RuntimeError("unknown_tool_in_plan")
+
+
+def _is_iso_datetime(value: str) -> bool:
+    candidate = str(value or "").strip()
+    if not candidate:
+        return False
+    normalized = candidate.replace("Z", "+00:00")
+    try:
+        datetime.fromisoformat(normalized)
+        return True
+    except Exception:
+        return False
 
 
 def _parse_pending_interaction(raw: Any) -> PendingInteraction | None:

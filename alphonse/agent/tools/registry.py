@@ -23,6 +23,12 @@ class ToolRegistry:
 
 def build_default_tool_registry() -> ToolRegistry:
     registry = ToolRegistry()
-    registry.register("clock", ClockTool())
-    registry.register("schedule_event", SchedulerTool())
+    clock = ClockTool()
+    scheduler = SchedulerTool()
+    registry.register("getTime", clock)
+    registry.register("createTimeEventTrigger", scheduler)
+    registry.register("scheduleReminder", scheduler)
+    # Internal aliases kept for compatibility.
+    registry.register("clock", clock)
+    registry.register("schedule_event", scheduler)
     return registry

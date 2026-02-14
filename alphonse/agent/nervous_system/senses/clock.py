@@ -3,14 +3,22 @@ from __future__ import annotations
 import logging
 import os
 import threading
-import time
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
 from alphonse.agent.nervous_system.senses.base import Sense, SignalSpec
 from alphonse.agent.nervous_system.senses.bus import Bus, Signal
 from alphonse.config import settings
 
 logger = logging.getLogger(__name__)
+
+
+def get_time_now(timezone_name: str | None = None) -> datetime:
+    tz_name = str(timezone_name or settings.get_timezone() or "UTC")
+    try:
+        return datetime.now(tz=ZoneInfo(tz_name))
+    except Exception:
+        return datetime.now(tz=timezone.utc)
 
 
 class ClockSense(Sense):

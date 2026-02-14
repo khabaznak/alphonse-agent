@@ -9,6 +9,47 @@ from alphonse.agent.nervous_system.timed_store import insert_timed_signal
 
 @dataclass(frozen=True)
 class SchedulerTool:
+    def create_time_event_trigger(self, *, time: str) -> dict[str, str]:
+        value = str(time or "").strip()
+        if not value:
+            raise ValueError("time is required")
+        return {"type": "time", "time": value}
+
+    def schedule_reminder_event(
+        self,
+        *,
+        message: str,
+        to: str,
+        from_: str,
+        event_trigger: dict[str, Any],
+        timezone_name: str,
+        correlation_id: str | None = None,
+    ) -> str:
+        trigger_type = str(event_trigger.get("type") or "").strip().lower()
+        if trigger_type != "time":
+            raise ValueError("only time event triggers are supported")
+        trigger_time = str(event_trigger.get("time") or "").strip()
+        if not trigger_time:
+            raise ValueError("event trigger time is required")
+        payload = {
+            "message": message,
+            "reminder_text_raw": message,
+            "to": to,
+            "from": from_,
+            "created_at": datetime.now(dt_timezone.utc).isoformat(),
+            "trigger_at": trigger_time,
+            "event_trigger": event_trigger,
+        }
+        return self.schedule_event(
+            trigger_time=trigger_time,
+            timezone_name=timezone_name,
+            signal_type="reminder",
+            payload=payload,
+            target=to,
+            origin=from_,
+            correlation_id=correlation_id,
+        )
+
     def schedule_event(
         self,
         *,

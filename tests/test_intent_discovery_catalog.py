@@ -11,8 +11,8 @@ from alphonse.agent.cognition.planning_engine import (
 def test_available_abilities_include_summary_and_optional_marker() -> None:
     rendered = format_available_abilities()
     assert "askQuestion(" in rendered
-    assert "missing required details" in rendered
-    assert "?:" in rendered
+    assert "one clear question" in rendered
+    assert "getTime()" in rendered
 
 
 def test_available_ability_catalog_is_llm_focused() -> None:
@@ -42,8 +42,9 @@ def test_available_ability_catalog_has_minimal_tools_only() -> None:
     }
     assert names == {
         "askQuestion",
-        "time.current",
-        "schedule_event",
+        "getTime",
+        "createTimeEventTrigger",
+        "scheduleReminder",
         "getMySettings",
         "getUserDetails",
     }

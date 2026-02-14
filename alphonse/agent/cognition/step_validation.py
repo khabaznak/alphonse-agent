@@ -31,6 +31,7 @@ class StepValidationResult:
 
 _PLACEHOLDER_PATTERNS = (
     r"<[^>]+>",
+    r"\{\{[^}]+\}\}",
     r"\byour\s+\w+\s+name\b",
     r"\bplaceholder\b",
     r"\[unknown\]",

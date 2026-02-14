@@ -10,39 +10,39 @@ logger = logging.getLogger(__name__)
 _PLANNER_TOOL_CARDS: list[dict[str, Any]] = [
     {
         "tool": "askQuestion",
-        "description": "Ask the user for missing required details to continue.",
+        "description": "Ask the user one clear question and wait for their answer.",
         "when_to_use": "Only when required user data is missing.",
         "returns": "user_answer_captured",
-        "required_parameters": ["question"],
         "input_parameters": [
             {"name": "question", "type": "string", "required": True},
-            {"name": "slot", "type": "string", "required": False},
-            {"name": "bind", "type": "object", "required": False},
         ],
     },
     {
-        "tool": "time.current",
-        "description": "Get the current time now using your current settings.",
+        "tool": "getTime",
+        "description": "Get your current time now.",
         "when_to_use": "Use for current time/date and as a reference for scheduling or deadline calculations.",
         "returns": "current_time",
-        "required_parameters": [],
+        "input_parameters": [],
+    },
+    {
+        "tool": "createTimeEventTrigger",
+        "description": "Create a time-based trigger from a time expression.",
+        "when_to_use": "Use when a reminder should fire at a specific time.",
+        "returns": "event_trigger",
         "input_parameters": [
-            {"name": "timezone_name", "type": "string", "required": False},
+            {"name": "time", "type": "string", "required": True},
         ],
     },
     {
-        "tool": "schedule_event",
-        "description": "Schedule an internal event for future execution.",
-        "when_to_use": "Use when the user asks for reminders or future follow-up.",
-        "returns": "scheduled_event_id",
-        "required_parameters": ["trigger_time", "signal_type"],
+        "tool": "scheduleReminder",
+        "description": "Schedule a reminder using a trigger.",
+        "when_to_use": "Use when the user asks to be reminded.",
+        "returns": "scheduled_reminder_id",
         "input_parameters": [
-            {"name": "trigger_time", "type": "iso_datetime", "required": True},
-            {"name": "signal_type", "type": "string", "required": True},
-            {"name": "timezone_name", "type": "string", "required": False},
-            {"name": "payload", "type": "object", "required": False},
-            {"name": "target", "type": "string", "required": False},
-            {"name": "origin", "type": "string", "required": False},
+            {"name": "Message", "type": "string", "required": True},
+            {"name": "To", "type": "string", "required": True},
+            {"name": "From", "type": "string", "required": True},
+            {"name": "EventTrigger", "type": "object", "required": True},
         ],
     },
     {
@@ -50,7 +50,6 @@ _PLANNER_TOOL_CARDS: list[dict[str, Any]] = [
         "description": "Get your current runtime settings (timezone, locale, tone, address style, channel context).",
         "when_to_use": "Use before time or language-sensitive decisions when settings are needed.",
         "returns": "settings",
-        "required_parameters": [],
         "input_parameters": [],
     },
     {
@@ -58,7 +57,6 @@ _PLANNER_TOOL_CARDS: list[dict[str, Any]] = [
         "description": "Get known user/channel details for the current conversation context.",
         "when_to_use": "Use when user identity/context details are needed before planning or scheduling.",
         "returns": "user_details",
-        "required_parameters": [],
         "input_parameters": [],
     },
 ]
@@ -220,11 +218,6 @@ def _validate_execution_plan(plan: list[dict[str, Any]]) -> dict[str, str] | Non
             return {"code": "MISSING_PARAMETERS", "message": f"step[{idx}] parameters are required."}
         if not isinstance(params, dict):
             return {"code": "INVALID_PARAMETERS", "message": f"step[{idx}] parameters must be an object."}
-        if tool != "askQuestion" and not params:
-            return {
-                "code": "NON_ASKQUESTION_EMPTY_PARAMETERS",
-                "message": f"step[{idx}] non-askQuestion actions must include parameters.",
-            }
     return None
 
 
