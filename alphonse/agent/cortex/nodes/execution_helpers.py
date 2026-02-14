@@ -75,10 +75,20 @@ def available_tool_catalog_data(
     try:
         parsed = json.loads(raw)
     except json.JSONDecodeError:
-        parsed = {"tools": []}
+        parsed = {}
+    if not isinstance(parsed, dict):
+        parsed = {}
+    tools = parsed.get("tools")
+    if not isinstance(tools, list):
+        try:
+            from alphonse.agent.cognition.planning_engine import planner_tool_catalog_data
+
+            parsed = planner_tool_catalog_data()
+        except Exception:
+            parsed = {"tools": []}
+        tools = parsed.get("tools")
     if not isinstance(parsed, dict):
         parsed = {"tools": []}
-    tools = parsed.get("tools")
     if not isinstance(tools, list):
         tools = []
     known = {
@@ -146,7 +156,7 @@ def critic_repair_invalid_step(
             "INVALID_STEP_JSON": invalid_step_md,
             "VALIDATION_EXCEPTION_JSON": validation_exception_md,
             "AVAILABLE_TOOL_SIGNATURES": format_available_abilities(),
-            "AVAILABLE_TOOL_CATALOG": _markdown_from_json_text(format_available_ability_catalog()),
+            "AVAILABLE_TOOL_CATALOG": str(format_available_ability_catalog() or "").strip(),
         },
     )
     try:

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from datetime import datetime
 import sqlite3
 from typing import Any, Callable
@@ -421,13 +420,9 @@ def route_after_plan(state: dict[str, Any]) -> str:
 
 def _tool_catalog(format_available_abilities: Callable[[], str]) -> dict[str, Any]:
     _ = format_available_abilities
-    from alphonse.agent.cognition.planning_engine import format_available_ability_catalog
+    from alphonse.agent.cognition.planning_engine import planner_tool_catalog_data
 
-    raw = format_available_ability_catalog()
-    try:
-        parsed = json.loads(raw)
-    except Exception:
-        return {"tools": []}
+    parsed = planner_tool_catalog_data()
     return parsed if isinstance(parsed, dict) else {"tools": []}
 
 

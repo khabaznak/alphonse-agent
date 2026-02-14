@@ -2,64 +2,20 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from typing import Any
+from alphonse.agent.cognition.prompt_templates_runtime import (
+    PLANNING_SYSTEM_PROMPT,
+    PLANNING_TOOLS_TEMPLATE,
+    PLANNING_USER_TEMPLATE,
+    render_prompt_template,
+)
 from alphonse.agent.cognition.utterance_policy import render_utterance_policy_block
 
 logger = logging.getLogger(__name__)
 
-_PLANNER_TOOL_CARDS: list[dict[str, Any]] = [
-    {
-        "tool": "askQuestion",
-        "description": "Ask the user one clear question and wait for their answer.",
-        "when_to_use": "Only when required user data is missing.",
-        "returns": "user_answer_captured",
-        "input_parameters": [
-            {"name": "question", "type": "string", "required": True},
-        ],
-    },
-    {
-        "tool": "getTime",
-        "description": "Get your current time now.",
-        "when_to_use": "Use for current time/date and as a reference for scheduling or deadline calculations.",
-        "returns": "current_time",
-        "input_parameters": [],
-    },
-    {
-        "tool": "createTimeEventTrigger",
-        "description": "Create a time-based trigger from a time expression.",
-        "when_to_use": "Use when a reminder should fire at a specific time.",
-        "returns": "event_trigger",
-        "input_parameters": [
-            {"name": "time", "type": "string", "required": True},
-        ],
-    },
-    {
-        "tool": "scheduleReminder",
-        "description": "Schedule a reminder using a trigger.",
-        "when_to_use": "Use when the user asks to be reminded.",
-        "returns": "scheduled_reminder_id",
-        "input_parameters": [
-            {"name": "Message", "type": "string", "required": True},
-            {"name": "To", "type": "string", "required": True},
-            {"name": "From", "type": "string", "required": True},
-            {"name": "EventTrigger", "type": "object", "required": True},
-        ],
-    },
-    {
-        "tool": "getMySettings",
-        "description": "Get your current runtime settings (timezone, locale, tone, address style, channel context).",
-        "when_to_use": "Use before time or language-sensitive decisions when settings are needed.",
-        "returns": "settings",
-        "input_parameters": [],
-    },
-    {
-        "tool": "getUserDetails",
-        "description": "Get known user/channel details for the current conversation context.",
-        "when_to_use": "Use when user identity/context details are needed before planning or scheduling.",
-        "returns": "user_details",
-        "input_parameters": [],
-    },
-]
+_HEADING_RE = re.compile(r"^###\s+([A-Za-z_]\w*)\(([^)]*)\)\s*$")
+_INPUT_RE = re.compile(r"^\s*-\s+`([^`]+)`\s+\(([^,]+),\s*(required|optional)\)\s*$", re.IGNORECASE)
 
 
 def discover_plan(
@@ -76,36 +32,22 @@ def discover_plan(
     if not llm_client:
         return {"messages": [], "plans": []}
     compact_context = _compact_planning_context(text=text, planning_context=planning_context)
-    system_prompt = (
-        "You are Alphonse planning engine.\n"
-        "Produce a compact executable plan using available tools.\n"
-        "Return JSON only with shape:\n"
-        '{'
-        '"intention":"string",'
-        '"confidence":"low|medium|high",'
-        '"acceptance_criteria":["..."],'
-        '"planning_interrupt":{"question":"...", "slot":"answer", "bind":{}, "missing_data":[]}|null,'
-        '"execution_plan":[{"tool":"tool.name","parameters":{"key":"value"}}]'
-        '}\n'
-        "Rules:\n"
-        "- Prefer direct executable steps with concrete parameters.\n"
-        "- Use planning_interrupt only when required user data is missing.\n"
-        "- Never ask the user about internal tool/function names.\n"
-        "- Keep execution_plan empty if planning_interrupt is present.\n"
+    user_prompt = render_prompt_template(
+        PLANNING_USER_TEMPLATE,
+        {
+            "POLICY_BLOCK": render_utterance_policy_block(
+                locale=locale,
+                tone=tone,
+                address_style=address_style,
+                channel_type=channel_type,
+            ),
+            "USER_MESSAGE": text,
+            "LOCALE": str(locale or "en-US"),
+            "PLANNING_CONTEXT": _format_context_markdown(compact_context),
+            "AVAILABLE_TOOLS": available_tools,
+        },
     )
-    user_prompt = (
-        "# Utterance Policy\n"
-        f"{render_utterance_policy_block(locale=locale, tone=tone, address_style=address_style, channel_type=channel_type)}\n\n"
-        "# User Message\n"
-        f"{text}\n\n"
-        "# Locale\n"
-        f"- {str(locale or 'en-US')}\n\n"
-        "# Planning Context\n"
-        f"{_format_context_markdown(compact_context)}\n\n"
-        "# Available Tools\n"
-        f"{available_tools}\n"
-    )
-    raw = _call_llm(llm_client, system_prompt=system_prompt, user_prompt=user_prompt)
+    raw = _call_llm(llm_client, system_prompt=PLANNING_SYSTEM_PROMPT, user_prompt=user_prompt)
     payload = _parse_json(raw)
     if not isinstance(payload, dict):
         return {
@@ -181,27 +123,80 @@ def discover_plan(
 
 
 def format_available_abilities() -> str:
+    tools = planner_tool_catalog_data().get("tools")
+    if not isinstance(tools, list):
+        return ""
     lines: list[str] = []
-    for card in _PLANNER_TOOL_CARDS:
-        tool = str(card.get("tool") or "").strip()
+    for item in tools:
+        if not isinstance(item, dict):
+            continue
+        tool = str(item.get("tool") or "").strip()
         if not tool:
             continue
-        params = card.get("input_parameters") if isinstance(card.get("input_parameters"), list) else []
-        rendered = ", ".join(_render_param_signature(item) for item in params if isinstance(item, dict))
-        description = str(card.get("description") or "No description.")
+        params = item.get("input_parameters") if isinstance(item.get("input_parameters"), list) else []
+        rendered = ", ".join(_render_param_signature(param) for param in params if isinstance(param, dict))
+        description = str(item.get("description") or "No description.")
         lines.append(f"- {tool}({rendered}) -> {description}")
     return "\n".join(lines)
 
 
 def format_available_ability_catalog() -> str:
-    return json.dumps({"tools": _PLANNER_TOOL_CARDS}, ensure_ascii=False)
+    return render_prompt_template(PLANNING_TOOLS_TEMPLATE, {}).strip()
+
+
+def planner_tool_catalog_data() -> dict[str, Any]:
+    tools: list[dict[str, Any]] = []
+    current: dict[str, Any] | None = None
+    lines = format_available_ability_catalog().splitlines()
+    for raw in lines:
+        line = raw.rstrip()
+        heading = _HEADING_RE.match(line.strip())
+        if heading:
+            if isinstance(current, dict):
+                tools.append(current)
+            current = {
+                "tool": heading.group(1),
+                "description": "",
+                "when_to_use": "",
+                "returns": "",
+                "input_parameters": [],
+            }
+            continue
+        if not isinstance(current, dict):
+            continue
+        stripped = line.strip()
+        if stripped.startswith("- Description:"):
+            current["description"] = stripped.replace("- Description:", "", 1).strip()
+            continue
+        if stripped.startswith("- When to use:"):
+            current["when_to_use"] = stripped.replace("- When to use:", "", 1).strip()
+            continue
+        if stripped.startswith("- Returns:"):
+            current["returns"] = stripped.replace("- Returns:", "", 1).strip()
+            continue
+        input_match = _INPUT_RE.match(line)
+        if input_match:
+            params = current.get("input_parameters")
+            if not isinstance(params, list):
+                params = []
+                current["input_parameters"] = params
+            params.append(
+                {
+                    "name": input_match.group(1).strip(),
+                    "type": input_match.group(2).strip(),
+                    "required": input_match.group(3).strip().lower() == "required",
+                }
+            )
+    if isinstance(current, dict):
+        tools.append(current)
+    return {"tools": tools}
 
 
 def planner_tool_names() -> list[str]:
     return [
-        str(card.get("tool") or "").strip()
-        for card in _PLANNER_TOOL_CARDS
-        if str(card.get("tool") or "").strip()
+        str(item.get("tool") or "").strip()
+        for item in (planner_tool_catalog_data().get("tools") or [])
+        if isinstance(item, dict) and str(item.get("tool") or "").strip()
     ]
 
 

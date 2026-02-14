@@ -1,0 +1,42 @@
+## Tool Catalog
+### askQuestion(question:string)
+- Description: Ask the user one clear question and wait for their answer.
+- When to use: Only when required user data is missing.
+- Returns: user_answer_captured
+- Inputs:
+  - `question` (string, required)
+
+### getTime()
+- Description: Get your current time now.
+- When to use: Use for current time/date and as a reference for scheduling or deadline calculations.
+- Returns: current_time
+- Inputs: none
+
+### createTimeEventTrigger(time:string)
+- Description: Create a time-based trigger from a time expression.
+- When to use: Use when a reminder should fire at a specific time.
+- Returns: event_trigger
+- Inputs:
+  - `time` (string, required)
+
+### scheduleReminder(Message:string, To:string, From:string, EventTrigger:object)
+- Description: Schedule a reminder using a trigger.
+- When to use: Use when the user asks to be reminded.
+- Returns: scheduled_reminder_id
+- Inputs:
+  - `Message` (string, required)
+  - `To` (string, required)
+  - `From` (string, required)
+  - `EventTrigger` (object, required)
+
+### getMySettings()
+- Description: Get your current runtime settings (timezone, locale, tone, address style, channel context).
+- When to use: Use before time or language-sensitive decisions when settings are needed.
+- Returns: settings
+- Inputs: none
+
+### getUserDetails()
+- Description: Get known user/channel details for the current conversation context.
+- When to use: Use when user identity/context details are needed before planning or scheduling.
+- Returns: user_details
+- Inputs: none

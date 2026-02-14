@@ -4,34 +4,14 @@ import json
 import logging
 from typing import Any
 
+from alphonse.agent.cognition.prompt_templates_runtime import (
+    FIRST_DECISION_SYSTEM_PROMPT,
+    FIRST_DECISION_USER_TEMPLATE,
+    render_prompt_template,
+)
 from alphonse.agent.cognition.utterance_policy import render_utterance_policy_block
 
 logger = logging.getLogger(__name__)
-
-_FIRST_DECISION_SYSTEM_PROMPT = (
-    "# Role\n"
-    "You are Alphonse, a routing controller for a conversational agent.\n\n"
-    "# Routes\n"
-    "- `direct_reply`: you can answer now without tools.\n"
-    "- `tool_plan`: a tool-based plan is required.\n"
-    "- `clarify`: one short clarification question is required.\n\n"
-    "# Rules\n"
-    "- Prefer `direct_reply` for greetings, language preference/capability questions, and simple conversation.\n"
-    "- Use `tool_plan` only when external data or side effects are required.\n"
-    "- Do not mention internal tool names in clarify questions.\n\n"
-    "# Output\n"
-    "Return strict JSON only with keys:\n"
-    '{"route":"direct_reply|tool_plan|clarify","intent":"string","confidence":0.0,"reply_text":"string","clarify_question":"string"}\n'
-)
-
-_FIRST_DECISION_USER_PROMPT = (
-    "# Utterance Policy\n"
-    "{policy_block}\n\n"
-    "# Available Tool Names (Awareness Only)\n"
-    "{tool_names}\n\n"
-    "# User Message\n"
-    "{message}\n"
-)
 
 
 def decide_first_action(
@@ -48,19 +28,22 @@ def decide_first_action(
         return {"route": "tool_plan", "intent": "unknown", "confidence": 0.0}
 
     tool_names = [str(name).strip() for name in (available_tool_names or []) if str(name).strip()]
-    user_prompt = _FIRST_DECISION_USER_PROMPT.format(
-        policy_block=render_utterance_policy_block(
+    user_prompt = render_prompt_template(
+        FIRST_DECISION_USER_TEMPLATE,
+        {
+            "POLICY_BLOCK": render_utterance_policy_block(
             locale=locale,
             tone=tone,
             address_style=address_style,
             channel_type=channel_type,
         ),
-        tool_names=", ".join(tool_names[:24]) or "(none)",
-        message=text.strip(),
+            "TOOL_NAMES": ", ".join(tool_names[:24]) or "(none)",
+            "USER_MESSAGE": text.strip(),
+        },
     )
     raw = _call_llm(
         llm_client,
-        system_prompt=_FIRST_DECISION_SYSTEM_PROMPT,
+        system_prompt=FIRST_DECISION_SYSTEM_PROMPT,
         user_prompt=user_prompt,
     )
     payload = _parse_json(raw)
