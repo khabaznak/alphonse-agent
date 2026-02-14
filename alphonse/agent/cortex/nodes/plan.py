@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from datetime import datetime
 import sqlite3
 from typing import Any, Callable
@@ -29,6 +30,8 @@ from alphonse.agent.cortex.nodes.capability_gap import has_capability_gap_plan
 from alphonse.agent.cortex.nodes.telemetry import emit_brain_state
 from alphonse.agent.nervous_system.paths import resolve_nervous_system_db_path
 from alphonse.config import settings
+
+logger = logging.getLogger(__name__)
 
 
 def plan_node(
@@ -298,9 +301,21 @@ def _run_native_tool_call_loop(
                 tools=tools,
                 tool_choice="auto",
             )
-        except Exception:
+        except Exception as exc:
+            logger.exception(
+                "plan tool_call_loop complete_with_tools failed chat_id=%s correlation_id=%s error=%s",
+                state.get("chat_id"),
+                state.get("correlation_id"),
+                type(exc).__name__,
+            )
             return None
         if not isinstance(response, dict):
+            logger.warning(
+                "plan tool_call_loop invalid response type chat_id=%s correlation_id=%s type=%s",
+                state.get("chat_id"),
+                state.get("correlation_id"),
+                type(response).__name__,
+            )
             return None
         tool_calls = response.get("tool_calls") if isinstance(response.get("tool_calls"), list) else []
         content = str(response.get("content") or "").strip()

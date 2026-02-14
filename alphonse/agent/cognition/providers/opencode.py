@@ -55,26 +55,7 @@ class OpenCodeClient:
             ],
             "stream": False,
         }
-        headers = {"Content-Type": "application/json"}
-        auth = None
-        api_key = os.getenv(self.api_key_env)
-        if api_key:
-            headers["Authorization"] = f"Bearer {api_key}"
-        else:
-            username = os.getenv(self.username_env, "opencode")
-            password = os.getenv(self.password_env)
-            if password:
-                auth = (username, password)
-
-        response = requests.post(
-            f"{self.base_url}{self.chat_path}",
-            headers=headers,
-            auth=auth,
-            json=payload,
-            timeout=self.timeout,
-        )
-        _raise_for_status_with_body(response, "OpenCode chat completion failed")
-        body = _read_json_response(response)
+        body = self._post_chat_completion(payload)
         content = _extract_message_content(body)
         if content is None:
             raise ValueError("OpenCode response missing assistant content")
@@ -87,6 +68,22 @@ class OpenCodeClient:
         tools: list[dict[str, Any]],
         tool_choice: str = "auto",
     ) -> dict[str, Any]:
+        force_chat = str(os.getenv("OPENCODE_FORCE_CHAT_COMPLETIONS", "")).strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+        if not force_chat:
+            try:
+                return self._complete_with_tools_via_session_api(
+                    messages=messages,
+                    tools=tools,
+                    tool_choice=tool_choice,
+                )
+            except Exception:
+                pass
+
         payload = {
             "model": self.model,
             "messages": messages,
@@ -95,6 +92,65 @@ class OpenCodeClient:
             "parallel_tool_calls": False,
             "stream": False,
         }
+        body = self._post_chat_completion(payload)
+        content, tool_calls, assistant_message = _extract_tool_call_payload(body)
+        return {
+            "content": content,
+            "tool_calls": tool_calls,
+            "assistant_message": assistant_message,
+        }
+
+    def _complete_with_tools_via_session_api(
+        self,
+        *,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+        tool_choice: str,
+    ) -> dict[str, Any]:
+        headers, auth = _build_auth(self.api_key_env, self.username_env, self.password_env)
+        session_id = self._ensure_session(headers=headers, auth=auth)
+        rendered = _render_tool_call_markdown_prompt(
+            messages=messages,
+            tools=tools,
+            tool_choice=tool_choice,
+        )
+        model_payloads: list[Any] = [_model_for_session_payload(self.model), self.model]
+        payloads = [
+            {"model": m, "parts": [{"type": "text", "text": rendered}]}
+            for m in model_payloads
+            if m
+        ]
+        payloads.append({"parts": [{"type": "text", "text": rendered}]})
+
+        failures: list[str] = []
+        for idx, payload in enumerate(payloads):
+            try:
+                response = requests.post(
+                    f"{self.base_url}/session/{session_id}/message",
+                    headers=headers,
+                    auth=auth,
+                    json=payload,
+                    timeout=self.timeout,
+                )
+                _raise_for_status_with_body(
+                    response,
+                    f"OpenCode session tool-call message failed (payload_variant={idx})",
+                )
+                body = _read_json_response(response)
+                content, tool_calls, assistant_message = _extract_session_tool_payload(body)
+                return {
+                    "content": content,
+                    "tool_calls": tool_calls,
+                    "assistant_message": assistant_message,
+                }
+            except Exception as exc:
+                failures.append(str(exc))
+        raise ValueError(
+            "OpenCode session tool-call loop failed for all payload variants: "
+            + " | ".join(failures[:4])
+        )
+
+    def _post_chat_completion(self, payload: dict[str, Any]) -> dict[str, Any]:
         headers = {"Content-Type": "application/json"}
         auth = None
         api_key = os.getenv(self.api_key_env)
@@ -105,21 +161,33 @@ class OpenCodeClient:
             password = os.getenv(self.password_env)
             if password:
                 auth = (username, password)
-        response = requests.post(
-            f"{self.base_url}{self.chat_path}",
-            headers=headers,
-            auth=auth,
-            json=payload,
-            timeout=self.timeout,
+        paths = [self.chat_path]
+        if self.chat_path.startswith("/v1/"):
+            paths.append(f"/api{self.chat_path}")
+        elif self.chat_path.startswith("/api/v1/"):
+            paths.append(self.chat_path.replace("/api", "", 1))
+        errors: list[str] = []
+        for path in paths:
+            try:
+                response = requests.post(
+                    f"{self.base_url}{path}",
+                    headers=headers,
+                    auth=auth,
+                    json=payload,
+                    timeout=self.timeout,
+                )
+                _raise_for_status_with_body(response, f"OpenCode chat completion failed path={path}")
+                return _read_json_response(response)
+            except Exception as exc:
+                errors.append(f"{path}: {exc}")
+                continue
+        raise ValueError(
+            "OpenCode chat completion failed for all configured paths. "
+            f"base_url={self.base_url} chat_path={self.chat_path} "
+            "Hint: point OPENCODE_BASE_URL to the JSON API host (not the web UI), "
+            "or set OPENCODE_CHAT_COMPLETIONS_PATH correctly. "
+            f"errors={' | '.join(errors[:3])}"
         )
-        _raise_for_status_with_body(response, "OpenCode tool completion failed")
-        body = _read_json_response(response)
-        content, tool_calls, assistant_message = _extract_tool_call_payload(body)
-        return {
-            "content": content,
-            "tool_calls": tool_calls,
-            "assistant_message": assistant_message,
-        }
 
     def _complete_via_session_api(self, system_prompt: str, user_prompt: str) -> str:
         headers, auth = _build_auth(self.api_key_env, self.username_env, self.password_env)
@@ -377,3 +445,188 @@ def _extract_tool_call_payload(body: Any) -> tuple[str, list[dict[str, Any]], di
     if assistant_tool_calls:
         assistant_message["tool_calls"] = assistant_tool_calls
     return content, tool_calls, assistant_message
+
+
+def _render_tool_call_markdown_prompt(
+    *,
+    messages: list[dict[str, Any]],
+    tools: list[dict[str, Any]],
+    tool_choice: str,
+) -> str:
+    lines: list[str] = []
+    lines.append("# Tool Call Task")
+    lines.append("")
+    lines.append("You are in a tool-calling loop.")
+    lines.append("Return ONLY valid JSON.")
+    lines.append("")
+    lines.append("## Output JSON Contract")
+    lines.append('{"content":"string","tool_calls":[{"id":"optional","name":"toolName","arguments":{}}]}')
+    lines.append("")
+    lines.append("Rules:")
+    lines.append("- Use `tool_calls` when a tool is needed next.")
+    lines.append("- Use empty `tool_calls` when you can answer directly.")
+    lines.append("- `arguments` must be an object.")
+    lines.append("- No markdown, no prose outside JSON.")
+    lines.append("")
+    lines.append(f"## Tool Choice")
+    lines.append(f"- {tool_choice}")
+    lines.append("")
+    lines.append("## Tools")
+    if not tools:
+        lines.append("- (none)")
+    else:
+        for tool in tools:
+            fn = tool.get("function") if isinstance(tool, dict) else None
+            if not isinstance(fn, dict):
+                continue
+            name = str(fn.get("name") or "").strip()
+            if not name:
+                continue
+            description = str(fn.get("description") or "").strip()
+            parameters = fn.get("parameters")
+            lines.append(f"- `{name}`")
+            if description:
+                lines.append(f"  - {description}")
+            if isinstance(parameters, dict):
+                lines.append("  - parameters schema:")
+                lines.append("```json")
+                lines.append(json.dumps(parameters, ensure_ascii=False))
+                lines.append("```")
+    lines.append("")
+    lines.append("## Conversation")
+    if not messages:
+        lines.append("- (empty)")
+    else:
+        for message in messages:
+            role = str(message.get("role") or "unknown")
+            content = str(message.get("content") or "").strip()
+            lines.append(f"### {role}")
+            if content:
+                lines.append(content)
+            tool_calls = message.get("tool_calls")
+            if isinstance(tool_calls, list) and tool_calls:
+                lines.append("tool_calls:")
+                lines.append("```json")
+                lines.append(json.dumps(tool_calls, ensure_ascii=False))
+                lines.append("```")
+            tool_call_id = message.get("tool_call_id")
+            if isinstance(tool_call_id, str) and tool_call_id.strip():
+                lines.append(f"tool_call_id: `{tool_call_id}`")
+            tool_name = message.get("tool_name")
+            if isinstance(tool_name, str) and tool_name.strip():
+                lines.append(f"tool_name: `{tool_name}`")
+            lines.append("")
+    return "\n".join(lines).strip()
+
+
+def _model_for_session_payload(model_ref: str) -> dict[str, str] | None:
+    value = str(model_ref or "").strip()
+    if not value or "/" not in value:
+        return None
+    provider, model_id = value.split("/", 1)
+    provider = provider.strip()
+    model_id = model_id.strip()
+    if not provider or not model_id:
+        return None
+    return {"providerID": provider, "modelID": model_id}
+
+
+def _extract_session_tool_payload(body: Any) -> tuple[str, list[dict[str, Any]], dict[str, Any]]:
+    content = ""
+    tool_calls: list[dict[str, Any]] = []
+    assistant_tool_calls: list[dict[str, Any]] = []
+    parts = body.get("parts") if isinstance(body, dict) else None
+    if isinstance(parts, list):
+        for idx, part in enumerate(parts):
+            if not isinstance(part, dict):
+                continue
+            part_type = str(part.get("type") or "").strip().lower()
+            if part_type == "tool":
+                tool_name = str(part.get("tool") or "").strip()
+                if not tool_name:
+                    continue
+                call_id = str(part.get("callID") or part.get("call_id") or f"call-{idx}").strip()
+                state = part.get("state") if isinstance(part.get("state"), dict) else {}
+                args = state.get("input") if isinstance(state.get("input"), dict) else {}
+                tool_calls.append({"id": call_id, "name": tool_name, "arguments": args})
+                assistant_tool_calls.append(
+                    {
+                        "id": call_id,
+                        "type": "function",
+                        "function": {
+                            "name": tool_name,
+                            "arguments": json.dumps(args, ensure_ascii=False),
+                        },
+                    }
+                )
+                continue
+            text = part.get("text")
+            if isinstance(text, str) and text.strip():
+                content = f"{content}\n{text.strip()}".strip()
+                continue
+            part_content = part.get("content")
+            if isinstance(part_content, str) and part_content.strip():
+                content = f"{content}\n{part_content.strip()}".strip()
+
+    if not content:
+        content = (_extract_session_message_content(body) or _extract_message_content(body) or "").strip()
+
+    if not tool_calls and content:
+        parsed = _try_parse_json_object(content)
+        if isinstance(parsed, dict):
+            maybe_calls = parsed.get("tool_calls")
+            maybe_content = parsed.get("content")
+            if isinstance(maybe_calls, list):
+                for idx, call in enumerate(maybe_calls):
+                    if not isinstance(call, dict):
+                        continue
+                    name = str(call.get("name") or "").strip()
+                    if not name:
+                        continue
+                    call_id = str(call.get("id") or f"call-{idx}").strip()
+                    args = call.get("arguments") if isinstance(call.get("arguments"), dict) else {}
+                    tool_calls.append({"id": call_id, "name": name, "arguments": args})
+                    assistant_tool_calls.append(
+                        {
+                            "id": call_id,
+                            "type": "function",
+                            "function": {
+                                "name": name,
+                                "arguments": json.dumps(args, ensure_ascii=False),
+                            },
+                        }
+                    )
+            if isinstance(maybe_content, str):
+                content = maybe_content.strip()
+
+    assistant_message: dict[str, Any] = {"role": "assistant", "content": content}
+    if assistant_tool_calls:
+        assistant_message["tool_calls"] = assistant_tool_calls
+    return content, tool_calls, assistant_message
+
+
+def _try_parse_json_object(text: str) -> dict[str, Any] | None:
+    raw = str(text or "").strip()
+    if not raw:
+        return None
+    candidates = [raw]
+    if "```json" in raw:
+        start = raw.find("```json")
+        end = raw.find("```", start + 7)
+        if start >= 0 and end > start:
+            candidates.append(raw[start + 7 : end].strip())
+    if "```" in raw:
+        first = raw.find("```")
+        second = raw.find("```", first + 3)
+        if first >= 0 and second > first:
+            block = raw[first + 3 : second].strip()
+            if block:
+                candidates.append(block)
+    for candidate in candidates:
+        try:
+            parsed = json.loads(candidate)
+        except ValueError:
+            continue
+        if isinstance(parsed, dict):
+            return parsed
+    return None

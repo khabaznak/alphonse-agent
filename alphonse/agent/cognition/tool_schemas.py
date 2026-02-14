@@ -10,7 +10,6 @@ def planner_tool_schemas() -> list[dict[str, Any]]:
             "function": {
                 "name": "askQuestion",
                 "description": "Ask the user one clear question and wait for their answer.",
-                "strict": True,
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -26,7 +25,6 @@ def planner_tool_schemas() -> list[dict[str, Any]]:
             "function": {
                 "name": "getTime",
                 "description": "Get your current time now.",
-                "strict": True,
                 "parameters": {
                     "type": "object",
                     "properties": {},
@@ -40,7 +38,6 @@ def planner_tool_schemas() -> list[dict[str, Any]]:
             "function": {
                 "name": "createTimeEventTrigger",
                 "description": "Create a time-based trigger from a time expression.",
-                "strict": True,
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -56,7 +53,6 @@ def planner_tool_schemas() -> list[dict[str, Any]]:
             "function": {
                 "name": "scheduleReminder",
                 "description": "Schedule a reminder using a trigger.",
-                "strict": True,
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -83,7 +79,6 @@ def planner_tool_schemas() -> list[dict[str, Any]]:
             "function": {
                 "name": "getMySettings",
                 "description": "Get runtime settings for current conversation context.",
-                "strict": True,
                 "parameters": {
                     "type": "object",
                     "properties": {},
@@ -97,7 +92,6 @@ def planner_tool_schemas() -> list[dict[str, Any]]:
             "function": {
                 "name": "getUserDetails",
                 "description": "Get known user and channel details for current conversation context.",
-                "strict": True,
                 "parameters": {
                     "type": "object",
                     "properties": {},
