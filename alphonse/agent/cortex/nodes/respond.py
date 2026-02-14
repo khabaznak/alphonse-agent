@@ -16,6 +16,8 @@ _UTTERANCE_RENDERER_PROMPT = (
     "- Respect prefs.locale, prefs.tone, prefs.address_style, and prefs.verbosity.\n"
     "- Do not include internal ids or raw timestamps unless prefs.verbosity is debug.\n"
     "- Avoid parroting user phrasing; paraphrase naturally.\n"
+    "- TIME RULES: Use utterance.content.when_human (or fire_at) to describe timing correctly.\n"
+    "- If when_human is an ISO timestamp and verbosity is not debug, avoid printing it; use a natural phrase like 'soon' / 'en breve'.\n"
     "- Never mention chat_id, tool names, or DB fields.\n"
     "- Keep it concise by default.\n"
 )
@@ -207,10 +209,11 @@ def build_utterance_from_state(state: dict[str, Any]) -> dict[str, Any] | None:
                     or evidence_payload.get("fire_at")
                     or ""
                 ).strip(),
+                "is_immediate": False,
                 "for_whom": "me",
             }
-            if verbosity == "debug":
-                content["reminder_id"] = str(evidence_payload.get("reminder_id") or "").strip()
+            wh = str(content.get("when_human") or "").strip().lower()
+            content["is_immediate"] = (wh in {"now", "ahora"}) or (not str(content.get("fire_at") or "").strip())
             utterance["type"] = "reminder_created"
             utterance["content"] = content
             return utterance
@@ -248,20 +251,33 @@ def render_utterance_with_llm(*, utterance: dict[str, Any], llm_client: Any) -> 
     return cleaned
 
 
-def _render_task_response(*, state: dict[str, Any], task_state: dict[str, Any]) -> str | None:
+
+# Minimal, locale-agnostic fallback for task response rendering.
+def _render_task_response_minimal(*, state: dict[str, Any], task_state: dict[str, Any]) -> str | None:
+    """Last-resort fallback when no LLM renderer is available.
+
+    This MUST be locale-agnostic and avoid hardcoded language strings. It should convey
+    status using symbols and (when available) the task subject/question.
+    """
     status = str(task_state.get("status") or "").strip().lower()
-    locale = str(state.get("locale") or "en-US")
+
+    # Prefer any explicit question provided by the system.
     if status == "waiting_user":
         question = str(task_state.get("next_user_question") or "").strip()
-        return question or ("Que detalle te falta?" if locale.lower().startswith("es") else "What detail is missing?")
+        return f"❓ {question}" if question else "❓"
+
     if status == "failed":
-        return (
-            "No pude completar esa tarea."
-            if locale.lower().startswith("es")
-            else "I could not complete that task."
-        )
+        # Avoid leaking internals; keep it minimal.
+        return "❌"
+
     if status == "done":
-        return "Listo." if locale.lower().startswith("es") else "Done."
+        return "✅"
+
     if status == "running":
-        return "Sigo trabajando en eso." if locale.lower().startswith("es") else "I'm still working on that."
+        return "⏳"
+
     return None
+
+def _render_task_response(*, state: dict[str, Any], task_state: dict[str, Any]) -> str | None:
+    # Kept for backwards compatibility with older call sites.
+    return _render_task_response_minimal(state=state, task_state=task_state)
