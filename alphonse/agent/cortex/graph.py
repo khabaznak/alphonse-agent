@@ -16,7 +16,6 @@ from alphonse.agent.cortex.nodes import route_after_first_decision
 from alphonse.agent.cortex.nodes import route_after_plan
 from alphonse.agent.cortex.transitions import emit_transition_event
 from alphonse.agent.cortex.utils import build_cognition_state, build_meta
-from alphonse.agent.cortex.providers import get_ability_registry
 from alphonse.agent.tools.registry import ToolRegistry, build_default_tool_registry
 
 class LLMClient(Protocol):
@@ -67,7 +66,6 @@ class CortexGraph:
             "first_decision_node",
             build_first_decision_node(
                 llm_client_from_state=self._llm_client_from_state,
-                ability_registry_getter=get_ability_registry,
             ),
         )
         graph.add_node(
@@ -76,7 +74,6 @@ class CortexGraph:
                 state,
                 llm_client_from_state=self._llm_client_from_state,
                 tool_registry=self._tool_registry,
-                ability_registry_getter=get_ability_registry,
                 discover_plan=discover_plan,
                 format_available_abilities=format_available_abilities,
                 run_capability_gap_tool=run_capability_gap_tool,

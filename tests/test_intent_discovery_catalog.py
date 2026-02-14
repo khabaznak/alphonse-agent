@@ -11,7 +11,7 @@ from alphonse.agent.cognition.planning_engine import (
 def test_available_abilities_include_summary_and_optional_marker() -> None:
     rendered = format_available_abilities()
     assert "askQuestion(" in rendered
-    assert "clarifying questions" in rendered
+    assert "missing required details" in rendered
     assert "?:" in rendered
 
 
@@ -32,7 +32,7 @@ def test_available_ability_catalog_is_llm_focused() -> None:
     assert "returns" in ask
 
 
-def test_available_ability_catalog_includes_fact_tools() -> None:
+def test_available_ability_catalog_has_minimal_tools_only() -> None:
     payload = json.loads(format_available_ability_catalog())
     tools = payload.get("tools") if isinstance(payload, dict) else []
     names = {
@@ -40,5 +40,4 @@ def test_available_ability_catalog_includes_fact_tools() -> None:
         for item in (tools if isinstance(tools, list) else [])
         if isinstance(item, dict)
     }
-    assert "facts.user.get" in names
-    assert "facts.agent.get" in names
+    assert names == {"askQuestion", "time.current", "schedule_event"}

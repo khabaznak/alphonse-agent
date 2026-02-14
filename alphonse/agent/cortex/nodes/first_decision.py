@@ -5,6 +5,7 @@ from typing import Any, Callable
 
 from alphonse.agent.cognition.first_decision_engine import decide_first_action
 from alphonse.agent.cognition.intent_types import IntentCategory
+from alphonse.agent.cognition.planning_engine import planner_tool_names
 from alphonse.agent.cognition.pending_interaction import (
     PendingInteractionType,
     build_pending_interaction,
@@ -17,7 +18,6 @@ def first_decision_node(
     state: dict[str, Any],
     *,
     llm_client_from_state: Callable[[dict[str, Any]], Any],
-    ability_registry_getter: Callable[[], Any],
     decide_first_action_fn: Callable[..., dict[str, Any]] = decide_first_action,
 ) -> dict[str, Any]:
     def _return(payload: dict[str, Any]) -> dict[str, Any]:
@@ -39,12 +39,7 @@ def first_decision_node(
         return _return({"route_decision": "respond"})
 
     llm_client = llm_client_from_state(state)
-    ability_registry = ability_registry_getter()
-    tool_names = (
-        ability_registry.list_intents()
-        if hasattr(ability_registry, "list_intents")
-        else []
-    )
+    tool_names = planner_tool_names()
     decision = decide_first_action_fn(
         text=text,
         llm_client=llm_client,
@@ -100,12 +95,10 @@ def first_decision_node(
 def build_first_decision_node(
     *,
     llm_client_from_state: Callable[[dict[str, Any]], Any],
-    ability_registry_getter: Callable[[], Any],
 ) -> Callable[[dict[str, Any]], dict[str, Any]]:
     return partial(
         first_decision_node,
         llm_client_from_state=llm_client_from_state,
-        ability_registry_getter=ability_registry_getter,
     )
 
 

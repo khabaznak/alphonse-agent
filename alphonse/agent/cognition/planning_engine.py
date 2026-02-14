@@ -2,15 +2,50 @@ from __future__ import annotations
 
 import json
 import logging
-from pathlib import Path
 from typing import Any
-
-from alphonse.agent.cognition.abilities.store import AbilitySpecStore
 from alphonse.agent.cognition.utterance_policy import render_utterance_policy_block
 
 logger = logging.getLogger(__name__)
 
-_DISCOVERY_EXCLUDED_TOOLS: set[str] = {"cancel"}
+_PLANNER_TOOL_CARDS: list[dict[str, Any]] = [
+    {
+        "tool": "askQuestion",
+        "description": "Ask the user for missing required details to continue.",
+        "when_to_use": "Only when required user data is missing.",
+        "returns": "user_answer_captured",
+        "required_parameters": ["question"],
+        "input_parameters": [
+            {"name": "question", "type": "string", "required": True},
+            {"name": "slot", "type": "string", "required": False},
+            {"name": "bind", "type": "object", "required": False},
+        ],
+    },
+    {
+        "tool": "time.current",
+        "description": "Get the current time in a timezone.",
+        "when_to_use": "Use when the user asks for current time/date.",
+        "returns": "current_time",
+        "required_parameters": [],
+        "input_parameters": [
+            {"name": "timezone_name", "type": "string", "required": False},
+        ],
+    },
+    {
+        "tool": "schedule_event",
+        "description": "Schedule an internal event for future execution.",
+        "when_to_use": "Use when the user asks for reminders or future follow-up.",
+        "returns": "scheduled_event_id",
+        "required_parameters": ["trigger_time", "signal_type"],
+        "input_parameters": [
+            {"name": "trigger_time", "type": "iso_datetime", "required": True},
+            {"name": "signal_type", "type": "string", "required": True},
+            {"name": "timezone_name", "type": "string", "required": False},
+            {"name": "payload", "type": "object", "required": False},
+            {"name": "target", "type": "string", "required": False},
+            {"name": "origin", "type": "string", "required": False},
+        ],
+    },
+]
 
 
 def discover_plan(
@@ -120,70 +155,28 @@ def discover_plan(
 
 
 def format_available_abilities() -> str:
-    specs = _load_ability_specs()
-    lines: list[str] = [
-        "- askQuestion(question:string, slot?:string, bind?:object) -> Use it to ask clarifying questions to the message author user. Only ask questions about missing data, never for missing tools.",
-    ]
-    for spec in specs:
-        intent = str(spec.get("intent_name") or "").strip()
-        if not intent or intent in _DISCOVERY_EXCLUDED_TOOLS:
+    lines: list[str] = []
+    for card in _PLANNER_TOOL_CARDS:
+        tool = str(card.get("tool") or "").strip()
+        if not tool:
             continue
-        params = spec.get("input_parameters") if isinstance(spec.get("input_parameters"), list) else []
-        summary = _ability_summary(spec)
-        if params:
-            rendered = ", ".join(_render_param_signature(item) for item in params if isinstance(item, dict))
-            lines.append(f"- {intent}({rendered}) -> {summary}")
-        else:
-            lines.append(f"- {intent}() -> {summary}")
+        params = card.get("input_parameters") if isinstance(card.get("input_parameters"), list) else []
+        rendered = ", ".join(_render_param_signature(item) for item in params if isinstance(item, dict))
+        description = str(card.get("description") or "No description.")
+        lines.append(f"- {tool}({rendered}) -> {description}")
     return "\n".join(lines)
 
 
 def format_available_ability_catalog() -> str:
-    specs = _load_ability_specs()
-    tools: list[dict[str, Any]] = [
-        {
-            "tool": "askQuestion",
-            "description": "Ask the user for missing parameters to continue.",
-            "when_to_use": "Use when required end-user data is missing.",
-            "returns": "user_answer_captured",
-            "input_parameters": [
-                {"name": "question", "type": "string", "required": True},
-                {"name": "slot", "type": "string", "required": False},
-                {"name": "bind", "type": "object", "required": False},
-            ],
-            "required_parameters": ["question"],
-        }
+    return json.dumps({"tools": _PLANNER_TOOL_CARDS}, ensure_ascii=False)
+
+
+def planner_tool_names() -> list[str]:
+    return [
+        str(card.get("tool") or "").strip()
+        for card in _PLANNER_TOOL_CARDS
+        if str(card.get("tool") or "").strip()
     ]
-    for spec in specs:
-        tool = str(spec.get("intent_name") or "").strip()
-        if not tool or tool in _DISCOVERY_EXCLUDED_TOOLS:
-            continue
-        params_raw = spec.get("input_parameters") if isinstance(spec.get("input_parameters"), list) else []
-        params: list[dict[str, Any]] = []
-        for item in params_raw:
-            if not isinstance(item, dict):
-                continue
-            name = str(item.get("name") or "").strip()
-            if not name:
-                continue
-            params.append(
-                {
-                    "name": name,
-                    "type": str(item.get("type") or "string"),
-                    "required": bool(item.get("required", False)),
-                }
-            )
-        tools.append(
-            {
-                "tool": tool,
-                "description": _ability_summary(spec),
-                "when_to_use": "Use when this tool directly satisfies the user request.",
-                "returns": "result",
-                "required_parameters": [p["name"] for p in params if bool(p.get("required"))],
-                "input_parameters": params,
-            }
-        )
-    return json.dumps({"tools": tools}, ensure_ascii=False)
 
 
 def _validate_execution_plan(plan: list[dict[str, Any]]) -> dict[str, str] | None:
@@ -292,50 +285,8 @@ def _compact_planning_context(
     return compact
 
 
-def _ability_summary(spec: dict[str, Any]) -> str:
-    intent = str(spec.get("intent_name") or "").strip()
-    if not intent:
-        return "Use it to complete the requested task."
-    return f"Use it to {intent.replace('.', ' ').replace('_', ' ').strip().lower()}."
-
-
 def _render_param_signature(param: dict[str, Any]) -> str:
     name = str(param.get("name") or "").strip()
     ptype = str(param.get("type") or "string").strip()
     required = bool(param.get("required", False))
     return f"{name}{'' if required else '?'}:{ptype}"
-
-
-def _load_ability_specs() -> list[dict[str, Any]]:
-    specs: list[dict[str, Any]] = []
-    specs.extend(_load_specs_file())
-    specs.extend(_load_specs_db())
-    unique: dict[str, dict[str, Any]] = {}
-    for spec in specs:
-        key = str(spec.get("intent_name") or "").strip()
-        if key:
-            unique[key] = spec
-    return [unique[key] for key in sorted(unique.keys())]
-
-
-def _load_specs_file() -> list[dict[str, Any]]:
-    path = (
-        Path(__file__).resolve().parents[1]
-        / "nervous_system"
-        / "resources"
-        / "ability_specs.seed.json"
-    )
-    if not path.exists():
-        return []
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        return []
-    return [item for item in payload if isinstance(item, dict)] if isinstance(payload, list) else []
-
-
-def _load_specs_db() -> list[dict[str, Any]]:
-    try:
-        return AbilitySpecStore().list_enabled_specs()
-    except Exception:
-        return []
