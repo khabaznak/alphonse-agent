@@ -23,10 +23,12 @@ logger = logging.getLogger(__name__)
 class TimedSignalRecord:
     id: str
     trigger_at: datetime
+    fire_at: datetime | None
     status: str
     signal_type: str
     payload: dict[str, Any]
     target: str | None
+    delivery_target: str | None
     origin: str | None
     correlation_id: str | None
     next_trigger_at: datetime | None
@@ -73,7 +75,7 @@ class TimerSense(Sense):
                 continue
 
             now = datetime.now(tz=timezone.utc)
-            due_at = next_signal.next_trigger_at or next_signal.trigger_at
+            due_at = next_signal.next_trigger_at or next_signal.fire_at or next_signal.trigger_at
             delta_seconds = (due_at - now).total_seconds()
 
             if delta_seconds < -1800:
@@ -116,7 +118,7 @@ class TimerSense(Sense):
                     "timed_signal_id": record.id,
                     "signal_type": record.signal_type,
                     "payload": record.payload,
-                    "target": record.target,
+                    "target": record.delivery_target or record.target,
                     "origin": record.origin,
                     "correlation_id": record.correlation_id,
                     "trigger_at": due_at.isoformat(),
@@ -128,29 +130,38 @@ class TimerSense(Sense):
 
     def _fetch_next_pending(self) -> TimedSignalRecord | None:
         query = (
-            "SELECT id, trigger_at, next_trigger_at, rrule, timezone, status, signal_type, "
-            "payload, target, origin, correlation_id "
+            "SELECT id, trigger_at, fire_at, next_trigger_at, rrule, timezone, status, signal_type, "
+            "payload, target, delivery_target, origin, correlation_id "
             "FROM timed_signals WHERE status = 'pending' "
-            "ORDER BY COALESCE(next_trigger_at, trigger_at) ASC LIMIT 1"
+            "ORDER BY COALESCE(next_trigger_at, fire_at, trigger_at) ASC LIMIT 1"
         )
         with sqlite3.connect(resolve_nervous_system_db_path()) as conn:
             row = conn.execute(query).fetchone()
         if not row:
             return None
-        trigger_at = _parse_dt(row[1])
-        next_trigger_at = _parse_dt(row[2]) if row[2] else None
-        rrule_value = _as_optional_str(row[3])
-        timezone_value = _as_optional_str(row[4])
-        payload = _parse_payload(row[7])
+        signal_id = str(row[0])
+        try:
+            trigger_at = _parse_dt(str(row[1]))
+            fire_at = _parse_dt(str(row[2])) if row[2] else None
+            next_trigger_at = _parse_dt(str(row[3])) if row[3] else None
+        except Exception:
+            self._mark_error(signal_id, f"invalid_fire_at:{row[1]}")
+            logger.warning("TimerSense marked signal error id=%s invalid_trigger_at=%s", signal_id, row[1])
+            return None
+        rrule_value = _as_optional_str(row[4])
+        timezone_value = _as_optional_str(row[5])
+        payload = _parse_payload(row[8])
         return TimedSignalRecord(
-            id=str(row[0]),
+            id=signal_id,
             trigger_at=trigger_at,
-            status=str(row[5]),
-            signal_type=str(row[6]),
+            fire_at=fire_at,
+            status=str(row[6]),
+            signal_type=str(row[7]),
             payload=payload,
-            target=_as_optional_str(row[8]),
-            origin=_as_optional_str(row[9]),
-            correlation_id=_as_optional_str(row[10]),
+            target=_as_optional_str(row[9]),
+            delivery_target=_as_optional_str(row[10]),
+            origin=_as_optional_str(row[11]),
+            correlation_id=_as_optional_str(row[12]),
             next_trigger_at=next_trigger_at,
             rrule=rrule_value,
             timezone=timezone_value,
@@ -188,6 +199,22 @@ class TimerSense(Sense):
                 """
                 UPDATE timed_signals
                 SET status = 'failed',
+                    last_error = ?,
+                    attempt_count = attempt_count + 1,
+                    attempts = attempts + 1,
+                    updated_at = datetime('now')
+                WHERE id = ?
+                """,
+                (reason, signal_id),
+            )
+            conn.commit()
+
+    def _mark_error(self, signal_id: str, reason: str) -> None:
+        with sqlite3.connect(resolve_nervous_system_db_path()) as conn:
+            conn.execute(
+                """
+                UPDATE timed_signals
+                SET status = 'error',
                     last_error = ?,
                     attempt_count = attempt_count + 1,
                     attempts = attempts + 1,

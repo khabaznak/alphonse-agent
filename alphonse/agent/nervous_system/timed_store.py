@@ -11,8 +11,8 @@ from alphonse.agent.nervous_system.paths import resolve_nervous_system_db_path
 
 def list_timed_signals(limit: int = 200) -> list[dict[str, Any]]:
     query = (
-        "SELECT id, trigger_at, next_trigger_at, rrule, timezone, status, fired_at, attempt_count, attempts, "
-        "last_error, signal_type, payload, target, origin, correlation_id, created_at, updated_at "
+        "SELECT id, trigger_at, fire_at, next_trigger_at, rrule, timezone, status, fired_at, attempt_count, attempts, "
+        "last_error, signal_type, payload, target, delivery_target, origin, correlation_id, created_at, updated_at "
         "FROM timed_signals ORDER BY COALESCE(next_trigger_at, trigger_at) DESC LIMIT ?"
     )
     with _connect() as conn:
@@ -22,11 +22,11 @@ def list_timed_signals(limit: int = 200) -> list[dict[str, Any]]:
 
 def list_upcoming_timed_signals(limit: int = 10) -> list[dict[str, Any]]:
     query = (
-        "SELECT id, trigger_at, next_trigger_at, rrule, timezone, status, fired_at, attempt_count, attempts, "
-        "last_error, signal_type, payload, target, origin, correlation_id, created_at, updated_at "
+        "SELECT id, trigger_at, fire_at, next_trigger_at, rrule, timezone, status, fired_at, attempt_count, attempts, "
+        "last_error, signal_type, payload, target, delivery_target, origin, correlation_id, created_at, updated_at "
         "FROM timed_signals "
         "WHERE status IN ('pending', 'processing') "
-        "ORDER BY COALESCE(next_trigger_at, trigger_at) ASC LIMIT ?"
+        "ORDER BY COALESCE(next_trigger_at, fire_at, trigger_at) ASC LIMIT ?"
     )
     with _connect() as conn:
         rows = conn.execute(query, (limit,)).fetchall()
@@ -51,19 +51,21 @@ def insert_timed_signal(
         conn.execute(
             """
             INSERT INTO timed_signals
-              (id, trigger_at, next_trigger_at, rrule, timezone, status, fired_at, attempt_count, attempts, last_error,
-               signal_type, payload, target, origin, correlation_id)
+              (id, trigger_at, fire_at, next_trigger_at, rrule, timezone, status, fired_at, attempt_count, attempts, last_error,
+               signal_type, payload, target, delivery_target, origin, correlation_id)
             VALUES
-              (?, ?, ?, ?, ?, 'pending', NULL, 0, 0, NULL, ?, ?, ?, ?, ?)
+              (?, ?, ?, ?, ?, ?, 'pending', NULL, 0, 0, NULL, ?, ?, ?, ?, ?, ?)
             """,
             (
                 timed_signal_id,
+                trigger_at,
                 trigger_at,
                 next_trigger_at,
                 rrule,
                 timezone,
                 signal_type,
                 json.dumps(payload),
+                target,
                 target,
                 origin,
                 correlation_id,
@@ -87,21 +89,23 @@ def _row_to_timed_signal(row: sqlite3.Row | tuple | None) -> dict[str, Any]:
     return {
         "id": row[0],
         "trigger_at": row[1],
-        "next_trigger_at": row[2],
-        "rrule": row[3],
-        "timezone": row[4],
-        "status": row[5],
-        "fired_at": row[6],
-        "attempt_count": row[7],
-        "attempts": row[8],
-        "last_error": row[9],
-        "signal_type": row[10],
-        "payload": _parse_payload(row[11]),
-        "target": row[12],
-        "origin": row[13],
-        "correlation_id": row[14],
-        "created_at": row[15],
-        "updated_at": row[16],
+        "fire_at": row[2],
+        "next_trigger_at": row[3],
+        "rrule": row[4],
+        "timezone": row[5],
+        "status": row[6],
+        "fired_at": row[7],
+        "attempt_count": row[8],
+        "attempts": row[9],
+        "last_error": row[10],
+        "signal_type": row[11],
+        "payload": _parse_payload(row[12]),
+        "target": row[13],
+        "delivery_target": row[14],
+        "origin": row[15],
+        "correlation_id": row[16],
+        "created_at": row[17],
+        "updated_at": row[18],
     }
 
 

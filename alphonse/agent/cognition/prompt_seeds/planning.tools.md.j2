@@ -12,22 +12,14 @@
 - Returns: current_time
 - Inputs: none
 
-### createTimeEventTrigger(time:string)
-- Description: Create a time-based trigger from a time expression.
-- When to use: Use when a reminder should fire at a specific time.
-- Returns: event_trigger
-- Inputs:
-  - `time` (string, required)
-
-### scheduleReminder(Message:string, To:string, From:string, EventTrigger:object)
-- Description: Schedule a reminder using a trigger.
+### createReminder(ForWhom:string, Time:string, Message:string)
+- Description: Create a reminder directly for a person at a specific time.
 - When to use: Use when the user asks to be reminded.
 - Returns: scheduled_reminder_id
 - Inputs:
+  - `ForWhom` (string, required)
+  - `Time` (string, required)
   - `Message` (string, required)
-  - `To` (string, required)
-  - `From` (string, required)
-  - `EventTrigger` (object, required)
 
 ### getMySettings()
 - Description: Get your current runtime settings (timezone, locale, tone, address style, channel context).

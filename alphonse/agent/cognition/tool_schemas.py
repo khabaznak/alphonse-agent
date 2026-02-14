@@ -36,40 +36,16 @@ def planner_tool_schemas() -> list[dict[str, Any]]:
         {
             "type": "function",
             "function": {
-                "name": "createTimeEventTrigger",
-                "description": "Create a time-based trigger from a time expression.",
+                "name": "createReminder",
+                "description": "Create a reminder for someone at a specific time.",
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "time": {"type": "string"},
-                    },
-                    "required": ["time"],
-                    "additionalProperties": False,
-                },
-            },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "scheduleReminder",
-                "description": "Schedule a reminder using a trigger.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
+                        "ForWhom": {"type": "string"},
+                        "Time": {"type": "string"},
                         "Message": {"type": "string"},
-                        "To": {"type": "string"},
-                        "From": {"type": "string"},
-                        "EventTrigger": {
-                            "type": "object",
-                            "properties": {
-                                "type": {"type": "string"},
-                                "time": {"type": "string"},
-                            },
-                            "required": ["type", "time"],
-                            "additionalProperties": True,
-                        },
                     },
-                    "required": ["Message", "To", "From", "EventTrigger"],
+                    "required": ["ForWhom", "Time", "Message"],
                     "additionalProperties": False,
                 },
             },

@@ -26,8 +26,8 @@ def build_default_tool_registry() -> ToolRegistry:
     clock = ClockTool()
     scheduler = SchedulerTool()
     registry.register("getTime", clock)
+    registry.register("createReminder", scheduler)
     registry.register("createTimeEventTrigger", scheduler)
-    registry.register("scheduleReminder", scheduler)
     # Internal aliases kept for compatibility.
     registry.register("clock", clock)
     registry.register("schedule_event", scheduler)

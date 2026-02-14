@@ -9,6 +9,7 @@ from alphonse.agent.cortex.nodes.plan import plan_node
 from alphonse.agent.cortex.nodes.plan import plan_node_stateful
 from alphonse.agent.cortex.nodes.plan import route_after_plan
 from alphonse.agent.cortex.nodes.respond import respond_finalize_node
+from alphonse.agent.cortex.nodes.task_mode import task_mode_entry_node
 
 __all__ = [
     "build_apology_node",
@@ -20,4 +21,5 @@ __all__ = [
     "plan_node_stateful",
     "route_after_plan",
     "respond_finalize_node",
+    "task_mode_entry_node",
 ]

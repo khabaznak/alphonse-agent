@@ -54,6 +54,7 @@ CREATE TABLE IF NOT EXISTS senses (
 CREATE TABLE IF NOT EXISTS timed_signals (
   id              TEXT PRIMARY KEY,
   trigger_at      TEXT NOT NULL,
+  fire_at         TEXT,
   next_trigger_at TEXT,
   rrule           TEXT,
   timezone        TEXT,
@@ -65,6 +66,7 @@ CREATE TABLE IF NOT EXISTS timed_signals (
   signal_type     TEXT NOT NULL,
   payload         TEXT,
   target          TEXT,
+  delivery_target TEXT,
   origin          TEXT,
   correlation_id  TEXT,
   created_at      TEXT NOT NULL DEFAULT (datetime('now')),

@@ -42,8 +42,7 @@ def test_available_ability_catalog_has_minimal_tools_only() -> None:
     assert names == {
         "askQuestion",
         "getTime",
-        "createTimeEventTrigger",
-        "scheduleReminder",
+        "createReminder",
         "getMySettings",
         "getUserDetails",
     }

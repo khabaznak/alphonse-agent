@@ -675,14 +675,10 @@ def _execute_tool_step(
             raise RuntimeError("clock_tool_invalid_output")
         timezone_name = str(getattr(now.tzinfo, "key", None) or state.get("timezone") or "UTC")
         locale = str(state.get("locale") or "en-US")
-        message = (
-            f"Son las {now.strftime('%H:%M')} en {timezone_name}."
-            if locale.lower().startswith("es")
-            else f"It is {now.strftime('%H:%M')} in {timezone_name}."
-        )
+
         return {
             "status": "executed",
-            "response_text": message,
+            "response_text": now.strftime('%H:%M'),
             "fact": {
                 "step": step_idx,
                 "tool": tool_name,
@@ -741,45 +737,42 @@ def _execute_tool_step(
             "response_text": _format_user_details_message(payload),
             "fact": {"step": step_idx, "tool": tool_name, "user_details": payload},
         }
-    if tool_name == "scheduleReminder":
-        scheduler_tool = tool_registry.get("scheduleReminder") if hasattr(tool_registry, "get") else None
-        if scheduler_tool is None or not hasattr(scheduler_tool, "schedule_reminder_event"):
-            raise RuntimeError("missing_schedule_reminder_tool")
+    if tool_name == "createReminder":
+        scheduler_tool = tool_registry.get("createReminder") if hasattr(tool_registry, "get") else None
+        if scheduler_tool is None or not hasattr(scheduler_tool, "create_reminder"):
+            raise RuntimeError("missing_create_reminder_tool")
         message_text = str(params.get("Message") or params.get("message") or "").strip()
-        reminder_to = str(params.get("To") or params.get("to") or state.get("channel_target") or "").strip()
-        reminder_from = str(params.get("From") or params.get("from") or state.get("channel_type") or "").strip()
-        event_trigger = params.get("EventTrigger")
-        if not isinstance(event_trigger, dict):
-            event_trigger = {}
-        if not event_trigger:
-            facts = (
-                ((state.get("planning_context") or {}).get("facts") or {}).get("tool_results")
-                if isinstance((state.get("planning_context") or {}).get("facts"), dict)
-                else []
-            )
-            if isinstance(facts, list):
-                for item in reversed(facts):
-                    if isinstance(item, dict) and isinstance(item.get("event_trigger"), dict):
-                        event_trigger = item.get("event_trigger") or {}
-                        break
-        trigger_time = str(event_trigger.get("time") or "").strip() if isinstance(event_trigger, dict) else ""
-        if not _is_iso_datetime(trigger_time):
-            raise RuntimeError("invalid_trigger_time_format")
+        for_whom = str(
+            params.get("ForWhom")
+            or params.get("for_whom")
+            or params.get("To")
+            or state.get("channel_target")
+            or ""
+        ).strip()
+        time_value = str(params.get("Time") or params.get("time") or "").strip()
         timezone_name = str(state.get("timezone") or "UTC")
         correlation_id = str(state.get("correlation_id") or "")
-        schedule_id = scheduler_tool.schedule_reminder_event(
+        from_value = str(state.get("channel_type") or "assistant")
+        reminder_payload = scheduler_tool.create_reminder(
+            for_whom=for_whom,
+            time=time_value,
             message=message_text,
-            to=reminder_to,
-            from_=reminder_from,
-            event_trigger=event_trigger,
             timezone_name=timezone_name,
             correlation_id=correlation_id or None,
+            from_=from_value,
+            channel_target=str(state.get("channel_target") or ""),
         )
+        if isinstance(reminder_payload, dict):
+            schedule_id = str(reminder_payload.get("reminder_id") or "")
+            trigger_time_render = str(reminder_payload.get("fire_at") or time_value)
+        else:
+            schedule_id = str(reminder_payload)
+            trigger_time_render = time_value
         locale = str(state.get("locale") or "en-US")
         message = (
-            f"Recordatorio programado para {trigger_time}. ID: {schedule_id}."
+            f"Recordatorio programado para {trigger_time_render}. ID: {schedule_id}."
             if locale.lower().startswith("es")
-            else f"Scheduled reminder for {trigger_time}. ID: {schedule_id}."
+            else f"Scheduled reminder for {trigger_time_render}. ID: {schedule_id}."
         )
         return {
             "status": "executed",
@@ -788,8 +781,8 @@ def _execute_tool_step(
                 "step": step_idx,
                 "tool": tool_name,
                 "schedule_id": schedule_id,
-                "trigger_time": trigger_time,
-                "event_trigger": event_trigger,
+                "trigger_time": trigger_time_render,
+                "for_whom": for_whom,
             },
         }
     raise RuntimeError("unknown_tool_in_plan")

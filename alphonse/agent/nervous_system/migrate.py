@@ -36,6 +36,7 @@ def main() -> None:
 
 def _ensure_timed_signal_columns(conn: sqlite3.Connection) -> None:
     columns = {
+        "fire_at": "TEXT",
         "next_trigger_at": "TEXT",
         "rrule": "TEXT",
         "timezone": "TEXT",
@@ -43,6 +44,7 @@ def _ensure_timed_signal_columns(conn: sqlite3.Connection) -> None:
         "attempt_count": "INTEGER NOT NULL DEFAULT 0",
         "attempts": "INTEGER NOT NULL DEFAULT 0",
         "last_error": "TEXT",
+        "delivery_target": "TEXT",
     }
     for name, definition in columns.items():
         try:
@@ -305,6 +307,7 @@ def _rebuild_timed_signals(conn: sqlite3.Connection) -> None:
         CREATE TABLE timed_signals (
           id              TEXT PRIMARY KEY,
           trigger_at      TEXT NOT NULL,
+          fire_at         TEXT,
           next_trigger_at TEXT,
           rrule           TEXT,
           timezone        TEXT,
@@ -316,6 +319,7 @@ def _rebuild_timed_signals(conn: sqlite3.Connection) -> None:
           signal_type     TEXT NOT NULL,
           payload         TEXT,
           target          TEXT,
+          delivery_target TEXT,
           origin          TEXT,
           correlation_id  TEXT,
           created_at      TEXT NOT NULL DEFAULT (datetime('now')),
@@ -331,18 +335,22 @@ def _rebuild_timed_signals(conn: sqlite3.Connection) -> None:
     attempts_expr = "attempts" if has_attempts else "attempt_count" if has_attempt_count else "0"
     last_error_expr = "last_error" if has_last_error else "NULL"
     attempt_count_expr = "attempt_count" if has_attempt_count else "0"
+    has_fire_at = "fire_at" in columns
+    has_delivery_target = "delivery_target" in columns
+    fire_at_expr = "fire_at" if has_fire_at else "trigger_at"
+    delivery_target_expr = "delivery_target" if has_delivery_target else "target"
     conn.execute(
         f"""
         INSERT INTO timed_signals (
-          id, trigger_at, next_trigger_at, rrule, timezone, status, fired_at,
-          attempt_count, attempts, last_error, signal_type, payload, target, origin,
+          id, trigger_at, fire_at, next_trigger_at, rrule, timezone, status, fired_at,
+          attempt_count, attempts, last_error, signal_type, payload, target, delivery_target, origin,
           correlation_id, created_at, updated_at
         )
         SELECT
-          id, trigger_at, next_trigger_at, rrule, timezone, status, fired_at,
+          id, trigger_at, {fire_at_expr}, next_trigger_at, rrule, timezone, status, fired_at,
           COALESCE({attempt_count_expr}, 0),
           COALESCE({attempts_expr}, 0),
-          {last_error_expr}, signal_type, payload, target, origin,
+          {last_error_expr}, signal_type, payload, target, {delivery_target_expr}, origin,
           correlation_id, created_at, updated_at
         FROM timed_signals_old
         """
