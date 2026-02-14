@@ -327,6 +327,62 @@ def _run_native_tool_call_loop(
             messages.append({"role": "assistant", "content": content})
 
         if not tool_calls:
+            if not steps_state:
+                fallback_call = _translate_text_plan_to_tool_call(
+                    llm_client=llm_client,
+                    content=content,
+                    catalog=catalog,
+                    state=state,
+                )
+                if fallback_call is not None:
+                    tool_name, params = fallback_call
+                    idx = len(steps_state)
+                    step_entry = {"idx": idx, "tool": tool_name, "status": "ready", "parameters": params}
+                    steps_state.append(step_entry)
+                    validation = validate_step({"tool": tool_name, "parameters": params}, catalog)
+                    if validation.is_valid:
+                        eligible, reason = is_tool_eligible(
+                            tool_name=tool_name,
+                            user_message=str(state.get("last_user_message") or ""),
+                        )
+                        if eligible:
+                            try:
+                                outcome = _execute_tool_step(
+                                    state=state,
+                                    llm_client=llm_client,
+                                    tool_registry=tool_registry,
+                                    tool_name=tool_name,
+                                    params=params,
+                                    step_idx=idx,
+                                )
+                            except Exception:
+                                step_entry["status"] = "failed"
+                            else:
+                                step_entry["status"] = str(outcome.get("status") or "executed")
+                                step_fact = outcome.get("fact")
+                                if isinstance(step_fact, dict):
+                                    tool_facts.append(step_fact)
+                                merged_context = _merge_tool_facts(state=state, tool_facts=tool_facts)
+                                return {
+                                    "response_text": outcome.get("response_text"),
+                                    "pending_interaction": outcome.get("pending_interaction"),
+                                    "ability_state": {"kind": "tool_calls", "steps": steps_state},
+                                    "planning_context": merged_context,
+                                    "plan_retry": False,
+                                    "plan_repair_attempts": 0,
+                                }
+                        else:
+                            step_entry["status"] = "failed"
+                            _append_tool_error_message(
+                                messages=messages,
+                                tool_call_id="text-fallback",
+                                tool_name=tool_name,
+                                style=tool_result_style,
+                                code="TOOL_NOT_ELIGIBLE",
+                                message=str(reason or "tool not eligible"),
+                            )
+                    else:
+                        step_entry["status"] = "failed"
             if not steps_state and _looks_like_tool_refusal(content):
                 result = run_capability_gap_tool(
                     state,
@@ -717,6 +773,73 @@ def _looks_like_tool_refusal(content: str) -> bool:
             "required tool",
         )
     )
+
+
+def _translate_text_plan_to_tool_call(
+    *,
+    llm_client: Any,
+    content: str,
+    catalog: dict[str, Any],
+    state: dict[str, Any],
+) -> tuple[str, dict[str, Any]] | None:
+    text = str(content or "").strip()
+    if not text:
+        return None
+    if llm_client is None or not callable(getattr(llm_client, "complete", None)):
+        return None
+    tool_lines: list[str] = []
+    tools = catalog.get("tools") if isinstance(catalog.get("tools"), list) else []
+    for item in tools:
+        if not isinstance(item, dict):
+            continue
+        tool_name = str(item.get("tool") or "").strip()
+        if not tool_name:
+            continue
+        params = item.get("input_parameters") if isinstance(item.get("input_parameters"), list) else []
+        required = [str(p.get("name") or "").strip() for p in params if isinstance(p, dict) and bool(p.get("required"))]
+        required = [p for p in required if p]
+        tool_lines.append(f"- {tool_name} (required: {', '.join(required) if required else 'none'})")
+    if not tool_lines:
+        return None
+    locale = str(state.get("locale") or "en-US")
+    system_prompt = (
+        "# Role\n"
+        "Translate a planning text into one executable tool call.\n\n"
+        "# Rules\n"
+        "- Return strict JSON only.\n"
+        "- Output keys: `tool` (string or null), `parameters` (object).\n"
+        "- Select only one tool from the available tools list.\n"
+        "- If no valid tool call can be derived, return {\"tool\":null,\"parameters\":{}}.\n"
+    )
+    user_prompt = (
+        "# User Message\n"
+        f"{str(state.get('last_user_message') or '').strip()}\n\n"
+        "# Locale\n"
+        f"{locale}\n\n"
+        "# Available Tools\n"
+        + "\n".join(tool_lines)
+        + "\n\n# Planning Text\n"
+        f"{text}"
+    )
+    try:
+        raw = str(llm_client.complete(system_prompt=system_prompt, user_prompt=user_prompt))
+    except Exception:
+        return None
+    payload = _parse_json_payload(raw)
+    if not isinstance(payload, dict):
+        return None
+    tool_name = str(payload.get("tool") or "").strip()
+    parameters = payload.get("parameters") if isinstance(payload.get("parameters"), dict) else {}
+    if not tool_name:
+        return None
+    known_names = {
+        str(item.get("tool") or "").strip()
+        for item in tools
+        if isinstance(item, dict) and str(item.get("tool") or "").strip()
+    }
+    if tool_name not in known_names:
+        return None
+    return tool_name, parameters
 
 
 

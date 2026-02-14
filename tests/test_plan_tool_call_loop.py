@@ -108,6 +108,31 @@ class _RefusalThenToolCallLlm:
         }
 
 
+class _TextPlanOnlyLlm:
+    supports_tool_calls = True
+
+    def complete_with_tools(
+        self,
+        *,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+        tool_choice: str = "auto",
+    ) -> dict[str, Any]:
+        _ = messages
+        _ = tools
+        _ = tool_choice
+        return {
+            "content": "**Plan**\n\n- Use `getTime` to fetch my current time",
+            "tool_calls": [],
+            "assistant_message": {"role": "assistant", "content": "**Plan**\n\n- Use `getTime` to fetch my current time"},
+        }
+
+    def complete(self, system_prompt: str, user_prompt: str) -> str:
+        _ = system_prompt
+        _ = user_prompt
+        return '{"tool":"getTime","parameters":{}}'
+
+
 def _run_capability_gap_tool(state: dict[str, Any], llm_client: Any, reason: str) -> dict[str, Any]:
     _ = state
     _ = llm_client
@@ -188,3 +213,25 @@ def test_plan_node_reports_tool_refusal_without_silent_repair() -> None:
     assert plans
     first = plans[0] if isinstance(plans[0], dict) else {}
     assert first.get("reason") == "model_tool_refusal_no_tool_call"
+
+
+def test_plan_node_translates_textual_plan_step_to_tool_execution() -> None:
+    state = {
+        "last_user_message": "claro! qué hora es contigo?",
+        "timezone": "UTC",
+        "locale": "es-MX",
+        "tone": "friendly",
+        "address_style": "tu",
+        "channel_type": "telegram",
+        "channel_target": "123",
+        "correlation_id": "corr-text-plan-fallback",
+    }
+    result = plan_node(
+        state,
+        llm_client=_TextPlanOnlyLlm(),
+        tool_registry=build_default_tool_registry(),
+        format_available_abilities=lambda: "- getTime() -> current time",
+        run_capability_gap_tool=_run_capability_gap_tool,
+    )
+    text = str(result.get("response_text") or "")
+    assert text.startswith("Son las ")
