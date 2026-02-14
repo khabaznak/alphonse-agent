@@ -68,8 +68,11 @@ class _LoopingTimeToolCallLlm:
         }
 
 
-class _NoToolCallTimeLlm:
+class _RefusalThenToolCallLlm:
     supports_tool_calls = True
+
+    def __init__(self) -> None:
+        self.calls = 0
 
     def complete_with_tools(
         self,
@@ -81,10 +84,27 @@ class _NoToolCallTimeLlm:
         _ = messages
         _ = tools
         _ = tool_choice
+        self.calls += 1
+        if self.calls == 1:
+            return {
+                "content": "I tried but the required tool isn't available here.",
+                "tool_calls": [],
+                "assistant_message": {"role": "assistant", "content": "I tried but the required tool isn't available here."},
+            }
         return {
-            "content": "I can't access tools right now.",
-            "tool_calls": [],
-            "assistant_message": {"role": "assistant", "content": "I can't access tools right now."},
+            "content": "",
+            "tool_calls": [{"id": "tc-1", "name": "getTime", "arguments": {}}],
+            "assistant_message": {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "tc-1",
+                        "type": "function",
+                        "function": {"name": "getTime", "arguments": "{}"},
+                    }
+                ],
+            },
         }
 
 
@@ -144,7 +164,8 @@ def test_plan_node_short_circuits_terminal_tool_loop() -> None:
     assert not result.get("plans")
 
 
-def test_plan_node_forces_get_time_when_time_query_has_no_tool_calls() -> None:
+def test_plan_node_repairs_tool_refusal_and_recovers_with_tool_call() -> None:
+    llm = _RefusalThenToolCallLlm()
     state = {
         "last_user_message": "What time is it?",
         "timezone": "UTC",
@@ -157,10 +178,11 @@ def test_plan_node_forces_get_time_when_time_query_has_no_tool_calls() -> None:
     }
     result = plan_node(
         state,
-        llm_client=_NoToolCallTimeLlm(),
+        llm_client=llm,
         tool_registry=build_default_tool_registry(),
         format_available_abilities=lambda: "- getTime() -> current time",
         run_capability_gap_tool=_run_capability_gap_tool,
     )
+    assert llm.calls == 2
     text = str(result.get("response_text") or "")
     assert text.startswith("It is ")
