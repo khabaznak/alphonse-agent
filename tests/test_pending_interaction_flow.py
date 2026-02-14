@@ -19,7 +19,7 @@ def _send_text(action: HandleIncomingMessageAction, text: str) -> None:
     action.execute({"signal": signal, "state": None, "outcome": None, "ctx": None})
 
 
-def test_pending_name_consumes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_pending_name_raw_event_keeps_pending_interaction(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     db_path = tmp_path / "nerve-db"
     monkeypatch.setenv("NERVE_DB_PATH", str(db_path))
     apply_schema(db_path)
@@ -43,10 +43,10 @@ def test_pending_name_consumes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
     action.execute({"signal": signal, "state": None, "outcome": None, "ctx": None})
     state = load_state("telegram:123")
     assert state is not None
-    assert state.get("pending_interaction") is None
+    assert state.get("pending_interaction") is not None
 
 
-def test_pending_non_consumable_empty_text_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_pending_non_consumable_empty_text_does_not_raise(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     db_path = tmp_path / "nerve-db"
     monkeypatch.setenv("NERVE_DB_PATH", str(db_path))
     apply_schema(db_path)
@@ -67,8 +67,6 @@ def test_pending_non_consumable_empty_text_raises(tmp_path: Path, monkeypatch: p
         payload={"text": "", "origin": "telegram", "chat_id": "123"},
         source="telegram",
     )
-    with pytest.raises(ValueError, match="normalized incoming text must be non-empty"):
-        action.execute({"signal": signal, "state": None, "outcome": None, "ctx": None})
+    action.execute({"signal": signal, "state": None, "outcome": None, "ctx": None})
     state = load_state("telegram:123")
     assert state is not None
-    assert state.get("pending_interaction") is not None

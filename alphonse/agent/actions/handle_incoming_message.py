@@ -1,12 +1,12 @@
 from __future__ import annotations
 
+import json
 import logging
 import uuid
 
 from alphonse.agent.actions.base import Action
 from alphonse.agent.actions.models import ActionResult
 from alphonse.agent.actions.session_context import IncomingContext
-from alphonse.agent.actions.session_context import build_incoming_context_from_normalized
 from alphonse.agent.actions.session_context import build_session_key
 from alphonse.agent.actions.state_context import build_cortex_state
 from alphonse.agent.actions.state_context import ensure_conversation_locale
@@ -17,6 +17,7 @@ from alphonse.agent.cognition.plans import CortexPlan, PlanType
 from alphonse.agent.cognition.providers.factory import build_llm_client
 from alphonse.agent.cortex.graph import CortexGraph
 from alphonse.agent.cortex.state_store import load_state, save_state
+from alphonse.agent.identity import store as identity_store
 from alphonse.agent.io import get_io_registry
 
 logger = logging.getLogger(__name__)
@@ -34,21 +35,18 @@ class HandleIncomingMessageAction(Action):
             correlation_id = payload.get("correlation_id")
         correlation_id = str(correlation_id or uuid.uuid4())
 
-        normalized = _normalize_incoming_payload(payload, signal)
-
-        raw_text = getattr(normalized, "text", None)
-        if not isinstance(raw_text, str):
-            raise TypeError("normalized incoming text must be a string")
-        text = raw_text.strip()
-        incoming = build_incoming_context_from_normalized(normalized, correlation_id)
+        incoming = _build_incoming_context_from_payload(payload, signal, correlation_id=correlation_id)
+        packed_input = _pack_raw_provider_event_markdown(
+            channel_type=incoming.channel_type,
+            payload=payload,
+            correlation_id=correlation_id,
+        )
         logger.info(
             "HandleIncomingMessageAction start channel=%s person=%s text=%s",
             incoming.channel_type,
             incoming.person_id,
-            _text_log_snippet(text),
+            _text_log_snippet(str(payload.get("text") or "")) if isinstance(payload, dict) else "",
         )
-        if not text:
-            raise ValueError("normalized incoming text must be non-empty")
 
         session_key = build_session_key(incoming)
         logger.info(
@@ -69,7 +67,7 @@ class HandleIncomingMessageAction(Action):
             incoming=incoming,
             correlation_id=correlation_id,
             payload=payload,
-            normalized=normalized,
+            normalized=None,
         )
         has_live_transition_sink = _attach_transition_sink(state, incoming)
 
@@ -79,7 +77,7 @@ class HandleIncomingMessageAction(Action):
             logger.exception("HandleIncomingMessageAction failed to build llm client")
             llm_client = None
         try:
-            result = _CORTEX_GRAPH.invoke(state, text, llm_client=llm_client)
+            result = _CORTEX_GRAPH.invoke(state, packed_input, llm_client=llm_client)
         except Exception:
             logger.exception(
                 "HandleIncomingMessageAction cortex_invoke_failed channel=%s target=%s correlation_id=%s",
@@ -147,7 +145,24 @@ def _text_log_snippet(text: str, limit: int = 80) -> str:
     return text if len(text) <= limit else f"{text[:limit]}..."
 
 
-def _normalize_incoming_payload(payload: object, signal: object | None) -> object:
+def _pack_raw_provider_event_markdown(*, channel_type: str, payload: dict[str, object], correlation_id: str) -> str:
+    return (
+        "# Incoming Provider Event\n"
+        f"- channel: {channel_type}\n"
+        f"- correlation_id: {correlation_id}\n\n"
+        "## RAW JSON\n"
+        "```json\n"
+        f"{json.dumps(payload, ensure_ascii=False, indent=2)}\n"
+        "```\n"
+    )
+
+
+def _build_incoming_context_from_payload(
+    payload: object,
+    signal: object | None,
+    *,
+    correlation_id: str,
+) -> IncomingContext:
     if not isinstance(payload, dict):
         raise TypeError("incoming signal payload must be a dict")
     channel_type = payload.get("channel") or payload.get("origin")
@@ -157,16 +172,26 @@ def _normalize_incoming_payload(payload: object, signal: object | None) -> objec
         channel_type = payload.get("channel")
     if not channel_type:
         raise ValueError("incoming payload is missing channel/origin")
-
-    registry = get_io_registry()
-    adapter = registry.get_sense(str(channel_type))
-    if not adapter:
-        raise LookupError(f"no sense adapter registered for channel={channel_type}")
-    try:
-        return adapter.normalize(payload)
-    except Exception:
-        logger.exception("Failed to normalize payload for channel=%s", channel_type)
-        raise
+    address = payload.get("target") or payload.get("chat_id") or payload.get("channel_target")
+    if address is None:
+        address = str(channel_type)
+    metadata = payload.get("metadata")
+    metadata_dict = metadata if isinstance(metadata, dict) else {}
+    person_id = metadata_dict.get("person_id") or payload.get("person_id")
+    if not person_id and channel_type and address:
+        person = identity_store.resolve_person_by_channel(str(channel_type), str(address))
+        if person:
+            person_id = person.get("person_id")
+    update_id = metadata_dict.get("update_id") or payload.get("update_id")
+    message_id = metadata_dict.get("message_id") or payload.get("message_id")
+    return IncomingContext(
+        channel_type=str(channel_type),
+        address=str(address),
+        person_id=str(person_id) if person_id is not None else None,
+        correlation_id=correlation_id,
+        update_id=str(update_id) if update_id is not None else None,
+        message_id=str(message_id) if message_id is not None else None,
+    )
 
 
 def _emit_channel_transition(incoming: IncomingContext, phase: str) -> None:

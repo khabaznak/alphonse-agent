@@ -99,6 +99,10 @@ def build_cortex_state(
 
     incoming_user_id = as_optional_str(getattr(normalized, "user_id", None))
     incoming_user_name = as_optional_str(getattr(normalized, "user_name", None))
+    if incoming_user_id is None and isinstance(payload, dict):
+        incoming_user_id = as_optional_str(payload.get("user_id") or payload.get("from_user"))
+    if incoming_user_name is None and isinstance(payload, dict):
+        incoming_user_name = as_optional_str(payload.get("user_name") or payload.get("from_user_name"))
     incoming_meta = getattr(normalized, "metadata", {}) if normalized is not None else {}
     if not isinstance(incoming_meta, dict):
         incoming_meta = {}
@@ -109,14 +113,24 @@ def build_cortex_state(
         "channel_type": incoming.channel_type,
         "channel_target": incoming.address or incoming.channel_type,
         "conversation_key": session_key,
-        "incoming_raw_message": incoming_meta.get("raw")
-        if isinstance(incoming_meta.get("raw"), dict)
-        else None,
+        "incoming_raw_message": payload if isinstance(payload, dict) else (
+            incoming_meta.get("raw")
+            if isinstance(incoming_meta.get("raw"), dict)
+            else None
+        ),
         "actor_person_id": incoming.person_id,
         "incoming_user_id": incoming_user_id,
         "incoming_user_name": incoming_user_name,
-        "incoming_reply_to_user_id": as_optional_str(incoming_meta.get("reply_to_user")),
-        "incoming_reply_to_user_name": as_optional_str(incoming_meta.get("reply_to_user_name")),
+        "incoming_reply_to_user_id": as_optional_str(
+            incoming_meta.get("reply_to_user")
+            if incoming_meta.get("reply_to_user") is not None
+            else (payload.get("reply_to_user") if isinstance(payload, dict) else None)
+        ),
+        "incoming_reply_to_user_name": as_optional_str(
+            incoming_meta.get("reply_to_user_name")
+            if incoming_meta.get("reply_to_user_name") is not None
+            else (payload.get("reply_to_user_name") if isinstance(payload, dict) else None)
+        ),
         "slots": stored_state.get("slots_collected") or {},
         "intent": stored_state.get("last_intent"),
         "locale": state_locale,
