@@ -27,6 +27,8 @@ class OpenCodeClient:
         self.username_env = username_env
         self.password_env = password_env
         self._session_id: str | None = None
+        self.supports_tool_calls = True
+        self.tool_result_message_style = "openai"
 
     def complete(self, system_prompt: str, user_prompt: str) -> str:
         force_session = str(os.getenv("OPENCODE_FORCE_SESSION_API", "")).strip().lower() in {
@@ -77,6 +79,47 @@ class OpenCodeClient:
         if content is None:
             raise ValueError("OpenCode response missing assistant content")
         return content
+
+    def complete_with_tools(
+        self,
+        *,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+        tool_choice: str = "auto",
+    ) -> dict[str, Any]:
+        payload = {
+            "model": self.model,
+            "messages": messages,
+            "tools": tools,
+            "tool_choice": tool_choice,
+            "parallel_tool_calls": False,
+            "stream": False,
+        }
+        headers = {"Content-Type": "application/json"}
+        auth = None
+        api_key = os.getenv(self.api_key_env)
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+        else:
+            username = os.getenv(self.username_env, "opencode")
+            password = os.getenv(self.password_env)
+            if password:
+                auth = (username, password)
+        response = requests.post(
+            f"{self.base_url}{self.chat_path}",
+            headers=headers,
+            auth=auth,
+            json=payload,
+            timeout=self.timeout,
+        )
+        _raise_for_status_with_body(response, "OpenCode tool completion failed")
+        body = _read_json_response(response)
+        content, tool_calls, assistant_message = _extract_tool_call_payload(body)
+        return {
+            "content": content,
+            "tool_calls": tool_calls,
+            "assistant_message": assistant_message,
+        }
 
     def _complete_via_session_api(self, system_prompt: str, user_prompt: str) -> str:
         headers, auth = _build_auth(self.api_key_env, self.username_env, self.password_env)
@@ -278,3 +321,59 @@ def _extract_message_content(body: Any) -> str | None:
     if isinstance(output, str) and output.strip():
         return output
     return None
+
+
+def _extract_tool_call_payload(body: Any) -> tuple[str, list[dict[str, Any]], dict[str, Any]]:
+    content = _extract_message_content(body) or ""
+    tool_calls: list[dict[str, Any]] = []
+    assistant_tool_calls: list[dict[str, Any]] = []
+
+    if isinstance(body, dict):
+        choices = body.get("choices")
+        if isinstance(choices, list) and choices:
+            first = choices[0] if isinstance(choices[0], dict) else {}
+            message = first.get("message") if isinstance(first, dict) else {}
+            raw_calls = message.get("tool_calls") if isinstance(message, dict) else None
+            if isinstance(raw_calls, list):
+                for item in raw_calls:
+                    if not isinstance(item, dict):
+                        continue
+                    function_obj = item.get("function")
+                    if not isinstance(function_obj, dict):
+                        continue
+                    name = str(function_obj.get("name") or "").strip()
+                    if not name:
+                        continue
+                    raw_args = function_obj.get("arguments")
+                    args: dict[str, Any] = {}
+                    if isinstance(raw_args, str) and raw_args.strip():
+                        try:
+                            parsed = json.loads(raw_args)
+                            if isinstance(parsed, dict):
+                                args = parsed
+                        except json.JSONDecodeError:
+                            args = {}
+                    elif isinstance(raw_args, dict):
+                        args = raw_args
+                    assistant_tool_calls.append(
+                        {
+                            "id": str(item.get("id") or "").strip(),
+                            "type": "function",
+                            "function": {
+                                "name": name,
+                                "arguments": raw_args if isinstance(raw_args, str) else json.dumps(args, ensure_ascii=False),
+                            },
+                        }
+                    )
+                    tool_calls.append(
+                        {
+                            "id": str(item.get("id") or "").strip(),
+                            "name": name,
+                            "arguments": args,
+                        }
+                    )
+
+    assistant_message: dict[str, Any] = {"role": "assistant", "content": content}
+    if assistant_tool_calls:
+        assistant_message["tool_calls"] = assistant_tool_calls
+    return content, tool_calls, assistant_message

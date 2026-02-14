@@ -18,6 +18,7 @@ class OpenAIClient:
         self.api_key_env = api_key_env
         self.timeout = timeout
         self.supports_tool_calls = True
+        self.tool_result_message_style = "openai"
 
     def complete(self, system_prompt, user_prompt):
         api_key = os.getenv(self.api_key_env)

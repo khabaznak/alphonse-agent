@@ -286,6 +286,7 @@ def _run_native_tool_call_loop(
         return None
     catalog = _tool_catalog(format_available_abilities)
     tools = planner_tool_schemas()
+    tool_result_style = str(getattr(llm_client, "tool_result_message_style", "openai") or "openai").strip().lower()
     steps_state: list[dict[str, Any]] = []
     tool_facts: list[dict[str, Any]] = []
     final_message: str | None = None
@@ -333,6 +334,8 @@ def _run_native_tool_call_loop(
                 _append_tool_error_message(
                     messages=messages,
                     tool_call_id=call_id,
+                    tool_name=tool_name,
+                    style=tool_result_style,
                     code="INVALID_STEP",
                     message=str(validation.issue.message if validation.issue else "invalid step"),
                 )
@@ -343,6 +346,8 @@ def _run_native_tool_call_loop(
                 _append_tool_error_message(
                     messages=messages,
                     tool_call_id=call_id,
+                    tool_name=tool_name,
+                    style=tool_result_style,
                     code="TOOL_NOT_ELIGIBLE",
                     message=str(reason or "tool not eligible"),
                 )
@@ -361,6 +366,8 @@ def _run_native_tool_call_loop(
                 _append_tool_error_message(
                     messages=messages,
                     tool_call_id=call_id,
+                    tool_name=tool_name,
+                    style=tool_result_style,
                     code="TOOL_EXECUTION_ERROR",
                     message=f"{type(exc).__name__}",
                 )
@@ -369,7 +376,13 @@ def _run_native_tool_call_loop(
             step_fact = outcome.get("fact")
             if isinstance(step_fact, dict):
                 tool_facts.append(step_fact)
-            _append_tool_success_message(messages=messages, tool_call_id=call_id, payload=outcome)
+            _append_tool_success_message(
+                messages=messages,
+                tool_call_id=call_id,
+                tool_name=tool_name,
+                style=tool_result_style,
+                payload=outcome,
+            )
             if outcome.get("pending_interaction"):
                 merged_context = _merge_tool_facts(state=state, tool_facts=tool_facts)
                 return {
@@ -419,6 +432,8 @@ def _append_tool_success_message(
     *,
     messages: list[dict[str, Any]],
     tool_call_id: str,
+    tool_name: str,
+    style: str,
     payload: dict[str, Any],
 ) -> None:
     content = json.dumps(
@@ -430,6 +445,9 @@ def _append_tool_success_message(
         },
         ensure_ascii=False,
     )
+    if style == "ollama":
+        messages.append({"role": "tool", "tool_name": tool_name, "content": content})
+        return
     messages.append({"role": "tool", "tool_call_id": tool_call_id or "tool-call", "content": content})
 
 
@@ -437,10 +455,15 @@ def _append_tool_error_message(
     *,
     messages: list[dict[str, Any]],
     tool_call_id: str,
+    tool_name: str,
+    style: str,
     code: str,
     message: str,
 ) -> None:
     content = json.dumps({"ok": False, "code": code, "message": message}, ensure_ascii=False)
+    if style == "ollama":
+        messages.append({"role": "tool", "tool_name": tool_name, "content": content})
+        return
     messages.append({"role": "tool", "tool_call_id": tool_call_id or "tool-call", "content": content})
 
 
