@@ -85,6 +85,7 @@ def test_reminder_request_calls_create_reminder_within_two_cycles() -> None:
         [
             '{"kind":"call_tool","tool_name":"getTime","args":{}}',
             '{"kind":"call_tool","tool_name":"createReminder","args":{"ForWhom":"8553589429","Time":"2026-02-14T12:01:00+00:00","Message":"Ir por un cafecito"}}',
+            "Listo, te lo recuerdo en breve.",
         ]
     )
 
@@ -151,6 +152,7 @@ def test_pdca_validation_error_routes_back_then_asks_user() -> None:
         [
             '{"kind":"call_tool","tool_name":"doesNotExist","args":{}}',
             '{"kind":"ask_user","question":"Which account should I use?"}',
+            "Which account should I use?",
         ]
     )
 

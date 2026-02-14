@@ -1,26 +1,12 @@
 from __future__ import annotations
 
-import json
 from datetime import datetime, timezone
 from typing import Any, Callable
 
 from alphonse.agent.cortex.nodes.capability_gap import has_capability_gap_plan
 from alphonse.agent.cortex.nodes.telemetry import emit_brain_state
-
-_UTTERANCE_RENDERER_PROMPT = (
-    "## Role\n"
-    "You are Alphonse's Utterance Renderer.\n\n"
-    "## Instructions\n"
-    "- Produce the final user-facing message.\n"
-    "- Output ONLY plain text. No JSON. No markdown.\n"
-    "- Respect prefs.locale, prefs.tone, prefs.address_style, and prefs.verbosity.\n"
-    "- Do not include internal ids or raw timestamps unless prefs.verbosity is debug.\n"
-    "- Avoid parroting user phrasing; paraphrase naturally.\n"
-    "- TIME RULES: Use utterance.content.when_human (or fire_at) to describe timing correctly.\n"
-    "- If when_human is an ISO timestamp and verbosity is not debug, avoid printing it; use a natural phrase like 'soon' / 'en breve'.\n"
-    "- Never mention chat_id, tool names, or DB fields.\n"
-    "- Keep it concise by default.\n"
-)
+from alphonse.agent.rendering.stage import render_stage
+from alphonse.agent.rendering.types import TextDeliverable
 
 
 def respond_node_impl(
@@ -70,11 +56,13 @@ def respond_node_impl(
                 result = ability.execute(state, tool_registry)
                 return _return(result if isinstance(result, dict) else {})
             except Exception:
-                return _return(run_capability_gap_tool(
-                    state,
-                    llm_client=llm_client,
-                    reason="ability_execution_exception",
-                ))
+                return _return(
+                    run_capability_gap_tool(
+                        state,
+                        llm_client=llm_client,
+                        reason="ability_execution_exception",
+                    )
+                )
     return _return({})
 
 
@@ -125,25 +113,46 @@ def respond_finalize_node(
         return _return({})
     if isinstance(task_state, dict):
         utterance = build_utterance_from_state(state)
-        llm_client = state.get("_llm_client")
-        task_response = None
         if isinstance(utterance, dict):
-            task_response = render_utterance_with_llm(utterance=utterance, llm_client=llm_client)
-        if not task_response:
-            task_response = _render_task_response(state=state, task_state=task_state)
-        if isinstance(task_response, str) and task_response.strip():
-            if task_status == "failed":
-                emit_transition_event(state, "failed")
-            elif task_status == "waiting_user":
-                emit_transition_event(state, "waiting_user")
-            else:
-                emit_transition_event(state, "done")
-            payload: dict[str, Any] = {"response_text": task_response}
-            if isinstance(utterance, dict):
-                payload["utterance"] = utterance
-            return _return(payload)
-        if isinstance(utterance, dict):
-            return _return({"utterance": utterance})
+            emit_brain_state(
+                state=state,
+                node="respond_node",
+                updates={},
+                stage="rendering_stage.start",
+            )
+            result = render_stage(utterance, llm_client=state.get("_llm_client"))
+            if result.status == "rendered":
+                emit_brain_state(
+                    state=state,
+                    node="respond_node",
+                    updates={},
+                    stage="rendering_stage.rendered",
+                )
+                rendered_text = next(
+                    (
+                        item.text
+                        for item in result.deliverables
+                        if isinstance(item, TextDeliverable) and str(item.text).strip()
+                    ),
+                    None,
+                )
+                if isinstance(rendered_text, str) and rendered_text.strip():
+                    if task_status == "failed":
+                        emit_transition_event(state, "failed")
+                    elif task_status == "waiting_user":
+                        emit_transition_event(state, "waiting_user")
+                    else:
+                        emit_transition_event(state, "done")
+                    return _return({"response_text": rendered_text, "utterance": utterance})
+            emit_brain_state(
+                state=state,
+                node="respond_node",
+                updates={"render_error": result.error},
+                stage="rendering_stage.failed",
+                error_type=result.error or "render_failed",
+            )
+            emit_transition_event(state, "failed", {"reason": "render_failed"})
+            return _return({"utterance": utterance, "render_error": result.error})
     if state.get("response_text"):
         emit_transition_event(state, "done")
     return _return({})
@@ -209,11 +218,10 @@ def build_utterance_from_state(state: dict[str, Any]) -> dict[str, Any] | None:
                     or evidence_payload.get("fire_at")
                     or ""
                 ).strip(),
-                "is_immediate": False,
                 "for_whom": "me",
             }
-            wh = str(content.get("when_human") or "").strip().lower()
-            content["is_immediate"] = (wh in {"now", "ahora"}) or (not str(content.get("fire_at") or "").strip())
+            if verbosity == "debug":
+                content["reminder_id"] = str(evidence_payload.get("reminder_id") or "").strip()
             utterance["type"] = "reminder_created"
             utterance["content"] = content
             return utterance
@@ -225,59 +233,3 @@ def build_utterance_from_state(state: dict[str, Any]) -> dict[str, Any] | None:
         utterance["content"] = {}
         return utterance
     return None
-
-
-def render_utterance_with_llm(*, utterance: dict[str, Any], llm_client: Any) -> str | None:
-    if llm_client is None or not callable(getattr(llm_client, "complete", None)):
-        return None
-    user_prompt = "## Utterance (JSON)\n```json\n" + json.dumps(
-        utterance,
-        ensure_ascii=False,
-        indent=2,
-    ) + "\n```"
-    try:
-        raw = llm_client.complete(_UTTERANCE_RENDERER_PROMPT, user_prompt)
-    except Exception:
-        return None
-    if not isinstance(raw, str):
-        return None
-    cleaned = raw.strip()
-    if cleaned.startswith("```"):
-        cleaned = cleaned.strip("`").strip()
-        if cleaned.lower().startswith("text"):
-            cleaned = cleaned[4:].strip()
-    if not cleaned:
-        return None
-    return cleaned
-
-
-
-# Minimal, locale-agnostic fallback for task response rendering.
-def _render_task_response_minimal(*, state: dict[str, Any], task_state: dict[str, Any]) -> str | None:
-    """Last-resort fallback when no LLM renderer is available.
-
-    This MUST be locale-agnostic and avoid hardcoded language strings. It should convey
-    status using symbols and (when available) the task subject/question.
-    """
-    status = str(task_state.get("status") or "").strip().lower()
-
-    # Prefer any explicit question provided by the system.
-    if status == "waiting_user":
-        question = str(task_state.get("next_user_question") or "").strip()
-        return f"❓ {question}" if question else "❓"
-
-    if status == "failed":
-        # Avoid leaking internals; keep it minimal.
-        return "❌"
-
-    if status == "done":
-        return "✅"
-
-    if status == "running":
-        return "⏳"
-
-    return None
-
-def _render_task_response(*, state: dict[str, Any], task_state: dict[str, Any]) -> str | None:
-    # Kept for backwards compatibility with older call sites.
-    return _render_task_response_minimal(state=state, task_state=task_state)
