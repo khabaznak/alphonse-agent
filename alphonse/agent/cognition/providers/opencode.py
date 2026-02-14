@@ -69,19 +69,15 @@ class OpenCodeClient:
         tool_choice: str = "auto",
     ) -> dict[str, Any]:
         mode = str(os.getenv("OPENCODE_TOOL_CALL_MODE", "session")).strip().lower()
-        if mode not in {"session", "chat", "auto"}:
+        if mode not in {"session", "chat"}:
             mode = "session"
 
-        if mode in {"session", "auto"}:
-            try:
-                return self._complete_with_tools_via_session_api(
-                    messages=messages,
-                    tools=tools,
-                    tool_choice=tool_choice,
-                )
-            except Exception:
-                if mode == "session":
-                    raise
+        if mode == "session":
+            return self._complete_with_tools_via_session_api(
+                messages=messages,
+                tools=tools,
+                tool_choice=tool_choice,
+            )
 
         return self._complete_with_tools_via_chat_completions(
             messages=messages,
