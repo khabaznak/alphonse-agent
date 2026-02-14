@@ -68,6 +68,26 @@ class _LoopingTimeToolCallLlm:
         }
 
 
+class _NoToolCallTimeLlm:
+    supports_tool_calls = True
+
+    def complete_with_tools(
+        self,
+        *,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+        tool_choice: str = "auto",
+    ) -> dict[str, Any]:
+        _ = messages
+        _ = tools
+        _ = tool_choice
+        return {
+            "content": "I can't access tools right now.",
+            "tool_calls": [],
+            "assistant_message": {"role": "assistant", "content": "I can't access tools right now."},
+        }
+
+
 def _run_capability_gap_tool(state: dict[str, Any], llm_client: Any, reason: str) -> dict[str, Any]:
     _ = state
     _ = llm_client
@@ -122,3 +142,25 @@ def test_plan_node_short_circuits_terminal_tool_loop() -> None:
     assert isinstance(result.get("response_text"), str)
     assert result.get("response_text")
     assert not result.get("plans")
+
+
+def test_plan_node_forces_get_time_when_time_query_has_no_tool_calls() -> None:
+    state = {
+        "last_user_message": "What time is it?",
+        "timezone": "UTC",
+        "locale": "en-US",
+        "tone": "friendly",
+        "address_style": "tu",
+        "channel_type": "telegram",
+        "channel_target": "123",
+        "correlation_id": "corr-force-time",
+    }
+    result = plan_node(
+        state,
+        llm_client=_NoToolCallTimeLlm(),
+        tool_registry=build_default_tool_registry(),
+        format_available_abilities=lambda: "- getTime() -> current time",
+        run_capability_gap_tool=_run_capability_gap_tool,
+    )
+    text = str(result.get("response_text") or "")
+    assert text.startswith("It is ")

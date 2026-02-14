@@ -327,6 +327,35 @@ def _run_native_tool_call_loop(
             messages.append({"role": "assistant", "content": content})
 
         if not tool_calls:
+            if not steps_state and _should_force_get_time(str(state.get("last_user_message") or "")):
+                idx = len(steps_state)
+                step_entry = {"idx": idx, "tool": "getTime", "status": "ready", "parameters": {}}
+                steps_state.append(step_entry)
+                try:
+                    outcome = _execute_tool_step(
+                        state=state,
+                        llm_client=llm_client,
+                        tool_registry=tool_registry,
+                        tool_name="getTime",
+                        params={},
+                        step_idx=idx,
+                    )
+                except Exception:
+                    step_entry["status"] = "failed"
+                else:
+                    step_entry["status"] = str(outcome.get("status") or "executed")
+                    step_fact = outcome.get("fact")
+                    if isinstance(step_fact, dict):
+                        tool_facts.append(step_fact)
+                    merged_context = _merge_tool_facts(state=state, tool_facts=tool_facts)
+                    return {
+                        "response_text": outcome.get("response_text"),
+                        "pending_interaction": outcome.get("pending_interaction"),
+                        "ability_state": {"kind": "tool_calls", "steps": steps_state},
+                        "planning_context": merged_context,
+                        "plan_retry": False,
+                        "plan_repair_attempts": 0,
+                    }
             merged_context = _merge_tool_facts(state=state, tool_facts=tool_facts)
             return {
                 "response_text": content or final_message,
@@ -690,6 +719,23 @@ def _is_iso_datetime(value: str) -> bool:
         return True
     except Exception:
         return False
+
+
+def _should_force_get_time(user_message: str) -> bool:
+    text = str(user_message or "").strip().lower()
+    if not text:
+        return False
+    return any(
+        token in text
+        for token in (
+            "what time is it",
+            "current time",
+            "time now",
+            "que hora es",
+            "qué hora es",
+            "hora actual",
+        )
+    )
 
 
 def _resolve_time_expression_with_llm(
