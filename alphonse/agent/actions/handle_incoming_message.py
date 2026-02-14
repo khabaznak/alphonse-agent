@@ -71,6 +71,7 @@ class HandleIncomingMessageAction(Action):
             payload=payload,
             normalized=normalized,
         )
+        has_live_transition_sink = _attach_transition_sink(state, incoming)
 
         try:
             llm_client = build_llm_client()
@@ -88,12 +89,13 @@ class HandleIncomingMessageAction(Action):
             )
             raise
 
-        emit_agent_transitions_from_meta(
-            incoming=incoming,
-            meta=result.meta if isinstance(result.meta, dict) else {},
-            emit_transition=lambda ctx, phase: _emit_channel_transition(ctx, phase),
-            skip_phases=set(),
-        )
+        if not has_live_transition_sink:
+            emit_agent_transitions_from_meta(
+                incoming=incoming,
+                meta=result.meta if isinstance(result.meta, dict) else {},
+                emit_transition=lambda ctx, phase: _emit_channel_transition(ctx, phase),
+                skip_phases=set(),
+            )
         logger.info(
             "HandleIncomingMessageAction cortex_result reply_len=%s plans=%s correlation_id=%s",
             len(str(result.reply_text or "")),
@@ -191,3 +193,44 @@ def _emit_channel_transition(incoming: IncomingContext, phase: str) -> None:
             incoming.channel_type,
             phase_value,
         )
+
+
+def _emit_channel_transition_event(incoming: IncomingContext, event: dict[str, object]) -> None:
+    if not isinstance(event, dict):
+        return
+    registry = get_io_registry()
+    adapter = registry.get_extremity(incoming.channel_type)
+    if adapter is None:
+        return
+    emit_event_fn = getattr(adapter, "emit_transition_event", None)
+    if callable(emit_event_fn):
+        try:
+            emit_event_fn(
+                channel_target=incoming.address,
+                event=event,
+                correlation_id=incoming.correlation_id,
+                message_id=incoming.message_id,
+            )
+            return
+        except Exception:
+            logger.exception(
+                "HandleIncomingMessageAction transition event emit failed channel=%s",
+                incoming.channel_type,
+            )
+            return
+    phase = str(event.get("phase") or "").strip().lower()
+    if phase:
+        _emit_channel_transition(incoming, phase)
+
+
+def _attach_transition_sink(state: dict[str, object], incoming: IncomingContext) -> bool:
+    registry = get_io_registry()
+    adapter = registry.get_extremity(incoming.channel_type)
+    if adapter is None:
+        return False
+    emit_event_fn = getattr(adapter, "emit_transition_event", None)
+    emit_phase_fn = getattr(adapter, "emit_transition", None)
+    if not callable(emit_event_fn) and not callable(emit_phase_fn):
+        return False
+    state["_transition_sink"] = lambda event: _emit_channel_transition_event(incoming, event)
+    return True

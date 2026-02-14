@@ -15,6 +15,13 @@ def respond_node_impl(
     run_capability_gap_tool: Callable[..., dict[str, Any]],
     emit_transition_event: Callable[[dict[str, Any], str, dict[str, Any] | None], None],
 ) -> dict[str, Any]:
+    emit_brain_state(
+        state=state,
+        node="respond_node",
+        updates={},
+        stage="start",
+    )
+
     def _return(payload: dict[str, Any]) -> dict[str, Any]:
         return emit_brain_state(
             state=state,
@@ -75,6 +82,13 @@ def respond_finalize_node(
     *,
     emit_transition_event: Callable[[dict[str, Any], str, dict[str, Any] | None], None],
 ) -> dict[str, Any]:
+    emit_brain_state(
+        state=state,
+        node="respond_node",
+        updates={},
+        stage="start",
+    )
+
     def _return(payload: dict[str, Any]) -> dict[str, Any]:
         return emit_brain_state(
             state=state,

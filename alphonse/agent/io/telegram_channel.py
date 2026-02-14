@@ -121,6 +121,24 @@ class TelegramExtremityAdapter(ExtremityAdapter):
             }
         )
 
+    def emit_transition_event(
+        self,
+        *,
+        channel_target: str | None,
+        event: dict[str, Any],
+        correlation_id: str | None = None,
+        message_id: str | None = None,
+    ) -> None:
+        phase = _telegram_phase_for_internal_event(event)
+        if not phase:
+            return
+        self.emit_transition(
+            channel_target=channel_target,
+            phase=phase,
+            correlation_id=correlation_id,
+            message_id=message_id,
+        )
+
 
 def _as_optional_str(value: object | None) -> str | None:
     if value is None:
@@ -156,3 +174,24 @@ def _telegram_reaction_for_phase(phase: str) -> str | None:
         "failed": "👎",
     }
     return mapped.get(str(phase or "").strip().lower())
+
+
+def _telegram_phase_for_internal_event(event: dict[str, Any]) -> str | None:
+    phase = str(event.get("phase") or "").strip().lower()
+    if phase in {"acknowledged", "thinking", "executing", "waiting_user", "done", "failed"}:
+        return phase
+    if phase != "cortex.state":
+        return None
+    detail = event.get("detail") if isinstance(event.get("detail"), dict) else {}
+    stage = str(detail.get("stage") or "").strip().lower()
+    node = str(detail.get("node") or "").strip().lower()
+    has_pending = bool(detail.get("has_pending_interaction"))
+    if stage == "start":
+        if node in {"first_decision_node", "plan_node", "apology_node"}:
+            return "thinking"
+        if node == "respond_node":
+            return "executing"
+    if stage == "done":
+        if has_pending:
+            return "waiting_user"
+    return None

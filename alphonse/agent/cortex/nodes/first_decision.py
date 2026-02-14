@@ -20,6 +20,13 @@ def first_decision_node(
     llm_client_from_state: Callable[[dict[str, Any]], Any],
     decide_first_action_fn: Callable[..., dict[str, Any]] = decide_first_action,
 ) -> dict[str, Any]:
+    emit_brain_state(
+        state=state,
+        node="first_decision_node",
+        updates={},
+        stage="start",
+    )
+
     def _return(payload: dict[str, Any]) -> dict[str, Any]:
         return emit_brain_state(
             state=state,

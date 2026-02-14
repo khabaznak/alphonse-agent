@@ -24,6 +24,13 @@ def apology_node(
     build_capability_gap_apology: Callable[..., str],
     llm_client: Any,
 ) -> dict[str, Any]:
+    emit_brain_state(
+        state=state,
+        node="apology_node",
+        updates={},
+        stage="start",
+    )
+
     def _return(payload: dict[str, Any]) -> dict[str, Any]:
         return emit_brain_state(
             state=state,

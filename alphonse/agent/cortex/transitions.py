@@ -27,6 +27,13 @@ def emit_transition_event(
             isinstance(last, dict)
             and last.get("type") == "agent.transition"
             and last.get("phase") == phase
+            and (last.get("detail") or {}) == (event.get("detail") or {})
         ):
             return
     events.append(event)
+    sink = state.get("_transition_sink")
+    if callable(sink):
+        try:
+            sink(event)
+        except Exception:
+            return

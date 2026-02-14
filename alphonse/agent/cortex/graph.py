@@ -54,6 +54,7 @@ class CortexState(TypedDict, total=False):
     selected_step_index: int | None
     route_decision: str | None
     _llm_client: Any
+    _transition_sink: Any
 
 
 class CortexGraph:

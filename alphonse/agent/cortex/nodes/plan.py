@@ -25,6 +25,13 @@ def plan_node(
     run_capability_gap_tool: Callable[..., dict[str, Any]],
 ) -> dict[str, Any]:
     """Single-pass planning and optional immediate tool execution."""
+    emit_brain_state(
+        state=state,
+        node="plan_node",
+        updates={},
+        stage="start",
+    )
+
     def _return(payload: dict[str, Any]) -> dict[str, Any]:
         return emit_brain_state(
             state=state,
