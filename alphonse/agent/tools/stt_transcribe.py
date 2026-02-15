@@ -19,24 +19,24 @@ class SttTranscribeTool:
     def execute(self, *, asset_id: str, language_hint: str | None = None) -> dict[str, Any]:
         normalized_asset_id = str(asset_id or "").strip()
         if not normalized_asset_id:
-            return {"status": "failed", "error": "asset_id_required"}
+            return _failed("asset_id_required", retryable=False, asset_id=normalized_asset_id)
 
         asset = get_asset(normalized_asset_id)
         if not isinstance(asset, dict):
-            return {"status": "failed", "error": "asset_not_found"}
+            return _failed("asset_not_found", retryable=False, asset_id=normalized_asset_id)
         if str(asset.get("kind") or "").strip().lower() != "audio":
-            return {"status": "failed", "error": "asset_not_audio"}
+            return _failed("asset_not_audio", retryable=False, asset_id=normalized_asset_id)
 
         whisper_cmd = shutil.which("whisper")
         if not whisper_cmd:
-            return {"status": "failed", "error": "whisper_cli_not_found"}
+            return _failed("whisper_cli_not_found", retryable=False, asset_id=normalized_asset_id)
 
         try:
             audio_path = resolve_asset_path(normalized_asset_id)
         except Exception:
-            return {"status": "failed", "error": "asset_path_unavailable"}
+            return _failed("asset_path_unavailable", retryable=True, asset_id=normalized_asset_id)
         if not audio_path.exists():
-            return {"status": "failed", "error": "asset_file_missing"}
+            return _failed("asset_file_missing", retryable=True, asset_id=normalized_asset_id)
 
         language = _language_code(language_hint)
         with tempfile.TemporaryDirectory(prefix="alphonse-stt-") as tmp_dir:
@@ -60,21 +60,30 @@ class SttTranscribeTool:
                 check=False,
             )
             if completed.returncode != 0:
-                return {"status": "failed", "error": "whisper_transcription_failed"}
+                return _failed("whisper_transcription_failed", retryable=True, asset_id=normalized_asset_id)
 
             payload = _read_whisper_output(Path(tmp_dir))
             if not isinstance(payload, dict):
-                return {"status": "failed", "error": "whisper_output_missing"}
+                return _failed("whisper_output_missing", retryable=True, asset_id=normalized_asset_id)
             text = str(payload.get("text") or "").strip()
             segments = _normalize_segments(payload.get("segments"))
             if not text:
-                return {"status": "failed", "error": "transcript_empty"}
+                return _failed("transcript_empty", retryable=True, asset_id=normalized_asset_id)
             return {
                 "status": "ok",
                 "asset_id": normalized_asset_id,
                 "text": text,
                 "segments": segments,
             }
+
+
+def _failed(error: str, *, retryable: bool, asset_id: str | None) -> dict[str, Any]:
+    return {
+        "status": "failed",
+        "error": str(error or "stt_transcribe_failed"),
+        "retryable": bool(retryable),
+        "asset_id": str(asset_id or "").strip() or None,
+    }
 
 
 def _read_whisper_output(output_dir: Path) -> dict[str, Any] | None:

@@ -63,3 +63,4 @@ def test_stt_transcribe_tool_fails_for_missing_asset() -> None:
     result = tool.execute(asset_id="missing-asset-id")
     assert result["status"] == "failed"
     assert result["error"] == "asset_not_found"
+    assert result["retryable"] is False

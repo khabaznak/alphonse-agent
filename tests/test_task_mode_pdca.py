@@ -48,6 +48,12 @@ class _FakeReminder:
         return "rem-test-1"
 
 
+class _FailingTool:
+    def execute(self, **kwargs):  # noqa: ANN003
+        _ = kwargs
+        return {"status": "failed", "error": "asset_not_found", "retryable": False}
+
+
 def _build_fake_registry() -> ToolRegistry:
     registry = ToolRegistry()
     registry.register("getTime", _FakeClock())
@@ -206,6 +212,43 @@ def test_pdca_parse_failure_falls_back_to_waiting_user() -> None:
     recent = trace.get("recent")
     assert isinstance(recent, list)
     assert any(isinstance(event, dict) and event.get("type") == "parse_failed" for event in recent)
+
+
+def test_execute_step_handles_structured_tool_failure() -> None:
+    registry = ToolRegistry()
+    registry.register("stt_transcribe", _FailingTool())
+    task_state = build_default_task_state()
+    task_state["plan"] = {
+        "version": 1,
+        "steps": [
+            {
+                "step_id": "step_1",
+                "proposal": {"kind": "call_tool", "tool_name": "stt_transcribe", "args": {"asset_id": "a1"}},
+                "status": "validated",
+            }
+        ],
+        "current_step_id": "step_1",
+    }
+    state: dict[str, object] = {"correlation_id": "corr-pdca-tool-fail", "task_state": task_state}
+
+    updated = execute_step_node(state, tool_registry=registry)
+    next_state = updated["task_state"]
+    assert isinstance(next_state, dict)
+    assert next_state.get("status") == "running"
+    plan = next_state.get("plan")
+    assert isinstance(plan, dict)
+    steps = plan.get("steps")
+    assert isinstance(steps, list)
+    assert isinstance(steps[0], dict)
+    assert steps[0].get("status") == "failed"
+    facts = next_state.get("facts")
+    assert isinstance(facts, dict)
+    entry = facts.get("step_1")
+    assert isinstance(entry, dict)
+    result = entry.get("result")
+    assert isinstance(result, dict)
+    assert result.get("status") == "failed"
+    assert result.get("error") == "asset_not_found"
 
 
 def test_execute_finish_persists_final_text_outcome() -> None:

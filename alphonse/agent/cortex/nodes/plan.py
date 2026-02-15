@@ -509,6 +509,17 @@ def _run_native_tool_call_loop(
             step_fact = outcome.get("fact")
             if isinstance(step_fact, dict):
                 tool_facts.append(step_fact)
+            if str(outcome.get("status") or "").strip().lower() == "failed":
+                error_code = str(outcome.get("error") or "TOOL_REPORTED_FAILED").strip() or "TOOL_REPORTED_FAILED"
+                _append_tool_error_message(
+                    messages=messages,
+                    tool_call_id=call_id,
+                    tool_name=tool_name,
+                    style=tool_result_style,
+                    code=error_code.upper(),
+                    message=str(outcome.get("error_detail") or error_code),
+                )
+                continue
             _append_tool_success_message(
                 messages=messages,
                 tool_call_id=call_id,
@@ -796,7 +807,21 @@ def _execute_tool_step(
             raise RuntimeError("stt_transcribe_invalid_output")
         if str(result.get("status") or "").strip().lower() != "ok":
             error_code = str(result.get("error") or "stt_transcribe_failed").strip() or "stt_transcribe_failed"
-            raise RuntimeError(error_code)
+            retryable = bool(result.get("retryable"))
+            return {
+                "status": "failed",
+                "error": error_code,
+                "error_detail": f"stt_transcribe_failed:{error_code}",
+                "response_text": None,
+                "fact": {
+                    "step": step_idx,
+                    "tool": tool_name,
+                    "asset_id": asset_id,
+                    "status": "failed",
+                    "error": error_code,
+                    "retryable": retryable,
+                },
+            }
         transcript = str(result.get("text") or "").strip()
         return {
             "status": "executed",

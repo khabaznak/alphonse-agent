@@ -304,6 +304,30 @@ def execute_step_node(state: dict[str, Any], *, tool_registry: Any) -> dict[str,
         }
         fact_bucket[step_id or f"result_{len(fact_bucket) + 1}"] = fact_entry
         task_state["facts"] = fact_bucket
+        result_status = ""
+        if isinstance(result, dict):
+            result_status = str(result.get("status") or "").strip().lower()
+        if result_status == "failed":
+            task_state["status"] = "running"
+            if isinstance(current, dict):
+                current["status"] = "failed"
+            error_code = str((result or {}).get("error") if isinstance(result, dict) else "") or "tool_failed"
+            _append_trace_event(
+                task_state,
+                {
+                    "type": "tool_failed",
+                    "summary": f"Tool {tool_name} reported failure: {error_code}.",
+                    "correlation_id": correlation_id,
+                },
+            )
+            logger.info(
+                "task_mode execute tool_failed_reported correlation_id=%s step_id=%s tool=%s error=%s",
+                correlation_id,
+                step_id,
+                tool_name,
+                error_code,
+            )
+            return {"task_state": task_state}
         task_state["status"] = "running"
         if isinstance(current, dict):
             current["status"] = "executed"
