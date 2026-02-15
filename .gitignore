@@ -55,6 +55,7 @@ alphonse/agent/nervous_system/db/
 data/*.db
 alphonse/agent/nervous_system/db/
 **/nerve-db*
+sessions/
 
 # WhatsApp CLI store
 integrations/whatsapp/store/
