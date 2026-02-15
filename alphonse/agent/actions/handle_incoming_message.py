@@ -177,6 +177,9 @@ class HandleIncomingMessageAction(Action):
             ability_state=cognition_state.get("ability_state")
             if isinstance(cognition_state.get("ability_state"), dict)
             else None,
+            task_state=cognition_state.get("task_state")
+            if isinstance(cognition_state.get("task_state"), dict)
+            else None,
             planning_context=cognition_state.get("planning_context")
             if isinstance(cognition_state.get("planning_context"), dict)
             else None,

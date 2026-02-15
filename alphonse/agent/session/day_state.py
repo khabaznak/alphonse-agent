@@ -107,11 +107,16 @@ def build_next_session_state(
     user_message: str,
     assistant_message: str,
     ability_state: dict[str, Any] | None,
+    task_state: dict[str, Any] | None,
     planning_context: dict[str, Any] | None,
     pending_interaction: dict[str, Any] | None,
 ) -> dict[str, Any]:
     state = _normalize_state(previous)
-    last_action = _infer_last_action(ability_state=ability_state, planning_context=planning_context)
+    last_action = _infer_last_action(
+        ability_state=ability_state,
+        task_state=task_state,
+        planning_context=planning_context,
+    )
     user_line = _sanitize_line(user_message, max_len=100)
     assistant_line = _sanitize_line(assistant_message, max_len=100)
 
@@ -211,26 +216,23 @@ def render_session_markdown(state: dict[str, Any]) -> str:
 def _infer_last_action(
     *,
     ability_state: dict[str, Any] | None,
+    task_state: dict[str, Any] | None,
     planning_context: dict[str, Any] | None,
 ) -> dict[str, Any] | None:
-    if not isinstance(ability_state, dict):
-        return None
-    steps = ability_state.get("steps") if isinstance(ability_state.get("steps"), list) else []
-    if not steps:
-        return None
-    selected: dict[str, Any] | None = None
-    for item in steps:
-        if not isinstance(item, dict):
-            continue
-        status = str(item.get("status") or "").strip().lower()
-        if status in {"executed", "waiting_user", "failed"}:
-            selected = item
+    selected = _last_ability_step(ability_state)
+    if selected is None:
+        selected = _last_task_tool_step(task_state)
     if not isinstance(selected, dict):
         return None
     tool = _sanitize_line(str(selected.get("tool") or ""), max_len=40)
     if not tool:
         return None
-    summary = _last_action_summary(tool=tool, step=selected, planning_context=planning_context)
+    summary = _last_action_summary(
+        tool=tool,
+        step=selected,
+        task_state=task_state,
+        planning_context=planning_context,
+    )
     if not summary:
         summary = f"Executed {tool}."
     return {
@@ -240,7 +242,50 @@ def _infer_last_action(
     }
 
 
-def _last_action_summary(*, tool: str, step: dict[str, Any], planning_context: dict[str, Any] | None) -> str:
+def _last_ability_step(ability_state: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not isinstance(ability_state, dict):
+        return None
+    steps = ability_state.get("steps") if isinstance(ability_state.get("steps"), list) else []
+    selected: dict[str, Any] | None = None
+    for item in steps:
+        if not isinstance(item, dict):
+            continue
+        status = str(item.get("status") or "").strip().lower()
+        if status in {"executed", "waiting_user", "failed"}:
+            selected = item
+    return selected
+
+
+def _last_task_tool_step(task_state: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not isinstance(task_state, dict):
+        return None
+    plan = task_state.get("plan") if isinstance(task_state.get("plan"), dict) else {}
+    steps = plan.get("steps") if isinstance(plan.get("steps"), list) else []
+    selected: dict[str, Any] | None = None
+    for step in steps:
+        if not isinstance(step, dict):
+            continue
+        proposal = step.get("proposal") if isinstance(step.get("proposal"), dict) else {}
+        kind = str(proposal.get("kind") or "").strip().lower()
+        if kind != "call_tool":
+            continue
+        status = str(step.get("status") or "").strip().lower()
+        if status not in {"executed", "failed"}:
+            continue
+        tool = _sanitize_line(str(proposal.get("tool_name") or ""), max_len=40)
+        if not tool:
+            continue
+        selected = {"tool": tool, "status": status, "step_id": str(step.get("step_id") or "").strip()}
+    return selected
+
+
+def _last_action_summary(
+    *,
+    tool: str,
+    step: dict[str, Any],
+    task_state: dict[str, Any] | None,
+    planning_context: dict[str, Any] | None,
+) -> str:
     step_idx = step.get("idx")
     facts = []
     if isinstance(planning_context, dict):
@@ -266,6 +311,19 @@ def _last_action_summary(*, tool: str, step: dict[str, Any], planning_context: d
         return "Ran a subprocess command."
     if tool == "askQuestion":
         return "Asked the user for clarification."
+    if isinstance(task_state, dict):
+        facts = task_state.get("facts") if isinstance(task_state.get("facts"), dict) else {}
+        step_id = str(step.get("step_id") or "").strip()
+        if step_id and isinstance(facts.get(step_id), dict):
+            result = facts[step_id].get("result")
+            if tool == "local_audio_output.speak":
+                return "Played local audio output."
+            if tool == "getTime":
+                return "Fetched current time."
+            if tool == "createReminder":
+                return "Created a reminder."
+            if tool == "createTimeEventTrigger":
+                return "Created a time trigger."
     status = str(step.get("status") or "").strip().lower()
     if status == "waiting_user":
         return f"Waiting on user after {tool}."

@@ -16,6 +16,7 @@ def build_cognition_state(state: dict[str, Any]) -> dict[str, Any]:
         "route_decision": state.get("route_decision"),
         "pending_interaction": state.get("pending_interaction"),
         "ability_state": state.get("ability_state"),
+        "task_state": state.get("task_state"),
         "planning_context": state.get("planning_context"),
         "last_updated_at": datetime.now(timezone.utc).isoformat(),
     }

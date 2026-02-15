@@ -46,6 +46,7 @@ def test_session_state_persists_rev_and_working_set(tmp_path: Path) -> None:
         user_message="Please run getTime again",
         assistant_message="It is 11:00 now.",
         ability_state={"kind": "tool_calls", "steps": [{"idx": 0, "tool": "getTime", "status": "executed"}]},
+        task_state=None,
         planning_context={"facts": {"tool_results": [{"step": 0, "tool": "getTime", "time": "2026-02-15T11:00:00"}]}},
         pending_interaction=None,
     )
@@ -100,3 +101,55 @@ def test_session_markdown_render_matches_json_content() -> None:
     assert "- User asked for reminder" in markdown
     assert "- Waiting for exact time" in markdown
     assert "- Tool: createReminder" in markdown
+
+
+def test_session_last_action_can_come_from_task_state_steps() -> None:
+    previous = {
+        "session_id": "u-9|2026-02-15",
+        "user_id": "u-9",
+        "date": "2026-02-15",
+        "rev": 0,
+        "channels_seen": ["telegram"],
+        "working_set": [],
+        "open_loops": [],
+        "last_action": None,
+    }
+    task_state = {
+        "plan": {
+            "steps": [
+                {
+                    "step_id": "step_1",
+                    "status": "executed",
+                    "proposal": {"kind": "call_tool", "tool_name": "getTime", "args": {}},
+                },
+                {
+                    "step_id": "step_2",
+                    "status": "executed",
+                    "proposal": {
+                        "kind": "call_tool",
+                        "tool_name": "local_audio_output.speak",
+                        "args": {"text": "Son las 5:22 p. m."},
+                    },
+                },
+            ],
+            "current_step_id": "step_2",
+        },
+        "facts": {
+            "step_2": {
+                "tool": "local_audio_output.speak",
+                "result": {"status": "ok"},
+            }
+        },
+    }
+    updated = build_next_session_state(
+        previous=previous,
+        channel="telegram",
+        user_message="otra vez",
+        assistant_message="Listo",
+        ability_state=None,
+        task_state=task_state,
+        planning_context=None,
+        pending_interaction=None,
+    )
+    assert isinstance(updated.get("last_action"), dict)
+    assert updated["last_action"]["tool"] == "local_audio_output.speak"
