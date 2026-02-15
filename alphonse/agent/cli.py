@@ -405,14 +405,31 @@ def build_parser() -> argparse.ArgumentParser:
     tool_configs_delete = tool_configs_sub.add_parser("delete", help="Delete tool config")
     tool_configs_delete.add_argument("config_id")
 
-    sandboxes_parser = sub.add_parser("sandboxes", help="Sandbox directory aliases")
+    sandboxes_parser = sub.add_parser(
+        "sandboxes",
+        help="Sandbox directory aliases",
+        description="Manage sandbox directory aliases used by file tools.",
+        epilog=(
+            "Examples:\n"
+            "  alphonse cli sandboxes list\n"
+            "  alphonse cli sandboxes add telegram_files /tmp/alphonse-sandbox/telegram_files "
+            "--description \"Telegram downloaded files\"\n"
+            "  alphonse cli sandboxes add media ./var/media --yes\n"
+            "  alphonse cli sandboxes remove media"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     sandboxes_sub = sandboxes_parser.add_subparsers(dest="sandboxes_command", required=True)
     sandboxes_list = sandboxes_sub.add_parser("list", help="List sandbox aliases")
     sandboxes_list.add_argument("--enabled-only", action="store_true")
     sandboxes_list.add_argument("--limit", type=int, default=200)
-    sandboxes_add = sandboxes_sub.add_parser("add", help="Register sandbox alias")
+    sandboxes_add = sandboxes_sub.add_parser(
+        "add",
+        help="Register sandbox alias",
+        description="Register a sandbox alias. Path may be absolute or relative; it is stored as an absolute path.",
+    )
     sandboxes_add.add_argument("alias")
-    sandboxes_add.add_argument("path")
+    sandboxes_add.add_argument("path", help="Directory path (absolute or relative)")
     sandboxes_add.add_argument("--description", default="")
     sandboxes_add.add_argument("--yes", action="store_true", help="Create missing directory without prompt")
     sandboxes_remove = sandboxes_sub.add_parser("remove", help="Remove sandbox alias registration")
@@ -1428,12 +1445,20 @@ def _command_sandboxes(args: argparse.Namespace) -> None:
             if not should_create:
                 print("Add cancelled.")
                 return
-            candidate.mkdir(parents=True, exist_ok=True)
-        ensure_sandbox_alias(
-            alias=alias,
-            base_path=str(candidate),
-            description=str(args.description or "").strip(),
-        )
+            try:
+                candidate.mkdir(parents=True, exist_ok=True)
+            except OSError as exc:
+                print(f"Failed to create directory: {candidate} ({exc})")
+                return
+        try:
+            ensure_sandbox_alias(
+                alias=alias,
+                base_path=str(candidate),
+                description=str(args.description or "").strip(),
+            )
+        except Exception as exc:
+            print(f"Failed to register sandbox alias: {exc}")
+            return
         print(f"Sandbox alias added: {alias} -> {candidate}")
         return
     if args.sandboxes_command == "remove":
