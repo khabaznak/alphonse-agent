@@ -258,7 +258,12 @@ def execute_step_node(state: dict[str, Any], *, tool_registry: Any) -> dict[str,
         return {"task_state": task_state}
 
     if kind == "finish":
+        final_text = str(proposal.get("final_text") or "").strip()
         task_state["status"] = "done"
+        task_state["outcome"] = {
+            "kind": "task_completed",
+            "final_text": final_text,
+        }
         if isinstance(current, dict):
             current["status"] = "executed"
         _append_trace_event(

@@ -206,3 +206,67 @@ def test_pdca_parse_failure_falls_back_to_waiting_user() -> None:
     recent = trace.get("recent")
     assert isinstance(recent, list)
     assert any(isinstance(event, dict) and event.get("type") == "parse_failed" for event in recent)
+
+
+def test_execute_finish_persists_final_text_outcome() -> None:
+    task_state = build_default_task_state()
+    task_state["plan"] = {
+        "version": 1,
+        "steps": [
+            {
+                "step_id": "step_1",
+                "proposal": {"kind": "finish", "final_text": "I'm online and operational."},
+                "status": "validated",
+            }
+        ],
+        "current_step_id": "step_1",
+    }
+    state: dict[str, object] = {
+        "correlation_id": "corr-pdca-finish-outcome",
+        "task_state": task_state,
+    }
+
+    updated = execute_step_node(state, tool_registry=build_default_tool_registry())
+    next_state = updated["task_state"]
+    assert isinstance(next_state, dict)
+    assert next_state.get("status") == "done"
+    outcome = next_state.get("outcome")
+    assert isinstance(outcome, dict)
+    assert outcome.get("kind") == "task_completed"
+    assert outcome.get("final_text") == "I'm online and operational."
+
+
+def test_respond_finalize_done_ignores_stale_pending_interaction() -> None:
+    transitions: list[str] = []
+    state: dict[str, object] = {
+        "correlation_id": "corr-pdca-stale-pending-done",
+        "channel_type": "telegram",
+        "channel_target": "8553589429",
+        "locale": "es-MX",
+        "_llm_client": _QueuedLlm(["Estoy en linea y listo para ayudarte."]),
+        "pending_interaction": {
+            "type": "SLOT_FILL",
+            "key": "answer",
+            "context": {"source": "first_decision", "intent": "retry_request_ambiguous"},
+        },
+        "task_state": {
+            "status": "done",
+            "outcome": {
+                "kind": "task_completed",
+                "final_text": "I'm online and operational.",
+            },
+        },
+    }
+
+    rendered = respond_finalize_node(
+        state,
+        emit_transition_event=lambda _state, phase, _payload=None: transitions.append(phase),
+    )
+    utterance = rendered.get("utterance")
+    assert isinstance(utterance, dict)
+    assert utterance.get("type") == "task_done"
+    content = utterance.get("content")
+    assert isinstance(content, dict)
+    assert content.get("summary") == "I'm online and operational."
+    assert str(rendered.get("response_text") or "").strip()
+    assert transitions and transitions[-1] == "done"

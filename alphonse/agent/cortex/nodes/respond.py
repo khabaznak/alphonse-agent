@@ -105,10 +105,12 @@ def respond_finalize_node(
     pending = state.get("pending_interaction")
     task_state = state.get("task_state") if isinstance(state.get("task_state"), dict) else None
     task_status = str((task_state or {}).get("status") or "").strip().lower() if isinstance(task_state, dict) else ""
+    terminal_task_statuses = {"done", "failed"}
+    is_terminal_task_state = task_status in terminal_task_statuses
     if has_capability_gap_plan(state):
         emit_transition_event(state, "failed")
         return _return({})
-    if pending:
+    if pending and not is_terminal_task_state:
         emit_transition_event(state, "waiting_user")
         return _return({})
     if isinstance(task_state, dict):
@@ -225,8 +227,17 @@ def build_utterance_from_state(state: dict[str, Any]) -> dict[str, Any] | None:
             utterance["type"] = "reminder_created"
             utterance["content"] = content
             return utterance
+        summary = ""
+        if isinstance(outcome, dict):
+            summary = str(
+                outcome.get("final_text")
+                or outcome.get("summary")
+                or ""
+            ).strip()
+        if not summary:
+            summary = str(state.get("response_text") or "").strip()
         utterance["type"] = "task_done"
-        utterance["content"] = {"summary": str(state.get("response_text") or "").strip()}
+        utterance["content"] = {"summary": summary}
         return utterance
     if status == "running":
         utterance["type"] = "task_running"
