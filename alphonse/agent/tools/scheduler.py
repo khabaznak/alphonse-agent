@@ -1,8 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone as dt_timezone
-import re
+from datetime import datetime, timezone as dt_timezone
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -11,6 +10,8 @@ from alphonse.agent.nervous_system.timed_store import insert_timed_signal
 
 @dataclass(frozen=True)
 class SchedulerTool:
+    llm_client: Any | None = None
+
     def create_reminder(
         self,
         *,
@@ -35,6 +36,7 @@ class SchedulerTool:
         fire_at = _normalize_time_expression_to_iso(
             expression=trigger_expr,
             timezone_name=resolved_timezone,
+            llm_client=self.llm_client,
         )
         delivery_target = _normalize_delivery_target(
             for_whom=whom_raw,
@@ -190,19 +192,20 @@ def _normalize_delivery_target(*, for_whom: str, channel_target: str | None) -> 
     return value
 
 
-def _normalize_time_expression_to_iso(*, expression: str, timezone_name: str) -> str:
+def _normalize_time_expression_to_iso(*, expression: str, timezone_name: str, llm_client: Any | None = None) -> str:
     raw = str(expression or "").strip()
     if not raw:
         raise ValueError("time is required")
     iso_direct = _try_parse_iso(raw, timezone_name=timezone_name)
     if iso_direct is not None:
         return iso_direct
-    rel = _try_parse_relative(raw, timezone_name=timezone_name)
-    if rel is not None:
-        return rel
-    tomorrow = _try_parse_tomorrow_clock(raw, timezone_name=timezone_name)
-    if tomorrow is not None:
-        return tomorrow
+    llm_iso = _normalize_with_llm(
+        expression=raw,
+        timezone_name=timezone_name,
+        llm_client=llm_client,
+    )
+    if llm_iso is not None:
+        return llm_iso
     raise ValueError("time expression could not be normalized")
 
 
@@ -218,47 +221,60 @@ def _try_parse_iso(raw: str, *, timezone_name: str) -> str | None:
     return dt.astimezone(dt_timezone.utc).isoformat()
 
 
-def _try_parse_relative(raw: str, *, timezone_name: str) -> str | None:
-    lower = raw.lower().strip()
-    patterns = [
-        r"^in\s+(\d+)\s*(minute|minutes|min|mins)$",
-        r"^en\s+(\d+)\s*(minuto|minutos|min)$",
-    ]
-    minutes: int | None = None
-    for pattern in patterns:
-        match = re.match(pattern, lower)
-        if match:
-            minutes = int(match.group(1))
-            break
-    if minutes is None:
-        match = re.match(r"^(\d+)\s*(minute|minutes|min|mins|minuto|minutos)$", lower)
-        if match:
-            minutes = int(match.group(1))
-    if minutes is None:
+def _normalize_with_llm(*, expression: str, timezone_name: str, llm_client: Any | None) -> str | None:
+    client = llm_client or _build_scheduler_llm_client()
+    if client is None:
         return None
     now_local = datetime.now(ZoneInfo(timezone_name))
-    fire_local = now_local + timedelta(minutes=minutes)
-    return fire_local.astimezone(dt_timezone.utc).isoformat()
-
-
-def _try_parse_tomorrow_clock(raw: str, *, timezone_name: str) -> str | None:
-    lower = raw.lower().strip()
-    match = re.match(r"^(manana|mañana|tomorrow)\s*(a las|at)?\s*(\d{1,2})(?::(\d{2}))?$", lower)
-    if not match:
-        return None
-    hour = int(match.group(3))
-    minute = int(match.group(4) or "0")
-    if hour > 23 or minute > 59:
-        return None
-    tz = ZoneInfo(timezone_name)
-    now = datetime.now(tz)
-    tomorrow_date = (now + timedelta(days=1)).date()
-    fire_local = datetime(
-        year=tomorrow_date.year,
-        month=tomorrow_date.month,
-        day=tomorrow_date.day,
-        hour=hour,
-        minute=minute,
-        tzinfo=tz,
+    system_prompt = (
+        "# Role\n"
+        "You convert natural language time expressions into a single ISO timestamp.\n"
+        "# Output Contract\n"
+        "- Return ONLY one line.\n"
+        "- Either a valid ISO-8601 datetime in UTC (offset +00:00) or UNRESOLVABLE.\n"
+        "- No markdown, no extra words."
     )
-    return fire_local.astimezone(dt_timezone.utc).isoformat()
+    user_prompt = (
+        "## Input\n"
+        f"- timezone: {timezone_name}\n"
+        f"- now_local: {now_local.isoformat()}\n"
+        f"- expression: {expression}\n\n"
+        "## Task\n"
+        "Convert expression to exact datetime and output UTC ISO only."
+    )
+    raw = _llm_complete_text(client=client, system_prompt=system_prompt, user_prompt=user_prompt)
+    candidate = str(raw or "").strip()
+    if not candidate:
+        return None
+    if candidate.upper() == "UNRESOLVABLE":
+        return None
+    if candidate.startswith("```"):
+        candidate = candidate.strip("`").strip()
+        if candidate.lower().startswith("text"):
+            candidate = candidate[4:].strip()
+    parsed = _try_parse_iso(candidate, timezone_name=timezone_name)
+    return parsed
+
+
+def _llm_complete_text(*, client: Any, system_prompt: str, user_prompt: str) -> str:
+    complete = getattr(client, "complete", None)
+    if not callable(complete):
+        return ""
+    try:
+        return str(complete(system_prompt=system_prompt, user_prompt=user_prompt))
+    except TypeError:
+        try:
+            return str(complete(system_prompt, user_prompt))
+        except Exception:
+            return ""
+    except Exception:
+        return ""
+
+
+def _build_scheduler_llm_client() -> Any | None:
+    try:
+        from alphonse.agent.cognition.providers.factory import build_llm_client
+
+        return build_llm_client()
+    except Exception:
+        return None

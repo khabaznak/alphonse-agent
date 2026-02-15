@@ -25,7 +25,15 @@ def test_create_reminder_normalizes_fire_at_and_delivery_target(
     apply_schema(db_path)
     monkeypatch.setenv("NERVE_DB_PATH", str(db_path))
 
-    tool = SchedulerTool()
+    class _FakeTimeLlm:
+        def complete(self, system_prompt: str, user_prompt: str) -> str:
+            _ = system_prompt
+            marker = "- now_local: "
+            now_line = next((line for line in user_prompt.splitlines() if line.startswith(marker)), "")
+            now_local = datetime.fromisoformat(now_line.replace(marker, "", 1).strip())
+            return (now_local + timedelta(minutes=1)).astimezone(timezone.utc).isoformat()
+
+    tool = SchedulerTool(llm_client=_FakeTimeLlm())
     result = tool.create_reminder(
         for_whom="me",
         time="in 1 minute",
