@@ -48,6 +48,7 @@ def test_telegram_get_file_meta_and_download(monkeypatch, tmp_path: Path) -> Non
 
 def test_transcribe_and_analyze_fail_cleanly_without_openai(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(telegram_files, "TelegramAdapter", _FakeTelegramAdapter)
+    monkeypatch.setattr(telegram_files.shutil, "which", lambda _cmd: None)
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "test-token")
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     db_path = tmp_path / "nerve-db"
@@ -57,7 +58,7 @@ def test_transcribe_and_analyze_fail_cleanly_without_openai(monkeypatch, tmp_pat
 
     transcribe = telegram_files.TranscribeTelegramAudioTool().execute(file_id="f-audio")
     assert transcribe["status"] == "failed"
-    assert transcribe["error"] == "openai_api_key_missing"
+    assert transcribe["error"] == "whisper_cli_not_found"
     assert transcribe["sandbox_alias"] == "telegram_files"
     assert transcribe.get("relative_path")
 

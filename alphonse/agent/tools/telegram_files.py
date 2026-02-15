@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 import base64
+import json
 import mimetypes
 import os
+import shutil
+import subprocess
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -96,8 +100,7 @@ class TelegramDownloadFileTool:
 class TranscribeTelegramAudioTool:
     def __init__(self, *, bot_token: str | None = None) -> None:
         self._bot_token = str(bot_token or os.getenv("TELEGRAM_BOT_TOKEN") or "").strip()
-        self._openai_key = str(os.getenv("OPENAI_API_KEY") or "").strip()
-        self._model = str(os.getenv("OPENAI_AUDIO_MODEL") or "gpt-4o-mini-transcribe")
+        self._model = str(os.getenv("ALPHONSE_STT_MODEL") or "base").strip() or "base"
 
     def execute(
         self,
@@ -114,45 +117,73 @@ class TranscribeTelegramAudioTool:
         )
         if download.get("status") != "ok":
             return download
-        if not self._openai_key:
-            return {
-                "status": "failed",
-                "error": "openai_api_key_missing",
-                "sandbox_alias": download.get("sandbox_alias"),
-                "relative_path": download.get("relative_path"),
-            }
         relative_path = str(download.get("relative_path") or "").strip()
         alias = str(download.get("sandbox_alias") or sandbox_alias or DEFAULT_SANDBOX_ALIAS).strip()
         if not relative_path:
-            return {"status": "failed", "error": "audio_path_missing"}
-        local_path = str(resolve_sandbox_path(alias=alias, relative_path=relative_path))
+            return {"status": "failed", "error": "audio_path_missing", "retryable": False}
+        local_path = resolve_sandbox_path(alias=alias, relative_path=relative_path)
+        whisper_cmd = shutil.which("whisper")
+        if not whisper_cmd:
+            return {
+                "status": "failed",
+                "error": "whisper_cli_not_found",
+                "retryable": False,
+                "sandbox_alias": alias,
+                "relative_path": relative_path,
+            }
         try:
-            with open(local_path, "rb") as fh:
-                files = {"file": (Path(local_path).name, fh, download.get("mime_type") or "audio/ogg")}
-                data: dict[str, Any] = {"model": self._model}
-                if isinstance(language, str) and language.strip():
-                    data["language"] = language.strip()
-                resp = requests.post(
-                    "https://api.openai.com/v1/audio/transcriptions",
-                    headers={"Authorization": f"Bearer {self._openai_key}"},
-                    files=files,
-                    data=data,
-                    timeout=60,
+            language_code = _language_code(language)
+            with tempfile.TemporaryDirectory(prefix="alphonse-telegram-stt-") as tmp_dir:
+                cmd = [
+                    whisper_cmd,
+                    str(local_path),
+                    "--model",
+                    self._model,
+                    "--output_dir",
+                    tmp_dir,
+                    "--output_format",
+                    "json",
+                ]
+                if language_code:
+                    cmd.extend(["--language", language_code])
+                completed = subprocess.run(
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    check=False,
                 )
-            if resp.status_code >= 400:
-                return {"status": "failed", "error": f"transcription_http_{resp.status_code}"}
-            payload = resp.json() if resp.content else {}
+                if completed.returncode != 0:
+                    return {
+                        "status": "failed",
+                        "error": "whisper_transcription_failed",
+                        "retryable": True,
+                        "sandbox_alias": alias,
+                        "relative_path": relative_path,
+                    }
+                payload = _read_whisper_output(Path(tmp_dir))
             text = payload.get("text") if isinstance(payload, dict) else None
+            segments = payload.get("segments") if isinstance(payload, dict) else None
+            normalized_segments = _normalize_segments(segments)
+            if not str(text or "").strip():
+                return {
+                    "status": "failed",
+                    "error": "transcript_empty",
+                    "retryable": True,
+                    "sandbox_alias": alias,
+                    "relative_path": relative_path,
+                }
             return {
                 "status": "ok",
                 "file_id": file_id,
                 "sandbox_alias": alias,
                 "relative_path": relative_path,
                 "text": str(text or ""),
+                "segments": normalized_segments,
                 "model": self._model,
             }
         except Exception as exc:
-            return {"status": "failed", "error": str(exc) or "transcription_failed"}
+            return {"status": "failed", "error": str(exc) or "transcription_failed", "retryable": True}
 
 
 class AnalyzeTelegramImageTool:
@@ -238,3 +269,45 @@ class AnalyzeTelegramImageTool:
             }
         except Exception as exc:
             return {"status": "failed", "error": str(exc) or "vision_failed"}
+
+
+def _read_whisper_output(output_dir: Path) -> dict[str, Any] | None:
+    files = sorted(output_dir.glob("*.json"))
+    if not files:
+        return None
+    try:
+        parsed = json.loads(files[0].read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def _language_code(language_hint: str | None) -> str | None:
+    hint = str(language_hint or "").strip().lower()
+    if not hint:
+        return None
+    if "-" in hint:
+        hint = hint.split("-", 1)[0]
+    if "_" in hint:
+        hint = hint.split("_", 1)[0]
+    return hint or None
+
+
+def _normalize_segments(raw: Any) -> list[dict[str, Any]]:
+    if not isinstance(raw, list):
+        return []
+    out: list[dict[str, Any]] = []
+    for item in raw[:200]:
+        if not isinstance(item, dict):
+            continue
+        text = str(item.get("text") or "").strip()
+        if not text:
+            continue
+        out.append(
+            {
+                "start": item.get("start"),
+                "end": item.get("end"),
+                "text": text,
+            }
+        )
+    return out
