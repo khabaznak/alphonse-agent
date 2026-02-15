@@ -36,9 +36,10 @@ class HandleIncomingMessageAction(Action):
         correlation_id = str(correlation_id or uuid.uuid4())
 
         incoming = _build_incoming_context_from_payload(payload, signal, correlation_id=correlation_id)
+        provider_payload = payload.get("provider_event") if isinstance(payload.get("provider_event"), dict) else payload
         packed_input = _pack_raw_provider_event_markdown(
             channel_type=incoming.channel_type,
-            payload=payload,
+            payload=provider_payload,
             correlation_id=correlation_id,
         )
         logger.info(

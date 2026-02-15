@@ -53,6 +53,68 @@ def planner_tool_schemas() -> list[dict[str, Any]]:
         {
             "type": "function",
             "function": {
+                "name": "telegramGetFileMeta",
+                "description": "Resolve Telegram file metadata from a file_id.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "file_id": {"type": "string"},
+                    },
+                    "required": ["file_id"],
+                    "additionalProperties": False,
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "telegramDownloadFile",
+                "description": "Download a Telegram file by file_id and return local path details.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "file_id": {"type": "string"},
+                    },
+                    "required": ["file_id"],
+                    "additionalProperties": False,
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "transcribeTelegramAudio",
+                "description": "Download Telegram audio by file_id and transcribe it to text.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "file_id": {"type": "string"},
+                        "language": {"type": "string"},
+                    },
+                    "required": ["file_id"],
+                    "additionalProperties": False,
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "analyzeTelegramImage",
+                "description": "Download Telegram image by file_id and analyze it with a prompt.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "file_id": {"type": "string"},
+                        "prompt": {"type": "string"},
+                    },
+                    "required": ["file_id"],
+                    "additionalProperties": False,
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
                 "name": "getMySettings",
                 "description": "Get runtime settings for current conversation context.",
                 "parameters": {

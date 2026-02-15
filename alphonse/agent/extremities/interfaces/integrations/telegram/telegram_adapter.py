@@ -242,6 +242,7 @@ class TelegramAdapter(IntegrationAdapter):
                 "reply_to_message_id": reply_to.get("message_id") if isinstance(reply_to, dict) else None,
                 "message_id": message.get("message_id"),
                 "update_id": update_id,
+                "provider_event": update,
             },
             source="telegram",
         )
@@ -251,6 +252,33 @@ class TelegramAdapter(IntegrationAdapter):
             chat_id,
         )
         self.emit_signal(signal)  # type: ignore[arg-type]
+
+    def get_file(self, file_id: str) -> dict[str, Any]:
+        endpoint = "getFile"
+        url = f"https://api.telegram.org/bot{self._bot_token}/{endpoint}"
+        data = parse.urlencode({"file_id": str(file_id)}).encode("utf-8")
+        req = request.Request(url, data=data, method="POST")
+        with request.urlopen(req, timeout=10) as response:
+            body = response.read().decode("utf-8", errors="ignore")
+        parsed = _parse_json(body)
+        if not isinstance(parsed, dict) or not parsed.get("ok") or not isinstance(parsed.get("result"), dict):
+            raise RuntimeError(f"TelegramAdapter {endpoint} failed")
+        return dict(parsed["result"])
+
+    def download_file(self, file_path: str) -> bytes:
+        endpoint = "downloadFile"
+        url = f"https://api.telegram.org/file/bot{self._bot_token}/{file_path}"
+        req = request.Request(url, method="GET")
+        with request.urlopen(req, timeout=20) as response:
+            body = response.read()
+            logger.info(
+                "TelegramAdapter %s status=%s file_path=%s bytes=%s",
+                endpoint,
+                getattr(response, "status", "unknown"),
+                file_path,
+                len(body),
+            )
+            return body
 
     def _should_emit_invite(self, message: dict[str, Any]) -> bool:
         text = str(message.get("text") or "").strip()

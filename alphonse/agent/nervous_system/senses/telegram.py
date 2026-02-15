@@ -126,6 +126,7 @@ class TelegramSense(Sense):
                     "timestamp": normalized.timestamp,
                     "correlation_id": normalized.correlation_id,
                     "metadata": normalized.metadata,
+                    "provider_event": payload.get("provider_event") if isinstance(payload.get("provider_event"), dict) else None,
                 },
                 source="telegram",
                 correlation_id=normalized.correlation_id,
