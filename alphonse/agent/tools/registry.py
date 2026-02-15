@@ -12,6 +12,8 @@ from alphonse.agent.tools.telegram_files import TelegramDownloadFileTool
 from alphonse.agent.tools.telegram_files import TelegramGetFileMetaTool
 from alphonse.agent.tools.telegram_files import TranscribeTelegramAudioTool
 
+from alphonse.agent.tools.subprocess import SubprocessTool
+
 
 @dataclass
 class ToolRegistry:
@@ -37,6 +39,7 @@ def build_default_tool_registry() -> ToolRegistry:
     telegram_download_file = TelegramDownloadFileTool()
     transcribe_audio = TranscribeTelegramAudioTool()
     analyze_image = AnalyzeTelegramImageTool()
+    python_subprocess = SubprocessTool()
     registry.register("getTime", clock)
     registry.register("createReminder", scheduler)
     registry.register("createTimeEventTrigger", scheduler)
@@ -49,4 +52,5 @@ def build_default_tool_registry() -> ToolRegistry:
     # Internal aliases kept for compatibility.
     registry.register("clock", clock)
     registry.register("schedule_event", scheduler)
+    registry.register("python_subprocess", python_subprocess)
     return registry

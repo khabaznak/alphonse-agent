@@ -358,3 +358,76 @@ def test_plan_node_keeps_structured_tool_failure_fact() -> None:
     assert first.get("tool") == "stt_transcribe"
     assert first.get("status") == "failed"
     assert first.get("error") == "asset_not_found"
+
+
+class _PythonSubprocessCallLlm:
+    supports_tool_calls = True
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def complete_with_tools(
+        self,
+        *,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+        tool_choice: str = "auto",
+    ) -> dict[str, Any]:
+        _ = (messages, tools, tool_choice)
+        self.calls += 1
+        if self.calls == 1:
+            return {
+                "content": "",
+                "tool_calls": [
+                    {"id": "tc-sub-1", "name": "python_subprocess", "arguments": {"command": "which python3"}}
+                ],
+                "assistant_message": {"role": "assistant", "content": ""},
+            }
+        return {
+            "content": "Done.",
+            "tool_calls": [],
+            "assistant_message": {"role": "assistant", "content": "Done."},
+        }
+
+
+def test_plan_node_executes_python_subprocess_when_authorized(monkeypatch) -> None:
+    class _SubprocessOkTool:
+        def execute(self, *, command: str, timeout_seconds: float | None = None) -> dict[str, Any]:
+            _ = timeout_seconds
+            return {"status": "ok", "exit_code": 0, "stdout": f"ran:{command}", "stderr": ""}
+
+    registry = ToolRegistry()
+    registry.register("python_subprocess", _SubprocessOkTool())
+    llm = _PythonSubprocessCallLlm()
+    state = {
+        "last_user_message": "install whisper",
+        "timezone": "UTC",
+        "locale": "en-US",
+        "tone": "friendly",
+        "address_style": "you",
+        "channel_type": "webui",
+        "channel_target": "webui",
+        "correlation_id": "corr-subprocess-ok",
+    }
+    monkeypatch.setattr(
+        "alphonse.agent.cortex.nodes.plan._can_use_python_subprocess",
+        lambda _state: (True, None),
+    )
+    result = plan_node(
+        state,
+        llm_client=llm,
+        tool_registry=registry,
+        format_available_abilities=lambda: "- python_subprocess(command, timeout_seconds) -> command output",
+        run_capability_gap_tool=_run_capability_gap_tool,
+    )
+    assert isinstance(result.get("response_text"), str)
+    planning_context = result.get("planning_context")
+    assert isinstance(planning_context, dict)
+    facts = planning_context.get("facts")
+    assert isinstance(facts, dict)
+    tool_results = facts.get("tool_results")
+    assert isinstance(tool_results, list)
+    assert tool_results
+    first = tool_results[0] if isinstance(tool_results[0], dict) else {}
+    assert first.get("tool") == "python_subprocess"
+    assert first.get("status") == "ok"

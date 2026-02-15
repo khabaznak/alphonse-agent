@@ -39,6 +39,14 @@
   - `asset_id` (string, required)
   - `language_hint` (string, optional)
 
+### python_subprocess(command:string, timeout_seconds:number)
+- Description: Execute a shell command on the local system and get the output.
+- When to use: Use only for admin-authorized maintenance tasks when built-in tools are insufficient.
+- Returns: command output, error message, and exit code
+- Inputs:
+  - `command` (string, required)
+  - `timeout_seconds` (number, optional)
+
 ### getMySettings()
 - Description: Get your current runtime settings (timezone, locale, tone, address style, channel context).
 - When to use: Use before time or language-sensitive decisions when settings are needed.

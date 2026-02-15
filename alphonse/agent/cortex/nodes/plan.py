@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from datetime import datetime
 import sqlite3
 from typing import Any, Callable
@@ -199,7 +200,7 @@ def _user_details_from_db(state: dict[str, Any]) -> dict[str, Any]:
 
         user = conn.execute(
             """
-            SELECT user_id, display_name, role, relationship
+            SELECT user_id, display_name, role, relationship, is_admin
             FROM users
             WHERE principal_id = ? AND is_active = 1
             ORDER BY updated_at DESC
@@ -213,6 +214,7 @@ def _user_details_from_db(state: dict[str, Any]) -> dict[str, Any]:
             details["display_name"] = user[1] or details.get("display_name")
             details["role"] = user[2]
             details["relationship"] = user[3]
+            details["is_admin"] = bool(user[4])
 
         person_id = state.get("actor_person_id")
         if person_id:
@@ -834,7 +836,75 @@ def _execute_tool_step(
                 "segments": result.get("segments") if isinstance(result.get("segments"), list) else [],
             },
         }
+    if tool_name == "python_subprocess":
+        subprocess_tool = tool_registry.get("python_subprocess") if hasattr(tool_registry, "get") else None
+        if subprocess_tool is None or not hasattr(subprocess_tool, "execute"):
+            raise RuntimeError("missing_python_subprocess_tool")
+        allowed, reason = _can_use_python_subprocess(state)
+        command = str(params.get("command") or "").strip()
+        timeout_seconds = params.get("timeout_seconds")
+        if not allowed:
+            return {
+                "status": "failed",
+                "error": str(reason or "python_subprocess_not_allowed"),
+                "error_detail": str(reason or "python_subprocess_not_allowed"),
+                "response_text": None,
+                "fact": {
+                    "step": step_idx,
+                    "tool": tool_name,
+                    "status": "failed",
+                    "error": str(reason or "python_subprocess_not_allowed"),
+                },
+            }
+        result = subprocess_tool.execute(command=command, timeout_seconds=timeout_seconds)
+        if not isinstance(result, dict):
+            raise RuntimeError("python_subprocess_invalid_output")
+        status = str(result.get("status") or "").strip().lower()
+        if status != "ok":
+            error_code = str(result.get("error") or "python_subprocess_failed").strip() or "python_subprocess_failed"
+            return {
+                "status": "failed",
+                "error": error_code,
+                "error_detail": str(result.get("detail") or error_code),
+                "response_text": None,
+                "fact": {
+                    "step": step_idx,
+                    "tool": tool_name,
+                    "status": "failed",
+                    "error": error_code,
+                    "retryable": bool(result.get("retryable")),
+                    "exit_code": result.get("exit_code"),
+                },
+            }
+        stdout = str(result.get("stdout") or "").strip()
+        stderr = str(result.get("stderr") or "").strip()
+        response_text = stdout or stderr or "Command completed."
+        return {
+            "status": "executed",
+            "response_text": response_text,
+            "fact": {
+                "step": step_idx,
+                "tool": tool_name,
+                "status": "ok",
+                "exit_code": int(result.get("exit_code") or 0),
+            },
+        }
     raise RuntimeError("unknown_tool_in_plan")
+
+
+def _can_use_python_subprocess(state: dict[str, Any]) -> tuple[bool, str | None]:
+    enabled = str(os.getenv("ALPHONSE_ENABLE_PYTHON_SUBPROCESS") or "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    if not enabled:
+        return False, "python_subprocess_disabled"
+    user_details = _user_details_payload_for_state(state)
+    if bool(user_details.get("is_admin")):
+        return True, None
+    return False, "python_subprocess_admin_required"
 
 
 def _is_iso_datetime(value: str) -> bool:

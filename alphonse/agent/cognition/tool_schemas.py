@@ -176,4 +176,20 @@ def planner_tool_schemas() -> list[dict[str, Any]]:
                 },
             },
         },
+        {
+            "type": "function",
+            "function": {
+                "name": "python_subprocess",
+                "description": "Execute a Python subprocess command on the local system. Use to install missing tools or for other system-level operations. Be cautious with this tool and avoid running untrusted commands.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "command": {"type": "string"},
+                        "timeout_seconds": {"type": "number"},
+                    },
+                    "required": ["command"],
+                    "additionalProperties": False,
+                },
+            },
+        },
     ]
