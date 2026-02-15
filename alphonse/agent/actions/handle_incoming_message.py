@@ -124,6 +124,15 @@ class HandleIncomingMessageAction(Action):
         )
         if result.reply_text:
             locale = outgoing_locale(result.cognition_state)
+            result_locale = (
+                str((result.cognition_state or {}).get("locale") or "").strip()
+                if isinstance(result.cognition_state, dict)
+                else ""
+            )
+            if not result_locale:
+                state_locale = str(state.get("locale") or "").strip()
+                if state_locale:
+                    locale = state_locale
             reply_plan = CortexPlan(
                 plan_type=PlanType.COMMUNICATE,
                 payload={

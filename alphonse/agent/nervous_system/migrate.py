@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 import sys
+import os
 from pathlib import Path
 
 
@@ -25,6 +26,7 @@ def apply_schema(db_path: Path) -> None:
         _ensure_principals_constraints(conn)
         _ensure_users_table(conn)
         _ensure_prompt_template_columns(conn)
+        _ensure_sandbox_directories(conn)
 
 
 def main() -> None:
@@ -195,6 +197,37 @@ def _ensure_prompt_template_columns(conn: sqlite3.Connection) -> None:
             conn.execute(f"ALTER TABLE prompt_templates ADD COLUMN {name} {definition}")
         except sqlite3.OperationalError:
             continue
+
+
+def _ensure_sandbox_directories(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS sandbox_directories (
+          alias       TEXT PRIMARY KEY,
+          base_path   TEXT NOT NULL,
+          description TEXT,
+          enabled     INTEGER NOT NULL DEFAULT 1,
+          created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+          updated_at  TEXT NOT NULL DEFAULT (datetime('now')),
+          CHECK (enabled IN (0,1))
+        ) STRICT
+        """
+    )
+    sandbox_root = Path(
+        os.getenv("ALPHONSE_SANDBOX_ROOT") or "/tmp/alphonse-sandbox"
+    ).resolve()
+    telegram_base = (sandbox_root / "telegram_files").resolve()
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO sandbox_directories (alias, base_path, description, enabled)
+        VALUES (?, ?, ?, 1)
+        """,
+        (
+            "telegram_files",
+            str(telegram_base),
+            "Downloaded Telegram files sandbox",
+        ),
+    )
 
 
 def _rebuild_delivery_receipts(conn: sqlite3.Connection) -> None:

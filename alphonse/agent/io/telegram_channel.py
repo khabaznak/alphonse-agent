@@ -62,6 +62,7 @@ class TelegramExtremityAdapter(ExtremityAdapter):
             logger.warning("TelegramExtremityAdapter disabled: missing bot token")
         else:
             self._adapter = TelegramAdapter(config)
+        self._reaction_cache: dict[tuple[str, str], str] = {}
 
     def deliver(self, message: NormalizedOutboundMessage) -> None:
         if not self._adapter:
@@ -108,6 +109,9 @@ class TelegramExtremityAdapter(ExtremityAdapter):
         reaction = _telegram_reaction_for_phase(phase)
         if not reaction or not message_id:
             return
+        cache_key = (str(channel_target), str(message_id))
+        if self._reaction_cache.get(cache_key) == reaction:
+            return
         self._adapter.handle_action(
             {
                 "type": "set_message_reaction",
@@ -120,6 +124,7 @@ class TelegramExtremityAdapter(ExtremityAdapter):
                 "target_integration_id": "telegram",
             }
         )
+        self._reaction_cache[cache_key] = reaction
 
     def emit_transition_event(
         self,
@@ -169,7 +174,7 @@ def _telegram_reaction_for_phase(phase: str) -> str | None:
         "acknowledged": "👀",
         "thinking": "🤔",
         "executing": "🤔",
-        "waiting_user": "❓",
+        "waiting_user": "🤔",
         "done": "👍",
         "failed": "👎",
     }

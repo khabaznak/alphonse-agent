@@ -118,6 +118,16 @@ CREATE TABLE IF NOT EXISTS terminal_sandboxes (
   updated_at         TEXT NOT NULL DEFAULT (datetime('now'))
 ) STRICT;
 
+CREATE TABLE IF NOT EXISTS sandbox_directories (
+  alias       TEXT PRIMARY KEY,
+  base_path   TEXT NOT NULL,
+  description TEXT,
+  enabled     INTEGER NOT NULL DEFAULT 1,
+  created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at  TEXT NOT NULL DEFAULT (datetime('now')),
+  CHECK (enabled IN (0,1))
+) STRICT;
+
 CREATE TABLE IF NOT EXISTS terminal_sessions (
   session_id   TEXT PRIMARY KEY,
   principal_id TEXT NOT NULL,

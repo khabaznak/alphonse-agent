@@ -10,12 +10,8 @@ from typing import Any
 import requests
 
 from alphonse.agent.extremities.interfaces.integrations.telegram.telegram_adapter import TelegramAdapter
-
-
-def _default_download_dir() -> Path:
-    root = Path(os.getenv("ALPHONSE_TELEGRAM_FILES_DIR") or "/tmp/alphonse-telegram-files")
-    root.mkdir(parents=True, exist_ok=True)
-    return root
+from alphonse.agent.nervous_system.sandbox_dirs import DEFAULT_SANDBOX_ALIAS
+from alphonse.agent.nervous_system.sandbox_dirs import resolve_sandbox_path
 
 
 @dataclass
@@ -28,20 +24,29 @@ class _TelegramFileClient:
     def get_file(self, file_id: str) -> dict[str, Any]:
         return self._adapter().get_file(file_id=file_id)
 
-    def download_file(self, *, file_id: str, destination_dir: Path) -> dict[str, Any]:
+    def download_file(
+        self,
+        *,
+        file_id: str,
+        sandbox_alias: str,
+        relative_path: str | None = None,
+    ) -> dict[str, Any]:
         meta = self.get_file(file_id)
         file_path = str(meta.get("file_path") or "").strip()
         if not file_path:
             raise RuntimeError("telegram_file_path_missing")
         payload = self._adapter().download_file(file_path=file_path)
         filename = Path(file_path).name or f"{file_id}.bin"
-        local_path = destination_dir / filename
+        chosen_relative = str(relative_path or filename).strip() or filename
+        local_path = resolve_sandbox_path(alias=sandbox_alias, relative_path=chosen_relative)
+        local_path.parent.mkdir(parents=True, exist_ok=True)
         local_path.write_bytes(payload)
         return {
             "file_id": file_id,
             "file_path": file_path,
             "file_size": int(meta.get("file_size") or len(payload)),
-            "local_path": str(local_path),
+            "sandbox_alias": sandbox_alias,
+            "relative_path": chosen_relative,
             "mime_type": mimetypes.guess_type(filename)[0] or "application/octet-stream",
         }
 
@@ -67,13 +72,20 @@ class TelegramDownloadFileTool:
     def __init__(self, *, bot_token: str | None = None) -> None:
         self._bot_token = str(bot_token or os.getenv("TELEGRAM_BOT_TOKEN") or "").strip()
 
-    def execute(self, *, file_id: str) -> dict[str, Any]:
+    def execute(
+        self,
+        *,
+        file_id: str,
+        sandbox_alias: str = DEFAULT_SANDBOX_ALIAS,
+        relative_path: str | None = None,
+    ) -> dict[str, Any]:
         if not self._bot_token:
             return {"status": "failed", "error": "telegram_bot_token_missing"}
         try:
             result = _TelegramFileClient(self._bot_token).download_file(
                 file_id=file_id,
-                destination_dir=_default_download_dir(),
+                sandbox_alias=str(sandbox_alias or DEFAULT_SANDBOX_ALIAS),
+                relative_path=relative_path,
             )
         except Exception as exc:
             return {"status": "failed", "error": str(exc) or "download_failed"}
@@ -87,21 +99,33 @@ class TranscribeTelegramAudioTool:
         self._openai_key = str(os.getenv("OPENAI_API_KEY") or "").strip()
         self._model = str(os.getenv("OPENAI_AUDIO_MODEL") or "gpt-4o-mini-transcribe")
 
-    def execute(self, *, file_id: str, language: str | None = None) -> dict[str, Any]:
+    def execute(
+        self,
+        *,
+        file_id: str,
+        language: str | None = None,
+        sandbox_alias: str = DEFAULT_SANDBOX_ALIAS,
+    ) -> dict[str, Any]:
         if not self._bot_token:
             return {"status": "failed", "error": "telegram_bot_token_missing"}
-        download = TelegramDownloadFileTool(bot_token=self._bot_token).execute(file_id=file_id)
+        download = TelegramDownloadFileTool(bot_token=self._bot_token).execute(
+            file_id=file_id,
+            sandbox_alias=sandbox_alias,
+        )
         if download.get("status") != "ok":
             return download
         if not self._openai_key:
             return {
                 "status": "failed",
                 "error": "openai_api_key_missing",
-                "local_path": download.get("local_path"),
+                "sandbox_alias": download.get("sandbox_alias"),
+                "relative_path": download.get("relative_path"),
             }
-        local_path = str(download.get("local_path") or "").strip()
-        if not local_path:
+        relative_path = str(download.get("relative_path") or "").strip()
+        alias = str(download.get("sandbox_alias") or sandbox_alias or DEFAULT_SANDBOX_ALIAS).strip()
+        if not relative_path:
             return {"status": "failed", "error": "audio_path_missing"}
+        local_path = str(resolve_sandbox_path(alias=alias, relative_path=relative_path))
         try:
             with open(local_path, "rb") as fh:
                 files = {"file": (Path(local_path).name, fh, download.get("mime_type") or "audio/ogg")}
@@ -122,7 +146,8 @@ class TranscribeTelegramAudioTool:
             return {
                 "status": "ok",
                 "file_id": file_id,
-                "local_path": local_path,
+                "sandbox_alias": alias,
+                "relative_path": relative_path,
                 "text": str(text or ""),
                 "model": self._model,
             }
@@ -136,21 +161,33 @@ class AnalyzeTelegramImageTool:
         self._openai_key = str(os.getenv("OPENAI_API_KEY") or "").strip()
         self._model = str(os.getenv("OPENAI_VISION_MODEL") or "gpt-4o-mini")
 
-    def execute(self, *, file_id: str, prompt: str | None = None) -> dict[str, Any]:
+    def execute(
+        self,
+        *,
+        file_id: str,
+        prompt: str | None = None,
+        sandbox_alias: str = DEFAULT_SANDBOX_ALIAS,
+    ) -> dict[str, Any]:
         if not self._bot_token:
             return {"status": "failed", "error": "telegram_bot_token_missing"}
-        download = TelegramDownloadFileTool(bot_token=self._bot_token).execute(file_id=file_id)
+        download = TelegramDownloadFileTool(bot_token=self._bot_token).execute(
+            file_id=file_id,
+            sandbox_alias=sandbox_alias,
+        )
         if download.get("status") != "ok":
             return download
         if not self._openai_key:
             return {
                 "status": "failed",
                 "error": "openai_api_key_missing",
-                "local_path": download.get("local_path"),
+                "sandbox_alias": download.get("sandbox_alias"),
+                "relative_path": download.get("relative_path"),
             }
-        local_path = str(download.get("local_path") or "").strip()
-        if not local_path:
+        relative_path = str(download.get("relative_path") or "").strip()
+        alias = str(download.get("sandbox_alias") or sandbox_alias or DEFAULT_SANDBOX_ALIAS).strip()
+        if not relative_path:
             return {"status": "failed", "error": "image_path_missing"}
+        local_path = str(resolve_sandbox_path(alias=alias, relative_path=relative_path))
         try:
             image_bytes = Path(local_path).read_bytes()
             mime = str(download.get("mime_type") or "image/jpeg")
@@ -194,7 +231,8 @@ class AnalyzeTelegramImageTool:
             return {
                 "status": "ok",
                 "file_id": file_id,
-                "local_path": local_path,
+                "sandbox_alias": alias,
+                "relative_path": relative_path,
                 "analysis": text,
                 "model": self._model,
             }

@@ -74,6 +74,8 @@ def planner_tool_schemas() -> list[dict[str, Any]]:
                     "type": "object",
                     "properties": {
                         "file_id": {"type": "string"},
+                        "sandbox_alias": {"type": "string"},
+                        "relative_path": {"type": "string"},
                     },
                     "required": ["file_id"],
                     "additionalProperties": False,
@@ -90,6 +92,7 @@ def planner_tool_schemas() -> list[dict[str, Any]]:
                     "properties": {
                         "file_id": {"type": "string"},
                         "language": {"type": "string"},
+                        "sandbox_alias": {"type": "string"},
                     },
                     "required": ["file_id"],
                     "additionalProperties": False,
@@ -106,6 +109,7 @@ def planner_tool_schemas() -> list[dict[str, Any]]:
                     "properties": {
                         "file_id": {"type": "string"},
                         "prompt": {"type": "string"},
+                        "sandbox_alias": {"type": "string"},
                     },
                     "required": ["file_id"],
                     "additionalProperties": False,
