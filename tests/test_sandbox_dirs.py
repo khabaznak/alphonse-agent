@@ -6,6 +6,8 @@ import pytest
 
 from alphonse.agent.nervous_system.migrate import apply_schema
 from alphonse.agent.nervous_system.sandbox_dirs import get_sandbox_alias
+from alphonse.agent.nervous_system.sandbox_dirs import list_sandbox_aliases
+from alphonse.agent.nervous_system.sandbox_dirs import remove_sandbox_alias
 from alphonse.agent.nervous_system.sandbox_dirs import resolve_sandbox_path
 
 
@@ -29,3 +31,15 @@ def test_resolve_sandbox_path_rejects_escape(tmp_path: Path, monkeypatch: pytest
 
     with pytest.raises(ValueError, match="relative_path_invalid|sandbox_path_escape"):
         resolve_sandbox_path(alias="telegram_files", relative_path="../escape.txt")
+
+
+def test_list_and_remove_sandbox_alias(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    db_path = tmp_path / "nerve-db"
+    monkeypatch.setenv("NERVE_DB_PATH", str(db_path))
+    monkeypatch.setenv("ALPHONSE_SANDBOX_ROOT", str(tmp_path / "sandbox-root"))
+    apply_schema(db_path)
+
+    rows = list_sandbox_aliases(limit=20)
+    assert any(row.get("alias") == "telegram_files" for row in rows)
+    assert remove_sandbox_alias("telegram_files") is True
+    assert remove_sandbox_alias("telegram_files") is False

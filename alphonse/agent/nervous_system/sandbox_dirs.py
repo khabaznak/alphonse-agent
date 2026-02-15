@@ -75,6 +75,45 @@ def get_sandbox_alias(alias: str) -> dict[str, Any] | None:
     }
 
 
+def list_sandbox_aliases(*, enabled_only: bool = False, limit: int = 200) -> list[dict[str, Any]]:
+    ensure_default_sandbox_aliases()
+    query = (
+        "SELECT alias, base_path, description, enabled "
+        "FROM sandbox_directories "
+    )
+    params: list[Any] = []
+    if enabled_only:
+        query += "WHERE enabled = 1 "
+    query += "ORDER BY alias ASC LIMIT ?"
+    params.append(max(1, int(limit)))
+    with _connect() as conn:
+        rows = conn.execute(query, tuple(params)).fetchall()
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        out.append(
+            {
+                "alias": str(row[0]),
+                "base_path": str(row[1]),
+                "description": str(row[2] or ""),
+                "enabled": bool(row[3]),
+            }
+        )
+    return out
+
+
+def remove_sandbox_alias(alias: str) -> bool:
+    normalized_alias = str(alias or "").strip()
+    if not normalized_alias:
+        return False
+    with _connect() as conn:
+        cur = conn.execute(
+            "DELETE FROM sandbox_directories WHERE alias = ?",
+            (normalized_alias,),
+        )
+        conn.commit()
+        return int(cur.rowcount or 0) > 0
+
+
 def resolve_sandbox_path(*, alias: str, relative_path: str) -> Path:
     ensure_default_sandbox_aliases()
     record = get_sandbox_alias(alias)

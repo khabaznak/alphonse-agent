@@ -86,6 +86,12 @@ from alphonse.agent.nervous_system.tool_configs import (
     list_tool_configs,
     upsert_tool_config,
 )
+from alphonse.agent.nervous_system.sandbox_dirs import (
+    ensure_sandbox_alias,
+    get_sandbox_alias,
+    list_sandbox_aliases,
+    remove_sandbox_alias,
+)
 from alphonse.agent.core.settings_store import init_db as init_settings_db
 
 
@@ -399,6 +405,19 @@ def build_parser() -> argparse.ArgumentParser:
     tool_configs_delete = tool_configs_sub.add_parser("delete", help="Delete tool config")
     tool_configs_delete.add_argument("config_id")
 
+    sandboxes_parser = sub.add_parser("sandboxes", help="Sandbox directory aliases")
+    sandboxes_sub = sandboxes_parser.add_subparsers(dest="sandboxes_command", required=True)
+    sandboxes_list = sandboxes_sub.add_parser("list", help="List sandbox aliases")
+    sandboxes_list.add_argument("--enabled-only", action="store_true")
+    sandboxes_list.add_argument("--limit", type=int, default=200)
+    sandboxes_add = sandboxes_sub.add_parser("add", help="Register sandbox alias")
+    sandboxes_add.add_argument("alias")
+    sandboxes_add.add_argument("path")
+    sandboxes_add.add_argument("--description", default="")
+    sandboxes_add.add_argument("--yes", action="store_true", help="Create missing directory without prompt")
+    sandboxes_remove = sandboxes_sub.add_parser("remove", help="Remove sandbox alias registration")
+    sandboxes_remove.add_argument("alias")
+
     telegram_parser = sub.add_parser("telegram", help="Telegram admin utilities")
     telegram_sub = telegram_parser.add_subparsers(dest="telegram_command", required=True)
     telegram_invites = telegram_sub.add_parser("invites", help="Telegram invite approvals")
@@ -578,6 +597,9 @@ def _dispatch_command(
         return
     if args.command == "tool-configs":
         _command_tool_configs(args)
+        return
+    if args.command == "sandboxes":
+        _command_sandboxes(args)
         return
     if args.command == "routing":
         _command_routing(args)
@@ -1364,6 +1386,65 @@ def _command_tool_configs(args: argparse.Namespace) -> None:
             print("Tool config not found.")
             return
         print(f"Deleted tool config: {args.config_id}")
+        return
+
+
+def _command_sandboxes(args: argparse.Namespace) -> None:
+    if args.sandboxes_command == "list":
+        rows = list_sandbox_aliases(
+            enabled_only=bool(args.enabled_only),
+            limit=int(args.limit),
+        )
+        if not rows:
+            print("No sandbox directories found.")
+            return
+        for row in rows:
+            print(
+                f"- {row.get('alias')} path={row.get('base_path')} "
+                f"enabled={row.get('enabled')} desc={row.get('description')}"
+            )
+        return
+    if args.sandboxes_command == "add":
+        alias = str(args.alias or "").strip()
+        if not alias:
+            print("Alias is required.")
+            return
+        existing = get_sandbox_alias(alias)
+        if isinstance(existing, dict):
+            print(
+                f"Sandbox alias already exists: {existing.get('alias')} "
+                f"path={existing.get('base_path')}"
+            )
+            return
+        candidate = Path(str(args.path or "")).expanduser().resolve()
+        if candidate.exists() and not candidate.is_dir():
+            print("Path exists but is not a directory.")
+            return
+        if not candidate.exists():
+            should_create = bool(args.yes)
+            if not should_create:
+                answer = input(f"Directory does not exist: {candidate}. Create it? [y/N]: ").strip().lower()
+                should_create = answer in {"y", "yes"}
+            if not should_create:
+                print("Add cancelled.")
+                return
+            candidate.mkdir(parents=True, exist_ok=True)
+        ensure_sandbox_alias(
+            alias=alias,
+            base_path=str(candidate),
+            description=str(args.description or "").strip(),
+        )
+        print(f"Sandbox alias added: {alias} -> {candidate}")
+        return
+    if args.sandboxes_command == "remove":
+        alias = str(args.alias or "").strip()
+        if not alias:
+            print("Alias is required.")
+            return
+        if remove_sandbox_alias(alias):
+            print(f"Removed sandbox alias registration: {alias}")
+        else:
+            print("Sandbox alias not found.")
         return
 
 
