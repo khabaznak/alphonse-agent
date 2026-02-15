@@ -22,6 +22,7 @@ from alphonse.agent.cortex.graph import CortexGraph
 from alphonse.agent.cortex.state_store import load_state, save_state
 from alphonse.agent.identity import store as identity_store
 from alphonse.agent.io import get_io_registry
+from alphonse.agent.nervous_system import users as users_store
 from alphonse.agent.session.day_state import build_next_session_state
 from alphonse.agent.session.day_state import commit_session_state
 from alphonse.agent.session.day_state import render_session_prompt_block
@@ -260,21 +261,66 @@ def _resolve_session_timezone(incoming: IncomingContext) -> str:
 
 def _resolve_session_user_id(*, incoming: IncomingContext, payload: dict[str, Any]) -> str:
     metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
+    resolved_name = _resolve_display_name(payload=payload, metadata=metadata)
+    if resolved_name:
+        try:
+            matched_user = users_store.get_user_by_display_name(resolved_name)
+        except Exception:
+            matched_user = None
+        if isinstance(matched_user, dict):
+            db_user_id = str(matched_user.get("user_id") or "").strip()
+            if db_user_id:
+                return db_user_id
+
     candidates = [
         incoming.person_id,
         metadata.get("person_id"),
         payload.get("person_id"),
         payload.get("user_id"),
         payload.get("from_user"),
+        metadata.get("user_id"),
+        metadata.get("from_user"),
+        _nested_get(payload, "metadata", "raw", "user_id"),
+        _nested_get(payload, "metadata", "raw", "from_user"),
+        _nested_get(payload, "metadata", "raw", "metadata", "user_id"),
         payload.get("chat_id"),
     ]
     for candidate in candidates:
         rendered = str(candidate or "").strip()
         if rendered:
             return rendered
+    if resolved_name:
+        return f"name:{resolved_name.lower()}"
     if incoming.address:
         return f"{incoming.channel_type}:{incoming.address}"
     return f"{incoming.channel_type}:anonymous"
+
+
+def _resolve_display_name(*, payload: dict[str, Any], metadata: dict[str, Any]) -> str | None:
+    candidates = [
+        payload.get("user_name"),
+        payload.get("from_user_name"),
+        metadata.get("user_name"),
+        metadata.get("from_user_name"),
+        _nested_get(payload, "metadata", "raw", "user_name"),
+        _nested_get(payload, "metadata", "raw", "from_user_name"),
+        _nested_get(payload, "metadata", "raw", "metadata", "user_name"),
+        _nested_get(payload, "metadata", "raw", "metadata", "from_user_name"),
+    ]
+    for candidate in candidates:
+        rendered = str(candidate or "").strip()
+        if rendered:
+            return rendered
+    return None
+
+
+def _nested_get(payload: dict[str, Any], *path: str) -> Any:
+    current: Any = payload
+    for key in path:
+        if not isinstance(current, dict):
+            return None
+        current = current.get(key)
+    return current
 
 
 def _emit_channel_transition(incoming: IncomingContext, phase: str) -> None:
