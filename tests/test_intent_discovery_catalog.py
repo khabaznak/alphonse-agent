@@ -43,6 +43,7 @@ def test_available_ability_catalog_has_minimal_tools_only() -> None:
         "askQuestion",
         "getTime",
         "createReminder",
+        "local_audio_output.speak",
         "getMySettings",
         "getUserDetails",
     }

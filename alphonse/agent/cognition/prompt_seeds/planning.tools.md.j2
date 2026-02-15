@@ -21,6 +21,16 @@
   - `Time` (string, required)
   - `Message` (string, required)
 
+### local_audio_output.speak(text:string, voice:string, blocking:boolean, volume:number)
+- Description: Speak text out loud on the local computer using OS-native TTS.
+- When to use: Use for local spoken output when requested.
+- Returns: local_audio_output_status
+- Inputs:
+  - `text` (string, required)
+  - `voice` (string, optional)
+  - `blocking` (boolean, optional)
+  - `volume` (number, optional)
+
 ### getMySettings()
 - Description: Get your current runtime settings (timezone, locale, tone, address style, channel context).
 - When to use: Use before time or language-sensitive decisions when settings are needed.

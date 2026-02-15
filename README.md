@@ -155,6 +155,23 @@ Check timed signal status:
 python -m alphonse.agent.cli status
 ```
 
+### Local Audio Output Tool (POC)
+
+Manual run:
+
+```bash
+python -m alphonse.tools.local_audio_output --text "Hola mundo"
+```
+
+Example tool-call payload:
+
+```json
+{
+  "tool": "local_audio_output.speak",
+  "args": { "text": "Hello World", "blocking": false }
+}
+```
+
 ### Acceptance milestones (must pass)
 
 Marker 1 — TimedSignals end-to-end

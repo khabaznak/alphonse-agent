@@ -8,7 +8,7 @@ from alphonse.agent.cognition.prompt_templates_runtime import (
     render_prompt_template,
 )
 
-_HEADING_RE = re.compile(r"^###\s+([A-Za-z_]\w*)\(([^)]*)\)\s*$")
+_HEADING_RE = re.compile(r"^###\s+([A-Za-z_][A-Za-z0-9_.-]*)\(([^)]*)\)\s*$")
 _INPUT_RE = re.compile(r"^\s*-\s+`([^`]+)`\s+\(([^,]+),\s*(required|optional)\)\s*$", re.IGNORECASE)
 
 

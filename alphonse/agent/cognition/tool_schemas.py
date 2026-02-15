@@ -53,6 +53,24 @@ def planner_tool_schemas() -> list[dict[str, Any]]:
         {
             "type": "function",
             "function": {
+                "name": "local_audio_output.speak",
+                "description": "Speak text out loud on the local computer using OS-native TTS.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "text": {"type": "string"},
+                        "voice": {"type": "string"},
+                        "blocking": {"type": "boolean"},
+                        "volume": {"type": "number"},
+                    },
+                    "required": ["text"],
+                    "additionalProperties": False,
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
                 "name": "telegramGetFileMeta",
                 "description": "Resolve Telegram file metadata from a file_id.",
                 "parameters": {

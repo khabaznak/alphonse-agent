@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from alphonse.agent.tools.clock import ClockTool
+from alphonse.agent.tools.local_audio_output import LocalAudioOutputSpeakTool
 from alphonse.agent.tools.scheduler import SchedulerTool
 from alphonse.agent.tools.telegram_files import AnalyzeTelegramImageTool
 from alphonse.agent.tools.telegram_files import TelegramDownloadFileTool
@@ -29,6 +30,7 @@ def build_default_tool_registry() -> ToolRegistry:
     registry = ToolRegistry()
     clock = ClockTool()
     scheduler = SchedulerTool()
+    local_audio_output = LocalAudioOutputSpeakTool()
     telegram_get_file = TelegramGetFileMetaTool()
     telegram_download_file = TelegramDownloadFileTool()
     transcribe_audio = TranscribeTelegramAudioTool()
@@ -36,6 +38,7 @@ def build_default_tool_registry() -> ToolRegistry:
     registry.register("getTime", clock)
     registry.register("createReminder", scheduler)
     registry.register("createTimeEventTrigger", scheduler)
+    registry.register("local_audio_output.speak", local_audio_output)
     registry.register("telegramGetFileMeta", telegram_get_file)
     registry.register("telegramDownloadFile", telegram_download_file)
     registry.register("transcribeTelegramAudio", transcribe_audio)
