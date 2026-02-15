@@ -3,23 +3,31 @@ from __future__ import annotations
 import json
 import logging
 import uuid
+from typing import Any
 
 from alphonse.agent.actions.base import Action
 from alphonse.agent.actions.models import ActionResult
 from alphonse.agent.actions.session_context import IncomingContext
 from alphonse.agent.actions.session_context import build_session_key
+from alphonse.agent.actions.state_context import principal_id_for_incoming
 from alphonse.agent.actions.state_context import build_cortex_state
 from alphonse.agent.actions.state_context import ensure_conversation_locale
 from alphonse.agent.actions.state_context import outgoing_locale
 from alphonse.agent.actions.transitions import emit_agent_transitions_from_meta
 from alphonse.agent.cognition.plan_executor import PlanExecutionContext, PlanExecutor
+from alphonse.agent.cognition.preferences.store import resolve_preference_with_precedence
 from alphonse.agent.cognition.plans import CortexPlan, PlanType
 from alphonse.agent.cognition.providers.factory import build_llm_client
 from alphonse.agent.cortex.graph import CortexGraph
 from alphonse.agent.cortex.state_store import load_state, save_state
 from alphonse.agent.identity import store as identity_store
 from alphonse.agent.io import get_io_registry
+from alphonse.agent.session.day_state import build_next_session_state
+from alphonse.agent.session.day_state import commit_session_state
+from alphonse.agent.session.day_state import render_session_prompt_block
+from alphonse.agent.session.day_state import resolve_day_session
 from alphonse.agent.tools.local_audio_output import LocalAudioOutputSpeakTool
+from alphonse.config import settings
 
 logger = logging.getLogger(__name__)
 _CORTEX_GRAPH = CortexGraph()
@@ -57,6 +65,13 @@ class HandleIncomingMessageAction(Action):
             incoming.channel_type,
             incoming.address,
         )
+        session_timezone = _resolve_session_timezone(incoming)
+        session_user_id = _resolve_session_user_id(incoming=incoming, payload=payload)
+        day_session = resolve_day_session(
+            user_id=session_user_id,
+            channel=incoming.channel_type,
+            timezone_name=session_timezone,
+        )
 
         stored_state = load_state(session_key) or {}
         ensure_conversation_locale(
@@ -71,6 +86,9 @@ class HandleIncomingMessageAction(Action):
             payload=payload,
             normalized=None,
         )
+        state["session_id"] = day_session.get("session_id")
+        state["session_state"] = day_session
+        state["session_state_block"] = render_session_prompt_block(day_session)
         has_live_transition_sink = _attach_transition_sink(state, incoming)
 
         try:
@@ -149,6 +167,23 @@ class HandleIncomingMessageAction(Action):
             reply_text=str(result.reply_text or ""),
             correlation_id=incoming.correlation_id,
         )
+        cognition_state = result.cognition_state if isinstance(result.cognition_state, dict) else {}
+        updated_day_session = build_next_session_state(
+            previous=day_session,
+            channel=incoming.channel_type,
+            user_message=str(payload.get("text") or ""),
+            assistant_message=str(result.reply_text or ""),
+            ability_state=cognition_state.get("ability_state")
+            if isinstance(cognition_state.get("ability_state"), dict)
+            else None,
+            planning_context=cognition_state.get("planning_context")
+            if isinstance(cognition_state.get("planning_context"), dict)
+            else None,
+            pending_interaction=cognition_state.get("pending_interaction")
+            if isinstance(cognition_state.get("pending_interaction"), dict)
+            else None,
+        )
+        commit_session_state(updated_day_session)
 
         logger.info(
             "HandleIncomingMessageAction response channel=%s message=noop",
@@ -208,6 +243,38 @@ def _build_incoming_context_from_payload(
         update_id=str(update_id) if update_id is not None else None,
         message_id=str(message_id) if message_id is not None else None,
     )
+
+
+def _resolve_session_timezone(incoming: IncomingContext) -> str:
+    principal_id = principal_id_for_incoming(incoming)
+    if principal_id:
+        timezone_name = resolve_preference_with_precedence(
+            key="timezone",
+            default=settings.get_timezone(),
+            channel_principal_id=principal_id,
+        )
+        if isinstance(timezone_name, str) and timezone_name.strip():
+            return timezone_name.strip()
+    return settings.get_timezone()
+
+
+def _resolve_session_user_id(*, incoming: IncomingContext, payload: dict[str, Any]) -> str:
+    metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
+    candidates = [
+        incoming.person_id,
+        metadata.get("person_id"),
+        payload.get("person_id"),
+        payload.get("user_id"),
+        payload.get("from_user"),
+        payload.get("chat_id"),
+    ]
+    for candidate in candidates:
+        rendered = str(candidate or "").strip()
+        if rendered:
+            return rendered
+    if incoming.address:
+        return f"{incoming.channel_type}:{incoming.address}"
+    return f"{incoming.channel_type}:anonymous"
 
 
 def _emit_channel_transition(incoming: IncomingContext, phase: str) -> None:

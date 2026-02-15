@@ -562,6 +562,10 @@ def _build_tool_call_messages(
     state: dict[str, Any],
     format_available_abilities: Callable[[], str],
 ) -> list[dict[str, Any]]:
+    session_state_block = str(state.get("session_state_block") or "").strip()
+    user_message = str(state.get("last_user_message") or "")
+    if session_state_block:
+        user_message = f"{session_state_block}\n\n{user_message}".strip()
     planning_context = state.get("planning_context") if isinstance(state.get("planning_context"), dict) else {}
     user_prompt = render_prompt_template(
         PLANNING_USER_TEMPLATE,
@@ -572,7 +576,7 @@ def _build_tool_call_messages(
                 address_style=state.get("address_style"),
                 channel_type=state.get("channel_type"),
             ),
-            "USER_MESSAGE": str(state.get("last_user_message") or ""),
+            "USER_MESSAGE": user_message,
             "LOCALE": str(state.get("locale") or "en-US"),
             "PLANNING_CONTEXT": _render_context_markdown(planning_context),
             "AVAILABLE_TOOLS": format_available_abilities(),

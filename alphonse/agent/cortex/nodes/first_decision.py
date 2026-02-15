@@ -55,6 +55,7 @@ def first_decision_node(
         address_style=state.get("address_style"),
         channel_type=state.get("channel_type"),
         available_tool_names=tool_names,
+        session_state_block=state.get("session_state_block"),
     )
     route = str(decision.get("route") or "tool_plan").strip().lower()
     intent = str(decision.get("intent") or "").strip() or state.get("intent")
