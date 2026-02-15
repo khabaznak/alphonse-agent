@@ -343,6 +343,28 @@ CREATE INDEX IF NOT EXISTS idx_tool_configs_tool_active
   ON tool_configs (tool_key, is_active, updated_at);
 
 ----------------------------------------------------------------------
+-- 2.6.2.9) ASSETS (SANDBOX-RESOLVED BY ID)
+----------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS assets (
+  asset_id        TEXT PRIMARY KEY,
+  kind            TEXT NOT NULL,
+  mime_type       TEXT NOT NULL,
+  byte_size       INTEGER NOT NULL,
+  sha256          TEXT NOT NULL,
+  sandbox_alias   TEXT NOT NULL,
+  relative_path   TEXT NOT NULL,
+  owner_user_id   TEXT,
+  provider        TEXT,
+  channel_type    TEXT,
+  channel_target  TEXT,
+  metadata_json   TEXT,
+  created_at      TEXT NOT NULL DEFAULT (datetime('now'))
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_assets_created_at
+  ON assets (created_at DESC);
+
+----------------------------------------------------------------------
 -- 2.6.2.1) CAPABILITY GAPS
 ----------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS capability_gaps (

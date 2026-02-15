@@ -37,6 +37,8 @@ def test_agent_message_webui_flow_returns_exchange_response() -> None:
             json={
                 "text": "hello",
                 "channel": "webui",
+                "content": {"type": "asset", "assets": [{"asset_id": "asset-1", "kind": "audio"}]},
+                "controls": {"audio_mode": "local_audio"},
                 "metadata": {"user_name": "UI Tester"},
             },
         )
@@ -52,6 +54,9 @@ def test_agent_message_webui_flow_returns_exchange_response() -> None:
     assert payload["text"] == "hello"
     assert payload["channel"] == "webui"
     assert payload["target"] == "webui"
+    assert payload["content"]["type"] == "asset"
+    assert payload["content"]["assets"][0]["asset_id"] == "asset-1"
+    assert payload["controls"]["audio_mode"] == "local_audio"
     assert payload["user_name"] is None
     assert payload["metadata"]["raw"]["metadata"]["user_name"] == "UI Tester"
     assert payload["origin"] == "api"

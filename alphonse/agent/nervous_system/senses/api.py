@@ -43,6 +43,20 @@ class ApiSense(Sense):
             raise ValueError(f"No sense adapter for channel={channel}")
         normalized = adapter.normalize({**api_signal.payload, "channel": channel})
         correlation_id = normalized.correlation_id or api_signal.correlation_id
+        raw_payload = normalized.metadata.get("raw") if isinstance(normalized.metadata, dict) else None
+        content = None
+        controls = None
+        provider = None
+        provider_event = None
+        if isinstance(raw_payload, dict):
+            if isinstance(raw_payload.get("content"), dict):
+                content = raw_payload.get("content")
+            if isinstance(raw_payload.get("controls"), dict):
+                controls = raw_payload.get("controls")
+            if raw_payload.get("provider") is not None:
+                provider = raw_payload.get("provider")
+            if isinstance(raw_payload.get("provider_event"), dict):
+                provider_event = raw_payload.get("provider_event")
         bus.emit(
             Signal(
                 type=api_signal.type,
@@ -55,6 +69,10 @@ class ApiSense(Sense):
                     "timestamp": normalized.timestamp,
                     "correlation_id": correlation_id,
                     "metadata": normalized.metadata,
+                    "content": content,
+                    "controls": controls,
+                    "provider": provider,
+                    "provider_event": provider_event,
                     "origin": "api",
                 },
                 source="api",

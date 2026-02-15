@@ -5,7 +5,7 @@ import os
 import time
 from typing import Any
 
-from fastapi import FastAPI, Body, HTTPException, Header
+from fastapi import FastAPI, Body, File, Form, HTTPException, Header, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -80,6 +80,7 @@ from alphonse.agent.nervous_system.users import (
     patch_user,
     upsert_user,
 )
+from alphonse.agent.nervous_system.assets import register_uploaded_asset
 from alphonse.infrastructure.api_gateway import gateway
 from alphonse.infrastructure.web_event_hub import web_event_hub
 from alphonse.agent.lan.api import router as lan_router
@@ -296,15 +297,28 @@ def agent_message(
     x_alphonse_api_token: str | None = Header(default=None),
 ) -> dict[str, Any]:
     _assert_api_token(x_alphonse_api_token)
-    text = str(payload.get("text", "")).strip()
+    text = _message_text_from_payload(payload)
+    metadata_payload = payload.get("metadata")
+    metadata = dict(metadata_payload) if isinstance(metadata_payload, dict) else {}
+    content_payload = payload.get("content")
+    content = dict(content_payload) if isinstance(content_payload, dict) else {"type": "text", "text": text}
+    controls_payload = payload.get("controls")
+    controls = dict(controls_payload) if isinstance(controls_payload, dict) else {}
+    channel = str(payload.get("channel") or payload.get("provider") or "webui")
+    target = str(payload.get("target") or payload.get("channel_target") or channel)
     signal = gateway.build_signal(
         "api.message_received",
         {
             "text": text,
             "args": payload.get("args") or {},
             "user_id": payload.get("user_id"),
-            "channel": payload.get("channel") or "webui",
-            "metadata": payload.get("metadata") or {},
+            "user_name": payload.get("user_name"),
+            "channel": channel,
+            "target": target,
+            "provider": str(payload.get("provider") or channel),
+            "content": content,
+            "controls": controls,
+            "metadata": metadata,
             "timestamp": payload.get("timestamp") or time.time(),
             "api_token": x_alphonse_api_token,
         },
@@ -314,6 +328,35 @@ def agent_message(
     if response is None:
         raise HTTPException(status_code=503, detail="API gateway unavailable")
     return response
+
+
+@app.post("/agent/assets")
+async def create_agent_asset(
+    file: UploadFile = File(...),
+    user_id: str | None = Form(default=None),
+    provider: str = Form(default="webui"),
+    channel: str = Form(default="webui"),
+    target: str | None = Form(default=None),
+    kind: str = Form(default="audio"),
+    x_alphonse_api_token: str | None = Header(default=None),
+) -> dict[str, Any]:
+    _assert_api_token(x_alphonse_api_token)
+    blob = await file.read()
+    try:
+        record = register_uploaded_asset(
+            content=blob,
+            kind=str(kind or "audio"),
+            mime_type=file.content_type,
+            owner_user_id=user_id,
+            provider=provider,
+            channel_type=channel,
+            channel_target=target or channel,
+            original_filename=file.filename,
+            metadata={"filename": file.filename or "", "uploaded_via": "api.agent.assets"},
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return record
 
 
 @app.get("/agent/timed-signals")
@@ -1217,6 +1260,27 @@ def _as_optional_str(value: object | None) -> str | None:
     if value is None:
         return None
     return str(value)
+
+
+def _message_text_from_payload(payload: dict[str, Any]) -> str:
+    text = str(payload.get("text") or "").strip()
+    if text:
+        return text
+    content = payload.get("content")
+    if not isinstance(content, dict):
+        return ""
+    content_type = str(content.get("type") or "").strip().lower()
+    if content_type == "text":
+        return str(content.get("text") or "").strip()
+    assets = content.get("assets")
+    if content_type == "asset" and isinstance(assets, list):
+        for item in assets:
+            if not isinstance(item, dict):
+                continue
+            kind = str(item.get("kind") or "").strip().lower()
+            if kind == "audio":
+                return "[audio asset message]"
+    return ""
 
 
 def _assert_api_token(provided: str | None) -> None:

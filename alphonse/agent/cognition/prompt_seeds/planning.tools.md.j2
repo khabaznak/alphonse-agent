@@ -31,6 +31,14 @@
   - `blocking` (boolean, optional)
   - `volume` (number, optional)
 
+### stt_transcribe(asset_id:string, language_hint:string)
+- Description: Transcribe an audio asset (identified by asset_id) to text.
+- When to use: Use when the incoming message includes an audio asset and you need its transcript.
+- Returns: transcript text and optional segments
+- Inputs:
+  - `asset_id` (string, required)
+  - `language_hint` (string, optional)
+
 ### getMySettings()
 - Description: Get your current runtime settings (timezone, locale, tone, address style, channel context).
 - When to use: Use before time or language-sensitive decisions when settings are needed.

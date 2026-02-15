@@ -71,6 +71,22 @@ def planner_tool_schemas() -> list[dict[str, Any]]:
         {
             "type": "function",
             "function": {
+                "name": "stt_transcribe",
+                "description": "Transcribe an audio asset by asset_id into text.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "asset_id": {"type": "string"},
+                        "language_hint": {"type": "string"},
+                    },
+                    "required": ["asset_id"],
+                    "additionalProperties": False,
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
                 "name": "telegramGetFileMeta",
                 "description": "Resolve Telegram file metadata from a file_id.",
                 "parameters": {

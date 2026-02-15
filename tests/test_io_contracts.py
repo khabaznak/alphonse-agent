@@ -89,6 +89,22 @@ def test_web_sense_adapter_normalizes() -> None:
     assert result.channel_target == "webui"
 
 
+def test_web_sense_adapter_normalizes_asset_message() -> None:
+    adapter = WebSenseAdapter()
+    result = adapter.normalize(
+        {
+            "channel": "webui",
+            "content": {
+                "type": "asset",
+                "assets": [{"asset_id": "asset-1", "kind": "audio"}],
+            },
+        }
+    )
+    assert result.text == "[audio asset message]"
+    assert result.channel_type == "webui"
+    assert result.channel_target == "webui"
+
+
 def test_api_sense_emits_normalized_payload(monkeypatch) -> None:
     normalized = NormalizedInboundMessage(
         text="ok",

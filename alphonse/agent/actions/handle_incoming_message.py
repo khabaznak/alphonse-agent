@@ -19,6 +19,7 @@ from alphonse.agent.cortex.graph import CortexGraph
 from alphonse.agent.cortex.state_store import load_state, save_state
 from alphonse.agent.identity import store as identity_store
 from alphonse.agent.io import get_io_registry
+from alphonse.agent.tools.local_audio_output import LocalAudioOutputSpeakTool
 
 logger = logging.getLogger(__name__)
 _CORTEX_GRAPH = CortexGraph()
@@ -143,6 +144,11 @@ class HandleIncomingMessageAction(Action):
             executor.execute([reply_plan], context, exec_context)
         if result.plans:
             executor.execute(result.plans, context, exec_context)
+        _maybe_emit_local_audio_reply(
+            payload=payload,
+            reply_text=str(result.reply_text or ""),
+            correlation_id=incoming.correlation_id,
+        )
 
         logger.info(
             "HandleIncomingMessageAction response channel=%s message=noop",
@@ -256,6 +262,56 @@ def _emit_channel_transition_event(incoming: IncomingContext, event: dict[str, o
     phase = str(event.get("phase") or "").strip().lower()
     if phase:
         _emit_channel_transition(incoming, phase)
+
+
+def _maybe_emit_local_audio_reply(*, payload: dict[str, object], reply_text: str, correlation_id: str) -> None:
+    if _extract_audio_mode(payload) != "local_audio":
+        return
+    spoken = str(reply_text or "").strip()
+    if not spoken:
+        return
+    try:
+        result = LocalAudioOutputSpeakTool().execute(text=spoken, blocking=False)
+        logger.info(
+            "HandleIncomingMessageAction local_audio_output correlation_id=%s status=%s",
+            correlation_id,
+            str(result.get("status") or "unknown"),
+        )
+    except Exception:
+        logger.exception(
+            "HandleIncomingMessageAction local_audio_output_failed correlation_id=%s",
+            correlation_id,
+        )
+
+
+def _extract_audio_mode(payload: dict[str, object]) -> str:
+    controls = payload.get("controls")
+    if isinstance(controls, dict):
+        mode = str(controls.get("audio_mode") or "").strip().lower()
+        if mode:
+            return mode
+    metadata = payload.get("metadata")
+    if isinstance(metadata, dict):
+        inner_controls = metadata.get("controls")
+        if isinstance(inner_controls, dict):
+            mode = str(inner_controls.get("audio_mode") or "").strip().lower()
+            if mode:
+                return mode
+        raw = metadata.get("raw")
+        if isinstance(raw, dict):
+            raw_controls = raw.get("controls")
+            if isinstance(raw_controls, dict):
+                mode = str(raw_controls.get("audio_mode") or "").strip().lower()
+                if mode:
+                    return mode
+    provider_event = payload.get("provider_event")
+    if isinstance(provider_event, dict):
+        event_controls = provider_event.get("controls")
+        if isinstance(event_controls, dict):
+            mode = str(event_controls.get("audio_mode") or "").strip().lower()
+            if mode:
+                return mode
+    return "none"
 
 
 def _attach_transition_sink(state: dict[str, object], incoming: IncomingContext) -> bool:

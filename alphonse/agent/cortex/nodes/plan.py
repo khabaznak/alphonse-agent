@@ -785,6 +785,30 @@ def _execute_tool_step(
                 "for_whom": for_whom,
             },
         }
+    if tool_name == "stt_transcribe":
+        stt_tool = tool_registry.get("stt_transcribe") if hasattr(tool_registry, "get") else None
+        if stt_tool is None or not hasattr(stt_tool, "execute"):
+            raise RuntimeError("missing_stt_transcribe_tool")
+        asset_id = str(params.get("asset_id") or "").strip()
+        language_hint = str(params.get("language_hint") or state.get("locale") or "").strip() or None
+        result = stt_tool.execute(asset_id=asset_id, language_hint=language_hint)
+        if not isinstance(result, dict):
+            raise RuntimeError("stt_transcribe_invalid_output")
+        if str(result.get("status") or "").strip().lower() != "ok":
+            error_code = str(result.get("error") or "stt_transcribe_failed").strip() or "stt_transcribe_failed"
+            raise RuntimeError(error_code)
+        transcript = str(result.get("text") or "").strip()
+        return {
+            "status": "executed",
+            "response_text": None,
+            "fact": {
+                "step": step_idx,
+                "tool": tool_name,
+                "asset_id": asset_id,
+                "transcript": transcript,
+                "segments": result.get("segments") if isinstance(result.get("segments"), list) else [],
+            },
+        }
     raise RuntimeError("unknown_tool_in_plan")
 
 
