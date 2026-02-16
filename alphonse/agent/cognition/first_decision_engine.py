@@ -23,16 +23,12 @@ def decide_first_action(
     address_style: str | None = None,
     channel_type: str | None = None,
     available_tool_names: list[str] | None = None,
-    session_state_block: str | None = None,
+    recent_conversation_block: str | None = None,
 ) -> dict[str, Any]:
     if not llm_client:
         return {"route": "tool_plan", "intent": "unknown", "confidence": 0.0}
 
     tool_names = [str(name).strip() for name in (available_tool_names or []) if str(name).strip()]
-    user_message = text.strip()
-    session_block = str(session_state_block or "").strip()
-    if session_block:
-        user_message = f"{session_block}\n\n{user_message}".strip()
     user_prompt = render_prompt_template(
         FIRST_DECISION_USER_TEMPLATE,
         {
@@ -43,8 +39,14 @@ def decide_first_action(
             channel_type=channel_type,
         ),
             "TOOL_NAMES": ", ".join(tool_names[:24]) or "(none)",
-            "USER_MESSAGE": user_message,
+            "RECENT_CONVERSATION": str(recent_conversation_block or "## RECENT CONVERSATION (last 10 turns)\n- (none)"),
+            "USER_MESSAGE": text.strip(),
         },
+    )
+    logger.debug(
+        "first_decision prompt system_prompt=%s user_prompt=%s",
+        FIRST_DECISION_SYSTEM_PROMPT,
+        user_prompt,
     )
     raw = _call_llm(
         llm_client,

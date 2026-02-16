@@ -9,12 +9,15 @@ from alphonse.agent.cognition.tool_schemas import planner_tool_schemas
 from alphonse.agent.cortex.task_mode.state import build_default_task_state
 from alphonse.agent.cortex.task_mode.types import NextStepProposal
 from alphonse.agent.cortex.task_mode.types import TraceEvent
+from alphonse.agent.session.day_state import render_recent_conversation_block
 
 logger = logging.getLogger(__name__)
 
 _NEXT_STEP_DEVELOPER_PROMPT = (
     "You are an iterative tool-using agent in a PDCA loop.\n"
     "Propose only the single next action.\n"
+    "- Treat `RECENT CONVERSATION` as authoritative context for this session/day.\n"
+    "- Use `RECENT CONVERSATION` to resolve follow-up references before asking the user again.\n"
     "- Choose one action kind: ask_user, call_tool, or finish.\n"
     "- Prefer tools that directly satisfy the user goal in one step.\n"
     "- Prefer direct-goal tools over informational tools.\n"
@@ -600,10 +603,14 @@ def _propose_next_step_with_llm(
         "- kind call_tool requires tool_name and args.\n"
         "- kind finish requires final_text."
     )
-    session_state_block = str(state.get("session_state_block") or "").strip()
+    recent_conversation_block = str(state.get("recent_conversation_block") or "").strip()
+    if not recent_conversation_block:
+        session_state = state.get("session_state") if isinstance(state.get("session_state"), dict) else None
+        if session_state:
+            recent_conversation_block = render_recent_conversation_block(session_state)
     user_prompt = (
-        f"{session_state_block}\n\n{user_prompt_body}".strip()
-        if session_state_block
+        f"{recent_conversation_block}\n\n{user_prompt_body}".strip()
+        if recent_conversation_block
         else user_prompt_body
     )
 

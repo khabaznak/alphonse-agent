@@ -12,6 +12,7 @@ from alphonse.agent.cognition.pending_interaction import (
     serialize_pending_interaction,
 )
 from alphonse.agent.cortex.nodes.telemetry import emit_brain_state
+from alphonse.agent.session.day_state import render_recent_conversation_block
 
 
 def first_decision_node(
@@ -47,6 +48,11 @@ def first_decision_node(
 
     llm_client = llm_client_from_state(state)
     tool_names = planner_tool_names()
+    recent_conversation_block = str(state.get("recent_conversation_block") or "").strip()
+    if not recent_conversation_block:
+        session_state = state.get("session_state") if isinstance(state.get("session_state"), dict) else None
+        if session_state:
+            recent_conversation_block = render_recent_conversation_block(session_state)
     decision = decide_first_action_fn(
         text=text,
         llm_client=llm_client,
@@ -55,7 +61,7 @@ def first_decision_node(
         address_style=state.get("address_style"),
         channel_type=state.get("channel_type"),
         available_tool_names=tool_names,
-        session_state_block=state.get("session_state_block"),
+        recent_conversation_block=recent_conversation_block,
     )
     route = str(decision.get("route") or "tool_plan").strip().lower()
     intent = str(decision.get("intent") or "").strip() or state.get("intent")

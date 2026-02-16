@@ -30,6 +30,7 @@ from alphonse.agent.cognition.preferences.store import (
 from alphonse.agent.cortex.nodes.capability_gap import has_capability_gap_plan
 from alphonse.agent.cortex.nodes.telemetry import emit_brain_state
 from alphonse.agent.nervous_system.paths import resolve_nervous_system_db_path
+from alphonse.agent.session.day_state import render_recent_conversation_block
 from alphonse.config import settings
 
 logger = logging.getLogger(__name__)
@@ -298,6 +299,20 @@ def _run_native_tool_call_loop(
     terminal_tools = {"getTime", "getMySettings", "getUserDetails"}
 
     for _ in range(6):
+        system_prompt = ""
+        user_prompt = ""
+        if len(messages) >= 2:
+            first = messages[0] if isinstance(messages[0], dict) else {}
+            second = messages[1] if isinstance(messages[1], dict) else {}
+            if str(first.get("role") or "").strip().lower() == "system":
+                system_prompt = str(first.get("content") or "")
+            if str(second.get("role") or "").strip().lower() == "user":
+                user_prompt = str(second.get("content") or "")
+        logger.debug(
+            "planning prompt system_prompt=%s user_prompt=%s",
+            system_prompt,
+            user_prompt,
+        )
         try:
             response = llm_client.complete_with_tools(
                 messages=messages,
@@ -562,11 +577,12 @@ def _build_tool_call_messages(
     state: dict[str, Any],
     format_available_abilities: Callable[[], str],
 ) -> list[dict[str, Any]]:
-    session_state_block = str(state.get("session_state_block") or "").strip()
-    user_message = str(state.get("last_user_message") or "")
-    if session_state_block:
-        user_message = f"{session_state_block}\n\n{user_message}".strip()
     planning_context = state.get("planning_context") if isinstance(state.get("planning_context"), dict) else {}
+    recent_conversation_block = str(state.get("recent_conversation_block") or "").strip()
+    if not recent_conversation_block:
+        session_state = state.get("session_state") if isinstance(state.get("session_state"), dict) else None
+        if session_state:
+            recent_conversation_block = render_recent_conversation_block(session_state)
     user_prompt = render_prompt_template(
         PLANNING_USER_TEMPLATE,
         {
@@ -576,7 +592,8 @@ def _build_tool_call_messages(
                 address_style=state.get("address_style"),
                 channel_type=state.get("channel_type"),
             ),
-            "USER_MESSAGE": user_message,
+            "RECENT_CONVERSATION": recent_conversation_block or "## RECENT CONVERSATION (last 10 turns)\n- (none)",
+            "USER_MESSAGE": str(state.get("last_user_message") or ""),
             "LOCALE": str(state.get("locale") or "en-US"),
             "PLANNING_CONTEXT": _render_context_markdown(planning_context),
             "AVAILABLE_TOOLS": format_available_abilities(),

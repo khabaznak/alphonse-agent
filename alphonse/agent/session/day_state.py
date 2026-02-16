@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo
 _MAX_WORKING_SET = 6
 _MAX_OPEN_LOOPS = 6
 _MAX_CHANNELS = 6
+_MAX_RECENT_TURNS = 10
 _MAX_LINE_LENGTH = 140
 _NAMED_SECRET_PATTERN = re.compile(r"(?i)\b(api[_-]?key|token|password|secret)\b\s*[:=]\s*\S+")
 _TOKEN_SECRET_PATTERN = re.compile(r"\bsk-[A-Za-z0-9]{10,}\b")
@@ -54,6 +55,7 @@ def default_session_state(*, user_id: str, local_date: str) -> dict[str, Any]:
         "date": local_date,
         "rev": 0,
         "channels_seen": [],
+        "recent_conversation": [],
         "working_set": [],
         "open_loops": [],
         "last_action": None,
@@ -145,11 +147,37 @@ def build_next_session_state(
             open_loops.append("Waiting for user input.")
 
     state["channels_seen"] = _merge_channels(state.get("channels_seen"), channel)
+    state["recent_conversation"] = _append_recent_turn(
+        existing=state.get("recent_conversation"),
+        user_text=user_line,
+        assistant_text=assistant_line,
+    )
     state["working_set"] = working_set[:_MAX_WORKING_SET]
     state["open_loops"] = open_loops[:_MAX_OPEN_LOOPS]
     state["last_action"] = last_action
     state["rev"] = int(state.get("rev") or 0) + 1
     return state
+
+
+def render_recent_conversation_block(state: dict[str, Any], *, max_turns: int = _MAX_RECENT_TURNS) -> str:
+    normalized = _normalize_state(state)
+    turns = normalized.get("recent_conversation") if isinstance(normalized.get("recent_conversation"), list) else []
+    lines = [f"## RECENT CONVERSATION (last {max_turns} turns)"]
+    if not turns:
+        lines.append("- (none)")
+        return "\n".join(lines)
+    for turn in turns[-max_turns:]:
+        if not isinstance(turn, dict):
+            continue
+        user_text = _sanitize_line(str(turn.get("user") or ""), max_len=120)
+        assistant_text = _sanitize_line(str(turn.get("assistant") or ""), max_len=120)
+        if user_text:
+            lines.append(f"- User: {user_text}")
+        if assistant_text:
+            lines.append(f"- Assistant: {assistant_text}")
+    if len(lines) == 1:
+        lines.append("- (none)")
+    return "\n".join(lines)
 
 
 def render_session_prompt_block(state: dict[str, Any]) -> str:
@@ -195,8 +223,23 @@ def render_session_markdown(state: dict[str, Any]) -> str:
         f"- Rev: {normalized['rev']}",
         f"- Channels Seen: {', '.join(normalized['channels_seen']) if normalized['channels_seen'] else '(none)'}",
         "",
-        "## Working Set",
+        "## Recent Conversation",
     ]
+    recent_turns = normalized.get("recent_conversation") if isinstance(normalized.get("recent_conversation"), list) else []
+    if recent_turns:
+        for turn in recent_turns:
+            if not isinstance(turn, dict):
+                continue
+            if str(turn.get("user") or "").strip():
+                lines.append(f"- User: {turn.get('user')}")
+            if str(turn.get("assistant") or "").strip():
+                lines.append(f"- Assistant: {turn.get('assistant')}")
+    else:
+        lines.append("- (none)")
+    lines.extend([
+        "",
+        "## Working Set",
+    ])
     for item in normalized["working_set"]:
         lines.append(f"- {item}")
     if not normalized["working_set"]:
@@ -365,6 +408,7 @@ def _normalize_state(state: dict[str, Any]) -> dict[str, Any]:
         "date": local_date,
         "rev": max(int(state.get("rev") or 0), 0),
         "channels_seen": _merge_channels(state.get("channels_seen"), None),
+        "recent_conversation": _normalize_recent_conversation(state.get("recent_conversation")),
         "working_set": _normalize_list(state.get("working_set"), limit=_MAX_WORKING_SET),
         "open_loops": _normalize_list(state.get("open_loops"), limit=_MAX_OPEN_LOOPS),
         "last_action": action_payload,
@@ -397,6 +441,31 @@ def _normalize_list(value: Any, *, limit: int) -> list[str]:
         if len(result) >= limit:
             break
     return result
+
+
+def _normalize_recent_conversation(value: Any) -> list[dict[str, str]]:
+    if not isinstance(value, list):
+        return []
+    normalized: list[dict[str, str]] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        user_text = _sanitize_line(str(item.get("user") or ""), max_len=120)
+        assistant_text = _sanitize_line(str(item.get("assistant") or ""), max_len=120)
+        if not user_text and not assistant_text:
+            continue
+        normalized.append({"user": user_text, "assistant": assistant_text})
+        if len(normalized) >= _MAX_RECENT_TURNS:
+            normalized = normalized[-_MAX_RECENT_TURNS:]
+    return normalized
+
+
+def _append_recent_turn(*, existing: Any, user_text: str, assistant_text: str) -> list[dict[str, str]]:
+    turns = _normalize_recent_conversation(existing)
+    if not user_text and not assistant_text:
+        return turns
+    turns.append({"user": _sanitize_line(user_text, max_len=120), "assistant": _sanitize_line(assistant_text, max_len=120)})
+    return turns[-_MAX_RECENT_TURNS:]
 
 
 def _sanitize_line(value: str, *, max_len: int = _MAX_LINE_LENGTH) -> str:

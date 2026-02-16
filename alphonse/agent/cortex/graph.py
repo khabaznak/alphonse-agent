@@ -58,6 +58,9 @@ class CortexState(TypedDict, total=False):
     plan_repair_attempts: int
     selected_step_index: int | None
     route_decision: str | None
+    session_id: str | None
+    session_state: dict[str, Any] | None
+    recent_conversation_block: str | None
     _llm_client: Any
     _transition_sink: Any
 

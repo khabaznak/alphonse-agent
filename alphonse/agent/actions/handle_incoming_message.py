@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import uuid
 from typing import Any
 
@@ -25,7 +26,7 @@ from alphonse.agent.io import get_io_registry
 from alphonse.agent.nervous_system import users as users_store
 from alphonse.agent.session.day_state import build_next_session_state
 from alphonse.agent.session.day_state import commit_session_state
-from alphonse.agent.session.day_state import render_session_prompt_block
+from alphonse.agent.session.day_state import render_recent_conversation_block
 from alphonse.agent.session.day_state import resolve_day_session
 from alphonse.agent.tools.local_audio_output import LocalAudioOutputSpeakTool
 from alphonse.config import settings
@@ -89,7 +90,7 @@ class HandleIncomingMessageAction(Action):
         )
         state["session_id"] = day_session.get("session_id")
         state["session_state"] = day_session
-        state["session_state_block"] = render_session_prompt_block(day_session)
+        state["recent_conversation_block"] = render_recent_conversation_block(day_session)
         has_live_transition_sink = _attach_transition_sink(state, incoming)
 
         try:
@@ -201,15 +202,78 @@ def _text_log_snippet(text: str, limit: int = 80) -> str:
 
 
 def _pack_raw_provider_event_markdown(*, channel_type: str, payload: dict[str, object], correlation_id: str) -> str:
+    render_mode = str(os.getenv("ALPHONSE_PROVIDER_EVENT_RENDER_MODE") or "json").strip().lower()
+    if render_mode == "markdown":
+        return _pack_raw_provider_event_as_markdown(
+            channel_type=channel_type,
+            payload=payload,
+            correlation_id=correlation_id,
+        )
     return (
-        "# Incoming Provider Event\n"
+        "## RAW MESSAGE\n"
+        "\n"
         f"- channel: {channel_type}\n"
         f"- correlation_id: {correlation_id}\n\n"
         "## RAW JSON\n"
+        "\n"
         "```json\n"
         f"{json.dumps(payload, ensure_ascii=False, indent=2)}\n"
         "```\n"
     )
+
+
+def _pack_raw_provider_event_as_markdown(
+    *,
+    channel_type: str,
+    payload: dict[str, object],
+    correlation_id: str,
+) -> str:
+    lines = [
+        "## RAW MESSAGE",
+        "",
+        f"- channel: {channel_type}",
+        f"- correlation_id: {correlation_id}",
+        "",
+        "## RAW MESSAGE FIELDS",
+    ]
+    lines.extend(_render_json_as_markdown(payload, level=0))
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def _render_json_as_markdown(value: object, *, level: int) -> list[str]:
+    indent = "  " * level
+    if isinstance(value, dict):
+        lines: list[str] = []
+        if not value:
+            return [f"{indent}- {{}}"]
+        for key, item in value.items():
+            key_text = str(key)
+            if isinstance(item, (dict, list)):
+                lines.append(f"{indent}- {key_text}:")
+                lines.extend(_render_json_as_markdown(item, level=level + 1))
+            else:
+                lines.append(f"{indent}- {key_text}: {_render_scalar(item)}")
+        return lines
+    if isinstance(value, list):
+        if not value:
+            return [f"{indent}- []"]
+        lines = []
+        for item in value:
+            if isinstance(item, (dict, list)):
+                lines.append(f"{indent}-")
+                lines.extend(_render_json_as_markdown(item, level=level + 1))
+            else:
+                lines.append(f"{indent}- {_render_scalar(item)}")
+        return lines
+    return [f"{indent}- {_render_scalar(value)}"]
+
+
+def _render_scalar(value: object) -> str:
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    return str(value)
 
 
 def _build_incoming_context_from_payload(
@@ -264,6 +328,17 @@ def _resolve_session_timezone(incoming: IncomingContext) -> str:
 
 def _resolve_session_user_id(*, incoming: IncomingContext, payload: dict[str, Any]) -> str:
     metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
+    principal_id = principal_id_for_incoming(incoming)
+    if principal_id:
+        try:
+            principal_user = users_store.get_user_by_principal_id(principal_id)
+        except Exception:
+            principal_user = None
+        if isinstance(principal_user, dict):
+            db_user_id = str(principal_user.get("user_id") or "").strip()
+            if db_user_id:
+                return db_user_id
+
     resolved_name = _resolve_display_name(payload=payload, metadata=metadata)
     if resolved_name:
         try:
@@ -274,6 +349,9 @@ def _resolve_session_user_id(*, incoming: IncomingContext, payload: dict[str, An
             db_user_id = str(matched_user.get("user_id") or "").strip()
             if db_user_id:
                 return db_user_id
+        # For Telegram, prefer name-based continuity over numeric chat/user id fallback.
+        if str(incoming.channel_type or "").strip().lower() == "telegram":
+            return f"name:{resolved_name.lower()}"
 
     candidates = [
         incoming.person_id,
@@ -286,7 +364,6 @@ def _resolve_session_user_id(*, incoming: IncomingContext, payload: dict[str, An
         _nested_get(payload, "metadata", "raw", "user_id"),
         _nested_get(payload, "metadata", "raw", "from_user"),
         _nested_get(payload, "metadata", "raw", "metadata", "user_id"),
-        payload.get("chat_id"),
     ]
     for candidate in candidates:
         rendered = str(candidate or "").strip()
@@ -294,6 +371,9 @@ def _resolve_session_user_id(*, incoming: IncomingContext, payload: dict[str, An
             return rendered
     if resolved_name:
         return f"name:{resolved_name.lower()}"
+    chat_id = str(payload.get("chat_id") or "").strip()
+    if chat_id:
+        return chat_id
     if incoming.address:
         return f"{incoming.channel_type}:{incoming.address}"
     return f"{incoming.channel_type}:anonymous"
@@ -305,6 +385,9 @@ def _resolve_display_name(*, payload: dict[str, Any], metadata: dict[str, Any]) 
         payload.get("from_user_name"),
         metadata.get("user_name"),
         metadata.get("from_user_name"),
+        _nested_get(payload, "provider_event", "message", "from", "first_name"),
+        _nested_get(payload, "provider_event", "message", "from", "username"),
+        _nested_get(payload, "provider_event", "message", "chat", "first_name"),
         _nested_get(payload, "metadata", "raw", "user_name"),
         _nested_get(payload, "metadata", "raw", "from_user_name"),
         _nested_get(payload, "metadata", "raw", "metadata", "user_name"),

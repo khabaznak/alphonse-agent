@@ -242,7 +242,7 @@ def test_pdca_parse_failure_falls_back_to_waiting_user() -> None:
     assert any(isinstance(event, dict) and event.get("type") == "parse_failed" for event in recent)
 
 
-def test_pdca_next_step_prompt_includes_session_state_block_sentinel() -> None:
+def test_pdca_next_step_prompt_includes_recent_conversation_sentinel() -> None:
     tool_registry = build_default_tool_registry()
     next_step = build_next_step_node(tool_registry=tool_registry)
     llm = _PromptCaptureLlm('{"kind":"call_tool","tool_name":"getTime","args":{}}')
@@ -254,11 +254,11 @@ def test_pdca_next_step_prompt_includes_session_state_block_sentinel() -> None:
         "correlation_id": "corr-pdca-session-sentinel",
         "_llm_client": llm,
         "task_state": task_state,
-        "session_state_block": (
-            "SESSION_STATE (u|2026-02-15)\n"
-            "SESSION_STATE is authoritative working memory for this session/day.\n"
+        "recent_conversation_block": (
+            "## RECENT CONVERSATION (last 10 turns)\n"
             f"{sentinel}\n"
-            "- last_action: Fetched current time."
+            "- User: what time was it?\n"
+            "- Assistant: It was 5:22 p.m."
         ),
     }
 
@@ -266,7 +266,7 @@ def test_pdca_next_step_prompt_includes_session_state_block_sentinel() -> None:
     assert sentinel in llm.last_user_prompt
 
 
-def test_pdca_can_answer_last_tool_question_from_session_state_block() -> None:
+def test_pdca_can_answer_last_tool_question_from_recent_conversation_block() -> None:
     tool_registry = build_default_tool_registry()
     next_step = build_next_step_node(tool_registry=tool_registry)
     llm = _SessionAwareTaskLlm()
@@ -280,9 +280,8 @@ def test_pdca_can_answer_last_tool_question_from_session_state_block() -> None:
         "channel_target": "8553589429",
         "locale": "en-US",
         "task_state": task_state,
-        "session_state_block": (
-            "SESSION_STATE (u|2026-02-15)\n"
-            "SESSION_STATE is authoritative working memory for this session/day.\n"
+        "recent_conversation_block": (
+            "## RECENT CONVERSATION (last 10 turns)\n"
             "- last_action: Played local audio output."
         ),
     }

@@ -2,6 +2,7 @@ from .day_state import build_next_session_state
 from .day_state import commit_session_state
 from .day_state import current_local_date
 from .day_state import load_session_state
+from .day_state import render_recent_conversation_block
 from .day_state import render_session_markdown
 from .day_state import render_session_prompt_block
 from .day_state import resolve_day_session
@@ -12,6 +13,7 @@ __all__ = [
     "commit_session_state",
     "current_local_date",
     "load_session_state",
+    "render_recent_conversation_block",
     "render_session_markdown",
     "render_session_prompt_block",
     "resolve_day_session",

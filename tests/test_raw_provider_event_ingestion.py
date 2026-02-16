@@ -60,7 +60,59 @@ def test_handle_incoming_packs_provider_event_raw_json(tmp_path: Path, monkeypat
     )
     action.execute({"signal": signal, "state": None, "outcome": None, "ctx": None})
     packed = captured.get("text", "")
-    assert "Incoming Provider Event" in packed
+    assert "## RAW MESSAGE" in packed
+    assert "## RAW JSON" in packed
+    assert "```json" in packed
     assert '"update_id": 123' in packed
     assert '"voice"' in packed
     assert '"file_id": "voice-file-1"' in packed
+
+
+def test_handle_incoming_packs_provider_event_markdown_mode(tmp_path: Path, monkeypatch) -> None:
+    db_path = tmp_path / "nerve-db"
+    monkeypatch.setenv("NERVE_DB_PATH", str(db_path))
+    monkeypatch.setenv("ALPHONSE_PROVIDER_EVENT_RENDER_MODE", "markdown")
+    apply_schema(db_path)
+
+    captured: dict[str, str] = {}
+
+    class _FakeGraph:
+        def invoke(self, state: dict, text: str, *, llm_client=None):
+            _ = (state, llm_client)
+            captured["text"] = text
+            return _FakeCortexResult()
+
+    class _FakePlanExecutor:
+        def execute(self, plans, context, exec_context) -> None:
+            _ = (plans, context, exec_context)
+            return None
+
+    monkeypatch.setattr(him, "_CORTEX_GRAPH", _FakeGraph())
+    monkeypatch.setattr(him, "PlanExecutor", lambda: _FakePlanExecutor())
+    monkeypatch.setattr(him, "build_llm_client", lambda: None)
+
+    action = HandleIncomingMessageAction()
+    provider_event = {
+        "update_id": 456,
+        "message": {
+            "message_id": 100,
+            "chat": {"id": 8553589429},
+            "text": "hola",
+        },
+    }
+    signal = Signal(
+        type="telegram.message_received",
+        payload={
+            "text": "hola",
+            "channel": "telegram",
+            "chat_id": "8553589429",
+            "provider_event": provider_event,
+        },
+        source="telegram",
+    )
+    action.execute({"signal": signal, "state": None, "outcome": None, "ctx": None})
+    packed = captured.get("text", "")
+    assert "## RAW MESSAGE" in packed
+    assert "## RAW MESSAGE FIELDS" in packed
+    assert "```json" not in packed
+    assert "- update_id: 456" in packed
