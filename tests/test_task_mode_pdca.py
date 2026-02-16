@@ -27,6 +27,34 @@ class _QueuedLlm:
         return self._responses.pop(0)
 
 
+class _PromptCaptureLlm:
+    def __init__(self, response: str) -> None:
+        self._response = response
+        self.last_user_prompt = ""
+
+    def complete(self, system_prompt: str, user_prompt: str) -> str:
+        _ = system_prompt
+        self.last_user_prompt = user_prompt
+        return self._response
+
+
+class _SessionAwareTaskLlm:
+    def __init__(self) -> None:
+        self.next_step_prompt = ""
+
+    def complete(self, system_prompt: str, user_prompt: str) -> str:
+        _ = system_prompt
+        if "## Output Contract" in user_prompt:
+            self.next_step_prompt = user_prompt
+            if "last_action: Played local audio output." in user_prompt:
+                return (
+                    '{"kind":"finish",'
+                    '"final_text":"The last tool you used was local_audio_output.speak."}'
+                )
+            return '{"kind":"ask_user","question":"Can you clarify?"}'
+        return "The last tool you used was local_audio_output.speak."
+
+
 class _FakeClock:
     def get_time(self) -> datetime:
         return datetime(2026, 2, 14, 12, 0, 0, tzinfo=timezone.utc)
@@ -212,6 +240,65 @@ def test_pdca_parse_failure_falls_back_to_waiting_user() -> None:
     recent = trace.get("recent")
     assert isinstance(recent, list)
     assert any(isinstance(event, dict) and event.get("type") == "parse_failed" for event in recent)
+
+
+def test_pdca_next_step_prompt_includes_session_state_block_sentinel() -> None:
+    tool_registry = build_default_tool_registry()
+    next_step = build_next_step_node(tool_registry=tool_registry)
+    llm = _PromptCaptureLlm('{"kind":"call_tool","tool_name":"getTime","args":{}}')
+
+    task_state = build_default_task_state()
+    task_state["goal"] = "what time is it?"
+    sentinel = "SESSION_SENTINEL_TOKEN_123"
+    state: dict[str, object] = {
+        "correlation_id": "corr-pdca-session-sentinel",
+        "_llm_client": llm,
+        "task_state": task_state,
+        "session_state_block": (
+            "SESSION_STATE (u|2026-02-15)\n"
+            "SESSION_STATE is authoritative working memory for this session/day.\n"
+            f"{sentinel}\n"
+            "- last_action: Fetched current time."
+        ),
+    }
+
+    _ = next_step(state)
+    assert sentinel in llm.last_user_prompt
+
+
+def test_pdca_can_answer_last_tool_question_from_session_state_block() -> None:
+    tool_registry = build_default_tool_registry()
+    next_step = build_next_step_node(tool_registry=tool_registry)
+    llm = _SessionAwareTaskLlm()
+
+    task_state = build_default_task_state()
+    task_state["goal"] = "what was the last tool you used?"
+    state: dict[str, object] = {
+        "correlation_id": "corr-pdca-last-tool-from-session-state",
+        "_llm_client": llm,
+        "channel_type": "telegram",
+        "channel_target": "8553589429",
+        "locale": "en-US",
+        "task_state": task_state,
+        "session_state_block": (
+            "SESSION_STATE (u|2026-02-15)\n"
+            "SESSION_STATE is authoritative working memory for this session/day.\n"
+            "- last_action: Played local audio output."
+        ),
+    }
+
+    state = _apply(state, next_step(state))
+    state = _apply(state, validate_step_node(state, tool_registry=tool_registry))
+    state = _apply(state, execute_step_node(state, tool_registry=tool_registry))
+    state = _apply(state, update_state_node(state))
+    state = _apply(state, act_node(state))
+
+    next_state = state["task_state"]
+    assert isinstance(next_state, dict)
+    assert next_state.get("status") == "done"
+    outcome = next_state.get("outcome")
+    assert isinstance(outcome, dict)
+    assert outcome.get("final_text") == "The last tool you used was local_audio_output.speak."
 
 
 def test_execute_step_handles_structured_tool_failure() -> None:

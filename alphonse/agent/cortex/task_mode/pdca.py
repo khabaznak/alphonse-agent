@@ -589,7 +589,7 @@ def _propose_next_step_with_llm(
 
     tool_menu = _build_tool_menu(tool_registry)
     working_view = _build_working_state_view(task_state)
-    user_prompt = (
+    user_prompt_body = (
         "## Tool Menu\n"
         f"{tool_menu}\n\n"
         "## Working State View\n"
@@ -599,6 +599,12 @@ def _propose_next_step_with_llm(
         "- kind ask_user requires question.\n"
         "- kind call_tool requires tool_name and args.\n"
         "- kind finish requires final_text."
+    )
+    session_state_block = str(state.get("session_state_block") or "").strip()
+    user_prompt = (
+        f"{session_state_block}\n\n{user_prompt_body}".strip()
+        if session_state_block
+        else user_prompt_body
     )
 
     structured_supported, parsed_structured = _call_llm_structured(

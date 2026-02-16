@@ -80,6 +80,7 @@ def test_session_prompt_block_is_bounded() -> None:
     block = render_session_prompt_block(state)
     assert block.count("\n") + 1 <= 30
     assert "SESSION_STATE (u-1|2026-02-15)" in block
+    assert "SESSION_STATE is authoritative working memory" in block
 
 
 def test_session_markdown_render_matches_json_content() -> None:
