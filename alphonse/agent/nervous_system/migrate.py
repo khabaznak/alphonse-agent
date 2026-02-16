@@ -25,6 +25,7 @@ def apply_schema(db_path: Path) -> None:
         _ensure_intent_specs_columns(conn)
         _ensure_principals_constraints(conn)
         _ensure_users_table(conn)
+        _ensure_services_registry(conn)
         _ensure_prompt_template_columns(conn)
         _ensure_sandbox_directories(conn)
 
@@ -185,6 +186,81 @@ def _ensure_users_table(conn: sqlite3.Connection) -> None:
     )
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_users_principal ON users (principal_id)"
+    )
+
+
+def _ensure_services_registry(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS services (
+          service_id         INTEGER PRIMARY KEY,
+          service_key        TEXT NOT NULL UNIQUE,
+          raw_user_key_field TEXT NOT NULL,
+          name               TEXT NOT NULL,
+          description        TEXT,
+          created_at         TEXT NOT NULL DEFAULT (datetime('now')),
+          updated_at         TEXT NOT NULL DEFAULT (datetime('now'))
+        ) STRICT
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS user_service_resolvers (
+          resolver_id      TEXT PRIMARY KEY,
+          user_id          TEXT NOT NULL,
+          service_id       INTEGER NOT NULL,
+          service_user_id  TEXT NOT NULL,
+          is_active        INTEGER NOT NULL DEFAULT 1,
+          created_at       TEXT NOT NULL DEFAULT (datetime('now')),
+          updated_at       TEXT NOT NULL DEFAULT (datetime('now')),
+          CHECK (is_active IN (0,1))
+        ) STRICT
+        """
+    )
+    conn.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_user_service_resolver_unique
+          ON user_service_resolvers (user_id, service_id)
+        """
+    )
+    conn.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_service_user_unique
+          ON user_service_resolvers (service_id, service_user_id)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_service_resolvers_active
+          ON user_service_resolvers (service_id, is_active)
+        """
+    )
+    # Temporary fixed registry ids by request:
+    # - Web UI: service_id=1
+    # - Telegram: service_id=2
+    conn.execute(
+        """
+        INSERT INTO services (service_id, service_key, raw_user_key_field, name, description)
+        VALUES (1, 'webui', 'user_id', 'Alphonse Web UI', 'Alphonse Web UI delivery')
+        ON CONFLICT(service_id) DO UPDATE SET
+          service_key = excluded.service_key,
+          raw_user_key_field = excluded.raw_user_key_field,
+          name = excluded.name,
+          description = excluded.description,
+          updated_at = datetime('now')
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO services (service_id, service_key, raw_user_key_field, name, description)
+        VALUES (2, 'telegram', 'chat_id', 'Telegram', 'Telegram chat delivery')
+        ON CONFLICT(service_id) DO UPDATE SET
+          service_key = excluded.service_key,
+          raw_user_key_field = excluded.raw_user_key_field,
+          name = excluded.name,
+          description = excluded.description,
+          updated_at = datetime('now')
+        """
     )
 
 

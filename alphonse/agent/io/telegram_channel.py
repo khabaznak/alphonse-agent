@@ -12,6 +12,7 @@ from alphonse.agent.io.contracts import (
 from alphonse.agent.io.adapters import SenseAdapter, ExtremityAdapter
 from alphonse.agent.extremities.interfaces.integrations.telegram.telegram_adapter import TelegramAdapter
 from alphonse.agent.extremities.telegram_config import build_telegram_adapter_config
+from alphonse.agent.nervous_system.user_service_resolvers import resolve_telegram_chat_id_for_user
 
 logger = logging.getLogger(__name__)
 
@@ -68,14 +69,19 @@ class TelegramExtremityAdapter(ExtremityAdapter):
         if not self._adapter:
             logger.warning("TelegramExtremityAdapter missing adapter; message skipped")
             return
-        if not message.channel_target:
-            logger.warning("TelegramExtremityAdapter missing channel_target")
+        chat_id = _resolve_telegram_delivery_target(message)
+        if not chat_id:
+            logger.warning(
+                "TelegramExtremityAdapter unresolved target channel_target=%s audience=%s",
+                message.channel_target,
+                message.audience,
+            )
             return
         self._adapter.handle_action(
             {
                 "type": "send_message",
                 "payload": {
-                    "chat_id": message.channel_target,
+                    "chat_id": chat_id,
                     "text": message.message,
                     "correlation_id": message.correlation_id,
                 },
@@ -158,6 +164,34 @@ def _as_float(value: object | None, *, default: float) -> float:
         return float(value)
     except (TypeError, ValueError):
         return default
+
+
+def _resolve_telegram_delivery_target(message: NormalizedOutboundMessage) -> str | None:
+    candidate = str(message.channel_target or "").strip()
+    if candidate and _is_numeric_chat_id(candidate):
+        return candidate
+
+    audience = message.audience if isinstance(message.audience, dict) else {}
+    if str(audience.get("kind") or "").strip().lower() == "person":
+        internal_user_id = str(audience.get("id") or "").strip()
+        resolved = resolve_telegram_chat_id_for_user(internal_user_id)
+        if resolved:
+            return resolved
+
+    if candidate:
+        resolved = resolve_telegram_chat_id_for_user(candidate)
+        if resolved:
+            return resolved
+    return candidate if candidate and _is_numeric_chat_id(candidate) else None
+
+
+def _is_numeric_chat_id(value: str) -> bool:
+    rendered = str(value or "").strip()
+    if not rendered:
+        return False
+    if rendered.startswith("-"):
+        return rendered[1:].isdigit()
+    return rendered.isdigit()
 
 
 def _telegram_chat_action_for_phase(phase: str) -> str | None:

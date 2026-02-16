@@ -20,6 +20,11 @@ def test_telegram_extremity_adapter_deliver_emits_send_message(monkeypatch) -> N
         lambda: {"bot_token": "fake-token", "poll_interval_sec": 1.0},
     )
     monkeypatch.setattr(telegram_channel, "TelegramAdapter", FakeTelegramAdapter)
+    monkeypatch.setattr(
+        telegram_channel,
+        "resolve_telegram_chat_id_for_user",
+        lambda _: None,
+    )
 
     adapter = telegram_channel.TelegramExtremityAdapter()
     adapter.deliver(
@@ -57,6 +62,45 @@ def test_telegram_extremity_adapter_disabled_without_config(monkeypatch) -> None
             metadata={},
         )
     )
+
+
+def test_telegram_extremity_adapter_resolves_internal_user_to_chat_id(monkeypatch) -> None:
+    captured: list[dict] = []
+
+    class FakeTelegramAdapter:
+        def __init__(self, config: dict) -> None:
+            self.config = config
+
+        def handle_action(self, action: dict) -> None:
+            captured.append(action)
+
+    monkeypatch.setattr(
+        telegram_channel,
+        "build_telegram_adapter_config",
+        lambda: {"bot_token": "fake-token", "poll_interval_sec": 1.0},
+    )
+    monkeypatch.setattr(telegram_channel, "TelegramAdapter", FakeTelegramAdapter)
+    monkeypatch.setattr(
+        telegram_channel,
+        "resolve_telegram_chat_id_for_user",
+        lambda user_ref: "8553589429" if user_ref in {"e64-user", "Alex"} else None,
+    )
+
+    adapter = telegram_channel.TelegramExtremityAdapter()
+    adapter.deliver(
+        NormalizedOutboundMessage(
+            message="hola",
+            channel_type="telegram",
+            channel_target="Alex",
+            audience={"kind": "person", "id": "e64-user"},
+            correlation_id="cid-map",
+            metadata={},
+        )
+    )
+
+    assert len(captured) == 1
+    assert captured[0]["type"] == "send_message"
+    assert captured[0]["payload"]["chat_id"] == "8553589429"
 
 
 def test_telegram_waiting_user_reaction_is_safe_and_deduped(monkeypatch) -> None:
