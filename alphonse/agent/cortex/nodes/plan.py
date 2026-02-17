@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import json
 import logging
 import os
@@ -658,6 +659,9 @@ def _merge_tool_facts(*, state: dict[str, Any], tool_facts: list[dict[str, Any]]
 def _render_context_markdown(context: dict[str, Any]) -> str:
     if not isinstance(context, dict) or not context:
         return "- (none)"
+    scratchpad_lines = _render_scratchpad_context_blocks(context)
+    if scratchpad_lines:
+        return "\n".join(scratchpad_lines)
     lines: list[str] = []
     for key, value in context.items():
         lines.append(f"- **{key}**: {value}")
@@ -901,7 +905,88 @@ def _execute_tool_step(
             "response_text": response_text,
             "fact": _fact("executed", status="ok", exit_code=int(result.get("exit_code") or 0)),
         }
+    tool = tool_registry.get(tool_name) if hasattr(tool_registry, "get") else None
+    if tool is not None and callable(getattr(tool, "execute", None)):
+        result = _execute_with_optional_state(tool=tool, params=params, state=state)
+        if not isinstance(result, dict):
+            raise RuntimeError("tool_invalid_output")
+        status = str(result.get("status") or "").strip().lower()
+        if status == "failed":
+            error_payload = result.get("error")
+            if isinstance(error_payload, dict):
+                error_code = str(error_payload.get("code") or "tool_failed").strip() or "tool_failed"
+                error_message = str(error_payload.get("message") or error_code)
+            else:
+                error_code = str(error_payload or "tool_failed").strip() or "tool_failed"
+                error_message = error_code
+            return {
+                "status": "failed",
+                "error": error_code,
+                "error_detail": error_message,
+                "response_text": None,
+                "fact": _fact("failed", status="failed", error=error_code),
+            }
+        result_payload = result.get("result")
+        response_text = ""
+        if isinstance(result_payload, dict):
+            response_text = str(result_payload.get("content") or result_payload.get("message") or "").strip()
+        elif isinstance(result_payload, str):
+            response_text = result_payload.strip()
+        return {
+            "status": "executed",
+            "response_text": response_text or None,
+            "fact": _fact("executed", status=str(result.get("status") or "ok"), result=result_payload),
+        }
     raise RuntimeError("unknown_tool_in_plan")
+
+
+def _execute_with_optional_state(*, tool: Any, params: dict[str, Any], state: dict[str, Any]) -> Any:
+    execute = getattr(tool, "execute", None)
+    if not callable(execute):
+        raise RuntimeError("tool_not_executable")
+    signature = inspect.signature(execute)
+    if "state" in signature.parameters:
+        return execute(**params, state=state)
+    return execute(**params)
+
+
+def _render_scratchpad_context_blocks(context: dict[str, Any]) -> list[str]:
+    facts = context.get("facts") if isinstance(context.get("facts"), dict) else {}
+    results = facts.get("tool_results") if isinstance(facts.get("tool_results"), list) else []
+    notes: list[dict[str, Any]] = []
+    for item in results:
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("tool") or "").strip() != "scratchpad_read":
+            continue
+        payload = item.get("result") if isinstance(item.get("result"), dict) else {}
+        if not isinstance(payload, dict):
+            continue
+        notes.append(payload)
+    if not notes:
+        return []
+    lines: list[str] = []
+    for idx, note in enumerate(notes):
+        if idx > 0:
+            lines.append("")
+        mode = str(note.get("mode") or "tail").strip() or "tail"
+        content = str(note.get("content") or "").strip()
+        lines.extend(
+            [
+                "### Retrieved Scratchpad Note (working context; may include drafts)",
+                f"- doc_id: {str(note.get('doc_id') or '').strip()}",
+                f"- title: {str(note.get('title') or '').strip()}",
+                f"- scope: {str(note.get('scope') or '').strip()}",
+                f"- tags: {', '.join(str(item).strip() for item in (note.get('tags') or []) if str(item).strip())}",
+                f"- updated_at: {str(note.get('updated_at') or '').strip()}",
+                f"- mode: {mode} (max_chars={int(note.get('max_chars') or 6000)})",
+            ]
+        )
+        if content:
+            lines.append("- content:")
+            for text_line in content.splitlines():
+                lines.append(f"  {text_line}")
+    return lines
 
 
 def _can_use_python_subprocess(state: dict[str, Any]) -> tuple[bool, str | None]:

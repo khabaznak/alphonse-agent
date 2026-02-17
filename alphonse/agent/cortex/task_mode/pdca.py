@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import json
 import logging
 from datetime import datetime
@@ -573,7 +574,11 @@ def _execute_tool_call(
     if tool is None:
         raise RuntimeError(f"tool_not_found:{tool_name}")
     if callable(getattr(tool, "execute", None)):
-        return tool.execute(**args)
+        execute = getattr(tool, "execute")
+        signature = inspect.signature(execute)
+        if "state" in signature.parameters:
+            return execute(**args, state=state)
+        return execute(**args)
     raise RuntimeError(f"tool_not_executable:{tool_name}")
 
 

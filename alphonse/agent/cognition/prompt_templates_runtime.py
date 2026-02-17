@@ -155,10 +155,10 @@ PLANNING_USER_TEMPLATE = _seed_text(
         "{{ RECENT_CONVERSATION }}\n\n"
         "# USER MESSAGE\n"
         "{{ USER_MESSAGE }}\n\n"
-        "# LOCALE\n"
-        "- {{ LOCALE }}\n\n"
         "# PLANNING CONTEXT\n"
         "{{ PLANNING_CONTEXT }}\n\n"
+        "# LOCALE\n"
+        "- {{ LOCALE }}\n\n"
         "# AVAILABLE TOOLS\n"
         "{{ AVAILABLE_TOOLS }}\n"
     ),
