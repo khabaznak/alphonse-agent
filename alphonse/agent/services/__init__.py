@@ -1,4 +1,5 @@
+from alphonse.agent.services.job_runner import JobRunner
+from alphonse.agent.services.job_store import JobStore
 from alphonse.agent.services.scratchpad_service import ScratchpadService
 
-__all__ = ["ScratchpadService"]
-
+__all__ = ["ScratchpadService", "JobStore", "JobRunner"]

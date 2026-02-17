@@ -439,6 +439,81 @@ class _PythonSubprocessCallLlm:
         }
 
 
+class _ScratchpadCreateCallLlm:
+    supports_tool_calls = True
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def complete_with_tools(
+        self,
+        *,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+        tool_choice: str = "auto",
+    ) -> dict[str, Any]:
+        _ = (messages, tools, tool_choice)
+        self.calls += 1
+        if self.calls == 1:
+            return {
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "tc-sp-1",
+                        "name": "scratchpad_create",
+                        "arguments": {
+                            "title": "Tiny hello world",
+                            "scope": "project",
+                            "tags": ["test"],
+                        },
+                    }
+                ],
+                "assistant_message": {"role": "assistant", "content": ""},
+            }
+        return {
+            "content": "Created a scratchpad note.",
+            "tool_calls": [],
+            "assistant_message": {"role": "assistant", "content": "Created a scratchpad note."},
+        }
+
+
+class _ScratchpadCreateFailureLlm:
+    supports_tool_calls = True
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def complete_with_tools(
+        self,
+        *,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+        tool_choice: str = "auto",
+    ) -> dict[str, Any]:
+        _ = (messages, tools, tool_choice)
+        self.calls += 1
+        if self.calls == 1:
+            return {
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "tc-sp-2",
+                        "name": "scratchpad_create",
+                        "arguments": {
+                            "title": "Tiny hello world",
+                            "scope": "project",
+                        },
+                    }
+                ],
+                "assistant_message": {"role": "assistant", "content": ""},
+            }
+        return {
+            "content": "Sorry, that didn't go through this time.",
+            "tool_calls": [],
+            "assistant_message": {"role": "assistant", "content": "Sorry, that didn't go through this time."},
+        }
+
+
 def test_plan_node_executes_python_subprocess_when_authorized(monkeypatch) -> None:
     class _SubprocessOkTool:
         def execute(self, *, command: str, timeout_seconds: float | None = None) -> dict[str, Any]:
@@ -480,3 +555,99 @@ def test_plan_node_executes_python_subprocess_when_authorized(monkeypatch) -> No
     first = tool_results[0] if isinstance(tool_results[0], dict) else {}
     assert first.get("tool") == "python_subprocess"
     assert first.get("status") == "ok"
+
+
+def test_plan_node_executes_scratchpad_create_and_keeps_result_fact() -> None:
+    class _ScratchpadCreateOkTool:
+        def execute(self, *, title: str, scope: str = "project", tags: list[str] | None = None, state: dict[str, Any] | None = None) -> dict[str, Any]:
+            _ = (state, scope, tags)
+            return {
+                "status": "ok",
+                "result": {
+                    "doc_id": "sp_test1234",
+                    "title": title,
+                    "scope": "project",
+                    "tags": ["test"],
+                    "created_at": "2026-02-17T09:15:00-06:00",
+                },
+                "error": None,
+                "metadata": {"tool": "scratchpad_create"},
+            }
+
+    registry = ToolRegistry()
+    registry.register("scratchpad_create", _ScratchpadCreateOkTool())
+    state = {
+        "last_user_message": "can you write a test scratchpad note for a tiny hello-world example?",
+        "timezone": "UTC",
+        "locale": "en-US",
+        "tone": "friendly",
+        "address_style": "you",
+        "channel_type": "webui",
+        "channel_target": "webui",
+        "correlation_id": "corr-scratchpad-create-ok",
+    }
+    result = plan_node(
+        state,
+        llm_client=_ScratchpadCreateCallLlm(),
+        tool_registry=registry,
+        format_available_abilities=lambda: "- scratchpad_create(title, scope, tags, template) -> doc metadata",
+        run_capability_gap_tool=_run_capability_gap_tool,
+    )
+    assert result.get("response_text") == "Created a scratchpad note."
+    planning_context = result.get("planning_context")
+    assert isinstance(planning_context, dict)
+    facts = planning_context.get("facts")
+    assert isinstance(facts, dict)
+    tool_results = facts.get("tool_results")
+    assert isinstance(tool_results, list)
+    assert tool_results
+    first = tool_results[0] if isinstance(tool_results[0], dict) else {}
+    assert first.get("tool") == "scratchpad_create"
+    assert first.get("status") == "ok"
+    result_payload = first.get("result")
+    assert isinstance(result_payload, dict)
+    assert result_payload.get("doc_id") == "sp_test1234"
+
+
+def test_plan_node_records_scratchpad_create_failure_fact() -> None:
+    class _ScratchpadCreateFailTool:
+        def execute(self, *, title: str, scope: str = "project", state: dict[str, Any] | None = None) -> dict[str, Any]:
+            _ = (title, scope, state)
+            return {
+                "status": "failed",
+                "result": None,
+                "error": {"code": "scratchpad_create_failed", "message": "disk busy"},
+                "metadata": {"tool": "scratchpad_create"},
+            }
+
+    registry = ToolRegistry()
+    registry.register("scratchpad_create", _ScratchpadCreateFailTool())
+    state = {
+        "last_user_message": "please try again",
+        "timezone": "UTC",
+        "locale": "en-US",
+        "tone": "friendly",
+        "address_style": "you",
+        "channel_type": "webui",
+        "channel_target": "webui",
+        "correlation_id": "corr-scratchpad-create-fail",
+    }
+    result = plan_node(
+        state,
+        llm_client=_ScratchpadCreateFailureLlm(),
+        tool_registry=registry,
+        format_available_abilities=lambda: "- scratchpad_create(title, scope, tags, template) -> doc metadata",
+        run_capability_gap_tool=_run_capability_gap_tool,
+    )
+    assert result.get("response_text") == "Sorry, that didn't go through this time."
+    planning_context = result.get("planning_context")
+    assert isinstance(planning_context, dict)
+    facts = planning_context.get("facts")
+    assert isinstance(facts, dict)
+    tool_results = facts.get("tool_results")
+    assert isinstance(tool_results, list)
+    assert tool_results
+    first = tool_results[0] if isinstance(tool_results[0], dict) else {}
+    assert first.get("tool") == "scratchpad_create"
+    assert first.get("status") == "failed"
+    assert first.get("error") == "scratchpad_create_failed"

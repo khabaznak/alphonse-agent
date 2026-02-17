@@ -327,6 +327,123 @@ def _default_specs() -> list[ToolSpec]:
             examples=[{"doc_id": "sp_1234abcd", "new_title": "Weekly chores plan v2"}],
         ),
         ToolSpec(
+            key="job_create",
+            description="Create a scheduled job with RRULE timing, payload routing, safety, and retry policy.",
+            when_to_use="Use when the user asks for recurring automations or scheduled background actions.",
+            returns="job_id and next_run_at",
+            input_schema=_object_schema(
+                properties={
+                    "name": {"type": "string"},
+                    "description": {"type": "string"},
+                    "schedule": {
+                        "type": "object",
+                        "properties": {
+                            "type": {"type": "string"},
+                            "dtstart": {"type": "string"},
+                            "rrule": {"type": "string"},
+                        },
+                        "required": ["type", "dtstart", "rrule"],
+                        "additionalProperties": False,
+                    },
+                    "payload_type": {"type": "string", "enum": ["job_ability", "tool_call", "prompt_to_brain", "internal_event"]},
+                    "payload": {"type": "object"},
+                    "timezone": {"type": "string"},
+                    "domain_tags": {"type": "array", "items": {"type": "string"}},
+                    "safety_level": {"type": "string"},
+                    "requires_confirmation": {"type": "boolean"},
+                    "retry_policy": {"type": "object"},
+                    "idempotency": {"type": "object"},
+                    "enabled": {"type": "boolean"},
+                },
+                required=["name", "description", "schedule", "payload_type", "payload"],
+            ),
+            domain_tags=["automation", "jobs", "productivity"],
+            safety_level=SafetyLevel.MEDIUM,
+            examples=[
+                {
+                    "name": "Weekly chores digest",
+                    "description": "Send Sunday chores reminder",
+                    "schedule": {
+                        "type": "rrule",
+                        "dtstart": "2026-02-17T09:00:00-06:00",
+                        "rrule": "FREQ=WEEKLY;BYDAY=SU;BYHOUR=18;BYMINUTE=0",
+                    },
+                    "payload_type": "prompt_to_brain",
+                    "payload": {"prompt_text": "Prepare weekly chores digest for the family."},
+                }
+            ],
+        ),
+        ToolSpec(
+            key="job_list",
+            description="List scheduled jobs with filtering by enabled state and domain tag.",
+            when_to_use="Use to review configured jobs before editing/running/deleting.",
+            returns="jobs summary list",
+            input_schema=_object_schema(
+                properties={
+                    "enabled": {"type": ["boolean", "null"]},
+                    "domain_tag": {"type": ["string", "null"]},
+                    "limit": {"type": "integer"},
+                },
+                required=[],
+            ),
+            domain_tags=["automation", "jobs", "productivity"],
+            safety_level=SafetyLevel.LOW,
+            examples=[{"enabled": True, "limit": 20}],
+        ),
+        ToolSpec(
+            key="job_pause",
+            description="Pause a scheduled job so it no longer auto-triggers.",
+            when_to_use="Use when the user wants to temporarily disable an automation.",
+            returns="job enabled state and next_run_at",
+            input_schema=_object_schema(
+                properties={"job_id": {"type": "string"}},
+                required=["job_id"],
+            ),
+            domain_tags=["automation", "jobs", "control"],
+            safety_level=SafetyLevel.MEDIUM,
+            examples=[{"job_id": "job_abc123"}],
+        ),
+        ToolSpec(
+            key="job_resume",
+            description="Resume a paused job and recompute next run time.",
+            when_to_use="Use when the user wants an automation active again.",
+            returns="job enabled state and next_run_at",
+            input_schema=_object_schema(
+                properties={"job_id": {"type": "string"}},
+                required=["job_id"],
+            ),
+            domain_tags=["automation", "jobs", "control"],
+            safety_level=SafetyLevel.MEDIUM,
+            examples=[{"job_id": "job_abc123"}],
+        ),
+        ToolSpec(
+            key="job_delete",
+            description="Delete a job definition permanently.",
+            when_to_use="Use when the user asks to remove an automation.",
+            returns="deletion status",
+            input_schema=_object_schema(
+                properties={"job_id": {"type": "string"}},
+                required=["job_id"],
+            ),
+            domain_tags=["automation", "jobs", "control"],
+            safety_level=SafetyLevel.HIGH,
+            requires_confirmation=True,
+            examples=[{"job_id": "job_abc123"}],
+        ),
+        ToolSpec(
+            key="job_run_now",
+            description="Trigger immediate execution of a job regardless of schedule.",
+            when_to_use="Use to test or manually force a scheduled job.",
+            returns="execution id and status",
+            input_schema=_object_schema(
+                properties={"job_id": {"type": "string"}},
+                required=["job_id"],
+            ),
+            domain_tags=["automation", "jobs", "control"],
+            safety_level=SafetyLevel.MEDIUM,
+            examples=[{"job_id": "job_abc123"}],
+        ),
+        ToolSpec(
             key="python_subprocess",
             description=(
                 "Execute a Python subprocess command on the local system. Use to install missing tools or for other "
