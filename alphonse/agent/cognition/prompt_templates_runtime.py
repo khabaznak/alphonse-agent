@@ -164,42 +164,6 @@ PLANNING_USER_TEMPLATE = _seed_text(
     ),
 )
 
-PLANNING_TOOLS_TEMPLATE = _seed_text(
-    "planning.tools.md.j2",
-    (
-        "## Tool Catalog\n"
-        "### askQuestion(question:string)\n"
-        "- Description: Ask the user one clear question and wait for their answer.\n"
-        "- When to use: Only when required user data is missing.\n"
-        "- Returns: user_answer_captured\n"
-        "- Inputs:\n"
-        "  - `question` (string, required)\n\n"
-        "### getTime()\n"
-        "- Description: Get your current time now.\n"
-        "- When to use: Use for current time/date and as a reference for scheduling or deadline calculations.\n"
-        "- Returns: current_time\n"
-        "- Inputs: none\n\n"
-        "### createReminder(ForWhom:string, Time:string, Message:string)\n"
-        "- Description: Create a reminder directly for a person at a specific time.\n"
-        "- When to use: Use when the user asks to be reminded.\n"
-        "- Returns: scheduled_reminder_id\n"
-        "- Inputs:\n"
-        "  - `ForWhom` (string, required)\n"
-        "  - `Time` (string, required)\n"
-        "  - `Message` (string, required)\n\n"
-        "### getMySettings()\n"
-        "- Description: Get your current runtime settings (timezone, locale, tone, address style, channel context).\n"
-        "- When to use: Use before time or language-sensitive decisions when settings are needed.\n"
-        "- Returns: settings\n"
-        "- Inputs: none\n\n"
-        "### getUserDetails()\n"
-        "- Description: Get known user/channel details for the current conversation context.\n"
-        "- When to use: Use when user identity/context details are needed before planning or scheduling.\n"
-        "- Returns: user_details\n"
-        "- Inputs: none\n"
-    ),
-)
-
 SLOT_QUESTION_USER_TEMPLATE = _seed_text(
     "slot_question.user.j2",
     (

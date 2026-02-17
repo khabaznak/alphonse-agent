@@ -7,11 +7,12 @@ from alphonse.agent.cognition.planning_engine import (
 )
 
 
-def test_available_abilities_include_summary_and_optional_marker() -> None:
+def test_available_abilities_renders_full_markdown_catalog() -> None:
     rendered = format_available_abilities()
-    assert "askQuestion(" in rendered
+    assert rendered.startswith("# Available Tools")
+    assert "## `askQuestion`" in rendered
     assert "one clear question" in rendered
-    assert "getTime()" in rendered
+    assert "## `getTime`" in rendered
 
 
 def test_available_ability_catalog_is_llm_focused() -> None:

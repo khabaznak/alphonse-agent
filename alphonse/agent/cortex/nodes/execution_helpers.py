@@ -71,22 +71,14 @@ def available_tool_catalog_data(
     format_available_ability_catalog: Callable[[], str],
     list_registered_intents: Callable[[], list[str]],
 ) -> dict[str, Any]:
-    raw = format_available_ability_catalog()
+    _ = format_available_ability_catalog
     try:
-        parsed = json.loads(raw)
-    except json.JSONDecodeError:
-        parsed = {}
-    if not isinstance(parsed, dict):
-        parsed = {}
-    tools = parsed.get("tools")
-    if not isinstance(tools, list):
-        try:
-            from alphonse.agent.cognition.planning_engine import planner_tool_catalog_data
+        from alphonse.agent.cognition.planning_engine import planner_tool_catalog_data
 
-            parsed = planner_tool_catalog_data()
-        except Exception:
-            parsed = {"tools": []}
-        tools = parsed.get("tools")
+        parsed = planner_tool_catalog_data()
+    except Exception:
+        parsed = {"tools": []}
+    tools = parsed.get("tools")
     if not isinstance(parsed, dict):
         parsed = {"tools": []}
     if not isinstance(tools, list):

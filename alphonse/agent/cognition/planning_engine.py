@@ -8,21 +8,7 @@ from alphonse.agent.tools.registry2 import build_planner_tool_registry
 
 
 def format_available_abilities() -> str:
-    tools = planner_tool_catalog_data().get("tools")
-    if not isinstance(tools, list):
-        return ""
-    lines: list[str] = []
-    for item in tools:
-        if not isinstance(item, dict):
-            continue
-        tool = str(item.get("tool") or "").strip()
-        if not tool:
-            continue
-        params = item.get("input_parameters") if isinstance(item.get("input_parameters"), list) else []
-        rendered = ", ".join(_render_param_signature(param) for param in params if isinstance(param, dict))
-        description = str(item.get("description") or "No description.")
-        lines.append(f"- {tool}({rendered}) -> {description}")
-    return "\n".join(lines)
+    return format_available_ability_catalog()
 
 
 def format_available_ability_catalog() -> str:
@@ -67,10 +53,3 @@ def planner_tool_names() -> list[str]:
         for item in (planner_tool_catalog_data().get("tools") or [])
         if isinstance(item, dict) and str(item.get("tool") or "").strip()
     ]
-
-
-def _render_param_signature(param: dict[str, Any]) -> str:
-    name = str(param.get("name") or "").strip()
-    ptype = str(param.get("type") or "string").strip()
-    required = bool(param.get("required", False))
-    return f"{name}{'' if required else '?'}:{ptype}"
