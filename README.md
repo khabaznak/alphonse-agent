@@ -64,12 +64,11 @@ Key files:
 Alphonse HTTP chat integration (MVP) uses `POST /agent/message`.
 Web UI outbound push can subscribe to `GET /agent/events` (SSE).
 
-Configuration lives in `config/alphonse.yaml`. The `mode` controls which inference
-provider Alphonse uses:
+Configuration is driven by environment variables in `alphonse/agent/.env`.
+Provider routing is controlled by:
 
-- `test` uses Ollama locally.
-- `production` uses an online provider (OpenAI by default) and expects an
-  `OPENAI_API_KEY` environment variable.
+- `ALPHONSE_LLM_PROVIDER` (`opencode`, `ollama`, `openai`, `llamafarm`)
+- provider-specific base URL/model/auth environment variables
 
 Code will be introduced incrementally once identity and boundaries are clearly defined.
 
@@ -91,7 +90,7 @@ The current focus is:
 Expose Alphonse Agent to the local network with:
 
 ```bash
-uvicorn interfaces.http.main:app --host 0.0.0.0 --port 8000
+python -m alphonse.agent.main
 ```
 
 ## Timed Signals / Scheduler
@@ -333,17 +332,7 @@ To add a new intent:
 
 ## Configuration
 
-`config/alphonse.yaml` controls runtime behavior. The key switch is `mode`:
-
-```yaml
-mode: test
-
-providers:
-  test:
-    type: ollama
-  production:
-    type: openai
-```
+Runtime behavior is configured via `alphonse/agent/.env` and defaults in code.
 
 In `production`, set `OPENAI_API_KEY` for the OpenAI provider.
 
@@ -361,24 +350,13 @@ Set these environment variables (see `.env.example`):
 - `VAPID_PUBLIC_KEY` (Web Push public key)
 - `VAPID_EMAIL` (Web Push contact email)
 
-Generate VAPID keys with:
+Generate VAPID keys with your preferred Web Push tooling and export:
+- `VAPID_PUBLIC_KEY`
+- `VAPID_PRIVATE_KEY`
 
-```bash
-python scripts/generate_vapid_keys.py
-```
-
-API endpoints:
-
-- `POST /api/push-devices`
-- `DELETE /api/push-devices/{id}`
-
-`/api/push-devices` accepts `platform` values like `android` or `web`.
-For web push, send the subscription object as `token`.
-
-`owner_id` for push devices references the `users` table.
-
-Webhook auth (optional): if `ALPHONSE_WEBHOOK_SECRET` is set, include the
-`X-Alphonse-Webhook-Secret` header in webhook requests.
+Legacy push-device endpoints under `/api/*` were removed with the legacy
+`interfaces/` service. Use the active `/agent/*` API in
+`alphonse/infrastructure/api.py`.
 
 ---
 

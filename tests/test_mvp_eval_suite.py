@@ -61,10 +61,28 @@ class _EvalLlm:
         self.planning_calls_by_message: dict[str, int] = {}
 
     def complete(self, system_prompt: str, user_prompt: str) -> str:
-        if "routing controller for a conversational agent" in system_prompt:
+        prompt_kind = str(system_prompt or "").lower()
+        user_prompt_kind = str(user_prompt or "").lower()
+        is_first_decision = (
+            "routing controller" in prompt_kind
+            or ("available tool names" in user_prompt_kind and "user message" in user_prompt_kind)
+        )
+        if is_first_decision:
             message = _extract_message(user_prompt, prefix="User message:")
             return self._first_decision_for_message(message)
-        if "You are Alphonse planning engine." in system_prompt:
+        is_pdca = "pdca loop" in prompt_kind or "working state view" in user_prompt_kind
+        if is_pdca:
+            message = _extract_goal(user_prompt)
+            if message:
+                self.planning_calls_by_message[message] = (
+                    self.planning_calls_by_message.get(message, 0) + 1
+                )
+            return self._pdca_for_message(message)
+        is_planning = (
+            "planning engine" in prompt_kind
+            or ("available tools" in user_prompt_kind and "planning context" in user_prompt_kind)
+        )
+        if is_planning:
             message = _extract_message(user_prompt, prefix="MESSAGE:")
             self.planning_calls_by_message[message] = (
                 self.planning_calls_by_message.get(message, 0) + 1
@@ -116,6 +134,13 @@ class _EvalLlm:
             '{"intention":"unknown","confidence":"low",'
             '"execution_plan":[{"tool":"askQuestion","parameters":{"question":"Can you clarify?"}}]}'
         )
+
+    @staticmethod
+    def _pdca_for_message(message: str) -> str:
+        normalized = message.lower().strip()
+        if normalized in {"show your current runtime status.", "what can you do?"}:
+            return '{"kind":"finish","final_text":"Working on it."}'
+        return '{"kind":"ask_user","question":"Can you clarify?"}'
 
 
 def test_mvp_eval_suite() -> None:
@@ -185,12 +210,36 @@ def _classify_actual_route(*, result: dict[str, object], planning_calls: int) ->
 
 
 def _extract_message(prompt: str, *, prefix: str) -> str:
+    normalized = str(prompt or "")
+    if "# USER MESSAGE" in normalized:
+        tail = normalized.split("# USER MESSAGE", 1)[1]
+        stripped = tail.lstrip()
+        if stripped.startswith("\n"):
+            stripped = stripped[1:]
+        return stripped.split("\n\n", 1)[0].strip()
+
     marker = f"{prefix}\n"
-    idx = prompt.find(marker)
+    idx = normalized.find(marker)
     if idx < 0:
         return ""
-    tail = prompt[idx + len(marker) :]
+    tail = normalized[idx + len(marker) :]
     return tail.split("\n\n", 1)[0].strip()
+
+
+def _extract_goal(prompt: str) -> str:
+    marker = '"goal":'
+    normalized = str(prompt or "")
+    idx = normalized.find(marker)
+    if idx < 0:
+        return ""
+    tail = normalized[idx + len(marker) :].lstrip()
+    if not tail.startswith('"'):
+        return ""
+    tail = tail[1:]
+    end = tail.find('"')
+    if end < 0:
+        return ""
+    return tail[:end].strip()
 
 
 def _bucket_latency(elapsed: float, buckets: dict[str, int]) -> None:

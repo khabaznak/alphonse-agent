@@ -122,13 +122,7 @@ def _build_api_server() -> ApiServer | None:
 
 
 def _resolve_nerve_db_path() -> Path:
-    configured = os.getenv("NERVE_DB_PATH")
-    if configured:
-        return resolve_nervous_system_db_path()
-    base = Path(__file__).resolve().parents[1]
-    path = base / "nervous_system" / "db" / "nerve-db"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    return path
+    return resolve_nervous_system_db_path()
 
 
 if __name__ == "__main__":

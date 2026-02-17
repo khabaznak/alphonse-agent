@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import pytest
 
 from alphonse.agent.actions import handle_incoming_message as him
-from alphonse.agent.cognition.plans import PlanType, UpdatePreferencesPayload
+from alphonse.agent.cognition.plans import CortexPlan, PlanType, UpdatePreferencesPayload
 from alphonse.agent.cognition.preferences.store import (
     get_or_create_principal_for_channel,
     get_with_fallback,
@@ -23,38 +22,23 @@ class DummySignal:
         self.correlation_id = "test-correlation"
 
 
-class _PreferenceLLM:
-    _updates: list[dict[str, str]]
-
-    def __init__(self) -> None:
-        self._updates = []
-
-    def complete(self, *, system_prompt: str, user_prompt: str) -> str:
-        _ = system_prompt
-        lower = user_prompt.lower()
-        if "latest_family_message:" in lower or '"message":' in lower:
-            if "english" in lower:
-                self._updates = [{"key": "locale", "value": "en-US"}]
-            elif "español" in lower or "espanol" in lower:
-                self._updates = [{"key": "locale", "value": "es-MX"}]
-            else:
-                self._updates = []
-            return (
-                '{"plan_version":"v1","message_summary":"update locale","primary_intention":"update_preferences",'
-                '"confidence":"high","steps":[{"step_id":"S1","goal":"update preference","requires":[],"produces":[],"priority":1}],'
-                '"acceptance_criteria":["Requested preference is updated"]}'
+class _FakeCortexResult:
+    def __init__(self, *, locale: str, channel_id: str) -> None:
+        self.reply_text = "ack.preference_updated"
+        self.plans = [
+            CortexPlan(
+                plan_type=PlanType.UPDATE_PREFERENCES,
+                payload={
+                    "principal": {
+                        "channel_type": "telegram",
+                        "channel_id": channel_id,
+                    },
+                    "updates": [{"key": "locale", "value": locale}],
+                },
             )
-        if "plan_from_step_a:" in lower or "plan to review:" in lower:
-            return (
-                '{"plan_version":"v1","bindings":[{"step_id":"S1","binding_type":"TOOL","tool_id":0,'
-                '"parameters":{"updates":' + json.dumps(self._updates) + '},"missing_data":[],"reason":"direct_match"}]}'
-            )
-        return (
-            '{"plan_version":"v1","status":"READY","execution_plan":[{"step_id":"S1","sequence":1,'
-            '"kind":"TOOL","tool_name":"update_preferences","parameters":{"updates":'
-            + json.dumps(self._updates)
-            + '},"acceptance_links":[0]}],"acceptance_criteria":["Requested preference is updated"],"repair_log":[]}'
-        )
+        ]
+        self.cognition_state = {"locale": locale}
+        self.meta = {}
 
 
 def _prepare_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -86,7 +70,19 @@ def _run_message(monkeypatch: pytest.MonkeyPatch, text: str) -> list:
                     captured.append(plan)
 
     monkeypatch.setattr(him, "PlanExecutor", FakePlanExecutor)
-    monkeypatch.setattr(him, "_build_llm_client", lambda: _PreferenceLLM())
+    monkeypatch.setattr(him, "build_llm_client", lambda: None)
+
+    class _FakeGraph:
+        def invoke(self, state: dict, packed_text: str, *, llm_client=None):
+            _ = (state, packed_text, llm_client)
+            lowered = text.lower()
+            if "english" in lowered:
+                return _FakeCortexResult(locale="en-US", channel_id="8553589429")
+            if "español" in lowered or "espanol" in lowered:
+                return _FakeCortexResult(locale="es-MX", channel_id="8553589429")
+            return _FakeCortexResult(locale=settings.get_default_locale(), channel_id="8553589429")
+
+    monkeypatch.setattr(him, "_CORTEX_GRAPH", _FakeGraph())
 
     context = {
         "signal": DummySignal(

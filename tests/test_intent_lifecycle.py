@@ -11,8 +11,7 @@ from alphonse.agent.cognition.intent_lifecycle import (
     next_state,
 )
 from alphonse.agent.cognition.intent_types import IntentCategory
-from alphonse.agent.cognition.planning import PlanningMode
-from alphonse.agent.cognition.planning_engine import propose_plan
+from alphonse.agent.cognition.planning import PlanningMode, resolve_planning_context
 
 
 def _record(state: LifecycleState, *, success: int = 0, corrections: int = 0, usage: int = 0, opt_in: bool = False) -> LifecycleRecord:
@@ -99,13 +98,10 @@ def test_automation_requires_opt_in() -> None:
 
 def test_lifecycle_hint_affects_planning_mode() -> None:
     hint = lifecycle_hint(LifecycleState.DISCOVERED, IntentCategory.TASK_PLANE)
-    proposal = propose_plan(
-        intent="schedule_reminder",
-        autonomy_level=0.9,
-        requested_mode=None,
-        draft_steps=["Do thing"],
-        acceptance_criteria=["Done"],
-        lifecycle_hint=hint,
+    capped_autonomy = min(0.9, hint.autonomy_cap)
+    context = resolve_planning_context(
+        autonomy_level=capped_autonomy,
+        requested_mode=hint.preferred_mode,
     )
-    assert proposal.plan.planning_mode == PlanningMode.AVENTURIZACION
-    assert proposal.plan.autonomy_level <= hint.autonomy_cap
+    assert context.effective_mode == PlanningMode.AVENTURIZACION
+    assert context.autonomy_level <= hint.autonomy_cap

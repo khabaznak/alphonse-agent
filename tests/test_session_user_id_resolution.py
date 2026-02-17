@@ -40,6 +40,11 @@ def test_resolve_session_user_id_prefers_db_surrogate_from_display_name(monkeypa
     }
     monkeypatch.setattr(
         him.users_store,
+        "get_user_by_principal_id",
+        lambda principal_id: None,
+    )
+    monkeypatch.setattr(
+        him.users_store,
         "get_user_by_display_name",
         lambda name: {"user_id": "user-42"} if name == "Alex" else None,
     )
@@ -48,7 +53,7 @@ def test_resolve_session_user_id_prefers_db_surrogate_from_display_name(monkeypa
     assert result == "user-42"
 
 
-def test_resolve_session_user_id_falls_back_to_name_when_db_has_no_match() -> None:
+def test_resolve_session_user_id_falls_back_to_name_when_db_has_no_match(monkeypatch) -> None:
     incoming = IncomingContext(
         channel_type="webui",
         address="webui",
@@ -61,11 +66,14 @@ def test_resolve_session_user_id_falls_back_to_name_when_db_has_no_match() -> No
         "metadata": {"raw": {"metadata": {"user_name": "Alex"}}},
     }
 
+    monkeypatch.setattr(him, "principal_id_for_incoming", lambda _: None)
+    monkeypatch.setattr(him.users_store, "get_user_by_display_name", lambda _: None)
+
     result = him._resolve_session_user_id(incoming=incoming, payload=payload)
     assert result == "name:alex"
 
 
-def test_resolve_session_user_id_extracts_display_name_from_provider_event() -> None:
+def test_resolve_session_user_id_extracts_display_name_from_provider_event(monkeypatch) -> None:
     incoming = IncomingContext(
         channel_type="telegram",
         address="8553589429",
@@ -82,11 +90,14 @@ def test_resolve_session_user_id_extracts_display_name_from_provider_event() -> 
         },
     }
 
+    monkeypatch.setattr(him, "principal_id_for_incoming", lambda _: None)
+    monkeypatch.setattr(him.users_store, "get_user_by_display_name", lambda _: None)
+
     result = him._resolve_session_user_id(incoming=incoming, payload=payload)
     assert result == "name:alex"
 
 
-def test_resolve_session_user_id_telegram_prefers_name_over_numeric_user_id() -> None:
+def test_resolve_session_user_id_telegram_prefers_name_over_numeric_user_id(monkeypatch) -> None:
     incoming = IncomingContext(
         channel_type="telegram",
         address="8553589429",
@@ -99,6 +110,9 @@ def test_resolve_session_user_id_telegram_prefers_name_over_numeric_user_id() ->
         "user_id": "8553589429",
         "user_name": "Alex",
     }
+
+    monkeypatch.setattr(him, "principal_id_for_incoming", lambda _: None)
+    monkeypatch.setattr(him.users_store, "get_user_by_display_name", lambda _: None)
 
     result = him._resolve_session_user_id(incoming=incoming, payload=payload)
     assert result == "name:alex"
