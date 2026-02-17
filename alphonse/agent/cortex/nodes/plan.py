@@ -31,6 +31,7 @@ from alphonse.agent.cortex.nodes.capability_gap import has_capability_gap_plan
 from alphonse.agent.cortex.nodes.telemetry import emit_brain_state
 from alphonse.agent.nervous_system.paths import resolve_nervous_system_db_path
 from alphonse.agent.session.day_state import render_recent_conversation_block
+from alphonse.agent.tools.base import tool_execution_mark
 from alphonse.config import settings
 
 logger = logging.getLogger(__name__)
@@ -680,6 +681,15 @@ def _execute_tool_step(
     params: dict[str, Any],
     step_idx: int,
 ) -> dict[str, Any]:
+    def _fact(execution_state: str, **values: Any) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "step": step_idx,
+            "tool": tool_name,
+            "execution_mark": tool_execution_mark(tool_name, execution_state),
+        }
+        payload.update(values)
+        return payload
+
     state["intent"] = tool_name
     state["slots"] = params
     if tool_name == "askQuestion":
@@ -693,7 +703,7 @@ def _execute_tool_step(
             "status": "waiting_user",
             "response_text": question,
             "pending_interaction": serialize_pending_interaction(pending),
-            "fact": {"step": step_idx, "tool": tool_name, "question": question},
+            "fact": _fact("waiting_user", question=question),
         }
     if tool_name == "getTime":
         clock_tool = tool_registry.get("getTime") if hasattr(tool_registry, "get") else None
@@ -713,12 +723,7 @@ def _execute_tool_step(
         return {
             "status": "executed",
             "response_text": now.strftime('%H:%M'),
-            "fact": {
-                "step": step_idx,
-                "tool": tool_name,
-                "time": now.isoformat(),
-                "timezone_name": timezone_name,
-            },
+            "fact": _fact("executed", time=now.isoformat(), timezone_name=timezone_name),
         }
     if tool_name == "createTimeEventTrigger":
         scheduler_tool = tool_registry.get("createTimeEventTrigger") if hasattr(tool_registry, "get") else None
@@ -742,7 +747,7 @@ def _execute_tool_step(
                 "status": "waiting_user",
                 "response_text": clarify_question or "What exact time should I use for this reminder?",
                 "pending_interaction": serialize_pending_interaction(pending),
-                "fact": {"step": step_idx, "tool": tool_name, "question": clarify_question or ""},
+                "fact": _fact("waiting_user", question=clarify_question or ""),
             }
         event_trigger = scheduler_tool.create_time_event_trigger(
             time=resolved_time,
@@ -751,25 +756,21 @@ def _execute_tool_step(
         return {
             "status": "executed",
             "response_text": None,
-            "fact": {
-                "step": step_idx,
-                "tool": tool_name,
-                "event_trigger": event_trigger,
-            },
+            "fact": _fact("executed", event_trigger=event_trigger),
         }
     if tool_name == "getMySettings":
         payload = _settings_payload_for_state(state)
         return {
             "status": "executed",
             "response_text": _format_settings_message(payload),
-            "fact": {"step": step_idx, "tool": tool_name, "settings": payload},
+            "fact": _fact("executed", settings=payload),
         }
     if tool_name == "getUserDetails":
         payload = _user_details_payload_for_state(state)
         return {
             "status": "executed",
             "response_text": _format_user_details_message(payload),
-            "fact": {"step": step_idx, "tool": tool_name, "user_details": payload},
+            "fact": _fact("executed", user_details=payload),
         }
     if tool_name == "createReminder":
         scheduler_tool = tool_registry.get("createReminder") if hasattr(tool_registry, "get") else None
@@ -811,13 +812,12 @@ def _execute_tool_step(
         return {
             "status": "executed",
             "response_text": message,
-            "fact": {
-                "step": step_idx,
-                "tool": tool_name,
-                "schedule_id": schedule_id,
-                "trigger_time": trigger_time_render,
-                "for_whom": for_whom,
-            },
+            "fact": _fact(
+                "executed",
+                schedule_id=schedule_id,
+                trigger_time=trigger_time_render,
+                for_whom=for_whom,
+            ),
         }
     if tool_name == "stt_transcribe":
         stt_tool = tool_registry.get("stt_transcribe") if hasattr(tool_registry, "get") else None
@@ -836,26 +836,24 @@ def _execute_tool_step(
                 "error": error_code,
                 "error_detail": f"stt_transcribe_failed:{error_code}",
                 "response_text": None,
-                "fact": {
-                    "step": step_idx,
-                    "tool": tool_name,
-                    "asset_id": asset_id,
-                    "status": "failed",
-                    "error": error_code,
-                    "retryable": retryable,
-                },
+                "fact": _fact(
+                    "failed",
+                    asset_id=asset_id,
+                    status="failed",
+                    error=error_code,
+                    retryable=retryable,
+                ),
             }
         transcript = str(result.get("text") or "").strip()
         return {
             "status": "executed",
             "response_text": None,
-            "fact": {
-                "step": step_idx,
-                "tool": tool_name,
-                "asset_id": asset_id,
-                "transcript": transcript,
-                "segments": result.get("segments") if isinstance(result.get("segments"), list) else [],
-            },
+            "fact": _fact(
+                "executed",
+                asset_id=asset_id,
+                transcript=transcript,
+                segments=result.get("segments") if isinstance(result.get("segments"), list) else [],
+            ),
         }
     if tool_name == "python_subprocess":
         subprocess_tool = tool_registry.get("python_subprocess") if hasattr(tool_registry, "get") else None
@@ -870,12 +868,11 @@ def _execute_tool_step(
                 "error": str(reason or "python_subprocess_not_allowed"),
                 "error_detail": str(reason or "python_subprocess_not_allowed"),
                 "response_text": None,
-                "fact": {
-                    "step": step_idx,
-                    "tool": tool_name,
-                    "status": "failed",
-                    "error": str(reason or "python_subprocess_not_allowed"),
-                },
+                "fact": _fact(
+                    "failed",
+                    status="failed",
+                    error=str(reason or "python_subprocess_not_allowed"),
+                ),
             }
         result = subprocess_tool.execute(command=command, timeout_seconds=timeout_seconds)
         if not isinstance(result, dict):
@@ -888,14 +885,13 @@ def _execute_tool_step(
                 "error": error_code,
                 "error_detail": str(result.get("detail") or error_code),
                 "response_text": None,
-                "fact": {
-                    "step": step_idx,
-                    "tool": tool_name,
-                    "status": "failed",
-                    "error": error_code,
-                    "retryable": bool(result.get("retryable")),
-                    "exit_code": result.get("exit_code"),
-                },
+                "fact": _fact(
+                    "failed",
+                    status="failed",
+                    error=error_code,
+                    retryable=bool(result.get("retryable")),
+                    exit_code=result.get("exit_code"),
+                ),
             }
         stdout = str(result.get("stdout") or "").strip()
         stderr = str(result.get("stderr") or "").strip()
@@ -903,12 +899,7 @@ def _execute_tool_step(
         return {
             "status": "executed",
             "response_text": response_text,
-            "fact": {
-                "step": step_idx,
-                "tool": tool_name,
-                "status": "ok",
-                "exit_code": int(result.get("exit_code") or 0),
-            },
+            "fact": _fact("executed", status="ok", exit_code=int(result.get("exit_code") or 0)),
         }
     raise RuntimeError("unknown_tool_in_plan")
 

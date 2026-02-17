@@ -1,0 +1,28 @@
+# Available Tools
+
+The following tools are available for execution.
+Select the most appropriate one based on the user intent.
+{% for t in tools %}
+
+---
+
+## `{{ t.key }}`
+
+**What it does:** {{ t.description }}
+
+**Domains:** {{ t.domain_tags | join(", ") if t.domain_tags else "—" }}
+
+**Safety Level:** {{ t.safety_level }}{% if t.requires_confirmation %} (Requires confirmation before execution){% endif %}
+
+**Input Schema (JSON):**
+```json
+{{ t.input_schema_pretty }}
+```
+{% if t.examples %}
+**Example Call:**
+```json
+{{ t.examples[0] | tojson(indent=2) }}
+```
+{% endif %}
+{% endfor %}
+

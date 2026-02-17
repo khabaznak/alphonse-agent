@@ -53,5 +53,5 @@ def test_available_ability_catalog_has_minimal_tools_only() -> None:
 
 def test_available_ability_catalog_prompt_is_markdown() -> None:
     rendered = format_available_ability_catalog()
-    assert rendered.startswith("## Tool Catalog")
-    assert "### askQuestion" in rendered
+    assert rendered.startswith("# Available Tools")
+    assert "## `askQuestion`" in rendered

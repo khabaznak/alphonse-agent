@@ -1,15 +1,10 @@
 from __future__ import annotations
 
-import re
+from pathlib import Path
 from typing import Any
 
-from alphonse.agent.cognition.prompt_templates_runtime import (
-    PLANNING_TOOLS_TEMPLATE,
-    render_prompt_template,
-)
-
-_HEADING_RE = re.compile(r"^###\s+([A-Za-z_][A-Za-z0-9_.-]*)\(([^)]*)\)\s*$")
-_INPUT_RE = re.compile(r"^\s*-\s+`([^`]+)`\s+\(([^,]+),\s*(required|optional)\)\s*$", re.IGNORECASE)
+from alphonse.agent.cognition.tool_catalog_renderer import render_tool_catalog
+from alphonse.agent.tools.registry2 import build_planner_tool_registry
 
 
 def format_available_abilities() -> str:
@@ -31,54 +26,38 @@ def format_available_abilities() -> str:
 
 
 def format_available_ability_catalog() -> str:
-    return render_prompt_template(PLANNING_TOOLS_TEMPLATE, {}).strip()
+    template_dir = Path(__file__).resolve().parent / "templates"
+    return render_tool_catalog(build_planner_tool_registry(), template_dir)
 
 
 def planner_tool_catalog_data() -> dict[str, Any]:
+    registry = build_planner_tool_registry()
     tools: list[dict[str, Any]] = []
-    current: dict[str, Any] | None = None
-    lines = format_available_ability_catalog().splitlines()
-    for raw in lines:
-        line = raw.rstrip()
-        heading = _HEADING_RE.match(line.strip())
-        if heading:
-            if isinstance(current, dict):
-                tools.append(current)
-            current = {
-                "tool": heading.group(1),
-                "description": "",
-                "when_to_use": "",
-                "returns": "",
-                "input_parameters": [],
-            }
-            continue
-        if not isinstance(current, dict):
-            continue
-        stripped = line.strip()
-        if stripped.startswith("- Description:"):
-            current["description"] = stripped.replace("- Description:", "", 1).strip()
-            continue
-        if stripped.startswith("- When to use:"):
-            current["when_to_use"] = stripped.replace("- When to use:", "", 1).strip()
-            continue
-        if stripped.startswith("- Returns:"):
-            current["returns"] = stripped.replace("- Returns:", "", 1).strip()
-            continue
-        input_match = _INPUT_RE.match(line)
-        if input_match:
-            params = current.get("input_parameters")
-            if not isinstance(params, list):
-                params = []
-                current["input_parameters"] = params
+    for spec in registry.specs_for_catalog():
+        params: list[dict[str, Any]] = []
+        schema = spec.input_schema if isinstance(spec.input_schema, dict) else {}
+        properties = schema.get("properties") if isinstance(schema.get("properties"), dict) else {}
+        required_raw = schema.get("required") if isinstance(schema.get("required"), list) else []
+        required = {str(item).strip() for item in required_raw if str(item).strip()}
+        for name, definition in properties.items():
+            if not isinstance(definition, dict):
+                continue
             params.append(
                 {
-                    "name": input_match.group(1).strip(),
-                    "type": input_match.group(2).strip(),
-                    "required": input_match.group(3).strip().lower() == "required",
+                    "name": str(name).strip(),
+                    "type": str(definition.get("type") or "string").strip(),
+                    "required": str(name).strip() in required,
                 }
             )
-    if isinstance(current, dict):
-        tools.append(current)
+        tools.append(
+            {
+                "tool": spec.key,
+                "description": spec.description,
+                "when_to_use": spec.when_to_use,
+                "returns": spec.returns,
+                "input_parameters": params,
+            }
+        )
     return {"tools": tools}
 
 
