@@ -24,22 +24,39 @@ class ScratchpadCreateTool:
     def execute(
         self,
         *,
-        title: str,
+        title: str | None = None,
         scope: str = "project",
         tags: list[str] | None = None,
         template: str | None = None,
         ctx: ToolContext | None = None,
         user_id: str | None = None,
         state: dict[str, Any] | None = None,
+        **kwargs: Any,
     ) -> dict[str, Any]:
         resolved = _resolve_ctx(scratchpad=self._scratchpad, ctx=ctx, user_id=user_id, state=state)
+        resolved_title = str(title or kwargs.get("name") or kwargs.get("doc_title") or "").strip()
+        if not resolved_title:
+            resolved_title = str(kwargs.get("title_text") or "").strip()
+        resolved_scope = str(scope or kwargs.get("doc_scope") or "project").strip() or "project"
+        resolved_tags = tags if isinstance(tags, list) else kwargs.get("tags")
+        if not isinstance(resolved_tags, list):
+            raw_tag = kwargs.get("tag")
+            if raw_tag is not None:
+                resolved_tags = [str(raw_tag)]
+            else:
+                resolved_tags = []
+        resolved_template = template
+        if resolved_template is None:
+            resolved_template = kwargs.get("content")
+        if resolved_template is None:
+            resolved_template = kwargs.get("text")
         try:
             result = resolved.services.scratchpad.create_doc(
                 user_id=resolved.user_id,
-                title=title,
-                scope=scope,
-                tags=tags or [],
-                template=template,
+                title=resolved_title,
+                scope=resolved_scope,
+                tags=[str(item) for item in resolved_tags if str(item).strip()],
+                template=str(resolved_template) if resolved_template is not None else None,
             )
             return _ok(result=result, metadata={"tool": "scratchpad_create"})
         except Exception as exc:

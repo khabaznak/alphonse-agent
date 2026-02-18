@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from pathlib import Path
 
 from alphonse.agent.cortex.nodes.respond import respond_finalize_node
 from alphonse.agent.cortex.task_mode.pdca import act_node
@@ -11,8 +12,10 @@ from alphonse.agent.cortex.task_mode.pdca import route_after_validate_step
 from alphonse.agent.cortex.task_mode.pdca import update_state_node
 from alphonse.agent.cortex.task_mode.pdca import validate_step_node
 from alphonse.agent.cortex.task_mode.state import build_default_task_state
+from alphonse.agent.services.scratchpad_service import ScratchpadService
 from alphonse.agent.tools.registry import ToolRegistry
 from alphonse.agent.tools.registry import build_default_tool_registry
+from alphonse.agent.tools.scratchpad_tools import ScratchpadCreateTool
 
 
 class _QueuedLlm:
@@ -363,6 +366,56 @@ def test_execute_finish_persists_final_text_outcome() -> None:
     assert isinstance(outcome, dict)
     assert outcome.get("kind") == "task_completed"
     assert outcome.get("final_text") == "I'm online and operational."
+
+
+def test_execute_step_scratchpad_create_tolerates_content_alias(tmp_path: Path) -> None:
+    registry = ToolRegistry()
+    scratchpad = ScratchpadCreateTool(ScratchpadService(root=tmp_path / "data" / "scratchpad"))
+    registry.register("scratchpad_create", scratchpad)
+    task_state = build_default_task_state()
+    task_state["plan"] = {
+        "version": 1,
+        "steps": [
+            {
+                "step_id": "step_1",
+                "proposal": {
+                    "kind": "call_tool",
+                    "tool_name": "scratchpad_create",
+                    "args": {
+                        "title": "eisenhower-matrix",
+                        "scope": "project",
+                        "content": "tiny hello-world example",
+                    },
+                },
+                "status": "validated",
+            }
+        ],
+        "current_step_id": "step_1",
+    }
+    state: dict[str, object] = {
+        "correlation_id": "corr-pdca-scratchpad-create-content-alias",
+        "channel_type": "telegram",
+        "channel_target": "8553589429",
+        "task_state": task_state,
+    }
+
+    updated = execute_step_node(state, tool_registry=registry)
+    next_state = updated["task_state"]
+    assert isinstance(next_state, dict)
+    assert next_state.get("status") == "running"
+    plan = next_state.get("plan")
+    assert isinstance(plan, dict)
+    steps = plan.get("steps")
+    assert isinstance(steps, list)
+    assert isinstance(steps[0], dict)
+    assert steps[0].get("status") == "executed"
+    facts = next_state.get("facts")
+    assert isinstance(facts, dict)
+    result = facts.get("step_1")
+    assert isinstance(result, dict)
+    payload = result.get("result")
+    assert isinstance(payload, dict)
+    assert payload.get("status") == "ok"
 
 
 def test_respond_finalize_done_ignores_stale_pending_interaction() -> None:

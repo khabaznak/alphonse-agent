@@ -60,3 +60,19 @@ def test_list_and_search_tools(tmp_path: Path) -> None:
     assert hits["status"] == "ok"
     assert hits["result"]["hits"]
 
+
+def test_scratchpad_create_accepts_content_alias_without_typeerror(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    create = ScratchpadCreateTool(service)
+    created = create.execute(
+        user_id="u1",
+        title="eisenhower-matrix",
+        scope="project",
+        content="tiny hello-world example",  # alias used by planner variants
+        extra_field="ignored",
+    )
+    assert created["status"] == "ok"
+    assert isinstance(created["result"], dict)
+    doc_id = str(created["result"]["doc_id"])
+    read = service.read_doc(user_id="u1", doc_id=doc_id, mode="full", max_chars=4000)
+    assert "tiny hello-world example" in str(read.get("content") or "")
