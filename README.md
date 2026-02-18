@@ -58,6 +58,7 @@ Key files:
 - `README.md` — This document
 - `docs/` — Design notes, vision, and long-term ideas
 - `docs/architecture.md` — Alphonse architecture and boundaries
+- `docs/channel_integration_blueprint.md` — Reusable channel integration scaffolding (Telegram reference for Discord/others)
 - `docs/refactor_roadmap.md` — Cleanup and separation roadmap
 - `docs/message_io_contract.md` — Normalized inbound/outbound adapter contract
 

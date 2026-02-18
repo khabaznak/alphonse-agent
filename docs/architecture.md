@@ -63,3 +63,10 @@ interfaces/
 scripts/
 docs/
 ```
+
+## Channel Integration Blueprint
+
+For a reusable implementation template (adapter, policy, ToolSpec/runtime tool wiring,
+deterministic auth gates, timed follow-ups, and testing), see:
+
+- `docs/channel_integration_blueprint.md`
