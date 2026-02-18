@@ -20,6 +20,7 @@ from alphonse.agent.tools.scratchpad_tools import ScratchpadReadTool
 from alphonse.agent.tools.scratchpad_tools import ScratchpadSearchTool
 from alphonse.agent.tools.scheduler import SchedulerTool
 from alphonse.agent.tools.stt_transcribe import SttTranscribeTool
+from alphonse.agent.tools.terminal_execute_tool import TerminalExecuteTool
 from alphonse.agent.tools.telegram_files import AnalyzeTelegramImageTool
 from alphonse.agent.tools.telegram_files import TelegramDownloadFileTool
 from alphonse.agent.tools.telegram_files import TelegramGetFileMetaTool
@@ -53,6 +54,7 @@ def build_default_tool_registry() -> ToolRegistry:
     transcribe_audio = TranscribeTelegramAudioTool()
     analyze_image = AnalyzeTelegramImageTool()
     python_subprocess = SubprocessTool()
+    terminal_execute = TerminalExecuteTool()
     scratchpad_service = ScratchpadService()
     scratchpad_create = ScratchpadCreateTool(scratchpad_service)
     scratchpad_append = ScratchpadAppendTool(scratchpad_service)
@@ -85,6 +87,7 @@ def build_default_tool_registry() -> ToolRegistry:
     registry.register("clock", clock)
     registry.register("schedule_event", scheduler)
     registry.register("python_subprocess", python_subprocess)
+    registry.register("terminal_execute", terminal_execute)
     registry.register("scratchpad_create", scratchpad_create)
     registry.register("scratchpad_append", scratchpad_append)
     registry.register("scratchpad_read", scratchpad_read)

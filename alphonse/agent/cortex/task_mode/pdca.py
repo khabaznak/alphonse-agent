@@ -456,6 +456,42 @@ def act_node(state: dict[str, Any]) -> dict[str, Any]:
         task_state["status"] = "running"
         return {"task_state": task_state}
 
+    if current_status == "failed":
+        evaluation = _evaluate_tool_execution(task_state=task_state, current_step=current)
+        task_state["execution_eval"] = evaluation
+        if evaluation.get("should_pause"):
+            task_state["status"] = "waiting_user"
+            task_state["next_user_question"] = _build_execution_pause_prompt(evaluation)
+            _append_trace_event(
+                task_state,
+                {
+                    "type": "status_changed",
+                    "summary": str(evaluation.get("summary") or "Status changed to waiting_user after repeated failures."),
+                    "correlation_id": correlation_id,
+                },
+            )
+            logger.info(
+                "task_mode act waiting_user_execution_eval correlation_id=%s step_id=%s tool=%s reason=%s total_failures=%s same_signature=%s",
+                correlation_id,
+                str((current or {}).get("step_id") or ""),
+                str(evaluation.get("tool_name") or ""),
+                str(evaluation.get("reason") or ""),
+                int(evaluation.get("total_failures") or 0),
+                int(evaluation.get("same_signature_failures") or 0),
+            )
+            return {"task_state": task_state}
+        task_state["status"] = "running"
+        logger.info(
+            "task_mode act continue_after_failure correlation_id=%s step_id=%s tool=%s reason=%s total_failures=%s same_signature=%s",
+            correlation_id,
+            str((current or {}).get("step_id") or ""),
+            str(evaluation.get("tool_name") or ""),
+            str(evaluation.get("reason") or ""),
+            int(evaluation.get("total_failures") or 0),
+            int(evaluation.get("same_signature_failures") or 0),
+        )
+        return {"task_state": task_state}
+
     task_state["status"] = "running"
     logger.info(
         "task_mode act continue correlation_id=%s step_id=%s",
@@ -954,3 +990,120 @@ def _correlation_id(state: dict[str, Any]) -> str | None:
     if value is None:
         return None
     return str(value)
+
+
+def _tool_name_for_step(step: dict[str, Any] | None) -> str:
+    if not isinstance(step, dict):
+        return ""
+    proposal = step.get("proposal") if isinstance(step.get("proposal"), dict) else {}
+    return str(proposal.get("tool_name") or "").strip()
+
+
+def _recent_tool_failure_count(*, task_state: dict[str, Any], tool_name: str) -> int:
+    plan = _task_plan(task_state)
+    steps = plan.get("steps") if isinstance(plan.get("steps"), list) else []
+    count = 0
+    for step in reversed(steps):
+        if not isinstance(step, dict):
+            continue
+        status = str(step.get("status") or "").strip().lower()
+        if status != "failed":
+            continue
+        if tool_name and _tool_name_for_step(step) != tool_name:
+            continue
+        count += 1
+        if count >= 5:
+            break
+    return count
+
+
+def _tool_signature_for_step(step: dict[str, Any] | None) -> str:
+    if not isinstance(step, dict):
+        return ""
+    proposal = step.get("proposal") if isinstance(step.get("proposal"), dict) else {}
+    tool_name = str(proposal.get("tool_name") or "").strip()
+    args = proposal.get("args") if isinstance(proposal.get("args"), dict) else {}
+    try:
+        args_text = json.dumps(args, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    except Exception:
+        args_text = str(args)
+    return f"{tool_name}|{args_text}"
+
+
+def _evaluate_tool_execution(*, task_state: dict[str, Any], current_step: dict[str, Any] | None) -> dict[str, Any]:
+    max_evolving_failures = 10
+    immediate_repeat_limit = 2
+    current_signature = _tool_signature_for_step(current_step)
+    current_tool = _tool_name_for_step(current_step)
+    plan = _task_plan(task_state)
+    steps = plan.get("steps") if isinstance(plan.get("steps"), list) else []
+
+    failed_steps: list[dict[str, Any]] = [
+        step
+        for step in steps
+        if isinstance(step, dict) and str(step.get("status") or "").strip().lower() == "failed"
+    ]
+    total_failures = len(failed_steps)
+    same_signature_failures = 0
+    signatures: list[str] = []
+    for step in failed_steps:
+        signature = _tool_signature_for_step(step)
+        if signature:
+            signatures.append(signature)
+        if current_signature and signature == current_signature:
+            same_signature_failures += 1
+    unique_signatures = len({item for item in signatures if item})
+    evolving = unique_signatures > 1
+
+    if same_signature_failures >= immediate_repeat_limit:
+        return {
+            "should_pause": True,
+            "reason": "repeated_identical_failure",
+            "summary": f"Repeated identical tool attempt failed for {current_tool or 'tool'}.",
+            "tool_name": current_tool,
+            "total_failures": total_failures,
+            "same_signature_failures": same_signature_failures,
+            "unique_signatures": unique_signatures,
+            "evolving": evolving,
+            "max_evolving_failures": max_evolving_failures,
+        }
+    if total_failures >= max_evolving_failures:
+        return {
+            "should_pause": True,
+            "reason": "failure_budget_exhausted",
+            "summary": "Failure budget exhausted while trying multiple strategies.",
+            "tool_name": current_tool,
+            "total_failures": total_failures,
+            "same_signature_failures": same_signature_failures,
+            "unique_signatures": unique_signatures,
+            "evolving": evolving,
+            "max_evolving_failures": max_evolving_failures,
+        }
+    return {
+        "should_pause": False,
+        "reason": "continue_learning" if evolving else "single_failure",
+        "summary": "Continue with next planning attempt.",
+        "tool_name": current_tool,
+        "total_failures": total_failures,
+        "same_signature_failures": same_signature_failures,
+        "unique_signatures": unique_signatures,
+        "evolving": evolving,
+        "max_evolving_failures": max_evolving_failures,
+    }
+
+
+def _build_execution_pause_prompt(evaluation: dict[str, Any]) -> str:
+    reason = str(evaluation.get("reason") or "")
+    tool_name = str(evaluation.get("tool_name") or "tool")
+    total = int(evaluation.get("total_failures") or 0)
+    unique = int(evaluation.get("unique_signatures") or 0)
+    if reason == "repeated_identical_failure":
+        return (
+            f"I got stuck repeating the same failed action with `{tool_name}`. "
+            "I paused the plan to avoid waste. Do you want me to keep trying with your approval, "
+            "or provide steering on a different approach?"
+        )
+    return (
+        f"I tried {total} times across {unique} strategy variants and I'm still blocked. "
+        "I paused the plan. Should I keep pursuing this goal, or do you want to steer me?"
+    )

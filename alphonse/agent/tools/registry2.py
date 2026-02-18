@@ -444,6 +444,24 @@ def _default_specs() -> list[ToolSpec]:
             examples=[{"job_id": "job_abc123"}],
         ),
         ToolSpec(
+            key="terminal_execute",
+            description="Execute terminal commands under global Alphonse execution mode and sandbox policy.",
+            when_to_use="Use for constrained terminal-like operations when explicit tools are insufficient.",
+            returns="command stdout/stderr/exit_code with policy metadata",
+            input_schema=_object_schema(
+                properties={
+                    "command": {"type": "string"},
+                    "cwd": {"type": "string"},
+                    "timeout_seconds": {"type": "number"},
+                },
+                required=["command"],
+            ),
+            domain_tags=["ops", "terminal", "automation"],
+            safety_level=SafetyLevel.HIGH,
+            requires_confirmation=True,
+            examples=[{"command": "ls -la", "cwd": ".", "timeout_seconds": 20}],
+        ),
+        ToolSpec(
             key="python_subprocess",
             description=(
                 "Execute a Python subprocess command on the local system. Use to install missing tools or for other "

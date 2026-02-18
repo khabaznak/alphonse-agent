@@ -8,6 +8,7 @@ DEFAULT_LOCALE = "es-MX"
 DEFAULT_TONE = "friendly"
 DEFAULT_ADDRESS_STYLE = "tu"
 DEFAULT_AUTONOMY_LEVEL = 0.35
+DEFAULT_EXECUTION_MODE = "readonly"
 
 
 def get_timezone() -> str:
@@ -72,3 +73,23 @@ def get_planning_mode() -> str | None:
     if isinstance(configured, str) and configured.strip():
         return configured.strip()
     return None
+
+
+def get_execution_mode() -> str:
+    configured = str(os.getenv("ALPHONSE_EXECUTION_MODE") or "").strip().lower()
+    if configured in {"readonly", "dev", "ops"}:
+        return configured
+    return DEFAULT_EXECUTION_MODE
+
+
+def get_terminal_allowed_roots() -> list[str]:
+    raw = str(os.getenv("ALPHONSE_TERMINAL_ALLOWED_ROOTS") or "").strip()
+    if not raw:
+        return ["."]
+    values: list[str] = []
+    for item in raw.split(","):
+        path = item.strip()
+        if not path:
+            continue
+        values.append(path)
+    return values or ["."]

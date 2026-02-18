@@ -56,6 +56,7 @@ def test_available_ability_catalog_has_minimal_tools_only() -> None:
         "job_resume",
         "job_delete",
         "job_run_now",
+        "terminal_execute",
         "local_audio_output.speak",
         "stt_transcribe",
         "python_subprocess",
