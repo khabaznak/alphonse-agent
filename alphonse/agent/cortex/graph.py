@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from typing import Any, Protocol, TypedDict
 
 from langgraph.graph import END, StateGraph
@@ -136,8 +137,10 @@ class CortexGraph:
         llm_client: LLMClient | None = None,
     ) -> CortexResult:
         runner = self.build().compile()
+        recursion_limit = _resolve_recursion_limit()
         result_state = runner.invoke(
-            {**state, "last_user_message": text, "_llm_client": llm_client}
+            {**state, "last_user_message": text, "_llm_client": llm_client},
+            config={"recursion_limit": recursion_limit},
         )
         plans = [
             CortexPlan.model_validate(plan) for plan in result_state.get("plans") or []
@@ -154,3 +157,14 @@ class CortexGraph:
     def _llm_client_from_state(state: dict[str, Any]) -> LLMClient | None:
         client = state.get("_llm_client")
         return client if client is not None else None
+
+
+def _resolve_recursion_limit() -> int:
+    raw = str(os.getenv("ALPHONSE_GRAPH_RECURSION_LIMIT") or "").strip()
+    if not raw:
+        return 100
+    try:
+        parsed = int(raw)
+    except ValueError:
+        return 100
+    return max(25, min(parsed, 400))

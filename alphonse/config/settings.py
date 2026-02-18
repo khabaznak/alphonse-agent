@@ -80,16 +80,3 @@ def get_execution_mode() -> str:
     if configured in {"readonly", "dev", "ops"}:
         return configured
     return DEFAULT_EXECUTION_MODE
-
-
-def get_terminal_allowed_roots() -> list[str]:
-    raw = str(os.getenv("ALPHONSE_TERMINAL_ALLOWED_ROOTS") or "").strip()
-    if not raw:
-        return ["."]
-    values: list[str] = []
-    for item in raw.split(","):
-        path = item.strip()
-        if not path:
-            continue
-        values.append(path)
-    return values or ["."]

@@ -341,7 +341,7 @@ In `production`, set `OPENAI_API_KEY` for the OpenAI provider.
 
 ## Supabase Integration
 
-Set these environment variables (see `.env.example`):
+Set these environment variables (see `alphonse/agent/.env.example`):
 
 - `SUPABASE_URL`
 - `SUPABASE_SERVICE_ROLE_KEY` (preferred) or `SUPABASE_ANON_KEY`

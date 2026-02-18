@@ -7,6 +7,7 @@ from datetime import datetime
 from typing import Any, Callable
 
 from alphonse.agent.cognition.tool_schemas import planner_tool_schemas
+from alphonse.agent.cortex.transitions import emit_transition_event
 from alphonse.agent.cortex.task_mode.state import build_default_task_state
 from alphonse.agent.cortex.task_mode.types import NextStepProposal
 from alphonse.agent.cortex.task_mode.types import TraceEvent
@@ -33,6 +34,7 @@ _NEXT_STEP_DEVELOPER_PROMPT = (
 )
 
 _PARSE_FALLBACK_QUESTION = "I can help—what task would you like me to do?"
+_PROGRESS_CHECK_CYCLE_THRESHOLD = 25
 
 # Strict JSON Schema for NextStepProposal structured output
 _NEXT_STEP_SCHEMA: dict[str, Any] = {
@@ -81,6 +83,7 @@ _NEXT_STEP_SCHEMA: dict[str, Any] = {
 
 def build_next_step_node(*, tool_registry: Any) -> Callable[[dict[str, Any]], dict[str, Any]]:
     def _node(state: dict[str, Any]) -> dict[str, Any]:
+        emit_transition_event(state, "thinking")
         task_state = _task_state_with_defaults(state)
         task_state["pdca_phase"] = "plan"
         correlation_id = _correlation_id(state)
@@ -135,6 +138,21 @@ def build_next_step_node(*, tool_registry: Any) -> Callable[[dict[str, Any]], di
         return {"task_state": task_state}
 
     return _node
+
+
+def route_after_next_step(state: dict[str, Any]) -> str:
+    task_state = state.get("task_state")
+    if isinstance(task_state, dict) and str(task_state.get("status") or "") == "waiting_user":
+        logger.info(
+            "task_mode route_after_next_step correlation_id=%s route=respond_node reason=waiting_user",
+            _correlation_id(state),
+        )
+        return "respond_node"
+    logger.info(
+        "task_mode route_after_next_step correlation_id=%s route=execute_step_node",
+        _correlation_id(state),
+    )
+    return "execute_step_node"
 
 
 def validate_step_node(state: dict[str, Any], *, tool_registry: Any) -> dict[str, Any]:
@@ -226,6 +244,7 @@ def route_after_validate_step(state: dict[str, Any]) -> str:
 
 
 def execute_step_node(state: dict[str, Any], *, tool_registry: Any) -> dict[str, Any]:
+    emit_transition_event(state, "executing")
     task_state = _task_state_with_defaults(state)
     task_state["pdca_phase"] = "do"
     correlation_id = _correlation_id(state)
@@ -397,6 +416,106 @@ def update_state_node(state: dict[str, Any]) -> dict[str, Any]:
         bool(outcome),
     )
     return {"task_state": task_state}
+
+
+def progress_critic_node(state: dict[str, Any]) -> dict[str, Any]:
+    task_state = _task_state_with_defaults(state)
+    task_state["pdca_phase"] = "critic"
+    correlation_id = _correlation_id(state)
+    status = str(task_state.get("status") or "").strip().lower()
+    current = _current_step(task_state)
+    current_status = str((current or {}).get("status") or "").strip().lower()
+    cycle = int(task_state.get("cycle_index") or 0)
+
+    if status in {"done", "waiting_user", "failed"}:
+        logger.info(
+            "task_mode progress_critic skip correlation_id=%s status=%s cycle=%s",
+            correlation_id,
+            status,
+            cycle,
+        )
+        return {"task_state": task_state}
+
+    evaluation = (
+        _evaluate_tool_execution(task_state=task_state, current_step=current)
+        if current_status == "failed"
+        else {}
+    )
+    task_state["execution_eval"] = evaluation if isinstance(evaluation, dict) else {}
+    if current_status == "failed" and int((evaluation or {}).get("same_signature_failures") or 0) >= 3:
+        task_state["status"] = "failed"
+        task_state["outcome"] = {
+            "kind": "task_failed",
+            "summary": str(
+                (evaluation or {}).get("summary")
+                or "I did not make enough progress to continue safely."
+            ),
+        }
+        _append_trace_event(
+            task_state,
+            {
+                "type": "status_changed",
+                "summary": "Progress critic marked task as failed due to repeated same-signature failures.",
+                "correlation_id": correlation_id,
+            },
+        )
+        logger.info(
+            "task_mode progress_critic fail correlation_id=%s step_id=%s same_signature=%s",
+            correlation_id,
+            str((current or {}).get("step_id") or ""),
+            int((evaluation or {}).get("same_signature_failures") or 0),
+        )
+        return {"task_state": task_state}
+
+    if cycle < _PROGRESS_CHECK_CYCLE_THRESHOLD:
+        logger.info(
+            "task_mode progress_critic continue correlation_id=%s cycle=%s threshold=%s",
+            correlation_id,
+            cycle,
+            _PROGRESS_CHECK_CYCLE_THRESHOLD,
+        )
+        return {"task_state": task_state}
+
+    question = _build_progress_checkin_question(
+        state=state,
+        task_state=task_state,
+        evaluation=evaluation if isinstance(evaluation, dict) else {},
+    )
+    task_state["status"] = "waiting_user"
+    task_state["next_user_question"] = question
+    _append_trace_event(
+        task_state,
+        {
+            "type": "status_changed",
+            "summary": "Progress critic requested user guidance after extended work-in-progress.",
+            "correlation_id": correlation_id,
+        },
+    )
+    logger.info(
+        "task_mode progress_critic ask_user correlation_id=%s cycle=%s step_id=%s",
+        correlation_id,
+        cycle,
+        str((current or {}).get("step_id") or ""),
+    )
+    return {"task_state": task_state}
+
+
+def route_after_progress_critic(state: dict[str, Any]) -> str:
+    task_state = state.get("task_state")
+    status = str((task_state or {}).get("status") or "").strip().lower() if isinstance(task_state, dict) else ""
+    if status in {"waiting_user", "failed"}:
+        logger.info(
+            "task_mode route_after_progress_critic correlation_id=%s route=respond_node status=%s",
+            _correlation_id(state),
+            status,
+        )
+        return "respond_node"
+    logger.info(
+        "task_mode route_after_progress_critic correlation_id=%s route=act_node status=%s",
+        _correlation_id(state),
+        status or "running",
+    )
+    return "act_node"
 
 
 def act_node(state: dict[str, Any]) -> dict[str, Any]:
@@ -770,6 +889,53 @@ def _call_llm_text(*, llm_client: Any, system_prompt: str, user_prompt: str) -> 
             return ""
     except Exception:
         return ""
+
+
+def _build_progress_checkin_question(
+    *,
+    state: dict[str, Any],
+    task_state: dict[str, Any],
+    evaluation: dict[str, Any],
+) -> str:
+    llm_client = state.get("_llm_client")
+    goal = str(task_state.get("goal") or "").strip()
+    cycle = int(task_state.get("cycle_index") or 0)
+    current = _current_step(task_state)
+    proposal = (current or {}).get("proposal") if isinstance(current, dict) else {}
+    current_kind = str((proposal or {}).get("kind") or "").strip()
+    current_tool = str((proposal or {}).get("tool_name") or "").strip()
+    summary = str((evaluation or {}).get("summary") or "").strip()
+    system_prompt = (
+        "You are Alphonse speaking to your human.\n"
+        "Generate exactly one concise question in the user's language.\n"
+        "The question must disclose current work-in-progress and ask whether to continue or stop.\n"
+        "Do not mention internal technical terms, stack traces, nodes, or recursion.\n"
+        "Output plain text only."
+    )
+    user_prompt = (
+        "Context:\n"
+        f"- locale: {str(state.get('locale') or '')}\n"
+        f"- cycle_count: {cycle}\n"
+        f"- task_goal: {goal}\n"
+        f"- current_step_kind: {current_kind}\n"
+        f"- current_tool: {current_tool}\n"
+        f"- progress_summary: {summary}\n\n"
+        "Write one question to the human asking whether to continue or stop."
+    )
+    question = _call_llm_text(
+        llm_client=llm_client,
+        system_prompt=system_prompt,
+        user_prompt=user_prompt,
+    )
+    rendered = str(question or "").strip()
+    if rendered:
+        return rendered
+    fallback_goal = goal or "this task"
+    fallback_wip = current_tool or "the current plan"
+    return (
+        f"I have been working on {fallback_goal} for {cycle} cycles and I am currently using {fallback_wip}. "
+        "Would you like me to continue or stop?"
+    )
 
 
 def _parse_json_payload(raw: Any) -> dict[str, Any] | None:
