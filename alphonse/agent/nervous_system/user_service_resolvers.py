@@ -27,6 +27,23 @@ def resolve_service_user_id(*, user_id: str, service_id: int) -> str | None:
     return str(row[0]) if row and row[0] is not None else None
 
 
+def resolve_user_id_by_service_user_id(*, service_id: int, service_user_id: str) -> str | None:
+    value = str(service_user_id or "").strip()
+    if not value:
+        return None
+    with sqlite3.connect(resolve_nervous_system_db_path()) as conn:
+        row = conn.execute(
+            """
+            SELECT user_id
+            FROM user_service_resolvers
+            WHERE service_id = ? AND service_user_id = ? AND is_active = 1
+            LIMIT 1
+            """,
+            (int(service_id), value),
+        ).fetchone()
+    return str(row[0]) if row and row[0] is not None else None
+
+
 def upsert_service_resolver(
     *,
     user_id: str,
@@ -89,6 +106,13 @@ def resolve_telegram_chat_id_for_user(user_ref: str) -> str | None:
             if mapped:
                 return mapped
     return None
+
+
+def resolve_internal_user_by_telegram_id(telegram_user_id: str) -> str | None:
+    return resolve_user_id_by_service_user_id(
+        service_id=TELEGRAM_SERVICE_ID,
+        service_user_id=str(telegram_user_id or "").strip(),
+    )
 
 
 def _is_numeric_identifier(value: str) -> bool:

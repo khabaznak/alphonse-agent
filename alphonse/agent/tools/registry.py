@@ -25,6 +25,8 @@ from alphonse.agent.tools.telegram_files import AnalyzeTelegramImageTool
 from alphonse.agent.tools.telegram_files import TelegramDownloadFileTool
 from alphonse.agent.tools.telegram_files import TelegramGetFileMetaTool
 from alphonse.agent.tools.telegram_files import TranscribeTelegramAudioTool
+from alphonse.agent.tools.user_contact_tools import UserRegisterFromContactTool
+from alphonse.agent.tools.user_contact_tools import UserRemoveFromContactTool
 
 from alphonse.agent.tools.subprocess import SubprocessTool
 
@@ -74,6 +76,8 @@ def build_default_tool_registry() -> ToolRegistry:
     job_resume = JobResumeTool(job_store)
     job_delete = JobDeleteTool(job_store)
     job_run_now = JobRunNowTool(job_runner)
+    user_register_from_contact = UserRegisterFromContactTool()
+    user_remove_from_contact = UserRemoveFromContactTool()
     registry.register("getTime", clock)
     registry.register("createReminder", scheduler)
     registry.register("createTimeEventTrigger", scheduler)
@@ -100,5 +104,7 @@ def build_default_tool_registry() -> ToolRegistry:
     registry.register("job_resume", job_resume)
     registry.register("job_delete", job_delete)
     registry.register("job_run_now", job_run_now)
+    registry.register("user_register_from_contact", user_register_from_contact)
+    registry.register("user_remove_from_contact", user_remove_from_contact)
     job_runner.set_tool_registry(registry)
     return registry

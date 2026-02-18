@@ -80,7 +80,9 @@ class TelegramSense(Sense):
             upsert_invite(
                 {
                     "chat_id": str(chat_id),
+                    "chat_type": payload.get("chat_type"),
                     "from_user_id": str(from_user) if from_user is not None else None,
+                    "from_user_username": payload.get("from_user_username"),
                     "from_user_name": from_user_name,
                     "last_message": text,
                     "status": "pending",

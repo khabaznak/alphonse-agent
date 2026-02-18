@@ -28,6 +28,8 @@ def apply_schema(db_path: Path) -> None:
         _ensure_services_registry(conn)
         _ensure_prompt_template_columns(conn)
         _ensure_sandbox_directories(conn)
+        _ensure_telegram_chat_access_table(conn)
+        _ensure_telegram_invite_columns(conn)
 
 
 def main() -> None:
@@ -304,6 +306,47 @@ def _ensure_sandbox_directories(conn: sqlite3.Connection) -> None:
             "Downloaded Telegram files sandbox",
         ),
     )
+
+
+def _ensure_telegram_chat_access_table(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS telegram_chat_access (
+          chat_id       TEXT PRIMARY KEY,
+          chat_type     TEXT NOT NULL,
+          status        TEXT NOT NULL DEFAULT 'active',
+          owner_user_id TEXT,
+          policy        TEXT NOT NULL DEFAULT 'registered_private',
+          created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+          updated_at    TEXT NOT NULL DEFAULT (datetime('now')),
+          revoked_at    TEXT,
+          revoke_reason TEXT,
+          CHECK (chat_type IN ('private', 'group', 'supergroup')),
+          CHECK (status IN ('active', 'revoked', 'pending')),
+          CHECK (policy IN ('registered_private', 'owner_managed_group'))
+        ) STRICT
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_telegram_chat_access_status
+          ON telegram_chat_access (status, updated_at)
+        """
+    )
+
+
+def _ensure_telegram_invite_columns(conn: sqlite3.Connection) -> None:
+    columns = {
+        "chat_type": "TEXT",
+        "from_user_username": "TEXT",
+    }
+    for name, definition in columns.items():
+        try:
+            conn.execute(
+                f"ALTER TABLE telegram_pending_invites ADD COLUMN {name} {definition}"
+            )
+        except sqlite3.OperationalError:
+            continue
 
 
 def _rebuild_delivery_receipts(conn: sqlite3.Connection) -> None:

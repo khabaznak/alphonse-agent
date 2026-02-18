@@ -25,6 +25,7 @@ def test_telegram_extremity_adapter_deliver_emits_send_message(monkeypatch) -> N
         "resolve_telegram_chat_id_for_user",
         lambda _: None,
     )
+    monkeypatch.setattr(telegram_channel, "can_deliver_to_chat", lambda _chat_id: True)
 
     adapter = telegram_channel.TelegramExtremityAdapter()
     adapter.deliver(
@@ -85,6 +86,7 @@ def test_telegram_extremity_adapter_resolves_internal_user_to_chat_id(monkeypatc
         "resolve_telegram_chat_id_for_user",
         lambda user_ref: "8553589429" if user_ref in {"e64-user", "Alex"} else None,
     )
+    monkeypatch.setattr(telegram_channel, "can_deliver_to_chat", lambda _chat_id: True)
 
     adapter = telegram_channel.TelegramExtremityAdapter()
     adapter.deliver(
@@ -119,6 +121,7 @@ def test_telegram_waiting_user_reaction_is_safe_and_deduped(monkeypatch) -> None
         lambda: {"bot_token": "fake-token", "poll_interval_sec": 1.0},
     )
     monkeypatch.setattr(telegram_channel, "TelegramAdapter", FakeTelegramAdapter)
+    monkeypatch.setattr(telegram_channel, "can_deliver_to_chat", lambda _chat_id: True)
 
     adapter = telegram_channel.TelegramExtremityAdapter()
     adapter.emit_transition(
@@ -139,3 +142,36 @@ def test_telegram_waiting_user_reaction_is_safe_and_deduped(monkeypatch) -> None
     ]
     assert len(reactions) == 1
     assert reactions[0]["payload"]["emoji"] == "🤔"
+
+
+def test_telegram_extremity_adapter_blocks_unauthorized_chat(monkeypatch) -> None:
+    captured: list[dict] = []
+
+    class FakeTelegramAdapter:
+        def __init__(self, config: dict) -> None:
+            self.config = config
+
+        def handle_action(self, action: dict) -> None:
+            captured.append(action)
+
+    monkeypatch.setattr(
+        telegram_channel,
+        "build_telegram_adapter_config",
+        lambda: {"bot_token": "fake-token", "poll_interval_sec": 1.0},
+    )
+    monkeypatch.setattr(telegram_channel, "TelegramAdapter", FakeTelegramAdapter)
+    monkeypatch.setattr(telegram_channel, "can_deliver_to_chat", lambda _chat_id: False)
+
+    adapter = telegram_channel.TelegramExtremityAdapter()
+    adapter.deliver(
+        NormalizedOutboundMessage(
+            message="blocked",
+            channel_type="telegram",
+            channel_target="12345",
+            audience={"kind": "system", "id": "system"},
+            correlation_id="cid-block",
+            metadata={},
+        )
+    )
+
+    assert captured == []

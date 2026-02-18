@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from alphonse.agent.nervous_system.paths import resolve_nervous_system_db_path
+from alphonse.agent.nervous_system.telegram_chat_access import provision_from_invite
 
 
 def upsert_invite(record: dict[str, Any]) -> str:
@@ -16,10 +17,12 @@ def upsert_invite(record: dict[str, Any]) -> str:
         conn.execute(
             """
             INSERT INTO telegram_pending_invites (
-              chat_id, from_user_id, from_user_name, last_message, status, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+              chat_id, chat_type, from_user_id, from_user_username, from_user_name, last_message, status, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(chat_id) DO UPDATE SET
+              chat_type = excluded.chat_type,
               from_user_id = excluded.from_user_id,
+              from_user_username = excluded.from_user_username,
               from_user_name = excluded.from_user_name,
               last_message = excluded.last_message,
               status = excluded.status,
@@ -27,7 +30,9 @@ def upsert_invite(record: dict[str, Any]) -> str:
             """,
             (
                 chat_id,
+                record.get("chat_type"),
                 record.get("from_user_id"),
+                record.get("from_user_username"),
                 record.get("from_user_name"),
                 record.get("last_message"),
                 record.get("status") or "pending",
@@ -47,7 +52,7 @@ def list_invites(status: str | None = None, limit: int = 200) -> list[dict[str, 
         params.append(status)
     where = f"WHERE {' AND '.join(filters)}" if filters else ""
     query = (
-        "SELECT chat_id, from_user_id, from_user_name, last_message, status, created_at, updated_at "
+        "SELECT chat_id, chat_type, from_user_id, from_user_username, from_user_name, last_message, status, created_at, updated_at "
         f"FROM telegram_pending_invites {where} ORDER BY updated_at DESC LIMIT ?"
     )
     params.append(limit)
@@ -60,7 +65,7 @@ def get_invite(chat_id: str) -> dict[str, Any] | None:
     with sqlite3.connect(resolve_nervous_system_db_path()) as conn:
         row = conn.execute(
             """
-            SELECT chat_id, from_user_id, from_user_name, last_message, status, created_at, updated_at
+            SELECT chat_id, chat_type, from_user_id, from_user_username, from_user_name, last_message, status, created_at, updated_at
             FROM telegram_pending_invites
             WHERE chat_id = ?
             """,
@@ -70,6 +75,7 @@ def get_invite(chat_id: str) -> dict[str, Any] | None:
 
 
 def update_invite_status(chat_id: str, status: str) -> dict[str, Any] | None:
+    normalized_status = str(status or "").strip().lower()
     with sqlite3.connect(resolve_nervous_system_db_path()) as conn:
         conn.execute(
             """
@@ -77,10 +83,13 @@ def update_invite_status(chat_id: str, status: str) -> dict[str, Any] | None:
             SET status = ?, updated_at = ?
             WHERE chat_id = ?
             """,
-            (status, _now_iso(), chat_id),
+            (normalized_status, _now_iso(), chat_id),
         )
         conn.commit()
-    return get_invite(chat_id)
+    invite = get_invite(chat_id)
+    if invite:
+        provision_from_invite(invite, status=normalized_status)
+    return invite
 
 
 def _row_to_invite(row: sqlite3.Row | tuple | None) -> dict[str, Any]:
@@ -90,12 +99,14 @@ def _row_to_invite(row: sqlite3.Row | tuple | None) -> dict[str, Any]:
         row = tuple(row)
     return {
         "chat_id": row[0],
-        "from_user_id": row[1],
-        "from_user_name": row[2],
-        "last_message": row[3],
-        "status": row[4],
-        "created_at": row[5],
-        "updated_at": row[6],
+        "chat_type": row[1],
+        "from_user_id": row[2],
+        "from_user_username": row[3],
+        "from_user_name": row[4],
+        "last_message": row[5],
+        "status": row[6],
+        "created_at": row[7],
+        "updated_at": row[8],
     }
 
 

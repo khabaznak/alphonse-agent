@@ -12,6 +12,7 @@ from alphonse.agent.io.contracts import (
 from alphonse.agent.io.adapters import SenseAdapter, ExtremityAdapter
 from alphonse.agent.extremities.interfaces.integrations.telegram.telegram_adapter import TelegramAdapter
 from alphonse.agent.extremities.telegram_config import build_telegram_adapter_config
+from alphonse.agent.nervous_system.telegram_chat_access import can_deliver_to_chat
 from alphonse.agent.nervous_system.user_service_resolvers import resolve_telegram_chat_id_for_user
 
 logger = logging.getLogger(__name__)
@@ -38,6 +39,9 @@ class TelegramSenseAdapter(SenseAdapter):
             "reply_to_user": payload.get("reply_to_user") or metadata.get("reply_to_user"),
             "reply_to_user_name": payload.get("reply_to_user_name") or metadata.get("reply_to_user_name"),
             "reply_to_message_id": payload.get("reply_to_message_id") or metadata.get("reply_to_message_id"),
+            "chat_type": payload.get("chat_type") or metadata.get("chat_type"),
+            "content_type": payload.get("content_type") or metadata.get("content_type"),
+            "contact": payload.get("contact") if isinstance(payload.get("contact"), dict) else metadata.get("contact"),
             "raw": payload,
         }
 
@@ -75,6 +79,12 @@ class TelegramExtremityAdapter(ExtremityAdapter):
                 "TelegramExtremityAdapter unresolved target channel_target=%s audience=%s",
                 message.channel_target,
                 message.audience,
+            )
+            return
+        if not can_deliver_to_chat(chat_id):
+            logger.warning(
+                "TelegramExtremityAdapter blocked delivery chat_id=%s reason=not_authorized",
+                chat_id,
             )
             return
         self._adapter.handle_action(

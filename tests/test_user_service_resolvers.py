@@ -55,3 +55,25 @@ def test_resolve_telegram_chat_id_for_internal_and_display_name(tmp_path: Path, 
     assert resolvers.resolve_telegram_chat_id_for_user("Alex") == "8553589429"
     assert resolvers.resolve_telegram_chat_id_for_user("8553589429") == "8553589429"
 
+
+def test_resolve_internal_user_by_telegram_id(tmp_path: Path, monkeypatch) -> None:
+    db_path = tmp_path / "nerve-db"
+    monkeypatch.setenv("NERVE_DB_PATH", str(db_path))
+    apply_schema(db_path)
+
+    users_store.upsert_user(
+        {
+            "user_id": "u-3",
+            "principal_id": "p-3",
+            "display_name": "Rex",
+            "is_active": True,
+        }
+    )
+    _ = resolvers.upsert_service_resolver(
+        user_id="u-3",
+        service_id=2,
+        service_user_id="123456789",
+        is_active=True,
+    )
+
+    assert resolvers.resolve_internal_user_by_telegram_id("123456789") == "u-3"
