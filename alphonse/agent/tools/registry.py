@@ -25,6 +25,7 @@ from alphonse.agent.tools.telegram_files import AnalyzeTelegramImageTool
 from alphonse.agent.tools.telegram_files import TelegramDownloadFileTool
 from alphonse.agent.tools.telegram_files import TelegramGetFileMetaTool
 from alphonse.agent.tools.telegram_files import TranscribeTelegramAudioTool
+from alphonse.agent.tools.telegram_files import VisionAnalyzeImageTool
 from alphonse.agent.tools.user_contact_tools import UserRegisterFromContactTool
 from alphonse.agent.tools.user_contact_tools import UserRemoveFromContactTool
 
@@ -55,6 +56,7 @@ def build_default_tool_registry() -> ToolRegistry:
     telegram_download_file = TelegramDownloadFileTool()
     transcribe_audio = TranscribeTelegramAudioTool()
     analyze_image = AnalyzeTelegramImageTool()
+    vision_analyze_image = VisionAnalyzeImageTool()
     python_subprocess = SubprocessTool()
     terminal_execute = TerminalExecuteTool()
     scratchpad_service = ScratchpadService()
@@ -87,6 +89,7 @@ def build_default_tool_registry() -> ToolRegistry:
     registry.register("telegramDownloadFile", telegram_download_file)
     registry.register("transcribeTelegramAudio", transcribe_audio)
     registry.register("analyzeTelegramImage", analyze_image)
+    registry.register("vision_analyze_image", vision_analyze_image)
     # Internal aliases kept for compatibility.
     registry.register("clock", clock)
     registry.register("schedule_event", scheduler)

@@ -189,86 +189,161 @@ class TranscribeTelegramAudioTool:
 class AnalyzeTelegramImageTool:
     def __init__(self, *, bot_token: str | None = None) -> None:
         self._bot_token = str(bot_token or os.getenv("TELEGRAM_BOT_TOKEN") or "").strip()
-        self._openai_key = str(os.getenv("OPENAI_API_KEY") or "").strip()
-        self._model = str(os.getenv("OPENAI_VISION_MODEL") or "gpt-4o-mini")
+        self._vision = VisionAnalyzeImageTool()
 
     def execute(
         self,
         *,
-        file_id: str,
+        file_id: str | None = None,
         prompt: str | None = None,
         sandbox_alias: str = DEFAULT_SANDBOX_ALIAS,
+        state: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         if not self._bot_token:
             return {"status": "failed", "error": "telegram_bot_token_missing"}
+        selected_file_id = str(file_id or "").strip() or _extract_image_file_id_from_state(state)
+        if not selected_file_id:
+            return {"status": "failed", "error": "telegram_image_file_id_missing"}
+        user_scope = _state_user_scope(state)
+        scoped_relative_path = _scoped_telegram_relative_path(
+            file_id=selected_file_id,
+            user_scope=user_scope,
+        )
         download = TelegramDownloadFileTool(bot_token=self._bot_token).execute(
-            file_id=file_id,
+            file_id=selected_file_id,
             sandbox_alias=sandbox_alias,
+            relative_path=scoped_relative_path,
         )
         if download.get("status") != "ok":
             return download
-        if not self._openai_key:
-            return {
-                "status": "failed",
-                "error": "openai_api_key_missing",
-                "sandbox_alias": download.get("sandbox_alias"),
-                "relative_path": download.get("relative_path"),
-            }
         relative_path = str(download.get("relative_path") or "").strip()
         alias = str(download.get("sandbox_alias") or sandbox_alias or DEFAULT_SANDBOX_ALIAS).strip()
         if not relative_path:
             return {"status": "failed", "error": "image_path_missing"}
-        local_path = str(resolve_sandbox_path(alias=alias, relative_path=relative_path))
+        result = self._vision.execute(
+            sandbox_alias=alias,
+            relative_path=relative_path,
+            prompt=prompt,
+        )
+        if result.get("status") != "ok":
+            return result
+        return {
+            "status": "ok",
+            "file_id": selected_file_id,
+            "sandbox_alias": alias,
+            "relative_path": relative_path,
+            "analysis": result.get("analysis"),
+            "model": result.get("model"),
+        }
+
+
+class VisionAnalyzeImageTool:
+    def __init__(self) -> None:
+        self._ollama_base_url = str(os.getenv("OLLAMA_BASE_URL") or "http://localhost:11434").strip()
+        self._model = str(os.getenv("ALPHONSE_VISION_MODEL") or "qwen3-vl:4b").strip() or "qwen3-vl:4b"
+        self._timeout_seconds = int(str(os.getenv("ALPHONSE_VISION_TIMEOUT_SECONDS") or "60").strip() or "60")
+
+    def execute(
+        self,
+        *,
+        sandbox_alias: str,
+        relative_path: str,
+        prompt: str | None = None,
+    ) -> dict[str, Any]:
+        alias = str(sandbox_alias or DEFAULT_SANDBOX_ALIAS).strip() or DEFAULT_SANDBOX_ALIAS
+        rel = str(relative_path or "").strip()
+        if not rel:
+            return {"status": "failed", "error": "image_path_missing"}
+        local_path = resolve_sandbox_path(alias=alias, relative_path=rel)
+        if not local_path.exists():
+            return {"status": "failed", "error": "image_not_found"}
+        if not local_path.is_file():
+            return {"status": "failed", "error": "image_not_a_file"}
         try:
-            image_bytes = Path(local_path).read_bytes()
-            mime = str(download.get("mime_type") or "image/jpeg")
+            image_bytes = local_path.read_bytes()
             image_b64 = base64.b64encode(image_bytes).decode("ascii")
-            user_text = str(prompt or "Describe this image concisely.")
+            user_text = str(prompt or "Describe this image concisely in the user's language.")
             payload = {
                 "model": self._model,
                 "messages": [
                     {
                         "role": "user",
-                        "content": [
-                            {"type": "text", "text": user_text},
-                            {
-                                "type": "image_url",
-                                "image_url": {"url": f"data:{mime};base64,{image_b64}"},
-                            },
-                        ],
+                        "content": user_text,
+                        "images": [image_b64],
                     }
                 ],
+                "stream": False,
             }
+            base_url = self._ollama_base_url.rstrip("/")
             resp = requests.post(
-                "https://api.openai.com/v1/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {self._openai_key}",
-                    "Content-Type": "application/json",
-                },
+                f"{base_url}/api/chat",
                 json=payload,
-                timeout=60,
+                timeout=self._timeout_seconds,
             )
             if resp.status_code >= 400:
                 return {"status": "failed", "error": f"vision_http_{resp.status_code}"}
             body = resp.json() if resp.content else {}
             text = ""
             if isinstance(body, dict):
-                choices = body.get("choices")
-                if isinstance(choices, list) and choices:
-                    first = choices[0] if isinstance(choices[0], dict) else {}
-                    msg = first.get("message") if isinstance(first, dict) else {}
-                    if isinstance(msg, dict):
-                        text = str(msg.get("content") or "")
+                message = body.get("message")
+                if isinstance(message, dict):
+                    text = str(message.get("content") or "")
             return {
                 "status": "ok",
-                "file_id": file_id,
                 "sandbox_alias": alias,
-                "relative_path": relative_path,
+                "relative_path": rel,
                 "analysis": text,
                 "model": self._model,
             }
         except Exception as exc:
             return {"status": "failed", "error": str(exc) or "vision_failed"}
+
+
+def _extract_image_file_id_from_state(state: dict[str, Any] | None) -> str:
+    if not isinstance(state, dict):
+        return ""
+    raw = state.get("provider_event")
+    if not isinstance(raw, dict):
+        return ""
+    message = raw.get("message")
+    if not isinstance(message, dict):
+        return ""
+    photo = message.get("photo")
+    if isinstance(photo, list):
+        for item in reversed(photo):
+            if not isinstance(item, dict):
+                continue
+            file_id = str(item.get("file_id") or "").strip()
+            if file_id:
+                return file_id
+    document = message.get("document")
+    if isinstance(document, dict):
+        mime = str(document.get("mime_type") or "").strip().lower()
+        file_id = str(document.get("file_id") or "").strip()
+    if file_id and mime.startswith("image/"):
+        return file_id
+    return ""
+
+
+def _state_user_scope(state: dict[str, Any] | None) -> str:
+    if not isinstance(state, dict):
+        return "unknown"
+    for key in ("user_id", "channel_target", "session_id"):
+        value = str(state.get(key) or "").strip()
+        if value:
+            return _sanitize_path_segment(value)
+    return "unknown"
+
+
+def _sanitize_path_segment(value: str) -> str:
+    cleaned = "".join(ch if ch.isalnum() or ch in {"-", "_"} else "_" for ch in value.strip().lower())
+    cleaned = cleaned.strip("_")
+    return cleaned or "unknown"
+
+
+def _scoped_telegram_relative_path(*, file_id: str, user_scope: str) -> str:
+    safe_file_id = _sanitize_path_segment(file_id)
+    return f"users/{user_scope}/images/{safe_file_id}.bin"
 
 
 def _read_whisper_output(output_dir: Path) -> dict[str, Any] | None:

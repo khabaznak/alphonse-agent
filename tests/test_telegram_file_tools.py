@@ -23,6 +23,16 @@ class _FakeTelegramAdapter:
         return b"fake-bytes"
 
 
+class _FakeVisionResponse:
+    def __init__(self, status_code: int, body: dict | None = None) -> None:
+        self.status_code = status_code
+        self._body = body or {}
+        self.content = b"{}"
+
+    def json(self) -> dict:
+        return dict(self._body)
+
+
 def test_telegram_get_file_meta_and_download(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(telegram_files, "TelegramAdapter", _FakeTelegramAdapter)
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "test-token")
@@ -46,11 +56,18 @@ def test_telegram_get_file_meta_and_download(monkeypatch, tmp_path: Path) -> Non
     assert saved.read_bytes() == b"fake-bytes"
 
 
-def test_transcribe_and_analyze_fail_cleanly_without_openai(monkeypatch, tmp_path: Path) -> None:
+def test_transcribe_and_analyze_with_ollama(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(telegram_files, "TelegramAdapter", _FakeTelegramAdapter)
     monkeypatch.setattr(telegram_files.shutil, "which", lambda _cmd: None)
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "test-token")
-    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setattr(
+        telegram_files.requests,
+        "post",
+        lambda *args, **kwargs: _FakeVisionResponse(
+            200,
+            {"message": {"content": "Detected a handwritten note and one receipt."}},
+        ),
+    )
     db_path = tmp_path / "nerve-db"
     monkeypatch.setenv("NERVE_DB_PATH", str(db_path))
     monkeypatch.setenv("ALPHONSE_SANDBOX_ROOT", str(tmp_path / "sandbox-root"))
@@ -62,8 +79,43 @@ def test_transcribe_and_analyze_fail_cleanly_without_openai(monkeypatch, tmp_pat
     assert transcribe["sandbox_alias"] == "telegram_files"
     assert transcribe.get("relative_path")
 
-    analyze = telegram_files.AnalyzeTelegramImageTool().execute(file_id="f-image")
-    assert analyze["status"] == "failed"
-    assert analyze["error"] == "openai_api_key_missing"
+    analyze = telegram_files.AnalyzeTelegramImageTool().execute(
+        file_id=None,
+        state={
+            "channel_target": "8553589429",
+            "provider_event": {
+                "message": {
+                    "photo": [
+                        {"file_id": "small-photo"},
+                        {"file_id": "best-photo"},
+                    ]
+                }
+            },
+        },
+    )
+    assert analyze["status"] == "ok"
     assert analyze["sandbox_alias"] == "telegram_files"
-    assert analyze.get("relative_path")
+    assert str(analyze.get("relative_path") or "").startswith("users/8553589429/images/")
+    assert analyze["analysis"] == "Detected a handwritten note and one receipt."
+
+
+def test_vision_analyze_image_http_failure(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(
+        telegram_files.requests,
+        "post",
+        lambda *args, **kwargs: _FakeVisionResponse(500, {}),
+    )
+    db_path = tmp_path / "nerve-db"
+    monkeypatch.setenv("NERVE_DB_PATH", str(db_path))
+    monkeypatch.setenv("ALPHONSE_SANDBOX_ROOT", str(tmp_path / "sandbox-root"))
+    apply_schema(db_path)
+    image_path = tmp_path / "sandbox-root" / "telegram_files" / "users" / "u1" / "images" / "sample.bin"
+    image_path.parent.mkdir(parents=True, exist_ok=True)
+    image_path.write_bytes(b"img")
+
+    result = telegram_files.VisionAnalyzeImageTool().execute(
+        sandbox_alias="telegram_files",
+        relative_path="users/u1/images/sample.bin",
+    )
+    assert result["status"] == "failed"
+    assert result["error"] == "vision_http_500"

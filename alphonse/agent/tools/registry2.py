@@ -197,12 +197,35 @@ def _default_specs() -> list[ToolSpec]:
                     "prompt": {"type": "string"},
                     "sandbox_alias": {"type": "string"},
                 },
-                required=["file_id"],
+                required=[],
             ),
             domain_tags=["telegram", "image", "analysis"],
             safety_level=SafetyLevel.HIGH,
             expose_in_catalog=False,
             examples=[{"file_id": "AgACAgQAAx...", "prompt": "Describe the image briefly."}],
+        ),
+        ToolSpec(
+            key="vision_analyze_image",
+            description="Analyze a sandboxed image using Alphonse's dedicated vision model.",
+            when_to_use="Use for image interpretation tasks like receipts, notes, package checks, and object descriptions.",
+            returns="image_analysis",
+            input_schema=_object_schema(
+                properties={
+                    "sandbox_alias": {"type": "string"},
+                    "relative_path": {"type": "string"},
+                    "prompt": {"type": "string"},
+                },
+                required=["sandbox_alias", "relative_path"],
+            ),
+            domain_tags=["vision", "image", "analysis"],
+            safety_level=SafetyLevel.MEDIUM,
+            examples=[
+                {
+                    "sandbox_alias": "telegram_files",
+                    "relative_path": "users/8553589429/images/abc123.bin",
+                    "prompt": "Extract the items and totals from this receipt.",
+                }
+            ],
         ),
         ToolSpec(
             key="getMySettings",
