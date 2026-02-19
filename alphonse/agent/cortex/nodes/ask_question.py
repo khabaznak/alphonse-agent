@@ -9,7 +9,6 @@ from alphonse.agent.cognition.pending_interaction import (
     serialize_pending_interaction,
 )
 from alphonse.agent.cortex.nodes.execution_helpers import run_ask_question_step
-from alphonse.agent.cortex.nodes.plan import next_step_index
 from alphonse.agent.cortex.transitions import emit_transition_event
 
 
@@ -117,3 +116,14 @@ def _has_missing_params(params: dict[str, Any]) -> bool:
         if isinstance(value, str) and not value.strip():
             return True
     return False
+
+
+def next_step_index(
+    steps: list[dict[str, Any]],
+    allowed_statuses: set[str],
+) -> int | None:
+    for idx, step in enumerate(steps):
+        status = str(step.get("status") or "").strip().lower()
+        if status in allowed_statuses:
+            return idx
+    return None

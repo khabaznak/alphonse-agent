@@ -5,16 +5,12 @@ from typing import Any, Protocol, TypedDict
 
 from langgraph.graph import END, StateGraph
 
-from alphonse.agent.cognition.planning_catalog import format_available_abilities
 from alphonse.agent.cognition.plans import CortexPlan, CortexResult
 from alphonse.agent.cortex.nodes import build_apology_node
 from alphonse.agent.cortex.nodes import build_first_decision_node
 from alphonse.agent.cortex.nodes import task_mode_entry_node
-from alphonse.agent.cortex.nodes import run_capability_gap_tool
-from alphonse.agent.cortex.nodes import plan_node_stateful
 from alphonse.agent.cortex.nodes import respond_finalize_node
 from alphonse.agent.cortex.nodes import route_after_first_decision
-from alphonse.agent.cortex.nodes import route_after_plan
 from alphonse.agent.cortex.task_mode.state import TaskState
 from alphonse.agent.cortex.task_mode.graph import wire_task_mode_pdca
 from alphonse.agent.cortex.transitions import emit_transition_event
@@ -79,16 +75,6 @@ class CortexGraph:
             ),
         )
         graph.add_node(
-            "plan_node",
-            lambda state: plan_node_stateful(
-                state,
-                llm_client_from_state=self._llm_client_from_state,
-                tool_registry=self._tool_registry,
-                format_available_abilities=format_available_abilities,
-                run_capability_gap_tool=run_capability_gap_tool,
-            ),
-        )
-        graph.add_node(
             "apology_node",
             build_apology_node(
                 llm_client_from_state=self._llm_client_from_state,
@@ -112,16 +98,7 @@ class CortexGraph:
             "first_decision_node",
             route_after_first_decision,
             {
-                "plan_node": "task_mode_entry_node",
-                "respond_node": "respond_node",
-            },
-        )
-        graph.add_conditional_edges(
-            "plan_node",
-            route_after_plan,
-            {
-                "plan_node": "plan_node",
-                "apology_node": "apology_node",
+                "task_mode_entry_node": "task_mode_entry_node",
                 "respond_node": "respond_node",
             },
         )

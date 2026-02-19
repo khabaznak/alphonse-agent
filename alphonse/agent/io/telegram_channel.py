@@ -238,7 +238,7 @@ def _telegram_phase_for_internal_event(event: dict[str, Any]) -> str | None:
     if stage == "start":
         if node == "first_decision_node":
             return "acknowledged"
-        if node in {"plan_node", "apology_node"}:
+        if node in {"next_step_node", "progress_critic_node", "act_node", "apology_node"}:
             return "thinking"
         if node == "respond_node":
             return "executing"

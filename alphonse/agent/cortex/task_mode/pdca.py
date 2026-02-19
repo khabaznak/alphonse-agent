@@ -6,6 +6,9 @@ import logging
 from datetime import datetime
 from typing import Any, Callable
 
+from alphonse.agent.cognition.pending_interaction import PendingInteractionType
+from alphonse.agent.cognition.pending_interaction import build_pending_interaction
+from alphonse.agent.cognition.pending_interaction import serialize_pending_interaction
 from alphonse.agent.cognition.tool_schemas import planner_tool_schemas
 from alphonse.agent.cortex.transitions import emit_transition_event
 from alphonse.agent.cortex.task_mode.state import build_default_task_state
@@ -89,6 +92,27 @@ def build_next_step_node(*, tool_registry: Any) -> Callable[[dict[str, Any]], di
         task_state = _task_state_with_defaults(state)
         task_state["pdca_phase"] = "plan"
         correlation_id = _correlation_id(state)
+        if not _has_acceptance_criteria(task_state):
+            goal = str(task_state.get("goal") or "").strip() or "the current task"
+            task_state["status"] = "waiting_user"
+            task_state["next_user_question"] = (
+                f"Before I proceed with '{goal}', what acceptance criteria should I use to decide it is done?"
+            )
+            _append_trace_event(
+                task_state,
+                {
+                    "type": "acceptance_criteria_requested",
+                    "summary": "Requested acceptance criteria before task execution.",
+                    "correlation_id": correlation_id,
+                },
+            )
+            pending = build_pending_interaction(
+                PendingInteractionType.SLOT_FILL,
+                key="acceptance_criteria",
+                context={"source": "task_mode.acceptance_criteria", "goal": goal},
+                ttl_minutes=30,
+            )
+            return {"task_state": task_state, "pending_interaction": serialize_pending_interaction(pending)}
         llm_client = state.get("_llm_client")
         proposal, parse_failed = _propose_next_step_with_llm(
             llm_client=llm_client,
@@ -439,6 +463,23 @@ def progress_critic_node(state: dict[str, Any]) -> dict[str, Any]:
     current_status = str((current or {}).get("status") or "").strip().lower()
     cycle = int(task_state.get("cycle_index") or 0)
 
+    if _goal_satisfied(task_state):
+        task_state["status"] = "done"
+        _append_trace_event(
+            task_state,
+            {
+                "type": "status_changed",
+                "summary": "Progress critic marked task as done from outcome evidence.",
+                "correlation_id": correlation_id,
+            },
+        )
+        logger.info(
+            "task_mode progress_critic done correlation_id=%s cycle=%s",
+            correlation_id,
+            cycle,
+        )
+        return {"task_state": task_state}
+
     if status in {"done", "waiting_user", "failed"}:
         logger.info(
             "task_mode progress_critic skip correlation_id=%s status=%s cycle=%s",
@@ -515,7 +556,7 @@ def progress_critic_node(state: dict[str, Any]) -> dict[str, Any]:
 def route_after_progress_critic(state: dict[str, Any]) -> str:
     task_state = state.get("task_state")
     status = str((task_state or {}).get("status") or "").strip().lower() if isinstance(task_state, dict) else ""
-    if status in {"waiting_user", "failed"}:
+    if status in {"waiting_user", "failed", "done"}:
         logger.info(
             "task_mode route_after_progress_critic correlation_id=%s route=respond_node status=%s",
             _correlation_id(state),
@@ -563,22 +604,6 @@ def act_node(state: dict[str, Any]) -> dict[str, Any]:
         return {"task_state": task_state}
 
     if current_status == "executed":
-        if _goal_satisfied(task_state):
-            task_state["status"] = "done"
-            _append_trace_event(
-                task_state,
-                {
-                    "type": "status_changed",
-                    "summary": "Status changed to done.",
-                    "correlation_id": correlation_id,
-                },
-            )
-            logger.info(
-                "task_mode act done correlation_id=%s step_id=%s",
-                correlation_id,
-                str((current or {}).get("step_id") or ""),
-            )
-            return {"task_state": task_state}
         logger.info(
             "task_mode act continue_unsatisfied correlation_id=%s step_id=%s",
             correlation_id,
@@ -635,13 +660,6 @@ def act_node(state: dict[str, Any]) -> dict[str, Any]:
 def route_after_act(state: dict[str, Any]) -> str:
     task_state = state.get("task_state")
     status = str((task_state or {}).get("status") or "").strip().lower() if isinstance(task_state, dict) else ""
-    if status in {"done", "waiting_user", "failed"}:
-        logger.info(
-            "task_mode route_after_act correlation_id=%s route=respond_node status=%s",
-            _correlation_id(state),
-            status,
-        )
-        return "respond_node"
     logger.info(
         "task_mode route_after_act correlation_id=%s route=next_step_node status=%s",
         _correlation_id(state),
@@ -960,6 +978,14 @@ def _build_progress_checkin_question(
     current_kind = str((proposal or {}).get("kind") or "").strip()
     current_tool = str((proposal or {}).get("tool_name") or "").strip()
     summary = str((evaluation or {}).get("summary") or "").strip()
+    acceptance_criteria = task_state.get("acceptance_criteria")
+    criteria_lines = (
+        "\n".join(f"- {str(item).strip()}" for item in acceptance_criteria if str(item).strip())
+        if isinstance(acceptance_criteria, list)
+        else ""
+    )
+    if not criteria_lines:
+        criteria_lines = "- (not provided)"
     system_prompt = (
         "You are Alphonse speaking to your human.\n"
         "Generate exactly one concise question in the user's language.\n"
@@ -975,6 +1001,8 @@ def _build_progress_checkin_question(
         f"- current_step_kind: {current_kind}\n"
         f"- current_tool: {current_tool}\n"
         f"- progress_summary: {summary}\n\n"
+        "Acceptance criteria:\n"
+        f"{criteria_lines}\n\n"
         "Write one question to the human asking whether to continue or stop."
     )
     question = _call_llm_text(
@@ -1115,7 +1143,15 @@ def _task_state_with_defaults(state: dict[str, Any]) -> dict[str, Any]:
     task_state.setdefault("facts", {})
     task_state.setdefault("status", "running")
     task_state.setdefault("repair_attempts", 0)
+    task_state.setdefault("acceptance_criteria", [])
     return task_state
+
+
+def _has_acceptance_criteria(task_state: dict[str, Any]) -> bool:
+    criteria = task_state.get("acceptance_criteria")
+    if not isinstance(criteria, list):
+        return False
+    return any(str(item).strip() for item in criteria)
 
 
 def _task_plan(task_state: dict[str, Any]) -> dict[str, Any]:

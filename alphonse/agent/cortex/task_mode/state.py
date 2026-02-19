@@ -17,6 +17,7 @@ class TaskState(TypedDict, total=False):
     pdca_phase: str
     cycle_index: int
     initialized: bool
+    acceptance_criteria: list[str]
 
 
 def build_default_task_state() -> TaskState:
@@ -41,4 +42,5 @@ def build_default_task_state() -> TaskState:
         "pdca_phase": "plan",
         "cycle_index": 0,
         "initialized": True,
+        "acceptance_criteria": [],
     }

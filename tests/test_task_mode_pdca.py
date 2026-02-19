@@ -8,7 +8,9 @@ from alphonse.agent.cortex.task_mode.pdca import act_node
 from alphonse.agent.cortex.task_mode.pdca import build_next_step_node
 from alphonse.agent.cortex.task_mode.pdca import execute_step_node
 from alphonse.agent.cortex.task_mode.pdca import route_after_act
+from alphonse.agent.cortex.task_mode.pdca import route_after_progress_critic
 from alphonse.agent.cortex.task_mode.pdca import route_after_validate_step
+from alphonse.agent.cortex.task_mode.pdca import progress_critic_node
 from alphonse.agent.cortex.task_mode.pdca import update_state_node
 from alphonse.agent.cortex.task_mode.pdca import validate_step_node
 from alphonse.agent.cortex.task_mode.state import build_default_task_state
@@ -144,7 +146,9 @@ def _run_cycle(
     if route == "execute_step_node":
         state = _apply(state, execute_step_node(state, tool_registry=tool_registry))
         state = _apply(state, update_state_node(state))
-        state = _apply(state, act_node(state))
+        state = _apply(state, progress_critic_node(state))
+        if route_after_progress_critic(state) == "act_node":
+            state = _apply(state, act_node(state))
     return state
 
 
@@ -160,6 +164,7 @@ def test_reminder_request_calls_create_reminder_within_two_cycles() -> None:
     )
 
     task_state = build_default_task_state()
+    task_state["acceptance_criteria"] = ["done when requested outcome is produced"]
     task_state["goal"] = "Recuérdame ir por un cafecito en 1min"
     state: dict[str, object] = {
         "correlation_id": "corr-pdca-reminder-two-cycles",
@@ -174,7 +179,7 @@ def test_reminder_request_calls_create_reminder_within_two_cycles() -> None:
     assert route_after_act(state) == "next_step_node"
 
     state = _run_cycle(state, next_step=next_step, tool_registry=tool_registry)
-    assert route_after_act(state) == "respond_node"
+    assert route_after_progress_critic(state) == "respond_node"
 
     next_state = state["task_state"]
     assert isinstance(next_state, dict)
@@ -201,6 +206,7 @@ def test_gettime_does_not_terminate_without_reminder_evidence() -> None:
     llm = _QueuedLlm(['{"kind":"call_tool","tool_name":"getTime","args":{}}'])
 
     task_state = build_default_task_state()
+    task_state["acceptance_criteria"] = ["done when requested outcome is produced"]
     task_state["goal"] = "Recuérdame algo más tarde"
     state: dict[str, object] = {
         "correlation_id": "corr-pdca-gettime-no-done",
@@ -218,6 +224,7 @@ def test_gettime_does_not_terminate_without_reminder_evidence() -> None:
 def test_pdca_create_reminder_structured_failure_keeps_running() -> None:
     tool_registry = _build_erroring_reminder_registry()
     task_state = build_default_task_state()
+    task_state["acceptance_criteria"] = ["done when requested outcome is produced"]
     task_state["goal"] = "Recuérdame mañana a las 7:30am"
     task_state["plan"]["current_step_id"] = "step_1"
     task_state["plan"]["steps"] = [
@@ -275,6 +282,7 @@ def test_pdca_validation_error_routes_back_then_asks_user() -> None:
     )
 
     task_state = build_default_task_state()
+    task_state["acceptance_criteria"] = ["done when requested outcome is produced"]
     task_state["goal"] = "schedule something"
     state: dict[str, object] = {
         "correlation_id": "corr-pdca-repair",
@@ -291,9 +299,8 @@ def test_pdca_validation_error_routes_back_then_asks_user() -> None:
     assert route_after_validate_step(state) == "execute_step_node"
     state = _apply(state, execute_step_node(state, tool_registry=tool_registry))
     state = _apply(state, update_state_node(state))
-    state = _apply(state, act_node(state))
-
-    assert route_after_act(state) == "respond_node"
+    state = _apply(state, progress_critic_node(state))
+    assert route_after_progress_critic(state) == "respond_node"
     next_state = state["task_state"]
     assert isinstance(next_state, dict)
     assert next_state.get("status") == "waiting_user"
@@ -304,6 +311,7 @@ def test_pdca_validation_error_routes_back_then_asks_user() -> None:
 def test_pdca_validation_rejects_unknown_tool_args_keys() -> None:
     tool_registry = build_default_tool_registry()
     task_state = build_default_task_state()
+    task_state["acceptance_criteria"] = ["done when requested outcome is produced"]
     task_state["goal"] = "create recurring fx job"
     task_state["plan"]["current_step_id"] = "step_1"
     task_state["plan"]["steps"] = [
@@ -347,6 +355,7 @@ def test_pdca_execute_maps_typeerror_to_structured_tool_failure() -> None:
     tool_registry = ToolRegistry()
     tool_registry.register("echo_tool", _ArgStrictTool())
     task_state = build_default_task_state()
+    task_state["acceptance_criteria"] = ["done when requested outcome is produced"]
     task_state["goal"] = "run strict tool"
     task_state["plan"]["current_step_id"] = "step_1"
     task_state["plan"]["steps"] = [
@@ -387,6 +396,7 @@ def test_pdca_parse_failure_falls_back_to_waiting_user() -> None:
     llm = _QueuedLlm(["not-json output"])
 
     task_state = build_default_task_state()
+    task_state["acceptance_criteria"] = ["done when requested outcome is produced"]
     task_state["goal"] = "do something"
     state: dict[str, object] = {
         "correlation_id": "corr-pdca-parse-fail",
@@ -406,12 +416,35 @@ def test_pdca_parse_failure_falls_back_to_waiting_user() -> None:
     assert any(isinstance(event, dict) and event.get("type") == "parse_failed" for event in recent)
 
 
+def test_pdca_requests_acceptance_criteria_before_planning() -> None:
+    tool_registry = build_default_tool_registry()
+    next_step = build_next_step_node(tool_registry=tool_registry)
+    task_state = build_default_task_state()
+    task_state["goal"] = "create recurring fx reminder"
+    task_state["acceptance_criteria"] = []
+    state: dict[str, object] = {
+        "correlation_id": "corr-pdca-acceptance-request",
+        "task_state": task_state,
+    }
+
+    updated = next_step(state)
+    next_state = updated.get("task_state")
+    assert isinstance(next_state, dict)
+    assert next_state.get("status") == "waiting_user"
+    question = str(next_state.get("next_user_question") or "")
+    assert "acceptance criteria" in question.lower()
+    pending = updated.get("pending_interaction")
+    assert isinstance(pending, dict)
+    assert pending.get("key") == "acceptance_criteria"
+
+
 def test_pdca_next_step_prompt_includes_recent_conversation_sentinel() -> None:
     tool_registry = build_default_tool_registry()
     next_step = build_next_step_node(tool_registry=tool_registry)
     llm = _PromptCaptureLlm('{"kind":"call_tool","tool_name":"getTime","args":{}}')
 
     task_state = build_default_task_state()
+    task_state["acceptance_criteria"] = ["done when requested outcome is produced"]
     task_state["goal"] = "what time is it?"
     sentinel = "SESSION_SENTINEL_TOKEN_123"
     state: dict[str, object] = {
@@ -436,6 +469,7 @@ def test_pdca_can_answer_last_tool_question_from_recent_conversation_block() -> 
     llm = _SessionAwareTaskLlm()
 
     task_state = build_default_task_state()
+    task_state["acceptance_criteria"] = ["done when requested outcome is produced"]
     task_state["goal"] = "what was the last tool you used?"
     state: dict[str, object] = {
         "correlation_id": "corr-pdca-last-tool-from-session-state",
@@ -468,6 +502,7 @@ def test_execute_step_handles_structured_tool_failure() -> None:
     registry = ToolRegistry()
     registry.register("stt_transcribe", _FailingTool())
     task_state = build_default_task_state()
+    task_state["acceptance_criteria"] = ["done when requested outcome is produced"]
     task_state["plan"] = {
         "version": 1,
         "steps": [
@@ -503,6 +538,7 @@ def test_execute_step_handles_structured_tool_failure() -> None:
 
 def test_act_node_stops_after_repeated_same_tool_failures() -> None:
     task_state = build_default_task_state()
+    task_state["acceptance_criteria"] = ["done when requested outcome is produced"]
     task_state["status"] = "running"
     task_state["plan"] = {
         "version": 1,
@@ -535,11 +571,12 @@ def test_act_node_stops_after_repeated_same_tool_failures() -> None:
     assert isinstance(eval_payload, dict)
     assert eval_payload.get("reason") == "repeated_identical_failure"
     route_state = {"task_state": next_state, "correlation_id": "corr-pdca-repeated-tool-failure"}
-    assert route_after_act(route_state) == "respond_node"
+    assert route_after_act(route_state) == "next_step_node"
 
 
 def test_act_node_allows_evolving_failures_under_budget() -> None:
     task_state = build_default_task_state()
+    task_state["acceptance_criteria"] = ["done when requested outcome is produced"]
     task_state["status"] = "running"
     task_state["plan"] = {
         "version": 1,
@@ -586,6 +623,7 @@ def test_act_node_pauses_after_failure_budget_exhausted() -> None:
             }
         )
     task_state = build_default_task_state()
+    task_state["acceptance_criteria"] = ["done when requested outcome is produced"]
     task_state["status"] = "running"
     task_state["plan"] = {
         "version": 1,
@@ -610,6 +648,7 @@ def test_act_node_pauses_after_failure_budget_exhausted() -> None:
 
 def test_execute_finish_persists_final_text_outcome() -> None:
     task_state = build_default_task_state()
+    task_state["acceptance_criteria"] = ["done when requested outcome is produced"]
     task_state["plan"] = {
         "version": 1,
         "steps": [
@@ -641,6 +680,7 @@ def test_execute_step_scratchpad_create_tolerates_content_alias(tmp_path: Path) 
     scratchpad = ScratchpadCreateTool(ScratchpadService(root=tmp_path / "data" / "scratchpad"))
     registry.register("scratchpad_create", scratchpad)
     task_state = build_default_task_state()
+    task_state["acceptance_criteria"] = ["done when requested outcome is produced"]
     task_state["plan"] = {
         "version": 1,
         "steps": [

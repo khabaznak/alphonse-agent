@@ -120,4 +120,4 @@ def route_after_first_decision(state: dict[str, Any]) -> str:
     decision = str(state.get("route_decision") or "").strip().lower()
     if decision == "respond":
         return "respond_node"
-    return "plan_node"
+    return "task_mode_entry_node"
