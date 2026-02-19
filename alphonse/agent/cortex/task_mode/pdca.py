@@ -11,6 +11,8 @@ from alphonse.agent.cognition.pending_interaction import build_pending_interacti
 from alphonse.agent.cognition.pending_interaction import serialize_pending_interaction
 from alphonse.agent.cognition.tool_schemas import planner_tool_schemas
 from alphonse.agent.cortex.transitions import emit_transition_event
+from alphonse.agent.cortex.task_mode.progress_critic import progress_critic_node as _progress_critic_node_impl
+from alphonse.agent.cortex.task_mode.progress_critic import route_after_progress_critic as _route_after_progress_critic_impl
 from alphonse.agent.cortex.task_mode.state import build_default_task_state
 from alphonse.agent.cortex.task_mode.types import NextStepProposal
 from alphonse.agent.cortex.task_mode.types import TraceEvent
@@ -437,104 +439,18 @@ def update_state_node(state: dict[str, Any]) -> dict[str, Any]:
 
 
 def progress_critic_node(state: dict[str, Any]) -> dict[str, Any]:
-    task_state = _task_state_with_defaults(state)
-    task_state["pdca_phase"] = "critic"
-    correlation_id = _correlation_id(state)
-    status = str(task_state.get("status") or "").strip().lower()
-    current = _current_step(task_state)
-    current_status = str((current or {}).get("status") or "").strip().lower()
-    cycle = int(task_state.get("cycle_index") or 0)
-
-    if _goal_satisfied(task_state):
-        task_state["status"] = "done"
-        _append_trace_event(
-            task_state,
-            {
-                "type": "status_changed",
-                "summary": "Progress critic marked task as done from outcome evidence.",
-                "correlation_id": correlation_id,
-            },
-        )
-        logger.info(
-            "task_mode progress_critic done correlation_id=%s cycle=%s",
-            correlation_id,
-            cycle,
-        )
-        return {"task_state": task_state}
-
-    if status in {"done", "waiting_user", "failed"}:
-        logger.info(
-            "task_mode progress_critic skip correlation_id=%s status=%s cycle=%s",
-            correlation_id,
-            status,
-            cycle,
-        )
-        return {"task_state": task_state}
-
-    _maybe_emit_periodic_wip_update(state=state, task_state=task_state, cycle=cycle, current_step=current)
-
-    evaluation = (
-        _evaluate_tool_execution(task_state=task_state, current_step=current)
-        if current_status == "failed"
-        else {}
+    return _progress_critic_node_impl(
+        state,
+        task_state_with_defaults=_task_state_with_defaults,
+        correlation_id=_correlation_id,
+        current_step=_current_step,
+        goal_satisfied=_goal_satisfied,
+        evaluate_tool_execution=_evaluate_tool_execution,
+        append_trace_event=_append_trace_event,
+        build_progress_checkin_question=_build_progress_checkin_question,
+        maybe_emit_periodic_wip_update=_maybe_emit_periodic_wip_update,
+        progress_check_cycle_threshold=_PROGRESS_CHECK_CYCLE_THRESHOLD,
     )
-    task_state["execution_eval"] = evaluation if isinstance(evaluation, dict) else {}
-    if current_status == "failed" and int((evaluation or {}).get("same_signature_failures") or 0) >= 3:
-        task_state["status"] = "failed"
-        task_state["outcome"] = {
-            "kind": "task_failed",
-            "summary": str(
-                (evaluation or {}).get("summary")
-                or "I did not make enough progress to continue safely."
-            ),
-        }
-        _append_trace_event(
-            task_state,
-            {
-                "type": "status_changed",
-                "summary": "Progress critic marked task as failed due to repeated same-signature failures.",
-                "correlation_id": correlation_id,
-            },
-        )
-        logger.info(
-            "task_mode progress_critic fail correlation_id=%s step_id=%s same_signature=%s",
-            correlation_id,
-            str((current or {}).get("step_id") or ""),
-            int((evaluation or {}).get("same_signature_failures") or 0),
-        )
-        return {"task_state": task_state}
-
-    if cycle < _PROGRESS_CHECK_CYCLE_THRESHOLD:
-        logger.info(
-            "task_mode progress_critic continue correlation_id=%s cycle=%s threshold=%s",
-            correlation_id,
-            cycle,
-            _PROGRESS_CHECK_CYCLE_THRESHOLD,
-        )
-        return {"task_state": task_state}
-
-    question = _build_progress_checkin_question(
-        state=state,
-        task_state=task_state,
-        evaluation=evaluation if isinstance(evaluation, dict) else {},
-    )
-    task_state["status"] = "waiting_user"
-    task_state["next_user_question"] = question
-    _append_trace_event(
-        task_state,
-        {
-            "type": "status_changed",
-            "summary": "Progress critic requested user guidance after extended work-in-progress.",
-            "correlation_id": correlation_id,
-        },
-    )
-    logger.info(
-        "task_mode progress_critic ask_user correlation_id=%s cycle=%s step_id=%s",
-        correlation_id,
-        cycle,
-        str((current or {}).get("step_id") or ""),
-    )
-    return {"task_state": task_state}
 
 
 def _maybe_emit_periodic_wip_update(
@@ -581,21 +497,7 @@ def _current_tool_name(current_step: dict[str, Any] | None) -> str:
 
 
 def route_after_progress_critic(state: dict[str, Any]) -> str:
-    task_state = state.get("task_state")
-    status = str((task_state or {}).get("status") or "").strip().lower() if isinstance(task_state, dict) else ""
-    if status in {"waiting_user", "failed", "done"}:
-        logger.info(
-            "task_mode route_after_progress_critic correlation_id=%s route=respond_node status=%s",
-            _correlation_id(state),
-            status,
-        )
-        return "respond_node"
-    logger.info(
-        "task_mode route_after_progress_critic correlation_id=%s route=act_node status=%s",
-        _correlation_id(state),
-        status or "running",
-    )
-    return "act_node"
+    return _route_after_progress_critic_impl(state, correlation_id=_correlation_id)
 
 
 def act_node(state: dict[str, Any]) -> dict[str, Any]:
