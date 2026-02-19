@@ -8,6 +8,30 @@ from zoneinfo import ZoneInfo
 from alphonse.agent.nervous_system.timed_store import insert_timed_signal
 
 
+class SchedulerToolError(Exception):
+    def __init__(
+        self,
+        *,
+        code: str,
+        message: str,
+        retryable: bool = False,
+        details: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.code = str(code or "scheduler_error")
+        self.message = str(message or "Scheduler operation failed")
+        self.retryable = bool(retryable)
+        self.details = dict(details or {})
+
+    def as_payload(self) -> dict[str, Any]:
+        return {
+            "code": self.code,
+            "message": self.message,
+            "retryable": self.retryable,
+            "details": self.details,
+        }
+
+
 @dataclass(frozen=True)
 class SchedulerTool:
     llm_client: Any | None = None
@@ -27,11 +51,23 @@ class SchedulerTool:
         trigger_expr = str(time or "").strip()
         reminder_message = str(message or "").strip()
         if not whom_raw:
-            raise ValueError("for_whom is required")
+            raise SchedulerToolError(
+                code="missing_for_whom",
+                message="for_whom is required",
+                retryable=False,
+            )
         if not trigger_expr:
-            raise ValueError("time is required")
+            raise SchedulerToolError(
+                code="missing_time",
+                message="time is required",
+                retryable=False,
+            )
         if not reminder_message:
-            raise ValueError("message is required")
+            raise SchedulerToolError(
+                code="missing_message",
+                message="message is required",
+                retryable=False,
+            )
         resolved_timezone = _resolve_timezone_name(timezone_name)
         fire_at = _normalize_time_expression_to_iso(
             expression=trigger_expr,
@@ -71,7 +107,11 @@ class SchedulerTool:
         _ = timezone_name
         value = str(time or "").strip()
         if not value:
-            raise ValueError("time is required")
+            raise SchedulerToolError(
+                code="missing_time",
+                message="time is required",
+                retryable=False,
+            )
         return {"type": "time", "time": value}
 
     def schedule_reminder_event(
@@ -86,10 +126,19 @@ class SchedulerTool:
     ) -> str:
         trigger_type = str(event_trigger.get("type") or "").strip().lower()
         if trigger_type != "time":
-            raise ValueError("only time event triggers are supported")
+            raise SchedulerToolError(
+                code="unsupported_event_trigger",
+                message="only time event triggers are supported",
+                retryable=False,
+                details={"event_trigger_type": trigger_type},
+            )
         trigger_time = str(event_trigger.get("time") or "").strip()
         if not trigger_time:
-            raise ValueError("event trigger time is required")
+            raise SchedulerToolError(
+                code="missing_event_trigger_time",
+                message="event trigger time is required",
+                retryable=False,
+            )
         payload = {
             "message": message,
             "reminder_text_raw": message,
@@ -195,7 +244,11 @@ def _normalize_delivery_target(*, for_whom: str, channel_target: str | None) -> 
 def _normalize_time_expression_to_iso(*, expression: str, timezone_name: str, llm_client: Any | None = None) -> str:
     raw = str(expression or "").strip()
     if not raw:
-        raise ValueError("time is required")
+        raise SchedulerToolError(
+            code="missing_time_expression",
+            message="time is required",
+            retryable=False,
+        )
     iso_direct = _try_parse_iso(raw, timezone_name=timezone_name)
     if iso_direct is not None:
         return iso_direct
@@ -206,7 +259,12 @@ def _normalize_time_expression_to_iso(*, expression: str, timezone_name: str, ll
     )
     if llm_iso is not None:
         return llm_iso
-    raise ValueError("time expression could not be normalized")
+    raise SchedulerToolError(
+        code="time_expression_unresolvable",
+        message="time expression could not be normalized",
+        retryable=True,
+        details={"expression": raw, "timezone": timezone_name},
+    )
 
 
 def _try_parse_iso(raw: str, *, timezone_name: str) -> str | None:

@@ -12,6 +12,8 @@ from alphonse.agent.cortex.task_mode.state import build_default_task_state
 from alphonse.agent.cortex.task_mode.types import NextStepProposal
 from alphonse.agent.cortex.task_mode.types import TraceEvent
 from alphonse.agent.session.day_state import render_recent_conversation_block
+from alphonse.agent.tools.scheduler import SchedulerTool
+from alphonse.agent.tools.scheduler import SchedulerToolError
 
 logger = logging.getLogger(__name__)
 
@@ -334,21 +336,31 @@ def execute_step_node(state: dict[str, Any], *, tool_registry: Any) -> dict[str,
             task_state["status"] = "running"
             if isinstance(current, dict):
                 current["status"] = "failed"
-            error_code = str((result or {}).get("error") if isinstance(result, dict) else "") or "tool_failed"
+            raw_error = (result or {}).get("error") if isinstance(result, dict) else None
+            if isinstance(raw_error, dict):
+                error_code = str(raw_error.get("code") or "tool_failed")
+                error_message = str(raw_error.get("message") or "").strip()
+            else:
+                error_code = str(raw_error or "tool_failed")
+                error_message = ""
             _append_trace_event(
                 task_state,
                 {
                     "type": "tool_failed",
-                    "summary": f"Tool {tool_name} reported failure: {error_code}.",
+                    "summary": (
+                        f"Tool {tool_name} reported failure: {error_code}"
+                        + (f" ({error_message})." if error_message else ".")
+                    ),
                     "correlation_id": correlation_id,
                 },
             )
             logger.info(
-                "task_mode execute tool_failed_reported correlation_id=%s step_id=%s tool=%s error=%s",
+                "task_mode execute tool_failed_reported correlation_id=%s step_id=%s tool=%s error_code=%s error_message=%s",
                 correlation_id,
                 step_id,
                 tool_name,
                 error_code,
+                error_message,
             )
             return {"task_state": task_state}
         task_state["status"] = "running"
@@ -700,6 +712,9 @@ def _execute_tool_call(
     if tool_name == "createReminder":
         if tool is None or not callable(getattr(tool, "create_reminder", None)):
             raise RuntimeError("createReminder unavailable")
+        llm_client = state.get("_llm_client")
+        if isinstance(tool, SchedulerTool) and getattr(tool, "llm_client", None) is None and llm_client is not None:
+            tool = SchedulerTool(llm_client=llm_client)
         for_whom = str(args.get("ForWhom") or args.get("for_whom") or args.get("To") or "").strip()
         time_value = str(args.get("Time") or args.get("time") or "").strip()
         message_value = str(args.get("Message") or args.get("message") or "").strip()
@@ -708,15 +723,35 @@ def _execute_tool_call(
         from_value = str(state.get("channel_type") or "assistant")
         timezone_name = str(state.get("timezone") or "UTC")
         correlation_id = _correlation_id(state)
-        reminder_id = tool.create_reminder(
-            for_whom=for_whom,
-            time=time_value,
-            message=message_value,
-            timezone_name=timezone_name,
-            correlation_id=correlation_id,
-            from_=from_value,
-            channel_target=str(state.get("channel_target") or ""),
-        )
+        try:
+            reminder_id = tool.create_reminder(
+                for_whom=for_whom,
+                time=time_value,
+                message=message_value,
+                timezone_name=timezone_name,
+                correlation_id=correlation_id,
+                from_=from_value,
+                channel_target=str(state.get("channel_target") or ""),
+            )
+        except SchedulerToolError as exc:
+            return {
+                "status": "failed",
+                "result": None,
+                "error": exc.as_payload(),
+                "metadata": {"tool": "createReminder"},
+            }
+        except Exception as exc:
+            return {
+                "status": "failed",
+                "result": None,
+                "error": {
+                    "code": "create_reminder_exception",
+                    "message": str(exc) or type(exc).__name__,
+                    "retryable": True,
+                    "details": {"exception_type": type(exc).__name__},
+                },
+                "metadata": {"tool": "createReminder"},
+            }
         if isinstance(reminder_id, dict):
             return reminder_id
         return {

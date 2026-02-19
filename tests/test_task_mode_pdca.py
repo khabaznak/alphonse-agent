@@ -16,6 +16,7 @@ from alphonse.agent.services.scratchpad_service import ScratchpadService
 from alphonse.agent.tools.registry import ToolRegistry
 from alphonse.agent.tools.registry import build_default_tool_registry
 from alphonse.agent.tools.scratchpad_tools import ScratchpadCreateTool
+from alphonse.agent.tools.scheduler import SchedulerToolError
 
 
 class _QueuedLlm:
@@ -79,6 +80,27 @@ class _FakeReminder:
         return "rem-test-1"
 
 
+class _ErroringReminder:
+    def create_reminder(
+        self,
+        *,
+        for_whom: str,
+        time: str,
+        message: str,
+        timezone_name: str,
+        correlation_id: str | None = None,
+        from_: str = "assistant",
+        channel_target: str | None = None,
+    ) -> str:
+        _ = (for_whom, time, message, timezone_name, correlation_id, from_, channel_target)
+        raise SchedulerToolError(
+            code="time_expression_unresolvable",
+            message="time expression could not be normalized",
+            retryable=True,
+            details={"expression": time},
+        )
+
+
 class _FailingTool:
     def execute(self, **kwargs):  # noqa: ANN003
         _ = kwargs
@@ -89,6 +111,12 @@ def _build_fake_registry() -> ToolRegistry:
     registry = ToolRegistry()
     registry.register("getTime", _FakeClock())
     registry.register("createReminder", _FakeReminder())
+    return registry
+
+
+def _build_erroring_reminder_registry() -> ToolRegistry:
+    registry = ToolRegistry()
+    registry.register("createReminder", _ErroringReminder())
     return registry
 
 
@@ -180,6 +208,54 @@ def test_gettime_does_not_terminate_without_reminder_evidence() -> None:
     assert isinstance(next_state, dict)
     assert next_state.get("status") == "running"
     assert route_after_act(state) == "next_step_node"
+
+
+def test_pdca_create_reminder_structured_failure_keeps_running() -> None:
+    tool_registry = _build_erroring_reminder_registry()
+    task_state = build_default_task_state()
+    task_state["goal"] = "Recuérdame mañana a las 7:30am"
+    task_state["plan"]["current_step_id"] = "step_1"
+    task_state["plan"]["steps"] = [
+        {
+            "step_id": "step_1",
+            "proposal": {
+                "kind": "call_tool",
+                "tool_name": "createReminder",
+                "args": {
+                    "ForWhom": "me",
+                    "Time": "mañana a las 7:30am",
+                    "Message": "Tengo que ir al Director's Office",
+                },
+            },
+            "status": "validated",
+        }
+    ]
+    state: dict[str, object] = {
+        "correlation_id": "corr-pdca-reminder-structured-failure",
+        "channel_type": "telegram",
+        "channel_target": "8553589429",
+        "task_state": task_state,
+    }
+
+    state = _apply(state, execute_step_node(state, tool_registry=tool_registry))
+    next_state = state["task_state"]
+    assert isinstance(next_state, dict)
+    assert next_state.get("status") == "running"
+    plan = next_state.get("plan")
+    assert isinstance(plan, dict)
+    steps = plan.get("steps")
+    assert isinstance(steps, list)
+    assert steps[0].get("status") == "failed"
+    facts = next_state.get("facts")
+    assert isinstance(facts, dict)
+    fact = facts.get("step_1")
+    assert isinstance(fact, dict)
+    result = fact.get("result")
+    assert isinstance(result, dict)
+    assert result.get("status") == "failed"
+    error = result.get("error")
+    assert isinstance(error, dict)
+    assert error.get("code") == "time_expression_unresolvable"
 
 
 def test_pdca_validation_error_routes_back_then_asks_user() -> None:
