@@ -683,6 +683,10 @@ def _validate_proposal(*, proposal: Any, tool_registry: Any) -> dict[str, Any]:
     if missing:
         missing_keys = ",".join(missing)
         return {"ok": False, "executable": False, "reason": f"missing_required_args:{missing_keys}"}
+    invalid_keys = _invalid_args_for_tool(tool_name=tool_name, args=dict(args or {}))
+    if invalid_keys:
+        keys = ",".join(invalid_keys)
+        return {"ok": False, "executable": False, "reason": f"invalid_args_keys:{keys}"}
     return {"ok": True, "executable": True, "reason": None}
 
 
@@ -766,9 +770,25 @@ def _execute_tool_call(
     if callable(getattr(tool, "execute", None)):
         execute = getattr(tool, "execute")
         signature = inspect.signature(execute)
-        if "state" in signature.parameters:
-            return execute(**args, state=state)
-        return execute(**args)
+        try:
+            if "state" in signature.parameters:
+                return execute(**args, state=state)
+            return execute(**args)
+        except TypeError as exc:
+            return {
+                "status": "failed",
+                "result": None,
+                "error": {
+                    "code": "invalid_tool_arguments",
+                    "message": str(exc) or "invalid tool arguments",
+                    "retryable": False,
+                    "details": {
+                        "tool": tool_name,
+                        "args_keys": sorted(list(args.keys())),
+                    },
+                },
+                "metadata": {"tool": tool_name},
+            }
     raise RuntimeError(f"tool_not_executable:{tool_name}")
 
 
@@ -1158,6 +1178,35 @@ def _required_args_for_tool(tool_name: str) -> list[str]:
             return [str(item) for item in required if str(item)]
         return []
     return []
+
+
+def _invalid_args_for_tool(*, tool_name: str, args: dict[str, Any]) -> list[str]:
+    params = _tool_parameters_for_tool(tool_name)
+    if not isinstance(params, dict):
+        return []
+    additional_properties = params.get("additionalProperties")
+    if additional_properties is not False:
+        return []
+    properties = params.get("properties")
+    if not isinstance(properties, dict):
+        return []
+    allowed = {str(k) for k in properties.keys()}
+    invalid = [key for key in args.keys() if str(key) not in allowed]
+    return sorted([str(item) for item in invalid if str(item)])
+
+
+def _tool_parameters_for_tool(tool_name: str) -> dict[str, Any] | None:
+    for schema in planner_tool_schemas():
+        fn = schema.get("function")
+        if not isinstance(fn, dict):
+            continue
+        if str(fn.get("name") or "") != tool_name:
+            continue
+        params = fn.get("parameters")
+        if isinstance(params, dict):
+            return params
+        return None
+    return None
 
 
 def _next_step_id(task_state: dict[str, Any]) -> str:

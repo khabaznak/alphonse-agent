@@ -107,6 +107,11 @@ class _FailingTool:
         return {"status": "failed", "error": "asset_not_found", "retryable": False}
 
 
+class _ArgStrictTool:
+    def execute(self, *, foo: str) -> dict[str, str]:
+        return {"status": "ok", "foo": foo}
+
+
 def _build_fake_registry() -> ToolRegistry:
     registry = ToolRegistry()
     registry.register("getTime", _FakeClock())
@@ -294,6 +299,86 @@ def test_pdca_validation_error_routes_back_then_asks_user() -> None:
     assert next_state.get("status") == "waiting_user"
     rendered = respond_finalize_node(state, emit_transition_event=lambda *_args, **_kwargs: None)
     assert rendered.get("response_text") == "Which account should I use?"
+
+
+def test_pdca_validation_rejects_unknown_tool_args_keys() -> None:
+    tool_registry = build_default_tool_registry()
+    task_state = build_default_task_state()
+    task_state["goal"] = "create recurring fx job"
+    task_state["plan"]["current_step_id"] = "step_1"
+    task_state["plan"]["steps"] = [
+        {
+            "step_id": "step_1",
+            "proposal": {
+                "kind": "call_tool",
+                "tool_name": "job_create",
+                "args": {
+                    "name": "FX update",
+                    "description": "Daily FX update",
+                    "schedule": {
+                        "type": "rrule",
+                        "dtstart": "2026-02-20T09:00:00+00:00",
+                        "rrule": "FREQ=DAILY;BYHOUR=9;BYMINUTE=0",
+                    },
+                    "payload_type": "prompt_to_brain",
+                    "payload": {"prompt_text": "USD to MXN update"},
+                    "payloadType": "prompt_to_brain",
+                },
+            },
+            "status": "proposed",
+        }
+    ]
+    state: dict[str, object] = {
+        "correlation_id": "corr-pdca-invalid-job-args",
+        "task_state": task_state,
+    }
+
+    state = _apply(state, validate_step_node(state, tool_registry=tool_registry))
+    next_state = state["task_state"]
+    assert isinstance(next_state, dict)
+    err = next_state.get("last_validation_error")
+    assert isinstance(err, dict)
+    reason = str(err.get("reason") or "")
+    assert reason.startswith("invalid_args_keys:")
+    assert "payloadType" in reason
+
+
+def test_pdca_execute_maps_typeerror_to_structured_tool_failure() -> None:
+    tool_registry = ToolRegistry()
+    tool_registry.register("echo_tool", _ArgStrictTool())
+    task_state = build_default_task_state()
+    task_state["goal"] = "run strict tool"
+    task_state["plan"]["current_step_id"] = "step_1"
+    task_state["plan"]["steps"] = [
+        {
+            "step_id": "step_1",
+            "proposal": {
+                "kind": "call_tool",
+                "tool_name": "echo_tool",
+                "args": {"bar": "x"},
+            },
+            "status": "validated",
+        }
+    ]
+    state: dict[str, object] = {
+        "correlation_id": "corr-pdca-typeerror-structured",
+        "task_state": task_state,
+    }
+
+    state = _apply(state, execute_step_node(state, tool_registry=tool_registry))
+    next_state = state["task_state"]
+    assert isinstance(next_state, dict)
+    assert next_state.get("status") == "running"
+    facts = next_state.get("facts")
+    assert isinstance(facts, dict)
+    fact = facts.get("step_1")
+    assert isinstance(fact, dict)
+    result = fact.get("result")
+    assert isinstance(result, dict)
+    assert result.get("status") == "failed"
+    error = result.get("error")
+    assert isinstance(error, dict)
+    assert error.get("code") == "invalid_tool_arguments"
 
 
 def test_pdca_parse_failure_falls_back_to_waiting_user() -> None:
