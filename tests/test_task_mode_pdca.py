@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from pathlib import Path
 
+import alphonse.agent.cortex.task_mode.pdca as pdca_module
 from alphonse.agent.cortex.nodes.respond import respond_finalize_node
 from alphonse.agent.cortex.task_mode.pdca import act_node
 from alphonse.agent.cortex.task_mode.pdca import build_next_step_node
@@ -760,3 +761,39 @@ def test_respond_finalize_done_ignores_stale_pending_interaction() -> None:
     assert content.get("summary") == "I'm online and operational."
     assert str(rendered.get("response_text") or "").strip()
     assert transitions and transitions[-1] == "done"
+
+
+def test_progress_critic_emits_wip_update_every_five_cycles(monkeypatch) -> None:
+    emitted: list[dict[str, object] | None] = []
+
+    def _capture_transition(_state: dict[str, object], phase: str, detail: dict[str, object] | None = None) -> None:
+        if phase == "wip_update":
+            emitted.append(detail)
+
+    monkeypatch.setattr(pdca_module, "emit_transition_event", _capture_transition)
+
+    task_state = build_default_task_state()
+    task_state["status"] = "running"
+    task_state["cycle_index"] = 5
+    task_state["goal"] = "Check package delivery"
+    task_state["plan"]["current_step_id"] = "step_1"
+    task_state["plan"]["steps"] = [
+        {
+            "step_id": "step_1",
+            "proposal": {"kind": "call_tool", "tool_name": "scratchpad_read", "args": {"doc_id": "sp_1"}},
+            "status": "executed",
+        }
+    ]
+    state: dict[str, object] = {
+        "correlation_id": "corr-wip-emit-5",
+        "task_state": task_state,
+    }
+
+    updated = progress_critic_node(state)
+    next_state = updated.get("task_state")
+    assert isinstance(next_state, dict)
+    assert len(emitted) == 1
+    detail = emitted[0]
+    assert isinstance(detail, dict)
+    assert detail.get("cycle") == 5
+    assert "Check package delivery" in str(detail.get("text") or "")

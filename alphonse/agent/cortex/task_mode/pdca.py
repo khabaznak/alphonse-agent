@@ -40,6 +40,7 @@ _NEXT_STEP_DEVELOPER_PROMPT = (
 
 _PARSE_FALLBACK_QUESTION = "I can help—what task would you like me to do?"
 _PROGRESS_CHECK_CYCLE_THRESHOLD = 25
+_WIP_EMIT_EVERY_CYCLES = 5
 
 # Strict JSON Schema for NextStepProposal structured output
 _NEXT_STEP_SCHEMA: dict[str, Any] = {
@@ -226,25 +227,6 @@ def validate_step_node(state: dict[str, Any], *, tool_registry: Any) -> dict[str
         str(error.get("reason") or ""),
         attempts,
     )
-    if attempts >= 2:
-        question = "I need one detail: what exact action should I take?"
-        task_state["status"] = "waiting_user"
-        task_state["next_user_question"] = question
-        _append_trace_event(
-            task_state,
-            {
-                "type": "status_changed",
-                "summary": "Status changed to waiting_user after validation failures.",
-                "correlation_id": correlation_id,
-            },
-        )
-        logger.info(
-            "task_mode validate waiting_user correlation_id=%s step_id=%s question=%s",
-            correlation_id,
-            str((current or {}).get("step_id") or ""),
-            question,
-        )
-        return {"task_state": task_state}
     return {"task_state": task_state}
 
 
@@ -489,6 +471,8 @@ def progress_critic_node(state: dict[str, Any]) -> dict[str, Any]:
         )
         return {"task_state": task_state}
 
+    _maybe_emit_periodic_wip_update(state=state, task_state=task_state, cycle=cycle, current_step=current)
+
     evaluation = (
         _evaluate_tool_execution(task_state=task_state, current_step=current)
         if current_status == "failed"
@@ -551,6 +535,49 @@ def progress_critic_node(state: dict[str, Any]) -> dict[str, Any]:
         str((current or {}).get("step_id") or ""),
     )
     return {"task_state": task_state}
+
+
+def _maybe_emit_periodic_wip_update(
+    *,
+    state: dict[str, Any],
+    task_state: dict[str, Any],
+    cycle: int,
+    current_step: dict[str, Any] | None,
+) -> None:
+    if cycle <= 0 or cycle % _WIP_EMIT_EVERY_CYCLES != 0:
+        return
+    detail = {
+        "text": _build_wip_update_text(task_state=task_state, cycle=cycle, current_step=current_step),
+        "cycle": cycle,
+        "goal": str(task_state.get("goal") or "").strip(),
+        "tool": _current_tool_name(current_step),
+    }
+    emit_transition_event(state, "wip_update", detail)
+    logger.info(
+        "task_mode progress_critic wip_update correlation_id=%s cycle=%s",
+        _correlation_id(state),
+        cycle,
+    )
+
+
+def _build_wip_update_text(
+    *,
+    task_state: dict[str, Any],
+    cycle: int,
+    current_step: dict[str, Any] | None,
+) -> str:
+    goal = str(task_state.get("goal") or "").strip() or "the current task"
+    tool = _current_tool_name(current_step)
+    if tool:
+        return f"Working on: {goal}. Cycle {cycle}. Current step: using `{tool}`."
+    return f"Working on: {goal}. Cycle {cycle}."
+
+
+def _current_tool_name(current_step: dict[str, Any] | None) -> str:
+    if not isinstance(current_step, dict):
+        return ""
+    proposal = current_step.get("proposal") if isinstance(current_step.get("proposal"), dict) else {}
+    return str(proposal.get("tool_name") or "").strip()
 
 
 def route_after_progress_critic(state: dict[str, Any]) -> str:
@@ -819,9 +846,8 @@ def _propose_next_step_with_llm(
 ) -> tuple[NextStepProposal, bool]:
     goal = str(task_state.get("goal") or "").strip()
     if not goal:
-        return {"kind": "ask_user", "question": "What task would you like me to do?"}, False
-    if llm_client is None:
-        return {"kind": "ask_user", "question": "What detail should I use first?"}, False
+        question = _build_goal_clarification_question(state=state, llm_client=llm_client)
+        return {"kind": "ask_user", "question": question}, False
 
     tool_menu = _build_tool_menu(tool_registry)
     working_view = _build_working_state_view(task_state)
@@ -871,6 +897,33 @@ def _propose_next_step_with_llm(
 
     logger.info("task_mode next_step parse failure correlation_id=%s", _correlation_id(state))
     return {"kind": "ask_user", "question": _PARSE_FALLBACK_QUESTION}, True
+
+
+def _build_goal_clarification_question(*, state: dict[str, Any], llm_client: Any) -> str:
+    system_prompt = (
+        "You are Alphonse speaking to your human.\n"
+        "Generate exactly one concise clarification question in the user's language.\n"
+        "Ask what concrete task they want you to execute now.\n"
+        "Output plain text only."
+    )
+    user_prompt = (
+        "Context:\n"
+        f"- locale: {str(state.get('locale') or '')}\n"
+        f"- latest_user_message: {str(state.get('last_user_message') or '').strip()}\n"
+        "\nWrite one question to clarify the task goal."
+    )
+    question = _call_llm_text(
+        llm_client=llm_client,
+        system_prompt=system_prompt,
+        user_prompt=user_prompt,
+    )
+    rendered = str(question or "").strip()
+    if rendered:
+        return rendered
+    latest = str(state.get("last_user_message") or "").strip()
+    if latest:
+        return f"To help correctly, what exact task should I do with: \"{latest}\"?"
+    return "What exact task should I execute now?"
 
 
 def _build_working_state_view(task_state: dict[str, Any]) -> dict[str, Any]:
@@ -1283,24 +1336,6 @@ def _tool_name_for_step(step: dict[str, Any] | None) -> str:
         return ""
     proposal = step.get("proposal") if isinstance(step.get("proposal"), dict) else {}
     return str(proposal.get("tool_name") or "").strip()
-
-
-def _recent_tool_failure_count(*, task_state: dict[str, Any], tool_name: str) -> int:
-    plan = _task_plan(task_state)
-    steps = plan.get("steps") if isinstance(plan.get("steps"), list) else []
-    count = 0
-    for step in reversed(steps):
-        if not isinstance(step, dict):
-            continue
-        status = str(step.get("status") or "").strip().lower()
-        if status != "failed":
-            continue
-        if tool_name and _tool_name_for_step(step) != tool_name:
-            continue
-        count += 1
-        if count >= 5:
-            break
-    return count
 
 
 def _tool_signature_for_step(step: dict[str, Any] | None) -> str:

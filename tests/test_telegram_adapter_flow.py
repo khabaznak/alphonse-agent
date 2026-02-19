@@ -175,3 +175,38 @@ def test_telegram_extremity_adapter_blocks_unauthorized_chat(monkeypatch) -> Non
     )
 
     assert captured == []
+
+
+def test_telegram_transition_event_wip_update_sends_message(monkeypatch) -> None:
+    captured: list[dict] = []
+
+    class FakeTelegramAdapter:
+        def __init__(self, config: dict) -> None:
+            self.config = config
+
+        def handle_action(self, action: dict) -> None:
+            captured.append(action)
+
+    monkeypatch.setattr(
+        telegram_channel,
+        "build_telegram_adapter_config",
+        lambda: {"bot_token": "fake-token", "poll_interval_sec": 1.0},
+    )
+    monkeypatch.setattr(telegram_channel, "TelegramAdapter", FakeTelegramAdapter)
+    monkeypatch.setattr(telegram_channel, "can_deliver_to_chat", lambda _chat_id: True)
+
+    adapter = telegram_channel.TelegramExtremityAdapter()
+    adapter.emit_transition_event(
+        channel_target="12345",
+        event={
+            "phase": "wip_update",
+            "detail": {"text": "Working on your request. Cycle 5."},
+        },
+        correlation_id="cid-wip",
+        message_id="11",
+    )
+
+    assert len(captured) == 1
+    assert captured[0]["type"] == "send_message"
+    assert captured[0]["payload"]["chat_id"] == "12345"
+    assert captured[0]["payload"]["text"] == "Working on your request. Cycle 5."

@@ -150,6 +150,23 @@ class TelegramExtremityAdapter(ExtremityAdapter):
         correlation_id: str | None = None,
         message_id: str | None = None,
     ) -> None:
+        phase_value = str(event.get("phase") or "").strip().lower()
+        if phase_value == "wip_update":
+            detail = event.get("detail") if isinstance(event.get("detail"), dict) else {}
+            text = str(detail.get("text") or "").strip()
+            if text and self._adapter and channel_target and can_deliver_to_chat(channel_target):
+                self._adapter.handle_action(
+                    {
+                        "type": "send_message",
+                        "payload": {
+                            "chat_id": channel_target,
+                            "text": text,
+                            "correlation_id": correlation_id,
+                        },
+                        "target_integration_id": "telegram",
+                    }
+                )
+            return
         phase = _telegram_phase_for_internal_event(event)
         if not phase:
             return
