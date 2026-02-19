@@ -763,6 +763,36 @@ def test_respond_finalize_done_ignores_stale_pending_interaction() -> None:
     assert transitions and transitions[-1] == "done"
 
 
+def test_respond_finalize_waiting_user_with_pending_renders_question() -> None:
+    transitions: list[str] = []
+    state: dict[str, object] = {
+        "correlation_id": "corr-pdca-waiting-pending-renders",
+        "channel_type": "telegram",
+        "channel_target": "8553589429",
+        "locale": "en-US",
+        "_llm_client": _QueuedLlm(["What acceptance criteria should I use to decide it is done?"]),
+        "pending_interaction": {
+            "type": "SLOT_FILL",
+            "key": "acceptance_criteria",
+            "context": {"source": "task_mode.acceptance_criteria"},
+        },
+        "task_state": {
+            "status": "waiting_user",
+            "next_user_question": "What acceptance criteria should I use to decide it is done?",
+        },
+    }
+
+    rendered = respond_finalize_node(
+        state,
+        emit_transition_event=lambda _state, phase, _payload=None: transitions.append(phase),
+    )
+    assert str(rendered.get("response_text") or "").strip()
+    utterance = rendered.get("utterance")
+    assert isinstance(utterance, dict)
+    assert utterance.get("type") == "question"
+    assert transitions and transitions[-1] == "waiting_user"
+
+
 def test_progress_critic_emits_wip_update_every_five_cycles(monkeypatch) -> None:
     emitted: list[dict[str, object] | None] = []
 

@@ -110,7 +110,7 @@ def respond_finalize_node(
     if has_capability_gap_plan(state):
         emit_transition_event(state, "failed")
         return _return({})
-    if pending and not is_terminal_task_state:
+    if pending and not is_terminal_task_state and task_status != "waiting_user":
         emit_transition_event(state, "waiting_user")
         return _return({})
     if isinstance(task_state, dict):
