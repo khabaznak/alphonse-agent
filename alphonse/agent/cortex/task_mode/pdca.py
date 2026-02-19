@@ -1128,7 +1128,43 @@ def _normalize_next_step_proposal(payload: Any) -> NextStepProposal | None:
 
 def _goal_satisfied(task_state: dict[str, Any]) -> bool:
     outcome = task_state.get("outcome")
-    return isinstance(outcome, dict) and bool(outcome)
+    if not isinstance(outcome, dict) or not outcome:
+        return False
+    kind = str(outcome.get("kind") or "").strip().lower()
+    if kind == "task_completed":
+        summary = str(
+            outcome.get("final_text")
+            or outcome.get("summary")
+            or ""
+        ).strip()
+        if not summary or _looks_like_question(summary):
+            return False
+        return _has_acceptance_criteria(task_state)
+    return True
+
+
+def _looks_like_question(text: str) -> bool:
+    rendered = str(text or "").strip().lower()
+    if not rendered:
+        return False
+    if "?" in rendered:
+        return True
+    starters = (
+        "can ",
+        "could ",
+        "would ",
+        "should ",
+        "do ",
+        "did ",
+        "is ",
+        "are ",
+        "what ",
+        "when ",
+        "where ",
+        "why ",
+        "how ",
+    )
+    return rendered.startswith(starters)
 
 
 def _derive_outcome_from_state(*, state: dict[str, Any], task_state: dict[str, Any]) -> dict[str, Any] | None:
