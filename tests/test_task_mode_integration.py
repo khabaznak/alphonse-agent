@@ -91,8 +91,13 @@ def test_task_mode_entry_extracts_goal_from_incoming_payload_not_raw_blob() -> N
 def test_acceptance_criteria_pending_context_uses_clean_goal_text() -> None:
     tool_registry = build_default_tool_registry()
     next_step = build_next_step_node(tool_registry=tool_registry)
+    llm = _FakeLlm(
+        '{"kind":"call_tool","tool_name":"job_list","args":{"limit":10},'
+        '"acceptance_criteria":["Return the scheduled jobs list."]}'
+    )
     state = {
         "correlation_id": "corr-clean-goal",
+        "_llm_client": llm,
         "incoming_raw_message": {
             "text": "Schedule my daily FX update at 7am.",
             "provider_event": {
@@ -109,12 +114,8 @@ def test_acceptance_criteria_pending_context_uses_clean_goal_text() -> None:
     state.update(task_mode_entry_node(state))
     task_state = state.get("task_state")
     assert isinstance(task_state, dict)
-    task_state["cycle_index"] = 1
     out = next_step(state)
-    pending = out.get("pending_interaction")
-    assert isinstance(pending, dict)
-    context = pending.get("context")
-    assert isinstance(context, dict)
-    goal = str(context.get("goal") or "")
+    goal = str(task_state.get("goal") or "")
     assert goal == "Schedule my daily FX update at 7am."
     assert "## RAW MESSAGE" not in goal
+    assert not isinstance(out.get("pending_interaction"), dict)

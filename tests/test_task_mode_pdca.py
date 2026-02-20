@@ -417,27 +417,32 @@ def test_pdca_parse_failure_falls_back_to_waiting_user() -> None:
     assert any(isinstance(event, dict) and event.get("type") == "parse_failed" for event in recent)
 
 
-def test_pdca_requests_acceptance_criteria_before_planning() -> None:
+def test_pdca_derives_acceptance_criteria_from_next_step_proposal() -> None:
     tool_registry = build_default_tool_registry()
     next_step = build_next_step_node(tool_registry=tool_registry)
+    llm = _QueuedLlm(
+        [
+            '{"kind":"call_tool","tool_name":"job_list","args":{"limit":10},'
+            '"acceptance_criteria":["Return the number of scheduled jobs."]}'
+        ]
+    )
     task_state = build_default_task_state()
     task_state["goal"] = "create recurring fx reminder"
     task_state["acceptance_criteria"] = []
-    task_state["cycle_index"] = 1
     state: dict[str, object] = {
-        "correlation_id": "corr-pdca-acceptance-request",
+        "correlation_id": "corr-pdca-acceptance-derived",
+        "_llm_client": llm,
         "task_state": task_state,
     }
 
     updated = next_step(state)
     next_state = updated.get("task_state")
     assert isinstance(next_state, dict)
-    assert next_state.get("status") == "waiting_user"
-    question = str(next_state.get("next_user_question") or "")
-    assert "acceptance criteria" in question.lower()
-    pending = updated.get("pending_interaction")
-    assert isinstance(pending, dict)
-    assert pending.get("key") == "acceptance_criteria"
+    criteria = next_state.get("acceptance_criteria")
+    assert isinstance(criteria, list)
+    assert criteria
+    assert "number of scheduled jobs" in str(criteria[0]).lower()
+    assert not isinstance(updated.get("pending_interaction"), dict)
 
 
 def test_pdca_does_not_force_acceptance_criteria_on_first_turn() -> None:

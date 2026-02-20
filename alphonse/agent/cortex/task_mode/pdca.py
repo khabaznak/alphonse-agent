@@ -6,9 +6,6 @@ import logging
 from datetime import datetime
 from typing import Any, Callable
 
-from alphonse.agent.cognition.pending_interaction import PendingInteractionType
-from alphonse.agent.cognition.pending_interaction import build_pending_interaction
-from alphonse.agent.cognition.pending_interaction import serialize_pending_interaction
 from alphonse.agent.cognition.tool_schemas import planner_tool_schemas
 from alphonse.agent.cortex.transitions import emit_transition_event
 from alphonse.agent.cortex.task_mode.progress_critic import progress_critic_node as _progress_critic_node_impl
@@ -37,6 +34,9 @@ _NEXT_STEP_DEVELOPER_PROMPT = (
     "- Prefer actions that reduce uncertainty early.\n"
     "- Use only tools listed in the tool menu.\n"
     "- If required info is missing, ask a concise clarifying question.\n"
+    "- Review acceptance criteria from working state.\n"
+    "- If acceptance criteria is missing, derive concise criteria from the goal and return them in `acceptance_criteria`.\n"
+    "- Ask the user for acceptance criteria only when criteria cannot be inferred safely.\n"
     "- Never propose multi-step plans.\n"
     "- Keep user-facing text concise and natural."
 )
@@ -56,6 +56,7 @@ _NEXT_STEP_SCHEMA: dict[str, Any] = {
         "tool_name": {"type": "string"},
         "args": {"type": "object"},
         "final_text": {"type": "string"},
+        "acceptance_criteria": {"type": "array", "items": {"type": "string"}},
     },
     "oneOf": [
         {
@@ -64,6 +65,7 @@ _NEXT_STEP_SCHEMA: dict[str, Any] = {
             "properties": {
                 "kind": {"const": "ask_user"},
                 "question": {"type": "string", "minLength": 1},
+                "acceptance_criteria": {"type": "array", "items": {"type": "string"}},
             },
             "required": ["kind", "question"],
         },
@@ -74,6 +76,7 @@ _NEXT_STEP_SCHEMA: dict[str, Any] = {
                 "kind": {"const": "call_tool"},
                 "tool_name": {"type": "string", "minLength": 1},
                 "args": {"type": "object"},
+                "acceptance_criteria": {"type": "array", "items": {"type": "string"}},
             },
             "required": ["kind", "tool_name", "args"],
         },
@@ -83,6 +86,7 @@ _NEXT_STEP_SCHEMA: dict[str, Any] = {
             "properties": {
                 "kind": {"const": "finish"},
                 "final_text": {"type": "string", "minLength": 1},
+                "acceptance_criteria": {"type": "array", "items": {"type": "string"}},
             },
             "required": ["kind", "final_text"],
         },
@@ -96,27 +100,6 @@ def build_next_step_node(*, tool_registry: Any) -> Callable[[dict[str, Any]], di
         task_state = _task_state_with_defaults(state)
         task_state["pdca_phase"] = "plan"
         correlation_id = _correlation_id(state)
-        if not _has_acceptance_criteria(task_state) and _is_subsequent_turn(task_state):
-            goal = str(task_state.get("goal") or "").strip() or "the current task"
-            task_state["status"] = "waiting_user"
-            task_state["next_user_question"] = (
-                f"Before I proceed with '{goal}', what acceptance criteria should I use to decide it is done?"
-            )
-            _append_trace_event(
-                task_state,
-                {
-                    "type": "acceptance_criteria_requested",
-                    "summary": "Requested acceptance criteria before task execution.",
-                    "correlation_id": correlation_id,
-                },
-            )
-            pending = build_pending_interaction(
-                PendingInteractionType.SLOT_FILL,
-                key="acceptance_criteria",
-                context={"source": "task_mode.acceptance_criteria", "goal": goal},
-                ttl_minutes=30,
-            )
-            return {"task_state": task_state, "pending_interaction": serialize_pending_interaction(pending)}
         llm_client = state.get("_llm_client")
         proposal, parse_failed = _propose_next_step_with_llm(
             llm_client=llm_client,
@@ -124,6 +107,20 @@ def build_next_step_node(*, tool_registry: Any) -> Callable[[dict[str, Any]], di
             task_state=task_state,
             tool_registry=tool_registry,
         )
+        if not _has_acceptance_criteria(task_state):
+            proposed_criteria = _normalize_acceptance_criteria_values(
+                proposal.get("acceptance_criteria") if isinstance(proposal, dict) else None
+            )
+            if proposed_criteria:
+                task_state["acceptance_criteria"] = proposed_criteria
+                _append_trace_event(
+                    task_state,
+                    {
+                        "type": "acceptance_criteria_derived",
+                        "summary": "Derived acceptance criteria from planning context.",
+                        "correlation_id": correlation_id,
+                    },
+                )
 
         step_id = _next_step_id(task_state)
         step_entry = {
@@ -911,8 +908,10 @@ def _build_working_state_view(task_state: dict[str, Any]) -> dict[str, Any]:
     if len(relevant_facts) > 8:
         keys = sorted(relevant_facts.keys())[-8:]
         relevant_facts = {key: relevant_facts[key] for key in keys}
+    acceptance_criteria = _normalize_acceptance_criteria_values(task_state.get("acceptance_criteria"))
     return {
         "goal": str(task_state.get("goal") or "").strip(),
+        "acceptance_criteria": acceptance_criteria,
         "relevant_facts": relevant_facts,
         "last_validation_error": task_state.get("last_validation_error"),
         "repair_attempts": int(task_state.get("repair_attempts") or 0),
@@ -1086,22 +1085,32 @@ def _normalize_next_step_proposal(payload: Any) -> NextStepProposal | None:
     if not isinstance(payload, dict):
         return None
     kind = str(payload.get("kind") or "").strip()
+    criteria = _normalize_acceptance_criteria_values(payload.get("acceptance_criteria"))
     if kind == "ask_user":
         question = str(payload.get("question") or "").strip()
         if not question:
             return None
-        return {"kind": "ask_user", "question": question}
+        out: NextStepProposal = {"kind": "ask_user", "question": question}
+        if criteria:
+            out["acceptance_criteria"] = criteria
+        return out
     if kind == "call_tool":
         tool_name = str(payload.get("tool_name") or "").strip()
         args = payload.get("args")
         if not tool_name or not isinstance(args, dict):
             return None
-        return {"kind": "call_tool", "tool_name": tool_name, "args": dict(args)}
+        out = {"kind": "call_tool", "tool_name": tool_name, "args": dict(args)}
+        if criteria:
+            out["acceptance_criteria"] = criteria
+        return out
     if kind == "finish":
         final_text = str(payload.get("final_text") or "").strip()
         if not final_text:
             return None
-        return {"kind": "finish", "final_text": final_text}
+        out = {"kind": "finish", "final_text": final_text}
+        if criteria:
+            out["acceptance_criteria"] = criteria
+        return out
     return None
 
 
@@ -1216,25 +1225,21 @@ def _task_state_with_defaults(state: dict[str, Any]) -> dict[str, Any]:
 
 
 def _has_acceptance_criteria(task_state: dict[str, Any]) -> bool:
-    criteria = task_state.get("acceptance_criteria")
-    if not isinstance(criteria, list):
-        return False
-    return any(str(item).strip() for item in criteria)
+    return bool(_normalize_acceptance_criteria_values(task_state.get("acceptance_criteria")))
 
 
-def _is_subsequent_turn(task_state: dict[str, Any]) -> bool:
-    cycle_index = int(task_state.get("cycle_index") or 0)
-    if cycle_index > 0:
-        return True
-    plan = _task_plan(task_state)
-    steps = plan.get("steps")
-    if isinstance(steps, list) and bool(steps):
-        return True
-    trace = _task_trace(task_state)
-    recent = trace.get("recent")
-    if isinstance(recent, list) and bool(recent):
-        return True
-    return False
+def _normalize_acceptance_criteria_values(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    out: list[str] = []
+    for item in value:
+        text = str(item or "").strip()
+        if not text:
+            continue
+        out.append(text[:180])
+        if len(out) >= 8:
+            break
+    return out
 
 
 def _task_plan(task_state: dict[str, Any]) -> dict[str, Any]:

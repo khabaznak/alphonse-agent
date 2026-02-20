@@ -9,6 +9,7 @@ class NextStepProposal(TypedDict, total=False):
     args: dict[str, Any]
     question: str
     final_text: str
+    acceptance_criteria: list[str]
 
 
 class ValidationResult(TypedDict, total=False):
