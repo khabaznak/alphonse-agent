@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from alphonse.agent.nervous_system.migrate import apply_schema
+from alphonse.agent.nervous_system.timed_store import list_timed_signals
 from alphonse.agent.services.job_models import JobSpec
 from alphonse.agent.services.job_runner import JobRunner, route_job
 from alphonse.agent.services.job_store import JobStore, compute_next_run_at
@@ -118,3 +120,30 @@ def test_router_sends_to_brain_for_high_safety() -> None:
     decision = route_job(job=job, auto_execute_high_risk=False)
     assert decision.route == "brain"
 
+
+def test_job_store_normalizes_missing_rrule_fields_and_syncs_timed_signal(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    db_path = tmp_path / "nerve-db"
+    apply_schema(db_path)
+    monkeypatch.setenv("NERVE_DB_PATH", str(db_path))
+    store = JobStore(root=tmp_path / "data" / "jobs")
+    created = store.create_job(
+        user_id="u1",
+        payload={
+            "name": "Legacy-like daily",
+            "description": "Created without explicit type and dtstart",
+            "schedule": {"rrule": "FREQ=DAILY;BYHOUR=7;BYMINUTE=0", "timezone": "America/Mexico_City"},
+            "payload_type": "prompt_to_brain",
+            "payload": {"prompt_text": "Ping me"},
+            "timezone": "UTC",
+        },
+    )
+    assert created.schedule.get("type") == "rrule"
+    assert str(created.schedule.get("dtstart") or "").strip()
+    assert created.next_run_at
+    rows = list_timed_signals(limit=20)
+    compiled = next((row for row in rows if row.get("id") == f"job_trigger:{created.job_id}"), None)
+    assert isinstance(compiled, dict)
+    assert compiled.get("signal_type") == "job_trigger"

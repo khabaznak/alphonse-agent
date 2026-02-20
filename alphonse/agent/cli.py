@@ -25,6 +25,7 @@ from alphonse.agent.nervous_system.ddfsm import DDFSM, DDFSMConfig
 from alphonse.agent.nervous_system.migrate import apply_schema
 from alphonse.agent.nervous_system.paths import resolve_nervous_system_db_path
 from alphonse.agent.nervous_system.paths import resolve_observability_db_path
+from alphonse.agent.services.job_store import JobStore
 from alphonse.agent.nervous_system.senses.bus import Bus, Signal
 from alphonse.agent.nervous_system.senses.timer import TimerSense
 from alphonse.agent.nervous_system.seed import apply_seed
@@ -139,6 +140,18 @@ def build_parser() -> argparse.ArgumentParser:
     report_sub = report_parser.add_subparsers(dest="report_command", required=True)
     report_daily = report_sub.add_parser(
         "daily", help="Show daily report schedule and last sent"
+    )
+
+    jobs_parser = sub.add_parser("jobs", help="Jobs maintenance utilities")
+    jobs_sub = jobs_parser.add_subparsers(dest="jobs_command", required=True)
+    jobs_backfill = jobs_sub.add_parser(
+        "backfill-schedule",
+        help="Backfill missing schedule fields and re-sync job timed signals",
+    )
+    jobs_backfill.add_argument(
+        "--user-id",
+        default=None,
+        help="Optional user id; if omitted all users are scanned",
     )
 
     debug_parser = sub.add_parser("debug", help="Diagnostics")
@@ -602,6 +615,9 @@ def _dispatch_command(
     if args.command == "report":
         _command_report(args, db_path)
         return
+    if args.command == "jobs":
+        _command_jobs(args)
+        return
     if args.command == "debug":
         _command_debug(args)
         return
@@ -718,6 +734,18 @@ def _command_report(args: argparse.Namespace, db_path: Path) -> None:
     if args.report_command == "daily":
         _command_report_daily(db_path)
         return
+
+
+def _command_jobs(args: argparse.Namespace) -> None:
+    if args.jobs_command != "backfill-schedule":
+        return
+    store = JobStore()
+    summary = store.backfill_and_sync_jobs(user_id=args.user_id)
+    print(
+        "Jobs backfill completed: "
+        f"scanned={int(summary.get('scanned') or 0)} "
+        f"updated={int(summary.get('updated') or 0)}"
+    )
 
 
 def _command_report_daily(db_path: Path) -> None:

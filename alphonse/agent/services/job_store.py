@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import secrets
+import logging
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -12,6 +13,8 @@ from dateutil.rrule import rrulestr
 
 from alphonse.agent.nervous_system.timed_store import insert_timed_signal
 from alphonse.agent.services.job_models import JobExecution, JobSpec
+
+logger = logging.getLogger(__name__)
 
 
 class JobStore:
@@ -50,11 +53,13 @@ class JobStore:
             raise ValueError("name is required")
         if not isinstance(job.schedule, dict):
             raise ValueError("schedule is required")
-        job.next_run_at = compute_next_run_at(
-            schedule=job.schedule,
-            timezone_name=job.timezone,
-            after=now,
-        )
+        _normalize_job_schedule(job=job, now=now)
+        if not job.next_run_at:
+            job.next_run_at = compute_next_run_at(
+                schedule=job.schedule,
+                timezone_name=job.timezone,
+                after=now,
+            )
         data = self._read_jobs(user_id)
         jobs = data.get("jobs")
         if not isinstance(jobs, dict):
@@ -64,8 +69,13 @@ class JobStore:
         self._write_jobs(user_id, data)
         try:
             self._sync_job_timed_signal(user_id=user_id, job=job)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning(
+                "JobStore create_job sync_failed user_id=%s job_id=%s error=%s",
+                user_id,
+                job.job_id,
+                type(exc).__name__,
+            )
         return job
 
     def list_jobs(
@@ -102,6 +112,13 @@ class JobStore:
         return JobSpec.from_dict(payload)
 
     def save_job(self, *, user_id: str, job: JobSpec) -> JobSpec:
+        _normalize_job_schedule(job=job, now=_now_utc())
+        if not job.next_run_at and bool(job.enabled):
+            job.next_run_at = compute_next_run_at(
+                schedule=job.schedule,
+                timezone_name=job.timezone,
+                after=_now_utc(),
+            )
         data = self._read_jobs(user_id)
         jobs = data.get("jobs")
         if not isinstance(jobs, dict):
@@ -112,9 +129,55 @@ class JobStore:
         self._write_jobs(user_id, data)
         try:
             self._sync_job_timed_signal(user_id=user_id, job=job)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning(
+                "JobStore save_job sync_failed user_id=%s job_id=%s error=%s",
+                user_id,
+                job.job_id,
+                type(exc).__name__,
+            )
         return job
+
+    def backfill_and_sync_jobs(self, *, user_id: str | None = None) -> dict[str, int]:
+        user_ids = [str(user_id)] if user_id else self.list_user_ids()
+        scanned = 0
+        updated = 0
+        for uid in user_ids:
+            data = self._read_jobs(uid)
+            jobs_raw = data.get("jobs")
+            if not isinstance(jobs_raw, dict):
+                continue
+            user_changed = False
+            for job_id, payload in jobs_raw.items():
+                if not isinstance(payload, dict):
+                    continue
+                scanned += 1
+                spec = JobSpec.from_dict(payload)
+                changed = _normalize_job_schedule(job=spec, now=_now_utc())
+                if not spec.next_run_at and bool(spec.enabled):
+                    spec.next_run_at = compute_next_run_at(
+                        schedule=spec.schedule,
+                        timezone_name=spec.timezone,
+                        after=_now_utc(),
+                    )
+                    changed = True
+                if changed:
+                    spec.updated_at = _now_utc().isoformat()
+                    jobs_raw[str(job_id)] = spec.to_dict()
+                    updated += 1
+                    user_changed = True
+                try:
+                    self._sync_job_timed_signal(user_id=uid, job=spec)
+                except Exception as exc:
+                    logger.warning(
+                        "JobStore backfill sync_failed user_id=%s job_id=%s error=%s",
+                        uid,
+                        spec.job_id,
+                        type(exc).__name__,
+                    )
+            if user_changed:
+                self._write_jobs(uid, data)
+        return {"scanned": scanned, "updated": updated}
 
     def pause_job(self, *, user_id: str, job_id: str) -> JobSpec:
         job = self.get_job(user_id=user_id, job_id=job_id)
@@ -279,9 +342,10 @@ class JobStore:
 
 
 def compute_next_run_at(*, schedule: dict[str, Any], timezone_name: str, after: datetime) -> str | None:
-    if str(schedule.get("type") or "").strip().lower() != "rrule":
-        return None
+    schedule_type = str(schedule.get("type") or "").strip().lower()
     rrule_value = str(schedule.get("rrule") or "").strip()
+    if schedule_type and schedule_type != "rrule":
+        return None
     if not rrule_value:
         return None
     dtstart_raw = str(schedule.get("dtstart") or "").strip()
@@ -303,6 +367,32 @@ def compute_next_run_at(*, schedule: dict[str, Any], timezone_name: str, after: 
     if candidate.tzinfo is None:
         candidate = candidate.replace(tzinfo=tz)
     return candidate.astimezone(timezone.utc).isoformat()
+
+
+def _normalize_job_schedule(*, job: JobSpec, now: datetime) -> bool:
+    changed = False
+    schedule = dict(job.schedule or {})
+    rrule_value = str(schedule.get("rrule") or "").strip()
+    if not rrule_value:
+        job.schedule = schedule
+        return changed
+    schedule_type = str(schedule.get("type") or "").strip().lower()
+    if not schedule_type:
+        schedule["type"] = "rrule"
+        changed = True
+    tz_in_schedule = str(schedule.get("timezone") or "").strip()
+    if tz_in_schedule and str(job.timezone or "").strip().upper() == "UTC":
+        job.timezone = tz_in_schedule
+        changed = True
+    dtstart_raw = str(schedule.get("dtstart") or "").strip()
+    if not dtstart_raw:
+        fallback = str(job.next_run_at or job.last_run_at or job.created_at or "").strip()
+        if not fallback:
+            fallback = now.isoformat()
+        schedule["dtstart"] = fallback
+        changed = True
+    job.schedule = schedule
+    return changed
 
 
 def _resolve_tz(name: str) -> ZoneInfo:
