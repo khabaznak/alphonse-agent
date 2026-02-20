@@ -423,6 +423,7 @@ def test_pdca_requests_acceptance_criteria_before_planning() -> None:
     task_state = build_default_task_state()
     task_state["goal"] = "create recurring fx reminder"
     task_state["acceptance_criteria"] = []
+    task_state["cycle_index"] = 1
     state: dict[str, object] = {
         "correlation_id": "corr-pdca-acceptance-request",
         "task_state": task_state,
@@ -437,6 +438,27 @@ def test_pdca_requests_acceptance_criteria_before_planning() -> None:
     pending = updated.get("pending_interaction")
     assert isinstance(pending, dict)
     assert pending.get("key") == "acceptance_criteria"
+
+
+def test_pdca_does_not_force_acceptance_criteria_on_first_turn() -> None:
+    tool_registry = build_default_tool_registry()
+    next_step = build_next_step_node(tool_registry=tool_registry)
+    llm = _QueuedLlm(['{"kind":"call_tool","tool_name":"job_list","args":{"limit":10}}'])
+    task_state = build_default_task_state()
+    task_state["goal"] = "how many jobs do we have scheduled?"
+    task_state["acceptance_criteria"] = []
+    task_state["cycle_index"] = 0
+    state: dict[str, object] = {
+        "correlation_id": "corr-pdca-no-criteria-first-turn",
+        "_llm_client": llm,
+        "task_state": task_state,
+    }
+
+    updated = next_step(state)
+    next_state = updated.get("task_state")
+    assert isinstance(next_state, dict)
+    assert next_state.get("status") != "waiting_user"
+    assert not isinstance(updated.get("pending_interaction"), dict)
 
 
 def test_pdca_next_step_prompt_includes_recent_conversation_sentinel() -> None:

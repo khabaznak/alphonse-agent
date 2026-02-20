@@ -107,6 +107,9 @@ def test_acceptance_criteria_pending_context_uses_clean_goal_text() -> None:
         ),
     }
     state.update(task_mode_entry_node(state))
+    task_state = state.get("task_state")
+    assert isinstance(task_state, dict)
+    task_state["cycle_index"] = 1
     out = next_step(state)
     pending = out.get("pending_interaction")
     assert isinstance(pending, dict)

@@ -96,7 +96,7 @@ def build_next_step_node(*, tool_registry: Any) -> Callable[[dict[str, Any]], di
         task_state = _task_state_with_defaults(state)
         task_state["pdca_phase"] = "plan"
         correlation_id = _correlation_id(state)
-        if not _has_acceptance_criteria(task_state):
+        if not _has_acceptance_criteria(task_state) and _is_subsequent_turn(task_state):
             goal = str(task_state.get("goal") or "").strip() or "the current task"
             task_state["status"] = "waiting_user"
             task_state["next_user_question"] = (
@@ -1220,6 +1220,21 @@ def _has_acceptance_criteria(task_state: dict[str, Any]) -> bool:
     if not isinstance(criteria, list):
         return False
     return any(str(item).strip() for item in criteria)
+
+
+def _is_subsequent_turn(task_state: dict[str, Any]) -> bool:
+    cycle_index = int(task_state.get("cycle_index") or 0)
+    if cycle_index > 0:
+        return True
+    plan = _task_plan(task_state)
+    steps = plan.get("steps")
+    if isinstance(steps, list) and bool(steps):
+        return True
+    trace = _task_trace(task_state)
+    recent = trace.get("recent")
+    if isinstance(recent, list) and bool(recent):
+        return True
+    return False
 
 
 def _task_plan(task_state: dict[str, Any]) -> dict[str, Any]:

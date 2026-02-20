@@ -147,3 +147,28 @@ def test_job_store_normalizes_missing_rrule_fields_and_syncs_timed_signal(
     compiled = next((row for row in rows if row.get("id") == f"job_trigger:{created.job_id}"), None)
     assert isinstance(compiled, dict)
     assert compiled.get("signal_type") == "job_trigger"
+
+
+def test_job_store_normalizes_legacy_prompt_payload_type(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    db_path = tmp_path / "nerve-db"
+    apply_schema(db_path)
+    monkeypatch.setenv("NERVE_DB_PATH", str(db_path))
+    store = JobStore(root=tmp_path / "data" / "jobs")
+    created = store.create_job(
+        user_id="u1",
+        payload={
+            "name": "Legacy prompt payload",
+            "description": "Should map prompt -> prompt_to_brain",
+            "schedule": {
+                "rrule": "FREQ=DAILY;BYHOUR=7;BYMINUTE=0",
+                "dtstart": (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat(),
+            },
+            "payload_type": "prompt",
+            "payload": {"text": "Send rate"},
+            "timezone": "UTC",
+        },
+    )
+    assert created.payload_type == "prompt_to_brain"

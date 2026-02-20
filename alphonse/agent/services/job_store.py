@@ -15,6 +15,7 @@ from alphonse.agent.nervous_system.timed_store import insert_timed_signal
 from alphonse.agent.services.job_models import JobExecution, JobSpec
 
 logger = logging.getLogger(__name__)
+VALID_PAYLOAD_TYPES = {"job_ability", "tool_call", "prompt_to_brain", "internal_event"}
 
 
 class JobStore:
@@ -32,6 +33,7 @@ class JobStore:
 
     def create_job(self, *, user_id: str, payload: dict[str, Any]) -> JobSpec:
         now = _now_utc()
+        payload_type = _normalize_payload_type(str(payload.get("payload_type") or "internal_event"))
         job = JobSpec(
             job_id=_new_job_id(),
             name=str(payload.get("name") or "").strip(),
@@ -39,7 +41,7 @@ class JobStore:
             enabled=bool(payload.get("enabled", True)),
             schedule=dict(payload.get("schedule") or {}),
             timezone=str(payload.get("timezone") or "UTC"),
-            payload_type=str(payload.get("payload_type") or "internal_event"),  # type: ignore[arg-type]
+            payload_type=payload_type,  # type: ignore[arg-type]
             payload=dict(payload.get("payload") or {}),
             domain_tags=[str(item).strip() for item in (payload.get("domain_tags") or []) if str(item).strip()],
             safety_level=str(payload.get("safety_level") or "low"),
@@ -53,6 +55,8 @@ class JobStore:
             raise ValueError("name is required")
         if not isinstance(job.schedule, dict):
             raise ValueError("schedule is required")
+        if str(job.payload_type or "").strip() not in VALID_PAYLOAD_TYPES:
+            raise ValueError("invalid_payload_type")
         _normalize_job_schedule(job=job, now=now)
         if not job.next_run_at:
             job.next_run_at = compute_next_run_at(
@@ -112,6 +116,9 @@ class JobStore:
         return JobSpec.from_dict(payload)
 
     def save_job(self, *, user_id: str, job: JobSpec) -> JobSpec:
+        job.payload_type = _normalize_payload_type(str(job.payload_type or "internal_event"))  # type: ignore[assignment]
+        if str(job.payload_type or "").strip() not in VALID_PAYLOAD_TYPES:
+            raise ValueError("invalid_payload_type")
         _normalize_job_schedule(job=job, now=_now_utc())
         if not job.next_run_at and bool(job.enabled):
             job.next_run_at = compute_next_run_at(
@@ -153,7 +160,15 @@ class JobStore:
                     continue
                 scanned += 1
                 spec = JobSpec.from_dict(payload)
+                original_payload_type = str(spec.payload_type or "").strip()
+                normalized_payload_type = _normalize_payload_type(original_payload_type)
+                spec.payload_type = normalized_payload_type  # type: ignore[assignment]
                 changed = _normalize_job_schedule(job=spec, now=_now_utc())
+                if normalized_payload_type != original_payload_type:
+                    changed = True
+                if str(spec.payload_type or "").strip() not in VALID_PAYLOAD_TYPES:
+                    spec.payload_type = "prompt_to_brain"  # type: ignore[assignment]
+                    changed = True
                 if not spec.next_run_at and bool(spec.enabled):
                     spec.next_run_at = compute_next_run_at(
                         schedule=spec.schedule,
@@ -429,6 +444,13 @@ def _new_job_id() -> str:
 
 def _now_utc() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _normalize_payload_type(value: str) -> str:
+    raw = str(value or "").strip()
+    if raw == "prompt":
+        return "prompt_to_brain"
+    return raw or "internal_event"
 
 
 def compute_retry_time(*, now: datetime, backoff_seconds: int) -> str:
