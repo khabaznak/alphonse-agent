@@ -22,10 +22,6 @@ from alphonse.agent.relay.client import build_relay_client_from_env
 from alphonse.agent.nervous_system.paths import resolve_nervous_system_db_path
 from alphonse.agent.nervous_system.migrate import apply_schema
 from alphonse.agent.nervous_system.seed import apply_seed
-from alphonse.agent.services.job_runner import JobRunner
-from alphonse.agent.services.job_store import JobStore
-from alphonse.agent.services.scratchpad_service import ScratchpadService
-from alphonse.agent.tools.registry import build_default_tool_registry
 from alphonse.agent.cognition.brain_health import BrainUnavailable, require_brain_health
 from alphonse.agent.core.settings_store import init_db as init_settings_db
 from alphonse.agent.io import get_io_registry
@@ -38,7 +34,7 @@ def load_env() -> None:
 
 
 def load_heart(config: HeartConfig, bus: Bus, ddfsm: DDFSM) -> Heart:
-    return Heart(config, bus=bus, ddfsm=ddfsm)
+    return Heart(config, bus=bus, ddfsm=ddfsm, ctx=bus)
 
 
 def main() -> None:
@@ -91,22 +87,6 @@ def main() -> None:
     relay_client = build_relay_client_from_env()
     if relay_client:
         relay_client.start()
-    job_runner = JobRunner(
-        job_store=JobStore(),
-        scratchpad_service=ScratchpadService(),
-        tool_registry=build_default_tool_registry(),
-        brain_event_sink=lambda payload: bus.emit(
-            Signal(
-                type="job.synthetic_event",
-                payload=payload,
-                source="job_runner",
-                correlation_id=str(payload.get("job_id") or ""),
-            )
-        ),
-        tick_seconds=45,
-    )
-    job_runner.start()
-
     heart = load_heart(config, bus, ddfsm)
     try:
         heart.run()
@@ -119,7 +99,6 @@ def main() -> None:
             api_server.stop()
         if relay_client:
             relay_client.stop()
-        job_runner.stop()
         sense_manager.stop()
 
 

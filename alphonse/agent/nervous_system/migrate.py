@@ -18,6 +18,7 @@ def apply_schema(db_path: Path) -> None:
     with sqlite3.connect(db_path) as conn:
         conn.executescript(schema_sql)
         _ensure_timed_signal_columns(conn)
+        _ensure_timed_signal_dispatch_columns(conn)
         _ensure_timed_signal_statuses(conn)
         _ensure_paired_device_columns(conn)
         _ensure_pairing_columns(conn)
@@ -27,6 +28,7 @@ def apply_schema(db_path: Path) -> None:
         _ensure_users_table(conn)
         _ensure_services_registry(conn)
         _ensure_prompt_template_columns(conn)
+        _ensure_prompt_artifacts_table(conn)
         _ensure_sandbox_directories(conn)
         _ensure_telegram_chat_access_table(conn)
         _ensure_telegram_invite_columns(conn)
@@ -50,6 +52,20 @@ def _ensure_timed_signal_columns(conn: sqlite3.Connection) -> None:
         "attempts": "INTEGER NOT NULL DEFAULT 0",
         "last_error": "TEXT",
         "delivery_target": "TEXT",
+    }
+    for name, definition in columns.items():
+        try:
+            conn.execute(f"ALTER TABLE timed_signals ADD COLUMN {name} {definition}")
+        except sqlite3.OperationalError:
+            continue
+
+
+def _ensure_timed_signal_dispatch_columns(conn: sqlite3.Connection) -> None:
+    columns = {
+        "mind_layer": "TEXT NOT NULL DEFAULT 'subconscious'",
+        "dispatch_mode": "TEXT NOT NULL DEFAULT 'deterministic'",
+        "job_id": "TEXT",
+        "prompt_artifact_id": "TEXT",
     }
     for name, definition in columns.items():
         try:
@@ -275,6 +291,23 @@ def _ensure_prompt_template_columns(conn: sqlite3.Connection) -> None:
             conn.execute(f"ALTER TABLE prompt_templates ADD COLUMN {name} {definition}")
         except sqlite3.OperationalError:
             continue
+
+
+def _ensure_prompt_artifacts_table(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS prompt_artifacts (
+          artifact_id       TEXT PRIMARY KEY,
+          user_id           TEXT NOT NULL,
+          source_instruction TEXT NOT NULL,
+          agent_internal_prompt TEXT NOT NULL,
+          language          TEXT,
+          artifact_kind     TEXT NOT NULL,
+          created_at        TEXT NOT NULL DEFAULT (datetime('now')),
+          updated_at        TEXT NOT NULL DEFAULT (datetime('now'))
+        ) STRICT
+        """
+    )
 
 
 def _ensure_sandbox_directories(conn: sqlite3.Connection) -> None:

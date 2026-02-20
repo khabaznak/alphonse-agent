@@ -5,7 +5,12 @@ from pathlib import Path
 
 from alphonse.agent.nervous_system.migrate import apply_schema
 from alphonse.agent.nervous_system.senses.bus import Bus
-from alphonse.agent.nervous_system.senses.timer import TimerSense
+from alphonse.agent.nervous_system.senses.timer import (
+    MAX_ACCEPTABLE_TRIGGER_LATENCY_SECONDS,
+    TimedSignalRecord,
+    TimerSense,
+    _allowed_lag_seconds,
+)
 from alphonse.agent.nervous_system.timed_store import list_timed_signals
 from alphonse.agent.tools.scheduler import SchedulerTool
 
@@ -97,3 +102,52 @@ def test_timer_dispatches_when_now_gte_fire_at(
         assert str(payload.get("target") or "") == "8553589429"
     finally:
         timer.stop()
+
+
+def test_allowed_lag_for_one_shot_uses_default_window() -> None:
+    now = datetime.now(timezone.utc)
+    record = TimedSignalRecord(
+        id="s1",
+        trigger_at=now,
+        fire_at=now,
+        status="pending",
+        signal_type="reminder",
+        mind_layer="conscious",
+        dispatch_mode="graph",
+        job_id=None,
+        prompt_artifact_id=None,
+        payload={},
+        target="8553589429",
+        delivery_target="8553589429",
+        origin="tests",
+        correlation_id=None,
+        next_trigger_at=now,
+        rrule=None,
+        timezone="America/Mexico_City",
+    )
+    assert _allowed_lag_seconds(record, now) == float(MAX_ACCEPTABLE_TRIGGER_LATENCY_SECONDS)
+
+
+def test_allowed_lag_for_daily_rrule_uses_catchup_window() -> None:
+    now = datetime.now(timezone.utc)
+    record = TimedSignalRecord(
+        id="s2",
+        trigger_at=now - timedelta(days=1),
+        fire_at=None,
+        status="pending",
+        signal_type="job_trigger",
+        mind_layer="conscious",
+        dispatch_mode="graph",
+        job_id="job_1",
+        prompt_artifact_id=None,
+        payload={},
+        target="8553589429",
+        delivery_target="8553589429",
+        origin="tests",
+        correlation_id=None,
+        next_trigger_at=now,
+        rrule="FREQ=DAILY",
+        timezone="America/Mexico_City",
+    )
+    lag = _allowed_lag_seconds(record, now)
+    assert lag >= 3600.0

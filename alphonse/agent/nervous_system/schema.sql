@@ -64,6 +64,10 @@ CREATE TABLE IF NOT EXISTS timed_signals (
   attempts        INTEGER NOT NULL DEFAULT 0,
   last_error      TEXT,
   signal_type     TEXT NOT NULL,
+  mind_layer      TEXT NOT NULL DEFAULT 'subconscious',
+  dispatch_mode   TEXT NOT NULL DEFAULT 'deterministic',
+  job_id          TEXT,
+  prompt_artifact_id TEXT,
   payload         TEXT,
   target          TEXT,
   delivery_target TEXT,
@@ -71,7 +75,20 @@ CREATE TABLE IF NOT EXISTS timed_signals (
   correlation_id  TEXT,
   created_at      TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at      TEXT NOT NULL DEFAULT (datetime('now')),
+  CHECK (mind_layer IN ('subconscious', 'conscious')),
+  CHECK (dispatch_mode IN ('deterministic', 'graph')),
   CHECK (status IN ('pending', 'processing', 'fired', 'failed', 'cancelled', 'error', 'skipped', 'dispatched'))
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS prompt_artifacts (
+  artifact_id       TEXT PRIMARY KEY,
+  user_id           TEXT NOT NULL,
+  source_instruction TEXT NOT NULL,
+  agent_internal_prompt TEXT NOT NULL,
+  language          TEXT,
+  artifact_kind     TEXT NOT NULL,
+  created_at        TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at        TEXT NOT NULL DEFAULT (datetime('now'))
 ) STRICT;
 
 ----------------------------------------------------------------------

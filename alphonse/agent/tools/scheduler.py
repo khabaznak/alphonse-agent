@@ -5,6 +5,7 @@ from datetime import datetime, timezone as dt_timezone
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from alphonse.agent.nervous_system.prompt_artifacts import create_prompt_artifact
 from alphonse.agent.nervous_system.timed_store import insert_timed_signal
 
 
@@ -150,6 +151,21 @@ class SchedulerTool:
             "delivery_target": to,
             "event_trigger": event_trigger,
         }
+        source_instruction = str(message or "").strip()
+        internal_prompt = _you_just_remembered_paraphrase(
+            llm_client=self.llm_client,
+            source_instruction=source_instruction,
+        )
+        artifact_id = create_prompt_artifact(
+            user_id=str(to or "default"),
+            source_instruction=source_instruction,
+            agent_internal_prompt=internal_prompt,
+            language=None,
+            artifact_kind="reminder",
+        )
+        payload["source_instruction"] = source_instruction
+        payload["agent_internal_prompt"] = internal_prompt
+        payload["prompt_artifact_id"] = artifact_id
         return self.schedule_event(
             trigger_time=trigger_time,
             timezone_name=timezone_name,
@@ -158,6 +174,9 @@ class SchedulerTool:
             target=to,
             origin=from_,
             correlation_id=correlation_id,
+            mind_layer="conscious",
+            dispatch_mode="graph",
+            prompt_artifact_id=artifact_id,
         )
 
     def schedule_event(
@@ -170,6 +189,9 @@ class SchedulerTool:
         target: str | None = None,
         origin: str | None = None,
         correlation_id: str | None = None,
+        mind_layer: str = "subconscious",
+        dispatch_mode: str = "deterministic",
+        prompt_artifact_id: str | None = None,
     ) -> str:
         event_payload = dict(payload or {})
         event_payload.setdefault("created_at", datetime.now(dt_timezone.utc).isoformat())
@@ -184,6 +206,9 @@ class SchedulerTool:
             target=str(target) if target is not None else None,
             origin=origin,
             correlation_id=correlation_id,
+            mind_layer=mind_layer,
+            dispatch_mode=dispatch_mode,
+            prompt_artifact_id=prompt_artifact_id,
         )
 
     # Compatibility helper while reminder payloads are still being migrated.
@@ -265,6 +290,34 @@ def _normalize_time_expression_to_iso(*, expression: str, timezone_name: str, ll
         retryable=True,
         details={"expression": raw, "timezone": timezone_name},
     )
+
+
+def _you_just_remembered_paraphrase(*, llm_client: Any | None, source_instruction: str) -> str:
+    source = str(source_instruction or "").strip()
+    if not source:
+        return "You just remembered something important."
+    if llm_client is None:
+        return f"You just remembered: {source}"
+    complete = getattr(llm_client, "complete", None)
+    if not callable(complete):
+        return f"You just remembered: {source}"
+    system_prompt = (
+        "Rewrite the user instruction as a first-person internal memory cue.\n"
+        "Technique: 'You Just Remembered'.\n"
+        "Keep the same language as the source.\n"
+        "Single sentence. Plain text only."
+    )
+    user_prompt = f"Source instruction:\n{source}"
+    try:
+        rendered = str(complete(system_prompt=system_prompt, user_prompt=user_prompt)).strip()
+    except TypeError:
+        try:
+            rendered = str(complete(system_prompt, user_prompt)).strip()
+        except Exception:
+            rendered = ""
+    except Exception:
+        rendered = ""
+    return rendered or f"You just remembered: {source}"
 
 
 def _try_parse_iso(raw: str, *, timezone_name: str) -> str | None:

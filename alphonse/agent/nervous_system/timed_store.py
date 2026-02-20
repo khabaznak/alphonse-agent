@@ -12,7 +12,7 @@ from alphonse.agent.nervous_system.paths import resolve_nervous_system_db_path
 def list_timed_signals(limit: int = 200) -> list[dict[str, Any]]:
     query = (
         "SELECT id, trigger_at, fire_at, next_trigger_at, rrule, timezone, status, fired_at, attempt_count, attempts, "
-        "last_error, signal_type, payload, target, delivery_target, origin, correlation_id, created_at, updated_at "
+        "last_error, signal_type, mind_layer, dispatch_mode, job_id, prompt_artifact_id, payload, target, delivery_target, origin, correlation_id, created_at, updated_at "
         "FROM timed_signals ORDER BY COALESCE(next_trigger_at, trigger_at) DESC LIMIT ?"
     )
     with _connect() as conn:
@@ -23,7 +23,7 @@ def list_timed_signals(limit: int = 200) -> list[dict[str, Any]]:
 def list_upcoming_timed_signals(limit: int = 10) -> list[dict[str, Any]]:
     query = (
         "SELECT id, trigger_at, fire_at, next_trigger_at, rrule, timezone, status, fired_at, attempt_count, attempts, "
-        "last_error, signal_type, payload, target, delivery_target, origin, correlation_id, created_at, updated_at "
+        "last_error, signal_type, mind_layer, dispatch_mode, job_id, prompt_artifact_id, payload, target, delivery_target, origin, correlation_id, created_at, updated_at "
         "FROM timed_signals "
         "WHERE status IN ('pending', 'processing') "
         "ORDER BY COALESCE(next_trigger_at, fire_at, trigger_at) ASC LIMIT ?"
@@ -45,6 +45,10 @@ def insert_timed_signal(
     signal_id: str | None = None,
     next_trigger_at: str | None = None,
     rrule: str | None = None,
+    mind_layer: str = "subconscious",
+    dispatch_mode: str = "deterministic",
+    job_id: str | None = None,
+    prompt_artifact_id: str | None = None,
 ) -> str:
     timed_signal_id = signal_id or str(uuid.uuid4())
     with _connect() as conn:
@@ -52,9 +56,9 @@ def insert_timed_signal(
             """
             INSERT INTO timed_signals
               (id, trigger_at, fire_at, next_trigger_at, rrule, timezone, status, fired_at, attempt_count, attempts, last_error,
-               signal_type, payload, target, delivery_target, origin, correlation_id)
+               signal_type, mind_layer, dispatch_mode, job_id, prompt_artifact_id, payload, target, delivery_target, origin, correlation_id)
             VALUES
-              (?, ?, ?, ?, ?, ?, 'pending', NULL, 0, 0, NULL, ?, ?, ?, ?, ?, ?)
+              (?, ?, ?, ?, ?, ?, 'pending', NULL, 0, 0, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 timed_signal_id,
@@ -64,6 +68,10 @@ def insert_timed_signal(
                 rrule,
                 timezone,
                 signal_type,
+                mind_layer,
+                dispatch_mode,
+                job_id,
+                prompt_artifact_id,
                 json.dumps(payload),
                 target,
                 target,
@@ -99,13 +107,17 @@ def _row_to_timed_signal(row: sqlite3.Row | tuple | None) -> dict[str, Any]:
         "attempts": row[9],
         "last_error": row[10],
         "signal_type": row[11],
-        "payload": _parse_payload(row[12]),
-        "target": row[13],
-        "delivery_target": row[14],
-        "origin": row[15],
-        "correlation_id": row[16],
-        "created_at": row[17],
-        "updated_at": row[18],
+        "mind_layer": row[12],
+        "dispatch_mode": row[13],
+        "job_id": row[14],
+        "prompt_artifact_id": row[15],
+        "payload": _parse_payload(row[16]),
+        "target": row[17],
+        "delivery_target": row[18],
+        "origin": row[19],
+        "correlation_id": row[20],
+        "created_at": row[21],
+        "updated_at": row[22],
     }
 
 

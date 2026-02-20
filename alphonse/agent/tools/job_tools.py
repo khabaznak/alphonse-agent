@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from alphonse.agent.nervous_system.prompt_artifacts import create_prompt_artifact
 from alphonse.agent.services.job_runner import JobRunner
 from alphonse.agent.services.job_store import JobStore
 
@@ -44,6 +45,29 @@ class JobCreateTool:
     ) -> dict[str, Any]:
         resolved_user = _resolve_user_id(user_id=user_id, state=state, ctx=ctx)
         try:
+            source_instruction = _build_job_source_instruction(
+                name=name,
+                description=description,
+                schedule=schedule,
+                payload_type=payload_type,
+                payload=payload,
+            )
+            llm_client = state.get("_llm_client") if isinstance(state, dict) else None
+            internal_prompt = _you_just_remembered_paraphrase(
+                llm_client=llm_client,
+                source_instruction=source_instruction,
+            )
+            artifact_id = create_prompt_artifact(
+                user_id=resolved_user,
+                source_instruction=source_instruction,
+                agent_internal_prompt=internal_prompt,
+                language=None,
+                artifact_kind="job",
+            )
+            payload_with_prompt = dict(payload or {})
+            payload_with_prompt.setdefault("source_instruction", source_instruction)
+            payload_with_prompt.setdefault("agent_internal_prompt", internal_prompt)
+            payload_with_prompt.setdefault("prompt_artifact_id", artifact_id)
             job = self._store.create_job(
                 user_id=resolved_user,
                 payload={
@@ -51,7 +75,7 @@ class JobCreateTool:
                     "description": description,
                     "schedule": schedule,
                     "payload_type": payload_type,
-                    "payload": payload,
+                    "payload": payload_with_prompt,
                     "timezone": timezone,
                     "domain_tags": domain_tags or [],
                     "safety_level": safety_level,
@@ -225,3 +249,47 @@ def _failed(*, code: str, message: str, metadata: dict[str, Any]) -> dict[str, A
         "metadata": metadata,
     }
 
+
+def _build_job_source_instruction(
+    *,
+    name: str,
+    description: str,
+    schedule: dict[str, Any],
+    payload_type: str,
+    payload: dict[str, Any],
+) -> str:
+    rrule = str((schedule or {}).get("rrule") or "").strip()
+    dtstart = str((schedule or {}).get("dtstart") or "").strip()
+    return (
+        f"Create scheduled job '{str(name or '').strip()}'. "
+        f"Description: {str(description or '').strip()}. "
+        f"Schedule dtstart={dtstart}, rrule={rrule}. "
+        f"Payload type={str(payload_type or '').strip()}. "
+        f"Payload={payload}."
+    ).strip()
+
+
+def _you_just_remembered_paraphrase(*, llm_client: Any | None, source_instruction: str) -> str:
+    source = str(source_instruction or "").strip()
+    if not source:
+        return "You just remembered a scheduled job."
+    complete = getattr(llm_client, "complete", None) if llm_client is not None else None
+    if not callable(complete):
+        return f"You just remembered: {source}"
+    system_prompt = (
+        "Rewrite the source instruction as a first-person internal reminder.\n"
+        "Technique: 'You Just Remembered'.\n"
+        "Keep the same language as source text.\n"
+        "One concise sentence. Plain text only."
+    )
+    user_prompt = f"Source instruction:\n{source}"
+    try:
+        rendered = str(complete(system_prompt=system_prompt, user_prompt=user_prompt)).strip()
+    except TypeError:
+        try:
+            rendered = str(complete(system_prompt, user_prompt)).strip()
+        except Exception:
+            rendered = ""
+    except Exception:
+        rendered = ""
+    return rendered or f"You just remembered: {source}"

@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo
 
 from dateutil.rrule import rrulestr
 
+from alphonse.agent.nervous_system.timed_store import insert_timed_signal
 from alphonse.agent.services.job_models import JobExecution, JobSpec
 
 
@@ -61,6 +62,10 @@ class JobStore:
             data["jobs"] = jobs
         jobs[job.job_id] = job.to_dict()
         self._write_jobs(user_id, data)
+        try:
+            self._sync_job_timed_signal(user_id=user_id, job=job)
+        except Exception:
+            pass
         return job
 
     def list_jobs(
@@ -105,6 +110,10 @@ class JobStore:
         job.updated_at = _now_utc().isoformat()
         jobs[job.job_id] = job.to_dict()
         self._write_jobs(user_id, data)
+        try:
+            self._sync_job_timed_signal(user_id=user_id, job=job)
+        except Exception:
+            pass
         return job
 
     def pause_job(self, *, user_id: str, job_id: str) -> JobSpec:
@@ -128,6 +137,10 @@ class JobStore:
             return False
         jobs.pop(str(job_id), None)
         self._write_jobs(user_id, data)
+        try:
+            self._delete_job_timed_signal(job_id=str(job_id))
+        except Exception:
+            pass
         return True
 
     def due_jobs(self, *, user_id: str, now: datetime | None = None) -> list[JobSpec]:
@@ -217,6 +230,53 @@ class JobStore:
         temp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
         temp.replace(path)
 
+    def _sync_job_timed_signal(self, *, user_id: str, job: JobSpec) -> None:
+        if not job.enabled:
+            self._delete_job_timed_signal(job_id=job.job_id)
+            return
+        dtstart_raw = str((job.schedule or {}).get("dtstart") or "").strip()
+        if not dtstart_raw:
+            return
+        trigger_at = dtstart_raw
+        next_trigger = str(job.next_run_at or "").strip() or None
+        signal_payload = {
+            "job_id": job.job_id,
+            "user_id": str(user_id),
+            "payload_type": job.payload_type,
+            "payload": job.payload,
+            "timezone": job.timezone,
+            "name": job.name,
+            "description": job.description,
+        }
+        self._delete_job_timed_signal(job_id=job.job_id)
+        insert_timed_signal(
+            signal_id=f"job_trigger:{job.job_id}",
+            trigger_at=trigger_at,
+            next_trigger_at=next_trigger,
+            rrule=str((job.schedule or {}).get("rrule") or "").strip() or None,
+            timezone=job.timezone,
+            signal_type="job_trigger",
+            mind_layer="conscious",
+            dispatch_mode="graph",
+            job_id=job.job_id,
+            payload=signal_payload,
+            target=str(user_id),
+            origin="job_store",
+            correlation_id=job.job_id,
+        )
+
+    def _delete_job_timed_signal(self, *, job_id: str) -> None:
+        from alphonse.agent.nervous_system.paths import resolve_nervous_system_db_path
+        import sqlite3
+
+        signal_id = f"job_trigger:{str(job_id)}"
+        with sqlite3.connect(resolve_nervous_system_db_path()) as conn:
+            try:
+                conn.execute("DELETE FROM timed_signals WHERE id = ? OR job_id = ?", (signal_id, str(job_id)))
+            except sqlite3.OperationalError:
+                conn.execute("DELETE FROM timed_signals WHERE id = ?", (signal_id,))
+            conn.commit()
+
 
 def compute_next_run_at(*, schedule: dict[str, Any], timezone_name: str, after: datetime) -> str | None:
     if str(schedule.get("type") or "").strip().lower() != "rrule":
@@ -283,4 +343,3 @@ def _now_utc() -> datetime:
 
 def compute_retry_time(*, now: datetime, backoff_seconds: int) -> str:
     return (now + timedelta(seconds=max(1, int(backoff_seconds or 1)))).isoformat()
-

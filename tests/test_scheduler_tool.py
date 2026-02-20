@@ -35,7 +35,14 @@ def test_normalize_spanish_tomorrow_time_expression_with_llm() -> None:
 
 
 def test_create_reminder_accepts_spanish_relative_time(monkeypatch) -> None:
-    monkeypatch.setattr(scheduler_module, "insert_timed_signal", lambda **_kwargs: "tsig_123")
+    captured: dict[str, object] = {}
+
+    def _capture_insert(**kwargs):  # noqa: ANN003
+        captured.update(kwargs)
+        return "tsig_123"
+
+    monkeypatch.setattr(scheduler_module, "insert_timed_signal", _capture_insert)
+    monkeypatch.setattr(scheduler_module, "create_prompt_artifact", lambda **_kwargs: "pa_test")
     tool = SchedulerTool(llm_client=_FixedIsoLlm())
     result = tool.create_reminder(
         for_whom="yo",
@@ -47,6 +54,9 @@ def test_create_reminder_accepts_spanish_relative_time(monkeypatch) -> None:
     assert result["reminder_id"] == "tsig_123"
     assert result["delivery_target"] == "8553589429"
     assert result["original_time_expression"] == "mañana a las 7:30am"
+    assert captured.get("mind_layer") == "conscious"
+    assert captured.get("dispatch_mode") == "graph"
+    assert captured.get("prompt_artifact_id") == "pa_test"
 
 
 def test_create_reminder_raises_structured_error_on_missing_message() -> None:
