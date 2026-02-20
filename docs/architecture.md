@@ -70,3 +70,9 @@ For a reusable implementation template (adapter, policy, ToolSpec/runtime tool w
 deterministic auth gates, timed follow-ups, and testing), see:
 
 - `docs/channel_integration_blueprint.md`
+
+## Observability and Harness
+
+For graph-layer observability design, retention policy, and operational diagnostics:
+
+- `docs/observability_and_harness.md`

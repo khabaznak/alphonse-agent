@@ -3,6 +3,8 @@ from __future__ import annotations
 import logging
 from typing import Any, Callable
 
+from alphonse.agent.cortex.task_mode.observability import log_task_event
+
 logger = logging.getLogger(__name__)
 
 
@@ -42,6 +44,13 @@ def progress_critic_node(
             corr,
             cycle,
         )
+        log_task_event(
+            logger=logger,
+            state=state,
+            task_state=task_state,
+            node="progress_critic_node",
+            event="graph.task.completed",
+        )
         return {"task_state": task_state}
 
     if status in {"done", "waiting_user", "failed"}:
@@ -50,6 +59,16 @@ def progress_critic_node(
             corr,
             status,
             cycle,
+        )
+        log_task_event(
+            logger=logger,
+            state=state,
+            task_state=task_state,
+            node="progress_critic_node",
+            event="graph.critic.skipped",
+            status=status,
+            cycle=cycle,
+            level="debug",
         )
         return {"task_state": task_state}
 
@@ -84,6 +103,16 @@ def progress_critic_node(
             str((current or {}).get("step_id") or ""),
             int((evaluation or {}).get("same_signature_failures") or 0),
         )
+        log_task_event(
+            logger=logger,
+            state=state,
+            task_state=task_state,
+            node="progress_critic_node",
+            event="graph.task.failed",
+            level="warning",
+            step_id=str((current or {}).get("step_id") or ""),
+            same_signature_failures=int((evaluation or {}).get("same_signature_failures") or 0),
+        )
         return {"task_state": task_state}
 
     if cycle < progress_check_cycle_threshold:
@@ -115,6 +144,14 @@ def progress_critic_node(
         corr,
         cycle,
         str((current or {}).get("step_id") or ""),
+    )
+    log_task_event(
+        logger=logger,
+        state=state,
+        task_state=task_state,
+        node="progress_critic_node",
+        event="graph.critic.ask_user",
+        step_id=str((current or {}).get("step_id") or ""),
     )
     return {"task_state": task_state}
 

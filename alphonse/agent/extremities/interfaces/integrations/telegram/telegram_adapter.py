@@ -47,6 +47,11 @@ class TelegramAdapter(IntegrationAdapter):
             self._allowed_chat_ids = {int(chat_id) for chat_id in allowed}
 
         self._poll_interval_sec = float(config.get("poll_interval_sec", 1.0))
+        self._poll_summary_interval_sec = float(config.get("poll_summary_interval_sec", 300.0))
+        self._poll_count = 0
+        self._empty_poll_count = 0
+        self._updates_received = 0
+        self._last_poll_summary_at = time.monotonic()
 
     @property
     def id(self) -> str:  # type: ignore[override]
@@ -153,13 +158,41 @@ class TelegramAdapter(IntegrationAdapter):
                 self._handle_update(update)
             if max_update_id is not None:
                 self._last_update_id = max_update_id
-            logger.info(
-                "TelegramAdapter getUpdates offset=%s returned=%s max_update_id=%s",
-                offset,
-                len(updates),
-                max_update_id,
-            )
+            returned_count = len(updates)
+            self._poll_count += 1
+            self._updates_received += returned_count
+            if returned_count == 0:
+                self._empty_poll_count += 1
+                logger.debug(
+                    "TelegramAdapter getUpdates offset=%s returned=0 max_update_id=%s",
+                    offset,
+                    max_update_id,
+                )
+            else:
+                logger.info(
+                    "TelegramAdapter getUpdates offset=%s returned=%s max_update_id=%s",
+                    offset,
+                    returned_count,
+                    max_update_id,
+                )
+            self._maybe_log_poll_summary()
             time.sleep(self._poll_interval_sec)
+
+    def _maybe_log_poll_summary(self) -> None:
+        now = time.monotonic()
+        if now - self._last_poll_summary_at < self._poll_summary_interval_sec:
+            return
+        logger.info(
+            "TelegramAdapter poll summary polls=%s empty_polls=%s updates_received=%s interval_seconds=%.1f",
+            self._poll_count,
+            self._empty_poll_count,
+            self._updates_received,
+            self._poll_summary_interval_sec,
+        )
+        self._last_poll_summary_at = now
+        self._poll_count = 0
+        self._empty_poll_count = 0
+        self._updates_received = 0
 
     def _fetch_updates(self, offset: int) -> list[dict[str, Any]] | None:
         endpoint = "getUpdates"

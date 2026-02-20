@@ -13,6 +13,7 @@ from alphonse.agent.cognition.tool_schemas import planner_tool_schemas
 from alphonse.agent.cortex.transitions import emit_transition_event
 from alphonse.agent.cortex.task_mode.progress_critic import progress_critic_node as _progress_critic_node_impl
 from alphonse.agent.cortex.task_mode.progress_critic import route_after_progress_critic as _route_after_progress_critic_impl
+from alphonse.agent.cortex.task_mode.observability import log_task_event
 from alphonse.agent.cortex.task_mode.state import build_default_task_state
 from alphonse.agent.cortex.task_mode.types import NextStepProposal
 from alphonse.agent.cortex.task_mode.types import TraceEvent
@@ -162,6 +163,17 @@ def build_next_step_node(*, tool_registry: Any) -> Callable[[dict[str, Any]], di
             _proposal_summary(proposal),
             parse_failed,
         )
+        log_task_event(
+            logger=logger,
+            state=state,
+            task_state=task_state,
+            node="next_step_node",
+            event="graph.next_step.proposed",
+            step_id=step_id,
+            kind=str(proposal.get("kind") or ""),
+            parse_failed=parse_failed,
+            summary=_proposal_summary(proposal),
+        )
         if parse_failed:
             return {"task_state": task_state}
         return {"task_state": task_state}
@@ -203,6 +215,15 @@ def validate_step_node(state: dict[str, Any], *, tool_registry: Any) -> dict[str
             str((current or {}).get("step_id") or ""),
             str((proposal or {}).get("kind") if isinstance(proposal, dict) else ""),
         )
+        log_task_event(
+            logger=logger,
+            state=state,
+            task_state=task_state,
+            node="validate_step_node",
+            event="graph.step.validated",
+            step_id=str((current or {}).get("step_id") or ""),
+            kind=str((proposal or {}).get("kind") if isinstance(proposal, dict) else ""),
+        )
         return {"task_state": task_state}
 
     attempts = int(task_state.get("repair_attempts") or 0) + 1
@@ -228,6 +249,17 @@ def validate_step_node(state: dict[str, Any], *, tool_registry: Any) -> dict[str
         str((current or {}).get("step_id") or ""),
         str(error.get("reason") or ""),
         attempts,
+    )
+    log_task_event(
+        logger=logger,
+        state=state,
+        task_state=task_state,
+        node="validate_step_node",
+        event="graph.step.validation_failed",
+        level="warning",
+        step_id=str((current or {}).get("step_id") or ""),
+        reason=str(error.get("reason") or ""),
+        repair_attempts=attempts,
     )
     return {"task_state": task_state}
 
@@ -288,6 +320,14 @@ def execute_step_node(state: dict[str, Any], *, tool_registry: Any) -> dict[str,
             str((current or {}).get("step_id") or ""),
             question,
         )
+        log_task_event(
+            logger=logger,
+            state=state,
+            task_state=task_state,
+            node="execute_step_node",
+            event="graph.step.ask_user",
+            step_id=str((current or {}).get("step_id") or ""),
+        )
         return {"task_state": task_state}
 
     if kind == "finish":
@@ -311,6 +351,14 @@ def execute_step_node(state: dict[str, Any], *, tool_registry: Any) -> dict[str,
             "task_mode execute finish correlation_id=%s step_id=%s",
             correlation_id,
             str((current or {}).get("step_id") or ""),
+        )
+        log_task_event(
+            logger=logger,
+            state=state,
+            task_state=task_state,
+            node="execute_step_node",
+            event="graph.task.completed",
+            step_id=str((current or {}).get("step_id") or ""),
         )
         return {"task_state": task_state}
 
@@ -370,6 +418,18 @@ def execute_step_node(state: dict[str, Any], *, tool_registry: Any) -> dict[str,
                 error_code,
                 error_message,
             )
+            log_task_event(
+                logger=logger,
+                state=state,
+                task_state=task_state,
+                node="execute_step_node",
+                event="graph.tool.failed",
+                level="warning",
+                step_id=step_id,
+                tool=tool_name,
+                error_code=error_code,
+                error_message=error_message,
+            )
             return {"task_state": task_state}
         task_state["status"] = "running"
         if isinstance(current, dict):
@@ -387,6 +447,15 @@ def execute_step_node(state: dict[str, Any], *, tool_registry: Any) -> dict[str,
             correlation_id,
             step_id,
             tool_name,
+        )
+        log_task_event(
+            logger=logger,
+            state=state,
+            task_state=task_state,
+            node="execute_step_node",
+            event="graph.tool.succeeded",
+            step_id=step_id,
+            tool=tool_name,
         )
         return {"task_state": task_state}
     except Exception as exc:
@@ -434,6 +503,14 @@ def update_state_node(state: dict[str, Any]) -> dict[str, Any]:
         int(task_state.get("cycle_index") or 0),
         str(task_state.get("status") or ""),
         bool(outcome),
+    )
+    log_task_event(
+        logger=logger,
+        state=state,
+        task_state=task_state,
+        node="update_state_node",
+        event="graph.state.updated",
+        has_outcome=bool(outcome),
     )
     return {"task_state": task_state}
 

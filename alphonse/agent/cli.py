@@ -24,6 +24,7 @@ from alphonse.agent.heart import Heart, HeartConfig, SHUTDOWN
 from alphonse.agent.nervous_system.ddfsm import DDFSM, DDFSMConfig
 from alphonse.agent.nervous_system.migrate import apply_schema
 from alphonse.agent.nervous_system.paths import resolve_nervous_system_db_path
+from alphonse.agent.nervous_system.paths import resolve_observability_db_path
 from alphonse.agent.nervous_system.senses.bus import Bus, Signal
 from alphonse.agent.nervous_system.senses.timer import TimerSense
 from alphonse.agent.nervous_system.seed import apply_seed
@@ -145,6 +146,19 @@ def build_parser() -> argparse.ArgumentParser:
     debug_wiring = debug_sub.add_parser(
         "wiring", help="Show DB path and timed signals API status"
     )
+
+    trace_parser = sub.add_parser("trace", help="Inspect observability traces")
+    trace_sub = trace_parser.add_subparsers(dest="trace_command", required=True)
+    trace_show = trace_sub.add_parser("show", help="Show events for a correlation id")
+    trace_show.add_argument("correlation_id", help="Correlation id")
+    trace_show.add_argument("--limit", type=int, default=100, help="Max events")
+    trace_show.add_argument("--json", action="store_true", dest="json_output")
+    trace_recent = trace_sub.add_parser("recent", help="List recent trace events")
+    trace_recent.add_argument("--limit", type=int, default=50, help="Max events")
+    trace_recent.add_argument("--event", default=None, help="Optional event filter")
+    trace_recent.add_argument("--level", default=None, help="Optional level filter")
+    trace_recent.add_argument("--json", action="store_true", dest="json_output")
+    trace_sub.add_parser("maintenance", help="Run observability retention maintenance")
 
     agent_parser = sub.add_parser("agent", help="Manage agent process (REPL-only)")
     agent_sub = agent_parser.add_subparsers(dest="agent_command", required=True)
@@ -591,6 +605,9 @@ def _dispatch_command(
     if args.command == "debug":
         _command_debug(args)
         return
+    if args.command == "trace":
+        _command_trace(args)
+        return
     if args.command == "agent":
         _command_agent(args, supervisor=supervisor)
         return
@@ -791,6 +808,102 @@ def _command_debug_wiring() -> None:
             print(f"API timed signals count: {len(timed_signals)}")
     except Exception as exc:
         print(f"API timed signals error: {exc}")
+
+
+def _command_trace(args: argparse.Namespace) -> None:
+    from alphonse.agent.observability.store import run_maintenance
+
+    db_path = resolve_observability_db_path()
+    if args.trace_command == "maintenance":
+        run_maintenance(force=True)
+        print(f"Observability maintenance completed. db_path={db_path}")
+        return
+
+    if not db_path.exists():
+        print(f"Observability DB not found: {db_path}")
+        return
+
+    if args.trace_command == "show":
+        rows = _query_trace_events(
+            correlation_id=args.correlation_id,
+            limit=args.limit,
+        )
+        _print_trace_rows(rows, json_output=bool(args.json_output))
+        return
+
+    if args.trace_command == "recent":
+        rows = _query_trace_events(
+            correlation_id=None,
+            limit=args.limit,
+            event=args.event,
+            level=args.level,
+        )
+        _print_trace_rows(rows, json_output=bool(args.json_output))
+        return
+
+
+def _query_trace_events(
+    *,
+    correlation_id: str | None,
+    limit: int,
+    event: str | None = None,
+    level: str | None = None,
+) -> list[dict[str, object]]:
+    db_path = resolve_observability_db_path()
+    where_parts: list[str] = []
+    params: list[object] = []
+    if correlation_id:
+        where_parts.append("correlation_id = ?")
+        params.append(correlation_id)
+    if event:
+        where_parts.append("event = ?")
+        params.append(event)
+    if level:
+        where_parts.append("level = ?")
+        params.append(level)
+    where_sql = f"WHERE {' AND '.join(where_parts)}" if where_parts else ""
+    effective_limit = max(1, int(limit))
+    query = (
+        "SELECT created_at, level, event, correlation_id, channel, user_id, node, cycle, status, tool, error_code "
+        f"FROM trace_events {where_sql} "
+        "ORDER BY created_at DESC LIMIT ?"
+    )
+    params.append(effective_limit)
+    with sqlite3.connect(db_path) as conn:
+        rows = conn.execute(query, tuple(params)).fetchall()
+    result: list[dict[str, object]] = []
+    for row in rows:
+        result.append(
+            {
+                "created_at": row[0],
+                "level": row[1],
+                "event": row[2],
+                "correlation_id": row[3],
+                "channel": row[4],
+                "user_id": row[5],
+                "node": row[6],
+                "cycle": row[7],
+                "status": row[8],
+                "tool": row[9],
+                "error_code": row[10],
+            }
+        )
+    return result
+
+
+def _print_trace_rows(rows: list[dict[str, object]], *, json_output: bool) -> None:
+    if json_output:
+        print(json.dumps(rows, indent=2, ensure_ascii=True))
+        return
+    if not rows:
+        print("No trace events found.")
+        return
+    for row in rows:
+        print(
+            f"{row.get('created_at')} | {row.get('level')} | {row.get('event')} | "
+            f"corr={row.get('correlation_id')} | node={row.get('node')} | cycle={row.get('cycle')} | "
+            f"status={row.get('status')} | tool={row.get('tool')} | error={row.get('error_code')}"
+        )
 
 
 def _command_routing(args: argparse.Namespace) -> None:
