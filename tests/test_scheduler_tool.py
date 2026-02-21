@@ -1,22 +1,8 @@
 from __future__ import annotations
 
-import alphonse.agent.tools.scheduler as scheduler_module
-from alphonse.agent.tools.scheduler import SchedulerTool
-from alphonse.agent.tools.scheduler import SchedulerToolError
-
-
-def test_create_time_event_trigger_keeps_input_expression() -> None:
-    tool = SchedulerTool()
-    trigger = tool.create_time_event_trigger(time="2026-02-14T12:00:00+00:00", timezone_name="UTC")
-    assert trigger.get("type") == "time"
-    assert str(trigger.get("time")) == "2026-02-14T12:00:00+00:00"
-
-
-def test_create_time_event_trigger_allows_natural_language_expression() -> None:
-    tool = SchedulerTool()
-    trigger = tool.create_time_event_trigger(time="in 10min", timezone_name="UTC")
-    assert trigger.get("type") == "time"
-    assert str(trigger.get("time")) == "in 10min"
+import alphonse.agent.tools.scheduler_tool as scheduler_module
+from alphonse.agent.tools.scheduler_tool import SchedulerTool
+from alphonse.agent.tools.scheduler_tool import SchedulerToolError
 
 
 class _FixedIsoLlm:
@@ -37,11 +23,12 @@ def test_normalize_spanish_tomorrow_time_expression_with_llm() -> None:
 def test_create_reminder_accepts_spanish_relative_time(monkeypatch) -> None:
     captured: dict[str, object] = {}
 
-    def _capture_insert(**kwargs):  # noqa: ANN003
+    def _capture_schedule_event(self, **kwargs):  # noqa: ANN001, ANN003
+        _ = self
         captured.update(kwargs)
         return "tsig_123"
 
-    monkeypatch.setattr(scheduler_module, "insert_timed_signal", _capture_insert)
+    monkeypatch.setattr(scheduler_module.SchedulerService, "schedule_event", _capture_schedule_event)
     monkeypatch.setattr(scheduler_module, "create_prompt_artifact", lambda **_kwargs: "pa_test")
     tool = SchedulerTool(llm_client=_FixedIsoLlm())
     result = tool.create_reminder(
@@ -52,7 +39,7 @@ def test_create_reminder_accepts_spanish_relative_time(monkeypatch) -> None:
         channel_target="8553589429",
     )
     assert result["reminder_id"] == "tsig_123"
-    assert result["delivery_target"] == "8553589429"
+    assert result["delivery_target"] == "yo"
     assert result["original_time_expression"] == "mañana a las 7:30am"
     assert "signal_type" not in captured
 
@@ -99,11 +86,12 @@ def test_create_reminder_raises_structured_error_on_unresolvable_time() -> None:
 def test_create_reminder_preserves_quoted_message_as_verbatim(monkeypatch) -> None:
     captured: dict[str, object] = {}
 
-    def _capture_insert(**kwargs):  # noqa: ANN003
+    def _capture_schedule_event(self, **kwargs):  # noqa: ANN001, ANN003
+        _ = self
         captured.update(kwargs)
         return "tsig_q1"
 
-    monkeypatch.setattr(scheduler_module, "insert_timed_signal", _capture_insert)
+    monkeypatch.setattr(scheduler_module.SchedulerService, "schedule_event", _capture_schedule_event)
     monkeypatch.setattr(scheduler_module, "create_prompt_artifact", lambda **_kwargs: "pa_test")
     tool = SchedulerTool(llm_client=_FixedIsoLlm())
     result = tool.create_reminder(

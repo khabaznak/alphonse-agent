@@ -18,7 +18,7 @@ from alphonse.agent.tools.scratchpad_tools import ScratchpadForkTool
 from alphonse.agent.tools.scratchpad_tools import ScratchpadListTool
 from alphonse.agent.tools.scratchpad_tools import ScratchpadReadTool
 from alphonse.agent.tools.scratchpad_tools import ScratchpadSearchTool
-from alphonse.agent.tools.scheduler import SchedulerTool
+from alphonse.agent.tools.scheduler_tool import SchedulerTool
 from alphonse.agent.tools.stt_transcribe import SttTranscribeTool
 from alphonse.agent.tools.terminal_execute_tool import TerminalExecuteTool
 from alphonse.agent.tools.telegram_files import AnalyzeTelegramImageTool
@@ -82,7 +82,6 @@ def build_default_tool_registry() -> ToolRegistry:
     user_remove_from_contact = UserRemoveFromContactTool()
     registry.register("getTime", clock)
     registry.register("createReminder", scheduler)
-    registry.register("createTimeEventTrigger", scheduler)
     registry.register("local_audio_output.speak", local_audio_output)
     registry.register("stt_transcribe", stt_transcribe)
     registry.register("telegramGetFileMeta", telegram_get_file)
@@ -92,7 +91,6 @@ def build_default_tool_registry() -> ToolRegistry:
     registry.register("vision_analyze_image", vision_analyze_image)
     # Internal aliases kept for compatibility.
     registry.register("clock", clock)
-    registry.register("schedule_event", scheduler)
     registry.register("python_subprocess", python_subprocess)
     registry.register("terminal_execute", terminal_execute)
     registry.register("scratchpad_create", scratchpad_create)

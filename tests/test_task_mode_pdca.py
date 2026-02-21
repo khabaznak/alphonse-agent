@@ -19,7 +19,7 @@ from alphonse.agent.services.scratchpad_service import ScratchpadService
 from alphonse.agent.tools.registry import ToolRegistry
 from alphonse.agent.tools.registry import build_default_tool_registry
 from alphonse.agent.tools.scratchpad_tools import ScratchpadCreateTool
-from alphonse.agent.tools.scheduler import SchedulerToolError
+from alphonse.agent.tools.scheduler_tool import SchedulerToolError
 
 
 class _QueuedLlm:

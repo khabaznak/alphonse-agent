@@ -37,7 +37,7 @@ from alphonse.agent.lan.pairing_store import approve_pairing, deny_pairing, get_
 from alphonse.config import settings
 from alphonse.agent.io import NormalizedOutboundMessage, get_io_registry
 from alphonse.agent.policy.engine import PolicyDecision, PolicyEngine
-from alphonse.agent.tools.scheduler import SchedulerTool
+from alphonse.agent.tools.scheduler_tool import SchedulerTool
 
 logger = logging.getLogger(__name__)
 

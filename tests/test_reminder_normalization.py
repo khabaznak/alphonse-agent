@@ -12,7 +12,7 @@ from alphonse.agent.nervous_system.senses.timer import (
     _allowed_lag_seconds,
 )
 from alphonse.agent.nervous_system.timed_store import list_timed_signals
-from alphonse.agent.tools.scheduler import SchedulerTool
+from alphonse.agent.tools.scheduler_tool import SchedulerTool
 
 
 def _parse_iso(value: str) -> datetime:
@@ -54,7 +54,7 @@ def test_create_reminder_normalizes_fire_at_and_delivery_target(
         (
             row
             for row in rows
-            if str(row.get("target") or "") == "8553589429"
+            if str(row.get("target") or "") == "me"
             and str(((row.get("payload") or {}).get("prompt") or "")).strip()
         ),
         None,
@@ -72,8 +72,8 @@ def test_create_reminder_normalizes_fire_at_and_delivery_target(
     parsed_fire = _parse_iso(fire_at)
     now = datetime.now(timezone.utc)
 
-    assert target == "8553589429"
-    assert delivery_target == "8553589429"
+    assert target == "me"
+    assert delivery_target == "me"
     assert parsed_trigger == parsed_fire
     assert now <= parsed_trigger <= now + timedelta(minutes=2)
 
@@ -106,7 +106,7 @@ def test_timer_dispatches_when_now_gte_fire_at(
         assert signal is not None
         assert signal.type == "timed_signal.fired"
         payload = signal.payload if isinstance(signal.payload, dict) else {}
-        assert str(payload.get("target") or "") == "8553589429"
+        assert str(payload.get("target") or "") == "current_conversation"
         inner = payload.get("payload") if isinstance(payload.get("payload"), dict) else {}
         assert str(inner.get("prompt") or "").strip()
     finally:

@@ -17,8 +17,8 @@ from alphonse.agent.cortex.task_mode.validate_step import validate_step_node_imp
 from alphonse.agent.cortex.task_mode.types import NextStepProposal
 from alphonse.agent.cortex.task_mode.types import TraceEvent
 from alphonse.agent.session.day_state import render_recent_conversation_block
-from alphonse.agent.tools.scheduler import SchedulerTool
-from alphonse.agent.tools.scheduler import SchedulerToolError
+from alphonse.agent.tools.scheduler_tool import SchedulerTool
+from alphonse.agent.tools.scheduler_tool import SchedulerToolError
 
 logger = logging.getLogger(__name__)
 
@@ -498,11 +498,6 @@ def _execute_tool_call(
         if isinstance(now, datetime):
             return now.isoformat()
         return now
-
-    if tool_name == "createTimeEventTrigger":
-        if tool is None or not callable(getattr(tool, "create_time_event_trigger", None)):
-            raise RuntimeError("createTimeEventTrigger unavailable")
-        return tool.create_time_event_trigger(time=str(args.get("time") or ""))
 
     if tool_name == "createReminder":
         if tool is None or not callable(getattr(tool, "create_reminder", None)):

@@ -7,7 +7,8 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from alphonse.agent.nervous_system.prompt_artifacts import create_prompt_artifact
-from alphonse.agent.nervous_system.timed_store import insert_timed_signal
+from alphonse.agent.services.scheduler_service import SchedulerService
+from alphonse.config import settings
 
 
 class SchedulerToolError(Exception):
@@ -37,6 +38,7 @@ class SchedulerToolError(Exception):
 @dataclass(frozen=True)
 class SchedulerTool:
     llm_client: Any | None = None
+    scheduler: SchedulerService | None = None
 
     def create_reminder(
         self,
@@ -76,20 +78,52 @@ class SchedulerTool:
             timezone_name=resolved_timezone,
             llm_client=self.llm_client,
         )
-        delivery_target = _normalize_delivery_target(
-            for_whom=whom_raw,
-            channel_target=channel_target,
+        _ = channel_target
+        delivery_target = whom_raw
+        trigger_time = fire_at
+        source_instruction = str(reminder_message or "").strip()
+        message_mode, message_text = _build_reminder_message_payload(
+            llm_client=self.llm_client,
+            source_instruction=source_instruction,
         )
-        schedule_id = self.schedule_reminder_event(
-            message=reminder_message,
-            to=delivery_target,
-            from_=str(from_ or "assistant"),
-            event_trigger={
+        payload = {
+            "message": message_text,
+            "message_text": message_text,
+            "message_mode": message_mode,
+            "reminder_text_raw": source_instruction,
+            "to": delivery_target,
+            "from": str(from_ or "assistant"),
+            "created_at": datetime.now(dt_timezone.utc).isoformat(),
+            "trigger_at": trigger_time,
+            "fire_at": trigger_time,
+            "delivery_target": delivery_target,
+            "event_trigger": {
                 "type": "time",
-                "time": fire_at,
+                "time": trigger_time,
                 "original_time_expression": trigger_expr,
             },
+        }
+        internal_prompt = _you_just_remembered_paraphrase(
+            llm_client=self.llm_client,
+            source_instruction=message_text,
+        )
+        artifact_id = create_prompt_artifact(
+            user_id=str(delivery_target or "default"),
+            source_instruction=source_instruction,
+            agent_internal_prompt=internal_prompt,
+            language=None,
+            artifact_kind="reminder",
+        )
+        payload["source_instruction"] = source_instruction
+        payload["agent_internal_prompt"] = internal_prompt
+        payload["prompt"] = internal_prompt
+        payload["prompt_artifact_id"] = artifact_id
+        schedule_id = self._schedule_timed_signal(
+            trigger_time=trigger_time,
             timezone_name=resolved_timezone,
+            payload=payload,
+            target=delivery_target,
+            origin=str(from_ or "assistant"),
             correlation_id=correlation_id,
         )
         return {
@@ -100,90 +134,7 @@ class SchedulerTool:
             "original_time_expression": trigger_expr,
         }
 
-    def create_time_event_trigger(
-        self,
-        *,
-        time: str,
-        timezone_name: str | None = None,
-    ) -> dict[str, str]:
-        _ = timezone_name
-        value = str(time or "").strip()
-        if not value:
-            raise SchedulerToolError(
-                code="missing_time",
-                message="time is required",
-                retryable=False,
-            )
-        return {"type": "time", "time": value}
-
-    def schedule_reminder_event(
-        self,
-        *,
-        message: str,
-        to: str,
-        from_: str,
-        event_trigger: dict[str, Any],
-        timezone_name: str,
-        correlation_id: str | None = None,
-    ) -> str:
-        trigger_type = str(event_trigger.get("type") or "").strip().lower()
-        if trigger_type != "time":
-            raise SchedulerToolError(
-                code="unsupported_event_trigger",
-                message="only time event triggers are supported",
-                retryable=False,
-                details={"event_trigger_type": trigger_type},
-            )
-        trigger_time = str(event_trigger.get("time") or "").strip()
-        if not trigger_time:
-            raise SchedulerToolError(
-                code="missing_event_trigger_time",
-                message="event trigger time is required",
-                retryable=False,
-            )
-        source_instruction = str(message or "").strip()
-        message_mode, message_text = _build_reminder_message_payload(
-            llm_client=self.llm_client,
-            source_instruction=source_instruction,
-        )
-        payload = {
-            "message": message_text,
-            "message_text": message_text,
-            "message_mode": message_mode,
-            "reminder_text_raw": source_instruction,
-            "to": to,
-            "from": from_,
-            "created_at": datetime.now(dt_timezone.utc).isoformat(),
-            "trigger_at": trigger_time,
-            "fire_at": trigger_time,
-            "delivery_target": to,
-            "event_trigger": event_trigger,
-        }
-        internal_prompt = _you_just_remembered_paraphrase(
-            llm_client=self.llm_client,
-            source_instruction=message_text,
-        )
-        artifact_id = create_prompt_artifact(
-            user_id=str(to or "default"),
-            source_instruction=source_instruction,
-            agent_internal_prompt=internal_prompt,
-            language=None,
-            artifact_kind="reminder",
-        )
-        payload["source_instruction"] = source_instruction
-        payload["agent_internal_prompt"] = internal_prompt
-        payload["prompt"] = internal_prompt
-        payload["prompt_artifact_id"] = artifact_id
-        return self.schedule_event(
-            trigger_time=trigger_time,
-            timezone_name=timezone_name,
-            payload=payload,
-            target=to,
-            origin=from_,
-            correlation_id=correlation_id,
-        )
-
-    def schedule_event(
+    def _schedule_timed_signal(
         self,
         *,
         trigger_time: str,
@@ -193,74 +144,33 @@ class SchedulerTool:
         origin: str | None = None,
         correlation_id: str | None = None,
     ) -> str:
-        event_payload = dict(payload or {})
-        event_payload.setdefault("created_at", datetime.now(dt_timezone.utc).isoformat())
-        event_payload.setdefault("trigger_at", trigger_time)
-        event_payload.setdefault("fire_at", trigger_time)
-        event_payload.setdefault("delivery_target", str(target) if target is not None else None)
-        return insert_timed_signal(
-            trigger_at=trigger_time,
-            timezone=timezone_name,
-            payload=event_payload,
-            target=str(target) if target is not None else None,
-            origin=origin,
-            correlation_id=correlation_id,
-        )
-
-    # Compatibility helper while reminder payloads are still being migrated.
-    def schedule_reminder(
-        self,
-        *,
-        reminder_text: str,
-        trigger_time: str,
-        chat_id: str,
-        channel_type: str,
-        actor_person_id: str | None,
-        intent_evidence: dict[str, Any],
-        correlation_id: str,
-        timezone_name: str,
-        locale_hint: str | None,
-    ) -> str:
-        payload = {
-            "prompt": reminder_text,
-            "message": reminder_text,
-            "reminder_text_raw": reminder_text,
-            "person_id": actor_person_id or chat_id,
-            "chat_id": chat_id,
-            "origin_channel": channel_type,
-            "locale_hint": locale_hint,
-            "intent_evidence": intent_evidence,
-        }
-        return self.schedule_event(
+        service = self.scheduler or SchedulerService()
+        return service.schedule_event(
             trigger_time=trigger_time,
             timezone_name=timezone_name,
             payload=payload,
-            target=str(actor_person_id or chat_id),
-            origin=channel_type,
+            target=target,
+            origin=origin,
             correlation_id=correlation_id,
         )
 
 
 def _resolve_timezone_name(timezone_name: str | None) -> str:
     candidate = str(timezone_name or "").strip()
-    if not candidate:
-        return "America/Mexico_City"
-    try:
-        ZoneInfo(candidate)
-        return candidate
-    except Exception:
-        return "America/Mexico_City"
-
-
-def _normalize_delivery_target(*, for_whom: str, channel_target: str | None) -> str:
-    value = str(for_whom or "").strip()
-    norm = value.lower()
-    if norm in {"me", "yo", "current_conversation"}:
-        channel = str(channel_target or "").strip()
-        if channel:
-            return channel
-    return value
-
+    if candidate:
+        try:
+            ZoneInfo(candidate)
+            return candidate
+        except Exception:
+            pass
+    fallback = str(settings.get_timezone() or "").strip()
+    if fallback:
+        try:
+            ZoneInfo(fallback)
+            return fallback
+        except Exception:
+            pass
+    return "UTC"
 
 def _normalize_time_expression_to_iso(*, expression: str, timezone_name: str, llm_client: Any | None = None) -> str:
     raw = str(expression or "").strip()

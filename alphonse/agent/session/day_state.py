@@ -351,8 +351,6 @@ def _last_action_summary(
         return "Fetched current time."
     if tool == "createReminder":
         return "Created a reminder."
-    if tool == "createTimeEventTrigger":
-        return "Created a time trigger."
     if tool == "stt_transcribe":
         return "Transcribed an audio asset."
     if tool == "python_subprocess":
@@ -370,8 +368,6 @@ def _last_action_summary(
                 return "Fetched current time."
             if tool == "createReminder":
                 return "Created a reminder."
-            if tool == "createTimeEventTrigger":
-                return "Created a time trigger."
     status = str(step.get("status") or "").strip().lower()
     if status == "waiting_user":
         return f"Waiting on user after {tool}."
