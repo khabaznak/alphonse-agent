@@ -44,13 +44,17 @@ def test_telegram_get_file_meta_and_download(monkeypatch, tmp_path: Path) -> Non
     meta_tool = telegram_files.TelegramGetFileMetaTool()
     meta = meta_tool.execute(file_id="f-1")
     assert meta["status"] == "ok"
-    assert meta["file_path"] == "voice/file.ogg"
+    meta_payload = meta.get("result")
+    assert isinstance(meta_payload, dict)
+    assert meta_payload.get("file_path") == "voice/file.ogg"
 
     dl_tool = telegram_files.TelegramDownloadFileTool()
     dl = dl_tool.execute(file_id="f-1")
     assert dl["status"] == "ok"
-    assert dl["sandbox_alias"] == "telegram_files"
-    rel = str(dl["relative_path"])
+    dl_payload = dl.get("result")
+    assert isinstance(dl_payload, dict)
+    assert dl_payload.get("sandbox_alias") == "telegram_files"
+    rel = str(dl_payload.get("relative_path") or "")
     saved = (tmp_path / "sandbox-root" / "telegram_files" / rel).resolve()
     assert saved.exists()
     assert saved.read_bytes() == b"fake-bytes"
@@ -75,9 +79,13 @@ def test_transcribe_and_analyze_with_ollama(monkeypatch, tmp_path: Path) -> None
 
     transcribe = telegram_files.TranscribeTelegramAudioTool().execute(file_id="f-audio")
     assert transcribe["status"] == "failed"
-    assert transcribe["error"] == "whisper_cli_not_found"
-    assert transcribe["sandbox_alias"] == "telegram_files"
-    assert transcribe.get("relative_path")
+    transcribe_error = transcribe.get("error")
+    assert isinstance(transcribe_error, dict)
+    assert transcribe_error.get("code") == "whisper_cli_not_found"
+    transcribe_details = transcribe_error.get("details")
+    assert isinstance(transcribe_details, dict)
+    assert transcribe_details.get("sandbox_alias") == "telegram_files"
+    assert transcribe_details.get("relative_path")
 
     analyze = telegram_files.AnalyzeTelegramImageTool().execute(
         file_id=None,
@@ -94,9 +102,11 @@ def test_transcribe_and_analyze_with_ollama(monkeypatch, tmp_path: Path) -> None
         },
     )
     assert analyze["status"] == "ok"
-    assert analyze["sandbox_alias"] == "telegram_files"
-    assert str(analyze.get("relative_path") or "").startswith("users/8553589429/images/")
-    assert analyze["analysis"] == "Detected a handwritten note and one receipt."
+    analyze_payload = analyze.get("result")
+    assert isinstance(analyze_payload, dict)
+    assert analyze_payload.get("sandbox_alias") == "telegram_files"
+    assert str(analyze_payload.get("relative_path") or "").startswith("users/8553589429/images/")
+    assert analyze_payload.get("analysis") == "Detected a handwritten note and one receipt."
 
 
 def test_vision_analyze_image_http_failure(monkeypatch, tmp_path: Path) -> None:
@@ -118,4 +128,6 @@ def test_vision_analyze_image_http_failure(monkeypatch, tmp_path: Path) -> None:
         relative_path="users/u1/images/sample.bin",
     )
     assert result["status"] == "failed"
-    assert result["error"] == "vision_http_500"
+    error = result.get("error")
+    assert isinstance(error, dict)
+    assert error.get("code") == "vision_http_500"

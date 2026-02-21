@@ -140,12 +140,27 @@ class _RecoverableReminder:
 class _FailingTool:
     def execute(self, **kwargs):  # noqa: ANN003
         _ = kwargs
-        return {"status": "failed", "error": "asset_not_found", "retryable": False}
+        return {
+            "status": "failed",
+            "result": None,
+            "error": {
+                "code": "asset_not_found",
+                "message": "asset_not_found",
+                "retryable": False,
+                "details": {},
+            },
+            "metadata": {"tool": "stt_transcribe"},
+        }
 
 
 class _ArgStrictTool:
-    def execute(self, *, foo: str) -> dict[str, str]:
-        return {"status": "ok", "foo": foo}
+    def execute(self, *, foo: str) -> dict[str, object]:
+        return {
+            "status": "ok",
+            "result": {"foo": foo},
+            "error": None,
+            "metadata": {"tool": "echo_tool"},
+        }
 
 
 def _build_fake_registry() -> ToolRegistry:

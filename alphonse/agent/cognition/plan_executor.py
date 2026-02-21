@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import logging
+from typing import Any, Callable
+
 from pydantic import ValidationError
 
 from alphonse.agent.cognition.narration.outbound_narration_orchestrator import (
@@ -9,10 +11,9 @@ from alphonse.agent.cognition.narration.outbound_narration_orchestrator import (
     build_default_coordinator,
 )
 from alphonse.agent.cognition.plan_execution.communication_dispatcher import CommunicationDispatcher
-from alphonse.agent.cognition.plan_execution import handlers as plan_handlers
-from alphonse.agent.cognition.plans import (
-    CortexPlan,
-)
+from alphonse.agent.cognition.plans import CortexPlan
+from alphonse.agent.tools.registry import ToolRegistry, build_default_tool_registry
+from alphonse.agent.tools.base import ensure_tool_result
 
 logger = logging.getLogger(__name__)
 
@@ -34,16 +35,40 @@ class PlanDispatchFailure:
     retryable: bool
 
 
+class ToolMap:
+    def __init__(self, *, registry: ToolRegistry) -> None:
+        self._registry = registry
+
+    def call(
+        self,
+        tool_key: str,
+        params: dict[str, Any],
+        execution_exception_handler: Callable[[Exception], None],
+        tool_call_output: Callable[[Any], None],
+    ) -> None:
+        try:
+            tool = self._registry.get(tool_key)
+            if tool is None:
+                raise RuntimeError(f"tool_not_found:{tool_key}")
+            raw = tool.execute(**dict(params or {}))
+            result = ensure_tool_result(tool_key=tool_key, value=raw)
+            tool_call_output(result)
+        except Exception as exc:
+            execution_exception_handler(exc)
+
+
 class PlanExecutor:
     def __init__(
         self,
         *,
         coordinator: DeliveryCoordinator | None = None,
         extremities: object | None = None,
+        tool_registry: ToolRegistry | None = None,
     ) -> None:
         _ = extremities
         self._coordinator = coordinator or build_default_coordinator()
         self._dispatcher = CommunicationDispatcher(coordinator=self._coordinator, logger=logger)
+        self._tool_map = ToolMap(registry=tool_registry or build_default_tool_registry())
 
     def execute(
         self, plans: list[CortexPlan], context: dict, exec_context: PlanExecutionContext
@@ -66,20 +91,61 @@ class PlanExecutor:
     def _execute_plan(
         self, plan: CortexPlan, context: dict, exec_context: PlanExecutionContext
     ) -> None:
-        handled = plan_handlers.execute_plan(
-            logger=logger,
-            plan=plan,
-            context=context,
-            exec_context=exec_context,
-            dispatch_message=self._dispatcher.dispatch_step_message,
+        tool_key = _tool_key(plan)
+        params = _plan_params(plan)
+
+        def _on_exception(exc: Exception) -> None:
+            raise exc
+
+        def _on_output(result: Any) -> None:
+            self._handle_tool_output(
+                plan=plan,
+                tool_key=tool_key,
+                params=params,
+                result=result,
+                context=context,
+                exec_context=exec_context,
+            )
+
+        self._tool_map.call(
+            tool_key=tool_key,
+            params=params,
+            execution_exception_handler=_on_exception,
+            tool_call_output=_on_output,
         )
-        if handled:
+
+    def _handle_tool_output(
+        self,
+        *,
+        plan: CortexPlan,
+        tool_key: str,
+        params: dict[str, Any],
+        result: Any,
+        context: dict[str, Any],
+        exec_context: PlanExecutionContext,
+    ) -> None:
+        if tool_key == "communicate":
+            message = str(params.get("message") or "").strip()
+            if not message:
+                raise ValueError("message_required")
+            channels = plan.channels or [exec_context.channel_type]
+            target = plan.target or exec_context.channel_target
+            for channel in channels:
+                self._dispatcher.dispatch_step_message(
+                    channel=channel,
+                    target=target,
+                    message=message,
+                    context=context,
+                    exec_context=exec_context,
+                    plan=plan,
+                )
             return
         logger.info(
-            "executor dispatch plan_id=%s step=%s outcome=noop",
+            "executor dispatch plan_id=%s step=%s outcome=tool_called",
             plan.plan_id,
-            str(plan.tool or "unknown"),
+            tool_key,
         )
+        _ = result
 
     def _dispatch_error(
         self,
@@ -122,3 +188,17 @@ def _normalize_dispatch_exception(*, plan: CortexPlan, exc: Exception) -> PlanDi
         message=str(exc) or type(exc).__name__,
         retryable=True,
     )
+
+
+def _tool_key(plan: CortexPlan) -> str:
+    return str(getattr(plan, "tool", "") or "").strip().lower()
+
+
+def _plan_params(plan: CortexPlan) -> dict[str, Any]:
+    params = getattr(plan, "parameters", None)
+    if isinstance(params, dict):
+        return dict(params)
+    payload = getattr(plan, "payload", None)
+    if isinstance(payload, dict):
+        return dict(payload)
+    return {}

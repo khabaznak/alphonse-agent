@@ -11,7 +11,9 @@ def test_subprocess_tool_requires_feature_flag(monkeypatch) -> None:
     tool = SubprocessTool()
     result = tool.execute(command="which python3")
     assert result["status"] == "failed"
-    assert result["error"] == "python_subprocess_disabled"
+    error = result.get("error")
+    assert isinstance(error, dict)
+    assert error.get("code") == "python_subprocess_disabled"
 
 
 def test_subprocess_tool_executes_allowed_command(monkeypatch) -> None:
@@ -26,8 +28,10 @@ def test_subprocess_tool_executes_allowed_command(monkeypatch) -> None:
     tool = SubprocessTool()
     result = tool.execute(command="which python3", timeout_seconds=5)
     assert result["status"] == "ok"
-    assert result["exit_code"] == 0
-    assert "/usr/bin/python3" in result["stdout"]
+    payload = result.get("result")
+    assert isinstance(payload, dict)
+    assert payload.get("exit_code") == 0
+    assert "/usr/bin/python3" in str(payload.get("stdout") or "")
 
 
 def test_subprocess_tool_blocks_disallowed_executable(monkeypatch) -> None:
@@ -35,4 +39,6 @@ def test_subprocess_tool_blocks_disallowed_executable(monkeypatch) -> None:
     tool = SubprocessTool()
     result = tool.execute(command="rm -rf /tmp/nope")
     assert result["status"] == "failed"
-    assert result["error"] == "command_not_allowed"
+    error = result.get("error")
+    assert isinstance(error, dict)
+    assert error.get("code") == "command_not_allowed"

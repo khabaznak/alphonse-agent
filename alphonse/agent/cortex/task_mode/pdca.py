@@ -16,6 +16,7 @@ from alphonse.agent.cortex.task_mode.validate_step import validate_step_node_imp
 from alphonse.agent.cortex.task_mode.types import NextStepProposal
 from alphonse.agent.cortex.task_mode.types import TraceEvent
 from alphonse.agent.session.day_state import render_recent_conversation_block
+from alphonse.agent.tools.base import ensure_tool_result
 logger = logging.getLogger(__name__)
 
 _NEXT_STEP_DEVELOPER_PROMPT = (
@@ -538,23 +539,7 @@ def _execute_tool_call(
 
 
 def _coerce_tool_result(*, tool_name: str, raw_result: Any) -> dict[str, Any]:
-    if isinstance(raw_result, dict):
-        status = str(raw_result.get("status") or "").strip().lower()
-        if status in {"ok", "executed", "failed"}:
-            error = raw_result.get("error")
-            normalized_status = "failed" if status == "failed" else "ok"
-            return {
-                "status": normalized_status,
-                "result": raw_result.get("result"),
-                "error": _coerce_error(error) if normalized_status == "failed" else None,
-                "metadata": _coerce_metadata(raw_result.get("metadata"), tool_name=tool_name),
-            }
-    return {
-        "status": "ok",
-        "result": raw_result,
-        "error": None,
-        "metadata": {"tool": tool_name},
-    }
+    return ensure_tool_result(tool_key=tool_name, value=raw_result)
 
 
 def _coerce_error(value: Any) -> dict[str, Any]:

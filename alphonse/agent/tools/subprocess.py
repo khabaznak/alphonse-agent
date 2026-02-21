@@ -40,26 +40,42 @@ class SubprocessTool:
         if not success:
             return {
                 "status": "failed",
-                "error": "subprocess_non_zero_exit",
-                "retryable": False,
-                "exit_code": int(completed.returncode or 1),
-                "stdout": _truncate_output(completed.stdout),
-                "stderr": _truncate_output(completed.stderr),
+                "result": None,
+                "error": {
+                    "code": "subprocess_non_zero_exit",
+                    "message": "subprocess returned non-zero exit",
+                    "retryable": False,
+                    "details": {
+                        "exit_code": int(completed.returncode or 1),
+                        "stdout": _truncate_output(completed.stdout),
+                        "stderr": _truncate_output(completed.stderr),
+                    },
+                },
+                "metadata": {"tool": "python_subprocess"},
             }
         return {
             "status": "ok",
-            "exit_code": int(completed.returncode or 0),
-            "stdout": _truncate_output(completed.stdout),
-            "stderr": _truncate_output(completed.stderr),
+            "result": {
+                "exit_code": int(completed.returncode or 0),
+                "stdout": _truncate_output(completed.stdout),
+                "stderr": _truncate_output(completed.stderr),
+            },
+            "error": None,
+            "metadata": {"tool": "python_subprocess"},
         }
 
 def _failed(error_code: str, *, retryable: bool, **kwargs: Any) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "status": "failed",
-        "error": str(error_code or "subprocess_failed"),
-        "retryable": bool(retryable),
+        "result": None,
+        "error": {
+            "code": str(error_code or "subprocess_failed"),
+            "message": str(error_code or "subprocess_failed"),
+            "retryable": bool(retryable),
+            "details": dict(kwargs),
+        },
+        "metadata": {"tool": "python_subprocess"},
     }
-    payload.update(kwargs)
     return payload
 
 

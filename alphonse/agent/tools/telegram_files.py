@@ -61,15 +61,17 @@ class TelegramGetFileMetaTool:
 
     def execute(self, *, file_id: str) -> dict[str, Any]:
         if not self._bot_token:
-            return {"status": "failed", "error": "telegram_bot_token_missing"}
+            return _failed("telegram_get_file_meta", "telegram_bot_token_missing")
         meta = _TelegramFileClient(self._bot_token).get_file(file_id=file_id)
-        return {
-            "status": "ok",
-            "file_id": file_id,
-            "file_path": meta.get("file_path"),
-            "file_size": meta.get("file_size"),
-            "file_unique_id": meta.get("file_unique_id"),
-        }
+        return _ok(
+            "telegram_get_file_meta",
+            {
+                "file_id": file_id,
+                "file_path": meta.get("file_path"),
+                "file_size": meta.get("file_size"),
+                "file_unique_id": meta.get("file_unique_id"),
+            },
+        )
 
 
 class TelegramDownloadFileTool:
@@ -84,7 +86,7 @@ class TelegramDownloadFileTool:
         relative_path: str | None = None,
     ) -> dict[str, Any]:
         if not self._bot_token:
-            return {"status": "failed", "error": "telegram_bot_token_missing"}
+            return _failed("telegram_download_file", "telegram_bot_token_missing")
         try:
             result = _TelegramFileClient(self._bot_token).download_file(
                 file_id=file_id,
@@ -92,9 +94,8 @@ class TelegramDownloadFileTool:
                 relative_path=relative_path,
             )
         except Exception as exc:
-            return {"status": "failed", "error": str(exc) or "download_failed"}
-        result["status"] = "ok"
-        return result
+            return _failed("telegram_download_file", str(exc) or "download_failed")
+        return _ok("telegram_download_file", result)
 
 
 class TranscribeTelegramAudioTool:
@@ -110,27 +111,27 @@ class TranscribeTelegramAudioTool:
         sandbox_alias: str = DEFAULT_SANDBOX_ALIAS,
     ) -> dict[str, Any]:
         if not self._bot_token:
-            return {"status": "failed", "error": "telegram_bot_token_missing"}
+            return _failed("transcribe_telegram_audio", "telegram_bot_token_missing")
         download = TelegramDownloadFileTool(bot_token=self._bot_token).execute(
             file_id=file_id,
             sandbox_alias=sandbox_alias,
         )
-        if download.get("status") != "ok":
+        if str(download.get("status") or "") != "ok":
             return download
-        relative_path = str(download.get("relative_path") or "").strip()
-        alias = str(download.get("sandbox_alias") or sandbox_alias or DEFAULT_SANDBOX_ALIAS).strip()
+        payload = download.get("result") if isinstance(download.get("result"), dict) else {}
+        relative_path = str(payload.get("relative_path") or "").strip()
+        alias = str(payload.get("sandbox_alias") or sandbox_alias or DEFAULT_SANDBOX_ALIAS).strip()
         if not relative_path:
-            return {"status": "failed", "error": "audio_path_missing", "retryable": False}
+            return _failed("transcribe_telegram_audio", "audio_path_missing", retryable=False)
         local_path = resolve_sandbox_path(alias=alias, relative_path=relative_path)
         whisper_cmd = shutil.which("whisper")
         if not whisper_cmd:
-            return {
-                "status": "failed",
-                "error": "whisper_cli_not_found",
-                "retryable": False,
-                "sandbox_alias": alias,
-                "relative_path": relative_path,
-            }
+                return _failed(
+                    "transcribe_telegram_audio",
+                    "whisper_cli_not_found",
+                    retryable=False,
+                    details={"sandbox_alias": alias, "relative_path": relative_path},
+                )
         try:
             language_code = _language_code(language)
             with tempfile.TemporaryDirectory(prefix="alphonse-telegram-stt-") as tmp_dir:
@@ -154,36 +155,36 @@ class TranscribeTelegramAudioTool:
                     check=False,
                 )
                 if completed.returncode != 0:
-                    return {
-                        "status": "failed",
-                        "error": "whisper_transcription_failed",
-                        "retryable": True,
-                        "sandbox_alias": alias,
-                        "relative_path": relative_path,
-                    }
+                    return _failed(
+                        "transcribe_telegram_audio",
+                        "whisper_transcription_failed",
+                        retryable=True,
+                        details={"sandbox_alias": alias, "relative_path": relative_path},
+                    )
                 payload = _read_whisper_output(Path(tmp_dir))
             text = payload.get("text") if isinstance(payload, dict) else None
             segments = payload.get("segments") if isinstance(payload, dict) else None
             normalized_segments = _normalize_segments(segments)
             if not str(text or "").strip():
-                return {
-                    "status": "failed",
-                    "error": "transcript_empty",
-                    "retryable": True,
+                return _failed(
+                    "transcribe_telegram_audio",
+                    "transcript_empty",
+                    retryable=True,
+                    details={"sandbox_alias": alias, "relative_path": relative_path},
+                )
+            return _ok(
+                "transcribe_telegram_audio",
+                {
+                    "file_id": file_id,
                     "sandbox_alias": alias,
                     "relative_path": relative_path,
-                }
-            return {
-                "status": "ok",
-                "file_id": file_id,
-                "sandbox_alias": alias,
-                "relative_path": relative_path,
-                "text": str(text or ""),
-                "segments": normalized_segments,
-                "model": self._model,
-            }
+                    "text": str(text or ""),
+                    "segments": normalized_segments,
+                    "model": self._model,
+                },
+            )
         except Exception as exc:
-            return {"status": "failed", "error": str(exc) or "transcription_failed", "retryable": True}
+            return _failed("transcribe_telegram_audio", str(exc) or "transcription_failed", retryable=True)
 
 
 class AnalyzeTelegramImageTool:
@@ -200,10 +201,10 @@ class AnalyzeTelegramImageTool:
         state: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         if not self._bot_token:
-            return {"status": "failed", "error": "telegram_bot_token_missing"}
+            return _failed("analyze_telegram_image", "telegram_bot_token_missing")
         selected_file_id = str(file_id or "").strip() or _extract_image_file_id_from_state(state)
         if not selected_file_id:
-            return {"status": "failed", "error": "telegram_image_file_id_missing"}
+            return _failed("analyze_telegram_image", "telegram_image_file_id_missing")
         user_scope = _state_user_scope(state)
         scoped_relative_path = _scoped_telegram_relative_path(
             file_id=selected_file_id,
@@ -214,27 +215,31 @@ class AnalyzeTelegramImageTool:
             sandbox_alias=sandbox_alias,
             relative_path=scoped_relative_path,
         )
-        if download.get("status") != "ok":
+        if str(download.get("status") or "") != "ok":
             return download
-        relative_path = str(download.get("relative_path") or "").strip()
-        alias = str(download.get("sandbox_alias") or sandbox_alias or DEFAULT_SANDBOX_ALIAS).strip()
+        payload = download.get("result") if isinstance(download.get("result"), dict) else {}
+        relative_path = str(payload.get("relative_path") or "").strip()
+        alias = str(payload.get("sandbox_alias") or sandbox_alias or DEFAULT_SANDBOX_ALIAS).strip()
         if not relative_path:
-            return {"status": "failed", "error": "image_path_missing"}
+            return _failed("analyze_telegram_image", "image_path_missing")
         result = self._vision.execute(
             sandbox_alias=alias,
             relative_path=relative_path,
             prompt=prompt,
         )
-        if result.get("status") != "ok":
+        if str(result.get("status") or "") != "ok":
             return result
-        return {
-            "status": "ok",
-            "file_id": selected_file_id,
-            "sandbox_alias": alias,
-            "relative_path": relative_path,
-            "analysis": result.get("analysis"),
-            "model": result.get("model"),
-        }
+        result_payload = result.get("result") if isinstance(result.get("result"), dict) else {}
+        return _ok(
+            "analyze_telegram_image",
+            {
+                "file_id": selected_file_id,
+                "sandbox_alias": alias,
+                "relative_path": relative_path,
+                "analysis": result_payload.get("analysis"),
+                "model": result_payload.get("model"),
+            },
+        )
 
 
 class VisionAnalyzeImageTool:
@@ -253,12 +258,12 @@ class VisionAnalyzeImageTool:
         alias = str(sandbox_alias or DEFAULT_SANDBOX_ALIAS).strip() or DEFAULT_SANDBOX_ALIAS
         rel = str(relative_path or "").strip()
         if not rel:
-            return {"status": "failed", "error": "image_path_missing"}
+            return _failed("vision_analyze_image", "image_path_missing")
         local_path = resolve_sandbox_path(alias=alias, relative_path=rel)
         if not local_path.exists():
-            return {"status": "failed", "error": "image_not_found"}
+            return _failed("vision_analyze_image", "image_not_found")
         if not local_path.is_file():
-            return {"status": "failed", "error": "image_not_a_file"}
+            return _failed("vision_analyze_image", "image_not_a_file")
         try:
             image_bytes = local_path.read_bytes()
             image_b64 = base64.b64encode(image_bytes).decode("ascii")
@@ -281,22 +286,24 @@ class VisionAnalyzeImageTool:
                 timeout=self._timeout_seconds,
             )
             if resp.status_code >= 400:
-                return {"status": "failed", "error": f"vision_http_{resp.status_code}"}
+                return _failed("vision_analyze_image", f"vision_http_{resp.status_code}")
             body = resp.json() if resp.content else {}
             text = ""
             if isinstance(body, dict):
                 message = body.get("message")
                 if isinstance(message, dict):
                     text = str(message.get("content") or "")
-            return {
-                "status": "ok",
-                "sandbox_alias": alias,
-                "relative_path": rel,
-                "analysis": text,
-                "model": self._model,
-            }
+            return _ok(
+                "vision_analyze_image",
+                {
+                    "sandbox_alias": alias,
+                    "relative_path": rel,
+                    "analysis": text,
+                    "model": self._model,
+                },
+            )
         except Exception as exc:
-            return {"status": "failed", "error": str(exc) or "vision_failed"}
+            return _failed("vision_analyze_image", str(exc) or "vision_failed")
 
 
 def _extract_image_file_id_from_state(state: dict[str, Any] | None) -> str:
@@ -366,6 +373,35 @@ def _language_code(language_hint: str | None) -> str | None:
     if "_" in hint:
         hint = hint.split("_", 1)[0]
     return hint or None
+
+
+def _ok(tool: str, result: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "status": "ok",
+        "result": result,
+        "error": None,
+        "metadata": {"tool": tool},
+    }
+
+
+def _failed(
+    tool: str,
+    message: str,
+    *,
+    retryable: bool = False,
+    details: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    return {
+        "status": "failed",
+        "result": None,
+        "error": {
+            "code": message,
+            "message": message,
+            "retryable": bool(retryable),
+            "details": dict(details or {}),
+        },
+        "metadata": {"tool": tool},
+    }
 
 
 def _normalize_segments(raw: Any) -> list[dict[str, Any]]:

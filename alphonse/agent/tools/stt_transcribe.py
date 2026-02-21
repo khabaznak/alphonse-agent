@@ -69,20 +69,37 @@ class SttTranscribeTool:
             segments = _normalize_segments(payload.get("segments"))
             if not text:
                 return _failed("transcript_empty", retryable=True, asset_id=normalized_asset_id)
-            return {
-                "status": "ok",
-                "asset_id": normalized_asset_id,
-                "text": text,
-                "segments": segments,
-            }
+            return _ok(
+                {
+                    "asset_id": normalized_asset_id,
+                    "text": text,
+                    "segments": segments,
+                }
+            )
 
 
 def _failed(error: str, *, retryable: bool, asset_id: str | None) -> dict[str, Any]:
     return {
         "status": "failed",
-        "error": str(error or "stt_transcribe_failed"),
-        "retryable": bool(retryable),
-        "asset_id": str(asset_id or "").strip() or None,
+        "result": None,
+        "error": {
+            "code": str(error or "stt_transcribe_failed"),
+            "message": str(error or "stt_transcribe_failed"),
+            "retryable": bool(retryable),
+            "details": {
+                "asset_id": str(asset_id or "").strip() or None,
+            },
+        },
+        "metadata": {"tool": "stt_transcribe"},
+    }
+
+
+def _ok(result: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "status": "ok",
+        "result": result,
+        "error": None,
+        "metadata": {"tool": "stt_transcribe"},
     }
 
 

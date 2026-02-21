@@ -52,15 +52,20 @@ def test_stt_transcribe_tool_transcribes_by_asset_id(tmp_path: Path, monkeypatch
     result = tool.execute(asset_id=asset_id, language_hint="es-MX")
 
     assert result["status"] == "ok"
-    assert result["asset_id"] == asset_id
-    assert result["text"] == "hola mundo"
-    assert isinstance(result.get("segments"), list)
-    assert result["segments"][0]["text"] == "hola mundo"
+    payload = result.get("result")
+    assert isinstance(payload, dict)
+    assert payload.get("asset_id") == asset_id
+    assert payload.get("text") == "hola mundo"
+    segments = payload.get("segments")
+    assert isinstance(segments, list)
+    assert segments[0]["text"] == "hola mundo"
 
 
 def test_stt_transcribe_tool_fails_for_missing_asset() -> None:
     tool = SttTranscribeTool()
     result = tool.execute(asset_id="missing-asset-id")
     assert result["status"] == "failed"
-    assert result["error"] == "asset_not_found"
-    assert result["retryable"] is False
+    error = result.get("error")
+    assert isinstance(error, dict)
+    assert error.get("code") == "asset_not_found"
+    assert error.get("retryable") is False

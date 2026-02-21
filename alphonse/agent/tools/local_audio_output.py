@@ -42,14 +42,13 @@ class LocalAudioOutputSpeakTool:
             preview,
         )
         if not spoken_text:
-            return {"status": "failed", "error": "text_required"}
+            return _failed("text_required", "text is required")
 
         if platform.system() != "Darwin":
-            return {
-                "status": "failed",
-                "error": "local_audio_output_not_supported",
-                "message": "local_audio_output.speak is currently supported only on macOS.",
-            }
+            return _failed(
+                "local_audio_output_not_supported",
+                "local_audio_output.speak is currently supported only on macOS.",
+            )
 
         cmd = _build_say_command(text=spoken_text, voice=selected_voice)
         if is_blocking:
@@ -69,11 +68,17 @@ class LocalAudioOutputSpeakTool:
                 )
                 return {
                     "status": "failed",
-                    "error": "tts_command_failed",
-                    "stderr": stderr,
+                    "result": None,
+                    "error": {
+                        "code": "tts_command_failed",
+                        "message": "tts command failed",
+                        "retryable": False,
+                        "details": {"stderr": stderr},
+                    },
+                    "metadata": {"tool": "local_audio_output.speak"},
                 }
             logger.info("local_audio_output.speak success mode=blocking")
-            return {"status": "ok", "mode": "blocking"}
+            return _ok({"mode": "blocking"})
 
         proc = subprocess.Popen(
             cmd,
@@ -88,7 +93,7 @@ class LocalAudioOutputSpeakTool:
         )
         watcher.start()
         logger.info("local_audio_output.speak success mode=non_blocking pid=%s", proc.pid)
-        return {"status": "ok", "mode": "non_blocking", "pid": int(proc.pid)}
+        return _ok({"mode": "non_blocking", "pid": int(proc.pid)})
 
 
 def _build_say_command(*, text: str, voice: str) -> list[str]:
@@ -117,6 +122,29 @@ def _watch_say_process(proc: subprocess.Popen[str], preview: str) -> None:
         )
         return
     logger.info("local_audio_output.speak async_done pid=%s preview=%s", proc.pid, preview)
+
+
+def _ok(result: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "status": "ok",
+        "result": result,
+        "error": None,
+        "metadata": {"tool": "local_audio_output.speak"},
+    }
+
+
+def _failed(code: str, message: str, details: dict[str, Any] | None = None) -> dict[str, Any]:
+    return {
+        "status": "failed",
+        "result": None,
+        "error": {
+            "code": str(code),
+            "message": str(message),
+            "retryable": False,
+            "details": dict(details or {}),
+        },
+        "metadata": {"tool": "local_audio_output.speak"},
+    }
 
 
 def main() -> None:
