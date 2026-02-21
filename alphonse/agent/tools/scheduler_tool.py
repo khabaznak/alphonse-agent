@@ -53,6 +53,8 @@ class SchedulerTool:
         message_value = str(args.get("Message") or args.get("message") or "").strip()
         timezone_name = args.get("timezone_name") or args.get("TimezoneName")
         correlation_id = args.get("correlation_id") or args.get("CorrelationId")
+        if not correlation_id and isinstance(state, dict):
+            correlation_id = state.get("correlation_id")
         origin_channel_value = str(
             args.get("origin_channel") or args.get("channel") or args.get("from_") or args.get("from") or ""
         ).strip()
@@ -66,7 +68,7 @@ class SchedulerTool:
             time=time_value,
             message=message_value,
             timezone_name=str(timezone_name or ""),
-            correlation_id=str(correlation_id or ""),
+            correlation_id=str(correlation_id).strip() if correlation_id is not None else None,
             origin_channel=origin_channel_value,
             channel_target=str(channel_target or ""),
         )
