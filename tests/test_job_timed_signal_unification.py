@@ -71,10 +71,6 @@ def test_timer_fired_job_trigger_emits_conscious_message_event(tmp_path: Path, m
         },
     )
 
-    # Force action runner to use the test store instance.
-    import alphonse.agent.actions.handle_timed_signals as handle_timed_signals_module
-
-    monkeypatch.setattr(handle_timed_signals_module, "JobStore", lambda: store)
     bus = _FakeBus()
     action = HandleTimedSignalsAction()
     signal = Signal(
@@ -93,6 +89,6 @@ def test_timer_fired_job_trigger_emits_conscious_message_event(tmp_path: Path, m
     action.execute({"signal": signal, "ctx": bus, "state": None, "outcome": None})
     assert bus.events
     emitted = bus.events[-1]
-    assert emitted.type == "api.message_received"
+    assert emitted.type == "timed_signal.subconscious_prompt"
     text = str((emitted.payload or {}).get("text") or "")
     assert text
