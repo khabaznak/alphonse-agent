@@ -309,33 +309,14 @@ def _set_arg_value(*, canonical_key: str, alias_keys: list[str], value: str, arg
 
 def _infer_reminder_time_expression(*, state: dict[str, Any], task_state: dict[str, Any]) -> str:
     candidates = [
-        str(state.get("last_user_message") or "").strip(),
+        _extract_primary_user_text(state),
         str(task_state.get("goal") or "").strip(),
+        str(state.get("last_user_message") or "").strip(),
     ]
     for text in candidates:
-        if not text:
-            continue
-        matched = _extract_time_expression(text)
-        if matched:
-            return matched
-    return ""
-
-
-def _extract_time_expression(text: str) -> str:
-    value = str(text or "").strip()
-    if not value:
-        return ""
-    patterns = [
-        r"\bin\s+\d+\s*(?:s|sec|secs|second|seconds|min|mins|minute|minutes|hour|hours|day|days|week|weeks)\b",
-        r"\bin\s+an?\s*(?:hour|day|week)\b",
-        r"\btomorrow(?:\s+at\s+\d{1,2}(?::\d{2})?\s*(?:am|pm)?)?\b",
-        r"\btoday(?:\s+at\s+\d{1,2}(?::\d{2})?\s*(?:am|pm)?)?\b",
-        r"\bat\s+\d{1,2}(?::\d{2})?\s*(?:am|pm)\b",
-    ]
-    for pattern in patterns:
-        matched = re.search(pattern, value, flags=re.IGNORECASE)
-        if matched:
-            return matched.group(0).strip()
+        normalized = str(text or "").strip()
+        if normalized:
+            return normalized
     return ""
 
 

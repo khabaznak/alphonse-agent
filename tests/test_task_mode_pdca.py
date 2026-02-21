@@ -348,7 +348,7 @@ def test_pdca_create_reminder_auto_repairs_missing_fields() -> None:
     result = fact.get("result")
     assert isinstance(result, dict)
     assert result.get("reminder_id") == "rem-repaired-1"
-    assert result.get("fire_at") == "in 1 min"
+    assert result.get("fire_at") == "ok please set a reminder for me in 1 min."
     assert result.get("message") == "ok please set a reminder for me in 1 min."
     assert len(reminder.calls) == 2
 
