@@ -65,3 +65,32 @@ def test_job_tools_crud(tmp_path: Path) -> None:
     assert removed["status"] == "ok"
     assert removed["result"]["deleted"] is True
 
+
+def test_job_run_now_accepts_job_name_alias(tmp_path: Path) -> None:
+    store = JobStore(root=tmp_path / "data" / "jobs")
+    runner = JobRunner(
+        job_store=store,
+        scratchpad_service=ScratchpadService(root=tmp_path / "data" / "scratchpad"),
+        tick_seconds=5,
+    )
+    create = JobCreateTool(store)
+    run_now = JobRunNowTool(runner)
+    job_name = "Weekly family review"
+    created = create.execute(
+        user_id="u1",
+        name=job_name,
+        description="Review family tasks every week",
+        schedule={
+            "type": "rrule",
+            "dtstart": (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat(),
+            "rrule": "FREQ=WEEKLY;BYDAY=TU;BYHOUR=9;BYMINUTE=0",
+        },
+        payload_type="internal_event",
+        payload={"event_name": "family.review", "data": {"source": "job"}},
+        timezone="UTC",
+        safety_level="low",
+    )
+    assert created["status"] == "ok"
+    run = run_now.execute(user_id="u1", job_name=job_name)
+    assert run["status"] == "ok"
+    assert run["result"]["execution_id"]

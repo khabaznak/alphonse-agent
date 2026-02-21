@@ -477,12 +477,16 @@ def _default_specs() -> list[ToolSpec]:
             when_to_use="Use to test or manually force a scheduled job.",
             returns="execution id and status",
             input_schema=_object_schema(
-                properties={"job_id": {"type": "string"}},
-                required=["job_id"],
+                properties={
+                    "job_id": {"type": "string"},
+                    "job_name": {"type": "string"},
+                    "name": {"type": "string"},
+                },
+                required=[],
             ),
             domain_tags=["automation", "jobs", "control"],
             safety_level=SafetyLevel.MEDIUM,
-            examples=[{"job_id": "job_abc123"}],
+            examples=[{"job_id": "job_abc123"}, {"job_name": "Weekly chores digest"}],
         ),
         ToolSpec(
             key="user_register_from_contact",

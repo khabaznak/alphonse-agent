@@ -192,14 +192,30 @@ class JobRunNowTool:
     def execute(
         self,
         *,
-        job_id: str,
+        job_id: str | None = None,
+        job_name: str | None = None,
+        name: str | None = None,
         ctx: JobToolContext | None = None,
         user_id: str | None = None,
         state: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         resolved_user = _resolve_user_id(user_id=user_id, state=state, ctx=ctx)
         try:
-            outcome = self._runner.run_job_now(user_id=resolved_user, job_id=job_id)
+            resolved_job_id = str(job_id or "").strip()
+            requested_name = str(job_name or name or "").strip()
+            if not resolved_job_id and requested_name:
+                resolved_job_id = _resolve_job_id_by_name(
+                    store=self._runner._job_store,  # noqa: SLF001
+                    user_id=resolved_user,
+                    requested_name=requested_name,
+                )
+            if not resolved_job_id:
+                return _failed(
+                    code="missing_job_id",
+                    message="job_id is required",
+                    metadata={"tool": "job_run_now"},
+                )
+            outcome = self._runner.run_job_now(user_id=resolved_user, job_id=resolved_job_id)
             return _ok(
                 result={
                     "execution_id": outcome.get("execution_id"),
@@ -293,3 +309,14 @@ def _you_just_remembered_paraphrase(*, llm_client: Any | None, source_instructio
     except Exception:
         rendered = ""
     return rendered or f"You just remembered: {source}"
+
+
+def _resolve_job_id_by_name(*, store: JobStore, user_id: str, requested_name: str) -> str:
+    expected = str(requested_name or "").strip().lower()
+    if not expected:
+        return ""
+    rows = store.list_jobs(user_id=user_id, enabled=None, limit=500)
+    for job in rows:
+        if str(job.name or "").strip().lower() == expected:
+            return str(job.job_id or "").strip()
+    return ""
