@@ -14,6 +14,7 @@ from alphonse.agent.cognition.plan_execution.communication_dispatcher import Com
 from alphonse.agent.cognition.plans import CortexPlan
 from alphonse.agent.tools.registry import ToolRegistry, build_default_tool_registry
 from alphonse.agent.tools.base import ensure_tool_result
+from alphonse.agent.services.communication_service import CommunicationRequest, CommunicationService
 
 logger = logging.getLogger(__name__)
 
@@ -69,6 +70,7 @@ class PlanExecutor:
         self._coordinator = coordinator or build_default_coordinator()
         self._dispatcher = CommunicationDispatcher(coordinator=self._coordinator, logger=logger)
         self._tool_map = ToolMap(registry=tool_registry or build_default_tool_registry())
+        self._communication = CommunicationService(dispatcher=self._dispatcher)
 
     def execute(
         self, plans: list[CortexPlan], context: dict, exec_context: PlanExecutionContext
@@ -93,6 +95,9 @@ class PlanExecutor:
     ) -> None:
         tool_key = _tool_key(plan)
         params = _plan_params(plan)
+        if tool_key == "communicate":
+            self._execute_communicate(plan=plan, params=params, context=context, exec_context=exec_context)
+            return
 
         def _on_exception(exc: Exception) -> None:
             raise exc
@@ -113,6 +118,37 @@ class PlanExecutor:
             execution_exception_handler=_on_exception,
             tool_call_output=_on_output,
         )
+
+    def _execute_communicate(
+        self,
+        *,
+        plan: CortexPlan,
+        params: dict[str, Any],
+        context: dict[str, Any],
+        exec_context: PlanExecutionContext,
+    ) -> None:
+        message = str(params.get("message") or "").strip()
+        if not message:
+            raise ValueError("message_required")
+        channels = plan.channels or [None]
+        for channel in channels:
+            request = CommunicationRequest(
+                message=message,
+                correlation_id=str(exec_context.correlation_id or ""),
+                origin_channel=str(exec_context.channel_type or ""),
+                origin_target=str(exec_context.channel_target or ""),
+                channel=str(channel or "").strip() or None,
+                target=str(plan.target or "").strip() or None,
+                recipient_ref=str(params.get("recipient") or "").strip() or None,
+                urgency=str(params.get("urgency") or "normal"),
+                locale=str(params.get("locale") or "").strip() or None,
+            )
+            self._communication.send(
+                request=request,
+                context=context,
+                exec_context=exec_context,
+                plan=plan,
+            )
 
     def _handle_tool_output(
         self,
