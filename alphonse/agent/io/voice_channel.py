@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 from alphonse.agent.io.contracts import NormalizedOutboundMessage
-from alphonse.agent.tools.local_audio_output import LocalAudioOutputSpeakTool
 
 logger = logging.getLogger(__name__)
 
@@ -11,14 +11,21 @@ logger = logging.getLogger(__name__)
 class VoiceExtremityAdapter:
     channel_type: str = "voice"
 
-    def __init__(self, *, speaker: LocalAudioOutputSpeakTool | None = None) -> None:
-        self._speaker = speaker or LocalAudioOutputSpeakTool()
+    def __init__(self, *, speaker: Any | None = None) -> None:
+        self._speaker = speaker
 
     def deliver(self, message: NormalizedOutboundMessage) -> None:
         text = str(message.message or "").strip()
         if not text:
             return
-        result = self._speaker.execute(text=text, blocking=False)
+        speaker = self._speaker
+        if speaker is None:
+            # Lazy import prevents import-time cycles with tools registry bootstrap.
+            from alphonse.agent.tools.local_audio_output import LocalAudioOutputSpeakTool
+
+            speaker = LocalAudioOutputSpeakTool()
+            self._speaker = speaker
+        result = speaker.execute(text=text, blocking=False)
         status = str((result or {}).get("status") or "").strip().lower()
         if status != "ok":
             error = (result or {}).get("error") if isinstance(result, dict) else None
