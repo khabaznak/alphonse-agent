@@ -11,7 +11,9 @@ from alphonse.agent.cortex.transitions import emit_transition_event
 from alphonse.agent.cortex.task_mode.progress_critic import progress_critic_node as _progress_critic_node_impl
 from alphonse.agent.cortex.task_mode.progress_critic import route_after_progress_critic as _route_after_progress_critic_impl
 from alphonse.agent.cortex.task_mode.observability import log_task_event
+from alphonse.agent.cortex.task_mode.execute_step import execute_step_node_impl
 from alphonse.agent.cortex.task_mode.state import build_default_task_state
+from alphonse.agent.cortex.task_mode.validate_step import validate_step_node_impl
 from alphonse.agent.cortex.task_mode.types import NextStepProposal
 from alphonse.agent.cortex.task_mode.types import TraceEvent
 from alphonse.agent.session.day_state import render_recent_conversation_block
@@ -194,71 +196,18 @@ def route_after_next_step(state: dict[str, Any]) -> str:
 
 
 def validate_step_node(state: dict[str, Any], *, tool_registry: Any) -> dict[str, Any]:
-    task_state = _task_state_with_defaults(state)
-    task_state["pdca_phase"] = "check"
-    correlation_id = _correlation_id(state)
-    plan = _task_plan(task_state)
-    current = _current_step(task_state)
-    proposal = (current or {}).get("proposal")
-    validation = _validate_proposal(proposal=proposal, tool_registry=tool_registry)
-
-    if validation["ok"]:
-        task_state["last_validation_error"] = None
-        if current is not None:
-            current["status"] = "validated"
-        logger.info(
-            "task_mode validate passed correlation_id=%s step_id=%s kind=%s",
-            correlation_id,
-            str((current or {}).get("step_id") or ""),
-            str((proposal or {}).get("kind") if isinstance(proposal, dict) else ""),
-        )
-        log_task_event(
-            logger=logger,
-            state=state,
-            task_state=task_state,
-            node="validate_step_node",
-            event="graph.step.validated",
-            step_id=str((current or {}).get("step_id") or ""),
-            kind=str((proposal or {}).get("kind") if isinstance(proposal, dict) else ""),
-        )
-        return {"task_state": task_state}
-
-    attempts = int(task_state.get("repair_attempts") or 0) + 1
-    task_state["repair_attempts"] = attempts
-    error = {
-        "reason": validation.get("reason") or "validation_failed",
-        "proposal": proposal,
-    }
-    task_state["last_validation_error"] = error
-    if current is not None:
-        current["status"] = "validation_failed"
-    _append_trace_event(
-        task_state,
-        {
-            "type": "validation_failed",
-            "summary": f"Validation failed: {error['reason']}.",
-            "correlation_id": correlation_id,
-        },
-    )
-    logger.info(
-        "task_mode validate failed correlation_id=%s step_id=%s reason=%s repair_attempts=%s",
-        correlation_id,
-        str((current or {}).get("step_id") or ""),
-        str(error.get("reason") or ""),
-        attempts,
-    )
-    log_task_event(
+    return validate_step_node_impl(
+        state,
+        tool_registry=tool_registry,
+        task_state_with_defaults=_task_state_with_defaults,
+        correlation_id=_correlation_id,
+        task_plan=_task_plan,
+        current_step=_current_step,
+        validate_proposal=_validate_proposal,
+        append_trace_event=_append_trace_event,
         logger=logger,
-        state=state,
-        task_state=task_state,
-        node="validate_step_node",
-        event="graph.step.validation_failed",
-        level="warning",
-        step_id=str((current or {}).get("step_id") or ""),
-        reason=str(error.get("reason") or ""),
-        repair_attempts=attempts,
+        log_task_event=log_task_event,
     )
-    return {"task_state": task_state}
 
 
 def route_after_validate_step(state: dict[str, Any]) -> str:
@@ -284,197 +233,18 @@ def route_after_validate_step(state: dict[str, Any]) -> str:
 
 def execute_step_node(state: dict[str, Any], *, tool_registry: Any) -> dict[str, Any]:
     emit_transition_event(state, "executing")
-    task_state = _task_state_with_defaults(state)
-    task_state["pdca_phase"] = "do"
-    correlation_id = _correlation_id(state)
-    current = _current_step(task_state)
-    proposal = (current or {}).get("proposal") if isinstance(current, dict) else None
-    if not isinstance(proposal, dict):
-        logger.info(
-            "task_mode execute skipped correlation_id=%s reason=no_proposal",
-            correlation_id,
-        )
-        return {"task_state": task_state}
-
-    kind = str(proposal.get("kind") or "").strip()
-    if kind == "ask_user":
-        question = str(proposal.get("question") or "What task should I run?").strip()
-        task_state["status"] = "waiting_user"
-        task_state["next_user_question"] = question
-        if isinstance(current, dict):
-            current["status"] = "executed"
-        _append_trace_event(
-            task_state,
-            {
-                "type": "status_changed",
-                "summary": "Status changed to waiting_user by ask_user proposal.",
-                "correlation_id": correlation_id,
-            },
-        )
-        logger.info(
-            "task_mode execute ask_user correlation_id=%s step_id=%s question=%s",
-            correlation_id,
-            str((current or {}).get("step_id") or ""),
-            question,
-        )
-        log_task_event(
-            logger=logger,
-            state=state,
-            task_state=task_state,
-            node="execute_step_node",
-            event="graph.step.ask_user",
-            step_id=str((current or {}).get("step_id") or ""),
-        )
-        return {"task_state": task_state}
-
-    if kind == "finish":
-        final_text = str(proposal.get("final_text") or "").strip()
-        task_state["status"] = "done"
-        task_state["outcome"] = {
-            "kind": "task_completed",
-            "final_text": final_text,
-        }
-        if isinstance(current, dict):
-            current["status"] = "executed"
-        _append_trace_event(
-            task_state,
-            {
-                "type": "status_changed",
-                "summary": "Status changed to done by finish proposal.",
-                "correlation_id": correlation_id,
-            },
-        )
-        logger.info(
-            "task_mode execute finish correlation_id=%s step_id=%s",
-            correlation_id,
-            str((current or {}).get("step_id") or ""),
-        )
-        log_task_event(
-            logger=logger,
-            state=state,
-            task_state=task_state,
-            node="execute_step_node",
-            event="graph.task.completed",
-            step_id=str((current or {}).get("step_id") or ""),
-        )
-        return {"task_state": task_state}
-
-    if kind != "call_tool":
-        return {"task_state": task_state}
-
-    tool_name = str(proposal.get("tool_name") or "").strip()
-    args = proposal.get("args")
-    params = dict(args) if isinstance(args, dict) else {}
-    step_id = str((current or {}).get("step_id") or "")
-    try:
-        result = _execute_tool_call(
-            state=state,
-            tool_registry=tool_registry,
-            tool_name=tool_name,
-            args=params,
-        )
-        facts = task_state.get("facts")
-        fact_bucket = dict(facts) if isinstance(facts, dict) else {}
-        result_payload = _serialize_result(result)
-        fact_entry = {
-            "tool": tool_name,
-            "result": result_payload,
-        }
-        fact_bucket[step_id or f"result_{len(fact_bucket) + 1}"] = fact_entry
-        task_state["facts"] = fact_bucket
-        result_status = ""
-        if isinstance(result, dict):
-            result_status = str(result.get("status") or "").strip().lower()
-        if result_status == "failed":
-            task_state["status"] = "running"
-            if isinstance(current, dict):
-                current["status"] = "failed"
-            raw_error = (result or {}).get("error") if isinstance(result, dict) else None
-            if isinstance(raw_error, dict):
-                error_code = str(raw_error.get("code") or "tool_failed")
-                error_message = str(raw_error.get("message") or "").strip()
-            else:
-                error_code = str(raw_error or "tool_failed")
-                error_message = ""
-            _append_trace_event(
-                task_state,
-                {
-                    "type": "tool_failed",
-                    "summary": (
-                        f"Tool {tool_name} reported failure: {error_code}"
-                        + (f" ({error_message})." if error_message else ".")
-                    ),
-                    "correlation_id": correlation_id,
-                },
-            )
-            logger.info(
-                "task_mode execute tool_failed_reported correlation_id=%s step_id=%s tool=%s error_code=%s error_message=%s",
-                correlation_id,
-                step_id,
-                tool_name,
-                error_code,
-                error_message,
-            )
-            log_task_event(
-                logger=logger,
-                state=state,
-                task_state=task_state,
-                node="execute_step_node",
-                event="graph.tool.failed",
-                level="warning",
-                step_id=step_id,
-                tool=tool_name,
-                error_code=error_code,
-                error_message=error_message,
-            )
-            return {"task_state": task_state}
-        task_state["status"] = "running"
-        if isinstance(current, dict):
-            current["status"] = "executed"
-        _append_trace_event(
-            task_state,
-            {
-                "type": "tool_executed",
-                "summary": f"Executed tool {tool_name}.",
-                "correlation_id": correlation_id,
-            },
-        )
-        logger.info(
-            "task_mode execute tool_ok correlation_id=%s step_id=%s tool=%s",
-            correlation_id,
-            step_id,
-            tool_name,
-        )
-        log_task_event(
-            logger=logger,
-            state=state,
-            task_state=task_state,
-            node="execute_step_node",
-            event="graph.tool.succeeded",
-            step_id=step_id,
-            tool=tool_name,
-        )
-        return {"task_state": task_state}
-    except Exception as exc:
-        task_state["status"] = "failed"
-        if isinstance(current, dict):
-            current["status"] = "failed"
-        _append_trace_event(
-            task_state,
-            {
-                "type": "tool_failed",
-                "summary": f"Tool {tool_name} failed: {type(exc).__name__}.",
-                "correlation_id": correlation_id,
-            },
-        )
-        logger.info(
-            "task_mode execute tool_failed correlation_id=%s step_id=%s tool=%s error=%s",
-            correlation_id,
-            step_id,
-            tool_name,
-            type(exc).__name__,
-        )
-        return {"task_state": task_state}
+    return execute_step_node_impl(
+        state,
+        tool_registry=tool_registry,
+        task_state_with_defaults=_task_state_with_defaults,
+        correlation_id=_correlation_id,
+        current_step=_current_step,
+        append_trace_event=_append_trace_event,
+        serialize_result=_serialize_result,
+        execute_tool_call=_execute_tool_call,
+        logger=logger,
+        log_task_event=log_task_event,
+    )
 
 
 def update_state_node(state: dict[str, Any]) -> dict[str, Any]:

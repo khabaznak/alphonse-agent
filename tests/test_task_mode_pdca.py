@@ -104,6 +104,35 @@ class _ErroringReminder:
         )
 
 
+class _RecoverableReminder:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, str]] = []
+
+    def create_reminder(
+        self,
+        *,
+        for_whom: str,
+        time: str,
+        message: str,
+        timezone_name: str,
+        correlation_id: str | None = None,
+        from_: str = "assistant",
+        channel_target: str | None = None,
+    ) -> dict[str, str]:
+        _ = (timezone_name, correlation_id, from_, channel_target)
+        self.calls.append({"for_whom": for_whom, "time": time, "message": message})
+        if not str(time or "").strip():
+            raise SchedulerToolError(code="missing_time", message="time is required", retryable=False)
+        if not str(message or "").strip():
+            raise SchedulerToolError(code="missing_message", message="message is required", retryable=False)
+        return {
+            "reminder_id": "rem-repaired-1",
+            "fire_at": time,
+            "delivery_target": for_whom,
+            "message": message,
+        }
+
+
 class _FailingTool:
     def execute(self, **kwargs):  # noqa: ANN003
         _ = kwargs
@@ -269,6 +298,58 @@ def test_pdca_create_reminder_structured_failure_keeps_running() -> None:
     error = result.get("error")
     assert isinstance(error, dict)
     assert error.get("code") == "time_expression_unresolvable"
+
+
+def test_pdca_create_reminder_auto_repairs_missing_fields() -> None:
+    reminder = _RecoverableReminder()
+    tool_registry = ToolRegistry()
+    tool_registry.register("createReminder", reminder)
+    task_state = build_default_task_state()
+    task_state["acceptance_criteria"] = ["done when requested outcome is produced"]
+    task_state["goal"] = "set a reminder for me in 1 min"
+    task_state["plan"]["current_step_id"] = "step_1"
+    task_state["plan"]["steps"] = [
+        {
+            "step_id": "step_1",
+            "proposal": {
+                "kind": "call_tool",
+                "tool_name": "createReminder",
+                "args": {
+                    "ForWhom": "8553589429",
+                    "Message": "",
+                },
+            },
+            "status": "validated",
+        }
+    ]
+    state: dict[str, object] = {
+        "correlation_id": "corr-pdca-reminder-auto-repair",
+        "channel_type": "telegram",
+        "channel_target": "8553589429",
+        "locale": "en-US",
+        "last_user_message": "ok please set a reminder for me in 1 min.",
+        "task_state": task_state,
+    }
+
+    state = _apply(state, execute_step_node(state, tool_registry=tool_registry))
+    next_state = state["task_state"]
+    assert isinstance(next_state, dict)
+    assert next_state.get("status") == "running"
+    plan = next_state.get("plan")
+    assert isinstance(plan, dict)
+    steps = plan.get("steps")
+    assert isinstance(steps, list)
+    assert steps[0].get("status") == "executed"
+    facts = next_state.get("facts")
+    assert isinstance(facts, dict)
+    fact = facts.get("step_1")
+    assert isinstance(fact, dict)
+    result = fact.get("result")
+    assert isinstance(result, dict)
+    assert result.get("reminder_id") == "rem-repaired-1"
+    assert result.get("fire_at") == "in 1 min"
+    assert result.get("message") == "Reminder"
+    assert len(reminder.calls) == 2
 
 
 def test_pdca_validation_error_routes_back_then_asks_user() -> None:
