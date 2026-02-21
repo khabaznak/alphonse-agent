@@ -45,7 +45,7 @@ def test_create_reminder_normalizes_fire_at_and_delivery_target(
         message="Ir a banarme",
         timezone_name="America/Mexico_City",
         channel_target="8553589429",
-        from_="telegram",
+        origin_channel="telegram",
     )
     assert isinstance(result, dict)
 
@@ -95,7 +95,7 @@ def test_timer_dispatches_when_now_gte_fire_at(
         message="test due now",
         timezone_name="America/Mexico_City",
         channel_target="8553589429",
-        from_="telegram",
+        origin_channel="telegram",
     )
 
     bus = Bus()

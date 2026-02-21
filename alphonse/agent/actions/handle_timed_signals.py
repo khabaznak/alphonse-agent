@@ -21,7 +21,9 @@ class HandleTimedSignalsAction(Action):
         prompt = _extract_prompt_text(inner=inner)
         target = str(inner.get("chat_id") or payload.get("target") or inner.get("delivery_target") or "").strip()
         user_id = str(inner.get("person_id") or target or "").strip()
-        channel_type = str(inner.get("origin_channel") or inner.get("origin") or payload.get("origin") or "api").strip()
+        channel_type = str(
+            inner.get("origin_channel") or payload.get("origin_channel") or payload.get("origin") or inner.get("origin") or "api"
+        ).strip()
         logger.info(
             "HandleTimedSignalsAction invoked signal_id=%s timed_signal_id=%s correlation_id=%s mind_layer=%s",
             getattr(signal, "id", None),

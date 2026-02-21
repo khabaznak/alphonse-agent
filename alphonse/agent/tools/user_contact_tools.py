@@ -301,7 +301,7 @@ def _schedule_proactive_intro(
             message=intro_prompt,
             timezone_name=timezone_name,
             correlation_id=correlation_id,
-            from_=origin_channel,
+            origin_channel=origin_channel,
             channel_target=str(telegram_chat_id),
         )
         return str(result.get("reminder_id") or "")

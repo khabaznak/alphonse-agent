@@ -53,7 +53,13 @@ class SchedulerTool:
         message_value = str(args.get("Message") or args.get("message") or "").strip()
         timezone_name = args.get("timezone_name") or args.get("TimezoneName")
         correlation_id = args.get("correlation_id") or args.get("CorrelationId")
-        from_value = str(args.get("from_") or args.get("from") or "assistant")
+        origin_channel_value = str(
+            args.get("origin_channel") or args.get("channel") or args.get("from_") or args.get("from") or ""
+        ).strip()
+        if not origin_channel_value and isinstance(state, dict):
+            origin_channel_value = str(state.get("channel_type") or state.get("channel") or "").strip()
+        if not origin_channel_value:
+            origin_channel_value = "api"
         channel_target = args.get("channel_target")
         reminder = tool.create_reminder(
             for_whom=for_whom,
@@ -61,7 +67,7 @@ class SchedulerTool:
             message=message_value,
             timezone_name=str(timezone_name or ""),
             correlation_id=str(correlation_id or ""),
-            from_=from_value,
+            origin_channel=origin_channel_value,
             channel_target=str(channel_target or ""),
         )
         return {
@@ -79,7 +85,7 @@ class SchedulerTool:
         message: str,
         timezone_name: str | None,
         correlation_id: str | None = None,
-        from_: str = "assistant",
+        origin_channel: str | None = None,
         channel_target: str | None = None,
     ) -> dict[str, str]:
         whom_raw = str(for_whom or "").strip()
@@ -111,6 +117,7 @@ class SchedulerTool:
         )
         _ = channel_target
         delivery_target = whom_raw
+        resolved_origin_channel = str(origin_channel or "").strip().lower() or "api"
         trigger_time = fire_at
         source_instruction = str(reminder_message or "").strip()
         message_mode, message_text = _build_reminder_message_payload(
@@ -123,8 +130,9 @@ class SchedulerTool:
             "message_text": message_text,
             "message_mode": message_mode,
             "reminder_text_raw": source_instruction,
-            "to": delivery_target,
-            "from": str(from_ or "assistant"),
+            "speaker": "alphonse",
+            "requested_by": delivery_target,
+            "origin_channel": resolved_origin_channel,
             "created_at": datetime.now(dt_timezone.utc).isoformat(),
             "trigger_at": trigger_time,
             "fire_at": trigger_time,
@@ -152,7 +160,7 @@ class SchedulerTool:
             timezone_name=resolved_timezone,
             payload=payload,
             target=delivery_target,
-            origin=str(from_ or "assistant"),
+            origin=resolved_origin_channel,
             correlation_id=correlation_id,
         )
         return {
