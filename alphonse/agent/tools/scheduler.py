@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone as dt_timezone
+import re
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -140,9 +141,16 @@ class SchedulerTool:
                 message="event trigger time is required",
                 retryable=False,
             )
+        source_instruction = str(message or "").strip()
+        message_mode, message_text = _build_reminder_message_payload(
+            llm_client=self.llm_client,
+            source_instruction=source_instruction,
+        )
         payload = {
-            "message": message,
-            "reminder_text_raw": message,
+            "message": message_text,
+            "message_text": message_text,
+            "message_mode": message_mode,
+            "reminder_text_raw": source_instruction,
             "to": to,
             "from": from_,
             "created_at": datetime.now(dt_timezone.utc).isoformat(),
@@ -151,10 +159,9 @@ class SchedulerTool:
             "delivery_target": to,
             "event_trigger": event_trigger,
         }
-        source_instruction = str(message or "").strip()
         internal_prompt = _you_just_remembered_paraphrase(
             llm_client=self.llm_client,
-            source_instruction=source_instruction,
+            source_instruction=message_text,
         )
         artifact_id = create_prompt_artifact(
             user_id=str(to or "default"),
@@ -318,6 +325,50 @@ def _you_just_remembered_paraphrase(*, llm_client: Any | None, source_instructio
     except Exception:
         rendered = ""
     return rendered or f"You just remembered: {source}"
+
+
+def _build_reminder_message_payload(*, llm_client: Any | None, source_instruction: str) -> tuple[str, str]:
+    source = str(source_instruction or "").strip()
+    if not source:
+        return "paraphrased", "You just remembered something important."
+    quoted = _extract_quoted_text(source)
+    if quoted:
+        return "verbatim", quoted
+    paraphrased = _paraphrase_reminder_message(llm_client=llm_client, source_instruction=source)
+    return "paraphrased", paraphrased or source
+
+
+def _extract_quoted_text(text: str) -> str:
+    for pattern in (r'"([^"]+)"', r"'([^']+)'"):
+        matched = re.search(pattern, str(text or ""))
+        if not matched:
+            continue
+        value = str(matched.group(1) or "").strip()
+        if value:
+            return value
+    return ""
+
+
+def _paraphrase_reminder_message(*, llm_client: Any | None, source_instruction: str) -> str:
+    source = str(source_instruction or "").strip()
+    if not source:
+        return ""
+    if llm_client is None:
+        return source
+    system_prompt = (
+        "You are Alphonse.\n"
+        "Rewrite reminder content as a clear execution cue for future trigger time.\n"
+        "Keep the same language as the source text.\n"
+        "Do not include scheduling phrases like 'in 1 minute' or 'tomorrow'.\n"
+        "Return one plain-text sentence only."
+    )
+    user_prompt = (
+        "Source reminder content:\n"
+        f"{source}\n\n"
+        "Rewrite only the reminder payload text."
+    )
+    rendered = _llm_complete_text(client=llm_client, system_prompt=system_prompt, user_prompt=user_prompt).strip()
+    return rendered or source
 
 
 def _try_parse_iso(raw: str, *, timezone_name: str) -> str | None:

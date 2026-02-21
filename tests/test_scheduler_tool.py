@@ -96,3 +96,29 @@ def test_create_reminder_raises_structured_error_on_unresolvable_time() -> None:
         payload = exc.as_payload()
         assert payload["code"] == "time_expression_unresolvable"
         assert payload["retryable"] is True
+
+
+def test_create_reminder_preserves_quoted_message_as_verbatim(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def _capture_insert(**kwargs):  # noqa: ANN003
+        captured.update(kwargs)
+        return "tsig_q1"
+
+    monkeypatch.setattr(scheduler_module, "insert_timed_signal", _capture_insert)
+    monkeypatch.setattr(scheduler_module, "create_prompt_artifact", lambda **_kwargs: "pa_test")
+    tool = SchedulerTool(llm_client=_FixedIsoLlm())
+    result = tool.create_reminder(
+        for_whom="me",
+        time="in 1 minute",
+        message='say "Hi alex"',
+        timezone_name="UTC",
+        channel_target="8553589429",
+    )
+    assert result["reminder_id"] == "tsig_q1"
+    payload = captured.get("payload")
+    assert isinstance(payload, dict)
+    assert payload.get("message_mode") == "verbatim"
+    assert payload.get("message_text") == "Hi alex"
+    assert payload.get("message") == "Hi alex"
+    assert payload.get("reminder_text_raw") == 'say "Hi alex"'

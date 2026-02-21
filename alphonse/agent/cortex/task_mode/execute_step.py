@@ -340,6 +340,13 @@ def _extract_time_expression(text: str) -> str:
 
 
 def _infer_reminder_message(*, state: dict[str, Any]) -> str:
+    user_text = str(state.get("last_user_message") or "").strip()
+    if user_text:
+        quoted = re.findall(r'"([^"]+)"|\'([^\']+)\'', user_text)
+        for a, b in quoted:
+            candidate = str(a or b).strip()
+            if candidate:
+                return candidate
     locale = str(state.get("locale") or "").strip().lower()
     if locale.startswith("es"):
         return "Recordatorio"

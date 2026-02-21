@@ -96,13 +96,23 @@ class HandleTimerFiredAction(Action):
             logger.warning("HandleTimerFiredAction conscious dispatch skipped reason=no_bus")
             return
         inner = _payload_from_signal(payload)
-        message_text = str(
-            inner.get("agent_internal_prompt")
-            or inner.get("prompt_text")
-            or inner.get("message")
-            or payload.get("signal_type")
-            or "You just remembered something important."
-        ).strip()
+        signal_type = str(payload.get("signal_type") or "").strip().lower()
+        if signal_type == "reminder":
+            message_text = str(
+                inner.get("message_text")
+                or inner.get("reminder_text_raw")
+                or inner.get("message")
+                or inner.get("agent_internal_prompt")
+                or "You just remembered something important."
+            ).strip()
+        else:
+            message_text = str(
+                inner.get("agent_internal_prompt")
+                or inner.get("prompt_text")
+                or inner.get("message")
+                or payload.get("signal_type")
+                or "You just remembered something important."
+            ).strip()
         target = str(inner.get("chat_id") or payload.get("target") or inner.get("delivery_target") or "").strip()
         user_id = str(inner.get("person_id") or target or "").strip()
         bus.emit(
