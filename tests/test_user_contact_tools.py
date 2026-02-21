@@ -101,7 +101,7 @@ def test_register_from_contact_admin_schedules_intro(tmp_path: Path, monkeypatch
     timed = list_timed_signals(limit=10)
     assert any(
         str(item.get("target") or "") == "222"
-        and str(((item.get("payload") or {}).get("kind") or "")) == "reminder"
+        and str(((item.get("payload") or {}).get("prompt") or "")).strip()
         for item in timed
     )
 

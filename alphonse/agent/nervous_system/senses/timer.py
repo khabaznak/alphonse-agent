@@ -107,7 +107,6 @@ class TimerSense(Sense):
                     "mind_layer": "subconscious",
                     "dispatch_mode": "deterministic",
                     "payload": record.payload,
-                    "kind": str((record.payload or {}).get("kind") or ""),
                     "target": record.target,
                     "origin": record.origin,
                     "correlation_id": record.correlation_id,

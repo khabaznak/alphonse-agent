@@ -267,7 +267,7 @@ def _schedule_proactive_intro(
         else f"Hi {display_name}, I am Alphonse. Nice to meet you."
     )
     payload = {
-        "kind": "reminder",
+        "prompt": intro_message,
         "message": intro_message,
         "reminder_text_raw": intro_message,
         "chat_id": str(telegram_chat_id),

@@ -50,7 +50,15 @@ def test_create_reminder_normalizes_fire_at_and_delivery_target(
     assert isinstance(result, dict)
 
     rows = list_timed_signals(limit=5)
-    reminder = next((row for row in rows if str((row.get("payload") or {}).get("kind") or "") == "reminder"), None)
+    reminder = next(
+        (
+            row
+            for row in rows
+            if str(row.get("target") or "") == "8553589429"
+            and str(((row.get("payload") or {}).get("prompt") or "")).strip()
+        ),
+        None,
+    )
     assert isinstance(reminder, dict)
     trigger_at = str(reminder.get("trigger_at") or "")
     target = str(reminder.get("target") or "")
@@ -98,8 +106,9 @@ def test_timer_dispatches_when_now_gte_fire_at(
         assert signal is not None
         assert signal.type == "timed_signal.fired"
         payload = signal.payload if isinstance(signal.payload, dict) else {}
-        assert str(payload.get("kind") or "") == "reminder"
         assert str(payload.get("target") or "") == "8553589429"
+        inner = payload.get("payload") if isinstance(payload.get("payload"), dict) else {}
+        assert str(inner.get("prompt") or "").strip()
     finally:
         timer.stop()
 

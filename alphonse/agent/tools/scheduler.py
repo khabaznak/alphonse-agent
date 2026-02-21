@@ -147,7 +147,6 @@ class SchedulerTool:
             source_instruction=source_instruction,
         )
         payload = {
-            "kind": "reminder",
             "message": message_text,
             "message_text": message_text,
             "message_mode": message_mode,
@@ -173,6 +172,7 @@ class SchedulerTool:
         )
         payload["source_instruction"] = source_instruction
         payload["agent_internal_prompt"] = internal_prompt
+        payload["prompt"] = internal_prompt
         payload["prompt_artifact_id"] = artifact_id
         return self.schedule_event(
             trigger_time=trigger_time,
@@ -222,6 +222,7 @@ class SchedulerTool:
         locale_hint: str | None,
     ) -> str:
         payload = {
+            "prompt": reminder_text,
             "message": reminder_text,
             "reminder_text_raw": reminder_text,
             "person_id": actor_person_id or chat_id,

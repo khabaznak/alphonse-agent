@@ -218,7 +218,7 @@ SELECT
   30,
   1,
   NULL,
-  'handle_timed_signals',
+  'handle_timed_signals_query',
   1,
   'api timed signals request'
 FROM states s1
@@ -243,7 +243,7 @@ SELECT
   20,
   1,
   NULL,
-  'handle_timer_fired',
+  'handle_timed_signals',
   1,
   'timer fired'
 FROM states s1
@@ -268,7 +268,7 @@ SELECT
   20,
   1,
   NULL,
-  'handle_timer_fired',
+  'handle_timed_signals',
   1,
   'timed signal fired'
 FROM states s1

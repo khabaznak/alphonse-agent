@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from alphonse.agent.actions.handle_timer_fired import HandleTimerFiredAction
+from alphonse.agent.actions.handle_timed_signals import HandleTimedSignalsAction
 from alphonse.agent.nervous_system.migrate import apply_schema
 from alphonse.agent.nervous_system.senses.bus import Signal
 from alphonse.agent.services.job_store import JobStore
@@ -72,21 +72,20 @@ def test_timer_fired_job_trigger_emits_conscious_message_event(tmp_path: Path, m
     )
 
     # Force action runner to use the test store instance.
-    import alphonse.agent.actions.handle_timer_fired as handle_timer_fired_module
+    import alphonse.agent.actions.handle_timed_signals as handle_timed_signals_module
 
-    monkeypatch.setattr(handle_timer_fired_module, "JobStore", lambda: store)
+    monkeypatch.setattr(handle_timed_signals_module, "JobStore", lambda: store)
     bus = _FakeBus()
-    action = HandleTimerFiredAction()
+    action = HandleTimedSignalsAction()
     signal = Signal(
         type="timed_signal.fired",
         payload={
             "timed_signal_id": f"job_trigger:{created.job_id}",
-            "kind": "job_trigger",
             "mind_layer": "subconscious",
             "dispatch_mode": "deterministic",
             "job_id": created.job_id,
             "target": "u1",
-            "payload": {"kind": "job_trigger", "job_id": created.job_id, "user_id": "u1"},
+            "payload": {"job_id": created.job_id, "user_id": "u1"},
         },
         source="timer",
         correlation_id=created.job_id,

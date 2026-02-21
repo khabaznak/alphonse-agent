@@ -43,10 +43,12 @@ def summarize_timed_signals(locale: str, limit: int = 10) -> str:
         trigger_at = signal.get("next_trigger_at") or signal.get("trigger_at") or "unknown"
         payload = signal.get("payload") or {}
         message = (
-            payload.get("message")
+            payload.get("prompt")
+            or payload.get("agent_internal_prompt")
+            or payload.get("prompt_text")
+            or payload.get("message")
             or payload.get("message_text")
             or payload.get("reminder_text")
-            or payload.get("kind")
             or "timed_signal"
         )
         lines.append(f"- {trigger_at}: {_snippet(str(message))}")
