@@ -106,6 +106,7 @@ def test_timer_dispatches_when_now_gte_fire_at(
         assert signal is not None
         assert signal.type == "timed_signal.fired"
         payload = signal.payload if isinstance(signal.payload, dict) else {}
+        assert str(payload.get("mind_layer") or "") == "conscious"
         assert str(payload.get("target") or "") == "current_conversation"
         inner = payload.get("payload") if isinstance(payload.get("payload"), dict) else {}
         assert str(inner.get("prompt") or "").strip()

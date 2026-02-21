@@ -99,13 +99,15 @@ class TimerSense(Sense):
     def _emit(self, record: TimedSignalRecord, due_at: datetime) -> None:
         if not self._bus:
             return
+        mind_layer = str((record.payload or {}).get("mind_layer") or "subconscious").strip().lower()
+        dispatch_mode = str((record.payload or {}).get("dispatch_mode") or "deterministic").strip().lower()
         self._bus.emit(
             Signal(
                 type="timed_signal.fired",
                 payload={
                     "timed_signal_id": record.id,
-                    "mind_layer": "subconscious",
-                    "dispatch_mode": "deterministic",
+                    "mind_layer": mind_layer,
+                    "dispatch_mode": dispatch_mode,
                     "payload": record.payload,
                     "target": record.target,
                     "origin": record.origin,

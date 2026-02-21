@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone as dt_timezone
+import logging
 import re
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -9,6 +10,8 @@ from zoneinfo import ZoneInfo
 from alphonse.agent.nervous_system.prompt_artifacts import create_prompt_artifact
 from alphonse.agent.services.scheduler_service import SchedulerService
 from alphonse.config import settings
+
+logger = logging.getLogger(__name__)
 
 
 class SchedulerToolError(Exception):
@@ -87,6 +90,7 @@ class SchedulerTool:
             source_instruction=source_instruction,
         )
         payload = {
+            "mind_layer": "conscious",
             "message": message_text,
             "message_text": message_text,
             "message_mode": message_mode,
@@ -103,10 +107,7 @@ class SchedulerTool:
                 "original_time_expression": trigger_expr,
             },
         }
-        internal_prompt = _you_just_remembered_paraphrase(
-            llm_client=self.llm_client,
-            source_instruction=message_text,
-        )
+        internal_prompt = message_text
         artifact_id = create_prompt_artifact(
             user_id=str(delivery_target or "default"),
             source_instruction=source_instruction,
@@ -198,43 +199,32 @@ def _normalize_time_expression_to_iso(*, expression: str, timezone_name: str, ll
     )
 
 
-def _you_just_remembered_paraphrase(*, llm_client: Any | None, source_instruction: str) -> str:
-    source = str(source_instruction or "").strip()
-    if not source:
-        return "You just remembered something important."
-    if llm_client is None:
-        return f"You just remembered: {source}"
-    complete = getattr(llm_client, "complete", None)
-    if not callable(complete):
-        return f"You just remembered: {source}"
-    system_prompt = (
-        "Rewrite the user instruction as a first-person internal memory cue.\n"
-        "Technique: 'You Just Remembered'.\n"
-        "Keep the same language as the source.\n"
-        "Single sentence. Plain text only."
-    )
-    user_prompt = f"Source instruction:\n{source}"
-    try:
-        rendered = str(complete(system_prompt=system_prompt, user_prompt=user_prompt)).strip()
-    except TypeError:
-        try:
-            rendered = str(complete(system_prompt, user_prompt)).strip()
-        except Exception:
-            rendered = ""
-    except Exception:
-        rendered = ""
-    return rendered or f"You just remembered: {source}"
-
-
 def _build_reminder_message_payload(*, llm_client: Any | None, source_instruction: str) -> tuple[str, str]:
     source = str(source_instruction or "").strip()
+    logger.info(
+        "scheduler_tool paraphrase input source=%r source_instructions=%r",
+        source,
+        source_instruction,
+    )
     if not source:
+        logger.info(
+            "scheduler_tool paraphrase output mode=paraphrased prompt=%r",
+            "You just remembered something important.",
+        )
         return "paraphrased", "You just remembered something important."
     quoted = _extract_quoted_text(source)
     if quoted:
+        logger.info(
+            "scheduler_tool paraphrase output mode=verbatim prompt=%r",
+            quoted,
+        )
         return "verbatim", quoted
-    paraphrased = _paraphrase_reminder_message(llm_client=llm_client, source_instruction=source)
-    return "paraphrased", paraphrased or source
+    rewritten = _paraphrase_reminder_message(llm_client=llm_client, source_instruction=source)
+    logger.info(
+        "scheduler_tool paraphrase output mode=paraphrased prompt=%r",
+        rewritten or source,
+    )
+    return "paraphrased", rewritten or source
 
 
 def _extract_quoted_text(text: str) -> str:
@@ -251,15 +241,19 @@ def _extract_quoted_text(text: str) -> str:
 def _paraphrase_reminder_message(*, llm_client: Any | None, source_instruction: str) -> str:
     source = str(source_instruction or "").strip()
     if not source:
+        logger.info("scheduler_tool _paraphrase_reminder_message source=%r result=%r", source, "")
         return ""
     if llm_client is None:
+        logger.info(
+            "scheduler_tool _paraphrase_reminder_message source=%r result=%r",
+            source,
+            source,
+        )
         return source
     system_prompt = (
-        "You are Alphonse.\n"
+        "You are Alphonse the family's genius butler and virtual assistant.\n"
         "Rewrite reminder content as a clear execution cue for future trigger time.\n"
-        "Keep the same language as the source text.\n"
-        "Do not include scheduling phrases like 'in 1 minute' or 'tomorrow'.\n"
-        "Return one plain-text sentence only."
+        "Keep the same language as the source text only if between quotes; otherwise rely the message content.\n"    
     )
     user_prompt = (
         "Source reminder content:\n"
@@ -267,6 +261,11 @@ def _paraphrase_reminder_message(*, llm_client: Any | None, source_instruction: 
         "Rewrite only the reminder payload text."
     )
     rendered = _llm_complete_text(client=llm_client, system_prompt=system_prompt, user_prompt=user_prompt).strip()
+    logger.info(
+        "scheduler_tool _paraphrase_reminder_message source=%r result=%r",
+        source,
+        rendered or source,
+    )
     return rendered or source
 
 

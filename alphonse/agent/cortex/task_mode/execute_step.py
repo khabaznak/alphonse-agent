@@ -340,14 +340,67 @@ def _extract_time_expression(text: str) -> str:
 
 
 def _infer_reminder_message(*, state: dict[str, Any]) -> str:
-    user_text = str(state.get("last_user_message") or "").strip()
+    user_text = _extract_primary_user_text(state)
     if user_text:
         quoted = re.findall(r'"([^"]+)"|\'([^\']+)\'', user_text)
         for a, b in quoted:
             candidate = str(a or b).strip()
-            if candidate:
+            if _is_viable_reminder_message(candidate):
                 return candidate
+        if _is_viable_reminder_message(user_text):
+            return user_text
     locale = str(state.get("locale") or "").strip().lower()
     if locale.startswith("es"):
         return "Recordatorio"
     return "Reminder"
+
+
+def _extract_primary_user_text(state: dict[str, Any]) -> str:
+    candidates: list[str] = []
+    incoming = state.get("incoming_raw_message")
+    if isinstance(incoming, dict):
+        direct_text = str(incoming.get("text") or "").strip()
+        if direct_text:
+            candidates.append(direct_text)
+        provider_event = incoming.get("provider_event")
+        if isinstance(provider_event, dict):
+            provider_message = provider_event.get("message")
+            if isinstance(provider_message, dict):
+                provider_text = str(provider_message.get("text") or "").strip()
+                if provider_text:
+                    candidates.append(provider_text)
+    last_user_message = str(state.get("last_user_message") or "").strip()
+    if last_user_message:
+        candidates.append(_extract_text_from_packed_input(last_user_message))
+        candidates.append(last_user_message)
+    for candidate in candidates:
+        normalized = str(candidate or "").strip()
+        if normalized:
+            return normalized
+    return ""
+
+
+def _extract_text_from_packed_input(text: str) -> str:
+    rendered = str(text or "")
+    line_match = re.search(r"^- text:\s*(.+)$", rendered, flags=re.IGNORECASE | re.MULTILINE)
+    if line_match:
+        return str(line_match.group(1) or "").strip()
+    json_match = re.search(r"```json\s*(\{.*?\})\s*```", rendered, flags=re.DOTALL | re.IGNORECASE)
+    if json_match:
+        block = str(json_match.group(1) or "")
+        message_match = re.search(r'"text"\s*:\s*"([^"]+)"', block)
+        if message_match:
+            return str(message_match.group(1) or "").strip()
+    return str(text or "").strip()
+
+
+def _is_viable_reminder_message(text: str) -> bool:
+    candidate = str(text or "").strip()
+    if not candidate:
+        return False
+    lower = candidate.lower()
+    if lower in {"update_id", "message_id", "chat_id", "correlation_id", "signal_id", "id"}:
+        return False
+    if re.fullmatch(r"[a-z_]+_id", lower):
+        return False
+    return True
