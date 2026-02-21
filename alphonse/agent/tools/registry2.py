@@ -103,6 +103,24 @@ def _default_specs() -> list[ToolSpec]:
             examples=[{"ForWhom": "me", "Time": "tomorrow 8am", "Message": "take medicine"}],
         ),
         ToolSpec(
+            key="sendMessage",
+            description="Send a message to a recipient through a communication channel (for example Telegram).",
+            when_to_use="Use when the user asks Alphonse to deliver a direct message to someone.",
+            returns="delivery_status",
+            input_schema=_object_schema(
+                properties={
+                    "To": {"type": "string"},
+                    "Message": {"type": "string"},
+                    "Channel": {"type": "string"},
+                    "Urgency": {"type": "string"},
+                },
+                required=["To", "Message"],
+            ),
+            domain_tags=["communication", "messaging", "delivery"],
+            safety_level=SafetyLevel.MEDIUM,
+            examples=[{"To": "Gabriela", "Message": "Hola Gaby, Alex llegará para cenar.", "Channel": "telegram"}],
+        ),
+        ToolSpec(
             key="local_audio_output.speak",
             description="Speak text out loud on the local computer using OS-native TTS.",
             when_to_use="Use for local spoken output when requested.",

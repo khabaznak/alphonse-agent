@@ -19,6 +19,7 @@ from alphonse.agent.tools.scratchpad_tools import ScratchpadListTool
 from alphonse.agent.tools.scratchpad_tools import ScratchpadReadTool
 from alphonse.agent.tools.scratchpad_tools import ScratchpadSearchTool
 from alphonse.agent.tools.scheduler_tool import SchedulerTool
+from alphonse.agent.tools.send_message_tool import SendMessageTool
 from alphonse.agent.tools.stt_transcribe import SttTranscribeTool
 from alphonse.agent.tools.terminal_execute_tool import TerminalExecuteTool
 from alphonse.agent.tools.telegram_files import AnalyzeTelegramImageTool
@@ -53,6 +54,7 @@ def build_default_tool_registry() -> ToolRegistry:
     registry = ToolRegistry()
     clock = ClockTool()
     scheduler = SchedulerTool()
+    send_message = SendMessageTool()
     local_audio_output = LocalAudioOutputSpeakTool()
     stt_transcribe = SttTranscribeTool()
     telegram_get_file = TelegramGetFileMetaTool()
@@ -85,6 +87,7 @@ def build_default_tool_registry() -> ToolRegistry:
     user_remove_from_contact = UserRemoveFromContactTool()
     registry.register("getTime", clock)
     registry.register("createReminder", scheduler)
+    registry.register("sendMessage", send_message)
     registry.register("local_audio_output.speak", local_audio_output)
     registry.register("stt_transcribe", stt_transcribe)
     registry.register("telegramGetFileMeta", telegram_get_file)
