@@ -52,6 +52,8 @@ alphonse.log
 alphonse/agent/nervous_system/db/
 
 # Local sqlite data
+data/
+!data/.gitkeep
 data/*.db
 alphonse/agent/nervous_system/db/
 **/nerve-db*
