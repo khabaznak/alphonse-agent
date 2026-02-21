@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import logging
 from typing import Any
 
 from alphonse.agent.nervous_system import users as users_store
 from alphonse.agent.nervous_system import user_service_resolvers as resolvers
 from alphonse.agent.nervous_system.services import TELEGRAM_SERVICE_ID
-from alphonse.agent.nervous_system.timed_store import insert_timed_signal
+from alphonse.agent.tools.scheduler_tool import SchedulerTool
+from alphonse.agent.tools.scheduler_tool import SchedulerToolError
+
+logger = logging.getLogger(__name__)
 
 
 class UserRegisterFromContactTool:
@@ -171,15 +175,38 @@ def _resolve_caller(state: dict[str, Any] | None) -> dict[str, Any] | None:
     if not isinstance(state, dict):
         return None
     incoming_user_id = str(state.get("incoming_user_id") or "").strip()
-    if not incoming_user_id:
+    channel_target = str(state.get("channel_target") or state.get("chat_id") or "").strip()
+    candidate_ids = [value for value in (incoming_user_id, channel_target) if value]
+    if not candidate_ids:
+        logger.info("user_contact_tools resolve_caller missing caller identifiers")
         return None
-    direct = users_store.get_user(incoming_user_id)
-    if isinstance(direct, dict) and direct:
-        return direct
-    internal_user_id = resolvers.resolve_internal_user_by_telegram_id(incoming_user_id)
-    if not internal_user_id:
-        return None
-    return users_store.get_user(internal_user_id)
+    for candidate in candidate_ids:
+        direct = users_store.get_user(candidate)
+        if isinstance(direct, dict) and direct:
+            logger.info(
+                "user_contact_tools resolve_caller direct user_id=%s is_admin=%s",
+                str(direct.get("user_id") or ""),
+                bool(direct.get("is_admin")),
+            )
+            return direct
+        internal_user_id = resolvers.resolve_internal_user_by_telegram_id(candidate)
+        if not internal_user_id:
+            continue
+        resolved = users_store.get_user(internal_user_id)
+        if isinstance(resolved, dict) and resolved:
+            logger.info(
+                "user_contact_tools resolve_caller via_telegram candidate=%s user_id=%s is_admin=%s",
+                candidate,
+                str(resolved.get("user_id") or ""),
+                bool(resolved.get("is_admin")),
+            )
+            return resolved
+    logger.info(
+        "user_contact_tools resolve_caller unresolved incoming_user_id=%s channel_target=%s",
+        incoming_user_id,
+        channel_target,
+    )
+    return None
 
 
 def _is_admin(user: dict[str, Any] | None) -> bool:
@@ -259,31 +286,40 @@ def _schedule_proactive_intro(
 ) -> str:
     now_utc = datetime.now(timezone.utc)
     trigger_at = (now_utc + timedelta(seconds=10)).isoformat()
-    locale = str((state or {}).get("locale") or "en-US").strip()
-    is_es = locale.lower().startswith("es")
-    intro_message = (
-        f"Hola {display_name}, soy Alphonse. Encantado de conocerte."
-        if is_es
-        else f"Hi {display_name}, I am Alphonse. Nice to meet you."
+    shared_by = str((state or {}).get("incoming_user_name") or "User").strip() or "User"
+    intro_prompt = (
+        f'{shared_by} just shared the contact card for {display_name} so you could '
+        "formally introduce yourself and put yourself at their service."
     )
-    payload = {
-        "prompt": intro_message,
-        "message": intro_message,
-        "reminder_text_raw": intro_message,
-        "chat_id": str(telegram_chat_id),
-        "origin_channel": "telegram",
-        "locale_hint": locale,
-        "created_at": now_utc.isoformat(),
-        "trigger_at": trigger_at,
-    }
-    return insert_timed_signal(
-        trigger_at=trigger_at,
-        timezone=str((state or {}).get("timezone") or "UTC"),
-        payload=payload,
-        target=str(telegram_chat_id),
-        origin="telegram",
-        correlation_id=str((state or {}).get("correlation_id") or ""),
-    )
+    timezone_name = str((state or {}).get("timezone") or "UTC")
+    correlation_id = str((state or {}).get("correlation_id") or "")
+    origin_channel = str((state or {}).get("channel_type") or "telegram")
+    try:
+        result = SchedulerTool().create_reminder(
+            for_whom=str(telegram_chat_id),
+            time=trigger_at,
+            message=intro_prompt,
+            timezone_name=timezone_name,
+            correlation_id=correlation_id,
+            from_=origin_channel,
+            channel_target=str(telegram_chat_id),
+        )
+        return str(result.get("reminder_id") or "")
+    except SchedulerToolError as exc:
+        logger.warning(
+            "user_contact_tools schedule intro failed code=%s message=%s chat_id=%s",
+            exc.code,
+            exc.message,
+            telegram_chat_id,
+        )
+        return ""
+    except Exception as exc:
+        logger.warning(
+            "user_contact_tools schedule intro failed error=%s chat_id=%s",
+            type(exc).__name__,
+            telegram_chat_id,
+        )
+        return ""
 
 
 def _ok(*, result: dict[str, Any], metadata: dict[str, Any]) -> dict[str, Any]:
