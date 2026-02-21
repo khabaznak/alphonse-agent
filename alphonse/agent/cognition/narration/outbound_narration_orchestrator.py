@@ -186,6 +186,10 @@ def _normalize_channel_type(channel_type: str) -> str:
     aliases = {
         "api": "webui",
         "web": "webui",
+        "mouth": "voice",
+        "local_audio": "voice",
+        "audio": "voice",
+        "tts": "voice",
     }
     return aliases.get(normalized, normalized or "webui")
 
@@ -194,6 +198,7 @@ def _default_target(channel_type: str) -> str | None:
     defaults = {
         "cli": "cli",
         "webui": "webui",
+        "voice": "local",
     }
     return defaults.get(channel_type)
 

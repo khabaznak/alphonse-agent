@@ -9,6 +9,7 @@ from alphonse.agent.io.telegram_channel import (
     TelegramExtremityAdapter,
 )
 from alphonse.agent.io.web_channel import WebSenseAdapter, WebExtremityAdapter
+from alphonse.agent.io.voice_channel import VoiceExtremityAdapter
 
 
 _REGISTRY: AdapterRegistry | None = None
@@ -26,6 +27,7 @@ def build_default_io_registry() -> AdapterRegistry:
     registry.register_extremity(CliExtremityAdapter())
     registry.register_extremity(WebExtremityAdapter())
     registry.register_extremity(TerminalExtremityAdapter())
+    registry.register_extremity(VoiceExtremityAdapter())
     return registry
 
 
