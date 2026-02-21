@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any
+from typing import Any, Protocol, TypedDict
 
 
 class ToolExecutionState(str, Enum):
@@ -29,3 +29,13 @@ class ToolExecutionEvent:
     def mark(self) -> str:
         return tool_execution_mark(self.tool, self.state)
 
+
+class ToolResult(TypedDict):
+    status: str
+    result: Any
+    error: dict[str, Any] | None
+    metadata: dict[str, Any]
+
+
+class ToolProtocol(Protocol):
+    def execute(self, **kwargs: Any) -> ToolResult: ...

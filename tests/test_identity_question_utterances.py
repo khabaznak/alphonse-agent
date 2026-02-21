@@ -6,7 +6,6 @@ import pytest
 
 from alphonse.agent.actions import handle_incoming_message as him
 from alphonse.agent.actions.handle_incoming_message import HandleIncomingMessageAction
-from alphonse.agent.cognition.plans import PlanType
 from alphonse.agent.cortex.state_store import load_state
 from alphonse.agent.identity import profile as identity_profile
 from alphonse.agent.nervous_system.migrate import apply_schema
@@ -70,7 +69,7 @@ def test_identity_question_utterances_route_to_user_name_intent(
 
         def execute(self, plans, context, exec_context) -> None:
             for plan in plans:
-                if plan.plan_type == PlanType.COMMUNICATE:
+                if str(plan.tool or "").strip().lower() == "communicate":
                     captured.append(plan)
 
     monkeypatch.setattr(him, "PlanExecutor", FakePlanExecutor)

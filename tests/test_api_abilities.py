@@ -48,8 +48,8 @@ def test_ability_crud_flow(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> N
             "kind": "plan_emit",
             "spec": {
                 "plan": {
-                    "plan_type": "QUERY_STATUS",
-                    "payload": {"include": ["gaps_summary"]},
+                    "tool": "query_status",
+                    "parameters": {"include": ["gaps_summary"]},
                 }
             },
         },

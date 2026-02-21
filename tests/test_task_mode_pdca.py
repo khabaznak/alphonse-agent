@@ -64,39 +64,45 @@ class _SessionAwareTaskLlm:
 
 
 class _FakeClock:
-    def get_time(self) -> datetime:
-        return datetime(2026, 2, 14, 12, 0, 0, tzinfo=timezone.utc)
+    def execute(self, **kwargs):  # noqa: ANN003
+        _ = kwargs
+        now = datetime(2026, 2, 14, 12, 0, 0, tzinfo=timezone.utc)
+        return {
+            "status": "ok",
+            "result": {
+                "time": now.isoformat(),
+                "timezone": "UTC",
+            },
+            "error": None,
+            "metadata": {"tool": "getTime"},
+        }
 
 
 class _FakeReminder:
-    def create_reminder(
+    def execute(
         self,
-        *,
-        for_whom: str,
-        time: str,
-        message: str,
-        timezone_name: str,
-        correlation_id: str | None = None,
-        from_: str = "assistant",
-        channel_target: str | None = None,
-    ) -> str:
-        _ = (for_whom, time, message, timezone_name, correlation_id, from_, channel_target)
-        return "rem-test-1"
+        **kwargs,  # noqa: ANN003
+    ) -> dict[str, object]:
+        for_whom = str(kwargs.get("ForWhom") or "")
+        time = str(kwargs.get("Time") or "")
+        message = str(kwargs.get("Message") or "")
+        _ = kwargs
+        return {
+            "status": "ok",
+            "result": {
+                "reminder_id": "rem-test-1",
+                "fire_at": time,
+                "delivery_target": for_whom,
+                "message": message,
+            },
+            "error": None,
+            "metadata": {"tool": "createReminder"},
+        }
 
 
 class _ErroringReminder:
-    def create_reminder(
-        self,
-        *,
-        for_whom: str,
-        time: str,
-        message: str,
-        timezone_name: str,
-        correlation_id: str | None = None,
-        from_: str = "assistant",
-        channel_target: str | None = None,
-    ) -> str:
-        _ = (for_whom, time, message, timezone_name, correlation_id, from_, channel_target)
+    def execute(self, **kwargs):  # noqa: ANN003
+        time = str(kwargs.get("Time") or "")
         raise SchedulerToolError(
             code="time_expression_unresolvable",
             message="time expression could not be normalized",
@@ -109,28 +115,25 @@ class _RecoverableReminder:
     def __init__(self) -> None:
         self.calls: list[dict[str, str]] = []
 
-    def create_reminder(
-        self,
-        *,
-        for_whom: str,
-        time: str,
-        message: str,
-        timezone_name: str,
-        correlation_id: str | None = None,
-        from_: str = "assistant",
-        channel_target: str | None = None,
-    ) -> dict[str, str]:
-        _ = (timezone_name, correlation_id, from_, channel_target)
+    def execute(self, **kwargs):  # noqa: ANN003
+        for_whom = str(kwargs.get("ForWhom") or "")
+        time = str(kwargs.get("Time") or "")
+        message = str(kwargs.get("Message") or "")
         self.calls.append({"for_whom": for_whom, "time": time, "message": message})
         if not str(time or "").strip():
             raise SchedulerToolError(code="missing_time", message="time is required", retryable=False)
         if not str(message or "").strip():
             raise SchedulerToolError(code="missing_message", message="message is required", retryable=False)
         return {
-            "reminder_id": "rem-repaired-1",
-            "fire_at": time,
-            "delivery_target": for_whom,
-            "message": message,
+            "status": "ok",
+            "result": {
+                "reminder_id": "rem-repaired-1",
+                "fire_at": time,
+                "delivery_target": for_whom,
+                "message": message,
+            },
+            "error": None,
+            "metadata": {"tool": "createReminder"},
         }
 
 
@@ -347,9 +350,12 @@ def test_pdca_create_reminder_auto_repairs_missing_fields() -> None:
     assert isinstance(fact, dict)
     result = fact.get("result")
     assert isinstance(result, dict)
-    assert result.get("reminder_id") == "rem-repaired-1"
-    assert result.get("fire_at") == "ok please set a reminder for me in 1 min."
-    assert result.get("message") == "ok please set a reminder for me in 1 min."
+    assert result.get("status") == "ok"
+    payload = result.get("result")
+    assert isinstance(payload, dict)
+    assert payload.get("reminder_id") == "rem-repaired-1"
+    assert payload.get("fire_at") == "ok please set a reminder for me in 1 min."
+    assert payload.get("message") == "ok please set a reminder for me in 1 min."
     assert len(reminder.calls) == 2
 
 
@@ -660,7 +666,9 @@ def test_execute_step_handles_structured_tool_failure() -> None:
     result = entry.get("result")
     assert isinstance(result, dict)
     assert result.get("status") == "failed"
-    assert result.get("error") == "asset_not_found"
+    error = result.get("error")
+    assert isinstance(error, dict)
+    assert error.get("code") == "asset_not_found"
 
 
 def test_act_node_stops_after_repeated_same_tool_failures() -> None:

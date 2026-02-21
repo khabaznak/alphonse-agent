@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
-from alphonse.agent.cognition.plans import CortexPlan, PlanType
+from alphonse.agent.cognition.plans import CortexPlan
 
 
 def has_capability_gap_plan(state: dict[str, Any]) -> bool:
@@ -11,7 +11,7 @@ def has_capability_gap_plan(state: dict[str, Any]) -> bool:
         return False
     return any(
         isinstance(item, dict)
-        and str(item.get("plan_type") or "") == PlanType.CAPABILITY_GAP.value
+        and str(item.get("tool") or "").strip().lower() == "capability_gap"
         for item in plans
     )
 
@@ -31,7 +31,23 @@ def build_gap_plan(
             str(channel_type), str(channel_id)
         )
     plan = CortexPlan(
-        plan_type=PlanType.CAPABILITY_GAP,
+        tool="capability_gap",
+        parameters={
+            "user_text": str(state.get("last_user_message") or ""),
+            "reason": reason,
+            "status": "open",
+            "intent": str(state.get("intent") or ""),
+            "confidence": state.get("intent_confidence"),
+            "missing_slots": missing_slots,
+            "principal_type": "channel_chat",
+            "principal_id": principal_id,
+            "channel_type": str(channel_type) if channel_type else None,
+            "channel_id": str(channel_id) if channel_id else None,
+            "correlation_id": state.get("correlation_id"),
+            "metadata": {
+                "intent_evidence": state.get("intent_evidence"),
+            },
+        },
         payload={
             "user_text": str(state.get("last_user_message") or ""),
             "reason": reason,

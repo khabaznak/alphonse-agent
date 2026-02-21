@@ -43,6 +43,34 @@ class SchedulerTool:
     llm_client: Any | None = None
     scheduler: SchedulerService | None = None
 
+    def execute(self, *, state: dict[str, Any] | None = None, **args: Any) -> dict[str, Any]:
+        tool: SchedulerTool = self
+        llm_client = (state or {}).get("_llm_client") if isinstance(state, dict) else None
+        if tool.llm_client is None and llm_client is not None:
+            tool = SchedulerTool(llm_client=llm_client, scheduler=self.scheduler)
+        for_whom = str(args.get("ForWhom") or args.get("for_whom") or args.get("To") or "").strip()
+        time_value = str(args.get("Time") or args.get("time") or "").strip()
+        message_value = str(args.get("Message") or args.get("message") or "").strip()
+        timezone_name = args.get("timezone_name") or args.get("TimezoneName")
+        correlation_id = args.get("correlation_id") or args.get("CorrelationId")
+        from_value = str(args.get("from_") or args.get("from") or "assistant")
+        channel_target = args.get("channel_target")
+        reminder = tool.create_reminder(
+            for_whom=for_whom,
+            time=time_value,
+            message=message_value,
+            timezone_name=str(timezone_name or ""),
+            correlation_id=str(correlation_id or ""),
+            from_=from_value,
+            channel_target=str(channel_target or ""),
+        )
+        return {
+            "status": "ok",
+            "result": reminder,
+            "error": None,
+            "metadata": {"tool": "createReminder"},
+        }
+
     def create_reminder(
         self,
         *,

@@ -28,6 +28,7 @@ from alphonse.agent.tools.telegram_files import TranscribeTelegramAudioTool
 from alphonse.agent.tools.telegram_files import VisionAnalyzeImageTool
 from alphonse.agent.tools.user_contact_tools import UserRegisterFromContactTool
 from alphonse.agent.tools.user_contact_tools import UserRemoveFromContactTool
+from alphonse.agent.tools.base import ToolProtocol
 
 from alphonse.agent.tools.subprocess import SubprocessTool
 
@@ -36,10 +37,12 @@ from alphonse.agent.tools.subprocess import SubprocessTool
 class ToolRegistry:
     _tools: dict[str, Any] = field(default_factory=dict)
 
-    def register(self, key: str, tool: Any) -> None:
+    def register(self, key: str, tool: ToolProtocol) -> None:
+        if not callable(getattr(tool, "execute", None)):
+            raise ValueError(f"tool_missing_execute:{key}")
         self._tools[str(key)] = tool
 
-    def get(self, key: str) -> Any | None:
+    def get(self, key: str) -> ToolProtocol | None:
         return self._tools.get(str(key))
 
     def keys(self) -> list[str]:

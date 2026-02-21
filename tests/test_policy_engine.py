@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from types import SimpleNamespace
 
-from alphonse.agent.cognition.plans import CortexPlan, PlanType
+from alphonse.agent.cognition.plans import CortexPlan
 from alphonse.agent.policy.engine import PolicyDecision, PolicyEngine, PolicyRule
 
 
@@ -16,7 +16,7 @@ def test_schedule_rule_denies_unapproved_telegram_chat(monkeypatch) -> None:
     engine = PolicyEngine()
 
     decision = engine.approve_plan(
-        CortexPlan(plan_type=PlanType.SCHEDULE_TIMED_SIGNAL, payload={}),
+        CortexPlan(tool="schedule_timed_signal", parameters={}),
         _context("telegram", "333"),
     )
 
@@ -28,7 +28,7 @@ def test_pairing_rule_allows_cli_channel() -> None:
     engine = PolicyEngine()
 
     decision = engine.approve_plan(
-        CortexPlan(plan_type=PlanType.PAIR_APPROVE, payload={}),
+        CortexPlan(tool="pair_approve", parameters={}),
         _context("cli", "local"),
     )
 
@@ -53,7 +53,7 @@ def test_custom_rule_provider_overrides_default_rules() -> None:
     engine = PolicyEngine(rule_providers=[CustomProvider()])
 
     decision = engine.approve_plan(
-        CortexPlan(plan_type=PlanType.COMMUNICATE, payload={}),
+        CortexPlan(tool="communicate", parameters={}),
         _context("telegram", "111"),
     )
 

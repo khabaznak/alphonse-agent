@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from alphonse.agent.actions import handle_incoming_message as him
-from alphonse.agent.cognition.plans import CortexPlan, PlanType, UpdatePreferencesPayload
+from alphonse.agent.cognition.plans import CortexPlan
 from alphonse.agent.cognition.preferences.store import (
     get_or_create_principal_for_channel,
     get_with_fallback,
@@ -27,7 +27,14 @@ class _FakeCortexResult:
         self.reply_text = "ack.preference_updated"
         self.plans = [
             CortexPlan(
-                plan_type=PlanType.UPDATE_PREFERENCES,
+                tool="update_preferences",
+                parameters={
+                    "principal": {
+                        "channel_type": "telegram",
+                        "channel_id": channel_id,
+                    },
+                    "updates": [{"key": "locale", "value": locale}],
+                },
                 payload={
                     "principal": {
                         "channel_type": "telegram",
@@ -56,17 +63,23 @@ def _run_message(monkeypatch: pytest.MonkeyPatch, text: str) -> list:
 
         def execute(self, plans, context, exec_context) -> None:
             for plan in plans:
-                if plan.plan_type == PlanType.UPDATE_PREFERENCES:
-                    payload = UpdatePreferencesPayload.model_validate(plan.payload)
-                    principal = payload.principal
+                if str(plan.tool or "").strip().lower() == "update_preferences":
+                    payload = plan.parameters if isinstance(plan.parameters, dict) and plan.parameters else plan.payload
+                    principal = payload.get("principal") if isinstance(payload, dict) else {}
+                    if not isinstance(principal, dict):
+                        continue
                     principal_id = get_or_create_principal_for_channel(
-                        principal.channel_type, principal.channel_id
+                        str(principal.get("channel_type") or ""),
+                        str(principal.get("channel_id") or ""),
                     )
-                    for update in payload.updates:
+                    updates = payload.get("updates") if isinstance(payload, dict) else []
+                    for update in updates if isinstance(updates, list) else []:
+                        if not isinstance(update, dict):
+                            continue
                         set_preference(
-                            principal_id, update.key, update.value, source="user"
+                            principal_id, str(update.get("key") or ""), update.get("value"), source="user"
                         )
-                if plan.plan_type == PlanType.COMMUNICATE:
+                if str(plan.tool or "").strip().lower() == "communicate":
                     captured.append(plan)
 
     monkeypatch.setattr(him, "PlanExecutor", FakePlanExecutor)

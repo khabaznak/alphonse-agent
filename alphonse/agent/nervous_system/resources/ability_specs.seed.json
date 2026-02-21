@@ -255,10 +255,10 @@
     "kind": "plan_emit",
     "tools": [],
     "plan": {
-      "plan_type": "QUERY_STATUS",
+      "tool": "query_status",
       "target_from": ["channel_target", "chat_id"],
       "channels_from": ["channel_type"],
-      "payload": {
+      "parameters": {
         "include": ["gaps_summary"],
         "limit": 5,
         "locale": "{locale}"

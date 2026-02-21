@@ -6,7 +6,7 @@ from typing import Any
 
 from alphonse.agent.cognition.capability_gaps.reporting import build_daily_report
 from alphonse.agent.cognition.plan_executor import PlanExecutionContext, PlanExecutor
-from alphonse.agent.cognition.plans import CortexPlan, PlanType
+from alphonse.agent.cognition.plans import CortexPlan
 from alphonse.agent.cognition.preferences.store import (
     list_principals_with_preference,
     resolve_preference_with_precedence,
@@ -53,9 +53,14 @@ def dispatch_daily_report(context: dict, payload: dict[str, Any]) -> None:
             )
         report = build_daily_report(locale, gaps)
         communicate_plan = CortexPlan(
-            plan_type=PlanType.COMMUNICATE,
+            tool="communicate",
             target=str(channel_id),
             channels=[str(channel_type)],
+            parameters={
+                "message": report,
+                "locale": locale,
+                "style": tone,
+            },
             payload={
                 "message": report,
                 "locale": locale,

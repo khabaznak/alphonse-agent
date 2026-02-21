@@ -17,7 +17,7 @@ from alphonse.agent.actions.state_context import outgoing_locale
 from alphonse.agent.actions.transitions import emit_agent_transitions_from_meta
 from alphonse.agent.cognition.plan_executor import PlanExecutionContext, PlanExecutor
 from alphonse.agent.cognition.preferences.store import resolve_preference_with_precedence
-from alphonse.agent.cognition.plans import CortexPlan, PlanType
+from alphonse.agent.cognition.plans import CortexPlan
 from alphonse.agent.cognition.providers.factory import build_llm_client
 from alphonse.agent.cortex.graph import CortexGraph
 from alphonse.agent.cortex.state_store import load_state, save_state
@@ -124,9 +124,9 @@ class HandleIncomingMessageAction(Action):
         )
         if result.plans:
             logger.info(
-                "HandleIncomingMessageAction cortex_plans correlation_id=%s plan_types=%s",
+                "HandleIncomingMessageAction cortex_plans correlation_id=%s steps=%s",
                 incoming.correlation_id,
-                [str(getattr(plan, "plan_type", "unknown")) for plan in result.plans],
+                [str(getattr(plan, "tool", "unknown")) for plan in result.plans],
             )
 
         save_state(session_key, result.cognition_state)
@@ -155,7 +155,11 @@ class HandleIncomingMessageAction(Action):
                 if state_locale:
                     locale = state_locale
             reply_plan = CortexPlan(
-                plan_type=PlanType.COMMUNICATE,
+                tool="communicate",
+                parameters={
+                    "message": str(result.reply_text),
+                    "locale": locale,
+                },
                 payload={
                     "message": str(result.reply_text),
                     "locale": locale,

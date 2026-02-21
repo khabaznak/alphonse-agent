@@ -46,9 +46,11 @@ def apology_node(
     for plan in plans:
         if not isinstance(plan, dict):
             continue
-        if str(plan.get("plan_type") or "") != "CAPABILITY_GAP":
+        if str(plan.get("tool") or "").strip().lower() != "capability_gap":
             continue
-        payload = plan.get("payload") if isinstance(plan.get("payload"), dict) else {}
+        payload = (
+            plan.get("parameters") if isinstance(plan.get("parameters"), dict) else {}
+        ) or (plan.get("payload") if isinstance(plan.get("payload"), dict) else {})
         reason = str(payload.get("reason") or "capability_gap")
         missing_slots = payload.get("missing_slots")
         apology = build_capability_gap_apology(

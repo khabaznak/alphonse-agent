@@ -6,7 +6,6 @@ import pytest
 
 from alphonse.agent.actions import handle_incoming_message as him
 from alphonse.agent.actions.handle_incoming_message import HandleIncomingMessageAction
-from alphonse.agent.cognition.plans import PlanType
 from alphonse.agent.cognition.preferences.store import (
     get_or_create_principal_for_channel,
     get_preference,
@@ -92,7 +91,7 @@ def test_primary_onboarding_prompts_for_name_on_first_contact(
 
         def execute(self, plans, context, exec_context) -> None:
             for plan in plans:
-                if plan.plan_type == PlanType.COMMUNICATE:
+                if str(plan.tool or "").strip().lower() == "communicate":
                     captured.append(plan)
 
     monkeypatch.setattr(him, "PlanExecutor", FakePlanExecutor)
@@ -126,7 +125,7 @@ def test_primary_onboarding_marks_bootstrap_complete_after_name_capture(
 
         def execute(self, plans, context, exec_context) -> None:
             for plan in plans:
-                if plan.plan_type == PlanType.COMMUNICATE:
+                if str(plan.tool or "").strip().lower() == "communicate":
                     captured.append(plan)
 
     monkeypatch.setattr(him, "PlanExecutor", FakePlanExecutor)

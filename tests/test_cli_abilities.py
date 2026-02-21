@@ -26,7 +26,7 @@ def test_cli_abilities_crud_flow(
             intent_name="demo.echo",
             kind="plan_emit",
             tools=[],
-            spec_json='{"plan":{"plan_type":"QUERY_STATUS"}}',
+            spec_json='{"plan":{"tool":"query_status","parameters":{"include":["gaps_summary"]}}}',
             spec_file=None,
             source="user",
             disabled=False,

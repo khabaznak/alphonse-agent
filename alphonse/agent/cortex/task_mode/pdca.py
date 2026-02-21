@@ -3,7 +3,6 @@ from __future__ import annotations
 import inspect
 import json
 import logging
-from datetime import datetime
 from typing import Any, Callable
 
 from alphonse.agent.cognition.tool_schemas import planner_tool_schemas
@@ -17,9 +16,6 @@ from alphonse.agent.cortex.task_mode.validate_step import validate_step_node_imp
 from alphonse.agent.cortex.task_mode.types import NextStepProposal
 from alphonse.agent.cortex.task_mode.types import TraceEvent
 from alphonse.agent.session.day_state import render_recent_conversation_block
-from alphonse.agent.tools.scheduler_tool import SchedulerTool
-from alphonse.agent.tools.scheduler_tool import SchedulerToolError
-
 logger = logging.getLogger(__name__)
 
 _NEXT_STEP_DEVELOPER_PROMPT = (
@@ -489,93 +485,99 @@ def _execute_tool_call(
     args: dict[str, Any],
 ) -> Any:
     tool = tool_registry.get(tool_name) if hasattr(tool_registry, "get") else None
-    if tool_name == "getTime":
-        if tool is None and hasattr(tool_registry, "get"):
-            tool = tool_registry.get("clock")
-        if tool is None or not callable(getattr(tool, "get_time", None)):
-            raise RuntimeError("getTime unavailable")
-        now = tool.get_time()
-        if isinstance(now, datetime):
-            return now.isoformat()
-        return now
-
-    if tool_name == "createReminder":
-        if tool is None or not callable(getattr(tool, "create_reminder", None)):
-            raise RuntimeError("createReminder unavailable")
-        llm_client = state.get("_llm_client")
-        if isinstance(tool, SchedulerTool) and getattr(tool, "llm_client", None) is None and llm_client is not None:
-            tool = SchedulerTool(llm_client=llm_client)
-        for_whom = str(args.get("ForWhom") or args.get("for_whom") or args.get("To") or "").strip()
-        time_value = str(args.get("Time") or args.get("time") or "").strip()
-        message_value = str(args.get("Message") or args.get("message") or "").strip()
-        if not for_whom:
-            for_whom = str(state.get("channel_target") or "").strip()
-        from_value = str(state.get("channel_type") or "assistant")
-        timezone_name = str(state.get("timezone") or "UTC")
-        correlation_id = _correlation_id(state)
-        try:
-            reminder_id = tool.create_reminder(
-                for_whom=for_whom,
-                time=time_value,
-                message=message_value,
-                timezone_name=timezone_name,
-                correlation_id=correlation_id,
-                from_=from_value,
-                channel_target=str(state.get("channel_target") or ""),
-            )
-        except SchedulerToolError as exc:
-            return {
-                "status": "failed",
-                "result": None,
-                "error": exc.as_payload(),
-                "metadata": {"tool": "createReminder"},
-            }
-        except Exception as exc:
-            return {
-                "status": "failed",
-                "result": None,
-                "error": {
-                    "code": "create_reminder_exception",
-                    "message": str(exc) or type(exc).__name__,
-                    "retryable": True,
-                    "details": {"exception_type": type(exc).__name__},
-                },
-                "metadata": {"tool": "createReminder"},
-            }
-        if isinstance(reminder_id, dict):
-            return reminder_id
-        return {
-            "reminder_id": str(reminder_id),
-            "fire_at": time_value,
-            "delivery_target": for_whom,
-            "message": message_value,
-        }
-
     if tool is None:
         raise RuntimeError(f"tool_not_found:{tool_name}")
-    if callable(getattr(tool, "execute", None)):
-        execute = getattr(tool, "execute")
+    execute = getattr(tool, "execute", None)
+    if not callable(execute):
+        raise RuntimeError(f"tool_not_executable:{tool_name}")
+    try:
+        call_args = dict(args or {})
         signature = inspect.signature(execute)
-        try:
-            if "state" in signature.parameters:
-                return execute(**args, state=state)
-            return execute(**args)
-        except TypeError as exc:
-            return {
-                "status": "failed",
-                "result": None,
-                "error": {
-                    "code": "invalid_tool_arguments",
-                    "message": str(exc) or "invalid tool arguments",
-                    "retryable": False,
-                    "details": {
-                        "tool": tool_name,
-                        "args_keys": sorted(list(args.keys())),
-                    },
+        accepts_state = "state" in signature.parameters or any(
+            p.kind == inspect.Parameter.VAR_KEYWORD for p in signature.parameters.values()
+        )
+        if accepts_state:
+            raw_result = execute(**call_args, state=state)
+        else:
+            raw_result = execute(**call_args)
+    except TypeError as exc:
+        return {
+            "status": "failed",
+            "result": None,
+            "error": {
+                "code": "invalid_tool_arguments",
+                "message": str(exc) or "invalid tool arguments",
+                "retryable": False,
+                "details": {
+                    "tool": tool_name,
+                    "args_keys": sorted(list(dict(args or {}).keys())),
                 },
-                "metadata": {"tool": tool_name},
+            },
+            "metadata": {"tool": tool_name},
+        }
+    except Exception as exc:
+        as_payload = getattr(exc, "as_payload", None)
+        if callable(as_payload):
+            error_payload = as_payload()
+            if not isinstance(error_payload, dict):
+                error_payload = {"code": "tool_execution_exception", "message": str(exc)}
+        else:
+            error_payload = {
+                "code": "tool_execution_exception",
+                "message": str(exc) or type(exc).__name__,
+                "retryable": True,
+                "details": {"exception_type": type(exc).__name__},
             }
-    raise RuntimeError(f"tool_not_executable:{tool_name}")
+        return {
+            "status": "failed",
+            "result": None,
+            "error": _coerce_error(error_payload),
+            "metadata": {"tool": tool_name},
+        }
+    return _coerce_tool_result(tool_name=tool_name, raw_result=raw_result)
+
+
+def _coerce_tool_result(*, tool_name: str, raw_result: Any) -> dict[str, Any]:
+    if isinstance(raw_result, dict):
+        status = str(raw_result.get("status") or "").strip().lower()
+        if status in {"ok", "executed", "failed"}:
+            error = raw_result.get("error")
+            normalized_status = "failed" if status == "failed" else "ok"
+            return {
+                "status": normalized_status,
+                "result": raw_result.get("result"),
+                "error": _coerce_error(error) if normalized_status == "failed" else None,
+                "metadata": _coerce_metadata(raw_result.get("metadata"), tool_name=tool_name),
+            }
+    return {
+        "status": "ok",
+        "result": raw_result,
+        "error": None,
+        "metadata": {"tool": tool_name},
+    }
+
+
+def _coerce_error(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        code = str(value.get("code") or "tool_execution_error")
+        message = str(value.get("message") or code)
+        retryable = bool(value.get("retryable", False))
+        details = value.get("details")
+        if not isinstance(details, dict):
+            details = {}
+        return {"code": code, "message": message, "retryable": retryable, "details": details}
+    if isinstance(value, str):
+        text = value.strip() or "tool_execution_error"
+        return {"code": text, "message": text, "retryable": False, "details": {}}
+    return {"code": "tool_execution_error", "message": "Tool execution failed", "retryable": False, "details": {}}
+
+
+def _coerce_metadata(value: Any, *, tool_name: str) -> dict[str, Any]:
+    if isinstance(value, dict):
+        merged = dict(value)
+        merged.setdefault("tool", tool_name)
+        return merged
+    return {"tool": tool_name}
 
 
 def _propose_next_step_with_llm(
@@ -939,15 +941,21 @@ def _derive_outcome_from_state(*, state: dict[str, Any], task_state: dict[str, A
     if tool_name != "createReminder" or not isinstance(result, dict):
         return task_state.get("outcome") if isinstance(task_state.get("outcome"), dict) else None
 
-    reminder_id = str(result.get("reminder_id") or "").strip()
-    fire_at = str(result.get("fire_at") or "").strip()
-    message = str(result.get("message") or "").strip()
+    payload = result
+    if str(result.get("status") or "").strip().lower() in {"ok", "executed"} and isinstance(
+        result.get("result"), dict
+    ):
+        payload = dict(result.get("result") or {})
+
+    reminder_id = str(payload.get("reminder_id") or "").strip()
+    fire_at = str(payload.get("fire_at") or "").strip()
+    message = str(payload.get("message") or "").strip()
     if not reminder_id or not fire_at:
         return task_state.get("outcome") if isinstance(task_state.get("outcome"), dict) else None
 
-    for_whom = str(result.get("for_whom") or state.get("channel_target") or "").strip()
+    for_whom = str(payload.get("for_whom") or state.get("channel_target") or "").strip()
     if not for_whom:
-        for_whom = str(result.get("delivery_target") or "").strip()
+        for_whom = str(payload.get("delivery_target") or "").strip()
     return {
         "kind": "reminder_created",
         "evidence": {
