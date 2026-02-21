@@ -17,14 +17,14 @@ def test_timed_signals_summary_with_records(
     monkeypatch.setenv("NERVE_DB_PATH", str(db_path))
     apply_schema(db_path)
 
-    payload = json.dumps({"message": "Drink water"})
+    payload = json.dumps({"kind": "reminder", "message": "Drink water"})
     with sqlite3.connect(db_path) as conn:
         conn.execute(
             """
             INSERT INTO timed_signals (id, trigger_at, signal_type, payload, status)
             VALUES (?, ?, ?, ?, ?)
             """,
-            ("ts-1", "2026-02-01T10:00:00Z", "reminder", payload, "pending"),
+            ("ts-1", "2026-02-01T10:00:00Z", "timed_signal", payload, "pending"),
         )
         conn.commit()
 

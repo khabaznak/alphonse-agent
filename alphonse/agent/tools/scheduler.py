@@ -147,6 +147,7 @@ class SchedulerTool:
             source_instruction=source_instruction,
         )
         payload = {
+            "kind": "reminder",
             "message": message_text,
             "message_text": message_text,
             "message_mode": message_mode,
@@ -176,14 +177,10 @@ class SchedulerTool:
         return self.schedule_event(
             trigger_time=trigger_time,
             timezone_name=timezone_name,
-            signal_type="reminder",
             payload=payload,
             target=to,
             origin=from_,
             correlation_id=correlation_id,
-            mind_layer="conscious",
-            dispatch_mode="graph",
-            prompt_artifact_id=artifact_id,
         )
 
     def schedule_event(
@@ -191,14 +188,10 @@ class SchedulerTool:
         *,
         trigger_time: str,
         timezone_name: str,
-        signal_type: str,
         payload: dict[str, Any] | None = None,
         target: str | None = None,
         origin: str | None = None,
         correlation_id: str | None = None,
-        mind_layer: str = "subconscious",
-        dispatch_mode: str = "deterministic",
-        prompt_artifact_id: str | None = None,
     ) -> str:
         event_payload = dict(payload or {})
         event_payload.setdefault("created_at", datetime.now(dt_timezone.utc).isoformat())
@@ -208,14 +201,10 @@ class SchedulerTool:
         return insert_timed_signal(
             trigger_at=trigger_time,
             timezone=timezone_name,
-            signal_type=signal_type,
             payload=event_payload,
             target=str(target) if target is not None else None,
             origin=origin,
             correlation_id=correlation_id,
-            mind_layer=mind_layer,
-            dispatch_mode=dispatch_mode,
-            prompt_artifact_id=prompt_artifact_id,
         )
 
     # Compatibility helper while reminder payloads are still being migrated.
@@ -244,7 +233,6 @@ class SchedulerTool:
         return self.schedule_event(
             trigger_time=trigger_time,
             timezone_name=timezone_name,
-            signal_type="reminder",
             payload=payload,
             target=str(actor_person_id or chat_id),
             origin=channel_type,

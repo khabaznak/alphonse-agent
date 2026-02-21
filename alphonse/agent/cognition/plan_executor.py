@@ -170,6 +170,7 @@ class PlanExecutor:
             eta_seconds if eta_seconds is not None else "unknown",
         )
         schedule_payload = {
+            "kind": "reminder",
             "message": payload.reminder_text,
             "reminder_text_raw": payload.reminder_text,
             "person_id": exec_context.actor_person_id or payload.chat_id,
@@ -181,7 +182,6 @@ class PlanExecutor:
         result = self._scheduler.schedule_event(
             trigger_time=payload.trigger_at,
             timezone_name=payload.timezone,
-            signal_type="reminder",
             payload=schedule_payload,
             target=str(exec_context.actor_person_id or payload.chat_id),
             origin=payload.origin,

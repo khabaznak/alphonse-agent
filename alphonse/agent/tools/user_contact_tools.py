@@ -267,6 +267,7 @@ def _schedule_proactive_intro(
         else f"Hi {display_name}, I am Alphonse. Nice to meet you."
     )
     payload = {
+        "kind": "reminder",
         "message": intro_message,
         "reminder_text_raw": intro_message,
         "chat_id": str(telegram_chat_id),
@@ -278,7 +279,6 @@ def _schedule_proactive_intro(
     return insert_timed_signal(
         trigger_at=trigger_at,
         timezone=str((state or {}).get("timezone") or "UTC"),
-        signal_type="reminder",
         payload=payload,
         target=str(telegram_chat_id),
         origin="telegram",

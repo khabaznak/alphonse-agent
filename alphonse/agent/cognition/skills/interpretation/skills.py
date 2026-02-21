@@ -133,8 +133,10 @@ class SkillExecutor:
             logger.warning("Failed to insert timed signal: %s", exc)
             return "Unable to schedule the timed signal right now."
 
-        when_text = record["next_trigger_at"] or record["trigger_at"]
-        return f"Scheduled {record['signal_type']} for {when_text}."
+        when_text = record["trigger_at"]
+        payload = record.get("payload") if isinstance(record, dict) else {}
+        kind = str((payload or {}).get("kind") or "timed_signal")
+        return f"Scheduled {kind} for {when_text}."
 
 
 def build_ollama_client() -> OllamaClient:
@@ -165,6 +167,8 @@ def _build_timed_signal_record(
     args = decision.args
     signal_type = _normalize_signal_type(args.get("signal_type"))
     payload = _normalize_payload(args.get("payload"))
+    payload = dict(payload)
+    payload.setdefault("kind", signal_type)
     user_name = (
         _as_optional_str(payload.get("user_name"))
         if isinstance(payload, dict)
@@ -230,15 +234,10 @@ def _build_timed_signal_record(
     return {
         "id": str(uuid.uuid4()),
         "trigger_at": trigger_at_utc.isoformat(),
-        "next_trigger_at": next_trigger_at.isoformat() if next_trigger_at else None,
-        "rrule": rrule_value,
         "timezone": tz_name,
         "status": "pending",
         "fired_at": None,
-        "attempt_count": 0,
-        "attempts": 0,
-        "last_error": None,
-        "signal_type": signal_type,
+        "signal_type": "timed_signal",
         "payload": payload,
         "target": _as_optional_str(args.get("target"))
         or _as_optional_str(message.metadata.get("target")),
@@ -253,21 +252,16 @@ def _insert_timed_signal(record: dict[str, Any]) -> None:
         conn.execute(
             """
             INSERT INTO timed_signals
-              (id, trigger_at, next_trigger_at, rrule, timezone, status, fired_at, attempt_count, attempts, last_error, signal_type, payload, target, origin, correlation_id)
+              (id, trigger_at, timezone, status, fired_at, signal_type, payload, target, origin, correlation_id)
             VALUES
-              (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 record["id"],
                 record["trigger_at"],
-                record["next_trigger_at"],
-                record["rrule"],
                 record["timezone"],
                 record["status"],
                 record["fired_at"],
-                record["attempt_count"],
-                record.get("attempts", record["attempt_count"]),
-                record.get("last_error"),
                 record["signal_type"],
                 json.dumps(record["payload"]),
                 record["target"],

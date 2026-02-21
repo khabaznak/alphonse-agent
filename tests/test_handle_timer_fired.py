@@ -19,11 +19,12 @@ def test_conscious_reminder_dispatch_prefers_message_text_over_internal_prompt()
         type="timed_signal.fired",
         payload={
             "timed_signal_id": "tsig_1",
-            "signal_type": "reminder",
+            "kind": "reminder",
             "mind_layer": "conscious",
             "dispatch_mode": "graph",
             "target": "8553589429",
             "payload": {
+                "kind": "reminder",
                 "message_text": "Hi alex",
                 "agent_internal_prompt": "You just remembered to set a reminder.",
                 "delivery_target": "8553589429",

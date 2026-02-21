@@ -54,31 +54,36 @@ CREATE TABLE IF NOT EXISTS senses (
 CREATE TABLE IF NOT EXISTS timed_signals (
   id              TEXT PRIMARY KEY,
   trigger_at      TEXT NOT NULL,
-  fire_at         TEXT,
-  next_trigger_at TEXT,
-  rrule           TEXT,
   timezone        TEXT,
   status          TEXT NOT NULL DEFAULT 'pending',
   fired_at        TEXT,
-  attempt_count   INTEGER NOT NULL DEFAULT 0,
-  attempts        INTEGER NOT NULL DEFAULT 0,
-  last_error      TEXT,
   signal_type     TEXT NOT NULL,
-  mind_layer      TEXT NOT NULL DEFAULT 'subconscious',
-  dispatch_mode   TEXT NOT NULL DEFAULT 'deterministic',
-  job_id          TEXT,
-  prompt_artifact_id TEXT,
   payload         TEXT,
   target          TEXT,
-  delivery_target TEXT,
   origin          TEXT,
   correlation_id  TEXT,
   created_at      TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at      TEXT NOT NULL DEFAULT (datetime('now')),
-  CHECK (mind_layer IN ('subconscious', 'conscious')),
-  CHECK (dispatch_mode IN ('deterministic', 'graph')),
-  CHECK (status IN ('pending', 'processing', 'fired', 'failed', 'cancelled', 'error', 'skipped', 'dispatched'))
+  CHECK (status IN ('pending', 'fired', 'failed', 'cancelled', 'error'))
 ) STRICT;
+
+CREATE TABLE IF NOT EXISTS scheduled_jobs (
+  id            TEXT PRIMARY KEY,
+  name          TEXT NOT NULL,
+  prompt        TEXT,
+  owner_id      TEXT NOT NULL,
+  rrule         TEXT,
+  retries       INTEGER NOT NULL DEFAULT 0,
+  status        TEXT NOT NULL DEFAULT 'active',
+  next_run_at   TEXT,
+  timezone      TEXT,
+  created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at    TEXT NOT NULL DEFAULT (datetime('now')),
+  CHECK (status IN ('active', 'paused', 'failed', 'completed'))
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_scheduled_jobs_owner ON scheduled_jobs (owner_id);
+CREATE INDEX IF NOT EXISTS idx_scheduled_jobs_next_run ON scheduled_jobs (next_run_at, status);
 
 CREATE TABLE IF NOT EXISTS prompt_artifacts (
   artifact_id       TEXT PRIMARY KEY,

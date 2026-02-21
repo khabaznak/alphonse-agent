@@ -35,22 +35,16 @@ VALUES
   ('telegram.invite_requested', 'Telegram Invite Requested', 'telegram', 'Telegram chat invite awaiting approval', 1);
 
 INSERT OR IGNORE INTO timed_signals (
-  id, trigger_at, next_trigger_at, rrule, timezone, status, fired_at, attempt_count, attempts,
-  last_error, signal_type, payload, target, origin, correlation_id
+  id, trigger_at, timezone, status, fired_at, signal_type, payload, target, origin, correlation_id
 )
 VALUES (
   'daily_report',
   datetime('now'),
   NULL,
-  'FREQ=DAILY',
-  NULL,
   'pending',
   NULL,
-  0,
-  0,
-  NULL,
-  'daily_report',
-  NULL,
+  'timed_signal',
+  '{"kind":"daily_report"}',
   NULL,
   'system',
   'daily_report'

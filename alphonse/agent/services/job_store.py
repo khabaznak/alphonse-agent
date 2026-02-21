@@ -4,6 +4,7 @@ import hashlib
 import json
 import secrets
 import logging
+import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -11,7 +12,7 @@ from zoneinfo import ZoneInfo
 
 from dateutil.rrule import rrulestr
 
-from alphonse.agent.nervous_system.timed_store import insert_timed_signal
+from alphonse.agent.nervous_system.paths import resolve_nervous_system_db_path
 from alphonse.agent.services.job_models import JobExecution, JobSpec
 
 logger = logging.getLogger(__name__)
@@ -72,7 +73,7 @@ class JobStore:
         jobs[job.job_id] = job.to_dict()
         self._write_jobs(user_id, data)
         try:
-            self._sync_job_timed_signal(user_id=user_id, job=job)
+            self._sync_scheduled_job_row(user_id=user_id, job=job)
         except Exception as exc:
             logger.warning(
                 "JobStore create_job sync_failed user_id=%s job_id=%s error=%s",
@@ -135,7 +136,7 @@ class JobStore:
         jobs[job.job_id] = job.to_dict()
         self._write_jobs(user_id, data)
         try:
-            self._sync_job_timed_signal(user_id=user_id, job=job)
+            self._sync_scheduled_job_row(user_id=user_id, job=job)
         except Exception as exc:
             logger.warning(
                 "JobStore save_job sync_failed user_id=%s job_id=%s error=%s",
@@ -182,7 +183,7 @@ class JobStore:
                     updated += 1
                     user_changed = True
                 try:
-                    self._sync_job_timed_signal(user_id=uid, job=spec)
+                    self._sync_scheduled_job_row(user_id=uid, job=spec)
                 except Exception as exc:
                     logger.warning(
                         "JobStore backfill sync_failed user_id=%s job_id=%s error=%s",
@@ -216,7 +217,7 @@ class JobStore:
         jobs.pop(str(job_id), None)
         self._write_jobs(user_id, data)
         try:
-            self._delete_job_timed_signal(job_id=str(job_id))
+            self._delete_scheduled_job_row(job_id=str(job_id))
         except Exception:
             pass
         return True
@@ -308,51 +309,54 @@ class JobStore:
         temp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
         temp.replace(path)
 
-    def _sync_job_timed_signal(self, *, user_id: str, job: JobSpec) -> None:
+    def _sync_scheduled_job_row(self, *, user_id: str, job: JobSpec) -> None:
         if not job.enabled:
-            self._delete_job_timed_signal(job_id=job.job_id)
+            self._delete_scheduled_job_row(job_id=job.job_id)
             return
-        dtstart_raw = str((job.schedule or {}).get("dtstart") or "").strip()
-        if not dtstart_raw:
-            return
-        trigger_at = dtstart_raw
-        next_trigger = str(job.next_run_at or "").strip() or None
-        signal_payload = {
-            "job_id": job.job_id,
-            "user_id": str(user_id),
-            "payload_type": job.payload_type,
-            "payload": job.payload,
-            "timezone": job.timezone,
-            "name": job.name,
-            "description": job.description,
-        }
-        self._delete_job_timed_signal(job_id=job.job_id)
-        insert_timed_signal(
-            signal_id=f"job_trigger:{job.job_id}",
-            trigger_at=trigger_at,
-            next_trigger_at=next_trigger,
-            rrule=str((job.schedule or {}).get("rrule") or "").strip() or None,
-            timezone=job.timezone,
-            signal_type="job_trigger",
-            mind_layer="conscious",
-            dispatch_mode="graph",
-            job_id=job.job_id,
-            payload=signal_payload,
-            target=str(user_id),
-            origin="job_store",
-            correlation_id=job.job_id,
-        )
+        prompt = _extract_job_prompt(job.payload)
+        now_text = _now_utc().isoformat()
+        rrule_value = str((job.schedule or {}).get("rrule") or "").strip() or None
+        status = "active" if bool(job.enabled) else "paused"
+        next_run_at = str(job.next_run_at or "").strip() or None
+        retries = int((job.retry_policy or {}).get("max_retries") or 0)
+        db_path = resolve_nervous_system_db_path()
+        with sqlite3.connect(db_path) as conn:
+            conn.execute(
+                """
+                INSERT INTO scheduled_jobs (
+                  id, name, prompt, owner_id, rrule, retries, status, next_run_at, timezone, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                  name = excluded.name,
+                  prompt = excluded.prompt,
+                  owner_id = excluded.owner_id,
+                  rrule = excluded.rrule,
+                  retries = excluded.retries,
+                  status = excluded.status,
+                  next_run_at = excluded.next_run_at,
+                  timezone = excluded.timezone,
+                  updated_at = excluded.updated_at
+                """,
+                (
+                    str(job.job_id),
+                    str(job.name or ""),
+                    prompt,
+                    str(user_id),
+                    rrule_value,
+                    retries,
+                    status,
+                    next_run_at,
+                    str(job.timezone or "UTC"),
+                    str(job.created_at or now_text),
+                    now_text,
+                ),
+            )
+            conn.commit()
 
-    def _delete_job_timed_signal(self, *, job_id: str) -> None:
-        from alphonse.agent.nervous_system.paths import resolve_nervous_system_db_path
-        import sqlite3
-
-        signal_id = f"job_trigger:{str(job_id)}"
-        with sqlite3.connect(resolve_nervous_system_db_path()) as conn:
-            try:
-                conn.execute("DELETE FROM timed_signals WHERE id = ? OR job_id = ?", (signal_id, str(job_id)))
-            except sqlite3.OperationalError:
-                conn.execute("DELETE FROM timed_signals WHERE id = ?", (signal_id,))
+    def _delete_scheduled_job_row(self, *, job_id: str) -> None:
+        db_path = resolve_nervous_system_db_path()
+        with sqlite3.connect(db_path) as conn:
+            conn.execute("DELETE FROM scheduled_jobs WHERE id = ?", (str(job_id),))
             conn.commit()
 
 
@@ -451,6 +455,16 @@ def _normalize_payload_type(value: str) -> str:
     if raw == "prompt":
         return "prompt_to_brain"
     return raw or "internal_event"
+
+
+def _extract_job_prompt(payload: dict[str, Any]) -> str:
+    if not isinstance(payload, dict):
+        return ""
+    for key in ("prompt_text", "prompt", "message", "text"):
+        value = str(payload.get(key) or "").strip()
+        if value:
+            return value
+    return ""
 
 
 def compute_retry_time(*, now: datetime, backoff_seconds: int) -> str:

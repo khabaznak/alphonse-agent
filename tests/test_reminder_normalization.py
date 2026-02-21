@@ -50,7 +50,7 @@ def test_create_reminder_normalizes_fire_at_and_delivery_target(
     assert isinstance(result, dict)
 
     rows = list_timed_signals(limit=5)
-    reminder = next((row for row in rows if row.get("signal_type") == "reminder"), None)
+    reminder = next((row for row in rows if str((row.get("payload") or {}).get("kind") or "") == "reminder"), None)
     assert isinstance(reminder, dict)
     trigger_at = str(reminder.get("trigger_at") or "")
     target = str(reminder.get("target") or "")
@@ -98,7 +98,7 @@ def test_timer_dispatches_when_now_gte_fire_at(
         assert signal is not None
         assert signal.type == "timed_signal.fired"
         payload = signal.payload if isinstance(signal.payload, dict) else {}
-        assert str(payload.get("signal_type") or "") == "reminder"
+        assert str(payload.get("kind") or "") == "reminder"
         assert str(payload.get("target") or "") == "8553589429"
     finally:
         timer.stop()
@@ -109,21 +109,14 @@ def test_allowed_lag_for_one_shot_uses_default_window() -> None:
     record = TimedSignalRecord(
         id="s1",
         trigger_at=now,
-        fire_at=now,
+        timezone="America/Mexico_City",
         status="pending",
-        signal_type="reminder",
-        mind_layer="conscious",
-        dispatch_mode="graph",
-        job_id=None,
-        prompt_artifact_id=None,
+        signal_type="timed_signal",
         payload={},
         target="8553589429",
-        delivery_target="8553589429",
         origin="tests",
         correlation_id=None,
-        next_trigger_at=now,
-        rrule=None,
-        timezone="America/Mexico_City",
+        fired_at=now,
     )
     assert _allowed_lag_seconds(record, now) == float(MAX_ACCEPTABLE_TRIGGER_LATENCY_SECONDS)
 
@@ -133,21 +126,14 @@ def test_allowed_lag_for_daily_rrule_uses_catchup_window() -> None:
     record = TimedSignalRecord(
         id="s2",
         trigger_at=now - timedelta(days=1),
-        fire_at=None,
+        timezone="America/Mexico_City",
         status="pending",
-        signal_type="job_trigger",
-        mind_layer="conscious",
-        dispatch_mode="graph",
-        job_id="job_1",
-        prompt_artifact_id=None,
+        signal_type="timed_signal",
         payload={},
         target="8553589429",
-        delivery_target="8553589429",
         origin="tests",
         correlation_id=None,
-        next_trigger_at=now,
-        rrule="FREQ=DAILY",
-        timezone="America/Mexico_City",
+        fired_at=None,
     )
     lag = _allowed_lag_seconds(record, now)
-    assert lag >= 3600.0
+    assert lag == float(MAX_ACCEPTABLE_TRIGGER_LATENCY_SECONDS)

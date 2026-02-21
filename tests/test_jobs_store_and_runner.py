@@ -4,7 +4,6 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from alphonse.agent.nervous_system.migrate import apply_schema
-from alphonse.agent.nervous_system.timed_store import list_timed_signals
 from alphonse.agent.services.job_models import JobSpec
 from alphonse.agent.services.job_runner import JobRunner, route_job
 from alphonse.agent.services.job_store import JobStore, compute_next_run_at
@@ -143,10 +142,17 @@ def test_job_store_normalizes_missing_rrule_fields_and_syncs_timed_signal(
     assert created.schedule.get("type") == "rrule"
     assert str(created.schedule.get("dtstart") or "").strip()
     assert created.next_run_at
-    rows = list_timed_signals(limit=20)
-    compiled = next((row for row in rows if row.get("id") == f"job_trigger:{created.job_id}"), None)
-    assert isinstance(compiled, dict)
-    assert compiled.get("signal_type") == "job_trigger"
+    import sqlite3
+
+    with sqlite3.connect(db_path) as conn:
+        compiled = conn.execute(
+            "SELECT id, owner_id, status FROM scheduled_jobs WHERE id = ?",
+            (created.job_id,),
+        ).fetchone()
+    assert compiled is not None
+    assert str(compiled[0]) == created.job_id
+    assert str(compiled[1]) == "u1"
+    assert str(compiled[2]) == "active"
 
 
 def test_job_store_normalizes_legacy_prompt_payload_type(

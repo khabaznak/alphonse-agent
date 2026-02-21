@@ -31,7 +31,8 @@ class HandleTimerFiredAction(Action):
     def execute(self, context: dict) -> ActionResult:
         signal = context.get("signal")
         payload = getattr(signal, "payload", {}) if signal else {}
-        signal_type = payload.get("signal_type")
+        inner = _payload_from_signal(payload)
+        payload_kind = str(inner.get("kind") or payload.get("kind") or "").strip().lower()
         mind_layer = str(payload.get("mind_layer") or "subconscious").strip().lower()
         dispatch_mode = str(payload.get("dispatch_mode") or "deterministic").strip().lower()
         logger.info(
@@ -40,16 +41,15 @@ class HandleTimerFiredAction(Action):
             payload.get("timed_signal_id"),
             getattr(signal, "correlation_id", None),
         )
-        if signal_type == "daily_report":
+        if payload_kind == "daily_report":
             dispatch_daily_report(context, payload)
             return ActionResult(intention_key="NOOP", payload={}, urgency=None)
-        if signal_type == "job_trigger":
+        if payload_kind == "job_trigger":
             self._handle_job_trigger(context=context, payload=payload, signal=signal)
             return ActionResult(intention_key="NOOP", payload={}, urgency=None)
         if dispatch_mode == "graph" or mind_layer == "conscious":
             self._dispatch_conscious_timed_signal(context=context, payload=payload, signal=signal)
             return ActionResult(intention_key="NOOP", payload={}, urgency=None)
-        inner = _payload_from_signal(payload)
         reminder_payload = _build_reminder_payload(payload, inner)
         rendered = render_reminder(reminder_payload, prefs=None)
         locale = _locale_from_payload(reminder_payload)
@@ -96,8 +96,8 @@ class HandleTimerFiredAction(Action):
             logger.warning("HandleTimerFiredAction conscious dispatch skipped reason=no_bus")
             return
         inner = _payload_from_signal(payload)
-        signal_type = str(payload.get("signal_type") or "").strip().lower()
-        if signal_type == "reminder":
+        payload_kind = str(inner.get("kind") or payload.get("kind") or "").strip().lower()
+        if payload_kind == "reminder":
             message_text = str(
                 inner.get("message_text")
                 or inner.get("reminder_text_raw")
@@ -110,7 +110,7 @@ class HandleTimerFiredAction(Action):
                 inner.get("agent_internal_prompt")
                 or inner.get("prompt_text")
                 or inner.get("message")
-                or payload.get("signal_type")
+                or payload_kind
                 or "You just remembered something important."
             ).strip()
         target = str(inner.get("chat_id") or payload.get("target") or inner.get("delivery_target") or "").strip()

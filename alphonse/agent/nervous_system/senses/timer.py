@@ -6,41 +6,30 @@ import os
 import sqlite3
 import threading
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Any
-
-from dateutil.rrule import rrulestr
 
 from alphonse.agent.nervous_system.senses.base import Sense, SignalSpec
 from alphonse.agent.nervous_system.senses.bus import Bus, Signal
 from alphonse.agent.nervous_system.paths import resolve_nervous_system_db_path
-from alphonse.config import settings
 
 logger = logging.getLogger(__name__)
 
 MAX_ACCEPTABLE_TRIGGER_LATENCY_SECONDS = 30 * 60
-RECURRENCE_CATCHUP_WINDOW_RATIO = 0.05
 
 
 @dataclass(frozen=True)
 class TimedSignalRecord:
     id: str
     trigger_at: datetime
-    fire_at: datetime | None
+    timezone: str | None
     status: str
     signal_type: str
-    mind_layer: str
-    dispatch_mode: str
-    job_id: str | None
-    prompt_artifact_id: str | None
     payload: dict[str, Any]
     target: str | None
-    delivery_target: str | None
     origin: str | None
     correlation_id: str | None
-    next_trigger_at: datetime | None
-    rrule: str | None
-    timezone: str | None
+    fired_at: datetime | None
 
 
 class TimerSense(Sense):
@@ -82,23 +71,11 @@ class TimerSense(Sense):
                 continue
 
             now = datetime.now(tz=timezone.utc)
-            due_at = next_signal.next_trigger_at or next_signal.fire_at or next_signal.trigger_at
+            due_at = next_signal.trigger_at
             delta_seconds = (due_at - now).total_seconds()
             allowed_lag_seconds = _allowed_lag_seconds(next_signal, due_at)
 
             if delta_seconds < -allowed_lag_seconds:
-                if next_signal.rrule:
-                    next_at = _next_rrule_occurrence(next_signal, now)
-                    if next_at:
-                        logger.info(
-                            "TimerSense skipped late recurring signal id=%s lag_seconds=%.3f allowed_lag_seconds=%.3f next_at=%s",
-                            next_signal.id,
-                            -delta_seconds,
-                            allowed_lag_seconds,
-                            next_at.isoformat(),
-                        )
-                        self._reschedule(next_signal.id, next_at)
-                        continue
                 self._mark_failed(next_signal.id, "missed dispatch window")
                 continue
 
@@ -115,10 +92,6 @@ class TimerSense(Sense):
                         (now - due_at).total_seconds(),
                     )
                     self._emit(next_signal, due_at)
-                    if next_signal.rrule:
-                        next_at = _next_rrule_occurrence(next_signal, due_at)
-                        if next_at:
-                            self._reschedule(next_signal.id, next_at)
                 continue
 
             self._sleep(min(delta_seconds, self._poll_seconds))
@@ -131,13 +104,11 @@ class TimerSense(Sense):
                 type="timed_signal.fired",
                 payload={
                     "timed_signal_id": record.id,
-                    "signal_type": record.signal_type,
-                    "mind_layer": record.mind_layer,
-                    "dispatch_mode": record.dispatch_mode,
-                    "job_id": record.job_id,
-                    "prompt_artifact_id": record.prompt_artifact_id,
+                    "mind_layer": "subconscious",
+                    "dispatch_mode": "deterministic",
                     "payload": record.payload,
-                    "target": record.delivery_target or record.target,
+                    "kind": str((record.payload or {}).get("kind") or ""),
+                    "target": record.target,
                     "origin": record.origin,
                     "correlation_id": record.correlation_id,
                     "trigger_at": due_at.isoformat(),
@@ -149,10 +120,9 @@ class TimerSense(Sense):
 
     def _fetch_next_pending(self) -> TimedSignalRecord | None:
         query = (
-            "SELECT id, trigger_at, fire_at, next_trigger_at, rrule, timezone, status, signal_type, "
-            "mind_layer, dispatch_mode, job_id, prompt_artifact_id, payload, target, delivery_target, origin, correlation_id "
+            "SELECT id, trigger_at, timezone, status, signal_type, payload, target, origin, correlation_id, fired_at "
             "FROM timed_signals WHERE status = 'pending' "
-            "ORDER BY COALESCE(next_trigger_at, fire_at, trigger_at) ASC LIMIT 1"
+            "ORDER BY trigger_at ASC LIMIT 1"
         )
         with sqlite3.connect(resolve_nervous_system_db_path()) as conn:
             row = conn.execute(query).fetchone()
@@ -161,33 +131,24 @@ class TimerSense(Sense):
         signal_id = str(row[0])
         try:
             trigger_at = _parse_dt(str(row[1]))
-            fire_at = _parse_dt(str(row[2])) if row[2] else None
-            next_trigger_at = _parse_dt(str(row[3])) if row[3] else None
+            fired_at = _parse_dt(str(row[9])) if row[9] else None
         except Exception:
-            self._mark_error(signal_id, f"invalid_fire_at:{row[1]}")
+            self._mark_error(signal_id, f"invalid_trigger_at:{row[1]}")
             logger.warning("TimerSense marked signal error id=%s invalid_trigger_at=%s", signal_id, row[1])
             return None
-        rrule_value = _as_optional_str(row[4])
-        timezone_value = _as_optional_str(row[5])
-        payload = _parse_payload(row[12])
+        timezone_value = _as_optional_str(row[2])
+        payload = _parse_payload(row[5])
         return TimedSignalRecord(
             id=signal_id,
             trigger_at=trigger_at,
-            fire_at=fire_at,
-            status=str(row[6]),
-            signal_type=str(row[7]),
-            mind_layer=str(row[8] or "subconscious"),
-            dispatch_mode=str(row[9] or "deterministic"),
-            job_id=_as_optional_str(row[10]),
-            prompt_artifact_id=_as_optional_str(row[11]),
-            payload=payload,
-            target=_as_optional_str(row[13]),
-            delivery_target=_as_optional_str(row[14]),
-            origin=_as_optional_str(row[15]),
-            correlation_id=_as_optional_str(row[16]),
-            next_trigger_at=next_trigger_at,
-            rrule=rrule_value,
             timezone=timezone_value,
+            status=str(row[3]),
+            signal_type=str(row[4]),
+            payload=payload,
+            target=_as_optional_str(row[6]),
+            origin=_as_optional_str(row[7]),
+            correlation_id=_as_optional_str(row[8]),
+            fired_at=fired_at,
         )
 
     def _mark_status(self, signal_id: str, status: str) -> None:
@@ -205,9 +166,6 @@ class TimerSense(Sense):
                 UPDATE timed_signals
                 SET status = 'fired',
                     fired_at = datetime('now'),
-                    attempt_count = attempt_count + 1,
-                    attempts = attempts + 1,
-                    last_error = NULL,
                     updated_at = datetime('now')
                 WHERE id = ? AND status = 'pending'
                 """,
@@ -222,50 +180,40 @@ class TimerSense(Sense):
                 """
                 UPDATE timed_signals
                 SET status = 'failed',
-                    last_error = ?,
-                    attempt_count = attempt_count + 1,
-                    attempts = attempts + 1,
                     updated_at = datetime('now')
                 WHERE id = ?
                 """,
-                (reason, signal_id),
+                (signal_id,),
             )
             conn.commit()
 
     def _mark_error(self, signal_id: str, reason: str) -> None:
+        _ = reason
         with sqlite3.connect(resolve_nervous_system_db_path()) as conn:
             conn.execute(
                 """
                 UPDATE timed_signals
                 SET status = 'error',
-                    last_error = ?,
-                    attempt_count = attempt_count + 1,
-                    attempts = attempts + 1,
                     updated_at = datetime('now')
                 WHERE id = ?
                 """,
-                (reason, signal_id),
-            )
-            conn.commit()
-
-    def _reschedule(self, signal_id: str, next_trigger_at: datetime) -> None:
-        with sqlite3.connect(resolve_nervous_system_db_path()) as conn:
-            conn.execute(
-                "UPDATE timed_signals SET next_trigger_at = ?, status = 'pending', updated_at = datetime('now') "
-                "WHERE id = ?",
-                (next_trigger_at.isoformat(), signal_id),
+                (signal_id,),
             )
             conn.commit()
 
     def _sleep(self, seconds: float) -> None:
-        self._stop_event.wait(timeout=seconds)
+        self._stop_event.wait(timeout=max(0.0, seconds))
 
 
 def _parse_dt(value: str) -> datetime:
-    parsed = datetime.fromisoformat(value)
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
-    return parsed.astimezone(timezone.utc)
+    text = str(value).strip()
+    if not text:
+        raise ValueError("empty datetime")
+    normalized = text.replace("Z", "+00:00")
+    dt = datetime.fromisoformat(normalized)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
 
 
 def _parse_payload(raw: str | None) -> dict[str, Any]:
@@ -273,61 +221,28 @@ def _parse_payload(raw: str | None) -> dict[str, Any]:
         return {}
     try:
         parsed = json.loads(raw)
-    except json.JSONDecodeError:
+    except Exception:
         return {}
-    if isinstance(parsed, dict):
-        return parsed
-    return {}
+    return parsed if isinstance(parsed, dict) else {}
 
 
-def _as_optional_str(value: object | None) -> str | None:
+def _as_optional_str(value: Any) -> str | None:
     if value is None:
         return None
-    return str(value)
-
-
-def _next_rrule_occurrence(record: TimedSignalRecord, last_fire_at: datetime) -> datetime | None:
-    tz_name = record.timezone or settings.get_timezone()
-    dtstart = record.trigger_at
-    rule = rrulestr(record.rrule or "", dtstart=dtstart)
-    candidate = rule.after(last_fire_at, inc=False)
-    return candidate.astimezone(timezone.utc) if candidate else None
-
-
-def _allowed_lag_seconds(record: TimedSignalRecord, due_at: datetime) -> float:
-    if not record.rrule:
-        return float(MAX_ACCEPTABLE_TRIGGER_LATENCY_SECONDS)
-    period_seconds = _estimate_rrule_period_seconds(record, due_at)
-    if period_seconds is None:
-        return float(MAX_ACCEPTABLE_TRIGGER_LATENCY_SECONDS)
-    catchup_seconds = period_seconds * RECURRENCE_CATCHUP_WINDOW_RATIO
-    return float(max(MAX_ACCEPTABLE_TRIGGER_LATENCY_SECONDS, catchup_seconds))
-
-
-def _estimate_rrule_period_seconds(record: TimedSignalRecord, reference: datetime) -> float | None:
-    try:
-        rule = rrulestr(record.rrule or "", dtstart=record.trigger_at)
-    except Exception:
-        return None
-    probe = reference - timedelta(seconds=1)
-    current = rule.before(probe, inc=True)
-    if current is None:
-        current = rule.after(reference, inc=True)
-    if current is None:
-        return None
-    next_occurrence = rule.after(current, inc=False)
-    if next_occurrence is None:
-        return None
-    period_seconds = (next_occurrence - current).total_seconds()
-    if period_seconds <= 0:
-        return None
-    return period_seconds
+    text = str(value).strip()
+    return text or None
 
 
 def _parse_float(raw: str | None, default: float) -> float:
-    if raw is None:
-        return default
     try:
-        return float(raw)
-    except ValueError:
-        return default
+        value = float(str(raw).strip()) if raw is not None else float(default)
+        if value <= 0:
+            return float(default)
+        return value
+    except Exception:
+        return float(default)
+
+
+def _allowed_lag_seconds(record: TimedSignalRecord, due_at: datetime) -> float:
+    _ = (record, due_at)
+    return float(MAX_ACCEPTABLE_TRIGGER_LATENCY_SECONDS)

@@ -54,9 +54,7 @@ def test_create_reminder_accepts_spanish_relative_time(monkeypatch) -> None:
     assert result["reminder_id"] == "tsig_123"
     assert result["delivery_target"] == "8553589429"
     assert result["original_time_expression"] == "mañana a las 7:30am"
-    assert captured.get("mind_layer") == "conscious"
-    assert captured.get("dispatch_mode") == "graph"
-    assert captured.get("prompt_artifact_id") == "pa_test"
+    assert "signal_type" not in captured
 
 
 def test_create_reminder_raises_structured_error_on_missing_message() -> None:

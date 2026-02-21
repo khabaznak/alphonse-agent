@@ -6,7 +6,6 @@ from pathlib import Path
 from alphonse.agent.actions.handle_timer_fired import HandleTimerFiredAction
 from alphonse.agent.nervous_system.migrate import apply_schema
 from alphonse.agent.nervous_system.senses.bus import Signal
-from alphonse.agent.nervous_system.timed_store import list_timed_signals
 from alphonse.agent.services.job_store import JobStore
 
 
@@ -38,12 +37,17 @@ def test_job_create_compiles_job_trigger_timed_signal(tmp_path: Path, monkeypatc
             "timezone": "UTC",
         },
     )
-    rows = list_timed_signals(limit=50)
-    row = next((item for item in rows if item.get("job_id") == created.job_id), None)
-    assert isinstance(row, dict)
-    assert row.get("signal_type") == "job_trigger"
-    assert row.get("mind_layer") == "conscious"
-    assert row.get("dispatch_mode") == "graph"
+    import sqlite3
+
+    with sqlite3.connect(db_path) as conn:
+        row = conn.execute(
+            "SELECT id, owner_id, status FROM scheduled_jobs WHERE id = ?",
+            (created.job_id,),
+        ).fetchone()
+    assert row is not None
+    assert str(row[0]) == created.job_id
+    assert str(row[1]) == "u1"
+    assert str(row[2]) == "active"
 
 
 def test_timer_fired_job_trigger_emits_conscious_message_event(tmp_path: Path, monkeypatch) -> None:
@@ -77,12 +81,12 @@ def test_timer_fired_job_trigger_emits_conscious_message_event(tmp_path: Path, m
         type="timed_signal.fired",
         payload={
             "timed_signal_id": f"job_trigger:{created.job_id}",
-            "signal_type": "job_trigger",
-            "mind_layer": "conscious",
-            "dispatch_mode": "graph",
+            "kind": "job_trigger",
+            "mind_layer": "subconscious",
+            "dispatch_mode": "deterministic",
             "job_id": created.job_id,
             "target": "u1",
-            "payload": {"job_id": created.job_id, "user_id": "u1"},
+            "payload": {"kind": "job_trigger", "job_id": created.job_id, "user_id": "u1"},
         },
         source="timer",
         correlation_id=created.job_id,

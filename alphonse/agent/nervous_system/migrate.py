@@ -17,9 +17,8 @@ def apply_schema(db_path: Path) -> None:
     schema_sql = schema_path.read_text(encoding="utf-8")
     with sqlite3.connect(db_path) as conn:
         conn.executescript(schema_sql)
-        _ensure_timed_signal_columns(conn)
-        _ensure_timed_signal_dispatch_columns(conn)
-        _ensure_timed_signal_statuses(conn)
+        _hard_reset_timed_signals(conn)
+        _ensure_scheduled_jobs_table(conn)
         _ensure_paired_device_columns(conn)
         _ensure_pairing_columns(conn)
         _ensure_delivery_receipts_columns(conn)
@@ -41,49 +40,54 @@ def main() -> None:
     print(f"Applied schema to {db_path}")
 
 
-def _ensure_timed_signal_columns(conn: sqlite3.Connection) -> None:
-    columns = {
-        "fire_at": "TEXT",
-        "next_trigger_at": "TEXT",
-        "rrule": "TEXT",
-        "timezone": "TEXT",
-        "fired_at": "TEXT",
-        "attempt_count": "INTEGER NOT NULL DEFAULT 0",
-        "attempts": "INTEGER NOT NULL DEFAULT 0",
-        "last_error": "TEXT",
-        "delivery_target": "TEXT",
-    }
-    for name, definition in columns.items():
-        try:
-            conn.execute(f"ALTER TABLE timed_signals ADD COLUMN {name} {definition}")
-        except sqlite3.OperationalError:
-            continue
+def _hard_reset_timed_signals(conn: sqlite3.Connection) -> None:
+    conn.execute("DROP TABLE IF EXISTS timed_signals")
+    conn.execute(
+        """
+        CREATE TABLE timed_signals (
+          id              TEXT PRIMARY KEY,
+          trigger_at      TEXT NOT NULL,
+          timezone        TEXT,
+          status          TEXT NOT NULL DEFAULT 'pending',
+          fired_at        TEXT,
+          signal_type     TEXT NOT NULL,
+          payload         TEXT,
+          target          TEXT,
+          origin          TEXT,
+          correlation_id  TEXT,
+          created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+          updated_at      TEXT NOT NULL DEFAULT (datetime('now')),
+          CHECK (status IN ('pending', 'fired', 'failed', 'cancelled', 'error'))
+        ) STRICT
+        """
+    )
 
 
-def _ensure_timed_signal_dispatch_columns(conn: sqlite3.Connection) -> None:
-    columns = {
-        "mind_layer": "TEXT NOT NULL DEFAULT 'subconscious'",
-        "dispatch_mode": "TEXT NOT NULL DEFAULT 'deterministic'",
-        "job_id": "TEXT",
-        "prompt_artifact_id": "TEXT",
-    }
-    for name, definition in columns.items():
-        try:
-            conn.execute(f"ALTER TABLE timed_signals ADD COLUMN {name} {definition}")
-        except sqlite3.OperationalError:
-            continue
-
-
-def _ensure_timed_signal_statuses(conn: sqlite3.Connection) -> None:
-    row = conn.execute(
-        "SELECT sql FROM sqlite_master WHERE type='table' AND name='timed_signals'"
-    ).fetchone()
-    if not row or not row[0]:
-        return
-    sql = str(row[0]).lower()
-    if "check" in sql and "failed" in sql and "processing" in sql:
-        return
-    _rebuild_timed_signals(conn)
+def _ensure_scheduled_jobs_table(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS scheduled_jobs (
+          id            TEXT PRIMARY KEY,
+          name          TEXT NOT NULL,
+          prompt        TEXT,
+          owner_id      TEXT NOT NULL,
+          rrule         TEXT,
+          retries       INTEGER NOT NULL DEFAULT 0,
+          status        TEXT NOT NULL DEFAULT 'active',
+          next_run_at   TEXT,
+          timezone      TEXT,
+          created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+          updated_at    TEXT NOT NULL DEFAULT (datetime('now')),
+          CHECK (status IN ('active', 'paused', 'failed', 'completed'))
+        ) STRICT
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_scheduled_jobs_owner ON scheduled_jobs (owner_id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_scheduled_jobs_next_run ON scheduled_jobs (next_run_at, status)"
+    )
 
 
 def _ensure_paired_device_columns(conn: sqlite3.Connection) -> None:
