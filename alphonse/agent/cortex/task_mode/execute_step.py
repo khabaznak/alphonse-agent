@@ -100,6 +100,7 @@ def execute_step_node_impl(
     args = proposal.get("args")
     params = dict(args) if isinstance(args, dict) else {}
     step_id = str((current or {}).get("step_id") or "")
+    send_after_search = _is_send_after_user_search(tool_name=tool_name, task_state=task_state)
     try:
         result = execute_tool_call(
             state=state,
@@ -160,6 +161,12 @@ def execute_step_node_impl(
                 error_code,
                 error_message,
             )
+            if send_after_search:
+                logger.info(
+                    "task_mode metric user_search_to_sendMessage correlation_id=%s outcome=failed error_code=%s",
+                    corr,
+                    error_code,
+                )
             log_task_event(
                 logger=logger,
                 state=state,
@@ -190,6 +197,11 @@ def execute_step_node_impl(
             step_id,
             tool_name,
         )
+        if send_after_search:
+            logger.info(
+                "task_mode metric user_search_to_sendMessage correlation_id=%s outcome=succeeded",
+                corr,
+            )
         log_task_event(
             logger=logger,
             state=state,
@@ -219,6 +231,12 @@ def execute_step_node_impl(
             tool_name,
             type(exc).__name__,
         )
+        if send_after_search:
+            logger.info(
+                "task_mode metric user_search_to_sendMessage correlation_id=%s outcome=exception error=%s",
+                corr,
+                type(exc).__name__,
+            )
         return {"task_state": task_state}
 
 
@@ -334,6 +352,20 @@ def _infer_reminder_message(*, state: dict[str, Any]) -> str:
     if locale.startswith("es"):
         return "Recordatorio"
     return "Reminder"
+
+
+def _is_send_after_user_search(*, tool_name: str, task_state: dict[str, Any]) -> bool:
+    if str(tool_name or "").strip() != "sendMessage":
+        return False
+    facts = task_state.get("facts")
+    if not isinstance(facts, dict):
+        return False
+    for _, entry in reversed(list(facts.items())):
+        if not isinstance(entry, dict):
+            continue
+        if str(entry.get("tool") or "").strip() == "user_search":
+            return True
+    return False
 
 
 def _extract_primary_user_text(state: dict[str, Any]) -> str:
