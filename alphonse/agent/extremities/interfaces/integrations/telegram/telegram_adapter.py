@@ -307,14 +307,16 @@ class TelegramAdapter(IntegrationAdapter):
                 return
 
         if self._allowed_chat_ids is not None and int(chat_id) not in self._allowed_chat_ids:
-            logger.info(
-                "TelegramAdapter rejected message update_id=%s chat_id=%s reason=not_allowed",
-                update_id,
-                chat_id,
-            )
-            if self._should_emit_invite(message):
-                self._emit_invite_signal(update, message)
-            return
+            # Registered private chats are authorized through resolver-backed access checks.
+            if not (access.allowed and str(access.reason or "").strip() == "registered_private"):
+                logger.info(
+                    "TelegramAdapter rejected message update_id=%s chat_id=%s reason=not_allowed",
+                    update_id,
+                    chat_id,
+                )
+                if self._should_emit_invite(message):
+                    self._emit_invite_signal(update, message)
+                return
 
         from_user = from_user_id
         reply_to = message.get("reply_to_message") if isinstance(message.get("reply_to_message"), dict) else {}
