@@ -23,11 +23,14 @@ class HandleTimedSignalsAction(Action):
     def execute(self, context: dict) -> ActionResult:
         signal = context.get("signal")
         if getattr(signal, "type", "") == "timer.fired":
-            return _handle_timer_reconcile_tick()
+            return _handle_timer_reconcile_tick(context=context)
         payload = getattr(signal, "payload", {}) if signal else {}
         inner = _payload_from_signal(payload)
         if _is_job_trigger_payload(signal_payload=payload, inner=inner):
             return _execute_job_trigger(context=context, payload=payload, inner=inner, signal=signal)
+        if _is_legacy_daily_report(payload=payload, inner=inner):
+            logger.info("HandleTimedSignalsAction skipped legacy_daily_report timed_signal_id=%s", payload.get("timed_signal_id"))
+            return ActionResult(intention_key="NOOP", payload={}, urgency=None)
         mind_layer = str(payload.get("mind_layer") or inner.get("mind_layer") or "subconscious").strip().lower()
         prompt = _extract_prompt_text(inner=inner)
         target = str(inner.get("chat_id") or payload.get("target") or inner.get("delivery_target") or "").strip()
@@ -73,12 +76,31 @@ class HandleTimedSignalsAction(Action):
         return ActionResult(intention_key="NOOP", payload={}, urgency=None)
 
 
-def _handle_timer_reconcile_tick() -> ActionResult:
-    summary = ScheduledJobsReconciler().reconcile()
+def _handle_timer_reconcile_tick(*, context: dict[str, Any]) -> ActionResult:
+    bus = context.get("ctx")
+    signal = context.get("signal")
+
+    def _brain_sink(brain_payload: dict[str, Any]) -> None:
+        _emit_brain_payload_to_bus(
+            bus=bus,
+            signal_payload={},
+            inner={},
+            user_id=str((brain_payload or {}).get("user_id") or "").strip(),
+            signal=signal,
+            brain_payload=brain_payload,
+        )
+
+    summary = ScheduledJobsReconciler().reconcile(
+        brain_event_sink=_brain_sink if hasattr(bus, "emit") else None
+    )
     logger.info(
-        "HandleTimedSignalsAction jobs_reconciled scanned=%s updated=%s overdue_active=%s due_pending_signals=%s",
+        "HandleTimedSignalsAction jobs_reconciled scanned=%s updated=%s stale_removed=%s executed=%s advanced_without_run=%s failed=%s overdue_active=%s due_pending_signals=%s",
         int(summary.get("scanned") or 0),
         int(summary.get("updated") or 0),
+        int(summary.get("stale_removed") or 0),
+        int(summary.get("executed") or 0),
+        int(summary.get("advanced_without_run") or 0),
+        int(summary.get("failed") or 0),
         int(summary.get("overdue_active_jobs") or 0),
         int(summary.get("due_pending_timed_signals") or 0),
     )
@@ -120,6 +142,12 @@ def _is_job_trigger_payload(*, signal_payload: dict[str, Any], inner: dict[str, 
     return bool(str((inner or {}).get("job_id") or "").strip() and str((inner or {}).get("user_id") or "").strip())
 
 
+def _is_legacy_daily_report(*, payload: dict[str, Any], inner: dict[str, Any]) -> bool:
+    timed_signal_id = str((payload or {}).get("timed_signal_id") or "").strip()
+    kind = str((inner or {}).get("kind") or "").strip().lower()
+    return timed_signal_id == "daily_report" or kind == "daily_report"
+
+
 def _execute_job_trigger(*, context: dict[str, Any], payload: dict[str, Any], inner: dict[str, Any], signal: object | None) -> ActionResult:
     bus = context.get("ctx")
     if not hasattr(bus, "emit"):
@@ -142,41 +170,13 @@ def _execute_job_trigger(*, context: dict[str, Any], payload: dict[str, Any], in
     )
 
     def _brain_sink(brain_payload: dict[str, Any]) -> None:
-        channel = str(
-            payload.get("origin")
-            or inner.get("origin_channel")
-            or payload.get("channel")
-            or "api"
-        ).strip() or "api"
-        target = str(payload.get("target") or inner.get("delivery_target") or user_id).strip() or user_id
-        correlation_id = _correlation_id(payload, signal)
-        nested = brain_payload.get("payload") if isinstance(brain_payload, dict) else {}
-        nested_payload = nested if isinstance(nested, dict) else {}
-        text = str(
-            nested_payload.get("text")
-            or nested_payload.get("prompt_text")
-            or nested_payload.get("agent_internal_prompt")
-            or nested_payload.get("source_instruction")
-            or "You just remembered something important."
-        ).strip() or "You just remembered something important."
-        bus.emit(
-            BusSignal(
-                type="api.message_received",
-                payload={
-                    "text": text,
-                    "channel": channel,
-                    "origin": channel,
-                    "target": target,
-                    "user_id": user_id,
-                    "metadata": {
-                        "timed_signal": payload,
-                        "job_id": job_id,
-                        "source": "job_trigger",
-                    },
-                },
-                source="timer",
-                correlation_id=correlation_id,
-            )
+        _emit_brain_payload_to_bus(
+            bus=bus,
+            signal_payload=payload,
+            inner=inner,
+            user_id=user_id,
+            signal=signal,
+            brain_payload=brain_payload,
         )
 
     try:
@@ -196,3 +196,55 @@ def _execute_job_trigger(*, context: dict[str, Any], payload: dict[str, Any], in
     else:
         logger.info("HandleTimedSignalsAction executed job_trigger job_id=%s user_id=%s", job_id, user_id)
     return ActionResult(intention_key="NOOP", payload={}, urgency=None)
+
+
+def _emit_brain_payload_to_bus(
+    *,
+    bus: Any,
+    signal_payload: dict[str, Any],
+    inner: dict[str, Any],
+    user_id: str,
+    signal: object | None,
+    brain_payload: dict[str, Any],
+) -> None:
+    if not hasattr(bus, "emit"):
+        return
+    channel = str(
+        signal_payload.get("origin")
+        or inner.get("origin_channel")
+        or signal_payload.get("channel")
+        or "api"
+    ).strip() or "api"
+    target = str(signal_payload.get("target") or inner.get("delivery_target") or user_id).strip() or user_id
+    correlation_id = _correlation_id(signal_payload, signal)
+    nested = brain_payload.get("payload") if isinstance(brain_payload, dict) else {}
+    nested_payload = nested if isinstance(nested, dict) else {}
+    text = str(
+        nested_payload.get("text")
+        or nested_payload.get("prompt_text")
+        or nested_payload.get("agent_internal_prompt")
+        or nested_payload.get("source_instruction")
+        or "You just remembered something important."
+    ).strip() or "You just remembered something important."
+    metadata = {
+        "timed_signal": signal_payload,
+        "source": "job_trigger" if signal_payload else "jobs_reconcile",
+    }
+    job_id = str((brain_payload or {}).get("job_id") or "").strip()
+    if job_id:
+        metadata["job_id"] = job_id
+    bus.emit(
+        BusSignal(
+            type="api.message_received",
+            payload={
+                "text": text,
+                "channel": channel,
+                "origin": channel,
+                "target": target,
+                "user_id": user_id,
+                "metadata": metadata,
+            },
+            source="timer",
+            correlation_id=correlation_id,
+        )
+    )

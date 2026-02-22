@@ -46,11 +46,15 @@ def test_timer_fired_runs_jobs_reconcile_without_dispatch(monkeypatch) -> None:
     calls: list[bool] = []
 
     class _FakeReconciler:
-        def reconcile(self) -> dict[str, int]:
+        def reconcile(self, **_: object) -> dict[str, int]:
             calls.append(True)
             return {
                 "scanned": 1,
                 "updated": 1,
+                "stale_removed": 0,
+                "executed": 0,
+                "advanced_without_run": 0,
+                "failed": 0,
                 "overdue_active_jobs": 0,
                 "due_pending_timed_signals": 1,
             }
