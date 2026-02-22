@@ -60,6 +60,7 @@ class CortexState(TypedDict, total=False):
     recent_conversation_block: str | None
     _llm_client: Any
     _transition_sink: Any
+    _bus: Any
 
 
 class CortexGraph:
