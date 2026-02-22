@@ -68,6 +68,13 @@ class SendMessageTool:
                 exec_context=exec_context,
                 plan=plan,
             )
+        except ValueError as exc:
+            code = str(exc or "").strip().lower() or "send_message_failed"
+            if code == "unresolved_recipient":
+                return _failed(code="unresolved_recipient", message="recipient could not be resolved")
+            if code == "missing_target":
+                return _failed(code="missing_target", message="message target could not be resolved")
+            return _failed(code="send_message_failed", message=str(exc) or type(exc).__name__)
         except Exception as exc:
             return _failed(code="send_message_failed", message=str(exc) or type(exc).__name__)
 

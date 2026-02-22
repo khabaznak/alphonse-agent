@@ -49,3 +49,24 @@ def test_send_message_tool_validates_required_fields() -> None:
     result = tool.execute(state={"channel_type": "telegram"}, To="", Message="")
     assert result["status"] == "failed"
     assert str((result.get("error") or {}).get("code") or "") in {"missing_message", "missing_recipient"}
+
+
+@dataclass
+class _FailingCommunication:
+    code: str
+
+    def send(self, *, request: Any, context: dict[str, Any], exec_context: Any, plan: Any) -> None:
+        _ = (request, context, exec_context, plan)
+        raise ValueError(self.code)
+
+
+def test_send_message_tool_maps_unresolved_recipient_error() -> None:
+    tool = SendMessageTool(_communication=_FailingCommunication(code="unresolved_recipient"))
+    result = tool.execute(
+        state={"channel_type": "telegram", "channel_target": "8553589429"},
+        To="Gabriela",
+        Message="Hola Gaby",
+        Channel="telegram",
+    )
+    assert result["status"] == "failed"
+    assert str((result.get("error") or {}).get("code") or "") == "unresolved_recipient"

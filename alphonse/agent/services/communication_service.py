@@ -37,6 +37,11 @@ class CommunicationService:
     ) -> None:
         channel = self._resolve_channel(request)
         target = self._resolve_target(request, channel=channel)
+        if not str(target or "").strip():
+            recipient_ref = str(request.recipient_ref or "").strip()
+            if recipient_ref:
+                raise ValueError("unresolved_recipient")
+            raise ValueError("missing_target")
         if self._is_blocked_by_policy(request=request, target=target):
             return
         message = self._apply_tone(request=request, target=target)
@@ -88,7 +93,7 @@ class CommunicationService:
                 )
                 if resolved:
                     return resolved
-        return str(request.origin_target or "").strip() or None
+        return None
 
     def _is_blocked_by_policy(self, *, request: CommunicationRequest, target: str | None) -> bool:
         if str(request.urgency or "").strip().lower() in {"urgent", "critical"}:
