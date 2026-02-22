@@ -680,7 +680,7 @@ def _build_tool_menu(tool_registry: Any) -> str:
             continue
         summary = descriptions.get(name) or "Tool available."
         lines.append(f"- `{name}`: {summary}")
-    return "\n".join(lines[:24]) or "- (no tools)"
+    return "\n".join(lines) or "- (no tools)"
 
 
 def _tool_descriptions() -> dict[str, str]:
