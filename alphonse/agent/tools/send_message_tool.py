@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from typing import Any
 import uuid
 import logging
+import re
 
 from alphonse.agent.cognition.plan_execution.communication_dispatcher import CommunicationDispatcher
 from alphonse.agent.cognition.narration.outbound_narration_orchestrator import build_default_coordinator
@@ -32,6 +33,7 @@ class SendMessageTool:
             return _failed(code="missing_recipient", message="recipient is required")
 
         state_payload = state if isinstance(state, dict) else {}
+        to = _resolve_recipient_ref(to=to, state=state_payload)
         origin_channel = str(state_payload.get("channel_type") or state_payload.get("channel") or "api").strip()
         origin_target = str(state_payload.get("channel_target") or state_payload.get("target") or "").strip() or None
         correlation_id = (
@@ -88,6 +90,93 @@ class SendMessageTool:
             "error": None,
             "metadata": {"tool": "sendMessage"},
         }
+
+
+def _resolve_recipient_ref(*, to: str, state: dict[str, Any]) -> str:
+    rendered = str(to or "").strip()
+    if not rendered:
+        return ""
+    if rendered.lstrip("-").isdigit():
+        return rendered
+    search_rows = _latest_user_search_rows(state)
+    if not search_rows:
+        return rendered
+    by_index = _resolve_by_ordinal_reference(rendered, search_rows)
+    if by_index:
+        return by_index
+    by_name = _resolve_by_display_name(rendered, search_rows)
+    if by_name:
+        return by_name
+    return rendered
+
+
+def _latest_user_search_rows(state: dict[str, Any]) -> list[dict[str, Any]]:
+    task_state = state.get("task_state")
+    if not isinstance(task_state, dict):
+        return []
+    facts = task_state.get("facts")
+    if not isinstance(facts, dict):
+        return []
+    for _, entry in reversed(list(facts.items())):
+        if not isinstance(entry, dict):
+            continue
+        if str(entry.get("tool") or "").strip() != "user_search":
+            continue
+        result = entry.get("result")
+        if not isinstance(result, dict):
+            continue
+        payload = result.get("result")
+        if not isinstance(payload, dict):
+            continue
+        users = payload.get("users")
+        if isinstance(users, list):
+            return [row for row in users if isinstance(row, dict)]
+    return []
+
+
+def _resolve_by_ordinal_reference(to: str, users: list[dict[str, Any]]) -> str | None:
+    normalized = _normalize_text(to)
+    patterns = [
+        (r"\bfirst\b|\b1st\b|\bone\b", 0),
+        (r"\bsecond\b|\b2nd\b|\btwo\b", 1),
+        (r"\bthird\b|\b3rd\b|\bthree\b", 2),
+    ]
+    for pattern, index in patterns:
+        if re.search(pattern, normalized):
+            if index < len(users):
+                return _user_delivery_ref(users[index])
+            return None
+    return None
+
+
+def _resolve_by_display_name(to: str, users: list[dict[str, Any]]) -> str | None:
+    needle = _normalize_text(to)
+    if not needle:
+        return None
+    matches: list[dict[str, Any]] = []
+    for user in users:
+        name = _normalize_text(str(user.get("display_name") or ""))
+        if not name:
+            continue
+        if needle in name or name in needle:
+            matches.append(user)
+    if len(matches) == 1:
+        return _user_delivery_ref(matches[0])
+    return None
+
+
+def _user_delivery_ref(user: dict[str, Any]) -> str:
+    telegram_user_id = str(user.get("telegram_user_id") or "").strip()
+    if telegram_user_id:
+        return telegram_user_id
+    user_id = str(user.get("user_id") or "").strip()
+    if user_id:
+        return user_id
+    return str(user.get("display_name") or "").strip()
+
+
+def _normalize_text(value: str) -> str:
+    return re.sub(r"\s+", " ", str(value or "").strip().lower())
 
 
 def _failed(*, code: str, message: str) -> dict[str, Any]:

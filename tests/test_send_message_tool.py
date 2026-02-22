@@ -70,3 +70,79 @@ def test_send_message_tool_maps_unresolved_recipient_error() -> None:
     )
     assert result["status"] == "failed"
     assert str((result.get("error") or {}).get("code") or "") == "unresolved_recipient"
+
+
+def test_send_message_tool_maps_first_contact_from_user_search() -> None:
+    fake = _FakeCommunication()
+    tool = SendMessageTool(_communication=fake)
+    state = {
+        "channel_type": "telegram",
+        "channel_target": "8553589429",
+        "task_state": {
+            "facts": {
+                "step_1": {
+                    "tool": "user_search",
+                    "result": {
+                        "status": "ok",
+                        "result": {
+                            "users": [
+                                {
+                                    "user_id": "u-1",
+                                    "display_name": "Gabriela Perez",
+                                    "telegram_user_id": "999111222",
+                                }
+                            ]
+                        },
+                    },
+                }
+            }
+        },
+    }
+    result = tool.execute(
+        state=state,
+        To="the first contact",
+        Message="Hola Gaby",
+        Channel="telegram",
+    )
+    assert result["status"] == "ok"
+    assert fake.called is True
+    assert str(fake.request.target) == "999111222"
+    assert str(fake.request.recipient_ref or "") == ""
+
+
+def test_send_message_tool_maps_partial_name_from_user_search() -> None:
+    fake = _FakeCommunication()
+    tool = SendMessageTool(_communication=fake)
+    state = {
+        "channel_type": "telegram",
+        "channel_target": "8553589429",
+        "task_state": {
+            "facts": {
+                "step_1": {
+                    "tool": "user_search",
+                    "result": {
+                        "status": "ok",
+                        "result": {
+                            "users": [
+                                {
+                                    "user_id": "u-1",
+                                    "display_name": "Gabriela Perez",
+                                    "telegram_user_id": "999111222",
+                                }
+                            ]
+                        },
+                    },
+                }
+            }
+        },
+    }
+    result = tool.execute(
+        state=state,
+        To="Gabriela",
+        Message="Hola Gaby",
+        Channel="telegram",
+    )
+    assert result["status"] == "ok"
+    assert fake.called is True
+    assert str(fake.request.target) == "999111222"
+    assert str(fake.request.recipient_ref or "") == ""
