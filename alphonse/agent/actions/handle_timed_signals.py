@@ -9,6 +9,7 @@ from alphonse.agent.actions.base import Action
 from alphonse.agent.actions.models import ActionResult
 from alphonse.agent.nervous_system.senses.bus import Signal as BusSignal
 from alphonse.agent.services.job_runner import JobRunner
+from alphonse.agent.services.scheduled_jobs_reconciler import ScheduledJobsReconciler
 from alphonse.agent.services.job_store import JobStore
 from alphonse.agent.services.scratchpad_service import ScratchpadService
 
@@ -21,6 +22,8 @@ class HandleTimedSignalsAction(Action):
 
     def execute(self, context: dict) -> ActionResult:
         signal = context.get("signal")
+        if getattr(signal, "type", "") == "timer.fired":
+            return _handle_timer_reconcile_tick()
         payload = getattr(signal, "payload", {}) if signal else {}
         inner = _payload_from_signal(payload)
         if _is_job_trigger_payload(signal_payload=payload, inner=inner):
@@ -68,6 +71,18 @@ class HandleTimedSignalsAction(Action):
         )
         logger.info("HandleTimedSignalsAction routed signal_type=%s", routed_signal_type)
         return ActionResult(intention_key="NOOP", payload={}, urgency=None)
+
+
+def _handle_timer_reconcile_tick() -> ActionResult:
+    summary = ScheduledJobsReconciler().reconcile()
+    logger.info(
+        "HandleTimedSignalsAction jobs_reconciled scanned=%s updated=%s overdue_active=%s due_pending_signals=%s",
+        int(summary.get("scanned") or 0),
+        int(summary.get("updated") or 0),
+        int(summary.get("overdue_active_jobs") or 0),
+        int(summary.get("due_pending_timed_signals") or 0),
+    )
+    return ActionResult(intention_key="NOOP", payload={}, urgency=None)
 
 
 def _payload_from_signal(payload: dict) -> dict:

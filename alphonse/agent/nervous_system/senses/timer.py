@@ -38,6 +38,7 @@ class TimerSense(Sense):
     description = "Emits timed_signal.fired signals when timed signals are due"
     source_type = "system"
     signals = [
+        SignalSpec(key="timer.fired", name="Timer Fired", description="Periodic timer tick"),
         SignalSpec(key="timed_signal.fired", name="Timed Signal Fired", description="Timed signal fired"),
     ]
 
@@ -46,6 +47,10 @@ class TimerSense(Sense):
         self._stop_event = threading.Event()
         self._bus: Bus | None = None
         self._poll_seconds = _parse_float(os.getenv("TIMER_POLL_SECONDS"), 60.0)
+        self._jobs_reconcile_interval_seconds = _parse_float(
+            os.getenv("JOB_RECONCILIATION_INTERVAL_SECONDS"), 30.0 * 60.0
+        )
+        self._last_jobs_reconcile_emit_at: datetime | None = None
 
     def start(self, bus: Bus) -> None:
         if self._thread and self._thread.is_alive():
@@ -66,6 +71,7 @@ class TimerSense(Sense):
         while not self._stop_event.is_set():
             next_signal = self._fetch_next_pending()
             if next_signal is None:
+                self._maybe_emit_reconcile_tick()
                 logger.info("TimerSense tick status=idle")
                 self._sleep(self._poll_seconds)
                 continue
@@ -116,6 +122,32 @@ class TimerSense(Sense):
                 },
                 source="timer",
                 correlation_id=record.correlation_id,
+            )
+        )
+
+    def _maybe_emit_reconcile_tick(self) -> None:
+        if not self._bus:
+            return
+        now = datetime.now(tz=timezone.utc)
+        should_emit = False
+        if self._last_jobs_reconcile_emit_at is None:
+            should_emit = True
+        else:
+            elapsed = (now - self._last_jobs_reconcile_emit_at).total_seconds()
+            should_emit = elapsed >= self._jobs_reconcile_interval_seconds
+        if not should_emit:
+            return
+        self._last_jobs_reconcile_emit_at = now
+        self._bus.emit(
+            Signal(
+                type="timer.fired",
+                payload={
+                    "kind": "jobs_reconcile",
+                    "trigger_at": now.isoformat(),
+                    "reconcile_interval_seconds": self._jobs_reconcile_interval_seconds,
+                },
+                source="timer",
+                correlation_id=f"timer-reconcile:{int(now.timestamp())}",
             )
         )
 
