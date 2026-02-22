@@ -53,8 +53,10 @@ def test_job_create_compiles_job_trigger_timed_signal(tmp_path: Path, monkeypatc
 def test_timer_fired_job_trigger_emits_conscious_message_event(tmp_path: Path, monkeypatch) -> None:
     db_path = tmp_path / "nerve-db"
     monkeypatch.setenv("NERVE_DB_PATH", str(db_path))
+    jobs_root = tmp_path / "jobs_store"
+    monkeypatch.setenv("ALPHONSE_JOBS_ROOT", str(jobs_root))
     apply_schema(db_path)
-    store = JobStore(root=tmp_path / "jobs")
+    store = JobStore(root=jobs_root)
     created = store.create_job(
         user_id="u1",
         payload={
@@ -89,6 +91,7 @@ def test_timer_fired_job_trigger_emits_conscious_message_event(tmp_path: Path, m
     action.execute({"signal": signal, "ctx": bus, "state": None, "outcome": None})
     assert bus.events
     emitted = bus.events[-1]
-    assert emitted.type == "timed_signal.subconscious_prompt"
+    assert emitted.type == "api.message_received"
+    assert str((emitted.payload or {}).get("user_id") or "") == "u1"
     text = str((emitted.payload or {}).get("text") or "")
     assert text

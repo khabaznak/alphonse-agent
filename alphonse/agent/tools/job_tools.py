@@ -45,6 +45,15 @@ class JobCreateTool:
     ) -> dict[str, Any]:
         resolved_user = _resolve_user_id(user_id=user_id, state=state, ctx=ctx)
         try:
+            state_payload = state if isinstance(state, dict) else {}
+            origin_channel = str(state_payload.get("channel_type") or "").strip().lower()
+            channel_target = str(
+                state_payload.get("channel_target")
+                or state_payload.get("incoming_user_id")
+                or resolved_user
+                or ""
+            ).strip()
+            correlation_id = str(state_payload.get("correlation_id") or "").strip()
             source_instruction = _build_job_source_instruction(
                 name=name,
                 description=description,
@@ -68,6 +77,12 @@ class JobCreateTool:
             payload_with_prompt.setdefault("source_instruction", source_instruction)
             payload_with_prompt.setdefault("agent_internal_prompt", internal_prompt)
             payload_with_prompt.setdefault("prompt_artifact_id", artifact_id)
+            if origin_channel:
+                payload_with_prompt.setdefault("origin_channel", origin_channel)
+            if channel_target:
+                payload_with_prompt.setdefault("delivery_target", channel_target)
+            if correlation_id:
+                payload_with_prompt.setdefault("correlation_id", correlation_id)
             job = self._store.create_job(
                 user_id=resolved_user,
                 payload={
@@ -215,7 +230,11 @@ class JobRunNowTool:
                     message="job_id is required",
                     metadata={"tool": "job_run_now"},
                 )
-            outcome = self._runner.run_job_now(user_id=resolved_user, job_id=resolved_job_id)
+            outcome = self._runner.run_job_now(
+                user_id=resolved_user,
+                job_id=resolved_job_id,
+                brain_event_sink=_brain_event_sink_from_state(state=state, fallback_user_id=resolved_user),
+            )
             return _ok(
                 result={
                     "execution_id": outcome.get("execution_id"),
@@ -239,6 +258,55 @@ def _resolve_user_id(*, user_id: str | None, state: dict[str, Any] | None, ctx: 
             if candidate:
                 return candidate
     return "default"
+
+
+def _brain_event_sink_from_state(
+    *,
+    state: dict[str, Any] | None,
+    fallback_user_id: str,
+):
+    state_payload = state if isinstance(state, dict) else {}
+    bus = state_payload.get("_bus")
+    if not hasattr(bus, "emit"):
+        return None
+    channel = str(state_payload.get("channel_type") or "api").strip() or "api"
+    target = str(state_payload.get("channel_target") or fallback_user_id).strip() or fallback_user_id
+    user_id = _resolve_user_id(user_id=None, state=state_payload, ctx=None)
+    correlation_id = str(state_payload.get("correlation_id") or "").strip() or None
+
+    def _sink(payload: dict[str, Any]) -> None:
+        inner = payload.get("payload")
+        inner_payload = inner if isinstance(inner, dict) else {}
+        text = str(
+            inner_payload.get("text")
+            or inner_payload.get("prompt_text")
+            or inner_payload.get("agent_internal_prompt")
+            or inner_payload.get("source_instruction")
+            or payload.get("message")
+            or "You just remembered something important."
+        ).strip() or "You just remembered something important."
+        from alphonse.agent.nervous_system.senses.bus import Signal
+
+        bus.emit(
+            Signal(
+                type="api.message_received",
+                payload={
+                    "text": text,
+                    "channel": channel,
+                    "origin": channel,
+                    "target": target,
+                    "user_id": user_id,
+                    "metadata": {
+                        "source": "job_runner",
+                        "job": payload,
+                    },
+                },
+                source="jobs",
+                correlation_id=correlation_id,
+            )
+        )
+
+    return _sink
 
 
 def _err_code(exc: Exception) -> str:

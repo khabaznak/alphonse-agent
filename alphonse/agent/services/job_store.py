@@ -312,6 +312,7 @@ class JobStore:
     def _sync_scheduled_job_row(self, *, user_id: str, job: JobSpec) -> None:
         if not job.enabled:
             self._delete_scheduled_job_row(job_id=job.job_id)
+            self._delete_job_timed_signal_row(job_id=job.job_id)
             return
         prompt = _extract_job_prompt(job.payload)
         now_text = _now_utc().isoformat()
@@ -352,11 +353,64 @@ class JobStore:
                 ),
             )
             conn.commit()
+        self._sync_job_timed_signal_row(user_id=user_id, job=job)
 
     def _delete_scheduled_job_row(self, *, job_id: str) -> None:
         db_path = resolve_nervous_system_db_path()
         with sqlite3.connect(db_path) as conn:
             conn.execute("DELETE FROM scheduled_jobs WHERE id = ?", (str(job_id),))
+            conn.commit()
+
+    def _sync_job_timed_signal_row(self, *, user_id: str, job: JobSpec) -> None:
+        next_run_at = str(job.next_run_at or "").strip()
+        if not next_run_at:
+            self._delete_job_timed_signal_row(job_id=job.job_id)
+            return
+        db_path = resolve_nervous_system_db_path()
+        signal_id = _job_timed_signal_id(job.job_id)
+        now_text = _now_utc().isoformat()
+        target = str(job.payload.get("delivery_target") or user_id or "").strip() or str(user_id)
+        origin = str(job.payload.get("origin_channel") or "assistant").strip().lower() or "assistant"
+        correlation_id = str(job.payload.get("correlation_id") or job.job_id).strip() or job.job_id
+        signal_payload = _job_trigger_payload(job=job, user_id=user_id)
+        with sqlite3.connect(db_path) as conn:
+            conn.execute(
+                """
+                INSERT INTO timed_signals
+                  (id, trigger_at, timezone, status, fired_at, signal_type, payload, target, origin, correlation_id, created_at, updated_at)
+                VALUES
+                  (?, ?, ?, 'pending', NULL, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                  trigger_at = excluded.trigger_at,
+                  timezone = excluded.timezone,
+                  status = 'pending',
+                  fired_at = NULL,
+                  signal_type = excluded.signal_type,
+                  payload = excluded.payload,
+                  target = excluded.target,
+                  origin = excluded.origin,
+                  correlation_id = excluded.correlation_id,
+                  updated_at = excluded.updated_at
+                """,
+                (
+                    signal_id,
+                    next_run_at,
+                    str(job.timezone or "UTC"),
+                    "timed_signal",
+                    json.dumps(signal_payload, ensure_ascii=False, separators=(",", ":")),
+                    target,
+                    origin,
+                    correlation_id,
+                    now_text,
+                    now_text,
+                ),
+            )
+            conn.commit()
+
+    def _delete_job_timed_signal_row(self, *, job_id: str) -> None:
+        db_path = resolve_nervous_system_db_path()
+        with sqlite3.connect(db_path) as conn:
+            conn.execute("DELETE FROM timed_signals WHERE id = ?", (_job_timed_signal_id(job_id),))
             conn.commit()
 
 
@@ -465,6 +519,23 @@ def _extract_job_prompt(payload: dict[str, Any]) -> str:
         if value:
             return value
     return ""
+
+
+def _job_timed_signal_id(job_id: str) -> str:
+    return f"job_trigger:{str(job_id or '').strip()}"
+
+
+def _job_trigger_payload(*, job: JobSpec, user_id: str) -> dict[str, Any]:
+    payload = dict(job.payload or {})
+    return {
+        "kind": "job_trigger",
+        "job_id": str(job.job_id or "").strip(),
+        "user_id": str(user_id or "").strip(),
+        "job_name": str(job.name or "").strip(),
+        "payload_type": str(job.payload_type or "").strip(),
+        "payload": payload,
+        "mind_layer": "conscious" if str(job.payload_type or "").strip() in {"prompt_to_brain", "job_ability"} else "subconscious",
+    }
 
 
 def compute_retry_time(*, now: datetime, backoff_seconds: int) -> str:

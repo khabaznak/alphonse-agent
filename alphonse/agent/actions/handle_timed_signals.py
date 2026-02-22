@@ -1,10 +1,16 @@
 from __future__ import annotations
 
 import logging
+import os
+from datetime import datetime, timezone
+from typing import Any
 
 from alphonse.agent.actions.base import Action
 from alphonse.agent.actions.models import ActionResult
 from alphonse.agent.nervous_system.senses.bus import Signal as BusSignal
+from alphonse.agent.services.job_runner import JobRunner
+from alphonse.agent.services.job_store import JobStore
+from alphonse.agent.services.scratchpad_service import ScratchpadService
 
 
 logger = logging.getLogger(__name__)
@@ -17,6 +23,8 @@ class HandleTimedSignalsAction(Action):
         signal = context.get("signal")
         payload = getattr(signal, "payload", {}) if signal else {}
         inner = _payload_from_signal(payload)
+        if _is_job_trigger_payload(signal_payload=payload, inner=inner):
+            return _execute_job_trigger(context=context, payload=payload, inner=inner, signal=signal)
         mind_layer = str(payload.get("mind_layer") or inner.get("mind_layer") or "subconscious").strip().lower()
         prompt = _extract_prompt_text(inner=inner)
         target = str(inner.get("chat_id") or payload.get("target") or inner.get("delivery_target") or "").strip()
@@ -86,3 +94,90 @@ def _extract_prompt_text(*, inner: dict) -> str:
         or "You just remembered something important."
     ).strip()
     return text or "You just remembered something important."
+
+
+def _is_job_trigger_payload(*, signal_payload: dict[str, Any], inner: dict[str, Any]) -> bool:
+    timed_signal_id = str((signal_payload or {}).get("timed_signal_id") or "").strip()
+    if timed_signal_id.startswith("job_trigger:"):
+        return True
+    if str((inner or {}).get("kind") or "").strip().lower() == "job_trigger":
+        return True
+    return bool(str((inner or {}).get("job_id") or "").strip() and str((inner or {}).get("user_id") or "").strip())
+
+
+def _execute_job_trigger(*, context: dict[str, Any], payload: dict[str, Any], inner: dict[str, Any], signal: object | None) -> ActionResult:
+    bus = context.get("ctx")
+    if not hasattr(bus, "emit"):
+        logger.warning("HandleTimedSignalsAction job_trigger skipped reason=no_bus")
+        return ActionResult(intention_key="NOOP", payload={}, urgency=None)
+    job_id = str(inner.get("job_id") or "").strip()
+    user_id = str(inner.get("user_id") or payload.get("target") or "").strip()
+    if not job_id or not user_id:
+        logger.warning(
+            "HandleTimedSignalsAction job_trigger skipped reason=missing_identifiers job_id=%s user_id=%s",
+            job_id,
+            user_id,
+        )
+        return ActionResult(intention_key="NOOP", payload={}, urgency=None)
+    store_root = str(os.getenv("ALPHONSE_JOBS_ROOT") or "").strip() or None
+    runner = JobRunner(
+        job_store=JobStore(root=store_root),
+        scratchpad_service=ScratchpadService(),
+        tick_seconds=45,
+    )
+
+    def _brain_sink(brain_payload: dict[str, Any]) -> None:
+        channel = str(
+            payload.get("origin")
+            or inner.get("origin_channel")
+            or payload.get("channel")
+            or "api"
+        ).strip() or "api"
+        target = str(payload.get("target") or inner.get("delivery_target") or user_id).strip() or user_id
+        correlation_id = _correlation_id(payload, signal)
+        nested = brain_payload.get("payload") if isinstance(brain_payload, dict) else {}
+        nested_payload = nested if isinstance(nested, dict) else {}
+        text = str(
+            nested_payload.get("text")
+            or nested_payload.get("prompt_text")
+            or nested_payload.get("agent_internal_prompt")
+            or nested_payload.get("source_instruction")
+            or "You just remembered something important."
+        ).strip() or "You just remembered something important."
+        bus.emit(
+            BusSignal(
+                type="api.message_received",
+                payload={
+                    "text": text,
+                    "channel": channel,
+                    "origin": channel,
+                    "target": target,
+                    "user_id": user_id,
+                    "metadata": {
+                        "timed_signal": payload,
+                        "job_id": job_id,
+                        "source": "job_trigger",
+                    },
+                },
+                source="timer",
+                correlation_id=correlation_id,
+            )
+        )
+
+    try:
+        runner.run_job_now(
+            user_id=user_id,
+            job_id=job_id,
+            now=datetime.now(timezone.utc),
+            brain_event_sink=_brain_sink,
+        )
+    except Exception as exc:
+        logger.warning(
+            "HandleTimedSignalsAction job_trigger failed job_id=%s user_id=%s error=%s",
+            job_id,
+            user_id,
+            type(exc).__name__,
+        )
+    else:
+        logger.info("HandleTimedSignalsAction executed job_trigger job_id=%s user_id=%s", job_id, user_id)
+    return ActionResult(intention_key="NOOP", payload={}, urgency=None)

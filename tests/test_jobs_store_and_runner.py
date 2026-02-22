@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -149,10 +150,17 @@ def test_job_store_normalizes_missing_rrule_fields_and_syncs_timed_signal(
             "SELECT id, owner_id, status FROM scheduled_jobs WHERE id = ?",
             (created.job_id,),
         ).fetchone()
+        timed = conn.execute(
+            "SELECT id, status, target, origin FROM timed_signals WHERE id = ?",
+            (f"job_trigger:{created.job_id}",),
+        ).fetchone()
     assert compiled is not None
     assert str(compiled[0]) == created.job_id
     assert str(compiled[1]) == "u1"
     assert str(compiled[2]) == "active"
+    assert timed is not None
+    assert str(timed[0]) == f"job_trigger:{created.job_id}"
+    assert str(timed[1]) == "pending"
 
 
 def test_job_store_normalizes_legacy_prompt_payload_type(
@@ -178,3 +186,44 @@ def test_job_store_normalizes_legacy_prompt_payload_type(
         },
     )
     assert created.payload_type == "prompt_to_brain"
+
+
+def test_job_runner_reschedules_job_trigger_timed_signal_after_run(tmp_path: Path, monkeypatch) -> None:
+    db_path = tmp_path / "nerve-db"
+    apply_schema(db_path)
+    monkeypatch.setenv("NERVE_DB_PATH", str(db_path))
+    store = JobStore(root=tmp_path / "data" / "jobs")
+    scratchpad = ScratchpadService(root=tmp_path / "data" / "scratchpad")
+    runner = JobRunner(job_store=store, scratchpad_service=scratchpad, tick_seconds=5)
+    created = store.create_job(
+        user_id="u1",
+        payload={
+            "name": "Daily FX update",
+            "description": "USD to MXN at 7am",
+            "schedule": {
+                "type": "rrule",
+                "dtstart": (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat(),
+                "rrule": "FREQ=DAILY;BYHOUR=7;BYMINUTE=0",
+            },
+            "payload_type": "internal_event",
+            "payload": {"event_name": "fx.update", "data": {"source": "job"}},
+            "timezone": "UTC",
+        },
+    )
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "UPDATE timed_signals SET status = 'fired', fired_at = datetime('now') WHERE id = ?",
+            (f"job_trigger:{created.job_id}",),
+        )
+        conn.commit()
+    outcome = runner.run_job_now(user_id="u1", job_id=created.job_id)
+    assert outcome["status"] == "ok"
+    with sqlite3.connect(db_path) as conn:
+        row = conn.execute(
+            "SELECT status, trigger_at, fired_at FROM timed_signals WHERE id = ?",
+            (f"job_trigger:{created.job_id}",),
+        ).fetchone()
+    assert row is not None
+    assert str(row[0]) == "pending"
+    assert str(row[1]).strip()
+    assert row[2] is None

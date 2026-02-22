@@ -88,6 +88,7 @@ class HandleIncomingMessageAction(Action):
             payload=payload,
             normalized=None,
         )
+        state["_bus"] = context.get("ctx")
         state["session_id"] = day_session.get("session_id")
         state["session_state"] = day_session
         state["recent_conversation_block"] = render_recent_conversation_block(day_session)

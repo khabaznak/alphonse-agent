@@ -62,7 +62,14 @@ class JobRunner:
                 outcomes.append(self.run_job_now(user_id=user_id, job_id=job.job_id, now=current))
         return outcomes
 
-    def run_job_now(self, *, user_id: str, job_id: str, now: datetime | None = None) -> dict[str, Any]:
+    def run_job_now(
+        self,
+        *,
+        user_id: str,
+        job_id: str,
+        now: datetime | None = None,
+        brain_event_sink: Callable[[dict[str, Any]], None] | None = None,
+    ) -> dict[str, Any]:
         current = now or datetime.now(timezone.utc)
         job = self._job_store.get_job(user_id=user_id, job_id=job_id)
         route = route_job(job=job, auto_execute_high_risk=self._auto_execute_high_risk)
@@ -98,8 +105,9 @@ class JobRunner:
                 output_summary = "blocked: confirmation required"
             elif route.route == "brain":
                 payload = _brain_payload(job=job, user_id=user_id, current=current)
-                if callable(self._brain_event_sink):
-                    self._brain_event_sink(payload)
+                sink = brain_event_sink if callable(brain_event_sink) else self._brain_event_sink
+                if callable(sink):
+                    sink(payload)
                 output_summary = "queued_to_brain"
             else:
                 output = self._execute_unconscious(job=job, user_id=user_id)
