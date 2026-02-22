@@ -527,6 +527,23 @@ def _default_specs() -> list[ToolSpec]:
             examples=[{"contact_user_id": "8553589429"}],
         ),
         ToolSpec(
+            key="user_search",
+            description="Search registered users by partial display name and include channel resolver identifiers.",
+            when_to_use="Use before sending messages when recipient identity is uncertain and needs read-only lookup.",
+            returns="matching users",
+            input_schema=_object_schema(
+                properties={
+                    "query": {"type": "string"},
+                    "limit": {"type": "integer"},
+                    "active_only": {"type": "boolean"},
+                },
+                required=["query"],
+            ),
+            domain_tags=["identity", "users", "lookup"],
+            safety_level=SafetyLevel.LOW,
+            examples=[{"query": "Gab", "limit": 5, "active_only": True}],
+        ),
+        ToolSpec(
             key="terminal_execute",
             description="Execute terminal commands under global Alphonse execution mode and sandbox policy.",
             when_to_use="Use for constrained terminal-like operations when explicit tools are insufficient.",

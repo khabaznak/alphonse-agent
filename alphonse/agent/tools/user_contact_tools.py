@@ -171,6 +171,39 @@ class UserRemoveFromContactTool:
         )
 
 
+class UserSearchTool:
+    def execute(
+        self,
+        *,
+        query: str,
+        limit: int = 5,
+        active_only: bool = True,
+        state: dict[str, Any] | None = None,
+        **_: Any,
+    ) -> dict[str, Any]:
+        _ = state
+        rendered_query = str(query or "").strip()
+        if not rendered_query:
+            return _failed(
+                code="missing_query",
+                message="query is required",
+                metadata={"tool": "user_search"},
+            )
+        rows = _search_user_records(
+            query=rendered_query,
+            active_only=bool(active_only),
+            limit=max(1, min(int(limit), 25)),
+        )
+        return _ok(
+            result={
+                "query": rendered_query,
+                "count": len(rows),
+                "users": rows,
+            },
+            metadata={"tool": "user_search"},
+        )
+
+
 def _resolve_caller(state: dict[str, Any] | None) -> dict[str, Any] | None:
     if not isinstance(state, dict):
         return None
@@ -276,6 +309,37 @@ def _resolve_display_name(
     last = str(contact_last_name or "").strip()
     full = " ".join(item for item in (first, last) if item).strip()
     return full
+
+
+def _search_user_records(*, query: str, active_only: bool, limit: int) -> list[dict[str, Any]]:
+    rendered = str(query or "").strip().lower()
+    if not rendered:
+        return []
+    candidates = users_store.list_users(active_only=bool(active_only), limit=500)
+    rows: list[dict[str, Any]] = []
+    for user in candidates:
+        if not isinstance(user, dict):
+            continue
+        display_name = str(user.get("display_name") or "").strip()
+        if rendered not in display_name.lower():
+            continue
+        user_id = str(user.get("user_id") or "").strip()
+        rows.append(
+            {
+                "user_id": user_id,
+                "display_name": display_name,
+                "role": user.get("role"),
+                "relationship": user.get("relationship"),
+                "is_active": bool(user.get("is_active", True)),
+                "telegram_user_id": resolvers.resolve_service_user_id(
+                    user_id=user_id,
+                    service_id=TELEGRAM_SERVICE_ID,
+                ),
+            }
+        )
+        if len(rows) >= int(limit):
+            break
+    return rows
 
 
 def _schedule_proactive_intro(
