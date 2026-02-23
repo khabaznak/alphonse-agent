@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import logging
+from alphonse.agent.observability.log_manager import get_component_logger
 from datetime import datetime, timezone
 from typing import Any
 
@@ -15,7 +15,7 @@ from alphonse.agent.nervous_system.capability_gaps import list_recent_gaps
 from alphonse.agent.policy.engine import PolicyEngine
 from alphonse.config import settings
 
-logger = logging.getLogger(__name__)
+logger = get_component_logger("actions.handle_daily_report")
 
 
 def dispatch_daily_report(context: dict, payload: dict[str, Any]) -> None:

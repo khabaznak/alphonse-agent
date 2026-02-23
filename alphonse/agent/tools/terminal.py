@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import logging
 import os
 import shlex
 import subprocess
@@ -9,7 +8,9 @@ from pathlib import Path
 from typing import Iterable
 import uuid
 
-logger = logging.getLogger(__name__)
+from alphonse.agent.observability.log_manager import get_component_logger
+
+logger = get_component_logger("tools.terminal")
 
 
 @dataclass(frozen=True)

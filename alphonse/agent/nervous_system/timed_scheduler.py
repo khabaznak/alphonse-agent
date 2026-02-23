@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-import logging
+from alphonse.agent.observability.log_manager import get_component_logger
 import sqlite3
 import threading
 import time
@@ -16,7 +16,7 @@ from typing import Any
 from alphonse.agent.nervous_system.senses.bus import Bus, Signal
 from alphonse.config import settings
 
-logger = logging.getLogger(__name__)
+logger = get_component_logger("nervous_system.timed_scheduler")
 
 
 @dataclass(frozen=True)

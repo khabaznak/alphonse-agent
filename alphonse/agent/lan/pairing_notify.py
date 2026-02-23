@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import logging
+from alphonse.agent.observability.log_manager import get_component_logger
 import os
 from typing import Any
 
@@ -8,7 +8,7 @@ from alphonse.agent.extremities.interfaces.integrations.telegram.telegram_adapte
 from alphonse.agent.extremities.telegram_config import build_telegram_adapter_config
 from alphonse.agent.lan.pairing_store import create_delivery_receipt, append_audit
 
-logger = logging.getLogger(__name__)
+logger = get_component_logger("lan.pairing_notify")
 
 
 def notify_pairing_request(pairing_id: str, device_name: str | None, otp: str, expires_at: str) -> None:

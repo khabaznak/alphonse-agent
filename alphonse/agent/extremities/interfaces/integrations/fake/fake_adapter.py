@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-import logging
+from alphonse.agent.observability.log_manager import get_component_logger
 from typing import Any
 
 from alphonse.agent.extremities.interfaces.integrations._contracts import IntegrationAdapter
 from alphonse.agent.nervous_system.senses.bus import Signal as BusSignal
 
-logger = logging.getLogger(__name__)
+logger = get_component_logger("extremities.interfaces.integrations.fake.fake_adapter")
 
 
 class FakeAdapter(IntegrationAdapter):

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import logging
+from alphonse.agent.observability.log_manager import get_component_logger
 from typing import Any
 
 from alphonse.agent.cognition.prompt_templates_runtime import (
@@ -9,7 +9,7 @@ from alphonse.agent.cognition.prompt_templates_runtime import (
     render_prompt_template,
 )
 
-logger = logging.getLogger(__name__)
+logger = get_component_logger("cognition.slot_question_llm")
 
 
 def generate_slot_question(

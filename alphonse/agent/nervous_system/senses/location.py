@@ -1,14 +1,14 @@
 from __future__ import annotations
 
-import logging
 from typing import Any
 
+from alphonse.agent.observability.log_manager import get_component_logger
 from alphonse.agent.nervous_system.senses.base import Sense, SignalSpec
 from alphonse.agent.nervous_system.senses.bus import Bus, Signal
 from alphonse.agent.nervous_system.location_profiles import upsert_location_profile
 from alphonse.agent.tools.registry import build_default_tool_registry
 
-logger = logging.getLogger(__name__)
+logger = get_component_logger("senses.location")
 
 
 class LocationSense(Sense):

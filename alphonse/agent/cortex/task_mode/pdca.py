@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import inspect
 import json
-import logging
 from typing import Any, Callable
 
 from alphonse.agent.cognition.tool_schemas import planner_tool_schemas
@@ -15,9 +14,10 @@ from alphonse.agent.cortex.task_mode.state import build_default_task_state
 from alphonse.agent.cortex.task_mode.validate_step import validate_step_node_impl
 from alphonse.agent.cortex.task_mode.types import NextStepProposal
 from alphonse.agent.cortex.task_mode.types import TraceEvent
+from alphonse.agent.observability.log_manager import get_component_logger
 from alphonse.agent.session.day_state import render_recent_conversation_block
 from alphonse.agent.tools.base import ensure_tool_result
-logger = logging.getLogger(__name__)
+logger = get_component_logger("task_mode.pdca")
 
 _NEXT_STEP_DEVELOPER_PROMPT = (
     "You are an iterative tool-using agent in a PDCA loop.\n"

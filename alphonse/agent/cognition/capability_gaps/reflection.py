@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-import logging
+from alphonse.agent.observability.log_manager import get_component_logger
 from datetime import datetime, timezone
 from typing import Any
 
@@ -16,7 +16,7 @@ from alphonse.agent.nervous_system.gap_proposals import (
     insert_gap_proposal,
 )
 
-logger = logging.getLogger(__name__)
+logger = get_component_logger("cognition.capability_gaps.reflection")
 
 
 def reflect_gaps(limit: int = 50) -> list[str]:

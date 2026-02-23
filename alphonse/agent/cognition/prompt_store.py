@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import logging
+from alphonse.agent.observability.log_manager import get_component_logger
 import sqlite3
 import uuid
 from dataclasses import dataclass
@@ -9,7 +9,7 @@ from typing import Any, Protocol
 
 from alphonse.agent.nervous_system.paths import resolve_nervous_system_db_path
 
-logger = logging.getLogger(__name__)
+logger = get_component_logger("cognition.prompt_store")
 
 
 @dataclass(frozen=True)

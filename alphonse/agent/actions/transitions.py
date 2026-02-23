@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-import logging
+from alphonse.agent.observability.log_manager import get_component_logger
 from typing import Any, Callable
 
 from alphonse.agent.actions.session_context import IncomingContext
 
-logger = logging.getLogger(__name__)
+logger = get_component_logger("actions.transitions")
 
 
 def emit_agent_transitions_from_meta(

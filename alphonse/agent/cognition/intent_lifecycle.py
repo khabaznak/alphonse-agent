@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-import logging
+from alphonse.agent.observability.log_manager import get_component_logger
 import sqlite3
 import uuid
 from dataclasses import dataclass
@@ -13,7 +13,7 @@ from alphonse.agent.cognition.intent_types import IntentCategory
 from alphonse.agent.cognition.planning import PlanningMode
 from alphonse.agent.nervous_system.paths import resolve_nervous_system_db_path
 
-logger = logging.getLogger(__name__)
+logger = get_component_logger("cognition.intent_lifecycle")
 
 
 class LifecycleState(str, Enum):

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import logging
 import os
 from datetime import datetime, timezone
 from typing import Any
@@ -8,13 +7,14 @@ from typing import Any
 from alphonse.agent.actions.base import Action
 from alphonse.agent.actions.models import ActionResult
 from alphonse.agent.nervous_system.senses.bus import Signal as BusSignal
+from alphonse.agent.observability.log_manager import get_component_logger
 from alphonse.agent.services.job_runner import JobRunner
 from alphonse.agent.services.scheduled_jobs_reconciler import ScheduledJobsReconciler
 from alphonse.agent.services.job_store import JobStore
 from alphonse.agent.services.scratchpad_service import ScratchpadService
 
 
-logger = logging.getLogger(__name__)
+logger = get_component_logger("actions.handle_timed_signals")
 
 
 class HandleTimedSignalsAction(Action):

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone as dt_timezone
-import logging
+from alphonse.agent.observability.log_manager import get_component_logger
 import re
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -11,7 +11,7 @@ from alphonse.agent.nervous_system.prompt_artifacts import create_prompt_artifac
 from alphonse.agent.services.scheduler_service import SchedulerService
 from alphonse.config import settings
 
-logger = logging.getLogger(__name__)
+logger = get_component_logger("tools.scheduler_tool")
 
 
 class SchedulerToolError(Exception):

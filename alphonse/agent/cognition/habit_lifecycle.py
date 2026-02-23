@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-import logging
+from alphonse.agent.observability.log_manager import get_component_logger
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -12,7 +12,7 @@ from alphonse.agent.cognition.intent_lifecycle import LifecycleState, get_record
 from alphonse.agent.cognition.intent_types import IntentCategory, RiskLevel
 from alphonse.agent.nervous_system.paths import resolve_nervous_system_db_path
 
-logger = logging.getLogger(__name__)
+logger = get_component_logger("cognition.habit_lifecycle")
 
 
 class HabitState(str, Enum):

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import logging
+from alphonse.agent.observability.log_manager import get_component_logger
 from datetime import datetime, timezone
 from typing import Any
 
@@ -12,7 +12,7 @@ from alphonse.agent.cognition.preferences.store import (
 from alphonse.agent.identity import profile as identity_profile
 from alphonse.config import settings
 
-logger = logging.getLogger(__name__)
+logger = get_component_logger("actions.state_context")
 
 
 def ensure_conversation_locale(

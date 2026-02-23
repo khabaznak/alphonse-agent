@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import logging
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -14,8 +13,9 @@ from alphonse.agent.extremities.interfaces.integrations.telegram.telegram_adapte
 from alphonse.agent.extremities.telegram_config import build_telegram_adapter_config
 from alphonse.agent.nervous_system.telegram_chat_access import can_deliver_to_chat
 from alphonse.agent.nervous_system.user_service_resolvers import resolve_telegram_chat_id_for_user
+from alphonse.agent.observability.log_manager import get_component_logger
 
-logger = logging.getLogger(__name__)
+logger = get_component_logger("io.telegram_channel")
 
 
 @dataclass(frozen=True)

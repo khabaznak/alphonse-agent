@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 import json
-import logging
+from alphonse.agent.observability.log_manager import get_component_logger
 from typing import Any, Callable
 
 from alphonse.agent.cognition.step_validation import StepValidationResult
 
-logger = logging.getLogger(__name__)
+logger = get_component_logger("cortex.nodes.execution_helpers")
 
 
 def has_missing_params(params: dict[str, Any]) -> bool:

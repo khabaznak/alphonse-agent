@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-import logging
 from typing import Any, Callable
 
 from alphonse.agent.cortex.task_mode.observability import log_task_event
+from alphonse.agent.observability.log_manager import get_component_logger
 
-logger = logging.getLogger(__name__)
+logger = get_component_logger("task_mode.progress_critic")
 
 
 def progress_critic_node(

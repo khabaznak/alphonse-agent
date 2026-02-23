@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import logging
 import os
 import uuid
 from typing import Any
@@ -24,6 +23,8 @@ from alphonse.agent.cortex.state_store import load_state, save_state
 from alphonse.agent.identity import store as identity_store
 from alphonse.agent.io import get_io_registry
 from alphonse.agent.nervous_system import users as users_store
+from alphonse.agent.observability.log_manager import get_component_logger
+from alphonse.agent.observability.log_manager import get_log_manager
 from alphonse.agent.session.day_state import build_next_session_state
 from alphonse.agent.session.day_state import commit_session_state
 from alphonse.agent.session.day_state import render_recent_conversation_block
@@ -31,7 +32,8 @@ from alphonse.agent.session.day_state import resolve_day_session
 from alphonse.agent.tools.local_audio_output import LocalAudioOutputSpeakTool
 from alphonse.config import settings
 
-logger = logging.getLogger(__name__)
+logger = get_component_logger("actions.handle_incoming_message")
+_LOG = get_log_manager()
 _CORTEX_GRAPH = CortexGraph()
 
 
@@ -53,19 +55,29 @@ class HandleIncomingMessageAction(Action):
             payload=provider_payload,
             correlation_id=correlation_id,
         )
-        logger.info(
-            "HandleIncomingMessageAction start channel=%s person=%s text=%s",
-            incoming.channel_type,
-            incoming.person_id,
-            _text_log_snippet(str(payload.get("text") or "")) if isinstance(payload, dict) else "",
+        _LOG.emit(
+            event="incoming_message.started",
+            component="handle_incoming_message",
+            correlation_id=correlation_id,
+            channel=incoming.channel_type,
+            user_id=incoming.person_id,
+            payload={
+                "address": incoming.address,
+                "text_snippet": _text_log_snippet(str(payload.get("text") or "")) if isinstance(payload, dict) else "",
+            },
         )
 
         session_key = build_session_key(incoming)
-        logger.info(
-            "HandleIncomingMessageAction session_key=%s channel=%s address=%s",
-            session_key,
-            incoming.channel_type,
-            incoming.address,
+        _LOG.emit(
+            event="incoming_message.session_resolved",
+            component="handle_incoming_message",
+            correlation_id=correlation_id,
+            channel=incoming.channel_type,
+            user_id=incoming.person_id,
+            payload={
+                "session_key": session_key,
+                "address": incoming.address,
+            },
         )
         session_timezone = _resolve_session_timezone(incoming)
         session_user_id = _resolve_session_user_id(incoming=incoming, payload=payload)
@@ -96,12 +108,31 @@ class HandleIncomingMessageAction(Action):
 
         try:
             llm_client = build_llm_client()
-        except Exception:
+        except Exception as exc:
+            _LOG.emit_exception(
+                event="incoming_message.llm_client_failed",
+                exc=exc,
+                component="handle_incoming_message",
+                correlation_id=incoming.correlation_id,
+                channel=incoming.channel_type,
+                user_id=incoming.person_id,
+                message="Failed to build LLM client; continuing with fallback None",
+            )
             logger.exception("HandleIncomingMessageAction failed to build llm client")
             llm_client = None
         try:
             result = _CORTEX_GRAPH.invoke(state, packed_input, llm_client=llm_client)
-        except Exception:
+        except Exception as exc:
+            _LOG.emit_exception(
+                event="incoming_message.cortex_invoke_failed",
+                exc=exc,
+                component="handle_incoming_message",
+                correlation_id=incoming.correlation_id,
+                channel=incoming.channel_type,
+                user_id=incoming.person_id,
+                message="Cortex invoke failed",
+                payload={"target": incoming.address},
+            )
             logger.exception(
                 "HandleIncomingMessageAction cortex_invoke_failed channel=%s target=%s correlation_id=%s",
                 incoming.channel_type,
@@ -117,24 +148,36 @@ class HandleIncomingMessageAction(Action):
                 emit_transition=lambda ctx, phase: _emit_channel_transition(ctx, phase),
                 skip_phases=set(),
             )
-        logger.info(
-            "HandleIncomingMessageAction cortex_result reply_len=%s plans=%s correlation_id=%s",
-            len(str(result.reply_text or "")),
-            len(result.plans or []),
-            incoming.correlation_id,
+        _LOG.emit(
+            event="incoming_message.cortex_result",
+            component="handle_incoming_message",
+            correlation_id=incoming.correlation_id,
+            channel=incoming.channel_type,
+            user_id=incoming.person_id,
+            payload={
+                "reply_len": len(str(result.reply_text or "")),
+                "plans": len(result.plans or []),
+            },
         )
         if result.plans:
-            logger.info(
-                "HandleIncomingMessageAction cortex_plans correlation_id=%s steps=%s",
-                incoming.correlation_id,
-                [str(getattr(plan, "tool", "unknown")) for plan in result.plans],
+            _LOG.emit(
+                event="incoming_message.cortex_plans",
+                component="handle_incoming_message",
+                correlation_id=incoming.correlation_id,
+                channel=incoming.channel_type,
+                user_id=incoming.person_id,
+                payload={"steps": [str(getattr(plan, "tool", "unknown")) for plan in result.plans]},
             )
 
         save_state(session_key, result.cognition_state)
         if isinstance(result.cognition_state, dict):
-            logger.info(
-                "HandleIncomingMessageAction saved_state pending_interaction=%s",
-                result.cognition_state.get("pending_interaction"),
+            _LOG.emit(
+                event="incoming_message.state_saved",
+                component="handle_incoming_message",
+                correlation_id=incoming.correlation_id,
+                channel=incoming.channel_type,
+                user_id=incoming.person_id,
+                payload={"pending_interaction": result.cognition_state.get("pending_interaction")},
             )
 
         executor = PlanExecutor()
@@ -195,9 +238,14 @@ class HandleIncomingMessageAction(Action):
         )
         commit_session_state(updated_day_session)
 
-        logger.info(
-            "HandleIncomingMessageAction response channel=%s message=noop",
-            incoming.channel_type,
+        _LOG.emit(
+            event="incoming_message.completed",
+            component="handle_incoming_message",
+            correlation_id=incoming.correlation_id,
+            channel=incoming.channel_type,
+            user_id=incoming.person_id,
+            status="done",
+            payload={"message": "noop"},
         )
         return ActionResult(intention_key="NOOP", payload={}, urgency=None)
 

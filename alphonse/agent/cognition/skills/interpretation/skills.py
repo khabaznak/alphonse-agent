@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-import logging
+from alphonse.agent.observability.log_manager import get_component_logger
 import os
 import re
 import sqlite3
@@ -24,7 +24,7 @@ from alphonse.agent.cognition.skills.interpretation.registry import SkillRegistr
 from alphonse.agent.nervous_system.paths import resolve_nervous_system_db_path
 from alphonse.agent.core.settings_store import get_timezone
 
-logger = logging.getLogger(__name__)
+logger = get_component_logger("cognition.skills.interpretation.skills")
 
 
 @dataclass(frozen=True)

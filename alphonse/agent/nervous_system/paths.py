@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-import logging
+from alphonse.agent.observability.log_manager import get_component_logger
 import os
 from pathlib import Path
 
-logger = logging.getLogger(__name__)
+logger = get_component_logger("nervous_system.paths")
 
 
 def resolve_nervous_system_db_path() -> Path:

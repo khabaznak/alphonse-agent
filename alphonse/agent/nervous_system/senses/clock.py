@@ -1,16 +1,16 @@
 from __future__ import annotations
 
-import logging
 import os
 import threading
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
+from alphonse.agent.observability.log_manager import get_component_logger
 from alphonse.agent.nervous_system.senses.base import Sense, SignalSpec
 from alphonse.agent.nervous_system.senses.bus import Bus, Signal
 from alphonse.config import settings
 
-logger = logging.getLogger(__name__)
+logger = get_component_logger("senses.clock")
 
 
 def get_time_now(timezone_name: str | None = None) -> datetime:

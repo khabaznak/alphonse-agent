@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-import logging
 import sqlite3
 from typing import Any
 
 from alphonse.agent.nervous_system.paths import resolve_nervous_system_db_path
+from alphonse.agent.observability.log_manager import get_log_manager
 
-logger = logging.getLogger(__name__)
+_LOG = get_log_manager()
 
 
 def write_trace(payload: dict[str, Any]) -> None:
@@ -31,4 +31,16 @@ def write_trace(payload: dict[str, Any]) -> None:
             ),
         )
         conn.commit()
-    logger.info("Trace written signal=%s state=%s action=%s", payload.get("signal_type"), payload.get("state_before"), payload.get("action_key"))
+    _LOG.emit(
+        event="fsm.trace.written",
+        component="trace_store",
+        correlation_id=str(payload.get("correlation_id") or "") or None,
+        status=str(payload.get("state_before") or "") or None,
+        payload={
+            "signal_type": payload.get("signal_type"),
+            "action_key": payload.get("action_key"),
+            "state_before": payload.get("state_before"),
+            "state_after": payload.get("state_after"),
+            "result": payload.get("result"),
+        },
+    )

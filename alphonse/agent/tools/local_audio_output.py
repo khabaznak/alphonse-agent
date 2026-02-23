@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import argparse
-import logging
+from alphonse.agent.observability.log_manager import get_component_logger
 import platform
 import subprocess
 import threading
 from typing import Any
 
-logger = logging.getLogger(__name__)
+logger = get_component_logger("tools.local_audio_output")
 
 
 class LocalAudioOutputSpeakTool:

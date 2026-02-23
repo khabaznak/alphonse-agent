@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-import logging
+from alphonse.agent.observability.log_manager import get_component_logger
 from typing import Any
 
 from alphonse.agent.cognition.preferences import store as pref_store
 
-logger = logging.getLogger(__name__)
+logger = get_component_logger("identity.profile")
 
 
 def set_display_name(conversation_key: str, name: str) -> None:

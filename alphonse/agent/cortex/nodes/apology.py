@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import logging
+from alphonse.agent.observability.log_manager import get_component_logger
 from functools import partial
 from typing import Any, Callable
 
@@ -15,7 +15,7 @@ from alphonse.agent.cortex.nodes.capability_gap import run_capability_gap_tool a
 from alphonse.agent.cortex.nodes.telemetry import emit_brain_state
 from alphonse.agent.cortex.transitions import emit_transition_event as _emit_transition_event
 
-logger = logging.getLogger(__name__)
+logger = get_component_logger("cortex.nodes.apology")
 
 
 def apology_node(

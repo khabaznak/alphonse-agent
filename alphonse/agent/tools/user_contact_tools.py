@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-import logging
+from alphonse.agent.observability.log_manager import get_component_logger
 from typing import Any
 
 from alphonse.agent.nervous_system import users as users_store
@@ -10,7 +10,7 @@ from alphonse.agent.nervous_system.services import TELEGRAM_SERVICE_ID
 from alphonse.agent.tools.scheduler_tool import SchedulerTool
 from alphonse.agent.tools.scheduler_tool import SchedulerToolError
 
-logger = logging.getLogger(__name__)
+logger = get_component_logger("tools.user_contact_tools")
 
 
 class UserRegisterFromContactTool:

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import logging
 import threading
 import time
 from urllib import parse, request
@@ -11,6 +10,7 @@ from typing import Any
 
 from alphonse.agent.extremities.interfaces.integrations._contracts import IntegrationAdapter
 from alphonse.agent.nervous_system.senses.bus import Signal as BusSignal
+from alphonse.agent.observability.log_manager import get_component_logger
 from alphonse.agent.nervous_system.telegram_chat_access import (
     evaluate_inbound_access,
     owner_telegram_user_id,
@@ -18,7 +18,7 @@ from alphonse.agent.nervous_system.telegram_chat_access import (
 )
 from alphonse.agent.nervous_system.telegram_updates_store import mark_update_processed
 
-logger = logging.getLogger(__name__)
+logger = get_component_logger("integrations.telegram_adapter")
 _SNIPPET_LIMIT = 80
 
 

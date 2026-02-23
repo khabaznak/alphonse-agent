@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-import logging
 from typing import Any
 
 from alphonse.agent.io.contracts import NormalizedOutboundMessage
+from alphonse.agent.observability.log_manager import get_component_logger
 
-logger = logging.getLogger(__name__)
+logger = get_component_logger("io.voice_channel")
 
 
 class VoiceExtremityAdapter:

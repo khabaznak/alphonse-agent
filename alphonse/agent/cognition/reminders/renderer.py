@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import logging
+from alphonse.agent.observability.log_manager import get_component_logger
 import re
 from datetime import datetime, timezone
 from typing import Any
@@ -12,7 +12,7 @@ from alphonse.agent.cognition.preferences.store import (
 )
 from alphonse.config import settings
 
-logger = logging.getLogger(__name__)
+logger = get_component_logger("cognition.reminders.renderer")
 
 
 def render_reminder(

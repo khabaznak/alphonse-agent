@@ -5,7 +5,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Any
 
-from alphonse.agent.observability.store import write_task_event
+from alphonse.agent.observability.log_manager import get_log_manager
 
 
 def log_task_event(
@@ -18,10 +18,12 @@ def log_task_event(
     level: str = "info",
     **extra: Any,
 ) -> None:
+    manager = get_log_manager()
     payload: dict[str, Any] = {
         "ts": datetime.now(timezone.utc).isoformat(),
         "level": str(level).lower(),
         "event": event,
+        "component": "task_mode",
         "correlation_id": state.get("correlation_id"),
         "channel": state.get("channel_type"),
         "user_id": state.get("actor_person_id"),
@@ -31,16 +33,36 @@ def log_task_event(
     }
     if extra:
         payload.update({k: v for k, v in extra.items() if v is not None})
-    line = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), default=str)
-    if str(level).lower() == "debug":
-        logger.debug("task_mode_event %s", line)
-    elif str(level).lower() == "warning":
-        logger.warning("task_mode_event %s", line)
-    elif str(level).lower() == "error":
-        logger.error("task_mode_event %s", line)
-    else:
-        logger.info("task_mode_event %s", line)
+    message = f"task_mode_event {json.dumps(payload, ensure_ascii=False, separators=(',', ':'), default=str)}"
+    manager.emit(
+        level=str(level).lower(),
+        event=event,
+        message=message,
+        component="task_mode",
+        correlation_id=_as_text_or_none(payload.get("correlation_id")),
+        channel=_as_text_or_none(payload.get("channel")),
+        user_id=_as_text_or_none(payload.get("user_id")),
+        node=_as_text_or_none(payload.get("node")),
+        cycle=_as_int_or_none(payload.get("cycle")),
+        status=_as_text_or_none(payload.get("status")),
+        tool=_as_text_or_none(payload.get("tool")),
+        error_code=_as_text_or_none(payload.get("error_code")),
+        latency_ms=_as_int_or_none(payload.get("latency_ms")),
+        payload=payload,
+    )
+
+
+def _as_text_or_none(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _as_int_or_none(value: Any) -> int | None:
+    if value is None:
+        return None
     try:
-        write_task_event(payload)
-    except Exception:
-        return
+        return int(value)
+    except (TypeError, ValueError):
+        return None

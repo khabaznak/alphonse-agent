@@ -1,17 +1,17 @@
 from __future__ import annotations
 
-import logging
 import os
 import sqlite3
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
 
+from alphonse.agent.observability.log_manager import get_component_logger
 from alphonse.agent.nervous_system.paths import resolve_nervous_system_db_path
 from alphonse.agent.nervous_system.senses.base import Sense, SignalSpec
 from alphonse.agent.nervous_system.senses.bus import Bus, Signal
 
-logger = logging.getLogger(__name__)
+logger = get_component_logger("senses.terminal")
 
 
 class TerminalSense(Sense):

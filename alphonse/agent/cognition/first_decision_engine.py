@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import json
-import logging
 from typing import Any
 
+from alphonse.agent.observability.log_manager import get_component_logger
 from alphonse.agent.cognition.prompt_templates_runtime import (
     FIRST_DECISION_SYSTEM_PROMPT,
     FIRST_DECISION_USER_TEMPLATE,
@@ -11,7 +11,7 @@ from alphonse.agent.cognition.prompt_templates_runtime import (
 )
 from alphonse.agent.cognition.utterance_policy import render_utterance_policy_block
 
-logger = logging.getLogger(__name__)
+logger = get_component_logger("cognition.first_decision_engine")
 
 
 def decide_first_action(

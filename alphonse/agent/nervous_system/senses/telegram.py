@@ -1,15 +1,15 @@
 from __future__ import annotations
 
-import logging
 import os
 from dataclasses import dataclass
 
 from alphonse.agent.extremities.interfaces.integrations.telegram.telegram_adapter import TelegramAdapter
 from alphonse.agent.io import TelegramSenseAdapter
+from alphonse.agent.observability.log_manager import get_component_logger
 from alphonse.agent.nervous_system.senses.base import Sense, SignalSpec
 from alphonse.agent.nervous_system.senses.bus import Bus, Signal
 
-logger = logging.getLogger(__name__)
+logger = get_component_logger("senses.telegram")
 
 
 @dataclass(frozen=True)

@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import secrets
-import logging
+from alphonse.agent.observability.log_manager import get_component_logger
 import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -15,7 +15,7 @@ from dateutil.rrule import rrulestr
 from alphonse.agent.nervous_system.paths import resolve_nervous_system_db_path
 from alphonse.agent.services.job_models import JobExecution, JobSpec
 
-logger = logging.getLogger(__name__)
+logger = get_component_logger("services.job_store")
 VALID_PAYLOAD_TYPES = {"job_ability", "tool_call", "prompt_to_brain", "internal_event"}
 
 

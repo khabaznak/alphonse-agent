@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-import logging
+from alphonse.agent.observability.log_manager import get_component_logger
 import os
 
 from alphonse.agent.cognition.plans import CortexPlan
 from alphonse.agent.policy.engine import PolicyDecision, PolicyRule
 
-logger = logging.getLogger(__name__)
+logger = get_component_logger("policy.rules.telegram")
 
 
 class TelegramScheduleRule:

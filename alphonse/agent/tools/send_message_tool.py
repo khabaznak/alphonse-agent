@@ -4,13 +4,14 @@ from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import Any
 import uuid
-import logging
 import re
 
 from alphonse.agent.cognition.plan_execution.communication_dispatcher import CommunicationDispatcher
 from alphonse.agent.cognition.narration.outbound_narration_orchestrator import build_default_coordinator
+from alphonse.agent.observability.log_manager import get_component_logger
 from alphonse.agent.services.communication_service import CommunicationRequest, CommunicationService
 
+logger = get_component_logger("tools.send_message_tool")
 
 @dataclass(frozen=True)
 class SendMessageTool:
@@ -19,7 +20,7 @@ class SendMessageTool:
     def __post_init__(self) -> None:
         if self._communication is not None:
             return
-        dispatcher = CommunicationDispatcher(coordinator=build_default_coordinator(), logger=logging.getLogger(__name__))
+        dispatcher = CommunicationDispatcher(coordinator=build_default_coordinator(), logger=logger)
         object.__setattr__(self, "_communication", CommunicationService(dispatcher=dispatcher))
 
     def execute(self, *, state: dict[str, Any] | None = None, **args: Any) -> dict[str, Any]:

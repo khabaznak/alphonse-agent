@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-import logging
 from typing import Any, Callable
 
 from pydantic import ValidationError
@@ -12,11 +11,12 @@ from alphonse.agent.cognition.narration.outbound_narration_orchestrator import (
 )
 from alphonse.agent.cognition.plan_execution.communication_dispatcher import CommunicationDispatcher
 from alphonse.agent.cognition.plans import CortexPlan
+from alphonse.agent.observability.log_manager import get_component_logger
 from alphonse.agent.tools.registry import ToolRegistry, build_default_tool_registry
 from alphonse.agent.tools.base import ensure_tool_result
 from alphonse.agent.services.communication_service import CommunicationRequest, CommunicationService
 
-logger = logging.getLogger(__name__)
+logger = get_component_logger("cognition.plan_executor")
 
 
 @dataclass(frozen=True)

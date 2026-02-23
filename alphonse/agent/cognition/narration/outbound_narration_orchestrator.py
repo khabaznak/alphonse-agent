@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-import logging
+from alphonse.agent.observability.log_manager import get_component_logger
 from datetime import datetime
 from typing import Any
 
@@ -19,7 +19,7 @@ from alphonse.agent.cognition.skills.narration.skill import NarrationSkill
 from alphonse.agent.identity import store as identity_store
 from alphonse.agent.io import NormalizedOutboundMessage
 
-logger = logging.getLogger(__name__)
+logger = get_component_logger("cognition.narration.outbound_narration_orchestrator")
 
 
 @dataclass

@@ -3,21 +3,20 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
-import logging
 
 from alphonse.agent.runtime import get_runtime
 from alphonse.agent.cognition.intentions.intent_pipeline import (
     IntentPipeline,
     build_default_pipeline_with_bus,
 )
+from alphonse.agent.observability.log_manager import get_log_manager
 from alphonse.agent.nervous_system.ddfsm import CurrentState, DDFSM
 from alphonse.agent.nervous_system.senses.bus import Bus
 
 SHUTDOWN = "SHUTDOWN"
 RUNNING = "RUNNING"
 
-logger = logging.getLogger(__name__)
+_LOG = get_log_manager()
 
 
 @dataclass
@@ -52,21 +51,31 @@ class Heart:
         """
         while self.signal != SHUTDOWN:
             signal = self.bus.get(timeout=None)
-            logger.info(
-                "Heart received signal state=%s/%s signal=%s",
-                self.state.id,
-                self.state.key,
-                signal.type,
+            _LOG.emit(
+                event="heart.signal.received",
+                component="heart",
+                correlation_id=getattr(signal, "correlation_id", None),
+                status=str(self.state.key or ""),
+                payload={
+                    "state_id": self.state.id,
+                    "state_key": self.state.key,
+                    "signal_type": signal.type,
+                },
             )
             self._runtime.update_signal(signal.type, signal.source)
             if signal.type == SHUTDOWN:
                 break
             outcome = self.ddfsm.handle(self.state, signal, self.ctx)
-            logger.info(
-                "Heart transition outcome matched=%s action=%s next_state=%s",
-                getattr(outcome, "matched", None),
-                getattr(outcome, "action_key", None),
-                getattr(outcome, "next_state_key", None),
+            _LOG.emit(
+                event="heart.transition.evaluated",
+                component="heart",
+                correlation_id=getattr(signal, "correlation_id", None),
+                status=str(self.state.key or ""),
+                payload={
+                    "matched": getattr(outcome, "matched", None),
+                    "action_key": getattr(outcome, "action_key", None),
+                    "next_state_key": getattr(outcome, "next_state_key", None),
+                },
             )
             if outcome:
                 self.pipeline.handle(

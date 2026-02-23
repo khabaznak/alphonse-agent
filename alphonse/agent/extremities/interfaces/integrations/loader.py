@@ -7,12 +7,12 @@ to the provided signal bus emit function.
 from __future__ import annotations
 
 import importlib
-import logging
 from typing import Any, Protocol, Type
 
 from alphonse.agent.extremities.interfaces.integrations._contracts import IntegrationAdapter
+from alphonse.agent.observability.log_manager import get_component_logger
 
-logger = logging.getLogger(__name__)
+logger = get_component_logger("integrations.loader")
 
 
 class SignalBus(Protocol):

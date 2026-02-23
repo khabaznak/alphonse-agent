@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone, timedelta
-import logging
+from alphonse.agent.observability.log_manager import get_component_logger
 import os
 import secrets
 import uuid
@@ -38,7 +38,7 @@ from alphonse.agent.lan.store import (
 )
 from alphonse.agent.lan.ws import LanConnectionManager
 
-logger = logging.getLogger(__name__)
+logger = get_component_logger("lan.api")
 
 
 router = APIRouter(tags=["lan"])

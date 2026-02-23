@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import logging
+from alphonse.agent.observability.log_manager import get_component_logger
 
 from alphonse.agent.actions.base import Action
 from alphonse.agent.actions.models import ActionResult
@@ -10,7 +10,7 @@ from alphonse.agent.cognition.preferences.store import (
 )
 from alphonse.agent.nervous_system.telegram_invites import get_invite
 
-logger = logging.getLogger(__name__)
+logger = get_component_logger("actions.handle_telegram_invite")
 
 
 class HandleTelegramInviteAction(Action):

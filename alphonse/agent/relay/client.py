@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import logging
 import os
 import threading
 import time
@@ -12,8 +11,9 @@ from typing import Any
 import requests
 
 from alphonse.agent.lan.store import get_latest_paired_device, get_paired_device
+from alphonse.agent.observability.log_manager import get_component_logger
 
-logger = logging.getLogger(__name__)
+logger = get_component_logger("relay.client")
 
 
 @dataclass

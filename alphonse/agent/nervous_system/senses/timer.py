@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import logging
 import os
 import sqlite3
 import threading
@@ -9,11 +8,12 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
+from alphonse.agent.observability.log_manager import get_component_logger
 from alphonse.agent.nervous_system.senses.base import Sense, SignalSpec
 from alphonse.agent.nervous_system.senses.bus import Bus, Signal
 from alphonse.agent.nervous_system.paths import resolve_nervous_system_db_path
 
-logger = logging.getLogger(__name__)
+logger = get_component_logger("senses.timer")
 
 MAX_ACCEPTABLE_TRIGGER_LATENCY_SECONDS = 30 * 60
 

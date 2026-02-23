@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-import logging
 import os
 import threading
 from dataclasses import dataclass
 
+from alphonse.agent.observability.log_manager import get_component_logger
 from alphonse.agent.nervous_system.terminal_tools import (
     get_terminal_command,
     get_terminal_sandbox,
@@ -19,7 +19,7 @@ from alphonse.agent.nervous_system.senses.base import Sense, SignalSpec
 from alphonse.agent.nervous_system.senses.bus import Bus, Signal
 from alphonse.agent.tools.terminal import TerminalTool
 
-logger = logging.getLogger(__name__)
+logger = get_component_logger("senses.terminal_executor")
 
 
 @dataclass(frozen=True)
