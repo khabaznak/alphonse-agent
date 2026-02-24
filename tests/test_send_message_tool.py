@@ -211,7 +211,7 @@ def test_send_voice_note_tool_enforces_audio_delivery_mode() -> None:
     result = tool.execute(
         state={"channel_type": "telegram", "channel_target": "8553589429", "correlation_id": "cid-voice"},
         To="Gabriela",
-        AudioFilePath="/tmp/alphonse-audio/voice-1.m4a",
+        AudioFilePath="/tmp/alphonse-audio/voice-1.ogg",
         Caption="Hola por voz",
         Channel="telegram",
     )
@@ -219,5 +219,20 @@ def test_send_voice_note_tool_enforces_audio_delivery_mode() -> None:
     assert fake.called is True
     payload = dict(getattr(fake.plan, "payload", {}) or {})
     assert payload.get("delivery_mode") == "audio"
-    assert payload.get("audio_file_path") == "/tmp/alphonse-audio/voice-1.m4a"
+    assert payload.get("audio_file_path") == "/tmp/alphonse-audio/voice-1.ogg"
     assert payload.get("as_voice") is True
+
+
+def test_send_voice_note_tool_rejects_non_ogg_for_voice_notes() -> None:
+    fake = _FakeCommunication()
+    tool = SendVoiceNoteTool(_send_message_tool=SendMessageTool(_communication=fake))
+    result = tool.execute(
+        state={"channel_type": "telegram", "channel_target": "8553589429", "correlation_id": "cid-voice-bad"},
+        To="Gabriela",
+        AudioFilePath="/tmp/alphonse-audio/voice-1.m4a",
+        Channel="telegram",
+        AsVoice=True,
+    )
+    assert result["status"] == "failed"
+    assert str((result.get("error") or {}).get("code") or "") == "voice_note_requires_ogg"
+    assert fake.called is False

@@ -35,6 +35,52 @@ def test_local_audio_output_render_m4a_on_macos(monkeypatch, tmp_path: Path) -> 
     assert calls[1][0] == "afconvert"
 
 
+def test_local_audio_output_render_ogg_on_macos(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(lao.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(lao.shutil, "which", lambda name: "/usr/local/bin/ffmpeg" if name == "ffmpeg" else None)
+    calls: list[list[str]] = []
+
+    def _fake_run(cmd, stdout, stderr, text, check):  # noqa: ANN001
+        calls.append(list(cmd))
+        _ = (stdout, stderr, text, check)
+        if cmd and cmd[0] == "say":
+            out_idx = cmd.index("-o") + 1
+            Path(cmd[out_idx]).write_bytes(b"fake-aiff")
+        elif cmd and "ffmpeg" in str(cmd[0]):
+            Path(cmd[-1]).write_bytes(b"fake-ogg")
+        return SimpleNamespace(returncode=0, stderr="")
+
+    monkeypatch.setattr(lao.subprocess, "run", _fake_run)
+
+    tool = LocalAudioOutputRenderTool()
+    result = tool.execute(text="Hola Alex", output_dir=str(tmp_path), format="ogg")
+
+    assert result["status"] == "ok"
+    payload = result["result"]
+    assert str(payload["file_path"]).endswith(".ogg")
+    assert payload["mime_type"] == "audio/ogg"
+    assert calls[0][0] == "say"
+    assert "ffmpeg" in str(calls[1][0])
+
+
+def test_local_audio_output_render_ogg_requires_ffmpeg(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(lao.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(lao.shutil, "which", lambda _name: None)
+
+    def _fake_run(cmd, stdout, stderr, text, check):  # noqa: ANN001
+        _ = (stdout, stderr, text, check)
+        if cmd and cmd[0] == "say":
+            out_idx = cmd.index("-o") + 1
+            Path(cmd[out_idx]).write_bytes(b"fake-aiff")
+        return SimpleNamespace(returncode=0, stderr="")
+
+    monkeypatch.setattr(lao.subprocess, "run", _fake_run)
+    tool = LocalAudioOutputRenderTool()
+    result = tool.execute(text="Hola Alex", output_dir=str(tmp_path), format="ogg")
+    assert result["status"] == "failed"
+    assert str((result.get("error") or {}).get("code") or "") == "ffmpeg_not_installed"
+
+
 def test_local_audio_output_render_rejects_non_macos(monkeypatch) -> None:
     monkeypatch.setattr(lao.platform, "system", lambda: "Linux")
     tool = LocalAudioOutputRenderTool()

@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from typing import Any
 import uuid
 import re
+from pathlib import Path
 
 from alphonse.agent.cognition.plan_execution.communication_dispatcher import CommunicationDispatcher
 from alphonse.agent.cognition.narration.outbound_narration_orchestrator import build_default_coordinator
@@ -119,6 +120,14 @@ class SendVoiceNoteTool:
         to = str(args.get("To") or args.get("to") or args.get("recipient") or "").strip()
         audio_file_path = str(args.get("AudioFilePath") or args.get("audio_file_path") or "").strip()
         caption = str(args.get("Caption") or args.get("caption") or "").strip()
+        as_voice = bool(args.get("AsVoice") if args.get("AsVoice") is not None else args.get("as_voice", True))
+        if as_voice and audio_file_path:
+            suffix = Path(audio_file_path).suffix.lower()
+            if suffix not in {".ogg", ".oga"}:
+                return _failed(
+                    code="voice_note_requires_ogg",
+                    message="voice notes require .ogg or .oga audio file paths",
+                )
         message = str(args.get("Message") or args.get("message") or "").strip()
         if not message:
             message = caption or "Voice note"
@@ -130,7 +139,7 @@ class SendVoiceNoteTool:
             Urgency=str(args.get("Urgency") or args.get("urgency") or "normal").strip() or "normal",
             DeliveryMode="audio",
             AudioFilePath=audio_file_path,
-            AsVoice=bool(args.get("AsVoice") if args.get("AsVoice") is not None else args.get("as_voice", True)),
+            AsVoice=as_voice,
             Caption=caption or None,
             correlation_id=args.get("correlation_id"),
         )

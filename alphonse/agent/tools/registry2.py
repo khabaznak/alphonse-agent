@@ -126,8 +126,8 @@ def _default_specs() -> list[ToolSpec]:
         ),
         ToolSpec(
             key="sendVoiceNote",
-            description="Send an audio voice note file to a recipient (optimized for Telegram voice note delivery).",
-            when_to_use="Prefer this over sendMessage when a voice note/audio reply must be delivered.",
+            description="Send a Telegram-style voice note to a recipient.",
+            when_to_use="Prefer this over sendMessage when you must deliver a true voice note bubble in Telegram.",
             returns="delivery_status",
             input_schema=_object_schema(
                 properties={
@@ -146,7 +146,7 @@ def _default_specs() -> list[ToolSpec]:
             examples=[
                 {
                     "To": "Gabriela",
-                    "AudioFilePath": "/tmp/alphonse-audio/response-20260224041238.m4a",
+                    "AudioFilePath": "/path/to/voice-note.ogg",
                     "Caption": "Te lo mando por audio.",
                     "Channel": "telegram",
                     "AsVoice": True,
@@ -174,7 +174,7 @@ def _default_specs() -> list[ToolSpec]:
         ToolSpec(
             key="local_audio_output.render",
             description="Render text to an audio file on the local machine for downstream delivery integrations.",
-            when_to_use="Use when you need a reusable audio artifact (for example Telegram audio replies).",
+            when_to_use="Use when you need a reusable audio artifact (use format='ogg' for Telegram voice notes).",
             returns="audio file path and format metadata",
             input_schema=_object_schema(
                 properties={
@@ -182,13 +182,13 @@ def _default_specs() -> list[ToolSpec]:
                     "voice": {"type": "string"},
                     "output_dir": {"type": "string"},
                     "filename_prefix": {"type": "string"},
-                    "format": {"type": "string", "enum": ["aiff", "m4a"]},
+                    "format": {"type": "string", "enum": ["aiff", "m4a", "ogg"]},
                 },
                 required=["text"],
             ),
             domain_tags=["audio", "output", "tts"],
             safety_level=SafetyLevel.LOW,
-            examples=[{"text": "Hola Alex", "format": "m4a"}],
+            examples=[{"text": "Hola Alex", "format": "ogg"}],
         ),
         ToolSpec(
             key="stt_transcribe",

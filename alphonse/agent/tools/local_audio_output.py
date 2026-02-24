@@ -4,6 +4,7 @@ import argparse
 from datetime import datetime, timezone
 import os
 from pathlib import Path
+import shutil
 from alphonse.agent.observability.log_manager import get_component_logger
 import platform
 import subprocess
@@ -128,10 +129,10 @@ class LocalAudioOutputRenderTool:
             )
         selected_voice = str(voice or "default").strip() or "default"
         target_format = str(format or "m4a").strip().lower()
-        if target_format not in {"aiff", "m4a"}:
+        if target_format not in {"aiff", "m4a", "ogg"}:
             return _failed(
                 "unsupported_audio_format",
-                "Supported formats are: aiff, m4a",
+                "Supported formats are: aiff, m4a, ogg",
                 tool="local_audio_output.render",
             )
         root = _resolve_render_output_dir(output_dir)
@@ -166,31 +167,67 @@ class LocalAudioOutputRenderTool:
                 },
                 tool="local_audio_output.render",
             )
-        target_path = source_path.with_suffix(".m4a")
-        convert_cmd = [
-            "afconvert",
-            "-f",
-            "m4af",
-            "-d",
-            "aac",
-            str(source_path),
-            str(target_path),
-        ]
-        converted = subprocess.run(
-            convert_cmd,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
-            text=True,
-            check=False,
-        )
-        if converted.returncode != 0:
-            stderr = str(converted.stderr or "").strip()
-            return _failed(
-                "audio_convert_failed",
-                "failed converting aiff to m4a",
-                details={"stderr": stderr},
-                tool="local_audio_output.render",
+        if target_format == "m4a":
+            target_path = source_path.with_suffix(".m4a")
+            converted = subprocess.run(
+                [
+                    "afconvert",
+                    "-f",
+                    "m4af",
+                    "-d",
+                    "aac",
+                    str(source_path),
+                    str(target_path),
+                ],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=False,
             )
+            if converted.returncode != 0:
+                stderr = str(converted.stderr or "").strip()
+                return _failed(
+                    "audio_convert_failed",
+                    "failed converting aiff to m4a",
+                    details={"stderr": stderr},
+                    tool="local_audio_output.render",
+                )
+            mime_type = "audio/mp4"
+        else:
+            ffmpeg_bin = shutil.which("ffmpeg")
+            if not ffmpeg_bin:
+                return _failed(
+                    "ffmpeg_not_installed",
+                    "ffmpeg is required to convert audio to ogg/opus",
+                    tool="local_audio_output.render",
+                )
+            target_path = source_path.with_suffix(".ogg")
+            converted = subprocess.run(
+                [
+                    ffmpeg_bin,
+                    "-y",
+                    "-i",
+                    str(source_path),
+                    "-c:a",
+                    "libopus",
+                    "-b:a",
+                    "32k",
+                    str(target_path),
+                ],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=False,
+            )
+            if converted.returncode != 0:
+                stderr = str(converted.stderr or "").strip()
+                return _failed(
+                    "audio_convert_failed",
+                    "failed converting aiff to ogg",
+                    details={"stderr": stderr},
+                    tool="local_audio_output.render",
+                )
+            mime_type = "audio/ogg"
         try:
             source_path.unlink(missing_ok=True)
         except Exception:
@@ -199,8 +236,8 @@ class LocalAudioOutputRenderTool:
         return _ok(
             {
                 "file_path": str(target_path),
-                "format": "m4a",
-                "mime_type": "audio/mp4",
+                "format": target_format,
+                "mime_type": mime_type,
                 "retention": cleanup,
             },
             tool="local_audio_output.render",
@@ -238,7 +275,7 @@ def _cleanup_rendered_audio(*, root: Path, keep_path: Path) -> dict[str, int]:
 
     removed_age = 0
     candidates = sorted(
-        [p for p in root.iterdir() if p.is_file() and p.suffix.lower() in {".m4a", ".aiff"}],
+        [p for p in root.iterdir() if p.is_file() and p.suffix.lower() in {".m4a", ".aiff", ".ogg", ".oga"}],
         key=lambda path: path.stat().st_mtime,
         reverse=True,
     )
@@ -254,7 +291,7 @@ def _cleanup_rendered_audio(*, root: Path, keep_path: Path) -> dict[str, int]:
 
     removed_count = 0
     remaining = sorted(
-        [p for p in root.iterdir() if p.is_file() and p.suffix.lower() in {".m4a", ".aiff"}],
+        [p for p in root.iterdir() if p.is_file() and p.suffix.lower() in {".m4a", ".aiff", ".ogg", ".oga"}],
         key=lambda path: path.stat().st_mtime,
         reverse=True,
     )
