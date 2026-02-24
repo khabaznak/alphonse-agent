@@ -1,16 +1,19 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import secrets
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from alphonse.agent.nervous_system.sandbox_dirs import get_sandbox_alias
+
 
 class ScratchpadService:
     def __init__(self, *, root: str | Path | None = None) -> None:
-        base = Path(root) if root is not None else Path("data/scratchpad")
+        base = Path(root) if root is not None else _default_scratchpad_root()
         self._root = base.resolve()
 
     @property
@@ -360,6 +363,19 @@ def _is_subpath(candidate: Path, root: Path) -> bool:
         return True
     except Exception:
         return False
+
+
+def _default_scratchpad_root() -> Path:
+    configured = str(os.getenv("ALPHONSE_SCRATCHPAD_ROOT") or "").strip()
+    if configured:
+        return Path(configured)
+    # Keep scratchpads in the shared workdir sandbox when available.
+    record = get_sandbox_alias("dumpster")
+    if isinstance(record, dict) and bool(record.get("enabled")):
+        base_path = str(record.get("base_path") or "").strip()
+        if base_path:
+            return Path(base_path) / "scratchpad"
+    return Path("data/scratchpad")
 
 
 def _normalize_limit(*, max_chars: int, default: int, minimum: int, maximum: int) -> int:
