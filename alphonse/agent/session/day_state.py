@@ -10,8 +10,8 @@ from zoneinfo import ZoneInfo
 _MAX_WORKING_SET = 6
 _MAX_OPEN_LOOPS = 6
 _MAX_CHANNELS = 6
-_MAX_RECENT_TURNS = 10
-_MAX_LINE_LENGTH = 140
+_MAX_RECENT_TURNS = 20
+_MAX_LINE_LENGTH = 256
 _NAMED_SECRET_PATTERN = re.compile(r"(?i)\b(api[_-]?key|token|password|secret)\b\s*[:=]\s*\S+")
 _TOKEN_SECRET_PATTERN = re.compile(r"\bsk-[A-Za-z0-9]{10,}\b")
 _PATH_PATTERNS = (
