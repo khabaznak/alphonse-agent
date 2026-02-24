@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import secrets
 from alphonse.agent.observability.log_manager import get_component_logger
 import sqlite3
@@ -12,6 +13,7 @@ from zoneinfo import ZoneInfo
 
 from dateutil.rrule import rrulestr
 
+from alphonse.agent.nervous_system.sandbox_dirs import get_sandbox_alias
 from alphonse.agent.nervous_system.paths import resolve_nervous_system_db_path
 from alphonse.agent.services.job_models import JobExecution, JobSpec
 
@@ -21,7 +23,7 @@ VALID_PAYLOAD_TYPES = {"job_ability", "tool_call", "prompt_to_brain", "internal_
 
 class JobStore:
     def __init__(self, *, root: str | Path | None = None) -> None:
-        base = Path(root) if root is not None else Path("data/jobs")
+        base = Path(root) if root is not None else _default_jobs_root()
         self._root = base.resolve()
         self._root.mkdir(parents=True, exist_ok=True)
 
@@ -540,3 +542,16 @@ def _job_trigger_payload(*, job: JobSpec, user_id: str) -> dict[str, Any]:
 
 def compute_retry_time(*, now: datetime, backoff_seconds: int) -> str:
     return (now + timedelta(seconds=max(1, int(backoff_seconds or 1)))).isoformat()
+
+
+def _default_jobs_root() -> Path:
+    configured = str(os.getenv("ALPHONSE_JOBS_ROOT") or "").strip()
+    if configured:
+        return Path(configured)
+    # Keep jobs in the shared workdir sandbox when available.
+    record = get_sandbox_alias("dumpster")
+    if isinstance(record, dict) and bool(record.get("enabled")):
+        base_path = str(record.get("base_path") or "").strip()
+        if base_path:
+            return Path(base_path) / "jobs"
+    return Path("data/jobs")

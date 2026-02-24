@@ -223,6 +223,18 @@ If unset, Alphonse uses:
 1. sandbox alias `dumpster` + `/scratchpad` (when enabled)
 2. fallback `data/scratchpad`
 
+### Jobs Storage Root
+
+Scheduled job files can be pinned to the same workdir strategy:
+
+```bash
+ALPHONSE_JOBS_ROOT=/Users/alex/Code\ Projects/alphonse-workdirs/dumpster/jobs
+```
+
+If unset, Alphonse uses:
+1. sandbox alias `dumpster` + `/jobs` (when enabled)
+2. fallback `data/jobs`
+
 Password auth example:
 
 ```json
