@@ -47,6 +47,54 @@ def test_telegram_extremity_adapter_deliver_emits_send_message(monkeypatch) -> N
     assert captured[0]["target_integration_id"] == "telegram"
 
 
+def test_telegram_extremity_adapter_deliver_emits_send_audio(monkeypatch) -> None:
+    captured: list[dict] = []
+
+    class FakeTelegramAdapter:
+        def __init__(self, config: dict) -> None:
+            self.config = config
+
+        def handle_action(self, action: dict) -> None:
+            captured.append(action)
+
+    monkeypatch.setattr(
+        telegram_channel,
+        "build_telegram_adapter_config",
+        lambda: {"bot_token": "fake-token", "poll_interval_sec": 1.0},
+    )
+    monkeypatch.setattr(telegram_channel, "TelegramAdapter", FakeTelegramAdapter)
+    monkeypatch.setattr(
+        telegram_channel,
+        "resolve_telegram_chat_id_for_user",
+        lambda _: None,
+    )
+    monkeypatch.setattr(telegram_channel, "can_deliver_to_chat", lambda _chat_id: True)
+
+    adapter = telegram_channel.TelegramExtremityAdapter()
+    adapter.deliver(
+        NormalizedOutboundMessage(
+            message="hola",
+            channel_type="telegram",
+            channel_target="12345",
+            audience={"kind": "system", "id": "system"},
+            correlation_id="cid-audio-1",
+            metadata={
+                "delivery_mode": "audio",
+                "audio_file_path": "/tmp/alphonse-audio/response-1.m4a",
+                "as_voice": False,
+                "caption": "Hola por audio",
+            },
+        )
+    )
+
+    assert len(captured) == 1
+    assert captured[0]["type"] == "send_audio"
+    assert captured[0]["payload"]["chat_id"] == "12345"
+    assert captured[0]["payload"]["file_path"] == "/tmp/alphonse-audio/response-1.m4a"
+    assert captured[0]["payload"]["as_voice"] is False
+    assert captured[0]["payload"]["caption"] == "Hola por audio"
+
+
 def test_telegram_extremity_adapter_disabled_without_config(monkeypatch) -> None:
     monkeypatch.setattr(telegram_channel, "build_telegram_adapter_config", lambda: None)
 

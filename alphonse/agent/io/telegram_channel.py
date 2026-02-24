@@ -87,6 +87,30 @@ class TelegramExtremityAdapter(ExtremityAdapter):
                 chat_id,
             )
             return
+        meta = message.metadata if isinstance(message.metadata, dict) else {}
+        delivery_mode = str(meta.get("delivery_mode") or "").strip().lower()
+        if delivery_mode == "audio":
+            audio_file_path = str(meta.get("audio_file_path") or "").strip()
+            if not audio_file_path:
+                logger.warning(
+                    "TelegramExtremityAdapter missing audio_file_path for audio delivery correlation_id=%s",
+                    message.correlation_id,
+                )
+                return
+            self._adapter.handle_action(
+                {
+                    "type": "send_audio",
+                    "payload": {
+                        "chat_id": chat_id,
+                        "file_path": audio_file_path,
+                        "caption": str(meta.get("caption") or message.message or "").strip() or None,
+                        "as_voice": bool(meta.get("as_voice", True)),
+                        "correlation_id": message.correlation_id,
+                    },
+                    "target_integration_id": "telegram",
+                }
+            )
+            return
         self._adapter.handle_action(
             {
                 "type": "send_message",

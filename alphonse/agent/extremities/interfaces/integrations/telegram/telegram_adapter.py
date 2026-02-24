@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import json
+import mimetypes
 import threading
 import time
+from pathlib import Path
 from urllib import parse, request
 from typing import Any
 
@@ -82,6 +84,23 @@ class TelegramAdapter(IntegrationAdapter):
 
     def handle_action(self, action: dict[str, Any]) -> None:
         action_type = action.get("type")
+        if action_type == "send_audio":
+            payload = action.get("payload") or {}
+            chat_id = payload.get("chat_id")
+            file_path = str(payload.get("file_path") or "").strip()
+            caption = payload.get("caption")
+            as_voice = bool(payload.get("as_voice", True))
+            if chat_id is None or not file_path:
+                logger.warning("TelegramAdapter missing chat_id/file_path in send_audio payload")
+                return
+            logger.info(
+                "TelegramAdapter sending audio to %s path=%s as_voice=%s",
+                chat_id,
+                file_path,
+                as_voice,
+            )
+            self._send_audio_http(chat_id=chat_id, file_path=file_path, caption=caption, as_voice=as_voice)
+            return
         if action_type == "set_message_reaction":
             payload = action.get("payload") or {}
             chat_id = payload.get("chat_id")
@@ -513,6 +532,51 @@ class TelegramAdapter(IntegrationAdapter):
             logger.error("TelegramAdapter %s failed: %s", endpoint, exc)
             raise
 
+    def _send_audio_http(
+        self,
+        *,
+        chat_id: int | str,
+        file_path: str,
+        caption: Any | None,
+        as_voice: bool,
+    ) -> None:
+        source = Path(str(file_path)).expanduser().resolve()
+        if not source.exists() or not source.is_file():
+            raise RuntimeError(f"audio_file_not_found:{source}")
+        endpoint, media_field = _telegram_audio_endpoint(as_voice=as_voice, file_path=str(source))
+        url = f"https://api.telegram.org/bot{self._bot_token}/{endpoint}"
+        with source.open("rb") as handle:
+            body, content_type = _build_multipart_request(
+                fields={
+                    "chat_id": str(chat_id),
+                    **({"caption": str(caption)} if str(caption or "").strip() else {}),
+                },
+                file_field=media_field,
+                filename=source.name,
+                file_bytes=handle.read(),
+                mime_type=_guess_mime_type(source),
+            )
+        req = request.Request(url, data=body, method="POST")
+        req.add_header("Content-Type", content_type)
+        try:
+            with request.urlopen(req, timeout=30) as response:
+                body_text = response.read().decode("utf-8", errors="ignore")
+                logger.info(
+                    "TelegramAdapter %s status=%s chat_id=%s body=%s",
+                    endpoint,
+                    response.status,
+                    chat_id,
+                    _snippet(body_text),
+                )
+                parsed = _parse_json(body_text)
+                if not isinstance(parsed, dict) or not bool(parsed.get("ok")):
+                    error_code = parsed.get("error_code") if isinstance(parsed, dict) else None
+                    description = parsed.get("description") if isinstance(parsed, dict) else None
+                    raise RuntimeError(f"TelegramAdapter {endpoint} failed: {error_code} {description}")
+        except Exception as exc:
+            logger.error("TelegramAdapter %s failed: %s", endpoint, exc)
+            raise
+
     def _send_chat_action_http(self, chat_id: int, action: str) -> None:
         endpoint = "sendChatAction"
         url = f"https://api.telegram.org/bot{self._bot_token}/{endpoint}"
@@ -582,3 +646,44 @@ def _to_int(value: Any) -> int | None:
         return int(str(value))
     except (TypeError, ValueError):
         return None
+
+
+def _telegram_audio_endpoint(*, as_voice: bool, file_path: str) -> tuple[str, str]:
+    suffix = Path(file_path).suffix.lower()
+    if as_voice and suffix in {".ogg", ".oga"}:
+        return ("sendVoice", "voice")
+    return ("sendAudio", "audio")
+
+
+def _guess_mime_type(path: Path) -> str:
+    guessed, _ = mimetypes.guess_type(str(path))
+    return guessed or "application/octet-stream"
+
+
+def _build_multipart_request(
+    *,
+    fields: dict[str, str],
+    file_field: str,
+    filename: str,
+    file_bytes: bytes,
+    mime_type: str,
+) -> tuple[bytes, str]:
+    boundary = f"----alphonse-boundary-{int(time.time() * 1000)}"
+    chunks: list[bytes] = []
+    for key, value in fields.items():
+        chunks.append(f"--{boundary}\r\n".encode("utf-8"))
+        chunks.append(
+            f'Content-Disposition: form-data; name="{key}"\r\n\r\n{value}\r\n'.encode("utf-8")
+        )
+    chunks.append(f"--{boundary}\r\n".encode("utf-8"))
+    chunks.append(
+        (
+            f'Content-Disposition: form-data; name="{file_field}"; filename="{filename}"\r\n'
+            f"Content-Type: {mime_type}\r\n\r\n"
+        ).encode("utf-8")
+    )
+    chunks.append(file_bytes)
+    chunks.append(b"\r\n")
+    chunks.append(f"--{boundary}--\r\n".encode("utf-8"))
+    body = b"".join(chunks)
+    return body, f"multipart/form-data; boundary={boundary}"

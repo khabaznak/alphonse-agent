@@ -28,10 +28,16 @@ class SendMessageTool:
         to = str(args.get("To") or args.get("to") or args.get("recipient") or "").strip()
         channel = str(args.get("Channel") or args.get("channel") or "").strip().lower() or None
         urgency = str(args.get("Urgency") or args.get("urgency") or "normal").strip().lower() or "normal"
+        delivery_mode = str(args.get("DeliveryMode") or args.get("delivery_mode") or "text").strip().lower() or "text"
+        audio_file_path = str(args.get("AudioFilePath") or args.get("audio_file_path") or "").strip() or None
+        as_voice = bool(args.get("AsVoice") if args.get("AsVoice") is not None else args.get("as_voice", True))
+        caption = str(args.get("Caption") or args.get("caption") or "").strip() or None
         if not message:
             return _failed(code="missing_message", message="message is required")
         if not to:
             return _failed(code="missing_recipient", message="recipient is required")
+        if delivery_mode == "audio" and not audio_file_path:
+            return _failed(code="missing_audio_file_path", message="audio file path is required for audio delivery mode")
 
         state_payload = state if isinstance(state, dict) else {}
         to = _resolve_recipient_ref(to=to, state=state_payload)
@@ -62,7 +68,19 @@ class SendMessageTool:
         plan = SimpleNamespace(
             plan_id=f"tool-send-message:{correlation_id}",
             tool="sendMessage",
-            payload={"locale": locale} if locale else {},
+            payload={
+                **({"locale": locale} if locale else {}),
+                **(
+                    {
+                        "delivery_mode": delivery_mode,
+                        "audio_file_path": audio_file_path,
+                        "as_voice": as_voice,
+                        "caption": caption,
+                    }
+                    if delivery_mode == "audio"
+                    else {}
+                ),
+            },
         )
         try:
             self._communication.send(

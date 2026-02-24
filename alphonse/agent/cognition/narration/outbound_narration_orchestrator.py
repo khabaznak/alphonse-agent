@@ -58,6 +58,7 @@ class DeliveryCoordinator:
                 str(correlation_id or ""),
                 {"content": text},
                 audience=_audience_from_payload(payload),
+                extra_metadata=_outbound_delivery_metadata(payload),
             )
 
         bundle = build_context_bundle(payload, context)
@@ -82,6 +83,7 @@ class DeliveryCoordinator:
                 draft.correlation_id,
                 rendered.payload,
                 audience=_audience_from_payload(payload),
+                extra_metadata=_outbound_delivery_metadata(payload),
             )
 
         resolution = resolve_channel(intent)
@@ -92,6 +94,7 @@ class DeliveryCoordinator:
             draft.correlation_id,
             rendered.payload,
             audience=_audience_from_payload(payload),
+            extra_metadata=_outbound_delivery_metadata(payload),
         )
 
 
@@ -156,6 +159,7 @@ def _normalized_outbound_for_channel(
     payload: dict[str, Any],
     *,
     audience: dict[str, str],
+    extra_metadata: dict[str, Any] | None = None,
 ) -> NormalizedOutboundMessage | None:
     normalized_channel = _normalize_channel_type(channel_type)
     target = address or _default_target(normalized_channel)
@@ -167,7 +171,10 @@ def _normalized_outbound_for_channel(
         channel_target=target,
         audience=audience,
         correlation_id=correlation_id,
-        metadata={"data": payload.get("data")},
+        metadata={
+            "data": payload.get("data"),
+            **(extra_metadata or {}),
+        },
     )
 
 
@@ -179,6 +186,14 @@ def _audience_from_payload(payload: dict[str, Any]) -> dict[str, str]:
         if isinstance(kind, str) and isinstance(ident, str):
             return {"kind": kind, "id": ident}
     return {"kind": "system", "id": "system"}
+
+
+def _outbound_delivery_metadata(payload: dict[str, Any]) -> dict[str, Any]:
+    metadata: dict[str, Any] = {}
+    for key in ("delivery_mode", "audio_file_path", "as_voice", "caption"):
+        if key in payload:
+            metadata[key] = payload.get(key)
+    return metadata
 
 
 def _normalize_channel_type(channel_type: str) -> str:

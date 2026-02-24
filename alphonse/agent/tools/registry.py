@@ -12,6 +12,7 @@ from alphonse.agent.tools.job_tools import JobPauseTool
 from alphonse.agent.tools.job_tools import JobResumeTool
 from alphonse.agent.tools.job_tools import JobRunNowTool
 from alphonse.agent.tools.local_audio_output import LocalAudioOutputSpeakTool
+from alphonse.agent.tools.local_audio_output import LocalAudioOutputRenderTool
 from alphonse.agent.tools.scratchpad_tools import ScratchpadAppendTool
 from alphonse.agent.tools.scratchpad_tools import ScratchpadCreateTool
 from alphonse.agent.tools.scratchpad_tools import ScratchpadForkTool
@@ -60,6 +61,7 @@ def build_default_tool_registry() -> ToolRegistry:
     scheduler = SchedulerTool()
     send_message = SendMessageTool()
     local_audio_output = LocalAudioOutputSpeakTool()
+    local_audio_render = LocalAudioOutputRenderTool()
     stt_transcribe = SttTranscribeTool()
     telegram_get_file = TelegramGetFileMetaTool()
     telegram_download_file = TelegramDownloadFileTool()
@@ -97,6 +99,7 @@ def build_default_tool_registry() -> ToolRegistry:
     registry.register("createReminder", scheduler)
     registry.register("sendMessage", send_message)
     registry.register("local_audio_output.speak", local_audio_output)
+    registry.register("local_audio_output.render", local_audio_render)
     registry.register("stt_transcribe", stt_transcribe)
     registry.register("telegramGetFileMeta", telegram_get_file)
     registry.register("telegramDownloadFile", telegram_download_file)

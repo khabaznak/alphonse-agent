@@ -44,6 +44,10 @@ class CommunicationDispatcher:
         payload = _message_payload(message, channel, target, exec_context)
         if isinstance(payload_dict, dict) and payload_dict.get("locale"):
             payload["locale"] = payload_dict.get("locale")
+        if isinstance(payload_dict, dict):
+            for key in ("delivery_mode", "audio_file_path", "as_voice", "caption"):
+                if key in payload_dict:
+                    payload[key] = payload_dict.get(key)
         action = ActionResult(intention_key="MESSAGE_READY", payload=payload, urgency="normal")
         delivery = self._coordinator.deliver(action, context)
         if delivery:

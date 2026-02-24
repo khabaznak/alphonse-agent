@@ -12,11 +12,13 @@ from alphonse.agent.tools.send_message_tool import SendMessageTool
 class _FakeCommunication:
     called: bool = False
     request: Any = None
+    plan: Any = None
 
     def send(self, *, request: Any, context: dict[str, Any], exec_context: Any, plan: Any) -> None:
         _ = (context, exec_context, plan)
         self.called = True
         self.request = request
+        self.plan = plan
 
 
 def test_send_message_exposed_in_registry2() -> None:
@@ -146,3 +148,37 @@ def test_send_message_tool_maps_partial_name_from_user_search() -> None:
     assert fake.called is True
     assert str(fake.request.target) == "999111222"
     assert str(fake.request.recipient_ref or "") == ""
+
+
+def test_send_message_audio_requires_audio_file_path() -> None:
+    tool = SendMessageTool(_communication=_FakeCommunication())
+    result = tool.execute(
+        state={"channel_type": "telegram", "channel_target": "8553589429"},
+        To="Gabriela",
+        Message="Hola Gaby",
+        DeliveryMode="audio",
+    )
+    assert result["status"] == "failed"
+    assert str((result.get("error") or {}).get("code") or "") == "missing_audio_file_path"
+
+
+def test_send_message_audio_payload_is_added_to_plan() -> None:
+    fake = _FakeCommunication()
+    tool = SendMessageTool(_communication=fake)
+    result = tool.execute(
+        state={"channel_type": "telegram", "channel_target": "8553589429", "correlation_id": "cid-aud"},
+        To="Gabriela",
+        Message="Hola Gaby",
+        Channel="telegram",
+        DeliveryMode="audio",
+        AudioFilePath="/tmp/alphonse-audio/response-1.m4a",
+        AsVoice=False,
+        Caption="Hola por audio",
+    )
+    assert result["status"] == "ok"
+    assert fake.called is True
+    payload = dict(getattr(fake.plan, "payload", {}) or {})
+    assert payload.get("delivery_mode") == "audio"
+    assert payload.get("audio_file_path") == "/tmp/alphonse-audio/response-1.m4a"
+    assert payload.get("as_voice") is False
+    assert payload.get("caption") == "Hola por audio"

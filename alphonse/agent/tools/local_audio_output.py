@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import argparse
+from datetime import datetime, timezone
+from pathlib import Path
 from alphonse.agent.observability.log_manager import get_component_logger
 import platform
 import subprocess
@@ -96,10 +98,110 @@ class LocalAudioOutputSpeakTool:
         return _ok({"mode": "non_blocking", "pid": int(proc.pid)})
 
 
-def _build_say_command(*, text: str, voice: str) -> list[str]:
+class LocalAudioOutputRenderTool:
+    """Render text-to-speech to an audio file for downstream integrations."""
+
+    def execute(
+        self,
+        *,
+        text: str,
+        voice: str = "default",
+        output_dir: str = "/tmp/alphonse-audio",
+        filename_prefix: str = "response",
+        format: str = "m4a",
+    ) -> dict[str, Any]:
+        spoken_text = str(text or "").strip()
+        if not spoken_text:
+            return _failed("text_required", "text is required", tool="local_audio_output.render")
+        if platform.system() != "Darwin":
+            return _failed(
+                "local_audio_output_not_supported",
+                "local_audio_output.render is currently supported only on macOS.",
+                tool="local_audio_output.render",
+            )
+        selected_voice = str(voice or "default").strip() or "default"
+        target_format = str(format or "m4a").strip().lower()
+        if target_format not in {"aiff", "m4a"}:
+            return _failed(
+                "unsupported_audio_format",
+                "Supported formats are: aiff, m4a",
+                tool="local_audio_output.render",
+            )
+        root = Path(str(output_dir or "/tmp/alphonse-audio")).expanduser().resolve()
+        root.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
+        prefix = str(filename_prefix or "response").strip() or "response"
+        source_path = root / f"{prefix}-{stamp}.aiff"
+        say_cmd = _build_say_command(text=spoken_text, voice=selected_voice, output_path=source_path)
+        completed = subprocess.run(
+            say_cmd,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+        )
+        if completed.returncode != 0:
+            stderr = str(completed.stderr or "").strip()
+            return _failed(
+                "tts_command_failed",
+                "tts command failed",
+                details={"stderr": stderr},
+                tool="local_audio_output.render",
+            )
+        if target_format == "aiff":
+            return _ok(
+                {
+                    "file_path": str(source_path),
+                    "format": "aiff",
+                    "mime_type": "audio/aiff",
+                },
+                tool="local_audio_output.render",
+            )
+        target_path = source_path.with_suffix(".m4a")
+        convert_cmd = [
+            "afconvert",
+            "-f",
+            "m4af",
+            "-d",
+            "aac",
+            str(source_path),
+            str(target_path),
+        ]
+        converted = subprocess.run(
+            convert_cmd,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+        )
+        if converted.returncode != 0:
+            stderr = str(converted.stderr or "").strip()
+            return _failed(
+                "audio_convert_failed",
+                "failed converting aiff to m4a",
+                details={"stderr": stderr},
+                tool="local_audio_output.render",
+            )
+        try:
+            source_path.unlink(missing_ok=True)
+        except Exception:
+            pass
+        return _ok(
+            {
+                "file_path": str(target_path),
+                "format": "m4a",
+                "mime_type": "audio/mp4",
+            },
+            tool="local_audio_output.render",
+        )
+
+
+def _build_say_command(*, text: str, voice: str, output_path: Path | None = None) -> list[str]:
     cmd = ["say"]
     if voice != "default":
         cmd.extend(["-v", voice])
+    if output_path is not None:
+        cmd.extend(["-o", str(output_path)])
     cmd.append(text)
     return cmd
 
@@ -124,16 +226,22 @@ def _watch_say_process(proc: subprocess.Popen[str], preview: str) -> None:
     logger.info("local_audio_output.speak async_done pid=%s preview=%s", proc.pid, preview)
 
 
-def _ok(result: dict[str, Any]) -> dict[str, Any]:
+def _ok(result: dict[str, Any], *, tool: str = "local_audio_output.speak") -> dict[str, Any]:
     return {
         "status": "ok",
         "result": result,
         "error": None,
-        "metadata": {"tool": "local_audio_output.speak"},
+        "metadata": {"tool": tool},
     }
 
 
-def _failed(code: str, message: str, details: dict[str, Any] | None = None) -> dict[str, Any]:
+def _failed(
+    code: str,
+    message: str,
+    details: dict[str, Any] | None = None,
+    *,
+    tool: str = "local_audio_output.speak",
+) -> dict[str, Any]:
     return {
         "status": "failed",
         "result": None,
@@ -143,7 +251,7 @@ def _failed(code: str, message: str, details: dict[str, Any] | None = None) -> d
             "retryable": False,
             "details": dict(details or {}),
         },
-        "metadata": {"tool": "local_audio_output.speak"},
+        "metadata": {"tool": tool},
     }
 
 
