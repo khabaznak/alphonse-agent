@@ -20,6 +20,7 @@ from alphonse.agent.tools.scratchpad_tools import ScratchpadReadTool
 from alphonse.agent.tools.scratchpad_tools import ScratchpadSearchTool
 from alphonse.agent.tools.scheduler_tool import SchedulerTool
 from alphonse.agent.tools.send_message_tool import SendMessageTool
+from alphonse.agent.tools.ssh_terminal_tool import SshTerminalTool
 from alphonse.agent.tools.stt_transcribe import SttTranscribeTool
 from alphonse.agent.tools.terminal_execute_tool import TerminalExecuteTool
 from alphonse.agent.tools.telegram_files import AnalyzeTelegramImageTool
@@ -65,6 +66,7 @@ def build_default_tool_registry() -> ToolRegistry:
     vision_analyze_image = VisionAnalyzeImageTool()
     python_subprocess = SubprocessTool()
     terminal_execute = TerminalExecuteTool()
+    ssh_terminal = SshTerminalTool()
     scratchpad_service = ScratchpadService()
     scratchpad_create = ScratchpadCreateTool(scratchpad_service)
     scratchpad_append = ScratchpadAppendTool(scratchpad_service)
@@ -101,6 +103,7 @@ def build_default_tool_registry() -> ToolRegistry:
     registry.register("clock", clock)
     registry.register("python_subprocess", python_subprocess)
     registry.register("terminal_execute", terminal_execute)
+    registry.register("ssh_terminal", ssh_terminal)
     registry.register("scratchpad_create", scratchpad_create)
     registry.register("scratchpad_append", scratchpad_append)
     registry.register("scratchpad_read", scratchpad_read)

@@ -562,6 +562,37 @@ def _default_specs() -> list[ToolSpec]:
             examples=[{"command": "ls -la", "cwd": ".", "timeout_seconds": 20}],
         ),
         ToolSpec(
+            key="ssh_terminal",
+            description="Execute a command on a remote SSH host using Paramiko.",
+            when_to_use="Use for explicit remote SSH operations that require host/user credentials and command execution.",
+            returns="remote command stdout/stderr/exit_code",
+            input_schema=_object_schema(
+                properties={
+                    "host": {"type": "string"},
+                    "username": {"type": "string"},
+                    "command": {"type": "string"},
+                    "port": {"type": "integer"},
+                    "password": {"type": "string"},
+                    "private_key_path": {"type": "string"},
+                    "cwd": {"type": "string"},
+                    "timeout_seconds": {"type": "number"},
+                    "connect_timeout_seconds": {"type": "number"},
+                },
+                required=["host", "username", "command"],
+            ),
+            domain_tags=["ops", "ssh", "remote"],
+            safety_level=SafetyLevel.CRITICAL,
+            requires_confirmation=True,
+            examples=[
+                {
+                    "host": "192.168.1.20",
+                    "username": "pi",
+                    "command": "uname -a",
+                    "timeout_seconds": 30,
+                }
+            ],
+        ),
+        ToolSpec(
             key="python_subprocess",
             description=(
                 "Execute a Python subprocess command on the local system. Use to install missing tools or for other "

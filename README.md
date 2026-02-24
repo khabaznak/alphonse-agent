@@ -172,6 +172,60 @@ Example tool-call payload:
 }
 ```
 
+### SSH Terminal Tool (`ssh_terminal`)
+
+Run remote SSH commands through Paramiko using the `ssh_terminal` tool.
+
+Prerequisites:
+
+- Install dependency: `paramiko` (already included in `requirements.txt`)
+- Enable tool in env:
+
+```bash
+ALPHONSE_ENABLE_SSH_TERMINAL=true
+```
+
+Optional env controls:
+
+```bash
+ALPHONSE_SSH_TERMINAL_DEFAULT_TIMEOUT_SECONDS=30
+ALPHONSE_SSH_TERMINAL_MAX_TIMEOUT_SECONDS=600
+ALPHONSE_SSH_TERMINAL_CONNECT_TIMEOUT_SECONDS=10
+ALPHONSE_SSH_TERMINAL_ALLOW_AGENT=true
+ALPHONSE_SSH_TERMINAL_LOOK_FOR_KEYS=true
+ALPHONSE_SSH_TERMINAL_STRICT_HOST_KEY=false
+ALPHONSE_SSH_TERMINAL_KNOWN_HOSTS_PATH=
+```
+
+Example tool-call payload:
+
+```json
+{
+  "tool": "ssh_terminal",
+  "args": {
+    "host": "192.168.1.20",
+    "username": "pi",
+    "command": "uname -a",
+    "timeout_seconds": 30
+  }
+}
+```
+
+Password auth example:
+
+```json
+{
+  "tool": "ssh_terminal",
+  "args": {
+    "host": "10.0.0.15",
+    "username": "admin",
+    "password": "REDACTED",
+    "command": "systemctl status ssh",
+    "connect_timeout_seconds": 8
+  }
+}
+```
+
 ### Acceptance milestones (must pass)
 
 Marker 1 — TimedSignals end-to-end
