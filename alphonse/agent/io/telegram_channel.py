@@ -92,11 +92,7 @@ class TelegramExtremityAdapter(ExtremityAdapter):
         if delivery_mode == "audio":
             audio_file_path = str(meta.get("audio_file_path") or "").strip()
             if not audio_file_path:
-                logger.warning(
-                    "TelegramExtremityAdapter missing audio_file_path for audio delivery correlation_id=%s",
-                    message.correlation_id,
-                )
-                return
+                raise ValueError("missing_audio_file_path")
             self._adapter.handle_action(
                 {
                     "type": "send_audio",

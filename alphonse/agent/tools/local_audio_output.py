@@ -2,12 +2,19 @@ from __future__ import annotations
 
 import argparse
 from datetime import datetime, timezone
+import os
 from pathlib import Path
 from alphonse.agent.observability.log_manager import get_component_logger
 import platform
 import subprocess
 import threading
 from typing import Any
+
+from alphonse.agent.nervous_system.sandbox_dirs import (
+    PRIMARY_WORKDIR_ALIASES,
+    default_sandbox_root,
+    get_sandbox_alias,
+)
 
 logger = get_component_logger("tools.local_audio_output")
 
@@ -106,7 +113,7 @@ class LocalAudioOutputRenderTool:
         *,
         text: str,
         voice: str = "default",
-        output_dir: str = "/tmp/alphonse-audio",
+        output_dir: str | None = None,
         filename_prefix: str = "response",
         format: str = "m4a",
     ) -> dict[str, Any]:
@@ -127,7 +134,7 @@ class LocalAudioOutputRenderTool:
                 "Supported formats are: aiff, m4a",
                 tool="local_audio_output.render",
             )
-        root = Path(str(output_dir or "/tmp/alphonse-audio")).expanduser().resolve()
+        root = _resolve_render_output_dir(output_dir)
         root.mkdir(parents=True, exist_ok=True)
         stamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
         prefix = str(filename_prefix or "response").strip() or "response"
@@ -149,11 +156,13 @@ class LocalAudioOutputRenderTool:
                 tool="local_audio_output.render",
             )
         if target_format == "aiff":
+            cleanup = _cleanup_rendered_audio(root=root, keep_path=source_path)
             return _ok(
                 {
                     "file_path": str(source_path),
                     "format": "aiff",
                     "mime_type": "audio/aiff",
+                    "retention": cleanup,
                 },
                 tool="local_audio_output.render",
             )
@@ -186,11 +195,13 @@ class LocalAudioOutputRenderTool:
             source_path.unlink(missing_ok=True)
         except Exception:
             pass
+        cleanup = _cleanup_rendered_audio(root=root, keep_path=target_path)
         return _ok(
             {
                 "file_path": str(target_path),
                 "format": "m4a",
                 "mime_type": "audio/mp4",
+                "retention": cleanup,
             },
             tool="local_audio_output.render",
         )
@@ -204,6 +215,75 @@ def _build_say_command(*, text: str, voice: str, output_path: Path | None = None
         cmd.extend(["-o", str(output_path)])
     cmd.append(text)
     return cmd
+
+
+def _resolve_render_output_dir(output_dir: str | None) -> Path:
+    rendered = str(output_dir or "").strip()
+    if rendered:
+        return Path(rendered).expanduser().resolve()
+    for alias in PRIMARY_WORKDIR_ALIASES:
+        record = get_sandbox_alias(alias)
+        if not isinstance(record, dict) or not bool(record.get("enabled")):
+            continue
+        base_path = str(record.get("base_path") or "").strip()
+        if base_path:
+            return (Path(base_path).expanduser().resolve() / "audio_output").resolve()
+    return (default_sandbox_root() / "audio_output").resolve()
+
+
+def _cleanup_rendered_audio(*, root: Path, keep_path: Path) -> dict[str, int]:
+    max_files = _int_env("ALPHONSE_AUDIO_MAX_FILES", default=200, minimum=1)
+    max_age_hours = _int_env("ALPHONSE_AUDIO_MAX_AGE_HOURS", default=168, minimum=1)
+    cutoff_ts = datetime.now(timezone.utc).timestamp() - float(max_age_hours * 3600)
+
+    removed_age = 0
+    candidates = sorted(
+        [p for p in root.iterdir() if p.is_file() and p.suffix.lower() in {".m4a", ".aiff"}],
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
+    for path in candidates:
+        if path == keep_path:
+            continue
+        try:
+            if path.stat().st_mtime < cutoff_ts:
+                path.unlink(missing_ok=True)
+                removed_age += 1
+        except Exception:
+            continue
+
+    removed_count = 0
+    remaining = sorted(
+        [p for p in root.iterdir() if p.is_file() and p.suffix.lower() in {".m4a", ".aiff"}],
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
+    for path in remaining[max_files:]:
+        if path == keep_path:
+            continue
+        try:
+            path.unlink(missing_ok=True)
+            removed_count += 1
+        except Exception:
+            continue
+
+    return {
+        "max_files": max_files,
+        "max_age_hours": max_age_hours,
+        "removed_by_age": removed_age,
+        "removed_by_count": removed_count,
+    }
+
+
+def _int_env(name: str, *, default: int, minimum: int) -> int:
+    raw = str(os.getenv(name) or "").strip()
+    if not raw:
+        return default
+    try:
+        parsed = int(raw)
+    except ValueError:
+        return default
+    return parsed if parsed >= minimum else default
 
 
 def _watch_say_process(proc: subprocess.Popen[str], preview: str) -> None:

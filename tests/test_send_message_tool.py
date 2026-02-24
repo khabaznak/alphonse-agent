@@ -6,6 +6,7 @@ from typing import Any
 from alphonse.agent.tools.registry import build_default_tool_registry
 from alphonse.agent.tools.registry2 import build_planner_tool_registry
 from alphonse.agent.tools.send_message_tool import SendMessageTool
+from alphonse.agent.tools.send_message_tool import SendVoiceNoteTool
 
 
 @dataclass
@@ -29,6 +30,16 @@ def test_send_message_exposed_in_registry2() -> None:
 def test_send_message_registered_in_runtime_registry() -> None:
     registry = build_default_tool_registry()
     assert registry.get("sendMessage") is not None
+
+
+def test_send_voice_note_exposed_in_registry2() -> None:
+    registry = build_planner_tool_registry()
+    assert registry.get("sendVoiceNote") is not None
+
+
+def test_send_voice_note_registered_in_runtime_registry() -> None:
+    registry = build_default_tool_registry()
+    assert registry.get("sendVoiceNote") is not None
 
 
 def test_send_message_tool_executes_delivery() -> None:
@@ -91,7 +102,6 @@ def test_send_message_tool_maps_first_contact_from_user_search() -> None:
                                 {
                                     "user_id": "u-1",
                                     "display_name": "Gabriela Perez",
-                                    "telegram_user_id": "999111222",
                                 }
                             ]
                         },
@@ -108,8 +118,8 @@ def test_send_message_tool_maps_first_contact_from_user_search() -> None:
     )
     assert result["status"] == "ok"
     assert fake.called is True
-    assert str(fake.request.target) == "999111222"
-    assert str(fake.request.recipient_ref or "") == ""
+    assert str(fake.request.recipient_ref) == "u-1"
+    assert str(fake.request.target or "") == ""
 
 
 def test_send_message_tool_maps_partial_name_from_user_search() -> None:
@@ -129,7 +139,6 @@ def test_send_message_tool_maps_partial_name_from_user_search() -> None:
                                 {
                                     "user_id": "u-1",
                                     "display_name": "Gabriela Perez",
-                                    "telegram_user_id": "999111222",
                                 }
                             ]
                         },
@@ -146,8 +155,8 @@ def test_send_message_tool_maps_partial_name_from_user_search() -> None:
     )
     assert result["status"] == "ok"
     assert fake.called is True
-    assert str(fake.request.target) == "999111222"
-    assert str(fake.request.recipient_ref or "") == ""
+    assert str(fake.request.recipient_ref) == "u-1"
+    assert str(fake.request.target or "") == ""
 
 
 def test_send_message_audio_requires_audio_file_path() -> None:
@@ -182,3 +191,33 @@ def test_send_message_audio_payload_is_added_to_plan() -> None:
     assert payload.get("audio_file_path") == "/tmp/alphonse-audio/response-1.m4a"
     assert payload.get("as_voice") is False
     assert payload.get("caption") == "Hola por audio"
+
+
+def test_send_message_tool_maps_audio_file_not_found_error() -> None:
+    tool = SendMessageTool(_communication=_FailingCommunication(code="audio_file_not_found:/tmp/missing.m4a"))
+    result = tool.execute(
+        state={"channel_type": "telegram", "channel_target": "8553589429"},
+        To="Gabriela",
+        Message="Hola Gaby",
+        Channel="telegram",
+    )
+    assert result["status"] == "failed"
+    assert str((result.get("error") or {}).get("code") or "") == "audio_file_not_found"
+
+
+def test_send_voice_note_tool_enforces_audio_delivery_mode() -> None:
+    fake = _FakeCommunication()
+    tool = SendVoiceNoteTool(_send_message_tool=SendMessageTool(_communication=fake))
+    result = tool.execute(
+        state={"channel_type": "telegram", "channel_target": "8553589429", "correlation_id": "cid-voice"},
+        To="Gabriela",
+        AudioFilePath="/tmp/alphonse-audio/voice-1.m4a",
+        Caption="Hola por voz",
+        Channel="telegram",
+    )
+    assert result["status"] == "ok"
+    assert fake.called is True
+    payload = dict(getattr(fake.plan, "payload", {}) or {})
+    assert payload.get("delivery_mode") == "audio"
+    assert payload.get("audio_file_path") == "/tmp/alphonse-audio/voice-1.m4a"
+    assert payload.get("as_voice") is True

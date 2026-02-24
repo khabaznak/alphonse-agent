@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from alphonse.agent.io.contracts import NormalizedOutboundMessage
 from alphonse.agent.io import telegram_channel
 
@@ -93,6 +95,36 @@ def test_telegram_extremity_adapter_deliver_emits_send_audio(monkeypatch) -> Non
     assert captured[0]["payload"]["file_path"] == "/tmp/alphonse-audio/response-1.m4a"
     assert captured[0]["payload"]["as_voice"] is False
     assert captured[0]["payload"]["caption"] == "Hola por audio"
+
+
+def test_telegram_extremity_adapter_audio_without_file_path_raises(monkeypatch) -> None:
+    class FakeTelegramAdapter:
+        def __init__(self, config: dict) -> None:
+            self.config = config
+
+        def handle_action(self, action: dict) -> None:
+            _ = action
+
+    monkeypatch.setattr(
+        telegram_channel,
+        "build_telegram_adapter_config",
+        lambda: {"bot_token": "fake-token", "poll_interval_sec": 1.0},
+    )
+    monkeypatch.setattr(telegram_channel, "TelegramAdapter", FakeTelegramAdapter)
+    monkeypatch.setattr(telegram_channel, "can_deliver_to_chat", lambda _chat_id: True)
+
+    adapter = telegram_channel.TelegramExtremityAdapter()
+    with pytest.raises(ValueError, match="missing_audio_file_path"):
+        adapter.deliver(
+            NormalizedOutboundMessage(
+                message="hola",
+                channel_type="telegram",
+                channel_target="12345",
+                audience={"kind": "system", "id": "system"},
+                correlation_id="cid-audio-missing",
+                metadata={"delivery_mode": "audio"},
+            )
+        )
 
 
 def test_telegram_extremity_adapter_disabled_without_config(monkeypatch) -> None:

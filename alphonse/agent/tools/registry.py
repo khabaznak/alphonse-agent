@@ -21,6 +21,7 @@ from alphonse.agent.tools.scratchpad_tools import ScratchpadReadTool
 from alphonse.agent.tools.scratchpad_tools import ScratchpadSearchTool
 from alphonse.agent.tools.scheduler_tool import SchedulerTool
 from alphonse.agent.tools.send_message_tool import SendMessageTool
+from alphonse.agent.tools.send_message_tool import SendVoiceNoteTool
 from alphonse.agent.tools.ssh_terminal_tool import SshTerminalTool
 from alphonse.agent.tools.stt_transcribe import SttTranscribeTool
 from alphonse.agent.tools.terminal_execute_tool import TerminalExecuteTool
@@ -60,6 +61,7 @@ def build_default_tool_registry() -> ToolRegistry:
     clock = ClockTool()
     scheduler = SchedulerTool()
     send_message = SendMessageTool()
+    send_voice_note = SendVoiceNoteTool(_send_message_tool=send_message)
     local_audio_output = LocalAudioOutputSpeakTool()
     local_audio_render = LocalAudioOutputRenderTool()
     stt_transcribe = SttTranscribeTool()
@@ -98,6 +100,7 @@ def build_default_tool_registry() -> ToolRegistry:
     registry.register("getTime", clock)
     registry.register("createReminder", scheduler)
     registry.register("sendMessage", send_message)
+    registry.register("sendVoiceNote", send_voice_note)
     registry.register("local_audio_output.speak", local_audio_output)
     registry.register("local_audio_output.render", local_audio_render)
     registry.register("stt_transcribe", stt_transcribe)

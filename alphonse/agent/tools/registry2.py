@@ -125,6 +125,35 @@ def _default_specs() -> list[ToolSpec]:
             examples=[{"To": "Gabriela", "Message": "Hola Gaby, Alex llegará para cenar.", "Channel": "telegram"}],
         ),
         ToolSpec(
+            key="sendVoiceNote",
+            description="Send an audio voice note file to a recipient (optimized for Telegram voice note delivery).",
+            when_to_use="Prefer this over sendMessage when a voice note/audio reply must be delivered.",
+            returns="delivery_status",
+            input_schema=_object_schema(
+                properties={
+                    "To": {"type": "string"},
+                    "AudioFilePath": {"type": "string"},
+                    "Caption": {"type": "string"},
+                    "Message": {"type": "string"},
+                    "Channel": {"type": "string"},
+                    "Urgency": {"type": "string"},
+                    "AsVoice": {"type": "boolean"},
+                },
+                required=["To", "AudioFilePath"],
+            ),
+            domain_tags=["communication", "messaging", "delivery", "audio"],
+            safety_level=SafetyLevel.MEDIUM,
+            examples=[
+                {
+                    "To": "Gabriela",
+                    "AudioFilePath": "/tmp/alphonse-audio/response-20260224041238.m4a",
+                    "Caption": "Te lo mando por audio.",
+                    "Channel": "telegram",
+                    "AsVoice": True,
+                }
+            ],
+        ),
+        ToolSpec(
             key="local_audio_output.speak",
             description="Speak text out loud on the local computer using OS-native TTS.",
             when_to_use="Use for local spoken output when requested.",

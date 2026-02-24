@@ -90,14 +90,9 @@ class SendMessageTool:
                 plan=plan,
             )
         except ValueError as exc:
-            code = str(exc or "").strip().lower() or "send_message_failed"
-            if code == "unresolved_recipient":
-                return _failed(code="unresolved_recipient", message="recipient could not be resolved")
-            if code == "missing_target":
-                return _failed(code="missing_target", message="message target could not be resolved")
-            return _failed(code="send_message_failed", message=str(exc) or type(exc).__name__)
+            return _map_send_error(exc)
         except Exception as exc:
-            return _failed(code="send_message_failed", message=str(exc) or type(exc).__name__)
+            return _map_send_error(exc)
 
         return {
             "status": "ok",
@@ -109,6 +104,36 @@ class SendMessageTool:
             "error": None,
             "metadata": {"tool": "sendMessage"},
         }
+
+
+@dataclass(frozen=True)
+class SendVoiceNoteTool:
+    _send_message_tool: SendMessageTool | None = None
+
+    def __post_init__(self) -> None:
+        if self._send_message_tool is not None:
+            return
+        object.__setattr__(self, "_send_message_tool", SendMessageTool())
+
+    def execute(self, *, state: dict[str, Any] | None = None, **args: Any) -> dict[str, Any]:
+        to = str(args.get("To") or args.get("to") or args.get("recipient") or "").strip()
+        audio_file_path = str(args.get("AudioFilePath") or args.get("audio_file_path") or "").strip()
+        caption = str(args.get("Caption") or args.get("caption") or "").strip()
+        message = str(args.get("Message") or args.get("message") or "").strip()
+        if not message:
+            message = caption or "Voice note"
+        return self._send_message_tool.execute(
+            state=state,
+            To=to,
+            Message=message,
+            Channel=str(args.get("Channel") or args.get("channel") or "").strip() or None,
+            Urgency=str(args.get("Urgency") or args.get("urgency") or "normal").strip() or "normal",
+            DeliveryMode="audio",
+            AudioFilePath=audio_file_path,
+            AsVoice=bool(args.get("AsVoice") if args.get("AsVoice") is not None else args.get("as_voice", True)),
+            Caption=caption or None,
+            correlation_id=args.get("correlation_id"),
+        )
 
 
 def _resolve_recipient_ref(*, to: str, state: dict[str, Any]) -> str:
@@ -185,9 +210,6 @@ def _resolve_by_display_name(to: str, users: list[dict[str, Any]]) -> str | None
 
 
 def _user_delivery_ref(user: dict[str, Any]) -> str:
-    telegram_user_id = str(user.get("telegram_user_id") or "").strip()
-    if telegram_user_id:
-        return telegram_user_id
     user_id = str(user.get("user_id") or "").strip()
     if user_id:
         return user_id
@@ -210,3 +232,19 @@ def _failed(*, code: str, message: str) -> dict[str, Any]:
         },
         "metadata": {"tool": "sendMessage"},
     }
+
+
+def _map_send_error(exc: Exception) -> dict[str, Any]:
+    rendered = str(exc or "").strip()
+    code = rendered.lower() or "send_message_failed"
+    if code == "unresolved_recipient":
+        return _failed(code="unresolved_recipient", message="recipient could not be resolved")
+    if code == "missing_target":
+        return _failed(code="missing_target", message="message target could not be resolved")
+    if code == "missing_audio_file_path":
+        return _failed(code="missing_audio_file_path", message="audio file path is required for audio delivery mode")
+    if code.startswith("audio_file_not_found:"):
+        missing_path = rendered.split(":", 1)[1] if ":" in rendered else ""
+        message = f"audio file not found: {missing_path}" if missing_path else "audio file not found"
+        return _failed(code="audio_file_not_found", message=message)
+    return _failed(code="send_message_failed", message=rendered or type(exc).__name__)
