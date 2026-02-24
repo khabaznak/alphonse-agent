@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import sqlite3
 import sys
-import os
 from pathlib import Path
+
+from alphonse.agent.nervous_system.sandbox_dirs import default_sandbox_root
 
 
 def default_db_path() -> Path:
@@ -328,9 +329,7 @@ def _ensure_sandbox_directories(conn: sqlite3.Connection) -> None:
         ) STRICT
         """
     )
-    sandbox_root = Path(
-        os.getenv("ALPHONSE_SANDBOX_ROOT") or "/tmp/alphonse-sandbox"
-    ).resolve()
+    sandbox_root = default_sandbox_root()
     telegram_base = (sandbox_root / "telegram_files").resolve()
     conn.execute(
         """

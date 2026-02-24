@@ -439,7 +439,7 @@ def build_parser() -> argparse.ArgumentParser:
         epilog=(
             "Examples:\n"
             "  alphonse cli sandboxes list\n"
-            "  alphonse cli sandboxes add telegram_files /tmp/alphonse-sandbox/telegram_files "
+            "  alphonse cli sandboxes add telegram_files ~/Code\\ Projects/alphonse-workdirs/dumpster/sandboxes/telegram_files "
             "--description \"Telegram downloaded files\"\n"
             "  alphonse cli sandboxes add media ./var/media --yes\n"
             "  alphonse cli sandboxes remove media"

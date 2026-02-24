@@ -15,12 +15,28 @@ def _connect() -> sqlite3.Connection:
 
 
 def ensure_default_sandbox_aliases() -> None:
-    root = Path(os.getenv("ALPHONSE_SANDBOX_ROOT") or "/tmp/alphonse-sandbox").resolve()
+    root = default_sandbox_root()
     ensure_sandbox_alias(
         alias=DEFAULT_SANDBOX_ALIAS,
         base_path=str((root / DEFAULT_SANDBOX_ALIAS).resolve()),
         description="Downloaded Telegram files sandbox",
     )
+
+
+def default_sandbox_root() -> Path:
+    configured = str(os.getenv("ALPHONSE_SANDBOX_ROOT") or "").strip()
+    if configured:
+        return Path(configured).expanduser().resolve()
+    # Keep integration sandboxes under the shared workdir root by default.
+    try:
+        row = get_sandbox_alias("dumpster")
+    except Exception:
+        row = None
+    if isinstance(row, dict) and bool(row.get("enabled")):
+        base = str(row.get("base_path") or "").strip()
+        if base:
+            return (Path(base).expanduser().resolve() / "sandboxes").resolve()
+    return Path("/tmp/alphonse-sandbox").resolve()
 
 
 def ensure_sandbox_alias(*, alias: str, base_path: str, description: str = "") -> None:

@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from alphonse.agent.nervous_system.paths import resolve_nervous_system_db_path
+from alphonse.agent.nervous_system.sandbox_dirs import default_sandbox_root
 from alphonse.agent.nervous_system.sandbox_dirs import ensure_sandbox_alias
 from alphonse.agent.nervous_system.sandbox_dirs import resolve_sandbox_path
 
@@ -21,7 +22,7 @@ def _connect() -> sqlite3.Connection:
 
 
 def ensure_asset_storage() -> None:
-    root = Path(os.getenv("ALPHONSE_SANDBOX_ROOT") or "/tmp/alphonse-sandbox").resolve()
+    root = default_sandbox_root()
     ensure_sandbox_alias(
         alias=ASSET_SANDBOX_ALIAS,
         base_path=str((root / ASSET_SANDBOX_ALIAS).resolve()),

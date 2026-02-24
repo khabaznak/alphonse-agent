@@ -90,6 +90,21 @@ Telegram implementation reference:
 - `telegram_chat_access`
 - `user_service_resolvers`
 
+## Integration Sandbox Root Contract
+
+For all file-producing integrations (Telegram, Discord, WhatsApp, Slack, etc.):
+
+1. Default sandbox paths must live under Alphonse workdir root.
+2. Channel folders should branch from a shared integration root (for example `.../dumpster/sandboxes/<channel_or_asset_alias>`).
+3. `/tmp` or `/private/tmp` should only be used when explicitly configured via environment override.
+4. Tool code must resolve paths through sandbox aliases, not hardcoded absolute paths.
+
+Current default policy implementation:
+
+- Workdir-backed root preferred (`dumpster/sandboxes`)
+- Fallback root: `/tmp/alphonse-sandbox`
+- Override env: `ALPHONSE_SANDBOX_ROOT`
+
 ## Structured Content Payload Pattern
 
 Do not create separate signal envelopes for every content type.
