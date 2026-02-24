@@ -549,9 +549,10 @@ def _default_jobs_root() -> Path:
     if configured:
         return Path(configured)
     # Keep jobs in the shared workdir sandbox when available.
-    record = get_sandbox_alias("dumpster")
-    if isinstance(record, dict) and bool(record.get("enabled")):
-        base_path = str(record.get("base_path") or "").strip()
-        if base_path:
-            return Path(base_path) / "jobs"
+    for alias in ("main", "dumpster"):
+        record = get_sandbox_alias(alias)
+        if isinstance(record, dict) and bool(record.get("enabled")):
+            base_path = str(record.get("base_path") or "").strip()
+            if base_path:
+                return Path(base_path) / "jobs"
     return Path("data/jobs")

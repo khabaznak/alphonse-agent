@@ -562,6 +562,38 @@ def _default_specs() -> list[ToolSpec]:
             examples=[{"command": "ls -la", "cwd": ".", "timeout_seconds": 20}],
         ),
         ToolSpec(
+            key="terminal_command_submit",
+            description="Submit a terminal command for asynchronous execution and return a command_id for polling.",
+            when_to_use="Use for long-running commands where blocking the current turn is undesirable.",
+            returns="command_id and initial status",
+            input_schema=_object_schema(
+                properties={
+                    "command": {"type": "string"},
+                    "cwd": {"type": "string"},
+                    "timeout_seconds": {"type": "number"},
+                    "sandbox_alias": {"type": "string"},
+                },
+                required=["command"],
+            ),
+            domain_tags=["ops", "terminal", "automation"],
+            safety_level=SafetyLevel.HIGH,
+            requires_confirmation=True,
+            examples=[{"command": "ollama pull llama3.2", "timeout_seconds": 1200, "sandbox_alias": "main"}],
+        ),
+        ToolSpec(
+            key="terminal_command_status",
+            description="Get status and output for an asynchronous terminal command by command_id.",
+            when_to_use="Use after terminal_command_submit to monitor progress and retrieve stdout/stderr when complete.",
+            returns="command status, done flag, and output",
+            input_schema=_object_schema(
+                properties={"command_id": {"type": "string"}},
+                required=["command_id"],
+            ),
+            domain_tags=["ops", "terminal", "automation"],
+            safety_level=SafetyLevel.LOW,
+            examples=[{"command_id": "6e9027bf-f81d-4277-bc57-8c40a7cb389f"}],
+        ),
+        ToolSpec(
             key="ssh_terminal",
             description="Execute a command on a remote SSH host using Paramiko.",
             when_to_use="Use for explicit remote SSH operations that require host/user credentials and command execution.",

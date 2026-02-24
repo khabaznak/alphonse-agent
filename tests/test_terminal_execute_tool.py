@@ -81,3 +81,48 @@ def test_terminal_execute_fails_when_no_sandbox_roots(monkeypatch: pytest.Monkey
     assert result["status"] == "failed"
     assert isinstance(result["error"], dict)
     assert result["error"]["code"] == "sandbox_roots_not_configured"
+
+
+def test_terminal_execute_uses_120s_default_timeout(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    class _DummyTerminal:
+        def __init__(self) -> None:
+            self.timeout: float | None = None
+
+        def execute_with_policy(self, **kwargs):
+            self.timeout = float(kwargs.get("timeout_seconds"))
+            return {"status": "ok", "result": {}, "error": None, "metadata": {}}
+
+    monkeypatch.setenv("ALPHONSE_EXECUTION_MODE", "dev")
+    monkeypatch.setattr(terminal_execute_tool, "_allowed_roots", lambda: [str(tmp_path)])
+    dummy = _DummyTerminal()
+    tool = TerminalExecuteTool(terminal=dummy)
+
+    result = tool.execute(command="pwd", cwd=str(tmp_path))
+
+    assert result["status"] == "ok"
+    assert dummy.timeout == 120.0
+
+
+def test_terminal_execute_clamps_timeout_to_configured_max(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    class _DummyTerminal:
+        def __init__(self) -> None:
+            self.timeout: float | None = None
+
+        def execute_with_policy(self, **kwargs):
+            self.timeout = float(kwargs.get("timeout_seconds"))
+            return {"status": "ok", "result": {}, "error": None, "metadata": {}}
+
+    monkeypatch.setenv("ALPHONSE_EXECUTION_MODE", "dev")
+    monkeypatch.setenv("ALPHONSE_TERMINAL_MAX_TIMEOUT_SECONDS", "600")
+    monkeypatch.setattr(terminal_execute_tool, "_allowed_roots", lambda: [str(tmp_path)])
+    dummy = _DummyTerminal()
+    tool = TerminalExecuteTool(terminal=dummy)
+
+    result = tool.execute(command="pwd", cwd=str(tmp_path), timeout_seconds=9999)
+
+    assert result["status"] == "ok"
+    assert dummy.timeout == 600.0

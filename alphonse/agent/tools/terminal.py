@@ -84,6 +84,8 @@ class TerminalTool:
     _BLOCK_ALWAYS = {"sudo", "su", "chmod", "chown", "mkfs", "shutdown", "reboot"}
     _WRITE_HINT_CMDS = {"rm", "mv", "cp", "mkdir", "touch", "tee", "sed"}
     _NETWORK_HINT_CMDS = {"curl", "wget", "nc", "ssh", "scp"}
+    _DEFAULT_TIMEOUT_SECONDS = 120.0
+    _MAX_TIMEOUT_SECONDS = 1800.0
 
     def classify_command(self, command: str) -> str:
         cmd = str(command or "").strip()
@@ -208,7 +210,7 @@ class TerminalTool:
         cwd: str,
         allowed_roots: list[str],
         mode: str,
-        timeout_seconds: float = 30.0,
+        timeout_seconds: float = 120.0,
     ) -> dict[str, object]:
         decision = self.evaluate_policy(
             command=command,
@@ -246,7 +248,7 @@ class TerminalTool:
                 cwd=str(resolved_cwd),
                 capture_output=True,
                 text=True,
-                timeout=max(1.0, min(float(timeout_seconds), 120.0)),
+                timeout=_effective_timeout(timeout_seconds),
                 check=False,
                 env=_scrub_env(os.environ),
             )
@@ -464,3 +466,35 @@ def _truncate_text(value: str | None, limit: int = 4000) -> str:
     if len(text) <= limit:
         return text
     return text[:limit]
+
+
+def _effective_timeout(value: float | int | None) -> float:
+    default_timeout = _read_positive_float(
+        "ALPHONSE_TERMINAL_DEFAULT_TIMEOUT_SECONDS",
+        TerminalTool._DEFAULT_TIMEOUT_SECONDS,
+    )
+    max_timeout = _read_positive_float(
+        "ALPHONSE_TERMINAL_MAX_TIMEOUT_SECONDS",
+        TerminalTool._MAX_TIMEOUT_SECONDS,
+    )
+    if max_timeout < 1.0:
+        max_timeout = TerminalTool._MAX_TIMEOUT_SECONDS
+    raw = default_timeout if value is None else value
+    try:
+        requested = float(raw)
+    except (TypeError, ValueError):
+        requested = default_timeout
+    return max(1.0, min(requested, max_timeout))
+
+
+def _read_positive_float(name: str, default: float) -> float:
+    raw = str(os.getenv(name) or "").strip()
+    if not raw:
+        return float(default)
+    try:
+        value = float(raw)
+    except ValueError:
+        return float(default)
+    if value <= 0:
+        return float(default)
+    return float(value)

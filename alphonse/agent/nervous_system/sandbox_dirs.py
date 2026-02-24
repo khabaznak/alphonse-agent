@@ -8,6 +8,7 @@ from typing import Any
 from alphonse.agent.nervous_system.paths import resolve_nervous_system_db_path
 
 DEFAULT_SANDBOX_ALIAS = "telegram_files"
+PRIMARY_WORKDIR_ALIASES = ("main", "dumpster")
 
 
 def _connect() -> sqlite3.Connection:
@@ -28,14 +29,15 @@ def default_sandbox_root() -> Path:
     if configured:
         return Path(configured).expanduser().resolve()
     # Keep integration sandboxes under the shared workdir root by default.
-    try:
-        row = get_sandbox_alias("dumpster")
-    except Exception:
-        row = None
-    if isinstance(row, dict) and bool(row.get("enabled")):
-        base = str(row.get("base_path") or "").strip()
-        if base:
-            return (Path(base).expanduser().resolve() / "sandboxes").resolve()
+    for alias in PRIMARY_WORKDIR_ALIASES:
+        try:
+            row = get_sandbox_alias(alias)
+        except Exception:
+            row = None
+        if isinstance(row, dict) and bool(row.get("enabled")):
+            base = str(row.get("base_path") or "").strip()
+            if base:
+                return (Path(base).expanduser().resolve() / "sandboxes").resolve()
     return Path("/tmp/alphonse-sandbox").resolve()
 
 

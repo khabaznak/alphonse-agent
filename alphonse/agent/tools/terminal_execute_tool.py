@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from typing import Any
 
 from alphonse.agent.nervous_system.sandbox_dirs import list_sandbox_aliases
@@ -16,7 +17,7 @@ class TerminalExecuteTool:
         *,
         command: str,
         cwd: str = ".",
-        timeout_seconds: float = 30.0,
+        timeout_seconds: float | None = None,
         state: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         _ = state
@@ -37,7 +38,7 @@ class TerminalExecuteTool:
             cwd=cwd,
             allowed_roots=roots,
             mode=mode,
-            timeout_seconds=timeout_seconds,
+            timeout_seconds=_resolve_timeout(timeout_seconds),
         )
         return result
 
@@ -47,10 +48,51 @@ def _allowed_roots() -> list[str]:
         rows = list_sandbox_aliases(enabled_only=True, limit=500)
     except Exception:
         return []
-    roots = [
-        str(item.get("base_path") or "").strip()
-        for item in rows
-        if isinstance(item, dict)
-    ]
+    prioritized = sorted(
+        [item for item in rows if isinstance(item, dict)],
+        key=_root_priority,
+    )
+    roots = [str(item.get("base_path") or "").strip() for item in prioritized]
     roots = [path for path in roots if path]
     return roots
+
+
+def _root_priority(record: dict[str, Any]) -> tuple[int, str]:
+    alias = str(record.get("alias") or "").strip().lower()
+    if alias == "main":
+        return (0, alias)
+    if alias == "dumpster":
+        return (1, alias)
+    return (2, alias)
+
+
+def _resolve_timeout(value: float | None) -> float:
+    default_timeout = _read_positive_float(
+        "ALPHONSE_TERMINAL_DEFAULT_TIMEOUT_SECONDS",
+        120.0,
+    )
+    if value is None:
+        requested = default_timeout
+    else:
+        try:
+            requested = float(value)
+        except (TypeError, ValueError):
+            requested = default_timeout
+    max_timeout = _read_positive_float(
+        "ALPHONSE_TERMINAL_MAX_TIMEOUT_SECONDS",
+        1800.0,
+    )
+    return max(1.0, min(requested, max_timeout))
+
+
+def _read_positive_float(name: str, default: float) -> float:
+    raw = str(os.getenv(name) or "").strip()
+    if not raw:
+        return float(default)
+    try:
+        parsed = float(raw)
+    except ValueError:
+        return float(default)
+    if parsed <= 0:
+        return float(default)
+    return float(parsed)

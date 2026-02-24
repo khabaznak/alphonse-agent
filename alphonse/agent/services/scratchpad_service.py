@@ -370,11 +370,12 @@ def _default_scratchpad_root() -> Path:
     if configured:
         return Path(configured)
     # Keep scratchpads in the shared workdir sandbox when available.
-    record = get_sandbox_alias("dumpster")
-    if isinstance(record, dict) and bool(record.get("enabled")):
-        base_path = str(record.get("base_path") or "").strip()
-        if base_path:
-            return Path(base_path) / "scratchpad"
+    for alias in ("main", "dumpster"):
+        record = get_sandbox_alias(alias)
+        if isinstance(record, dict) and bool(record.get("enabled")):
+            base_path = str(record.get("base_path") or "").strip()
+            if base_path:
+                return Path(base_path) / "scratchpad"
     return Path("data/scratchpad")
 
 

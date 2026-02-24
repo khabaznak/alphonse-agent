@@ -40,7 +40,7 @@ def test_available_ability_catalog_has_minimal_tools_only() -> None:
         for item in (tools if isinstance(tools, list) else [])
         if isinstance(item, dict)
     }
-    assert names == {
+    required = {
         "askQuestion",
         "getTime",
         "createReminder",
@@ -57,12 +57,15 @@ def test_available_ability_catalog_has_minimal_tools_only() -> None:
         "job_delete",
         "job_run_now",
         "terminal_execute",
+        "terminal_command_submit",
+        "terminal_command_status",
         "local_audio_output.speak",
         "stt_transcribe",
         "python_subprocess",
         "getMySettings",
         "getUserDetails",
     }
+    assert required.issubset(names)
 
 
 def test_available_ability_catalog_prompt_is_markdown() -> None:

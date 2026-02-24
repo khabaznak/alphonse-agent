@@ -28,6 +28,8 @@ from alphonse.agent.tools.telegram_files import TelegramDownloadFileTool
 from alphonse.agent.tools.telegram_files import TelegramGetFileMetaTool
 from alphonse.agent.tools.telegram_files import TranscribeTelegramAudioTool
 from alphonse.agent.tools.telegram_files import VisionAnalyzeImageTool
+from alphonse.agent.tools.terminal_async_tools import TerminalCommandStatusTool
+from alphonse.agent.tools.terminal_async_tools import TerminalCommandSubmitTool
 from alphonse.agent.tools.user_contact_tools import UserRegisterFromContactTool
 from alphonse.agent.tools.user_contact_tools import UserRemoveFromContactTool
 from alphonse.agent.tools.user_contact_tools import UserSearchTool
@@ -66,6 +68,8 @@ def build_default_tool_registry() -> ToolRegistry:
     vision_analyze_image = VisionAnalyzeImageTool()
     python_subprocess = SubprocessTool()
     terminal_execute = TerminalExecuteTool()
+    terminal_command_submit = TerminalCommandSubmitTool()
+    terminal_command_status = TerminalCommandStatusTool()
     ssh_terminal = SshTerminalTool()
     scratchpad_service = ScratchpadService()
     scratchpad_create = ScratchpadCreateTool(scratchpad_service)
@@ -103,6 +107,8 @@ def build_default_tool_registry() -> ToolRegistry:
     registry.register("clock", clock)
     registry.register("python_subprocess", python_subprocess)
     registry.register("terminal_execute", terminal_execute)
+    registry.register("terminal_command_submit", terminal_command_submit)
+    registry.register("terminal_command_status", terminal_command_status)
     registry.register("ssh_terminal", ssh_terminal)
     registry.register("scratchpad_create", scratchpad_create)
     registry.register("scratchpad_append", scratchpad_append)
