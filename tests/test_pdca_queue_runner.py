@@ -119,3 +119,52 @@ def test_pdca_queue_runner_avoids_double_dispatch_under_contention(
     assert signal is not None
     assert signal.type == "pdca.slice.requested"
     assert bus.get(timeout=0.05) is None
+
+
+def test_pdca_queue_runner_skips_leased_tasks_until_stale(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db_path = tmp_path / "nerve-db"
+    monkeypatch.setenv("NERVE_DB_PATH", str(db_path))
+    apply_schema(db_path)
+
+    now = datetime.now(timezone.utc)
+    stale_task_id = upsert_pdca_task(
+        {
+            "owner_id": "owner-stale",
+            "conversation_key": "chat-stale",
+            "status": "queued",
+            "next_run_at": (now - timedelta(seconds=2)).isoformat(),
+            "lease_until": (now - timedelta(seconds=1)).isoformat(),
+            "worker_id": "other-worker",
+        }
+    )
+    _ = upsert_pdca_task(
+        {
+            "owner_id": "owner-future",
+            "conversation_key": "chat-future",
+            "status": "queued",
+            "next_run_at": (now - timedelta(seconds=2)).isoformat(),
+            "lease_until": (now + timedelta(seconds=120)).isoformat(),
+            "worker_id": "other-worker",
+        }
+    )
+
+    bus = Bus()
+    runner = PdcaQueueRunner(
+        bus=bus,
+        enabled=True,
+        poll_seconds=0.5,
+        lease_seconds=10,
+        dispatch_cooldown_seconds=60,
+        worker_id="worker-test",
+    )
+    dispatched = runner.run_once(now=now.isoformat())
+    assert dispatched == 1
+
+    signal = bus.get(timeout=0.1)
+    assert signal is not None
+    assert signal.type == "pdca.slice.requested"
+    assert signal.payload.get("task_id") == stale_task_id
+    assert bus.get(timeout=0.05) is None

@@ -11,6 +11,7 @@ from alphonse.agent.nervous_system.pdca_queue_store import (
     get_pdca_task,
     list_pdca_events,
     load_pdca_checkpoint,
+    save_pdca_checkpoint,
     upsert_pdca_task,
 )
 from alphonse.agent.nervous_system.senses.bus import Signal
@@ -170,3 +171,154 @@ def test_handle_pdca_slice_request_ignores_duplicate_signal_correlation(
     ignored = [e for e in events if e["event_type"] == "slice.request.duplicate_ignored" and e["correlation_id"] == "dup-cid"]
     assert len(received) == 1
     assert len(ignored) == 1
+
+
+def test_handle_pdca_slice_request_blocks_when_max_cycles_reached(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db_path = tmp_path / "nerve-db"
+    monkeypatch.setenv("NERVE_DB_PATH", str(db_path))
+    apply_schema(db_path)
+
+    task_id = upsert_pdca_task(
+        {
+            "owner_id": "owner-1",
+            "conversation_key": "chat-cycle-limit",
+            "status": "queued",
+            "max_cycles": 2,
+            "metadata": {"pending_user_text": "Continue"},
+        }
+    )
+    _ = save_pdca_checkpoint(
+        task_id=task_id,
+        state={"conversation_key": "chat-cycle-limit"},
+        task_state={"cycle_index": 2, "status": "running"},
+        expected_version=0,
+    )
+
+    class _FakeGraph:
+        calls = 0
+
+        def invoke(self, state, text, *, llm_client=None):  # noqa: ANN001
+            _ = (state, text, llm_client)
+            self.calls += 1
+            raise AssertionError("graph should not be called when max_cycles is reached")
+
+    fake_graph = _FakeGraph()
+    monkeypatch.setattr(hpsr, "_CORTEX_GRAPH", fake_graph)
+    monkeypatch.setattr(hpsr, "build_llm_client", lambda: None)
+
+    signal = Signal(
+        type="pdca.slice.requested",
+        payload={"task_id": task_id, "correlation_id": "cid-cycle"},
+        source="pdca_queue_runner",
+    )
+    action = HandlePdcaSliceRequestAction()
+    _ = action.execute({"signal": signal, "ctx": None})
+
+    assert fake_graph.calls == 0
+    task = get_pdca_task(task_id)
+    assert task is not None
+    assert task["status"] == "failed"
+    events = list_pdca_events(task_id=task_id, limit=20)
+    assert any(item["event_type"] == "slice.blocked.budget_exhausted" for item in events)
+
+
+def test_handle_pdca_slice_request_blocks_when_token_budget_exhausted(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db_path = tmp_path / "nerve-db"
+    monkeypatch.setenv("NERVE_DB_PATH", str(db_path))
+    apply_schema(db_path)
+
+    task_id = upsert_pdca_task(
+        {
+            "owner_id": "owner-1",
+            "conversation_key": "chat-token-limit",
+            "status": "queued",
+            "token_budget_remaining": 0,
+            "metadata": {"pending_user_text": "Continue"},
+        }
+    )
+
+    class _FakeGraph:
+        calls = 0
+
+        def invoke(self, state, text, *, llm_client=None):  # noqa: ANN001
+            _ = (state, text, llm_client)
+            self.calls += 1
+            raise AssertionError("graph should not be called when token budget is exhausted")
+
+    fake_graph = _FakeGraph()
+    monkeypatch.setattr(hpsr, "_CORTEX_GRAPH", fake_graph)
+    monkeypatch.setattr(hpsr, "build_llm_client", lambda: None)
+
+    signal = Signal(
+        type="pdca.slice.requested",
+        payload={"task_id": task_id, "correlation_id": "cid-token"},
+        source="pdca_queue_runner",
+    )
+    action = HandlePdcaSliceRequestAction()
+    _ = action.execute({"signal": signal, "ctx": None})
+
+    assert fake_graph.calls == 0
+    task = get_pdca_task(task_id)
+    assert task is not None
+    assert task["status"] == "failed"
+    events = list_pdca_events(task_id=task_id, limit=20)
+    blocked = [item for item in events if item["event_type"] == "slice.blocked.budget_exhausted"]
+    assert blocked
+    assert blocked[-1]["payload"].get("reason") == "token_budget_exhausted"
+
+
+def test_handle_pdca_slice_request_blocks_when_runtime_budget_exhausted(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db_path = tmp_path / "nerve-db"
+    monkeypatch.setenv("NERVE_DB_PATH", str(db_path))
+    apply_schema(db_path)
+
+    task_id = upsert_pdca_task(
+        {
+            "owner_id": "owner-1",
+            "conversation_key": "chat-runtime-limit",
+            "status": "queued",
+            "max_runtime_seconds": 1,
+            "metadata": {
+                "pending_user_text": "Continue",
+                "started_at": "2000-01-01T00:00:00+00:00",
+            },
+        }
+    )
+
+    class _FakeGraph:
+        calls = 0
+
+        def invoke(self, state, text, *, llm_client=None):  # noqa: ANN001
+            _ = (state, text, llm_client)
+            self.calls += 1
+            raise AssertionError("graph should not be called when runtime budget is exhausted")
+
+    fake_graph = _FakeGraph()
+    monkeypatch.setattr(hpsr, "_CORTEX_GRAPH", fake_graph)
+    monkeypatch.setattr(hpsr, "build_llm_client", lambda: None)
+
+    signal = Signal(
+        type="pdca.slice.requested",
+        payload={"task_id": task_id, "correlation_id": "cid-runtime"},
+        source="pdca_queue_runner",
+    )
+    action = HandlePdcaSliceRequestAction()
+    _ = action.execute({"signal": signal, "ctx": None})
+
+    assert fake_graph.calls == 0
+    task = get_pdca_task(task_id)
+    assert task is not None
+    assert task["status"] == "failed"
+    events = list_pdca_events(task_id=task_id, limit=20)
+    blocked = [item for item in events if item["event_type"] == "slice.blocked.budget_exhausted"]
+    assert blocked
+    assert blocked[-1]["payload"].get("reason") == "max_runtime_reached"

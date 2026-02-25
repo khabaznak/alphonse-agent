@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from datetime import datetime, timedelta, timezone
+from math import ceil
 from typing import Any
 
 from alphonse.agent.actions.base import Action
@@ -90,6 +91,21 @@ class HandlePdcaSliceRequestAction(Action):
                 correlation_id=correlation_id,
             )
             return ActionResult(intention_key="NOOP", payload={}, urgency=None)
+        budget_block = _budget_block(task=task, checkpoint=checkpoint, request_text=text)
+        if budget_block is not None:
+            _finalize_budget_exhausted(
+                task=task,
+                correlation_id=correlation_id,
+                reason=str(budget_block.get("reason") or "budget_exhausted"),
+                details=budget_block,
+            )
+            _emit_slice_signal(
+                context=context,
+                event_type="pdca.failed",
+                task_id=task_id,
+                correlation_id=correlation_id,
+            )
+            return ActionResult(intention_key="NOOP", payload={}, urgency=None)
 
         try:
             llm_client = build_llm_client()
@@ -121,7 +137,7 @@ class HandlePdcaSliceRequestAction(Action):
             save_state(conversation_key, merged_state)
 
         next_status = _next_status(cognition_state=cognition_state, reply_text=str(result.reply_text or ""))
-        _upsert_task_after_slice(task=task, status=next_status)
+        _upsert_task_after_slice(task=task, status=next_status, request_text=text, reply_text=str(result.reply_text or ""))
         append_pdca_event(
             task_id=task_id,
             event_type=f"slice.completed.{next_status}",
@@ -213,12 +229,20 @@ def _next_status(*, cognition_state: dict[str, Any], reply_text: str) -> str:
     return "queued"
 
 
-def _upsert_task_after_slice(*, task: dict[str, Any], status: str) -> None:
+def _upsert_task_after_slice(*, task: dict[str, Any], status: str, request_text: str, reply_text: str) -> None:
     now = datetime.now(timezone.utc)
     next_run_at = None
     if status == "queued":
         cooldown = _dispatch_cooldown_seconds()
         next_run_at = (now + timedelta(seconds=cooldown)).isoformat()
+    token_budget = task.get("token_budget_remaining")
+    tokens_used = _estimate_token_burn(request_text, reply_text)
+    next_token_budget = int(token_budget) - tokens_used if token_budget is not None else None
+    failure_streak = int(task.get("failure_streak") or 0)
+    if status == "failed":
+        failure_streak += 1
+    else:
+        failure_streak = 0
     upsert_pdca_task(
         {
             "task_id": task.get("task_id"),
@@ -231,8 +255,8 @@ def _upsert_task_after_slice(*, task: dict[str, Any], status: str) -> None:
             "slice_cycles": task.get("slice_cycles", 5),
             "max_cycles": task.get("max_cycles"),
             "max_runtime_seconds": task.get("max_runtime_seconds"),
-            "token_budget_remaining": task.get("token_budget_remaining"),
-            "failure_streak": task.get("failure_streak", 0),
+            "token_budget_remaining": next_token_budget,
+            "failure_streak": failure_streak,
             "last_error": task.get("last_error"),
             "metadata": task.get("metadata") if isinstance(task.get("metadata"), dict) else {},
             "created_at": task.get("created_at"),
@@ -249,6 +273,95 @@ def _finalize_failure(*, task: dict[str, Any], correlation_id: str | None, error
         payload={"error": error},
         correlation_id=correlation_id,
     )
+
+
+def _finalize_budget_exhausted(*, task: dict[str, Any], correlation_id: str | None, reason: str, details: dict[str, Any]) -> None:
+    task_id = str(task.get("task_id") or "").strip()
+    update_pdca_task_status(task_id=task_id, status="failed", last_error=reason)
+    append_pdca_event(
+        task_id=task_id,
+        event_type="slice.blocked.budget_exhausted",
+        payload=details,
+        correlation_id=correlation_id,
+    )
+
+
+def _budget_block(*, task: dict[str, Any], checkpoint: dict[str, Any] | None, request_text: str) -> dict[str, Any] | None:
+    max_cycles = _as_optional_int(task.get("max_cycles"))
+    cycle_index = _current_cycle_index(checkpoint)
+    if max_cycles is not None and cycle_index >= max_cycles:
+        return {
+            "reason": "max_cycles_reached",
+            "cycle_index": cycle_index,
+            "max_cycles": max_cycles,
+        }
+    runtime_limit = _as_optional_int(task.get("max_runtime_seconds"))
+    if runtime_limit is not None:
+        elapsed = _elapsed_runtime_seconds(task)
+        if elapsed is not None and elapsed >= runtime_limit:
+            return {
+                "reason": "max_runtime_reached",
+                "elapsed_seconds": elapsed,
+                "max_runtime_seconds": runtime_limit,
+            }
+    token_budget = _as_optional_int(task.get("token_budget_remaining"))
+    if token_budget is not None:
+        projected_burn = _estimate_token_burn(request_text, "")
+        if token_budget <= 0 or token_budget < projected_burn:
+            return {
+                "reason": "token_budget_exhausted",
+                "token_budget_remaining": token_budget,
+                "projected_slice_burn": projected_burn,
+            }
+    return None
+
+
+def _current_cycle_index(checkpoint: dict[str, Any] | None) -> int:
+    if not isinstance(checkpoint, dict):
+        return 0
+    task_state = checkpoint.get("task_state") if isinstance(checkpoint.get("task_state"), dict) else {}
+    return _as_optional_int(task_state.get("cycle_index")) or 0
+
+
+def _elapsed_runtime_seconds(task: dict[str, Any]) -> int | None:
+    metadata = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
+    for key in ("started_at", "last_enqueued_at"):
+        started = _parse_utc(metadata.get(key))
+        if started is not None:
+            now = datetime.now(timezone.utc)
+            return max(int((now - started).total_seconds()), 0)
+    created = _parse_utc(task.get("created_at"))
+    if created is None:
+        return None
+    now = datetime.now(timezone.utc)
+    return max(int((now - created).total_seconds()), 0)
+
+
+def _parse_utc(value: Any) -> datetime | None:
+    rendered = str(value or "").strip()
+    if not rendered:
+        return None
+    try:
+        parsed = datetime.fromisoformat(rendered)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _as_optional_int(value: Any) -> int | None:
+    try:
+        if value is None:
+            return None
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _estimate_token_burn(request_text: str, reply_text: str) -> int:
+    chars = len(str(request_text or "").strip()) + len(str(reply_text or "").strip())
+    return max(1, int(ceil(chars / 4)))
 
 
 def _status_signal(status: str) -> str:
