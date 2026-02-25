@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 import threading
 from pathlib import Path
 from typing import Any
@@ -210,9 +209,6 @@ def _normalize_cwd(*, cwd: str | None, roots: list[str]) -> str:
     raw = str(cwd or "").strip()
     if raw and raw != ".":
         return raw
-    configured = str(os.getenv("ALPHONSE_TERMINAL_MAIN_WORKDIR") or "").strip()
-    if configured:
-        return configured
     if roots:
         return str(Path(roots[0]).resolve())
     return "."
