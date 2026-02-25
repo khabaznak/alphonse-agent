@@ -609,6 +609,49 @@ def test_pdca_next_step_prompt_includes_recent_conversation_sentinel() -> None:
     assert sentinel in llm.last_user_prompt
 
 
+def test_pdca_next_step_prompt_includes_failure_diagnostics_for_remediation() -> None:
+    tool_registry = build_default_tool_registry()
+    next_step = build_next_step_node(tool_registry=tool_registry)
+    llm = _PromptCaptureLlm('{"kind":"call_tool","tool_name":"terminal_sync","args":{"command":"echo ok"}}')
+
+    task_state = build_default_task_state()
+    task_state["acceptance_criteria"] = ["done when requested outcome is produced"]
+    task_state["goal"] = "check pending updates on the Raspberry Pi"
+    task_state["execution_eval"] = {
+        "should_pause": False,
+        "reason": "continue_learning",
+        "summary": "Continue with next planning attempt.",
+    }
+    task_state["plan"]["current_step_id"] = "step_1"
+    task_state["plan"]["steps"] = [
+        {
+            "step_id": "step_1",
+            "proposal": {"kind": "call_tool", "tool_name": "ssh_terminal", "args": {"host": "192.168.68.127"}},
+            "status": "failed",
+        }
+    ]
+    task_state["facts"] = {
+        "step_1": {
+            "tool": "ssh_terminal",
+            "result": {
+                "status": "failed",
+                "error": {"code": "paramiko_not_installed", "message": "paramiko_not_installed"},
+            },
+        }
+    }
+    state: dict[str, object] = {
+        "correlation_id": "corr-pdca-remediation-prompt",
+        "_llm_client": llm,
+        "task_state": task_state,
+    }
+
+    _ = next_step(state)
+    prompt = llm.last_user_prompt
+    assert "latest_failure_diagnostics" in prompt
+    assert "paramiko_not_installed" in prompt
+    assert "execution_eval" in prompt
+
+
 def test_pdca_can_answer_last_tool_question_from_recent_conversation_block() -> None:
     tool_registry = build_default_tool_registry()
     next_step = build_next_step_node(tool_registry=tool_registry)
@@ -719,7 +762,7 @@ def test_act_node_stops_after_repeated_same_tool_failures() -> None:
     assert isinstance(eval_payload, dict)
     assert eval_payload.get("reason") == "repeated_identical_failure"
     route_state = {"task_state": next_state, "correlation_id": "corr-pdca-repeated-tool-failure"}
-    assert route_after_act(route_state) == "next_step_node"
+    assert route_after_act(route_state) == "respond_node"
 
 
 def test_act_node_allows_evolving_failures_under_budget() -> None:

@@ -31,6 +31,11 @@ _NEXT_STEP_DEVELOPER_PROMPT = (
     "- If a tool accepts a natural time expression (e.g., 'in 1 minute'), pass it through; do NOT call get_time just to interpret it.\n"
     "- Call get_time only when a tool explicitly requires an absolute timestamp and you must compute it.\n"
     "- Prefer actions that reduce uncertainty early.\n"
+    "- After a tool failure, first diagnose root cause from error_code/error_message before changing strategy.\n"
+    "- Prefer deterministic remediation over guessing: fix missing dependencies, missing binaries, invalid cwd/path, bad args, or auth setup when possible.\n"
+    "- If remediation can be executed with available tools/policy, do remediation + retry instead of asking the user.\n"
+    "- Ask the user only when blocked by missing external secrets/permissions or after repeated equivalent failures despite remediation.\n"
+    "- When blocked, state the exact blocker and the minimum input needed from the user.\n"
     "- Use only tools listed in the tool menu.\n"
     "- If required info is missing, ask a concise clarifying question.\n"
     "- Review acceptance criteria from working state.\n"
@@ -430,6 +435,13 @@ def act_node(state: dict[str, Any]) -> dict[str, Any]:
 def route_after_act(state: dict[str, Any]) -> str:
     task_state = state.get("task_state")
     status = str((task_state or {}).get("status") or "").strip().lower() if isinstance(task_state, dict) else ""
+    if status == "waiting_user":
+        logger.info(
+            "task_mode route_after_act correlation_id=%s route=respond_node status=%s",
+            _correlation_id(state),
+            status,
+        )
+        return "respond_node"
     logger.info(
         "task_mode route_after_act correlation_id=%s route=next_step_node status=%s",
         _correlation_id(state),
@@ -661,14 +673,43 @@ def _build_working_state_view(task_state: dict[str, Any]) -> dict[str, Any]:
         keys = sorted(relevant_facts.keys())[-8:]
         relevant_facts = {key: relevant_facts[key] for key in keys}
     acceptance_criteria = _normalize_acceptance_criteria_values(task_state.get("acceptance_criteria"))
+    failure_diagnostics = _latest_failure_diagnostics(task_state)
     return {
         "goal": str(task_state.get("goal") or "").strip(),
         "acceptance_criteria": acceptance_criteria,
         "relevant_facts": relevant_facts,
+        "latest_failure_diagnostics": failure_diagnostics,
+        "execution_eval": task_state.get("execution_eval") if isinstance(task_state.get("execution_eval"), dict) else {},
         "last_validation_error": task_state.get("last_validation_error"),
         "repair_attempts": int(task_state.get("repair_attempts") or 0),
         "pending_question": str(task_state.get("next_user_question") or "").strip() or None,
     }
+
+
+def _latest_failure_diagnostics(task_state: dict[str, Any]) -> dict[str, Any]:
+    plan = _task_plan(task_state)
+    steps = plan.get("steps") if isinstance(plan.get("steps"), list) else []
+    facts = task_state.get("facts") if isinstance(task_state.get("facts"), dict) else {}
+    for raw_step in reversed(steps):
+        if not isinstance(raw_step, dict):
+            continue
+        if str(raw_step.get("status") or "").strip().lower() != "failed":
+            continue
+        step_id = str(raw_step.get("step_id") or "").strip()
+        proposal = raw_step.get("proposal") if isinstance(raw_step.get("proposal"), dict) else {}
+        tool_name = str(proposal.get("tool_name") or "").strip()
+        args = proposal.get("args") if isinstance(proposal.get("args"), dict) else {}
+        fact_entry = facts.get(step_id) if step_id else None
+        result = fact_entry.get("result") if isinstance(fact_entry, dict) and isinstance(fact_entry.get("result"), dict) else {}
+        error = result.get("error") if isinstance(result.get("error"), dict) else {}
+        return {
+            "step_id": step_id,
+            "tool_name": tool_name,
+            "args": args,
+            "error_code": str(error.get("code") or "").strip(),
+            "error_message": str(error.get("message") or "").strip(),
+        }
+    return {}
 
 
 def _build_tool_menu(tool_registry: Any) -> str:
