@@ -218,11 +218,15 @@ class HandleIncomingMessageAction(Action):
             correlation_id=incoming.correlation_id,
         )
         cognition_state = result.cognition_state if isinstance(result.cognition_state, dict) else {}
+        session_assistant_message = _resolve_assistant_session_message(
+            reply_text=str(result.reply_text or ""),
+            plans=result.plans or [],
+        )
         updated_day_session = build_next_session_state(
             previous=day_session,
             channel=incoming.channel_type,
             user_message=str(payload.get("text") or ""),
-            assistant_message=str(result.reply_text or ""),
+            assistant_message=session_assistant_message,
             ability_state=cognition_state.get("ability_state")
             if isinstance(cognition_state.get("ability_state"), dict)
             else None,
@@ -577,3 +581,43 @@ def _attach_transition_sink(state: dict[str, object], incoming: IncomingContext)
         return False
     state["_transition_sink"] = lambda event: _emit_channel_transition_event(incoming, event)
     return True
+
+
+def _resolve_assistant_session_message(*, reply_text: str, plans: list[Any]) -> str:
+    reply_line = str(reply_text or "").strip()
+    transcript = _extract_tts_transcript(plans)
+    if not transcript:
+        return reply_line
+    if not reply_line:
+        return f"[TTS transcript] {transcript}"
+    if _normalized_text(reply_line) == _normalized_text(transcript):
+        return f"[TTS transcript] {reply_line}"
+    return f"{reply_line} [TTS transcript: {transcript}]"
+
+
+def _extract_tts_transcript(plans: list[Any]) -> str:
+    for item in plans:
+        if not isinstance(item, CortexPlan):
+            continue
+        tool_name = str(item.tool or "").strip().lower()
+        params = dict(item.parameters or {})
+        payload = dict(item.payload or {})
+        merged = dict(payload)
+        merged.update(params)
+        transcript = ""
+        if tool_name == "local_audio_output.speak":
+            transcript = str(merged.get("text") or "").strip()
+        elif tool_name == "sendvoicenote":
+            transcript = str(merged.get("message") or merged.get("caption") or "").strip()
+        elif tool_name == "sendmessage":
+            delivery_mode = str(merged.get("delivery_mode") or "").strip().lower()
+            as_voice = bool(merged.get("as_voice") is True)
+            if delivery_mode == "audio" or as_voice:
+                transcript = str(merged.get("message") or merged.get("caption") or "").strip()
+        if transcript:
+            return transcript
+    return ""
+
+
+def _normalized_text(value: str) -> str:
+    return " ".join(str(value or "").strip().lower().split())
