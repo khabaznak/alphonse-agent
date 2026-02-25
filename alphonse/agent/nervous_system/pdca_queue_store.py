@@ -448,6 +448,191 @@ def has_pdca_event(
     return row is not None
 
 
+def get_pdca_queue_metrics(
+    *,
+    now: str | None = None,
+    lookback_minutes: int = 15,
+    top_owners: int = 5,
+) -> dict[str, Any]:
+    now_dt = _parse_or_now(now)
+    window_minutes = max(int(lookback_minutes or 15), 1)
+    top_limit = max(int(top_owners or 5), 1)
+    window_start = (now_dt - timedelta(minutes=window_minutes)).isoformat()
+    metrics: dict[str, Any] = {
+        "generated_at": now_dt.isoformat(),
+        "lookback_minutes": window_minutes,
+        "queue_depth_total": 0,
+        "queue_depth_by_status": {},
+        "queue_depth_by_owner": {},
+        "oldest_wait_seconds": {"global": 0, "by_owner": {}},
+        "dispatch_rate_per_minute": {"global": 0.0, "by_owner": {}},
+        "budget_exhaustions_total": {"all": 0, "by_reason": {}},
+        "starvation_warnings_total": 0,
+        "owner_fairness_ratio": {"by_owner": {}, "max_skew": 0.0},
+        "terminal_outcomes_total": {"done": 0, "waiting_user": 0, "failed": 0},
+    }
+    try:
+        with _connect() as conn:
+            status_rows = conn.execute(
+                """
+                SELECT status, COUNT(*) AS cnt
+                FROM pdca_tasks
+                GROUP BY status
+                """
+            ).fetchall()
+            by_status = {str(row[0]): int(row[1] or 0) for row in status_rows if row[0]}
+            metrics["queue_depth_by_status"] = by_status
+            metrics["queue_depth_total"] = sum(by_status.values())
+
+            owner_rows = conn.execute(
+                """
+                SELECT owner_id, COUNT(*) AS cnt
+                FROM pdca_tasks
+                WHERE status IN ('queued', 'running')
+                GROUP BY owner_id
+                ORDER BY cnt DESC, owner_id ASC
+                LIMIT ?
+                """,
+                (top_limit,),
+            ).fetchall()
+            queue_by_owner = {str(row[0]): int(row[1] or 0) for row in owner_rows if row[0]}
+            metrics["queue_depth_by_owner"] = queue_by_owner
+
+            wait_rows = conn.execute(
+                """
+                SELECT owner_id, next_run_at, created_at
+                FROM pdca_tasks
+                WHERE status IN ('queued', 'running')
+                """
+            ).fetchall()
+            wait_by_owner: dict[str, int] = {}
+            oldest_global = 0
+            for row in wait_rows:
+                owner_id = str(row[0] or "").strip() or "unknown"
+                baseline = _parse_iso_utc(str(row[1] or "")) or _parse_iso_utc(str(row[2] or ""))
+                if baseline is None:
+                    continue
+                wait_seconds = max(int((now_dt - baseline).total_seconds()), 0)
+                oldest_global = max(oldest_global, wait_seconds)
+                wait_by_owner[owner_id] = max(wait_by_owner.get(owner_id, 0), wait_seconds)
+            metrics["oldest_wait_seconds"] = {"global": oldest_global, "by_owner": wait_by_owner}
+
+            dispatch_total = int(
+                conn.execute(
+                    """
+                    SELECT COUNT(*) FROM pdca_events WHERE event_type = 'slice.requested'
+                    """
+                ).fetchone()[0]
+                or 0
+            )
+            dispatch_window = int(
+                conn.execute(
+                    """
+                    SELECT COUNT(*) FROM pdca_events
+                    WHERE event_type = 'slice.requested' AND created_at >= ?
+                    """,
+                    (window_start,),
+                ).fetchone()[0]
+                or 0
+            )
+            dispatch_by_owner_rows = conn.execute(
+                """
+                SELECT t.owner_id, COUNT(*) AS cnt
+                FROM pdca_events e
+                JOIN pdca_tasks t ON t.task_id = e.task_id
+                WHERE e.event_type = 'slice.requested' AND e.created_at >= ?
+                GROUP BY t.owner_id
+                """,
+                (window_start,),
+            ).fetchall()
+            dispatch_by_owner = {str(row[0]): int(row[1] or 0) for row in dispatch_by_owner_rows if row[0]}
+            metrics["dispatch_rate_per_minute"] = {
+                "global": round(dispatch_window / float(window_minutes), 4),
+                "by_owner": {owner: round(count / float(window_minutes), 4) for owner, count in dispatch_by_owner.items()},
+                "dispatch_total": dispatch_total,
+                "dispatch_in_window": dispatch_window,
+            }
+
+            budget_rows = conn.execute(
+                """
+                SELECT payload_json
+                FROM pdca_events
+                WHERE event_type = 'slice.blocked.budget_exhausted'
+                """
+            ).fetchall()
+            by_reason: dict[str, int] = {}
+            for row in budget_rows:
+                payload = _parse_json(str(row[0] or "")) if row and row[0] else {}
+                reason = str((payload or {}).get("reason") or "unknown").strip() or "unknown"
+                by_reason[reason] = by_reason.get(reason, 0) + 1
+            metrics["budget_exhaustions_total"] = {"all": len(budget_rows), "by_reason": by_reason}
+
+            starvation_total = int(
+                conn.execute(
+                    """
+                    SELECT COUNT(*) FROM pdca_events WHERE event_type = 'queue.starvation_warning'
+                    """
+                ).fetchone()[0]
+                or 0
+            )
+            metrics["starvation_warnings_total"] = starvation_total
+
+            terminal_rows = conn.execute(
+                """
+                SELECT event_type
+                FROM pdca_events
+                WHERE event_type IN (
+                  'slice.completed.done',
+                  'slice.completed.waiting_user',
+                  'slice.blocked.missing_text',
+                  'slice.completed.failed',
+                  'slice.failed',
+                  'slice.blocked.budget_exhausted'
+                )
+                """
+            ).fetchall()
+            terminal = {"done": 0, "waiting_user": 0, "failed": 0}
+            for row in terminal_rows:
+                event_type = str(row[0] or "").strip()
+                if event_type == "slice.completed.done":
+                    terminal["done"] += 1
+                elif event_type in {"slice.completed.waiting_user", "slice.blocked.missing_text"}:
+                    terminal["waiting_user"] += 1
+                elif event_type in {"slice.completed.failed", "slice.failed", "slice.blocked.budget_exhausted"}:
+                    terminal["failed"] += 1
+            metrics["terminal_outcomes_total"] = terminal
+
+            active_owner_rows = conn.execute(
+                """
+                SELECT owner_id, COUNT(*) AS cnt
+                FROM pdca_tasks
+                WHERE status IN ('queued', 'running')
+                GROUP BY owner_id
+                """
+            ).fetchall()
+            active_by_owner = {str(row[0]): int(row[1] or 0) for row in active_owner_rows if row[0]}
+            total_active = sum(active_by_owner.values())
+            total_dispatched_window = sum(dispatch_by_owner.values())
+            fairness: dict[str, float] = {}
+            max_skew = 0.0
+            for owner_id in set(active_by_owner.keys()) | set(dispatch_by_owner.keys()):
+                queue_share = (active_by_owner.get(owner_id, 0) / float(total_active)) if total_active > 0 else 0.0
+                dispatch_share = (
+                    dispatch_by_owner.get(owner_id, 0) / float(total_dispatched_window)
+                    if total_dispatched_window > 0
+                    else 0.0
+                )
+                if queue_share <= 0:
+                    continue
+                ratio = round(dispatch_share / queue_share, 4)
+                fairness[owner_id] = ratio
+                max_skew = max(max_skew, abs(ratio - 1.0))
+            metrics["owner_fairness_ratio"] = {"by_owner": fairness, "max_skew": round(max_skew, 4)}
+    except sqlite3.OperationalError:
+        return metrics
+    return metrics
+
+
 def _connect() -> sqlite3.Connection:
     path = resolve_nervous_system_db_path()
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -520,6 +705,18 @@ def _parse_json(value: str | None) -> Any:
         return json.loads(value)
     except json.JSONDecodeError:
         return None
+
+
+def _parse_iso_utc(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
 
 
 def _now_iso() -> str:
