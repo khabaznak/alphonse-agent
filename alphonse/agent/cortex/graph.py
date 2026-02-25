@@ -140,9 +140,9 @@ class CortexGraph:
 def _resolve_recursion_limit() -> int:
     raw = str(os.getenv("ALPHONSE_GRAPH_RECURSION_LIMIT") or "").strip()
     if not raw:
-        return 100
+        return 1000
     try:
         parsed = int(raw)
     except ValueError:
-        return 100
-    return max(25, min(parsed, 400))
+        return 1000
+    return max(100, min(parsed, 1000))
