@@ -832,3 +832,63 @@ CREATE TABLE IF NOT EXISTS habit_lifecycle (
   user_opt_in            INTEGER NOT NULL DEFAULT 0,
   audit_required         INTEGER NOT NULL DEFAULT 1
 ) STRICT;
+
+----------------------------------------------------------------------
+-- 10) PDCA SLICE QUEUE
+----------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS pdca_tasks (
+  task_id                 TEXT PRIMARY KEY,
+  owner_id                TEXT NOT NULL,
+  conversation_key        TEXT NOT NULL,
+  session_id              TEXT,
+  status                  TEXT NOT NULL DEFAULT 'queued',
+  priority                INTEGER NOT NULL DEFAULT 100,
+  next_run_at             TEXT,
+  lease_until             TEXT,
+  worker_id               TEXT,
+  slice_cycles            INTEGER NOT NULL DEFAULT 5,
+  max_cycles              INTEGER,
+  max_runtime_seconds     INTEGER,
+  token_budget_remaining  INTEGER,
+  failure_streak          INTEGER NOT NULL DEFAULT 0,
+  last_error              TEXT,
+  metadata_json           TEXT,
+  created_at              TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at              TEXT NOT NULL DEFAULT (datetime('now')),
+  CHECK (status IN ('queued', 'running', 'waiting_user', 'done', 'failed', 'paused')),
+  CHECK (priority >= 0),
+  CHECK (slice_cycles > 0)
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_pdca_tasks_runnable
+  ON pdca_tasks (status, next_run_at, priority, updated_at);
+
+CREATE INDEX IF NOT EXISTS idx_pdca_tasks_lease
+  ON pdca_tasks (lease_until, status);
+
+CREATE INDEX IF NOT EXISTS idx_pdca_tasks_owner
+  ON pdca_tasks (owner_id, status, updated_at);
+
+CREATE TABLE IF NOT EXISTS pdca_checkpoints (
+  task_id          TEXT PRIMARY KEY,
+  state_json       TEXT NOT NULL,
+  task_state_json  TEXT NOT NULL,
+  version          INTEGER NOT NULL DEFAULT 1,
+  created_at       TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at       TEXT NOT NULL DEFAULT (datetime('now')),
+  FOREIGN KEY (task_id) REFERENCES pdca_tasks(task_id) ON DELETE CASCADE,
+  CHECK (version > 0)
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS pdca_events (
+  event_id         TEXT PRIMARY KEY,
+  task_id          TEXT NOT NULL,
+  event_type       TEXT NOT NULL,
+  payload_json     TEXT,
+  correlation_id   TEXT,
+  created_at       TEXT NOT NULL DEFAULT (datetime('now')),
+  FOREIGN KEY (task_id) REFERENCES pdca_tasks(task_id) ON DELETE CASCADE
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_pdca_events_task_created
+  ON pdca_events (task_id, created_at);

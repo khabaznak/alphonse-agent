@@ -3,10 +3,17 @@
 INSERT OR IGNORE INTO states (key, name, description, is_terminal, is_enabled)
 VALUES
   ('idle', 'Idle', 'Ready and waiting', 0, 1),
-  ('dnd', 'Do Not Disturb', 'Reduced notifications', 0, 1),
+  ('dnd', 'Do Not Disturb', 'Reduced notifications (legacy)', 0, 0),
   ('error', 'Error', 'Error state', 0, 1),
   ('onboarding', 'Onboarding', 'Initial setup', 0, 1),
-  ('shutting_down', 'Shutting Down', 'Preparing to stop', 1, 1);
+  ('shutting_down', 'Shutting Down', 'Preparing to stop', 1, 1),
+  ('executing', 'Executing', 'Actively executing a PDCA slice', 0, 1),
+  ('persisting_slice', 'Persisting Slice', 'Persisting checkpoint for cooperative multitasking', 0, 1),
+  ('rehydrating_slice', 'Rehydrating Slice', 'Loading checkpoint before resuming a slice', 0, 1),
+  ('waiting_user', 'Waiting User', 'Paused until user provides required input', 0, 1);
+
+-- Legacy FSM state retained for compatibility but disabled.
+UPDATE states SET is_enabled = 0 WHERE key = 'dnd';
 
 INSERT OR IGNORE INTO senses (key, name, description, source_type, enabled, owner)
 VALUES
@@ -32,7 +39,13 @@ VALUES
   ('timed_signal.fired', 'Timed Signal Fired', 'timer', 'Scheduled timed signal fired', 1),
   ('terminal.command_updated', 'Terminal Command Updated', 'terminal', 'Terminal command updated', 1),
   ('terminal.command_executed', 'Terminal Command Executed', 'terminal_executor', 'Terminal command executed', 1),
-  ('telegram.invite_requested', 'Telegram Invite Requested', 'telegram', 'Telegram chat invite awaiting approval', 1);
+  ('telegram.invite_requested', 'Telegram Invite Requested', 'telegram', 'Telegram chat invite awaiting approval', 1),
+  ('pdca.slice.requested', 'PDCA Slice Requested', 'pdca_queue_runner', 'Queue runner requested a PDCA execution slice', 1),
+  ('pdca.resume_requested', 'PDCA Resume Requested', 'pdca_queue_runner', 'Resume previously persisted PDCA slice', 1),
+  ('pdca.slice.persisted', 'PDCA Slice Persisted', 'handle_pdca_slice_request', 'PDCA slice checkpoint persisted', 1),
+  ('pdca.slice.completed', 'PDCA Slice Completed', 'handle_pdca_slice_request', 'PDCA task reached terminal completion', 1),
+  ('pdca.waiting_user', 'PDCA Waiting User', 'handle_pdca_slice_request', 'PDCA task needs user input', 1),
+  ('pdca.failed', 'PDCA Failed', 'handle_pdca_slice_request', 'PDCA slice failed', 1);
 
 INSERT OR IGNORE INTO timed_signals (
   id, trigger_at, timezone, status, fired_at, signal_type, payload, target, origin, correlation_id
@@ -274,6 +287,239 @@ SELECT
 FROM states s1
 JOIN signals sig ON sig.key = 'timed_signal.fired'
 JOIN states s2 ON s2.key = 'idle';
+
+INSERT OR IGNORE INTO transitions (
+  state_id,
+  signal_id,
+  next_state_id,
+  priority,
+  is_enabled,
+  guard_key,
+  action_key,
+  match_any_state,
+  notes
+)
+SELECT
+  s1.id,
+  sig.id,
+  s2.id,
+  5,
+  1,
+  NULL,
+  'handle_pdca_slice_request',
+  0,
+  'idle receives pdca slice request'
+FROM states s1
+JOIN signals sig ON sig.key = 'pdca.slice.requested'
+JOIN states s2 ON s2.key = 'rehydrating_slice'
+WHERE s1.key = 'idle';
+
+INSERT OR IGNORE INTO transitions (
+  state_id,
+  signal_id,
+  next_state_id,
+  priority,
+  is_enabled,
+  guard_key,
+  action_key,
+  match_any_state,
+  notes
+)
+SELECT
+  s1.id,
+  sig.id,
+  s2.id,
+  5,
+  1,
+  NULL,
+  'handle_pdca_slice_request',
+  0,
+  'resume request enters rehydration'
+FROM states s1
+JOIN signals sig ON sig.key = 'pdca.resume_requested'
+JOIN states s2 ON s2.key = 'rehydrating_slice'
+WHERE s1.key IN ('idle', 'waiting_user');
+
+INSERT OR IGNORE INTO transitions (
+  state_id,
+  signal_id,
+  next_state_id,
+  priority,
+  is_enabled,
+  guard_key,
+  action_key,
+  match_any_state,
+  notes
+)
+SELECT
+  s1.id,
+  sig.id,
+  s2.id,
+  1,
+  1,
+  NULL,
+  NULL,
+  0,
+  'rehydration succeeded; start executing'
+FROM states s1
+JOIN signals sig ON sig.key = 'action.succeeded'
+JOIN states s2 ON s2.key = 'executing'
+WHERE s1.key = 'rehydrating_slice';
+
+INSERT OR IGNORE INTO transitions (
+  state_id,
+  signal_id,
+  next_state_id,
+  priority,
+  is_enabled,
+  guard_key,
+  action_key,
+  match_any_state,
+  notes
+)
+SELECT
+  s1.id,
+  sig.id,
+  s2.id,
+  1,
+  1,
+  NULL,
+  NULL,
+  0,
+  'slice persisted; move to persistence state'
+FROM states s1
+JOIN signals sig ON sig.key = 'pdca.slice.persisted'
+JOIN states s2 ON s2.key = 'persisting_slice'
+WHERE s1.key = 'executing';
+
+INSERT OR IGNORE INTO transitions (
+  state_id,
+  signal_id,
+  next_state_id,
+  priority,
+  is_enabled,
+  guard_key,
+  action_key,
+  match_any_state,
+  notes
+)
+SELECT
+  s1.id,
+  sig.id,
+  s2.id,
+  1,
+  1,
+  NULL,
+  NULL,
+  0,
+  'slice completed terminally; return to idle'
+FROM states s1
+JOIN signals sig ON sig.key = 'pdca.slice.completed'
+JOIN states s2 ON s2.key = 'idle'
+WHERE s1.key = 'executing';
+
+INSERT OR IGNORE INTO transitions (
+  state_id,
+  signal_id,
+  next_state_id,
+  priority,
+  is_enabled,
+  guard_key,
+  action_key,
+  match_any_state,
+  notes
+)
+SELECT
+  s1.id,
+  sig.id,
+  s2.id,
+  1,
+  1,
+  NULL,
+  NULL,
+  0,
+  'task waiting for user'
+FROM states s1
+JOIN signals sig ON sig.key = 'pdca.waiting_user'
+JOIN states s2 ON s2.key = 'waiting_user'
+WHERE s1.key = 'executing';
+
+INSERT OR IGNORE INTO transitions (
+  state_id,
+  signal_id,
+  next_state_id,
+  priority,
+  is_enabled,
+  guard_key,
+  action_key,
+  match_any_state,
+  notes
+)
+SELECT
+  s1.id,
+  sig.id,
+  s2.id,
+  1,
+  1,
+  NULL,
+  NULL,
+  0,
+  'persisting succeeded; back to idle'
+FROM states s1
+JOIN signals sig ON sig.key = 'action.succeeded'
+JOIN states s2 ON s2.key = 'idle'
+WHERE s1.key = 'persisting_slice';
+
+INSERT OR IGNORE INTO transitions (
+  state_id,
+  signal_id,
+  next_state_id,
+  priority,
+  is_enabled,
+  guard_key,
+  action_key,
+  match_any_state,
+  notes
+)
+SELECT
+  s1.id,
+  sig.id,
+  s2.id,
+  1,
+  1,
+  NULL,
+  NULL,
+  0,
+  'incoming message resumes waiting pdca slice'
+FROM states s1
+JOIN signals sig ON sig.key IN ('telegram.message_received', 'cli.message_received', 'api.message_received')
+JOIN states s2 ON s2.key = 'rehydrating_slice'
+WHERE s1.key = 'waiting_user';
+
+INSERT OR IGNORE INTO transitions (
+  state_id,
+  signal_id,
+  next_state_id,
+  priority,
+  is_enabled,
+  guard_key,
+  action_key,
+  match_any_state,
+  notes
+)
+SELECT
+  s1.id,
+  sig.id,
+  s2.id,
+  1,
+  1,
+  NULL,
+  'handle_action_failure',
+  1,
+  'pdca explicit failure'
+FROM states s1
+JOIN signals sig ON sig.key = 'pdca.failed'
+JOIN states s2 ON s2.key = 'error';
 
 INSERT OR IGNORE INTO transitions (
   state_id,
