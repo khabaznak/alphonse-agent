@@ -33,6 +33,7 @@ __pycache__/
 env/
 venv/
 .venv/
+.venv_pptx/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/

@@ -61,8 +61,8 @@ from __future__ import annotations
 import threading
 import time
 
-from alphonse.nervous_system.senses.base import Sense, SignalSpec
-from alphonse.nervous_system.senses.bus import Bus, Signal
+from alphonse.agent.nervous_system.senses.base import Sense, SignalSpec
+from alphonse.agent.nervous_system.senses.bus import Bus, Signal
 
 
 class ExampleSense(Sense):
