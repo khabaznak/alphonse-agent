@@ -11,7 +11,6 @@ from alphonse.agent.observability.log_manager import get_component_logger
 from alphonse.agent.services.job_runner import JobRunner
 from alphonse.agent.services.scheduled_jobs_reconciler import ScheduledJobsReconciler
 from alphonse.agent.services.job_store import JobStore
-from alphonse.agent.services.scratchpad_service import ScratchpadService
 
 
 logger = get_component_logger("actions.handle_timed_signals")
@@ -165,7 +164,6 @@ def _execute_job_trigger(*, context: dict[str, Any], payload: dict[str, Any], in
     store_root = str(os.getenv("ALPHONSE_JOBS_ROOT") or "").strip() or None
     runner = JobRunner(
         job_store=JobStore(root=store_root),
-        scratchpad_service=ScratchpadService(),
         tick_seconds=45,
     )
 

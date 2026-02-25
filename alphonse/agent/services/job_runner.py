@@ -9,7 +9,6 @@ from typing import Any, Callable
 
 from alphonse.agent.services.job_models import JobExecution, JobSpec
 from alphonse.agent.services.job_store import JobStore, compute_next_run_at, compute_retry_time
-from alphonse.agent.services.scratchpad_service import ScratchpadService
 
 
 @dataclass(frozen=True)
@@ -23,14 +22,12 @@ class JobRunner:
         self,
         *,
         job_store: JobStore,
-        scratchpad_service: ScratchpadService,
         tool_registry: Any | None = None,
         brain_event_sink: Callable[[dict[str, Any]], None] | None = None,
         tick_seconds: float = 45.0,
         auto_execute_high_risk: bool = False,
     ) -> None:
         self._job_store = job_store
-        self._scratchpad = scratchpad_service
         self._tool_registry = tool_registry
         self._brain_event_sink = brain_event_sink
         self._tick_seconds = max(float(tick_seconds), 5.0)
@@ -92,7 +89,6 @@ class JobRunner:
             )
             self._job_store.append_execution(user_id=user_id, execution=execution)
             self._update_job_after_execution(user_id=user_id, job=job, now=current, success=True, retried=False)
-            self._append_log(user_id=user_id, job=job, execution=execution)
             return {"execution_id": execution.execution_id, "status": execution.status, "route": route.route}
 
         status = "ok"
@@ -136,7 +132,6 @@ class JobRunner:
         if status == "error":
             retried = self._apply_retry(user_id=user_id, job=job, now=current)
         self._update_job_after_execution(user_id=user_id, job=job, now=current, success=(status != "error"), retried=retried)
-        self._append_log(user_id=user_id, job=job, execution=execution)
         return {"execution_id": execution.execution_id, "status": execution.status, "route": route.route}
 
     def _run_loop(self) -> None:
@@ -219,19 +214,6 @@ class JobRunner:
             return False
         return False
 
-    def _append_log(self, *, user_id: str, job: JobSpec, execution: JobExecution) -> None:
-        log_doc = _ensure_jobs_log_doc(self._scratchpad, user_id=user_id)
-        text = (
-            f"job_id={job.job_id}\n"
-            f"name={job.name}\n"
-            f"execution_id={execution.execution_id}\n"
-            f"route={execution.route}\n"
-            f"status={execution.status}\n"
-            f"summary={execution.output_summary or ''}"
-        ).strip()
-        self._scratchpad.append_doc(user_id=user_id, doc_id=log_doc, text=text)
-
-
 def route_job(*, job: JobSpec, auto_execute_high_risk: bool = False) -> JobRouteDecision:
     safety = str(job.safety_level or "low").strip().lower()
     if job.requires_confirmation:
@@ -243,22 +225,6 @@ def route_job(*, job: JobSpec, auto_execute_high_risk: bool = False) -> JobRoute
     if job.payload_type in {"tool_call", "internal_event"}:
         return JobRouteDecision(route="unconscious", reason="deterministic_payload")
     return JobRouteDecision(route="brain", reason="unknown_payload")
-
-
-def _ensure_jobs_log_doc(scratchpad: ScratchpadService, *, user_id: str) -> str:
-    listing = scratchpad.list_docs(user_id=user_id, scope="daily", tag="jobs_log", limit=10)
-    docs = listing.get("docs") if isinstance(listing.get("docs"), list) else []
-    if docs:
-        first = docs[0]
-        return str(first.get("doc_id") or "")
-    created = scratchpad.create_doc(
-        user_id=user_id,
-        title="Jobs execution log",
-        scope="daily",
-        tags=["jobs_log"],
-        template="Append-only execution log for scheduled jobs.",
-    )
-    return str(created.get("doc_id") or "")
 
 
 def _brain_payload(*, job: JobSpec, user_id: str, current: datetime) -> dict[str, Any]:

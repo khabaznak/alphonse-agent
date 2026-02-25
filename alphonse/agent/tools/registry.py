@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from alphonse.agent.services import JobRunner, JobStore, ScratchpadService
+from alphonse.agent.services import JobRunner, JobStore
 from alphonse.agent.tools.clock import ClockTool
 from alphonse.agent.tools.job_tools import JobCreateTool
 from alphonse.agent.tools.job_tools import JobDeleteTool
@@ -13,12 +13,6 @@ from alphonse.agent.tools.job_tools import JobResumeTool
 from alphonse.agent.tools.job_tools import JobRunNowTool
 from alphonse.agent.tools.local_audio_output import LocalAudioOutputSpeakTool
 from alphonse.agent.tools.local_audio_output import LocalAudioOutputRenderTool
-from alphonse.agent.tools.scratchpad_tools import ScratchpadAppendTool
-from alphonse.agent.tools.scratchpad_tools import ScratchpadCreateTool
-from alphonse.agent.tools.scratchpad_tools import ScratchpadForkTool
-from alphonse.agent.tools.scratchpad_tools import ScratchpadListTool
-from alphonse.agent.tools.scratchpad_tools import ScratchpadReadTool
-from alphonse.agent.tools.scratchpad_tools import ScratchpadSearchTool
 from alphonse.agent.tools.scheduler_tool import SchedulerTool
 from alphonse.agent.tools.send_message_tool import SendMessageTool
 from alphonse.agent.tools.send_message_tool import SendVoiceNoteTool
@@ -72,17 +66,9 @@ def build_default_tool_registry() -> ToolRegistry:
     terminal_async = TerminalCommandSubmitTool()
     terminal_async_command_status = TerminalCommandStatusTool()
     ssh_terminal = SshTerminalTool()
-    scratchpad_service = ScratchpadService()
-    scratchpad_create = ScratchpadCreateTool(scratchpad_service)
-    scratchpad_append = ScratchpadAppendTool(scratchpad_service)
-    scratchpad_read = ScratchpadReadTool(scratchpad_service)
-    scratchpad_list = ScratchpadListTool(scratchpad_service)
-    scratchpad_search = ScratchpadSearchTool(scratchpad_service)
-    scratchpad_fork = ScratchpadForkTool(scratchpad_service)
     job_store = JobStore()
     job_runner = JobRunner(
         job_store=job_store,
-        scratchpad_service=scratchpad_service,
         tick_seconds=45,
     )
     job_create = JobCreateTool(job_store)
@@ -122,12 +108,6 @@ def build_default_tool_registry() -> ToolRegistry:
     registry.register("terminal_async", terminal_async)
     registry.register("terminal_async_command_status", terminal_async_command_status)
     registry.register("ssh_terminal", ssh_terminal)
-    registry.register("scratchpad_create", scratchpad_create)
-    registry.register("scratchpad_append", scratchpad_append)
-    registry.register("scratchpad_read", scratchpad_read)
-    registry.register("scratchpad_list", scratchpad_list)
-    registry.register("scratchpad_search", scratchpad_search)
-    registry.register("scratchpad_fork", scratchpad_fork)
     registry.register("job_create", job_create)
     registry.register("job_list", job_list)
     registry.register("job_pause", job_pause)

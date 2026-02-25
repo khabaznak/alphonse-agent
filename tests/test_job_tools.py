@@ -6,7 +6,6 @@ from pathlib import Path
 from alphonse.agent.nervous_system.senses.bus import Signal
 from alphonse.agent.services.job_runner import JobRunner
 from alphonse.agent.services.job_store import JobStore
-from alphonse.agent.services.scratchpad_service import ScratchpadService
 from alphonse.agent.tools.job_tools import JobCreateTool
 from alphonse.agent.tools.job_tools import JobDeleteTool
 from alphonse.agent.tools.job_tools import JobListTool
@@ -27,7 +26,6 @@ def test_job_tools_crud(tmp_path: Path) -> None:
     store = JobStore(root=tmp_path / "data" / "jobs")
     runner = JobRunner(
         job_store=store,
-        scratchpad_service=ScratchpadService(root=tmp_path / "data" / "scratchpad"),
         tick_seconds=5,
     )
     create = JobCreateTool(store)
@@ -79,7 +77,6 @@ def test_job_run_now_accepts_job_name_alias(tmp_path: Path) -> None:
     store = JobStore(root=tmp_path / "data" / "jobs")
     runner = JobRunner(
         job_store=store,
-        scratchpad_service=ScratchpadService(root=tmp_path / "data" / "scratchpad"),
         tick_seconds=5,
     )
     create = JobCreateTool(store)
@@ -109,7 +106,6 @@ def test_job_run_now_routes_prompt_jobs_to_bus_when_present(tmp_path: Path) -> N
     store = JobStore(root=tmp_path / "data" / "jobs")
     runner = JobRunner(
         job_store=store,
-        scratchpad_service=ScratchpadService(root=tmp_path / "data" / "scratchpad"),
         tick_seconds=5,
     )
     create = JobCreateTool(store)

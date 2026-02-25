@@ -194,7 +194,7 @@ def render_session_prompt_block(state: dict[str, Any]) -> str:
         (
             "SESSION_STATE is authoritative working memory for this session/day. "
             "Use it to answer follow-up questions about what happened earlier today, "
-            "last tools used, and scratchpad values. Do not ignore it."
+            "last tools used, and persisted notes/history values. Do not ignore it."
         ),
         f"- rev: {int(normalized.get('rev') or 0)}",
         f"- channels_seen: {', '.join(channels) if channels else '(none)'}",

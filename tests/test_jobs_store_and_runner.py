@@ -8,7 +8,6 @@ from alphonse.agent.nervous_system.migrate import apply_schema
 from alphonse.agent.services.job_models import JobSpec
 from alphonse.agent.services.job_runner import JobRunner, route_job
 from alphonse.agent.services.job_store import JobStore, compute_next_run_at
-from alphonse.agent.services.scratchpad_service import ScratchpadService
 
 
 class _FakeRegistry:
@@ -70,11 +69,9 @@ def test_job_store_create_and_persist(tmp_path: Path) -> None:
 
 def test_runner_executes_due_job(tmp_path: Path) -> None:
     store = JobStore(root=tmp_path / "data" / "jobs")
-    scratchpad = ScratchpadService(root=tmp_path / "data" / "scratchpad")
     registry = _FakeRegistry()
     runner = JobRunner(
         job_store=store,
-        scratchpad_service=scratchpad,
         tool_registry=registry,
         tick_seconds=5,
     )
@@ -100,8 +97,6 @@ def test_runner_executes_due_job(tmp_path: Path) -> None:
     assert registry.called is True
     executions = store.list_executions(user_id="u1", job_id=created.job_id, limit=5)
     assert executions
-    logs = scratchpad.list_docs(user_id="u1", scope="daily", tag="jobs_log", limit=5)["docs"]
-    assert logs
 
 
 def test_router_sends_to_brain_for_high_safety() -> None:
@@ -193,8 +188,7 @@ def test_job_runner_reschedules_job_trigger_timed_signal_after_run(tmp_path: Pat
     apply_schema(db_path)
     monkeypatch.setenv("NERVE_DB_PATH", str(db_path))
     store = JobStore(root=tmp_path / "data" / "jobs")
-    scratchpad = ScratchpadService(root=tmp_path / "data" / "scratchpad")
-    runner = JobRunner(job_store=store, scratchpad_service=scratchpad, tick_seconds=5)
+    runner = JobRunner(job_store=store, tick_seconds=5)
     created = store.create_job(
         user_id="u1",
         payload={

@@ -22,12 +22,6 @@ Runtime registrations are wired in:
 | `transcribe_telegram_audio` | `transcribe_telegram_audio(file_id, language?, sandbox_alias?)` | `telegram, audio, transcription` | Download+transcribe Telegram audio | Direct Telegram voice handling | `high / no` |
 | `analyze_telegram_image` | `analyze_telegram_image(file_id?, prompt?, sandbox_alias?)` | `telegram, image, analysis` | Download+analyze Telegram image | Telegram inbound image semantics | `high / no` |
 | `vision_analyze_image` | `vision_analyze_image(sandbox_alias, relative_path, prompt?)` | `vision, image, analysis` | Analyze sandbox image with dedicated vision model | Receipts, notes, package checks, object ID | `medium / no` |
-| `scratchpad_create` | `scratchpad_create(title, scope?, tags?, template?)` | `productivity, caregiving, memory` | Create scratchpad doc | Start durable notes/log/plans | `medium / no` |
-| `scratchpad_append` | `scratchpad_append(doc_id, text)` | `productivity, caregiving, memory` | Append timestamped block | Immutable progress updates | `medium / no` |
-| `scratchpad_read` | `scratchpad_read(doc_id, mode?, max_chars?)` | `productivity, caregiving, memory` | Read bounded scratchpad content | Inspect working context safely | `low / no` |
-| `scratchpad_list` | `scratchpad_list(scope?, tag?, limit?)` | `productivity, caregiving, memory` | List scratchpad docs | Find candidate docs | `low / no` |
-| `scratchpad_search` | `scratchpad_search(query, scope?, tags_any?, limit?)` | `productivity, caregiving, memory` | Search scratchpad docs | Keyword retrieval of prior notes | `low / no` |
-| `scratchpad_fork` | `scratchpad_fork(doc_id, new_title?)` | `productivity, caregiving, memory` | Fork scratchpad doc | Major rewrite preserving history | `medium / no` |
 | `job_create` | `job_create(name, description, schedule, payload_type, payload, timezone?, domain_tags?, safety_level?, requires_confirmation?, retry_policy?, idempotency?, enabled?)` | `automation, jobs, productivity` | Create scheduled job | Recurring/background automation | `medium / no` |
 | `job_list` | `job_list(enabled?, domain_tag?, limit?)` | `automation, jobs, productivity` | List jobs | Review configured automations | `low / no` |
 | `job_pause` | `job_pause(job_id)` | `automation, jobs, control` | Pause job | Temporarily disable automation | `medium / no` |

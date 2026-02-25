@@ -1,14 +1,26 @@
 # Available Tools
 
-The following tools are available for execution.
-Select the most appropriate one based on the user intent.
-{% for t in tools %}
+Select tools by capability group first, then choose the narrowest tool that solves the request.
+{% for g in groups %}
 
 ---
 
-## `{{ t.key }}`
+## {{ g.title }}
+
+**Choose this group when:** {{ g.when_to_choose }}
+
+**Avoid this group when:** {{ g.avoid_when }}
+
+{% for t in g.tools %}
+### `{{ t.key }}`
 
 **What it does:** {{ t.description }}
+
+**Use when:** {{ t.when_to_use if t.when_to_use else "Use when this is the most direct deterministic tool for the task." }}
+
+**Avoid when:** {% if t.safety_level in ["high", "critical"] %}A lower-risk tool can satisfy the same request.{% else %}Another tool provides a more specific or safer fit.{% endif %}
+
+**Returns:** {{ t.returns if t.returns else "tool-specific payload" }}
 
 **Domains:** {{ t.domain_tags | join(", ") if t.domain_tags else "—" }}
 
@@ -25,4 +37,4 @@ Select the most appropriate one based on the user intent.
 ```
 {% endif %}
 {% endfor %}
-
+{% endfor %}

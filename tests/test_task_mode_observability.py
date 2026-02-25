@@ -26,17 +26,20 @@ def test_log_task_event_emits_required_fields(caplog, tmp_path: Path, monkeypatc
             task_state=task_state,
             node="progress_critic_node",
             event="graph.state.updated",
-            tool="scratchpad_create",
+            tool="get_time",
         )
 
     record = next((r for r in caplog.records if "task_mode_event " in r.message), None)
     assert record is not None
-    raw = record.message.split("task_mode_event ", 1)[1]
+    raw_event = record.message.split("event ", 1)[1]
+    envelope = json.loads(raw_event)
+    message = str(envelope.get("message") or "")
+    raw = message.split("task_mode_event ", 1)[1]
     payload = json.loads(raw)
     for key in ("ts", "level", "event", "correlation_id", "channel", "user_id", "node", "cycle", "status"):
         assert key in payload
     assert payload["event"] == "graph.state.updated"
-    assert payload["tool"] == "scratchpad_create"
+    assert payload["tool"] == "get_time"
     with sqlite3.connect(resolve_observability_db_path()) as conn:
         row = conn.execute("SELECT COUNT(*) FROM trace_events").fetchone()
         assert row is not None

@@ -211,18 +211,6 @@ Example tool-call payload:
 }
 ```
 
-### Scratchpad Storage Root
-
-Scratchpad files can be pinned to a single workspace directory:
-
-```bash
-ALPHONSE_SCRATCHPAD_ROOT=/Users/alex/Code\ Projects/alphonse-workdirs/dumpster/scratchpad
-```
-
-If unset, Alphonse uses:
-1. sandbox alias `dumpster` + `/scratchpad` (when enabled)
-2. fallback `data/scratchpad`
-
 ### Jobs Storage Root
 
 Scheduled job files can be pinned to the same workdir strategy:

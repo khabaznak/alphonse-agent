@@ -10,9 +10,9 @@ from alphonse.agent.cognition.planning_engine import (
 def test_available_abilities_renders_full_markdown_catalog() -> None:
     rendered = format_available_abilities()
     assert rendered.startswith("# Available Tools")
-    assert "## `askQuestion`" in rendered
+    assert "### `askQuestion`" in rendered
     assert "one clear question" in rendered
-    assert "## `get_time`" in rendered
+    assert "### `get_time`" in rendered
 
 
 def test_available_ability_catalog_is_llm_focused() -> None:
@@ -44,12 +44,6 @@ def test_available_ability_catalog_has_minimal_tools_only() -> None:
         "askQuestion",
         "get_time",
         "create_reminder",
-        "scratchpad_create",
-        "scratchpad_append",
-        "scratchpad_read",
-        "scratchpad_list",
-        "scratchpad_search",
-        "scratchpad_fork",
         "job_create",
         "job_list",
         "job_pause",
@@ -70,4 +64,4 @@ def test_available_ability_catalog_has_minimal_tools_only() -> None:
 def test_available_ability_catalog_prompt_is_markdown() -> None:
     rendered = format_available_ability_catalog()
     assert rendered.startswith("# Available Tools")
-    assert "## `askQuestion`" in rendered
+    assert "### `askQuestion`" in rendered

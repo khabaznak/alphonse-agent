@@ -8,7 +8,6 @@ from typing import Any
 from alphonse.agent.nervous_system.paths import resolve_nervous_system_db_path
 from alphonse.agent.services.job_runner import JobRunner
 from alphonse.agent.services.job_store import JobStore, compute_next_run_at
-from alphonse.agent.services.scratchpad_service import ScratchpadService
 
 
 class ScheduledJobsReconciler:
@@ -44,7 +43,6 @@ class ScheduledJobsReconciler:
         max_jobs = _parse_int_env("JOB_RECONCILIATION_MAX_JOBS_PER_TICK", 25)
         runner = JobRunner(
             job_store=self._store,
-            scratchpad_service=ScratchpadService(),
             tick_seconds=45,
         )
         executed = 0
