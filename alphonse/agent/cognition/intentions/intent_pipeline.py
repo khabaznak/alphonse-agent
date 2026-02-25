@@ -13,6 +13,7 @@ from alphonse.agent.actions.handle_timed_signals import HandleTimedSignalsAction
 from alphonse.agent.actions.handle_action_failure import HandleActionFailure
 from alphonse.agent.actions.handle_timed_signals_query import HandleTimedSignalsQueryAction
 from alphonse.agent.actions.handle_telegram_invite import HandleTelegramInviteAction
+from alphonse.agent.actions.handle_pdca_slice_request import HandlePdcaSliceRequestAction
 from alphonse.agent.nervous_system.senses.bus import Bus, Signal
 from alphonse.agent.nervous_system.trace_store import write_trace
 from alphonse.agent.cognition.narration.outbound_narration_orchestrator import (
@@ -79,6 +80,7 @@ def build_default_pipeline_with_bus(bus: Bus) -> IntentPipeline:
     actions.register("handle_timed_signals_query", lambda _: HandleTimedSignalsQueryAction())
     actions.register("handle_action_failure", lambda _: HandleActionFailure())
     actions.register("handle_telegram_invite", lambda _: HandleTelegramInviteAction())
+    actions.register("handle_pdca_slice_request", lambda _: HandlePdcaSliceRequestAction())
     return IntentPipeline(
         actions=actions,
         bus=bus,

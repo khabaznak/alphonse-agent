@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from alphonse.agent.actions.base import Action
 from alphonse.agent.actions.models import ActionResult
+from alphonse.agent.nervous_system.pdca_queue_store import get_pdca_queue_metrics
 from alphonse.agent.runtime import get_runtime
 
 
@@ -12,6 +13,7 @@ class HandleStatusAction(Action):
         signal = context.get("signal")
         correlation_id = getattr(signal, "correlation_id", None) if signal else None
         snapshot = get_runtime().snapshot()
+        snapshot["pdca_metrics"] = get_pdca_queue_metrics()
         return ActionResult(
             intention_key="MESSAGE_READY",
             payload={

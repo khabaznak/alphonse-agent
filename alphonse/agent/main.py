@@ -25,6 +25,7 @@ from alphonse.agent.nervous_system.seed import apply_seed
 from alphonse.agent.cognition.brain_health import BrainUnavailable, require_brain_health
 from alphonse.agent.core.settings_store import init_db as init_settings_db
 from alphonse.agent.io import get_io_registry
+from alphonse.agent.services.pdca_queue_runner import PdcaQueueRunner
 
 
 def load_env() -> None:
@@ -80,6 +81,8 @@ def main() -> None:
 
     sense_manager = SenseManager(db_path=str(db_path), bus=bus)
     sense_manager.start()
+    pdca_queue_runner = PdcaQueueRunner(bus=bus)
+    pdca_queue_runner.start()
 
     api_server = _build_api_server()
     if api_server:
@@ -95,6 +98,7 @@ def main() -> None:
         heart.stop()
         bus.emit(Signal(type=SHUTDOWN, source="system"))
     finally:
+        pdca_queue_runner.stop()
         if api_server:
             api_server.stop()
         if relay_client:

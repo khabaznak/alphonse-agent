@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import uuid
+from datetime import datetime, timezone
 from typing import Any
 
 from alphonse.agent.actions.base import Action
@@ -23,6 +24,14 @@ from alphonse.agent.cortex.state_store import load_state, save_state
 from alphonse.agent.identity import store as identity_store
 from alphonse.agent.io import get_io_registry
 from alphonse.agent.nervous_system import users as users_store
+from alphonse.agent.nervous_system.pdca_queue_store import (
+    append_pdca_event,
+    get_latest_pdca_task_for_conversation,
+    update_pdca_task_metadata,
+    update_pdca_task_status,
+    upsert_pdca_task,
+)
+from alphonse.agent.nervous_system.senses.bus import Signal as BusSignal
 from alphonse.agent.observability.log_manager import get_component_logger
 from alphonse.agent.observability.log_manager import get_log_manager
 from alphonse.agent.session.day_state import build_next_session_state
@@ -105,6 +114,38 @@ class HandleIncomingMessageAction(Action):
         state["session_state"] = day_session
         state["recent_conversation_block"] = render_recent_conversation_block(day_session)
         has_live_transition_sink = _attach_transition_sink(state, incoming)
+        if _pdca_slicing_enabled():
+            task_id = _enqueue_pdca_slice(
+                context=context,
+                incoming=incoming,
+                state=state,
+                session_key=session_key,
+                session_user_id=session_user_id,
+                day_session=day_session,
+                payload=payload,
+                correlation_id=correlation_id,
+            )
+            updated_day_session = build_next_session_state(
+                previous=day_session,
+                channel=incoming.channel_type,
+                user_message=str(payload.get("text") or ""),
+                assistant_message="",
+                ability_state=None,
+                task_state=None,
+                planning_context=None,
+                pending_interaction={"type": "pdca_slice", "key": task_id} if task_id else None,
+            )
+            commit_session_state(updated_day_session)
+            _LOG.emit(
+                event="incoming_message.completed",
+                component="handle_incoming_message",
+                correlation_id=incoming.correlation_id,
+                channel=incoming.channel_type,
+                user_id=incoming.person_id,
+                status="done",
+                payload={"message": "enqueued_pdca_slice", "task_id": task_id},
+            )
+            return ActionResult(intention_key="NOOP", payload={"task_id": task_id} if task_id else {}, urgency=None)
 
         try:
             llm_client = build_llm_client()
@@ -581,6 +622,139 @@ def _attach_transition_sink(state: dict[str, object], incoming: IncomingContext)
         return False
     state["_transition_sink"] = lambda event: _emit_channel_transition_event(incoming, event)
     return True
+
+
+def _enqueue_pdca_slice(
+    *,
+    context: dict[str, Any],
+    incoming: IncomingContext,
+    state: dict[str, Any],
+    session_key: str,
+    session_user_id: str,
+    day_session: dict[str, Any],
+    payload: dict[str, Any],
+    correlation_id: str,
+) -> str:
+    now = _now_iso()
+    user_text = str(payload.get("text") or "").strip()
+    existing = get_latest_pdca_task_for_conversation(
+        conversation_key=session_key,
+        statuses=["waiting_user", "queued", "running", "paused"],
+    )
+    if isinstance(existing, dict):
+        task_id = str(existing.get("task_id") or "").strip()
+        metadata = dict(existing.get("metadata") or {}) if isinstance(existing.get("metadata"), dict) else {}
+        metadata["pending_user_text"] = user_text
+        metadata["last_user_message"] = user_text
+        metadata["last_user_channel"] = incoming.channel_type
+        metadata["last_user_target"] = incoming.address
+        metadata["last_enqueue_correlation_id"] = correlation_id
+        metadata["last_enqueued_at"] = now
+        update_pdca_task_metadata(task_id=task_id, metadata=metadata)
+        if str(existing.get("status") or "").strip().lower() in {"waiting_user", "paused"}:
+            update_pdca_task_status(task_id=task_id, status="queued")
+        append_pdca_event(
+            task_id=task_id,
+            event_type="incoming.user_message",
+            payload={"text": user_text, "channel": incoming.channel_type},
+            correlation_id=correlation_id,
+        )
+        _emit_pdca_request_signal(
+            context=context,
+            task_id=task_id,
+            owner_id=str(existing.get("owner_id") or session_user_id),
+            conversation_key=session_key,
+            text=user_text,
+            correlation_id=correlation_id,
+            resume=True,
+        )
+        return task_id
+
+    metadata = {
+        "pending_user_text": user_text,
+        "last_user_message": user_text,
+        "last_user_channel": incoming.channel_type,
+        "last_user_target": incoming.address,
+        "last_enqueue_correlation_id": correlation_id,
+        "state": {
+            "conversation_key": session_key,
+            "chat_id": session_key,
+            "channel_type": incoming.channel_type,
+            "channel_target": incoming.address,
+            "actor_person_id": incoming.person_id,
+            "locale": state.get("locale"),
+            "tone": state.get("tone"),
+            "address_style": state.get("address_style"),
+            "timezone": state.get("timezone"),
+        },
+    }
+    task_id = upsert_pdca_task(
+        {
+            "owner_id": session_user_id,
+            "conversation_key": session_key,
+            "session_id": str(day_session.get("session_id") or "").strip() or None,
+            "status": "queued",
+            "priority": 100,
+            "next_run_at": now,
+            "slice_cycles": 5,
+            "metadata": metadata,
+        }
+    )
+    append_pdca_event(
+        task_id=task_id,
+        event_type="incoming.task_created",
+        payload={"channel": incoming.channel_type, "target": incoming.address},
+        correlation_id=correlation_id,
+    )
+    _emit_pdca_request_signal(
+        context=context,
+        task_id=task_id,
+        owner_id=session_user_id,
+        conversation_key=session_key,
+        text=user_text,
+        correlation_id=correlation_id,
+        resume=False,
+    )
+    return task_id
+
+
+def _emit_pdca_request_signal(
+    *,
+    context: dict[str, Any],
+    task_id: str,
+    owner_id: str,
+    conversation_key: str,
+    text: str,
+    correlation_id: str,
+    resume: bool,
+) -> None:
+    bus = context.get("ctx")
+    if not hasattr(bus, "emit"):
+        return
+    event_type = "pdca.resume_requested" if resume else "pdca.slice.requested"
+    bus.emit(
+        BusSignal(
+            type=event_type,
+            payload={
+                "task_id": task_id,
+                "owner_id": owner_id,
+                "conversation_key": conversation_key,
+                "text": text,
+                "correlation_id": correlation_id,
+            },
+            source="handle_incoming_message",
+            correlation_id=correlation_id,
+        )
+    )
+
+
+def _pdca_slicing_enabled() -> bool:
+    value = str(os.getenv("ALPHONSE_PDCA_SLICING_ENABLED", "false")).strip().lower()
+    return value in {"1", "true", "yes", "on"}
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 
 def _resolve_assistant_session_message(*, reply_text: str, plans: list[Any]) -> str:
