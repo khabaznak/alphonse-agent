@@ -9,6 +9,7 @@ from alphonse.agent.cortex.task_mode.pdca import act_node
 from alphonse.agent.cortex.task_mode.pdca import build_next_step_node
 from alphonse.agent.cortex.task_mode.pdca import execute_step_node
 from alphonse.agent.cortex.task_mode.pdca import route_after_act
+from alphonse.agent.cortex.task_mode.pdca import route_after_next_step
 from alphonse.agent.cortex.task_mode.pdca import route_after_progress_critic
 from alphonse.agent.cortex.task_mode.pdca import route_after_validate_step
 from alphonse.agent.cortex.task_mode.pdca import progress_critic_node
@@ -509,7 +510,7 @@ def test_pdca_execute_maps_typeerror_to_structured_tool_failure() -> None:
     assert error.get("code") == "invalid_tool_arguments"
 
 
-def test_pdca_parse_failure_falls_back_to_waiting_user() -> None:
+def test_pdca_parse_failure_degrades_to_failed() -> None:
     tool_registry = build_default_tool_registry()
     next_step = build_next_step_node(tool_registry=tool_registry)
     llm = _QueuedLlm(["not-json output"])
@@ -526,13 +527,55 @@ def test_pdca_parse_failure_falls_back_to_waiting_user() -> None:
     state = _apply(state, next_step(state))
     next_state = state["task_state"]
     assert isinstance(next_state, dict)
-    assert next_state.get("status") == "waiting_user"
-    assert next_state.get("next_user_question") == "I can help—what task would you like me to do?"
+    assert next_state.get("status") == "failed"
+    assert next_state.get("next_user_question") is None
+    last_error = next_state.get("last_validation_error")
+    assert isinstance(last_error, dict)
+    assert last_error.get("reason") == "next_step_parse_failed"
+    assert int(last_error.get("attempts") or 0) == 2
+    assert route_after_next_step({"correlation_id": "corr-pdca-parse-fail", "task_state": next_state}) == "respond_node"
     trace = next_state.get("trace")
     assert isinstance(trace, dict)
     recent = trace.get("recent")
     assert isinstance(recent, list)
     assert any(isinstance(event, dict) and event.get("type") == "parse_failed" for event in recent)
+
+
+def test_pdca_parse_failure_retry_can_recover_with_valid_json() -> None:
+    tool_registry = build_default_tool_registry()
+    next_step = build_next_step_node(tool_registry=tool_registry)
+    llm = _QueuedLlm(
+        [
+            "not-json output",
+            '{"kind":"call_tool","tool_name":"job_list","args":{"limit":10}}',
+        ]
+    )
+
+    task_state = build_default_task_state()
+    task_state["acceptance_criteria"] = ["done when requested outcome is produced"]
+    task_state["goal"] = "do something"
+    state: dict[str, object] = {
+        "correlation_id": "corr-pdca-parse-repair-success",
+        "_llm_client": llm,
+        "task_state": task_state,
+    }
+
+    state = _apply(state, next_step(state))
+    next_state = state["task_state"]
+    assert isinstance(next_state, dict)
+    assert next_state.get("status") != "failed"
+    assert next_state.get("next_user_question") is None
+    plan = next_state.get("plan")
+    assert isinstance(plan, dict)
+    steps = plan.get("steps")
+    assert isinstance(steps, list)
+    assert steps
+    first = steps[0]
+    assert isinstance(first, dict)
+    proposal = first.get("proposal")
+    assert isinstance(proposal, dict)
+    assert proposal.get("kind") == "call_tool"
+    assert proposal.get("tool_name") == "job_list"
 
 
 def test_pdca_derives_acceptance_criteria_from_next_step_proposal() -> None:

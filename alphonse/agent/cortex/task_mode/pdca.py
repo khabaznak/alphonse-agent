@@ -25,17 +25,23 @@ _NEXT_STEP_DEVELOPER_PROMPT = (
     "- Treat `RECENT CONVERSATION` as authoritative context for this session/day.\n"
     "- Use `RECENT CONVERSATION` to resolve follow-up references before asking the user again.\n"
     "- Choose one action kind: ask_user, call_tool, or finish.\n"
-    "- Prefer tools that directly satisfy the user goal in one step.\n"
-    "- Prefer direct-goal tools over informational tools.\n"
-    "- Use informational tools only as prerequisites for missing required arguments of a direct tool.\n"
+    "- Optimize for highest probability of progress on the goal, not novelty.\n"
+    "- If the most recent step failed and remediation is possible, do NOT switch tools yet: remediate deterministically and then retry the same tool in the next cycle.\n"
+    "- Prefer deterministic remediation over guessing: fix missing dependencies (e.g., ModuleNotFoundError), missing binaries/commands, invalid cwd/path, bad args/schema, or auth setup when possible.\n"
+    "- After a tool failure, first diagnose root cause from error_code/error_message before changing strategy.\n"
+    "- Repair playbook (apply when relevant):\n"
+    "  - ModuleNotFoundError/ImportError -> install the missing package, then retry.\n"
+    "  - command not found -> install the binary or adjust PATH/cwd, then retry.\n"
+    "  - No such file/directory -> correct path/cwd or create required file/dir, then retry.\n"
+    "  - Permission denied/Unauthorized -> request the minimal secret/permission needed, then retry.\n"
+    "  - Timeout/Connection refused -> verify host/port/network and retry/backoff.\n"
+    "  - invalid_tool_arguments/schema -> fix args to match the tool schema, then retry.\n"
+    "- Ask the user only when blocked by missing external secrets/permissions or after repeated equivalent failures despite remediation.\n"
+    "- When blocked, state the exact blocker and the minimum input needed from the user.\n"
+    "- Prefer direct-goal tools over informational tools. Use informational tools only as prerequisites for missing required arguments of a direct tool.\n"
     "- If a tool accepts a natural time expression (e.g., 'in 1 minute'), pass it through; do NOT call get_time just to interpret it.\n"
     "- Call get_time only when a tool explicitly requires an absolute timestamp and you must compute it.\n"
     "- Prefer actions that reduce uncertainty early.\n"
-    "- After a tool failure, first diagnose root cause from error_code/error_message before changing strategy.\n"
-    "- Prefer deterministic remediation over guessing: fix missing dependencies, missing binaries, invalid cwd/path, bad args, or auth setup when possible.\n"
-    "- If remediation can be executed with available tools/policy, do remediation + retry instead of asking the user.\n"
-    "- Ask the user only when blocked by missing external secrets/permissions or after repeated equivalent failures despite remediation.\n"
-    "- When blocked, state the exact blocker and the minimum input needed from the user.\n"
     "- Use only tools listed in the tool menu.\n"
     "- If required info is missing, ask a concise clarifying question.\n"
     "- Review acceptance criteria from working state.\n"
@@ -45,9 +51,9 @@ _NEXT_STEP_DEVELOPER_PROMPT = (
     "- Keep user-facing text concise and natural."
 )
 
-_PARSE_FALLBACK_QUESTION = "I can help—what task would you like me to do?"
 _PROGRESS_CHECK_CYCLE_THRESHOLD = 25
 _WIP_EMIT_EVERY_CYCLES = 5
+_NEXT_STEP_MAX_ATTEMPTS = 2
 
 # Strict JSON Schema for NextStepProposal structured output
 _NEXT_STEP_SCHEMA: dict[str, Any] = {
@@ -105,12 +111,29 @@ def build_next_step_node(*, tool_registry: Any) -> Callable[[dict[str, Any]], di
         task_state["pdca_phase"] = "plan"
         correlation_id = _correlation_id(state)
         llm_client = state.get("_llm_client")
-        proposal, parse_failed = _propose_next_step_with_llm(
+        proposal, parse_failed, diagnostics = _propose_next_step_with_llm(
             llm_client=llm_client,
             state=state,
             task_state=task_state,
             tool_registry=tool_registry,
         )
+        if diagnostics:
+            for item in diagnostics:
+                if not isinstance(item, dict):
+                    continue
+                log_task_event(
+                    logger=logger,
+                    state=state,
+                    task_state=task_state,
+                    node="next_step_node",
+                    event="graph.next_step.parse_invalid",
+                    attempt=int(item.get("attempt") or 0),
+                    parse_error_type=str(item.get("parse_error_type") or ""),
+                    validation_errors=item.get("validation_errors"),
+                    raw_output_preview=str(item.get("raw_output_preview") or ""),
+                    provider=str(item.get("provider") or ""),
+                    model=str(item.get("model") or ""),
+                )
         if not _has_acceptance_criteria(task_state):
             proposed_criteria = _normalize_acceptance_criteria_values(
                 proposal.get("acceptance_criteria") if isinstance(proposal, dict) else None
@@ -126,6 +149,45 @@ def build_next_step_node(*, tool_registry: Any) -> Callable[[dict[str, Any]], di
                     },
                 )
 
+        if parse_failed:
+            task_state["status"] = "failed"
+            task_state["next_user_question"] = None
+            provider, model = _provider_model_from_state(state)
+            attempts = int((diagnostics[-1] if diagnostics else {}).get("attempt") or _NEXT_STEP_MAX_ATTEMPTS)
+            task_state["last_validation_error"] = {
+                "reason": "next_step_parse_failed",
+                "attempts": attempts,
+                "schema": "NextStepProposal",
+                "provider": provider,
+                "model": model,
+            }
+            _append_trace_event(
+                task_state,
+                {
+                    "type": "parse_failed",
+                    "summary": "Next-step parse failed; task paused as internal degradation.",
+                    "correlation_id": _correlation_id(state),
+                },
+            )
+            log_task_event(
+                logger=logger,
+                state=state,
+                task_state=task_state,
+                node="next_step_node",
+                event="graph.next_step.degraded",
+                reason="next_step_parse_failed",
+                attempts=attempts,
+                provider=provider,
+                model=model,
+            )
+            logger.warning(
+                "task_mode next_step degraded correlation_id=%s reason=next_step_parse_failed attempts=%s provider=%s model=%s",
+                correlation_id,
+                attempts,
+                provider,
+                model,
+            )
+            return {"task_state": task_state}
         step_id = _next_step_id(task_state)
         step_entry = {
             "step_id": step_id,
@@ -137,17 +199,6 @@ def build_next_step_node(*, tool_registry: Any) -> Callable[[dict[str, Any]], di
         plan["current_step_id"] = step_id
         task_state["next_user_question"] = None
         task_state["last_validation_error"] = None
-        if parse_failed:
-            task_state["status"] = "waiting_user"
-            task_state["next_user_question"] = _PARSE_FALLBACK_QUESTION
-            _append_trace_event(
-                task_state,
-                {
-                    "type": "parse_failed",
-                    "summary": "Next-step parse failed; using safe ask_user fallback.",
-                    "correlation_id": _correlation_id(state),
-                },
-            )
         _append_trace_event(
             task_state,
             {
@@ -175,8 +226,6 @@ def build_next_step_node(*, tool_registry: Any) -> Callable[[dict[str, Any]], di
             parse_failed=parse_failed,
             summary=_proposal_summary(proposal),
         )
-        if parse_failed:
-            return {"task_state": task_state}
         return {"task_state": task_state}
 
     return _node
@@ -184,9 +233,9 @@ def build_next_step_node(*, tool_registry: Any) -> Callable[[dict[str, Any]], di
 
 def route_after_next_step(state: dict[str, Any]) -> str:
     task_state = state.get("task_state")
-    if isinstance(task_state, dict) and str(task_state.get("status") or "") == "waiting_user":
+    if isinstance(task_state, dict) and str(task_state.get("status") or "").strip().lower() in {"waiting_user", "failed"}:
         logger.info(
-            "task_mode route_after_next_step correlation_id=%s route=respond_node reason=waiting_user",
+            "task_mode route_after_next_step correlation_id=%s route=respond_node reason=terminal_status",
             _correlation_id(state),
         )
         return "respond_node"
@@ -583,18 +632,32 @@ def _propose_next_step_with_llm(
     state: dict[str, Any],
     task_state: dict[str, Any],
     tool_registry: Any,
-) -> tuple[NextStepProposal, bool]:
+) -> tuple[NextStepProposal, bool, list[dict[str, Any]]]:
     goal = str(task_state.get("goal") or "").strip()
+    diagnostics: list[dict[str, Any]] = []
     if not goal:
         question = _build_goal_clarification_question(state=state, llm_client=llm_client)
-        return {"kind": "ask_user", "question": question}, False
+        return {"kind": "ask_user", "question": question}, False, diagnostics
 
     tool_menu = _build_tool_menu(tool_registry)
     working_view = _build_working_state_view(task_state)
+    # Optional injected guidance blocks (kept short; can be expanded later).
+    injected_blocks: list[str] = []
+    philosophy = str(state.get("philosophy_block") or "").strip()
+    soul = str(state.get("soul_block") or "").strip()
+    agents = str(state.get("agents_block") or "").strip()
+    if philosophy:
+        injected_blocks.append("## Philosophy\n" + philosophy)
+    if soul:
+        injected_blocks.append("## SOUL\n" + soul)
+    if agents:
+        injected_blocks.append("## AGENTS\n" + agents)
+    injected_guidance = "\n\n".join(injected_blocks).strip()
     user_prompt_body = (
         "## Tool Menu\n"
         f"{tool_menu}\n\n"
-        "## Working State View\n"
+        + (f"{injected_guidance}\n\n" if injected_guidance else "")
+        + "## Working State View\n"
         f"{json.dumps(working_view, ensure_ascii=False)}\n\n"
         "## Output Contract\n"
         "Return ONLY the JSON object that matches the schema. No markdown, no extra text.\n"
@@ -621,22 +684,61 @@ def _propose_next_step_with_llm(
     if structured_supported:
         normalized = _normalize_next_step_proposal(parsed_structured)
         if normalized is not None:
-            return normalized, False
-        logger.info("task_mode next_step structured parse failure correlation_id=%s", _correlation_id(state))
-        return {"kind": "ask_user", "question": _PARSE_FALLBACK_QUESTION}, True
+            return normalized, False, diagnostics
+        diagnostics.append(
+            _build_parse_diagnostic(
+                state=state,
+                attempt=1,
+                parse_error_type="structured_payload_invalid",
+                validation_errors=["structured_output_failed_schema_validation"],
+                raw_output=parsed_structured,
+            )
+        )
+    else:
+        raw = _call_llm_text(
+            llm_client=llm_client,
+            system_prompt=_NEXT_STEP_DEVELOPER_PROMPT,
+            user_prompt=user_prompt,
+        )
+        parsed = _parse_json_payload(raw)
+        normalized = _normalize_next_step_proposal(parsed)
+        if normalized is not None:
+            return normalized, False, diagnostics
+        diagnostics.append(
+            _build_parse_diagnostic(
+                state=state,
+                attempt=1,
+                parse_error_type="text_payload_invalid",
+                validation_errors=["text_output_not_valid_next_step_json"],
+                raw_output=raw,
+            )
+        )
 
-    raw = _call_llm_text(
+    repair_prompt = _build_next_step_repair_prompt(
+        original_user_prompt=user_prompt,
+        latest_diagnostic=diagnostics[-1] if diagnostics else {},
+    )
+    repair_raw = _call_llm_text(
         llm_client=llm_client,
         system_prompt=_NEXT_STEP_DEVELOPER_PROMPT,
-        user_prompt=user_prompt,
+        user_prompt=repair_prompt,
     )
-    parsed = _parse_json_payload(raw)
-    normalized = _normalize_next_step_proposal(parsed)
-    if normalized is not None:
-        return normalized, False
+    repair_parsed = _parse_json_payload(repair_raw)
+    repaired = _normalize_next_step_proposal(repair_parsed)
+    if repaired is not None:
+        return repaired, False, diagnostics
+    diagnostics.append(
+        _build_parse_diagnostic(
+            state=state,
+            attempt=2,
+            parse_error_type="repair_payload_invalid",
+            validation_errors=["repair_output_not_valid_next_step_json"],
+            raw_output=repair_raw,
+        )
+    )
 
     logger.info("task_mode next_step parse failure correlation_id=%s", _correlation_id(state))
-    return {"kind": "ask_user", "question": _PARSE_FALLBACK_QUESTION}, True
+    return {"kind": "ask_user", "question": ""}, True, diagnostics
 
 
 def _build_goal_clarification_question(*, state: dict[str, Any], llm_client: Any) -> str:
@@ -664,6 +766,70 @@ def _build_goal_clarification_question(*, state: dict[str, Any], llm_client: Any
     if latest:
         return f"To help correctly, what exact task should I do with: \"{latest}\"?"
     return "What exact task should I execute now?"
+
+
+def _provider_model_from_state(state: dict[str, Any]) -> tuple[str | None, str | None]:
+    llm_client = state.get("_llm_client")
+    provider = str(getattr(llm_client, "provider", "") or "").strip() or None
+    model = str(getattr(llm_client, "model", "") or "").strip() or None
+    return provider, model
+
+
+def _build_parse_diagnostic(
+    *,
+    state: dict[str, Any],
+    attempt: int,
+    parse_error_type: str,
+    validation_errors: list[str],
+    raw_output: Any,
+) -> dict[str, Any]:
+    provider, model = _provider_model_from_state(state)
+    preview = _truncate_text(_redact_secrets(str(raw_output or "")), limit=280)
+    return {
+        "attempt": int(attempt),
+        "parse_error_type": str(parse_error_type or "next_step_parse_invalid"),
+        "validation_errors": validation_errors,
+        "raw_output_preview": preview,
+        "provider": provider,
+        "model": model,
+    }
+
+
+def _build_next_step_repair_prompt(*, original_user_prompt: str, latest_diagnostic: dict[str, Any]) -> str:
+    parse_error_type = str((latest_diagnostic or {}).get("parse_error_type") or "").strip()
+    validation_errors = latest_diagnostic.get("validation_errors")
+    lines = []
+    if isinstance(validation_errors, list):
+        lines = [f"- {str(item)}" for item in validation_errors if str(item).strip()]
+    if not lines:
+        lines = ["- next_step_output_invalid"]
+    diagnostic_block = (
+        "## Repair Feedback\n"
+        "Your previous output did not satisfy the required JSON contract.\n"
+        f"- parse_error_type: {parse_error_type or 'unknown'}\n"
+        "Validation errors:\n"
+        f"{chr(10).join(lines)}\n"
+        "Return ONLY valid JSON matching the Output Contract."
+    )
+    return f"{original_user_prompt}\n\n{diagnostic_block}".strip()
+
+
+def _redact_secrets(text: str) -> str:
+    value = str(text or "")
+    lowered = value.lower()
+    redacted = value
+    secret_tokens = ("password", "pass", "token", "api_key", "secret")
+    if any(token in lowered for token in secret_tokens):
+        for token in secret_tokens:
+            redacted = redacted.replace(token, "[redacted_key]")
+    return redacted
+
+
+def _truncate_text(text: str, *, limit: int) -> str:
+    value = str(text or "")
+    if len(value) <= limit:
+        return value
+    return value[:limit]
 
 
 def _build_working_state_view(task_state: dict[str, Any]) -> dict[str, Any]:
