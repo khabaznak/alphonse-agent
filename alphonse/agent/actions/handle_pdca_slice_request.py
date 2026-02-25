@@ -12,6 +12,7 @@ from alphonse.agent.cortex.state_store import load_state, save_state
 from alphonse.agent.nervous_system.pdca_queue_store import (
     append_pdca_event,
     get_pdca_task,
+    has_pdca_event,
     load_pdca_checkpoint,
     save_pdca_checkpoint,
     upsert_pdca_task,
@@ -41,6 +42,23 @@ class HandlePdcaSliceRequestAction(Action):
         task = get_pdca_task(task_id)
         if not isinstance(task, dict):
             logger.warning("HandlePdcaSliceRequestAction skipped reason=task_not_found task_id=%s", task_id)
+            return ActionResult(intention_key="NOOP", payload={}, urgency=None)
+        if correlation_id and has_pdca_event(
+            task_id=task_id,
+            event_type="slice.request.signal_received",
+            correlation_id=correlation_id,
+        ):
+            append_pdca_event(
+                task_id=task_id,
+                event_type="slice.request.duplicate_ignored",
+                payload={"source": getattr(signal, "source", None)},
+                correlation_id=correlation_id,
+            )
+            logger.info(
+                "HandlePdcaSliceRequestAction duplicate ignored task_id=%s correlation_id=%s",
+                task_id,
+                correlation_id,
+            )
             return ActionResult(intention_key="NOOP", payload={}, urgency=None)
 
         updated = update_pdca_task_status(task_id=task_id, status="running")

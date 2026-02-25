@@ -76,3 +76,46 @@ def test_pdca_queue_runner_noop_when_disabled(tmp_path: Path, monkeypatch: pytes
     assert runner.enabled is False
     assert runner.run_once() == 0
     assert bus.get(timeout=0.05) is None
+
+
+def test_pdca_queue_runner_avoids_double_dispatch_under_contention(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db_path = tmp_path / "nerve-db"
+    monkeypatch.setenv("NERVE_DB_PATH", str(db_path))
+    apply_schema(db_path)
+
+    now = datetime.now(timezone.utc)
+    _ = upsert_pdca_task(
+        {
+            "owner_id": "owner-3",
+            "conversation_key": "chat-3",
+            "status": "queued",
+            "next_run_at": (now - timedelta(seconds=1)).isoformat(),
+        }
+    )
+
+    bus = Bus()
+    runner_a = PdcaQueueRunner(
+        bus=bus,
+        enabled=True,
+        lease_seconds=30,
+        dispatch_cooldown_seconds=60,
+        worker_id="worker-a",
+    )
+    runner_b = PdcaQueueRunner(
+        bus=bus,
+        enabled=True,
+        lease_seconds=30,
+        dispatch_cooldown_seconds=60,
+        worker_id="worker-b",
+    )
+    first = runner_a.run_once(now=now.isoformat())
+    second = runner_b.run_once(now=now.isoformat())
+    assert first == 1
+    assert second == 0
+    signal = bus.get(timeout=0.1)
+    assert signal is not None
+    assert signal.type == "pdca.slice.requested"
+    assert bus.get(timeout=0.05) is None

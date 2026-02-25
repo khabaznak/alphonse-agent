@@ -116,6 +116,55 @@ def get_pdca_task(task_id: str) -> dict[str, Any] | None:
     return _row_to_task(row) if row else None
 
 
+def get_latest_pdca_task_for_conversation(
+    *,
+    conversation_key: str,
+    statuses: list[str] | None = None,
+) -> dict[str, Any] | None:
+    key = str(conversation_key or "").strip()
+    if not key:
+        return None
+    status_values = [str(item or "").strip().lower() for item in (statuses or list(_ACTIVE_TASK_STATUSES))]
+    status_values = [item for item in status_values if item in _ALL_TASK_STATUSES]
+    if not status_values:
+        status_values = list(_ACTIVE_TASK_STATUSES)
+    placeholders = ",".join("?" for _ in status_values)
+    query = (
+        """
+            SELECT
+              task_id,
+              owner_id,
+              conversation_key,
+              session_id,
+              status,
+              priority,
+              next_run_at,
+              lease_until,
+              worker_id,
+              slice_cycles,
+              max_cycles,
+              max_runtime_seconds,
+              token_budget_remaining,
+              failure_streak,
+              last_error,
+              metadata_json,
+              created_at,
+              updated_at
+            FROM pdca_tasks
+            WHERE conversation_key = ?
+              AND status IN ("""
+        + placeholders
+        + """)
+            ORDER BY updated_at DESC
+            LIMIT 1
+        """
+    )
+    params: list[Any] = [key, *status_values]
+    with _connect() as conn:
+        row = conn.execute(query, tuple(params)).fetchone()
+    return _row_to_task(row) if row else None
+
+
 def list_runnable_pdca_tasks(*, now: str | None = None, limit: int = 20) -> list[dict[str, Any]]:
     now_text = str(now or _now_iso()).strip()
     safe_limit = _as_int(limit, default=20, minimum=1)
@@ -212,6 +261,24 @@ def update_pdca_task_status(*, task_id: str, status: str, last_error: str | None
             WHERE task_id = ?
             """,
             (normalized, _none_if_blank(last_error), _now_iso(), task_key),
+        )
+        conn.commit()
+    return cur.rowcount > 0
+
+
+def update_pdca_task_metadata(*, task_id: str, metadata: dict[str, Any]) -> bool:
+    task_key = str(task_id or "").strip()
+    if not task_key:
+        return False
+    payload = metadata if isinstance(metadata, dict) else {}
+    with _connect() as conn:
+        cur = conn.execute(
+            """
+            UPDATE pdca_tasks
+            SET metadata_json = ?, updated_at = ?
+            WHERE task_id = ?
+            """,
+            (json.dumps(payload, ensure_ascii=False), _now_iso(), task_key),
         )
         conn.commit()
     return cur.rowcount > 0
@@ -356,6 +423,29 @@ def list_pdca_events(*, task_id: str, limit: int = 100) -> list[dict[str, Any]]:
         }
         for row in rows
     ]
+
+
+def has_pdca_event(
+    *,
+    task_id: str,
+    event_type: str,
+    correlation_id: str | None = None,
+) -> bool:
+    task_key = str(task_id or "").strip()
+    event_key = str(event_type or "").strip()
+    if not task_key or not event_key:
+        return False
+    query = (
+        "SELECT 1 FROM pdca_events WHERE task_id = ? AND event_type = ? "
+        + ("AND correlation_id = ? " if correlation_id else "")
+        + "LIMIT 1"
+    )
+    params: list[Any] = [task_key, event_key]
+    if correlation_id:
+        params.append(str(correlation_id or "").strip())
+    with _connect() as conn:
+        row = conn.execute(query, tuple(params)).fetchone()
+    return row is not None
 
 
 def _connect() -> sqlite3.Connection:

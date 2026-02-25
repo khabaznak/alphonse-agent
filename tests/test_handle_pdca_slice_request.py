@@ -116,3 +116,57 @@ def test_handle_pdca_slice_request_without_task_id_is_noop() -> None:
     )
     result = action.execute({"signal": signal})
     assert result.intention_key == "NOOP"
+
+
+def test_handle_pdca_slice_request_ignores_duplicate_signal_correlation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db_path = tmp_path / "nerve-db"
+    monkeypatch.setenv("NERVE_DB_PATH", str(db_path))
+    monkeypatch.setenv("ALPHONSE_PDCA_QUEUE_DISPATCH_COOLDOWN_SECONDS", "10")
+    apply_schema(db_path)
+
+    task_id = upsert_pdca_task(
+        {
+            "owner_id": "owner-1",
+            "conversation_key": "chat-dup",
+            "status": "queued",
+            "metadata": {"pending_user_text": "Execute this"},
+        }
+    )
+
+    class _FakeResult:
+        reply_text = ""
+        plans = []
+        cognition_state = {"task_state": {"status": "running", "cycle_index": 1}}
+        meta = {}
+
+    class _FakeGraph:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def invoke(self, state, text, *, llm_client=None):  # noqa: ANN001
+            _ = (state, text, llm_client)
+            self.calls += 1
+            return _FakeResult()
+
+    fake_graph = _FakeGraph()
+    monkeypatch.setattr(hpsr, "_CORTEX_GRAPH", fake_graph)
+    monkeypatch.setattr(hpsr, "build_llm_client", lambda: None)
+
+    action = HandlePdcaSliceRequestAction()
+    signal = Signal(
+        type="pdca.slice.requested",
+        payload={"task_id": task_id, "correlation_id": "dup-cid"},
+        source="pdca_queue_runner",
+    )
+    _ = action.execute({"signal": signal, "ctx": None})
+    _ = action.execute({"signal": signal, "ctx": None})
+
+    assert fake_graph.calls == 1
+    events = list_pdca_events(task_id=task_id, limit=50)
+    received = [e for e in events if e["event_type"] == "slice.request.signal_received" and e["correlation_id"] == "dup-cid"]
+    ignored = [e for e in events if e["event_type"] == "slice.request.duplicate_ignored" and e["correlation_id"] == "dup-cid"]
+    assert len(received) == 1
+    assert len(ignored) == 1
