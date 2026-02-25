@@ -94,3 +94,38 @@ Audit of potentially duplicated, legacy, or placeholder directories under `/User
 2. Decide whether empty interface placeholders stay (roadmap) or go (clean tree).
 3. Keep wrappers and legacy brain modules until a migration RFC exists.
 4. Add `.venv_pptx/` ignore rule.
+
+## Remaining Work Plan
+
+### Phase A: Compatibility shim decision (`alphonse/tools`)
+1. Inventory all invocations of `python -m alphonse.tools.local_audio_output` in docs, scripts, and automations.
+2. Define target entrypoint:
+   - Option A: keep shim permanently as stable compatibility API.
+   - Option B: migrate to `python -m alphonse.agent.tools.local_audio_output` or dedicated script under `scripts/`.
+3. If migrating, add a deprecation window:
+   - Keep shim with warning logs for one release cycle.
+   - Update docs/CI/examples first.
+4. Remove shim only after usage reaches zero.
+
+### Phase B: `brain` -> `agent/cognition` consolidation plan
+1. Write an RFC that defines final ownership boundaries:
+   - Which modules remain in `alphonse/brain`.
+   - Which modules move into `alphonse/agent/cognition`.
+2. Build dependency map for current `alphonse/brain/*` imports (especially `alphonse/brain/orchestrator.py` and LAN integration call sites).
+3. Execute migration in small slices:
+   - Move one subdomain at a time.
+   - Add temporary compatibility imports where needed.
+   - Keep behavior parity with tests per slice.
+4. Add explicit “cutover complete” criteria:
+   - No runtime imports from deprecated `alphonse/brain/*` paths.
+   - All docs and tests updated.
+5. Only then remove deprecated `brain` paths.
+
+### Phase C: Runtime hygiene tooling
+1. Add a small maintenance command (or make target) to clear local runtime artifacts safely:
+   - `data/*` transient files
+   - optional local DB snapshots/backups older than retention threshold
+2. Document retention policy:
+   - what is safe to delete
+   - what should be preserved for debugging/auditing
+3. Ensure maintenance commands never touch source files and are opt-in.
