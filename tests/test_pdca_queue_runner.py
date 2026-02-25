@@ -225,3 +225,106 @@ def test_pdca_queue_runner_rotates_owners_with_equal_priority(
     assert signal_1 is not None and signal_2 is not None
     assert signal_1.payload.get("task_id") == task_a1
     assert signal_2.payload.get("task_id") == task_b1
+
+
+def test_pdca_queue_runner_prioritizes_interactive_tasks_with_boost(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db_path = tmp_path / "nerve-db"
+    monkeypatch.setenv("NERVE_DB_PATH", str(db_path))
+    apply_schema(db_path)
+
+    now = datetime.now(timezone.utc)
+    background_id = upsert_pdca_task(
+        {
+            "owner_id": "owner-bg",
+            "conversation_key": "chat-bg",
+            "status": "queued",
+            "priority": 100,
+            "next_run_at": (now - timedelta(seconds=5)).isoformat(),
+            "metadata": {"task_class": "background"},
+        }
+    )
+    interactive_id = upsert_pdca_task(
+        {
+            "owner_id": "owner-i",
+            "conversation_key": "chat-i",
+            "status": "queued",
+            "priority": 70,
+            "next_run_at": (now - timedelta(seconds=2)).isoformat(),
+            "metadata": {"task_class": "interactive"},
+        }
+    )
+
+    bus = Bus()
+    runner = PdcaQueueRunner(
+        bus=bus,
+        enabled=True,
+        lease_seconds=10,
+        dispatch_cooldown_seconds=60,
+        interactive_boost=40,
+        worker_id="worker-weighted",
+    )
+    dispatched = runner.run_once(now=now.isoformat())
+    assert dispatched == 1
+
+    signal = bus.get(timeout=0.1)
+    assert signal is not None
+    assert signal.type == "pdca.slice.requested"
+    assert signal.payload.get("task_id") == interactive_id
+
+    background = get_pdca_task(background_id)
+    assert background is not None
+    assert background["status"] == "queued"
+
+
+def test_pdca_queue_runner_emits_starvation_warning_event_with_cooldown(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db_path = tmp_path / "nerve-db"
+    monkeypatch.setenv("NERVE_DB_PATH", str(db_path))
+    apply_schema(db_path)
+
+    now = datetime.now(timezone.utc)
+    starved_id = upsert_pdca_task(
+        {
+            "owner_id": "owner-starved",
+            "conversation_key": "chat-starved",
+            "status": "queued",
+            "priority": 100,
+            "next_run_at": (now - timedelta(seconds=120)).isoformat(),
+        }
+    )
+    _ = upsert_pdca_task(
+        {
+            "owner_id": "owner-fresh",
+            "conversation_key": "chat-fresh",
+            "status": "queued",
+            "priority": 100,
+            "next_run_at": (now - timedelta(seconds=10)).isoformat(),
+        }
+    )
+
+    bus = Bus()
+    runner = PdcaQueueRunner(
+        bus=bus,
+        enabled=True,
+        lease_seconds=10,
+        dispatch_cooldown_seconds=1,
+        starvation_warn_seconds=60,
+        starvation_warn_cooldown_seconds=120,
+        worker_id="worker-health",
+    )
+    first = runner.run_once(now=now.isoformat())
+    second = runner.run_once(now=(now + timedelta(seconds=30)).isoformat())
+    assert first == 1
+    assert second == 1
+
+    events = list_pdca_events(task_id=starved_id, limit=20)
+    warning_events = [item for item in events if item["event_type"] == "queue.starvation_warning"]
+    assert len(warning_events) == 1
+    payload = warning_events[0]["payload"]
+    assert int(payload.get("warn_threshold_seconds") or 0) == 60
+    assert int(payload.get("queue_depth") or 0) >= 1

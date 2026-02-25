@@ -26,6 +26,9 @@ class PdcaQueueRunner:
         poll_seconds: float | None = None,
         lease_seconds: int | None = None,
         dispatch_cooldown_seconds: int | None = None,
+        interactive_boost: int | None = None,
+        starvation_warn_seconds: int | None = None,
+        starvation_warn_cooldown_seconds: int | None = None,
         worker_id: str | None = None,
         enabled: bool | None = None,
     ) -> None:
@@ -38,11 +41,30 @@ class PdcaQueueRunner:
             default=30,
             minimum=1,
         )
+        self._interactive_boost = _as_int(
+            interactive_boost,
+            env_name="ALPHONSE_PDCA_QUEUE_INTERACTIVE_BOOST",
+            default=40,
+            minimum=0,
+        )
+        self._starvation_warn_seconds = _as_int(
+            starvation_warn_seconds,
+            env_name="ALPHONSE_PDCA_QUEUE_STARVATION_WARN_SECONDS",
+            default=300,
+            minimum=1,
+        )
+        self._starvation_warn_cooldown_seconds = _as_int(
+            starvation_warn_cooldown_seconds,
+            env_name="ALPHONSE_PDCA_QUEUE_STARVATION_WARN_COOLDOWN_SECONDS",
+            default=60,
+            minimum=1,
+        )
         self._worker_id = str(worker_id or os.getenv("ALPHONSE_PDCA_QUEUE_WORKER_ID") or "pdca-queue-runner").strip()
         self._enabled = _is_enabled(enabled)
         self._thread: threading.Thread | None = None
         self._stop_event = threading.Event()
         self._last_owner_id: str | None = None
+        self._last_starvation_warning_at: datetime | None = None
 
     @property
     def enabled(self) -> bool:
@@ -76,6 +98,7 @@ class PdcaQueueRunner:
         now_dt = _parse_or_now(now)
         now_text = now_dt.isoformat()
         candidates = self._fair_order_candidates(list_runnable_pdca_tasks(now=now_text, limit=20))
+        self._emit_queue_health(candidates=candidates, now_dt=now_dt)
         for task in candidates:
             task_id = str(task.get("task_id") or "").strip()
             if not task_id:
@@ -163,9 +186,17 @@ class PdcaQueueRunner:
     def _fair_order_candidates(self, candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if not candidates:
             return []
-        top_priority = max(_task_priority(item) for item in candidates)
-        top_bucket = [item for item in candidates if _task_priority(item) == top_priority]
-        tail = [item for item in candidates if _task_priority(item) != top_priority]
+        scored = sorted(
+            candidates,
+            key=lambda item: (
+                -self._effective_priority(item),
+                _iso_for_order(item.get("next_run_at")),
+                _iso_for_order(item.get("updated_at")),
+            ),
+        )
+        top_priority = max(self._effective_priority(item) for item in scored)
+        top_bucket = [item for item in scored if self._effective_priority(item) == top_priority]
+        tail = [item for item in scored if self._effective_priority(item) != top_priority]
         if not self._last_owner_id:
             return top_bucket + tail
         for index, item in enumerate(top_bucket):
@@ -175,6 +206,50 @@ class PdcaQueueRunner:
                 remaining = top_bucket[:index] + top_bucket[index + 1 :]
                 return [preferred, *remaining, *tail]
         return top_bucket + tail
+
+    def _effective_priority(self, task: dict[str, Any]) -> int:
+        base = _task_priority(task)
+        metadata = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
+        task_class = str(metadata.get("task_class") or metadata.get("kind") or "").strip().lower()
+        interactive = bool(metadata.get("interactive"))
+        if task_class == "interactive" or interactive:
+            return base + self._interactive_boost
+        return base
+
+    def _emit_queue_health(self, *, candidates: list[dict[str, Any]], now_dt: datetime) -> None:
+        if not candidates:
+            return
+        oldest = max(candidates, key=lambda item: _wait_seconds(item=item, now_dt=now_dt))
+        oldest_wait = _wait_seconds(item=oldest, now_dt=now_dt)
+        if oldest_wait < self._starvation_warn_seconds:
+            return
+        if self._last_starvation_warning_at is not None:
+            cooldown = timedelta(seconds=self._starvation_warn_cooldown_seconds)
+            if (now_dt - self._last_starvation_warning_at) < cooldown:
+                return
+        task_id = str(oldest.get("task_id") or "").strip()
+        if not task_id:
+            return
+        self._last_starvation_warning_at = now_dt
+        append_pdca_event(
+            task_id=task_id,
+            event_type="queue.starvation_warning",
+            payload={
+                "worker_id": self._worker_id,
+                "queue_depth": len(candidates),
+                "oldest_wait_seconds": oldest_wait,
+                "warn_threshold_seconds": self._starvation_warn_seconds,
+                "owner_id": str(oldest.get("owner_id") or "").strip() or None,
+            },
+            correlation_id=f"pdca.queue.starvation:{task_id}:{int(now_dt.timestamp())}",
+        )
+        logger.warning(
+            "PDCA queue starvation warning worker_id=%s task_id=%s wait_seconds=%s depth=%s",
+            self._worker_id,
+            task_id,
+            oldest_wait,
+            len(candidates),
+        )
 
 
 def _is_enabled(value: bool | None) -> bool:
@@ -223,3 +298,30 @@ def _task_priority(task: dict[str, Any]) -> int:
         return int(task.get("priority") or 0)
     except (TypeError, ValueError):
         return 0
+
+
+def _parse_iso_utc(value: Any) -> datetime | None:
+    rendered = str(value or "").strip()
+    if not rendered:
+        return None
+    try:
+        parsed = datetime.fromisoformat(rendered)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _wait_seconds(*, item: dict[str, Any], now_dt: datetime) -> int:
+    baseline = _parse_iso_utc(item.get("next_run_at")) or _parse_iso_utc(item.get("created_at"))
+    if baseline is None:
+        return 0
+    return max(int((now_dt - baseline).total_seconds()), 0)
+
+
+def _iso_for_order(value: Any) -> str:
+    parsed = _parse_iso_utc(value)
+    if parsed is None:
+        return "9999-12-31T23:59:59+00:00"
+    return parsed.isoformat()
