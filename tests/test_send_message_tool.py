@@ -24,7 +24,7 @@ class _FakeCommunication:
 
 def test_send_message_exposed_in_registry2() -> None:
     registry = build_planner_tool_registry()
-    assert registry.get("sendMessage") is not None
+    assert registry.get("send_message") is not None
 
 
 def test_send_message_registered_in_runtime_registry() -> None:
@@ -34,7 +34,7 @@ def test_send_message_registered_in_runtime_registry() -> None:
 
 def test_send_voice_note_exposed_in_registry2() -> None:
     registry = build_planner_tool_registry()
-    assert registry.get("sendVoiceNote") is not None
+    assert registry.get("send_voice_note") is not None
 
 
 def test_send_voice_note_registered_in_runtime_registry() -> None:

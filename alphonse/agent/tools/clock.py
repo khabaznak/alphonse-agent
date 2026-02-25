@@ -19,7 +19,7 @@ class ClockTool:
                 "timezone": tz,
             },
             "error": None,
-            "metadata": {"tool": "getTime"},
+            "metadata": {"tool": "get_time"},
         }
 
     def get_time(self) -> datetime:

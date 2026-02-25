@@ -76,7 +76,7 @@ def _default_specs() -> list[ToolSpec]:
             examples=[{"question": "What exact time should I use for this reminder?"}],
         ),
         ToolSpec(
-            key="getTime",
+            key="get_time",
             description="Get your current time now.",
             when_to_use="Use for current time/date and as a reference for scheduling or deadline calculations.",
             returns="current_time",
@@ -86,7 +86,7 @@ def _default_specs() -> list[ToolSpec]:
             examples=[{}],
         ),
         ToolSpec(
-            key="createReminder",
+            key="create_reminder",
             description="Create a reminder for someone at a specific time.",
             when_to_use="Use when the user asks to be reminded.",
             returns="scheduled_reminder_id",
@@ -103,7 +103,7 @@ def _default_specs() -> list[ToolSpec]:
             examples=[{"ForWhom": "me", "Time": "tomorrow 8am", "Message": "take medicine"}],
         ),
         ToolSpec(
-            key="sendMessage",
+            key="send_message",
             description="Send a message to a recipient through a communication channel (for example Telegram).",
             when_to_use="Use when the user asks Alphonse to deliver a direct message to someone.",
             returns="delivery_status",
@@ -125,9 +125,9 @@ def _default_specs() -> list[ToolSpec]:
             examples=[{"To": "Gabriela", "Message": "Hola Gaby, Alex llegará para cenar.", "Channel": "telegram"}],
         ),
         ToolSpec(
-            key="sendVoiceNote",
+            key="send_voice_note",
             description="Send a Telegram-style voice note to a recipient.",
-            when_to_use="Prefer this over sendMessage when you must deliver a true voice note bubble in Telegram.",
+            when_to_use="Prefer this over send_message when you must deliver a true voice note bubble in Telegram.",
             returns="delivery_status",
             input_schema=_object_schema(
                 properties={
@@ -154,7 +154,7 @@ def _default_specs() -> list[ToolSpec]:
             ],
         ),
         ToolSpec(
-            key="local_audio_output.speak",
+            key="local_audio_output_speak",
             description="Speak text out loud on the local computer using OS-native TTS.",
             when_to_use="Use for local spoken output when requested.",
             returns="local_audio_output_status",
@@ -172,7 +172,7 @@ def _default_specs() -> list[ToolSpec]:
             examples=[{"text": "Hola, te escucho.", "voice": "Jorge"}],
         ),
         ToolSpec(
-            key="local_audio_output.render",
+            key="local_audio_output_render",
             description="Render text to an audio file on the local machine for downstream delivery integrations.",
             when_to_use="Use when you need a reusable audio artifact (use format='ogg' for Telegram voice notes).",
             returns="audio file path and format metadata",
@@ -207,7 +207,7 @@ def _default_specs() -> list[ToolSpec]:
             examples=[{"asset_id": "asset_123", "language_hint": "es-MX"}],
         ),
         ToolSpec(
-            key="telegramGetFileMeta",
+            key="telegram_get_file_meta",
             description="Resolve Telegram file metadata from a file_id.",
             when_to_use="Use when telegram file metadata is required before download/transcription.",
             returns="telegram_file_meta",
@@ -221,7 +221,7 @@ def _default_specs() -> list[ToolSpec]:
             examples=[{"file_id": "AgACAgQAAx..."}],
         ),
         ToolSpec(
-            key="telegramDownloadFile",
+            key="telegram_download_file",
             description="Download a Telegram file by file_id and return local path details.",
             when_to_use="Use when a telegram file must be downloaded for downstream processing.",
             returns="download_path_details",
@@ -239,7 +239,7 @@ def _default_specs() -> list[ToolSpec]:
             examples=[{"file_id": "AgACAgQAAx...", "sandbox_alias": "telegram"}],
         ),
         ToolSpec(
-            key="transcribeTelegramAudio",
+            key="transcribe_telegram_audio",
             description="Download Telegram audio by file_id and transcribe it to text.",
             when_to_use="Use when an inbound telegram audio message should be transcribed directly.",
             returns="transcript text",
@@ -257,7 +257,7 @@ def _default_specs() -> list[ToolSpec]:
             examples=[{"file_id": "CQACAgQAAx...", "language": "es"}],
         ),
         ToolSpec(
-            key="analyzeTelegramImage",
+            key="analyze_telegram_image",
             description="Download Telegram image by file_id and analyze it with a prompt.",
             when_to_use="Use when an inbound telegram image requires semantic analysis.",
             returns="image_analysis",
@@ -298,7 +298,7 @@ def _default_specs() -> list[ToolSpec]:
             ],
         ),
         ToolSpec(
-            key="getMySettings",
+            key="get_my_settings",
             description="Get runtime settings for current conversation context.",
             when_to_use="Use before time or language-sensitive decisions when settings are needed.",
             returns="settings",
@@ -308,7 +308,7 @@ def _default_specs() -> list[ToolSpec]:
             examples=[{}],
         ),
         ToolSpec(
-            key="getUserDetails",
+            key="get_user_details",
             description="Get known user and channel details for current conversation context.",
             when_to_use="Use when user identity/context details are needed before planning or scheduling.",
             returns="user_details",
@@ -596,7 +596,7 @@ def _default_specs() -> list[ToolSpec]:
             examples=[{"query": "Gab", "limit": 5, "active_only": True}],
         ),
         ToolSpec(
-            key="terminal_execute",
+            key="terminal_sync",
             description="Execute terminal commands under global Alphonse execution mode and sandbox policy.",
             when_to_use="Use for constrained terminal-like operations when explicit tools are insufficient.",
             returns="command stdout/stderr/exit_code with policy metadata",
@@ -614,7 +614,7 @@ def _default_specs() -> list[ToolSpec]:
             examples=[{"command": "ls -la", "cwd": ".", "timeout_seconds": 20}],
         ),
         ToolSpec(
-            key="terminal_command_submit",
+            key="terminal_async",
             description="Submit a terminal command for asynchronous execution and return a command_id for polling.",
             when_to_use="Use for long-running commands where blocking the current turn is undesirable.",
             returns="command_id and initial status",
@@ -633,9 +633,9 @@ def _default_specs() -> list[ToolSpec]:
             examples=[{"command": "ollama pull llama3.2", "timeout_seconds": 1200, "sandbox_alias": "main"}],
         ),
         ToolSpec(
-            key="terminal_command_status",
+            key="terminal_async_command_status",
             description="Get status and output for an asynchronous terminal command by command_id.",
-            when_to_use="Use after terminal_command_submit to monitor progress and retrieve stdout/stderr when complete.",
+            when_to_use="Use after terminal_async to monitor progress and retrieve stdout/stderr when complete.",
             returns="command status, done flag, and output",
             input_schema=_object_schema(
                 properties={"command_id": {"type": "string"}},
@@ -675,25 +675,5 @@ def _default_specs() -> list[ToolSpec]:
                     "timeout_seconds": 30,
                 }
             ],
-        ),
-        ToolSpec(
-            key="python_subprocess",
-            description=(
-                "Execute a Python subprocess command on the local system. Use to install missing tools or for other "
-                "system-level operations. Be cautious with this tool and avoid running untrusted commands."
-            ),
-            when_to_use="Use only for admin-authorized maintenance tasks when built-in tools are insufficient.",
-            returns="command output, error message, and exit code",
-            input_schema=_object_schema(
-                properties={
-                    "command": {"type": "string"},
-                    "timeout_seconds": {"type": "number"},
-                },
-                required=["command"],
-            ),
-            domain_tags=["ops", "maintenance", "system"],
-            safety_level=SafetyLevel.CRITICAL,
-            requires_confirmation=True,
-            examples=[{"command": "which python3", "timeout_seconds": 20}],
         ),
     ]

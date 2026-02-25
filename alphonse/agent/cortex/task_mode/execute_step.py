@@ -252,7 +252,7 @@ def _maybe_retry_repaired_reminder_call(
     execute_tool_call: Callable[..., Any],
     logger: logging.Logger,
 ) -> Any:
-    if tool_name != "createReminder" or not isinstance(result, dict):
+    if tool_name not in {"create_reminder", "createReminder"} or not isinstance(result, dict):
         return result
     if str(result.get("status") or "").strip().lower() != "failed":
         return result
@@ -355,7 +355,7 @@ def _infer_reminder_message(*, state: dict[str, Any]) -> str:
 
 
 def _is_send_after_user_search(*, tool_name: str, task_state: dict[str, Any]) -> bool:
-    if str(tool_name or "").strip() != "sendMessage":
+    if str(tool_name or "").strip() not in {"send_message", "sendMessage"}:
         return False
     facts = task_state.get("facts")
     if not isinstance(facts, dict):

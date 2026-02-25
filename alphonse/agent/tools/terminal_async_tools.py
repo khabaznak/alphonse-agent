@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import os
 import threading
+from pathlib import Path
 from typing import Any
 
 from alphonse.agent.nervous_system.sandbox_dirs import list_sandbox_aliases
@@ -53,7 +55,7 @@ class TerminalCommandSubmitTool:
                 {
                     "session_id": session_id,
                     "command": str(command or "").strip(),
-                    "cwd": str(cwd or "."),
+                    "cwd": _normalize_cwd(cwd=cwd, roots=_allowed_roots()),
                     "status": "pending",
                     "requested_by": principal_id,
                     "approved_by": "system:auto",
@@ -69,7 +71,7 @@ class TerminalCommandSubmitTool:
                 "command_id": command_id,
                 "session_id": session_id,
                 "command": str(command or "").strip(),
-                "cwd": str(cwd or "."),
+                "cwd": _normalize_cwd(cwd=cwd, roots=_allowed_roots()),
                 "timeout_seconds": timeout_seconds,
             },
             daemon=True,
@@ -202,6 +204,18 @@ def _resolve_principal_id(state: dict[str, Any] | None) -> str:
         if value:
             return value
     return "default"
+
+
+def _normalize_cwd(*, cwd: str | None, roots: list[str]) -> str:
+    raw = str(cwd or "").strip()
+    if raw and raw != ".":
+        return raw
+    configured = str(os.getenv("ALPHONSE_TERMINAL_MAIN_WORKDIR") or "").strip()
+    if configured:
+        return configured
+    if roots:
+        return str(Path(roots[0]).resolve())
+    return "."
 
 
 def _ok(result: dict[str, Any]) -> dict[str, Any]:

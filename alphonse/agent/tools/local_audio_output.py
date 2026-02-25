@@ -25,7 +25,7 @@ class LocalAudioOutputSpeakTool:
 
     Example tool-call JSON:
     {
-      "tool": "local_audio_output.speak",
+      "tool": "local_audio_output_speak",
       "args": { "text": "Hello World", "blocking": false }
     }
     """
@@ -45,7 +45,7 @@ class LocalAudioOutputSpeakTool:
         preview = spoken_text[:40] + ("..." if len(spoken_text) > 40 else "")
 
         logger.info(
-            "local_audio_output.speak invoke text_len=%s voice=%s blocking=%s preview=%s",
+            "local_audio_output_speak invoke text_len=%s voice=%s blocking=%s preview=%s",
             len(spoken_text),
             selected_voice,
             is_blocking,
@@ -57,7 +57,7 @@ class LocalAudioOutputSpeakTool:
         if platform.system() != "Darwin":
             return _failed(
                 "local_audio_output_not_supported",
-                "local_audio_output.speak is currently supported only on macOS.",
+                "local_audio_output_speak is currently supported only on macOS.",
             )
 
         cmd = _build_say_command(text=spoken_text, voice=selected_voice)
@@ -72,7 +72,7 @@ class LocalAudioOutputSpeakTool:
             if completed.returncode != 0:
                 stderr = str(completed.stderr or "").strip()
                 logger.error(
-                    "local_audio_output.speak failed returncode=%s stderr=%s",
+                    "local_audio_output_speak failed returncode=%s stderr=%s",
                     completed.returncode,
                     stderr,
                 )
@@ -85,9 +85,9 @@ class LocalAudioOutputSpeakTool:
                         "retryable": False,
                         "details": {"stderr": stderr},
                     },
-                    "metadata": {"tool": "local_audio_output.speak"},
+                    "metadata": {"tool": "local_audio_output_speak"},
                 }
-            logger.info("local_audio_output.speak success mode=blocking")
+            logger.info("local_audio_output_speak success mode=blocking")
             return _ok({"mode": "blocking"})
 
         proc = subprocess.Popen(
@@ -102,7 +102,7 @@ class LocalAudioOutputSpeakTool:
             daemon=True,
         )
         watcher.start()
-        logger.info("local_audio_output.speak success mode=non_blocking pid=%s", proc.pid)
+        logger.info("local_audio_output_speak success mode=non_blocking pid=%s", proc.pid)
         return _ok({"mode": "non_blocking", "pid": int(proc.pid)})
 
 
@@ -120,12 +120,12 @@ class LocalAudioOutputRenderTool:
     ) -> dict[str, Any]:
         spoken_text = str(text or "").strip()
         if not spoken_text:
-            return _failed("text_required", "text is required", tool="local_audio_output.render")
+            return _failed("text_required", "text is required", tool="local_audio_output_render")
         if platform.system() != "Darwin":
             return _failed(
                 "local_audio_output_not_supported",
-                "local_audio_output.render is currently supported only on macOS.",
-                tool="local_audio_output.render",
+                "local_audio_output_render is currently supported only on macOS.",
+                tool="local_audio_output_render",
             )
         selected_voice = str(voice or "default").strip() or "default"
         target_format = str(format or "m4a").strip().lower()
@@ -133,7 +133,7 @@ class LocalAudioOutputRenderTool:
             return _failed(
                 "unsupported_audio_format",
                 "Supported formats are: aiff, m4a, ogg",
-                tool="local_audio_output.render",
+                tool="local_audio_output_render",
             )
         root = _resolve_render_output_dir(output_dir)
         root.mkdir(parents=True, exist_ok=True)
@@ -154,7 +154,7 @@ class LocalAudioOutputRenderTool:
                 "tts_command_failed",
                 "tts command failed",
                 details={"stderr": stderr},
-                tool="local_audio_output.render",
+                tool="local_audio_output_render",
             )
         if target_format == "aiff":
             cleanup = _cleanup_rendered_audio(root=root, keep_path=source_path)
@@ -165,7 +165,7 @@ class LocalAudioOutputRenderTool:
                     "mime_type": "audio/aiff",
                     "retention": cleanup,
                 },
-                tool="local_audio_output.render",
+                tool="local_audio_output_render",
             )
         if target_format == "m4a":
             target_path = source_path.with_suffix(".m4a")
@@ -190,7 +190,7 @@ class LocalAudioOutputRenderTool:
                     "audio_convert_failed",
                     "failed converting aiff to m4a",
                     details={"stderr": stderr},
-                    tool="local_audio_output.render",
+                    tool="local_audio_output_render",
                 )
             mime_type = "audio/mp4"
         else:
@@ -199,7 +199,7 @@ class LocalAudioOutputRenderTool:
                 return _failed(
                     "ffmpeg_not_installed",
                     "ffmpeg is required to convert audio to ogg/opus",
-                    tool="local_audio_output.render",
+                    tool="local_audio_output_render",
                 )
             target_path = source_path.with_suffix(".ogg")
             converted = subprocess.run(
@@ -225,7 +225,7 @@ class LocalAudioOutputRenderTool:
                     "audio_convert_failed",
                     "failed converting aiff to ogg",
                     details={"stderr": stderr},
-                    tool="local_audio_output.render",
+                    tool="local_audio_output_render",
                 )
             mime_type = "audio/ogg"
         try:
@@ -240,7 +240,7 @@ class LocalAudioOutputRenderTool:
                 "mime_type": mime_type,
                 "retention": cleanup,
             },
-            tool="local_audio_output.render",
+            tool="local_audio_output_render",
         )
 
 
@@ -333,17 +333,17 @@ def _watch_say_process(proc: subprocess.Popen[str], preview: str) -> None:
             stderr = ""
     if return_code != 0:
         logger.error(
-            "local_audio_output.speak async_failed pid=%s returncode=%s stderr=%s preview=%s",
+            "local_audio_output_speak async_failed pid=%s returncode=%s stderr=%s preview=%s",
             proc.pid,
             return_code,
             stderr,
             preview,
         )
         return
-    logger.info("local_audio_output.speak async_done pid=%s preview=%s", proc.pid, preview)
+    logger.info("local_audio_output_speak async_done pid=%s preview=%s", proc.pid, preview)
 
 
-def _ok(result: dict[str, Any], *, tool: str = "local_audio_output.speak") -> dict[str, Any]:
+def _ok(result: dict[str, Any], *, tool: str = "local_audio_output_speak") -> dict[str, Any]:
     return {
         "status": "ok",
         "result": result,
@@ -357,7 +357,7 @@ def _failed(
     message: str,
     details: dict[str, Any] | None = None,
     *,
-    tool: str = "local_audio_output.speak",
+    tool: str = "local_audio_output_speak",
 ) -> dict[str, Any]:
     return {
         "status": "failed",

@@ -345,16 +345,23 @@ def _last_action_summary(
             continue
         if step_idx is not None and item.get("step") == step_idx:
             fact = item
-    if tool == "getTime":
+    if tool in {"get_time", "getTime"}:
         if isinstance(fact, dict) and fact.get("time"):
             return "Fetched current time."
         return "Fetched current time."
-    if tool == "createReminder":
+    if tool in {"create_reminder", "createReminder"}:
         return "Created a reminder."
     if tool == "stt_transcribe":
         return "Transcribed an audio asset."
-    if tool == "python_subprocess":
-        return "Ran a subprocess command."
+    if tool in {
+        "terminal_sync",
+        "terminal_async",
+        "terminal_async_command_status",
+        "terminal_execute",
+        "terminal_command_submit",
+        "terminal_command_status",
+    }:
+        return "Ran a terminal command."
     if tool == "askQuestion":
         return "Asked the user for clarification."
     if isinstance(task_state, dict):
@@ -362,11 +369,11 @@ def _last_action_summary(
         step_id = str(step.get("step_id") or "").strip()
         if step_id and isinstance(facts.get(step_id), dict):
             result = facts[step_id].get("result")
-            if tool == "local_audio_output.speak":
+            if tool in {"local_audio_output_speak", "local_audio_output.speak"}:
                 return "Played local audio output."
-            if tool == "getTime":
+            if tool in {"get_time", "getTime"}:
                 return "Fetched current time."
-            if tool == "createReminder":
+            if tool in {"create_reminder", "createReminder"}:
                 return "Created a reminder."
     status = str(step.get("status") or "").strip().lower()
     if status == "waiting_user":

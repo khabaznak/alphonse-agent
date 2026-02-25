@@ -76,7 +76,7 @@ class SchedulerTool:
             "status": "ok",
             "result": reminder,
             "error": None,
-            "metadata": {"tool": "createReminder"},
+            "metadata": {"tool": "create_reminder"},
         }
 
     def create_reminder(

@@ -37,8 +37,6 @@ from alphonse.agent.tools.user_contact_tools import UserRemoveFromContactTool
 from alphonse.agent.tools.user_contact_tools import UserSearchTool
 from alphonse.agent.tools.base import ToolProtocol
 
-from alphonse.agent.tools.subprocess import SubprocessTool
-
 
 @dataclass
 class ToolRegistry:
@@ -70,10 +68,9 @@ def build_default_tool_registry() -> ToolRegistry:
     transcribe_audio = TranscribeTelegramAudioTool()
     analyze_image = AnalyzeTelegramImageTool()
     vision_analyze_image = VisionAnalyzeImageTool()
-    python_subprocess = SubprocessTool()
-    terminal_execute = TerminalExecuteTool()
-    terminal_command_submit = TerminalCommandSubmitTool()
-    terminal_command_status = TerminalCommandStatusTool()
+    terminal_sync = TerminalExecuteTool()
+    terminal_async = TerminalCommandSubmitTool()
+    terminal_async_command_status = TerminalCommandStatusTool()
     ssh_terminal = SshTerminalTool()
     scratchpad_service = ScratchpadService()
     scratchpad_create = ScratchpadCreateTool(scratchpad_service)
@@ -97,24 +94,33 @@ def build_default_tool_registry() -> ToolRegistry:
     user_register_from_contact = UserRegisterFromContactTool()
     user_remove_from_contact = UserRemoveFromContactTool()
     user_search = UserSearchTool()
+    registry.register("get_time", clock)
+    registry.register("create_reminder", scheduler)
+    registry.register("send_message", send_message)
+    registry.register("send_voice_note", send_voice_note)
+    registry.register("local_audio_output_speak", local_audio_output)
+    registry.register("local_audio_output_render", local_audio_render)
+    registry.register("stt_transcribe", stt_transcribe)
+    registry.register("telegram_get_file_meta", telegram_get_file)
+    registry.register("telegram_download_file", telegram_download_file)
+    registry.register("transcribe_telegram_audio", transcribe_audio)
+    registry.register("analyze_telegram_image", analyze_image)
+    registry.register("vision_analyze_image", vision_analyze_image)
+    # Internal aliases kept for compatibility.
+    registry.register("clock", clock)
     registry.register("getTime", clock)
     registry.register("createReminder", scheduler)
     registry.register("sendMessage", send_message)
     registry.register("sendVoiceNote", send_voice_note)
     registry.register("local_audio_output.speak", local_audio_output)
     registry.register("local_audio_output.render", local_audio_render)
-    registry.register("stt_transcribe", stt_transcribe)
     registry.register("telegramGetFileMeta", telegram_get_file)
     registry.register("telegramDownloadFile", telegram_download_file)
     registry.register("transcribeTelegramAudio", transcribe_audio)
     registry.register("analyzeTelegramImage", analyze_image)
-    registry.register("vision_analyze_image", vision_analyze_image)
-    # Internal aliases kept for compatibility.
-    registry.register("clock", clock)
-    registry.register("python_subprocess", python_subprocess)
-    registry.register("terminal_execute", terminal_execute)
-    registry.register("terminal_command_submit", terminal_command_submit)
-    registry.register("terminal_command_status", terminal_command_status)
+    registry.register("terminal_sync", terminal_sync)
+    registry.register("terminal_async", terminal_async)
+    registry.register("terminal_async_command_status", terminal_async_command_status)
     registry.register("ssh_terminal", ssh_terminal)
     registry.register("scratchpad_create", scratchpad_create)
     registry.register("scratchpad_append", scratchpad_append)

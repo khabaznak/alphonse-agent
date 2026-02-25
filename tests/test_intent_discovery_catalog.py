@@ -12,7 +12,7 @@ def test_available_abilities_renders_full_markdown_catalog() -> None:
     assert rendered.startswith("# Available Tools")
     assert "## `askQuestion`" in rendered
     assert "one clear question" in rendered
-    assert "## `getTime`" in rendered
+    assert "## `get_time`" in rendered
 
 
 def test_available_ability_catalog_is_llm_focused() -> None:
@@ -42,8 +42,8 @@ def test_available_ability_catalog_has_minimal_tools_only() -> None:
     }
     required = {
         "askQuestion",
-        "getTime",
-        "createReminder",
+        "get_time",
+        "create_reminder",
         "scratchpad_create",
         "scratchpad_append",
         "scratchpad_read",
@@ -56,14 +56,13 @@ def test_available_ability_catalog_has_minimal_tools_only() -> None:
         "job_resume",
         "job_delete",
         "job_run_now",
-        "terminal_execute",
-        "terminal_command_submit",
-        "terminal_command_status",
-        "local_audio_output.speak",
+        "terminal_sync",
+        "terminal_async",
+        "terminal_async_command_status",
+        "local_audio_output_speak",
         "stt_transcribe",
-        "python_subprocess",
-        "getMySettings",
-        "getUserDetails",
+        "get_my_settings",
+        "get_user_details",
     }
     assert required.issubset(names)
 

@@ -695,12 +695,12 @@ def test_act_node_stops_after_repeated_same_tool_failures() -> None:
         "steps": [
             {
                 "step_id": "step_1",
-                "proposal": {"kind": "call_tool", "tool_name": "python_subprocess", "args": {"command": "node -v"}},
+                "proposal": {"kind": "call_tool", "tool_name": "terminal_sync", "args": {"command": "node -v"}},
                 "status": "failed",
             },
             {
                 "step_id": "step_2",
-                "proposal": {"kind": "call_tool", "tool_name": "python_subprocess", "args": {"command": "node -v"}},
+                "proposal": {"kind": "call_tool", "tool_name": "terminal_sync", "args": {"command": "node -v"}},
                 "status": "failed",
             },
         ],
@@ -733,12 +733,12 @@ def test_act_node_allows_evolving_failures_under_budget() -> None:
         "steps": [
             {
                 "step_id": "step_1",
-                "proposal": {"kind": "call_tool", "tool_name": "python_subprocess", "args": {"command": "node -v"}},
+                "proposal": {"kind": "call_tool", "tool_name": "terminal_sync", "args": {"command": "node -v"}},
                 "status": "failed",
             },
             {
                 "step_id": "step_2",
-                "proposal": {"kind": "call_tool", "tool_name": "python_subprocess", "args": {"command": "npm -v"}},
+                "proposal": {"kind": "call_tool", "tool_name": "terminal_sync", "args": {"command": "npm -v"}},
                 "status": "failed",
             },
         ],
@@ -766,7 +766,7 @@ def test_act_node_pauses_after_failure_budget_exhausted() -> None:
                 "step_id": f"step_{idx}",
                 "proposal": {
                     "kind": "call_tool",
-                    "tool_name": "python_subprocess",
+                    "tool_name": "terminal_sync",
                     "args": {"command": f"tool-{idx} --version"},
                 },
                 "status": "failed",

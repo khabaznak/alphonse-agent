@@ -157,7 +157,7 @@ def test_session_last_action_can_come_from_task_state_steps() -> None:
     assert updated["last_action"]["tool"] == "local_audio_output.speak"
 
 
-def test_recent_conversation_block_renders_last_ten_turns() -> None:
+def test_recent_conversation_block_renders_last_twenty_turns() -> None:
     state = {
         "session_id": "u-3|2026-02-15",
         "user_id": "u-3",
@@ -173,8 +173,8 @@ def test_recent_conversation_block_renders_last_ten_turns() -> None:
         "last_action": None,
     }
     block = render_recent_conversation_block(state)
-    assert "## RECENT CONVERSATION (last 10 turns)" in block
-    assert "user-0" not in block
-    assert "assistant-0" not in block
+    assert "## RECENT CONVERSATION (last 20 turns)" in block
+    assert "user-0" in block
+    assert "assistant-0" in block
     assert "user-11" in block
     assert "assistant-11" in block

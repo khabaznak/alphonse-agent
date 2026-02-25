@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from typing import Any
 
 from alphonse.agent.nervous_system.sandbox_dirs import list_sandbox_aliases
@@ -35,7 +36,7 @@ class TerminalExecuteTool:
             }
         result = self._terminal.execute_with_policy(
             command=command,
-            cwd=cwd,
+            cwd=_normalize_cwd(cwd=cwd, roots=roots),
             allowed_roots=roots,
             mode=mode,
             timeout_seconds=_resolve_timeout(timeout_seconds),
@@ -83,6 +84,18 @@ def _resolve_timeout(value: float | None) -> float:
         1800.0,
     )
     return max(1.0, min(requested, max_timeout))
+
+
+def _normalize_cwd(*, cwd: str | None, roots: list[str]) -> str:
+    raw = str(cwd or "").strip()
+    if raw and raw != ".":
+        return raw
+    configured = str(os.getenv("ALPHONSE_TERMINAL_MAIN_WORKDIR") or "").strip()
+    if configured:
+        return configured
+    if roots:
+        return str(Path(roots[0]).resolve())
+    return "."
 
 
 def _read_positive_float(name: str, default: float) -> float:

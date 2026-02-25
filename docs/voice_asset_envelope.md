@@ -27,7 +27,7 @@ Use this shape for audio from `webui` (and future providers):
 
 `controls.audio_mode`:
 - `none`: text-only response
-- `local_audio`: text response plus local TTS playback via `local_audio_output.speak`
+- `local_audio`: text response plus local TTS playback via `local_audio_output_speak`
 
 ## Asset ingestion
 

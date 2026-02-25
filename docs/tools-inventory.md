@@ -11,16 +11,16 @@ Runtime registrations are wired in:
 | Tool | Signature (agent call) | Scope | Description | Suggested Functionality | Safety / Confirm |
 |---|---|---|---|---|---|
 | `askQuestion` | `askQuestion(question)` | `planning, clarification` | Ask user one clear question | Missing required user data | `low / no` |
-| `getTime` | `getTime()` | `time, planning` | Get current time | Time reference, scheduling | `low / no` |
-| `createReminder` | `createReminder(ForWhom, Time, Message)` | `time, reminders` | Create reminder | User reminder requests | `medium / no` |
-| `getMySettings` | `getMySettings()` | `context, settings` | Get runtime settings | Locale/time/tone-sensitive tasks | `low / no` |
-| `getUserDetails` | `getUserDetails()` | `context, identity` | Get user/channel details | Identity/context before actions | `low / no` |
-| `local_audio_output.speak` | `local_audio_output.speak(text, voice?, blocking?, volume?)` | `audio, output` | Local TTS output | Spoken output when requested | `low / no` |
+| `get_time` | `get_time()` | `time, planning` | Get current time | Time reference, scheduling | `low / no` |
+| `create_reminder` | `create_reminder(ForWhom, Time, Message)` | `time, reminders` | Create reminder | User reminder requests | `medium / no` |
+| `get_my_settings` | `get_my_settings()` | `context, settings` | Get runtime settings | Locale/time/tone-sensitive tasks | `low / no` |
+| `get_user_details` | `get_user_details()` | `context, identity` | Get user/channel details | Identity/context before actions | `low / no` |
+| `local_audio_output_speak` | `local_audio_output_speak(text, voice?, blocking?, volume?)` | `audio, output` | Local TTS output | Spoken output when requested | `low / no` |
 | `stt_transcribe` | `stt_transcribe(asset_id, language_hint?)` | `audio, transcription` | Transcribe audio asset | Incoming audio transcript | `medium / no` |
-| `telegramGetFileMeta` | `telegramGetFileMeta(file_id)` | `telegram, files` | Resolve Telegram file metadata | Before download/transcription | `medium / no` |
-| `telegramDownloadFile` | `telegramDownloadFile(file_id, sandbox_alias?, relative_path?)` | `telegram, files` | Download Telegram file | Prepare file for downstream tools | `high / no` |
-| `transcribeTelegramAudio` | `transcribeTelegramAudio(file_id, language?, sandbox_alias?)` | `telegram, audio, transcription` | Download+transcribe Telegram audio | Direct Telegram voice handling | `high / no` |
-| `analyzeTelegramImage` | `analyzeTelegramImage(file_id?, prompt?, sandbox_alias?)` | `telegram, image, analysis` | Download+analyze Telegram image | Telegram inbound image semantics | `high / no` |
+| `telegram_get_file_meta` | `telegram_get_file_meta(file_id)` | `telegram, files` | Resolve Telegram file metadata | Before download/transcription | `medium / no` |
+| `telegram_download_file` | `telegram_download_file(file_id, sandbox_alias?, relative_path?)` | `telegram, files` | Download Telegram file | Prepare file for downstream tools | `high / no` |
+| `transcribe_telegram_audio` | `transcribe_telegram_audio(file_id, language?, sandbox_alias?)` | `telegram, audio, transcription` | Download+transcribe Telegram audio | Direct Telegram voice handling | `high / no` |
+| `analyze_telegram_image` | `analyze_telegram_image(file_id?, prompt?, sandbox_alias?)` | `telegram, image, analysis` | Download+analyze Telegram image | Telegram inbound image semantics | `high / no` |
 | `vision_analyze_image` | `vision_analyze_image(sandbox_alias, relative_path, prompt?)` | `vision, image, analysis` | Analyze sandbox image with dedicated vision model | Receipts, notes, package checks, object ID | `medium / no` |
 | `scratchpad_create` | `scratchpad_create(title, scope?, tags?, template?)` | `productivity, caregiving, memory` | Create scratchpad doc | Start durable notes/log/plans | `medium / no` |
 | `scratchpad_append` | `scratchpad_append(doc_id, text)` | `productivity, caregiving, memory` | Append timestamped block | Immutable progress updates | `medium / no` |
@@ -34,8 +34,9 @@ Runtime registrations are wired in:
 | `job_resume` | `job_resume(job_id)` | `automation, jobs, control` | Resume job | Re-enable automation | `medium / no` |
 | `job_run_now` | `job_run_now(job_id)` | `automation, jobs, control` | Trigger immediate run | Test/force scheduled job | `medium / no` |
 | `job_delete` | `job_delete(job_id)` | `automation, jobs, control` | Delete job | Remove automation | `high / yes` |
-| `python_subprocess` | `python_subprocess(command, timeout_seconds?)` | `ops, maintenance, system` | Execute subprocess command | Admin maintenance fallback | `critical / yes` |
-| `terminal_execute` | `terminal_execute(command, cwd?, timeout_seconds?)` | `ops, terminal, automation` | Policy-constrained terminal execution | Controlled terminal-like ops | `high / yes` |
+| `terminal_sync` | `terminal_sync(command, cwd?, timeout_seconds?)` | `ops, terminal, automation` | Policy-constrained terminal execution | Controlled terminal-like ops | `high / yes` |
+| `terminal_async` | `terminal_async(command, cwd?, timeout_seconds?, sandbox_alias?)` | `ops, terminal, automation` | Submit terminal command for async execution | Long-running command workflows | `high / yes` |
+| `terminal_async_command_status` | `terminal_async_command_status(command_id)` | `ops, terminal, automation` | Poll status/output for async command | Read async execution result | `low / no` |
 | `user_register_from_contact` | `user_register_from_contact(display_name?, role?, relationship?, contact_user_id?, contact_first_name?, contact_last_name?, contact_phone?)` | `identity, admin, onboarding` | Register/update user from shared contact | Admin-led onboarding | `medium / no` |
 | `user_remove_from_contact` | `user_remove_from_contact(contact_user_id?)` | `identity, admin, access-control` | Deactivate registered user | Admin-led removal | `high / yes` |
 

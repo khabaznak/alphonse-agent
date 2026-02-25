@@ -68,7 +68,7 @@ class SendMessageTool:
         )
         plan = SimpleNamespace(
             plan_id=f"tool-send-message:{correlation_id}",
-            tool="sendMessage",
+            tool="send_message",
             payload={
                 **({"locale": locale} if locale else {}),
                 **(
@@ -103,7 +103,7 @@ class SendMessageTool:
                 "urgency": urgency,
             },
             "error": None,
-            "metadata": {"tool": "sendMessage"},
+            "metadata": {"tool": "send_message"},
         }
 
 
@@ -239,7 +239,7 @@ def _failed(*, code: str, message: str) -> dict[str, Any]:
             "retryable": False,
             "details": {},
         },
-        "metadata": {"tool": "sendMessage"},
+        "metadata": {"tool": "send_message"},
     }
 
 

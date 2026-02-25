@@ -28,8 +28,8 @@ _NEXT_STEP_DEVELOPER_PROMPT = (
     "- Prefer tools that directly satisfy the user goal in one step.\n"
     "- Prefer direct-goal tools over informational tools.\n"
     "- Use informational tools only as prerequisites for missing required arguments of a direct tool.\n"
-    "- If a tool accepts a natural time expression (e.g., 'in 1 minute'), pass it through; do NOT call getTime just to interpret it.\n"
-    "- Call getTime only when a tool explicitly requires an absolute timestamp and you must compute it.\n"
+    "- If a tool accepts a natural time expression (e.g., 'in 1 minute'), pass it through; do NOT call get_time just to interpret it.\n"
+    "- Call get_time only when a tool explicitly requires an absolute timestamp and you must compute it.\n"
     "- Prefer actions that reduce uncertainty early.\n"
     "- Use only tools listed in the tool menu.\n"
     "- If required info is missing, ask a concise clarifying question.\n"
@@ -923,7 +923,7 @@ def _derive_outcome_from_state(*, state: dict[str, Any], task_state: dict[str, A
 
     tool_name = str(entry.get("tool") or "").strip()
     result = entry.get("result")
-    if tool_name != "createReminder" or not isinstance(result, dict):
+    if tool_name not in {"create_reminder", "createReminder"} or not isinstance(result, dict):
         return task_state.get("outcome") if isinstance(task_state.get("outcome"), dict) else None
 
     payload = result
