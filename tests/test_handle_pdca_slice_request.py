@@ -6,6 +6,7 @@ import pytest
 
 from alphonse.agent.actions import handle_pdca_slice_request as hpsr
 from alphonse.agent.actions.handle_pdca_slice_request import HandlePdcaSliceRequestAction
+from alphonse.agent.cortex.state_store import save_state
 from alphonse.agent.nervous_system.migrate import apply_schema
 from alphonse.agent.nervous_system.pdca_queue_store import (
     get_pdca_task,
@@ -322,3 +323,62 @@ def test_handle_pdca_slice_request_blocks_when_runtime_budget_exhausted(
     blocked = [item for item in events if item["event_type"] == "slice.blocked.budget_exhausted"]
     assert blocked
     assert blocked[-1]["payload"].get("reason") == "max_runtime_reached"
+
+
+def test_handle_pdca_slice_request_prefers_checkpoint_state_for_rehydration(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db_path = tmp_path / "nerve-db"
+    monkeypatch.setenv("NERVE_DB_PATH", str(db_path))
+    monkeypatch.setenv("ALPHONSE_PDCA_QUEUE_DISPATCH_COOLDOWN_SECONDS", "10")
+    apply_schema(db_path)
+
+    task_id = upsert_pdca_task(
+        {
+            "owner_id": "owner-1",
+            "conversation_key": "chat-rehydrate",
+            "status": "queued",
+            "metadata": {"state": {"from_metadata": True}},
+        }
+    )
+    save_state("chat-rehydrate", {"from_session_store": True})
+    _ = save_pdca_checkpoint(
+        task_id=task_id,
+        state={
+            "from_checkpoint": True,
+            "last_user_message": "resume from checkpoint",
+            "task_state": {"cycle_index": 5},
+        },
+        task_state={"cycle_index": 5, "status": "running"},
+        expected_version=0,
+    )
+
+    class _FakeResult:
+        reply_text = ""
+        plans = []
+        cognition_state = {"task_state": {"status": "running", "cycle_index": 6}}
+        meta = {}
+
+    class _FakeGraph:
+        def invoke(self, state, text, *, llm_client=None):  # noqa: ANN001
+            _ = llm_client
+            assert state.get("from_checkpoint") is True
+            assert state.get("from_session_store") is None
+            assert text == "resume from checkpoint"
+            return _FakeResult()
+
+    monkeypatch.setattr(hpsr, "_CORTEX_GRAPH", _FakeGraph())
+    monkeypatch.setattr(hpsr, "build_llm_client", lambda: None)
+
+    signal = Signal(
+        type="pdca.slice.requested",
+        payload={"task_id": task_id, "correlation_id": "cid-rehydrate"},
+        source="pdca_queue_runner",
+    )
+    action = HandlePdcaSliceRequestAction()
+    _ = action.execute({"signal": signal, "ctx": None})
+
+    checkpoint = load_pdca_checkpoint(task_id)
+    assert checkpoint is not None
+    assert checkpoint["task_state"]["cycle_index"] == 6

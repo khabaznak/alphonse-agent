@@ -42,6 +42,7 @@ class PdcaQueueRunner:
         self._enabled = _is_enabled(enabled)
         self._thread: threading.Thread | None = None
         self._stop_event = threading.Event()
+        self._last_owner_id: str | None = None
 
     @property
     def enabled(self) -> bool:
@@ -74,7 +75,7 @@ class PdcaQueueRunner:
             return 0
         now_dt = _parse_or_now(now)
         now_text = now_dt.isoformat()
-        candidates = list_runnable_pdca_tasks(now=now_text, limit=20)
+        candidates = self._fair_order_candidates(list_runnable_pdca_tasks(now=now_text, limit=20))
         for task in candidates:
             task_id = str(task.get("task_id") or "").strip()
             if not task_id:
@@ -90,6 +91,7 @@ class PdcaQueueRunner:
             try:
                 emitted = self._emit_slice_requested(task=task, now_dt=now_dt)
                 if emitted:
+                    self._last_owner_id = str(task.get("owner_id") or "").strip() or None
                     return 1
             finally:
                 release_pdca_task_lease(task_id=task_id, worker_id=self._worker_id)
@@ -158,6 +160,22 @@ class PdcaQueueRunner:
         )
         return True
 
+    def _fair_order_candidates(self, candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        if not candidates:
+            return []
+        top_priority = max(_task_priority(item) for item in candidates)
+        top_bucket = [item for item in candidates if _task_priority(item) == top_priority]
+        tail = [item for item in candidates if _task_priority(item) != top_priority]
+        if not self._last_owner_id:
+            return top_bucket + tail
+        for index, item in enumerate(top_bucket):
+            owner_id = str(item.get("owner_id") or "").strip()
+            if owner_id and owner_id != self._last_owner_id:
+                preferred = top_bucket[index]
+                remaining = top_bucket[:index] + top_bucket[index + 1 :]
+                return [preferred, *remaining, *tail]
+        return top_bucket + tail
+
 
 def _is_enabled(value: bool | None) -> bool:
     if isinstance(value, bool):
@@ -198,3 +216,10 @@ def _parse_or_now(value: str | None) -> datetime:
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
     return parsed.astimezone(timezone.utc)
+
+
+def _task_priority(task: dict[str, Any]) -> int:
+    try:
+        return int(task.get("priority") or 0)
+    except (TypeError, ValueError):
+        return 0

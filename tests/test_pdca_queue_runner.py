@@ -168,3 +168,60 @@ def test_pdca_queue_runner_skips_leased_tasks_until_stale(
     assert signal.type == "pdca.slice.requested"
     assert signal.payload.get("task_id") == stale_task_id
     assert bus.get(timeout=0.05) is None
+
+
+def test_pdca_queue_runner_rotates_owners_with_equal_priority(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db_path = tmp_path / "nerve-db"
+    monkeypatch.setenv("NERVE_DB_PATH", str(db_path))
+    apply_schema(db_path)
+
+    now = datetime.now(timezone.utc)
+    task_a1 = upsert_pdca_task(
+        {
+            "owner_id": "owner-a",
+            "conversation_key": "chat-a1",
+            "status": "queued",
+            "priority": 100,
+            "next_run_at": (now - timedelta(seconds=5)).isoformat(),
+        }
+    )
+    _ = upsert_pdca_task(
+        {
+            "owner_id": "owner-a",
+            "conversation_key": "chat-a2",
+            "status": "queued",
+            "priority": 100,
+            "next_run_at": (now - timedelta(seconds=4)).isoformat(),
+        }
+    )
+    task_b1 = upsert_pdca_task(
+        {
+            "owner_id": "owner-b",
+            "conversation_key": "chat-b1",
+            "status": "queued",
+            "priority": 100,
+            "next_run_at": (now - timedelta(seconds=3)).isoformat(),
+        }
+    )
+
+    bus = Bus()
+    runner = PdcaQueueRunner(
+        bus=bus,
+        enabled=True,
+        lease_seconds=10,
+        dispatch_cooldown_seconds=1,
+        worker_id="worker-fair",
+    )
+    first = runner.run_once(now=now.isoformat())
+    second = runner.run_once(now=(now + timedelta(seconds=2)).isoformat())
+    assert first == 1
+    assert second == 1
+
+    signal_1 = bus.get(timeout=0.1)
+    signal_2 = bus.get(timeout=0.1)
+    assert signal_1 is not None and signal_2 is not None
+    assert signal_1.payload.get("task_id") == task_a1
+    assert signal_2.payload.get("task_id") == task_b1
