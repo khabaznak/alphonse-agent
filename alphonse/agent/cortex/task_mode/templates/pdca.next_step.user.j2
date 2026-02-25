@@ -1,0 +1,15 @@
+## Tool Menu
+{{ TOOL_MENU }}
+
+{% if INJECTED_GUIDANCE_BLOCK %}
+{{ INJECTED_GUIDANCE_BLOCK }}
+
+{% endif %}
+## Working State View
+{{ WORKING_STATE_VIEW_JSON }}
+
+## Output Contract
+Return ONLY the JSON object that matches the schema. No markdown, no extra text.
+- kind ask_user requires question.
+- kind call_tool requires tool_name and args.
+- kind finish requires final_text.

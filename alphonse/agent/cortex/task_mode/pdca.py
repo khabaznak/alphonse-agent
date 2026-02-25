@@ -9,6 +9,14 @@ from alphonse.agent.cortex.transitions import emit_transition_event
 from alphonse.agent.cortex.task_mode.progress_critic import progress_critic_node as _progress_critic_node_impl
 from alphonse.agent.cortex.task_mode.progress_critic import route_after_progress_critic as _route_after_progress_critic_impl
 from alphonse.agent.cortex.task_mode.observability import log_task_event
+from alphonse.agent.cortex.task_mode.prompt_templates import GOAL_CLARIFICATION_SYSTEM_PROMPT
+from alphonse.agent.cortex.task_mode.prompt_templates import GOAL_CLARIFICATION_USER_TEMPLATE
+from alphonse.agent.cortex.task_mode.prompt_templates import NEXT_STEP_REPAIR_USER_TEMPLATE
+from alphonse.agent.cortex.task_mode.prompt_templates import NEXT_STEP_SYSTEM_PROMPT
+from alphonse.agent.cortex.task_mode.prompt_templates import NEXT_STEP_USER_TEMPLATE
+from alphonse.agent.cortex.task_mode.prompt_templates import PROGRESS_CHECKIN_SYSTEM_PROMPT
+from alphonse.agent.cortex.task_mode.prompt_templates import PROGRESS_CHECKIN_USER_TEMPLATE
+from alphonse.agent.cortex.task_mode.prompt_templates import render_pdca_prompt
 from alphonse.agent.cortex.task_mode.execute_step import execute_step_node_impl
 from alphonse.agent.cortex.task_mode.state import build_default_task_state
 from alphonse.agent.cortex.task_mode.validate_step import validate_step_node_impl
@@ -18,38 +26,6 @@ from alphonse.agent.observability.log_manager import get_component_logger
 from alphonse.agent.session.day_state import render_recent_conversation_block
 from alphonse.agent.tools.base import ensure_tool_result
 logger = get_component_logger("task_mode.pdca")
-
-_NEXT_STEP_DEVELOPER_PROMPT = (
-    "You are an iterative tool-using agent in a PDCA loop.\n"
-    "Propose only the single next action.\n"
-    "- Treat `RECENT CONVERSATION` as authoritative context for this session/day.\n"
-    "- Use `RECENT CONVERSATION` to resolve follow-up references before asking the user again.\n"
-    "- Choose one action kind: ask_user, call_tool, or finish.\n"
-    "- Optimize for highest probability of progress on the goal, not novelty.\n"
-    "- If the most recent step failed and remediation is possible, do NOT switch tools yet: remediate deterministically and then retry the same tool in the next cycle.\n"
-    "- Prefer deterministic remediation over guessing: fix missing dependencies (e.g., ModuleNotFoundError), missing binaries/commands, invalid cwd/path, bad args/schema, or auth setup when possible.\n"
-    "- After a tool failure, first diagnose root cause from error_code/error_message before changing strategy.\n"
-    "- Repair playbook (apply when relevant):\n"
-    "  - ModuleNotFoundError/ImportError -> install the missing package, then retry.\n"
-    "  - command not found -> install the binary or adjust PATH/cwd, then retry.\n"
-    "  - No such file/directory -> correct path/cwd or create required file/dir, then retry.\n"
-    "  - Permission denied/Unauthorized -> request the minimal secret/permission needed, then retry.\n"
-    "  - Timeout/Connection refused -> verify host/port/network and retry/backoff.\n"
-    "  - invalid_tool_arguments/schema -> fix args to match the tool schema, then retry.\n"
-    "- Ask the user only when blocked by missing external secrets/permissions or after repeated equivalent failures despite remediation.\n"
-    "- When blocked, state the exact blocker and the minimum input needed from the user.\n"
-    "- Prefer direct-goal tools over informational tools. Use informational tools only as prerequisites for missing required arguments of a direct tool.\n"
-    "- If a tool accepts a natural time expression (e.g., 'in 1 minute'), pass it through; do NOT call get_time just to interpret it.\n"
-    "- Call get_time only when a tool explicitly requires an absolute timestamp and you must compute it.\n"
-    "- Prefer actions that reduce uncertainty early.\n"
-    "- Use only tools listed in the tool menu.\n"
-    "- If required info is missing, ask a concise clarifying question.\n"
-    "- Review acceptance criteria from working state.\n"
-    "- If acceptance criteria is missing, derive concise criteria from the goal and return them in `acceptance_criteria`.\n"
-    "- Ask the user for acceptance criteria only when criteria cannot be inferred safely.\n"
-    "- Never propose multi-step plans.\n"
-    "- Keep user-facing text concise and natural."
-)
 
 _PROGRESS_CHECK_CYCLE_THRESHOLD = 25
 _WIP_EMIT_EVERY_CYCLES = 5
@@ -618,14 +594,6 @@ def _coerce_error(value: Any) -> dict[str, Any]:
     return {"code": "tool_execution_error", "message": "Tool execution failed", "retryable": False, "details": {}}
 
 
-def _coerce_metadata(value: Any, *, tool_name: str) -> dict[str, Any]:
-    if isinstance(value, dict):
-        merged = dict(value)
-        merged.setdefault("tool", tool_name)
-        return merged
-    return {"tool": tool_name}
-
-
 def _propose_next_step_with_llm(
     *,
     llm_client: Any,
@@ -653,17 +621,13 @@ def _propose_next_step_with_llm(
     if agents:
         injected_blocks.append("## AGENTS\n" + agents)
     injected_guidance = "\n\n".join(injected_blocks).strip()
-    user_prompt_body = (
-        "## Tool Menu\n"
-        f"{tool_menu}\n\n"
-        + (f"{injected_guidance}\n\n" if injected_guidance else "")
-        + "## Working State View\n"
-        f"{json.dumps(working_view, ensure_ascii=False)}\n\n"
-        "## Output Contract\n"
-        "Return ONLY the JSON object that matches the schema. No markdown, no extra text.\n"
-        "- kind ask_user requires question.\n"
-        "- kind call_tool requires tool_name and args.\n"
-        "- kind finish requires final_text."
+    user_prompt_body = render_pdca_prompt(
+        NEXT_STEP_USER_TEMPLATE,
+        {
+            "TOOL_MENU": tool_menu,
+            "INJECTED_GUIDANCE_BLOCK": injected_guidance,
+            "WORKING_STATE_VIEW_JSON": json.dumps(working_view, ensure_ascii=False),
+        },
     )
     recent_conversation_block = str(state.get("recent_conversation_block") or "").strip()
     if not recent_conversation_block:
@@ -678,7 +642,7 @@ def _propose_next_step_with_llm(
 
     structured_supported, parsed_structured = _call_llm_structured(
         llm_client=llm_client,
-        system_prompt=_NEXT_STEP_DEVELOPER_PROMPT,
+        system_prompt=NEXT_STEP_SYSTEM_PROMPT,
         user_prompt=user_prompt,
     )
     if structured_supported:
@@ -697,7 +661,7 @@ def _propose_next_step_with_llm(
     else:
         raw = _call_llm_text(
             llm_client=llm_client,
-            system_prompt=_NEXT_STEP_DEVELOPER_PROMPT,
+            system_prompt=NEXT_STEP_SYSTEM_PROMPT,
             user_prompt=user_prompt,
         )
         parsed = _parse_json_payload(raw)
@@ -720,7 +684,7 @@ def _propose_next_step_with_llm(
     )
     repair_raw = _call_llm_text(
         llm_client=llm_client,
-        system_prompt=_NEXT_STEP_DEVELOPER_PROMPT,
+        system_prompt=NEXT_STEP_SYSTEM_PROMPT,
         user_prompt=repair_prompt,
     )
     repair_parsed = _parse_json_payload(repair_raw)
@@ -742,21 +706,16 @@ def _propose_next_step_with_llm(
 
 
 def _build_goal_clarification_question(*, state: dict[str, Any], llm_client: Any) -> str:
-    system_prompt = (
-        "You are Alphonse speaking to your human.\n"
-        "Generate exactly one concise clarification question in the user's language.\n"
-        "Ask what concrete task they want you to execute now.\n"
-        "Output plain text only."
-    )
-    user_prompt = (
-        "Context:\n"
-        f"- locale: {str(state.get('locale') or '')}\n"
-        f"- latest_user_message: {str(state.get('last_user_message') or '').strip()}\n"
-        "\nWrite one question to clarify the task goal."
+    user_prompt = render_pdca_prompt(
+        GOAL_CLARIFICATION_USER_TEMPLATE,
+        {
+            "LOCALE": str(state.get("locale") or ""),
+            "LATEST_USER_MESSAGE": str(state.get("last_user_message") or "").strip(),
+        },
     )
     question = _call_llm_text(
         llm_client=llm_client,
-        system_prompt=system_prompt,
+        system_prompt=GOAL_CLARIFICATION_SYSTEM_PROMPT,
         user_prompt=user_prompt,
     )
     rendered = str(question or "").strip()
@@ -803,15 +762,14 @@ def _build_next_step_repair_prompt(*, original_user_prompt: str, latest_diagnost
         lines = [f"- {str(item)}" for item in validation_errors if str(item).strip()]
     if not lines:
         lines = ["- next_step_output_invalid"]
-    diagnostic_block = (
-        "## Repair Feedback\n"
-        "Your previous output did not satisfy the required JSON contract.\n"
-        f"- parse_error_type: {parse_error_type or 'unknown'}\n"
-        "Validation errors:\n"
-        f"{chr(10).join(lines)}\n"
-        "Return ONLY valid JSON matching the Output Contract."
+    return render_pdca_prompt(
+        NEXT_STEP_REPAIR_USER_TEMPLATE,
+        {
+            "ORIGINAL_USER_PROMPT": original_user_prompt,
+            "PARSE_ERROR_TYPE": parse_error_type or "unknown",
+            "VALIDATION_ERRORS_LINES": "\n".join(lines),
+        },
     )
-    return f"{original_user_prompt}\n\n{diagnostic_block}".strip()
 
 
 def _redact_secrets(text: str) -> str:
@@ -976,28 +934,21 @@ def _build_progress_checkin_question(
     )
     if not criteria_lines:
         criteria_lines = "- (not provided)"
-    system_prompt = (
-        "You are Alphonse speaking to your human.\n"
-        "Generate exactly one concise question in the user's language.\n"
-        "The question must disclose current work-in-progress and ask whether to continue or stop.\n"
-        "Do not mention internal technical terms, stack traces, nodes, or recursion.\n"
-        "Output plain text only."
-    )
-    user_prompt = (
-        "Context:\n"
-        f"- locale: {str(state.get('locale') or '')}\n"
-        f"- cycle_count: {cycle}\n"
-        f"- task_goal: {goal}\n"
-        f"- current_step_kind: {current_kind}\n"
-        f"- current_tool: {current_tool}\n"
-        f"- progress_summary: {summary}\n\n"
-        "Acceptance criteria:\n"
-        f"{criteria_lines}\n\n"
-        "Write one question to the human asking whether to continue or stop."
+    user_prompt = render_pdca_prompt(
+        PROGRESS_CHECKIN_USER_TEMPLATE,
+        {
+            "LOCALE": str(state.get("locale") or ""),
+            "CYCLE_COUNT": cycle,
+            "TASK_GOAL": goal,
+            "CURRENT_STEP_KIND": current_kind,
+            "CURRENT_TOOL": current_tool,
+            "PROGRESS_SUMMARY": summary,
+            "ACCEPTANCE_CRITERIA_LINES": criteria_lines,
+        },
     )
     question = _call_llm_text(
         llm_client=llm_client,
-        system_prompt=system_prompt,
+        system_prompt=PROGRESS_CHECKIN_SYSTEM_PROMPT,
         user_prompt=user_prompt,
     )
     rendered = str(question or "").strip()
