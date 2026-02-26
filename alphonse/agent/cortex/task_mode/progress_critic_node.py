@@ -88,9 +88,11 @@ def _maybe_emit_periodic_wip_update(
     }
     emit_transition_event(state, "wip_update", detail)
     logger.info(
-        "task_mode progress_critic wip_update correlation_id=%s cycle=%s",
+        "task_mode progress_critic wip_update correlation_id=%s cycle=%s intention=%s text=%s",
         correlation_id(state),
         cycle,
+        str(detail.get("intention") or ""),
+        str(detail.get("text") or ""),
     )
 
 
