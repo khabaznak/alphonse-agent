@@ -512,6 +512,33 @@ def _default_specs() -> list[ToolSpec]:
             examples=[{"command": "ls -la", "cwd": ".", "timeout_seconds": 20}],
         ),
         ToolSpec(
+            key="mcp_call",
+            description="Execute a named operation via an MCP profile through a controlled connector and policy envelope.",
+            when_to_use="Use this for MCP-backed capabilities (for example Chrome MCP web search); do not call MCP binaries via terminal tools.",
+            returns="mcp operation status, stdout/stderr, and policy envelope metadata",
+            input_schema=_object_schema(
+                properties={
+                    "profile": {"type": "string"},
+                    "operation": {"type": "string"},
+                    "arguments": {"type": "object"},
+                    "cwd": {"type": "string"},
+                    "timeout_seconds": {"type": "number"},
+                },
+                required=["profile", "operation"],
+            ),
+            domain_tags=["mcp", "automation", "integration"],
+            safety_level=SafetyLevel.HIGH,
+            requires_confirmation=True,
+            examples=[
+                {
+                    "profile": "chrome",
+                    "operation": "web_search",
+                    "arguments": {"query": "Veloswim company profile"},
+                    "cwd": ".",
+                }
+            ],
+        ),
+        ToolSpec(
             key="terminal_async",
             description="Submit a terminal command for asynchronous execution and return a command_id for polling.",
             when_to_use="Use for long-running commands where blocking the current turn is undesirable.",

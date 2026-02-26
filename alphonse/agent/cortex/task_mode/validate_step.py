@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import logging
+import re
+import shlex
 from typing import Any, Callable
 
 from alphonse.agent.cognition.tool_schemas import planner_tool_schemas
+from alphonse.agent.tools.mcp.registry import McpProfileRegistry
 
 
 def validate_step_node_impl(
@@ -122,6 +125,16 @@ def _validate_proposal(*, proposal: Any, tool_registry: Any) -> dict[str, Any]:
     if invalid_keys:
         keys = ",".join(invalid_keys)
         return {"ok": False, "executable": False, "reason": f"invalid_args_keys:{keys}"}
+    mcp_reason = _validate_mcp_call_args(tool_name=tool_name, args=dict(args or {}))
+    if mcp_reason:
+        return {"ok": False, "executable": False, "reason": mcp_reason}
+    terminal_command = _terminal_command_from_tool_call(tool_name=tool_name, args=dict(args or {}))
+    if terminal_command and _is_mcp_like_terminal_command(terminal_command):
+        return {
+            "ok": False,
+            "executable": False,
+            "reason": "policy_violation:mcp_binaries_require_mcp_call",
+        }
     return {"ok": True, "executable": True, "reason": None}
 
 
@@ -173,3 +186,74 @@ def _tool_parameters_for_tool(tool_name: str) -> dict[str, Any] | None:
             return params
         return None
     return None
+
+
+def _terminal_command_from_tool_call(*, tool_name: str, args: dict[str, Any]) -> str:
+    normalized = str(tool_name or "").strip().lower()
+    if normalized not in {"terminal_sync", "terminal_async", "ssh_terminal"}:
+        return ""
+    return str(args.get("command") or "").strip()
+
+
+def _is_mcp_like_terminal_command(command: str) -> bool:
+    raw = str(command or "").strip()
+    if not raw:
+        return False
+    for segment in re.split(r"[|;&]+", raw):
+        probe = _segment_binary_probe(segment)
+        if not probe:
+            continue
+        if _is_mcp_binary_token(probe):
+            return True
+    return False
+
+
+def _segment_binary_probe(segment: str) -> str:
+    text = str(segment or "").strip()
+    if not text:
+        return ""
+    try:
+        parts = shlex.split(text)
+    except ValueError:
+        return ""
+    if not parts:
+        return ""
+
+    head = str(parts[0]).strip()
+    if head in {"command", "which"} and len(parts) >= 3 and str(parts[1]).strip() in {"-v", "-V"}:
+        return str(parts[2]).strip()
+    if head == "npx":
+        for item in parts[1:]:
+            token = str(item).strip()
+            if token and not token.startswith("-"):
+                return token
+        return ""
+    return head
+
+
+def _is_mcp_binary_token(token: str) -> bool:
+    value = str(token or "").strip().lower()
+    if not value:
+        return False
+    basename = value.split("/")[-1]
+    if basename in {"chrome-mcp", "chrome-devtools-mcp"}:
+        return True
+    if basename.startswith("mcp-server-"):
+        return True
+    if basename.endswith("-mcp") or basename.startswith("mcp-"):
+        return True
+    return False
+
+
+def _validate_mcp_call_args(*, tool_name: str, args: dict[str, Any]) -> str:
+    if str(tool_name or "").strip() != "mcp_call":
+        return ""
+    profile_key = str(args.get("profile") or "").strip()
+    operation_key = str(args.get("operation") or "").strip()
+    registry = McpProfileRegistry()
+    profile = registry.get(profile_key)
+    if profile is None:
+        return f"unknown_mcp_profile:{profile_key or 'missing'}"
+    if operation_key not in profile.operations:
+        return f"unknown_mcp_operation:{operation_key or 'missing'}"
+    return ""

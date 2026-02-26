@@ -13,6 +13,7 @@ from alphonse.agent.tools.job_tools import JobResumeTool
 from alphonse.agent.tools.job_tools import JobRunNowTool
 from alphonse.agent.tools.local_audio_output import LocalAudioOutputSpeakTool
 from alphonse.agent.tools.local_audio_output import LocalAudioOutputRenderTool
+from alphonse.agent.tools.mcp_call_tool import McpCallTool
 from alphonse.agent.tools.scheduler_tool import SchedulerTool
 from alphonse.agent.tools.send_message_tool import SendMessageTool
 from alphonse.agent.tools.send_message_tool import SendVoiceNoteTool
@@ -63,6 +64,7 @@ def build_default_tool_registry() -> ToolRegistry:
     analyze_image = AnalyzeTelegramImageTool()
     vision_analyze_image = VisionAnalyzeImageTool()
     terminal_sync = TerminalExecuteTool()
+    mcp_call = McpCallTool()
     terminal_async = TerminalCommandSubmitTool()
     terminal_async_command_status = TerminalCommandStatusTool()
     ssh_terminal = SshTerminalTool()
@@ -105,6 +107,7 @@ def build_default_tool_registry() -> ToolRegistry:
     registry.register("transcribeTelegramAudio", transcribe_audio)
     registry.register("analyzeTelegramImage", analyze_image)
     registry.register("terminal_sync", terminal_sync)
+    registry.register("mcp_call", mcp_call)
     registry.register("terminal_async", terminal_async)
     registry.register("terminal_async_command_status", terminal_async_command_status)
     registry.register("ssh_terminal", ssh_terminal)

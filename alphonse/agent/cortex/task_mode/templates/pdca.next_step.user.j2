@@ -1,6 +1,11 @@
 ## Tool Menu
 {{ TOOL_MENU }}
 
+{% if MCP_CAPABILITY_MENU %}
+## MCP Capabilities
+{{ MCP_CAPABILITY_MENU }}
+
+{% endif %}
 {% if INJECTED_GUIDANCE_BLOCK %}
 {{ INJECTED_GUIDANCE_BLOCK }}
 

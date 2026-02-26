@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import json
 from pathlib import Path
 
 import alphonse.agent.cortex.task_mode.pdca as pdca_module
@@ -179,6 +180,31 @@ def _apply(state: dict[str, object], update: dict[str, object]) -> dict[str, obj
     merged = dict(state)
     merged.update(update)
     return merged
+
+
+def _write_mcp_profile(tmp_path: Path) -> Path:
+    profiles_dir = tmp_path / "mcp-profiles"
+    profiles_dir.mkdir(parents=True, exist_ok=True)
+    (profiles_dir / "chrome.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "key": "chrome",
+                "description": "Chrome MCP",
+                "binary_candidates": ["chrome-devtools-mcp", "chrome-mcp"],
+                "operations": {
+                    "web_search": {
+                        "key": "web_search",
+                        "description": "search web",
+                        "command_template": "search {query}",
+                        "required_args": ["query"],
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    return profiles_dir
 
 
 def _run_cycle(
@@ -452,6 +478,36 @@ def test_pdca_validation_rejects_unknown_tool_args_keys() -> None:
     assert "payloadType" in reason
 
 
+def test_pdca_validation_rejects_direct_terminal_mcp_binaries() -> None:
+    tool_registry = build_default_tool_registry()
+    task_state = build_default_task_state()
+    task_state["acceptance_criteria"] = ["done when requested outcome is produced"]
+    task_state["goal"] = "search web via chrome mcp"
+    task_state["plan"]["current_step_id"] = "step_1"
+    task_state["plan"]["steps"] = [
+        {
+            "step_id": "step_1",
+            "proposal": {
+                "kind": "call_tool",
+                "tool_name": "terminal_sync",
+                "args": {"command": 'chrome-devtools-mcp search "Veloswim"'},
+            },
+            "status": "proposed",
+        }
+    ]
+    state: dict[str, object] = {
+        "correlation_id": "corr-pdca-terminal-mcp-block",
+        "task_state": task_state,
+    }
+
+    state = _apply(state, validate_step_node(state, tool_registry=tool_registry))
+    next_state = state["task_state"]
+    assert isinstance(next_state, dict)
+    err = next_state.get("last_validation_error")
+    assert isinstance(err, dict)
+    assert err.get("reason") == "policy_violation:mcp_binaries_require_mcp_call"
+
+
 def test_pdca_execute_maps_typeerror_to_structured_tool_failure() -> None:
     tool_registry = ToolRegistry()
     tool_registry.register("echo_tool", _ArgStrictTool())
@@ -674,6 +730,86 @@ def test_pdca_next_step_prompt_includes_failure_diagnostics_for_remediation() ->
     assert "latest_failure_diagnostics" in prompt
     assert "paramiko_not_installed" in prompt
     assert "execution_eval" in prompt
+
+
+def test_pdca_next_step_prompt_includes_mcp_capabilities(tmp_path: Path, monkeypatch) -> None:
+    profiles_dir = _write_mcp_profile(tmp_path)
+    monkeypatch.setenv("ALPHONSE_MCP_PROFILES_DIR", str(profiles_dir))
+    tool_registry = build_default_tool_registry()
+    next_step = build_next_step_node(tool_registry=tool_registry)
+    llm = _PromptCaptureLlm('{"kind":"call_tool","tool_name":"getTime","args":{}}')
+    task_state = build_default_task_state()
+    task_state["acceptance_criteria"] = ["done when requested outcome is produced"]
+    task_state["goal"] = "search web"
+    state: dict[str, object] = {
+        "correlation_id": "corr-pdca-mcp-menu",
+        "_llm_client": llm,
+        "task_state": task_state,
+    }
+
+    _ = next_step(state)
+    prompt = llm.last_user_prompt
+    assert "## MCP Capabilities" in prompt
+    assert "profile `chrome`" in prompt
+    assert "operation `web_search`" in prompt
+
+
+def test_pdca_validation_rejects_unknown_mcp_profile(tmp_path: Path, monkeypatch) -> None:
+    profiles_dir = _write_mcp_profile(tmp_path)
+    monkeypatch.setenv("ALPHONSE_MCP_PROFILES_DIR", str(profiles_dir))
+    tool_registry = build_default_tool_registry()
+    task_state = build_default_task_state()
+    task_state["acceptance_criteria"] = ["done when requested outcome is produced"]
+    task_state["goal"] = "search web via mcp"
+    task_state["plan"]["current_step_id"] = "step_1"
+    task_state["plan"]["steps"] = [
+        {
+            "step_id": "step_1",
+            "proposal": {
+                "kind": "call_tool",
+                "tool_name": "mcp_call",
+                "args": {"profile": "unknown", "operation": "web_search", "arguments": {"query": "Veloswim"}},
+            },
+            "status": "proposed",
+        }
+    ]
+    state: dict[str, object] = {"correlation_id": "corr-pdca-bad-mcp-profile", "task_state": task_state}
+
+    state = _apply(state, validate_step_node(state, tool_registry=tool_registry))
+    next_state = state["task_state"]
+    assert isinstance(next_state, dict)
+    err = next_state.get("last_validation_error")
+    assert isinstance(err, dict)
+    assert str(err.get("reason") or "").startswith("unknown_mcp_profile:")
+
+
+def test_pdca_validation_rejects_unknown_mcp_operation(tmp_path: Path, monkeypatch) -> None:
+    profiles_dir = _write_mcp_profile(tmp_path)
+    monkeypatch.setenv("ALPHONSE_MCP_PROFILES_DIR", str(profiles_dir))
+    tool_registry = build_default_tool_registry()
+    task_state = build_default_task_state()
+    task_state["acceptance_criteria"] = ["done when requested outcome is produced"]
+    task_state["goal"] = "search web via mcp"
+    task_state["plan"]["current_step_id"] = "step_1"
+    task_state["plan"]["steps"] = [
+        {
+            "step_id": "step_1",
+            "proposal": {
+                "kind": "call_tool",
+                "tool_name": "mcp_call",
+                "args": {"profile": "chrome", "operation": "wrong_op", "arguments": {"query": "Veloswim"}},
+            },
+            "status": "proposed",
+        }
+    ]
+    state: dict[str, object] = {"correlation_id": "corr-pdca-bad-mcp-operation", "task_state": task_state}
+
+    state = _apply(state, validate_step_node(state, tool_registry=tool_registry))
+    next_state = state["task_state"]
+    assert isinstance(next_state, dict)
+    err = next_state.get("last_validation_error")
+    assert isinstance(err, dict)
+    assert str(err.get("reason") or "").startswith("unknown_mcp_operation:")
 
 
 def test_pdca_can_answer_last_tool_question_from_recent_conversation_block() -> None:

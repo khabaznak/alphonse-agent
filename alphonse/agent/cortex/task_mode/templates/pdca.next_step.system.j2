@@ -40,6 +40,7 @@ Propose only the single next action.
 - Call get_time only when a tool explicitly requires an absolute timestamp and you must compute it.
 - Prefer actions that reduce uncertainty early.
 - Use only tools listed in the tool menu.
+- Never execute MCP-like binaries directly through terminal tools. For MCP capabilities, use `mcp_call` with profile + operation.
 - Filesystem root discipline:
   - Treat the configured `main` workdir as your filesystem root for task execution.
   - Prefer relative paths under `main` (for example: `notes/today.md`, `reports/health/check.md`).

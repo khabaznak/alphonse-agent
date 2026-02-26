@@ -12,6 +12,8 @@ from alphonse.agent.cortex.task_mode.prompt_templates import NEXT_STEP_USER_TEMP
 from alphonse.agent.cortex.task_mode.prompt_templates import render_pdca_prompt
 from alphonse.agent.cortex.task_mode.types import NextStepProposal
 from alphonse.agent.session.day_state import render_recent_conversation_block
+from alphonse.agent.tools.mcp.loader import default_profiles_dir
+from alphonse.agent.tools.mcp.registry import McpProfileRegistry
 
 _NEXT_STEP_MAX_ATTEMPTS = 2
 
@@ -81,6 +83,24 @@ def build_next_step_node_impl(
     task_state = task_state_with_defaults(state)
     task_state["pdca_phase"] = "plan"
     corr = correlation_id(state)
+    _, mcp_capability_stats = _build_mcp_capability_menu()
+    logger.info(
+        "task_mode next_step mcp_capabilities correlation_id=%s profiles=%s operations=%s source_dir=%s",
+        corr,
+        int(mcp_capability_stats.get("profile_count") or 0),
+        int(mcp_capability_stats.get("operation_count") or 0),
+        str(mcp_capability_stats.get("source_dir") or ""),
+    )
+    log_task_event(
+        logger=logger,
+        state=state,
+        task_state=task_state,
+        node="next_step_node",
+        event="graph.next_step.mcp_capabilities",
+        profile_count=int(mcp_capability_stats.get("profile_count") or 0),
+        operation_count=int(mcp_capability_stats.get("operation_count") or 0),
+        source_dir=str(mcp_capability_stats.get("source_dir") or ""),
+    )
     llm_client = state.get("_llm_client")
     proposal, parse_failed, diagnostics = _propose_next_step_with_llm(
         llm_client=llm_client,
@@ -230,6 +250,7 @@ def _propose_next_step_with_llm(
     diagnostics: list[dict[str, Any]] = []
 
     tool_menu = _build_tool_menu(tool_registry)
+    mcp_capability_menu, _ = _build_mcp_capability_menu()
     working_view = _build_working_state_view(task_state)
     injected_blocks: list[str] = []
     philosophy = str(state.get("philosophy_block") or "").strip()
@@ -246,6 +267,7 @@ def _propose_next_step_with_llm(
         NEXT_STEP_USER_TEMPLATE,
         {
             "TOOL_MENU": tool_menu,
+            "MCP_CAPABILITY_MENU": mcp_capability_menu,
             "INJECTED_GUIDANCE_BLOCK": injected_guidance,
             "WORKING_STATE_VIEW_JSON": json.dumps(working_view, ensure_ascii=False),
         },
@@ -464,6 +486,32 @@ def _tool_exists(tool_registry: Any, name: str) -> bool:
     if hasattr(tool_registry, "get"):
         return tool_registry.get(name) is not None
     return False
+
+
+def _build_mcp_capability_menu() -> tuple[str, dict[str, Any]]:
+    registry = McpProfileRegistry()
+    lines: list[str] = []
+    operation_count = 0
+    for profile_key in registry.keys():
+        profile = registry.get(profile_key)
+        if profile is None:
+            continue
+        lines.append(
+            f"- profile `{profile.key}`: {profile.description} "
+            f"(allowed_modes: {', '.join(profile.allowed_modes) or 'n/a'})"
+        )
+        for operation in sorted(profile.operations.values(), key=lambda item: item.key):
+            operation_count += 1
+            args_hint = ", ".join(operation.required_args) if operation.required_args else "none"
+            lines.append(
+                f"  - operation `{operation.key}`: {operation.description} "
+                f"(required_args: {args_hint})"
+            )
+    return "\n".join(lines).strip(), {
+        "profile_count": len(registry.keys()),
+        "operation_count": operation_count,
+        "source_dir": str(default_profiles_dir()),
+    }
 
 
 def _call_llm_structured(

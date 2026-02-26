@@ -141,6 +141,14 @@ def _current_intention(current_step: dict[str, Any] | None) -> str:
         return "I am preparing and sending an update"
     if tool in {"telegram_download_file"}:
         return "I am downloading the file required for the task"
+    if tool == "mcp_call":
+        profile = str(args.get("profile") or "").strip()
+        operation = str(args.get("operation") or "").strip()
+        if profile and operation:
+            return f"I am invoking MCP profile `{profile}` operation `{operation}`"
+        if profile:
+            return f"I am invoking MCP profile `{profile}`"
+        return "I am invoking an MCP operation to advance the task"
     if tool:
         return f"I am using `{tool}` to advance the task"
     return ""
