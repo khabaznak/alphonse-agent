@@ -18,9 +18,13 @@ def validate_profile_payload(payload: Any) -> list[str]:
     if not description:
         errors.append("description is required")
 
+    metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
+    supports_native = bool(metadata.get("native_tools"))
     operations = payload.get("operations")
-    if not isinstance(operations, dict) or not operations:
-        errors.append("operations must be a non-empty object")
+    if not isinstance(operations, dict):
+        errors.append("operations must be an object")
+    elif not operations and not supports_native:
+        errors.append("operations must be non-empty unless metadata.native_tools=true")
     else:
         for op_name, op_payload in operations.items():
             if not isinstance(op_payload, dict):
@@ -72,4 +76,3 @@ def validate_profile_payload(payload: Any) -> list[str]:
     if version is not None and int(version) != PROFILE_SCHEMA_VERSION:
         errors.append(f"schema_version must be {PROFILE_SCHEMA_VERSION}")
     return errors
-

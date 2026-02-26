@@ -285,6 +285,7 @@ def _propose_next_step_with_llm(
 
     tool_menu = _build_tool_menu(tool_registry)
     mcp_capability_menu, _ = _build_mcp_capability_menu()
+    mcp_live_tools_menu = _build_mcp_live_tools_menu(task_state)
     working_view = _build_working_state_view(task_state)
     injected_blocks: list[str] = []
     philosophy = str(state.get("philosophy_block") or "").strip()
@@ -302,6 +303,7 @@ def _propose_next_step_with_llm(
         {
             "TOOL_MENU": tool_menu,
             "MCP_CAPABILITY_MENU": mcp_capability_menu,
+            "MCP_LIVE_TOOLS_MENU": mcp_live_tools_menu,
             "INJECTED_GUIDANCE_BLOCK": injected_guidance,
             "WORKING_STATE_VIEW_JSON": json.dumps(working_view, ensure_ascii=False),
         },
@@ -534,6 +536,11 @@ def _build_mcp_capability_menu() -> tuple[str, dict[str, Any]]:
         profile = registry.get(profile_key)
         if profile is None:
             continue
+        metadata = profile.metadata if isinstance(profile.metadata, dict) else {}
+        supports_native = bool(metadata.get("native_tools")) or str(metadata.get("capability_model") or "").strip().lower() in {
+            "interactive_browser_server",
+            "native_mcp",
+        }
         lines.append(
             f"- profile `{profile.key}`: {profile.description} "
             f"(allowed_modes: {', '.join(profile.allowed_modes) or 'n/a'})"
@@ -543,6 +550,11 @@ def _build_mcp_capability_menu() -> tuple[str, dict[str, Any]]:
             lines.append(
                 "  - capability_model `interactive_browser`: use this like a normal browser for agent tasks "
                 "(open search engines, navigate websites, and read/extract page information)."
+            )
+        if supports_native:
+            lines.append(
+                "  - native MCP enabled: use `operation: \"list_tools\"` first to discover live server tools, "
+                "then call `mcp_call` again with `operation` equal to the discovered tool name."
             )
         for operation in sorted(profile.operations.values(), key=lambda item: item.key):
             operation_count += 1
@@ -556,6 +568,53 @@ def _build_mcp_capability_menu() -> tuple[str, dict[str, Any]]:
         "operation_count": operation_count,
         "source_dir": str(default_profiles_dir()),
     }
+
+
+def _build_mcp_live_tools_menu(task_state: dict[str, Any]) -> str:
+    facts = task_state.get("facts") if isinstance(task_state.get("facts"), dict) else {}
+    if not facts:
+        return ""
+    entries = list(facts.values())
+    for fact in reversed(entries):
+        if not isinstance(fact, dict):
+            continue
+        if str(fact.get("tool") or "").strip() != "mcp_call":
+            continue
+        result = fact.get("result")
+        if not isinstance(result, dict):
+            continue
+        if str(result.get("status") or "").strip().lower() != "ok":
+            continue
+        metadata = result.get("metadata") if isinstance(result.get("metadata"), dict) else {}
+        requested_operation = str(metadata.get("mcp_requested_operation") or metadata.get("mcp_operation") or "").strip()
+        if requested_operation not in {"list_tools", "discover_tools"}:
+            continue
+        payload = result.get("result") if isinstance(result.get("result"), dict) else {}
+        tools = payload.get("tools") if isinstance(payload.get("tools"), list) else []
+        if not tools:
+            continue
+        profile = str(metadata.get("mcp_profile") or "").strip() or "unknown"
+        lines = [f"- latest discovered native tools for profile `{profile}`:"]
+        for item in tools[:20]:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("name") or "").strip()
+            if not name:
+                continue
+            description = str(item.get("description") or "").strip()
+            schema = item.get("inputSchema") if isinstance(item.get("inputSchema"), dict) else {}
+            required_raw = schema.get("required") if isinstance(schema.get("required"), list) else []
+            required = [str(x).strip() for x in required_raw if str(x).strip()]
+            required_hint = ", ".join(required) if required else "none"
+            if description:
+                lines.append(f"  - `{name}`: {description} (required_args: {required_hint})")
+            else:
+                lines.append(f"  - `{name}` (required_args: {required_hint})")
+        if len(lines) == 1:
+            continue
+        lines.append("  - invoke with `mcp_call` using `operation` equal to the tool name above.")
+        return "\n".join(lines)
+    return ""
 
 
 def _call_llm_structured(

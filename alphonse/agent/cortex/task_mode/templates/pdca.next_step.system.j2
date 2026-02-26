@@ -47,8 +47,9 @@ Propose only the single next action.
   - Put operation inputs under `arguments`.
   - Do NOT use top-level `args`, `query`, `mode`, `input`, or any other extra top-level keys in `mcp_call` args.
   - If an operation has no inputs, set `"arguments": {}`.
+  - For native MCP profiles, run discovery first with `operation = "list_tools"` and then set `operation` to an actual discovered tool name.
   - Canonical example:
-    - `{"kind":"call_tool","tool_name":"mcp_call","args":{"profile":"chrome","operation":"web_search","arguments":{"query":"Veloswim company overview"}}}`
+    - `{"kind":"call_tool","tool_name":"mcp_call","args":{"profile":"chrome","operation":"list_tools","arguments":{}}}`
 - Filesystem root discipline:
   - Treat the configured `main` workdir as your filesystem root for task execution.
   - Prefer relative paths under `main` (for example: `notes/today.md`, `reports/health/check.md`).

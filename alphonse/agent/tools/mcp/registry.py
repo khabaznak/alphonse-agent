@@ -72,8 +72,12 @@ def _profiles_from_payloads(payloads: list[dict[str, Any]]) -> list[McpServerPro
                     command_template=str(op_payload.get("command_template") or "").strip(),
                     required_args=tuple(str(item).strip() for item in op_payload.get("required_args") or [] if str(item).strip()),
                 )
+        metadata = dict(payload.get("metadata") or {}) if isinstance(payload.get("metadata"), dict) else {}
+        supports_native = bool(metadata.get("native_tools"))
         key = str(payload.get("key") or "").strip()
-        if not key or not operations:
+        if not key:
+            continue
+        if not operations and not supports_native:
             continue
         profiles.append(
             McpServerProfile(
@@ -88,7 +92,7 @@ def _profiles_from_payloads(payloads: list[dict[str, Any]]) -> list[McpServerPro
                     str(item).strip() for item in payload.get("allowed_modes") or ("ops", "dev") if str(item).strip()
                 ),
                 npx_package_fallback=_normalize_optional_string(payload.get("npx_package_fallback")),
-                metadata=dict(payload.get("metadata") or {}) if isinstance(payload.get("metadata"), dict) else {},
+                metadata=metadata,
             )
         )
     return profiles
@@ -97,4 +101,3 @@ def _profiles_from_payloads(payloads: list[dict[str, Any]]) -> list[McpServerPro
 def _normalize_optional_string(value: Any) -> str | None:
     text = str(value or "").strip()
     return text or None
-

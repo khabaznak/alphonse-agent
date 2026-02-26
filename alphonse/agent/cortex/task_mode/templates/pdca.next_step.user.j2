@@ -6,6 +6,11 @@
 {{ MCP_CAPABILITY_MENU }}
 
 {% endif %}
+{% if MCP_LIVE_TOOLS_MENU %}
+## MCP Live Tools
+{{ MCP_LIVE_TOOLS_MENU }}
+
+{% endif %}
 {% if INJECTED_GUIDANCE_BLOCK %}
 {{ INJECTED_GUIDANCE_BLOCK }}
 
@@ -20,3 +25,4 @@ Return ONLY the JSON object that matches the schema. No markdown, no extra text.
 - kind finish requires final_text.
 - If tool_name is `mcp_call`, args MUST be:
   - `{"profile":"<profile_key>","operation":"<operation_key>","arguments":{...}}`
+- For native MCP profiles, use `operation: "list_tools"` before attempting task-specific tool names.

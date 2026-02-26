@@ -271,3 +271,51 @@ def test_mcp_call_fast_fails_contract_mismatch(monkeypatch: pytest.MonkeyPatch, 
     error = result.get("error")
     assert isinstance(error, dict)
     assert error.get("code") == "mcp_operation_contract_mismatch"
+
+
+def test_mcp_call_routes_unknown_operation_to_native_connector(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("ALPHONSE_EXECUTION_MODE", "ops")
+    monkeypatch.setattr(mcp_call_tool_module, "_allowed_roots", lambda: [str(tmp_path)])
+    profiles_dir = tmp_path / "profiles"
+    profiles_dir.mkdir(parents=True, exist_ok=True)
+    (profiles_dir / "chrome.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "key": "chrome",
+                "description": "Chrome MCP",
+                "binary_candidates": ["chrome-devtools-mcp"],
+                "operations": {},
+                "metadata": {"native_tools": True},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("ALPHONSE_MCP_PROFILES_DIR", str(profiles_dir))
+
+    connector = McpConnector(terminal=_DummyTerminal())
+    called: dict[str, object] = {}
+
+    def _fake_native(**kwargs):
+        called.update(kwargs)
+        return {
+            "status": "ok",
+            "result": {"tools": ["navigate"]},
+            "error": None,
+            "metadata": {"tool": "mcp_call", "mcp_native": True},
+        }
+
+    monkeypatch.setattr(connector, "_execute_native", _fake_native)
+    tool = McpCallTool(connector=connector)
+
+    result = tool.execute(
+        profile="chrome",
+        operation="list_tools",
+        arguments={},
+        cwd=str(tmp_path),
+    )
+
+    assert result["status"] == "ok"
+    assert called.get("operation_key") == "list_tools"

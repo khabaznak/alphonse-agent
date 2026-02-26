@@ -756,6 +756,58 @@ def test_pdca_next_step_prompt_includes_mcp_capabilities(tmp_path: Path, monkeyp
     assert "interactive_browser" in prompt
 
 
+def test_pdca_next_step_prompt_includes_mcp_live_tools_menu() -> None:
+    tool_registry = build_default_tool_registry()
+    next_step = build_next_step_node(tool_registry=tool_registry)
+    llm = _PromptCaptureLlm('{"kind":"call_tool","tool_name":"getTime","args":{}}')
+    task_state = build_default_task_state()
+    task_state["acceptance_criteria"] = ["done when requested outcome is produced"]
+    task_state["goal"] = "search web"
+    task_state["facts"] = {
+        "step_1": {
+            "tool": "mcp_call",
+            "result": {
+                "status": "ok",
+                "result": {
+                    "tools": [
+                        {
+                            "name": "navigate",
+                            "description": "Navigate to URL",
+                            "inputSchema": {
+                                "type": "object",
+                                "required": ["url"],
+                                "properties": {"url": {"type": "string"}},
+                            },
+                        },
+                        {
+                            "name": "snapshot",
+                            "description": "Capture page snapshot",
+                            "inputSchema": {"type": "object", "required": []},
+                        },
+                    ]
+                },
+                "metadata": {
+                    "mcp_profile": "chrome",
+                    "mcp_requested_operation": "list_tools",
+                    "mcp_operation": "list_tools",
+                },
+            },
+        }
+    }
+    state: dict[str, object] = {
+        "correlation_id": "corr-pdca-mcp-live-tools",
+        "_llm_client": llm,
+        "task_state": task_state,
+    }
+
+    _ = next_step(state)
+    prompt = llm.last_user_prompt
+    assert "## MCP Live Tools" in prompt
+    assert "profile `chrome`" in prompt
+    assert "`navigate`" in prompt
+    assert "required_args: url" in prompt
+
+
 def test_pdca_validation_rejects_unknown_mcp_profile(tmp_path: Path, monkeypatch) -> None:
     profiles_dir = _write_mcp_profile(tmp_path)
     monkeypatch.setenv("ALPHONSE_MCP_PROFILES_DIR", str(profiles_dir))
@@ -812,6 +864,47 @@ def test_pdca_validation_rejects_unknown_mcp_operation(tmp_path: Path, monkeypat
     err = next_state.get("last_validation_error")
     assert isinstance(err, dict)
     assert str(err.get("reason") or "").startswith("unknown_mcp_operation:")
+
+
+def test_pdca_validation_allows_unknown_mcp_operation_for_native_profile(tmp_path: Path, monkeypatch) -> None:
+    profiles_dir = tmp_path / "mcp-profiles-native"
+    profiles_dir.mkdir(parents=True, exist_ok=True)
+    (profiles_dir / "chrome.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "key": "chrome",
+                "description": "Chrome MCP",
+                "binary_candidates": ["chrome-devtools-mcp"],
+                "operations": {},
+                "metadata": {"native_tools": True},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("ALPHONSE_MCP_PROFILES_DIR", str(profiles_dir))
+    tool_registry = build_default_tool_registry()
+    task_state = build_default_task_state()
+    task_state["acceptance_criteria"] = ["done when requested outcome is produced"]
+    task_state["goal"] = "search web via mcp"
+    task_state["plan"]["current_step_id"] = "step_1"
+    task_state["plan"]["steps"] = [
+        {
+            "step_id": "step_1",
+            "proposal": {
+                "kind": "call_tool",
+                "tool_name": "mcp_call",
+                "args": {"profile": "chrome", "operation": "web_search", "arguments": {"query": "Veloswim"}},
+            },
+            "status": "proposed",
+        }
+    ]
+    state: dict[str, object] = {"correlation_id": "corr-pdca-native-mcp-operation", "task_state": task_state}
+
+    state = _apply(state, validate_step_node(state, tool_registry=tool_registry))
+    next_state = state["task_state"]
+    assert isinstance(next_state, dict)
+    assert next_state.get("last_validation_error") is None
 
 
 def test_route_after_next_step_uses_mcp_handler_for_mcp_call() -> None:

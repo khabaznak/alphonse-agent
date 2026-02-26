@@ -254,6 +254,13 @@ def _validate_mcp_call_args(*, tool_name: str, args: dict[str, Any]) -> str:
     profile = registry.get(profile_key)
     if profile is None:
         return f"unknown_mcp_profile:{profile_key or 'missing'}"
-    if operation_key not in profile.operations:
+    if operation_key in profile.operations:
+        return ""
+    metadata = profile.metadata if isinstance(profile.metadata, dict) else {}
+    supports_native = bool(metadata.get("native_tools")) or str(metadata.get("capability_model") or "").strip().lower() in {
+        "interactive_browser_server",
+        "native_mcp",
+    }
+    if not supports_native:
         return f"unknown_mcp_operation:{operation_key or 'missing'}"
     return ""
