@@ -233,11 +233,45 @@ def route_after_next_step_impl(
             correlation_id(state),
         )
         return "respond_node"
+    if _current_step_is_mcp_call(state):
+        logger.info(
+            "task_mode route_after_next_step correlation_id=%s route=mcp_handler_node",
+            correlation_id(state),
+        )
+        return "mcp_handler_node"
     logger.info(
         "task_mode route_after_next_step correlation_id=%s route=execute_step_node",
         correlation_id(state),
     )
     return "execute_step_node"
+
+
+def _current_step_is_mcp_call(state: dict[str, Any]) -> bool:
+    task_state = state.get("task_state")
+    if not isinstance(task_state, dict):
+        return False
+    plan = task_state.get("plan")
+    if not isinstance(plan, dict):
+        return False
+    step_id = str(plan.get("current_step_id") or "").strip()
+    if not step_id:
+        return False
+    steps = plan.get("steps")
+    if not isinstance(steps, list):
+        return False
+    for item in steps:
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("step_id") or "") != step_id:
+            continue
+        proposal = item.get("proposal")
+        if not isinstance(proposal, dict):
+            return False
+        return (
+            str(proposal.get("kind") or "").strip() == "call_tool"
+            and str(proposal.get("tool_name") or "").strip() == "mcp_call"
+        )
+    return False
 
 
 def _propose_next_step_with_llm(

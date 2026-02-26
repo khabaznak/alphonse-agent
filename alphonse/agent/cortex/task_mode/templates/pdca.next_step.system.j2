@@ -41,6 +41,14 @@ Propose only the single next action.
 - Prefer actions that reduce uncertainty early.
 - Use only tools listed in the tool menu.
 - Never execute MCP-like binaries directly through terminal tools. For MCP capabilities, use `mcp_call` with profile + operation.
+- MCP CALL CONTRACT (STRICT):
+  - For `tool_name = "mcp_call"`, `args` MUST use this canonical shape only:
+    - `{"profile":"<profile_key>","operation":"<operation_key>","arguments":{...}}`
+  - Put operation inputs under `arguments`.
+  - Do NOT use top-level `args`, `query`, `mode`, `input`, or any other extra top-level keys in `mcp_call` args.
+  - If an operation has no inputs, set `"arguments": {}`.
+  - Canonical example:
+    - `{"kind":"call_tool","tool_name":"mcp_call","args":{"profile":"chrome","operation":"web_search","arguments":{"query":"Veloswim company overview"}}}`
 - Filesystem root discipline:
   - Treat the configured `main` workdir as your filesystem root for task execution.
   - Prefer relative paths under `main` (for example: `notes/today.md`, `reports/health/check.md`).

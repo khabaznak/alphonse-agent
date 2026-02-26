@@ -18,3 +18,5 @@ Return ONLY the JSON object that matches the schema. No markdown, no extra text.
 - kind ask_user requires question.
 - kind call_tool requires tool_name and args.
 - kind finish requires final_text.
+- If tool_name is `mcp_call`, args MUST be:
+  - `{"profile":"<profile_key>","operation":"<operation_key>","arguments":{...}}`

@@ -812,6 +812,32 @@ def test_pdca_validation_rejects_unknown_mcp_operation(tmp_path: Path, monkeypat
     assert str(err.get("reason") or "").startswith("unknown_mcp_operation:")
 
 
+def test_route_after_next_step_uses_mcp_handler_for_mcp_call() -> None:
+    task_state = build_default_task_state()
+    task_state["plan"]["current_step_id"] = "step_1"
+    task_state["plan"]["steps"] = [
+        {
+            "step_id": "step_1",
+            "proposal": {
+                "kind": "call_tool",
+                "tool_name": "mcp_call",
+                "args": {
+                    "profile": "chrome",
+                    "operation": "web_search",
+                    "arguments": {"query": "Veloswim"},
+                },
+            },
+            "status": "proposed",
+        }
+    ]
+    state: dict[str, object] = {
+        "correlation_id": "corr-pdca-route-mcp-handler",
+        "task_state": task_state,
+    }
+
+    assert route_after_next_step(state) == "mcp_handler_node"
+
+
 def test_pdca_can_answer_last_tool_question_from_recent_conversation_block() -> None:
     tool_registry = build_default_tool_registry()
     next_step = build_next_step_node(tool_registry=tool_registry)

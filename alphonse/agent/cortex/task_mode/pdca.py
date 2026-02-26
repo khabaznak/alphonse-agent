@@ -7,6 +7,7 @@ from alphonse.agent.cortex.task_mode.act_node import evaluate_tool_execution
 from alphonse.agent.cortex.task_mode.act_node import route_after_act_stateful
 from alphonse.agent.cortex.task_mode.check_state import derive_outcome_from_state
 from alphonse.agent.cortex.task_mode.check_state import goal_satisfied
+from alphonse.agent.cortex.task_mode.mcp_handler import mcp_handler_node_impl
 from alphonse.agent.cortex.transitions import emit_transition_event
 from alphonse.agent.cortex.task_mode.plan import build_next_step_node_impl
 from alphonse.agent.cortex.task_mode.plan import route_after_next_step_impl
@@ -101,6 +102,18 @@ def execute_step_node(state: dict[str, Any], *, tool_registry: Any) -> dict[str,
     return execute_step_node_impl(
         state,
         tool_registry=tool_registry,
+        task_state_with_defaults=task_state_with_defaults,
+        correlation_id=correlation_id,
+        current_step=current_step,
+        append_trace_event=append_trace_event,
+        logger=logger,
+        log_task_event=log_task_event,
+    )
+
+
+def mcp_handler_node(state: dict[str, Any]) -> dict[str, Any]:
+    return mcp_handler_node_impl(
+        state,
         task_state_with_defaults=task_state_with_defaults,
         correlation_id=correlation_id,
         current_step=current_step,

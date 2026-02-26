@@ -96,3 +96,92 @@ def test_mcp_call_rejects_unknown_profile(monkeypatch: pytest.MonkeyPatch, tmp_p
     error = result.get("error")
     assert isinstance(error, dict)
     assert error.get("code") == "mcp_profile_not_found"
+
+
+def test_mcp_call_normalizes_legacy_query_and_ignores_mode(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("ALPHONSE_EXECUTION_MODE", "ops")
+    monkeypatch.setattr(mcp_call_tool_module, "_allowed_roots", lambda: [str(tmp_path)])
+    profiles_dir = tmp_path / "profiles"
+    profiles_dir.mkdir(parents=True, exist_ok=True)
+    (profiles_dir / "chrome.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "key": "chrome",
+                "description": "Chrome MCP",
+                "binary_candidates": ["chrome-devtools-mcp"],
+                "operations": {
+                    "web_search": {
+                        "key": "web_search",
+                        "description": "search web",
+                        "command_template": "search {query}",
+                        "required_args": ["query"],
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("ALPHONSE_MCP_PROFILES_DIR", str(profiles_dir))
+    dummy_terminal = _DummyTerminal()
+    tool = McpCallTool(connector=McpConnector(terminal=dummy_terminal))
+
+    result = tool.execute(
+        profile="chrome",
+        operation="web_search",
+        query="Veloswim",
+        mode="headless",
+        cwd=str(tmp_path),
+    )
+
+    assert result["status"] == "ok"
+    assert dummy_terminal.calls
+    command = str(dummy_terminal.calls[0].get("command") or "")
+    assert "Veloswim" in command
+
+
+def test_mcp_call_normalizes_nested_args_payload(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("ALPHONSE_EXECUTION_MODE", "ops")
+    monkeypatch.setattr(mcp_call_tool_module, "_allowed_roots", lambda: [str(tmp_path)])
+    profiles_dir = tmp_path / "profiles"
+    profiles_dir.mkdir(parents=True, exist_ok=True)
+    (profiles_dir / "chrome.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "key": "chrome",
+                "description": "Chrome MCP",
+                "binary_candidates": ["chrome-devtools-mcp"],
+                "operations": {
+                    "web_search": {
+                        "key": "web_search",
+                        "description": "search web",
+                        "command_template": "search {query}",
+                        "required_args": ["query"],
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("ALPHONSE_MCP_PROFILES_DIR", str(profiles_dir))
+    dummy_terminal = _DummyTerminal()
+    tool = McpCallTool(connector=McpConnector(terminal=dummy_terminal))
+
+    result = tool.execute(
+        args={
+            "profile": "chrome",
+            "operation": "web_search",
+            "query": "Veloswim nested",
+        },
+        cwd=str(tmp_path),
+    )
+
+    assert result["status"] == "ok"
+    assert dummy_terminal.calls
+    command = str(dummy_terminal.calls[0].get("command") or "")
+    assert "Veloswim nested" in command
