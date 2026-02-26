@@ -1012,7 +1012,7 @@ def test_progress_critic_emits_wip_update_every_five_cycles(monkeypatch) -> None
     assert "Check package delivery" in str(detail.get("text") or "")
 
 
-def test_progress_critic_does_not_accept_question_as_done_outcome() -> None:
+def test_progress_critic_accepts_structured_task_completed_outcome() -> None:
     task_state = build_default_task_state()
     task_state["status"] = "running"
     task_state["acceptance_criteria"] = ["done when the user gets a concrete answer"]
@@ -1029,5 +1029,5 @@ def test_progress_critic_does_not_accept_question_as_done_outcome() -> None:
     updated = progress_critic_node(state)
     next_state = updated.get("task_state")
     assert isinstance(next_state, dict)
-    assert next_state.get("status") == "running"
-    assert route_after_progress_critic(updated) == "act_node"
+    assert next_state.get("status") == "done"
+    assert route_after_progress_critic(updated) == "respond_node"

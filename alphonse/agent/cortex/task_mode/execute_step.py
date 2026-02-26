@@ -180,6 +180,13 @@ def execute_step_node_impl(
                 error_message=error_message,
             )
             return {"task_state": task_state}
+        derived_outcome = _derive_tool_outcome_from_result(
+            tool_name=tool_name,
+            result=result,
+            state=state,
+        )
+        if isinstance(derived_outcome, dict):
+            task_state["outcome"] = derived_outcome
         task_state["status"] = "running"
         if isinstance(current, dict):
             current["status"] = "executed"
@@ -365,6 +372,37 @@ def _serialize_result(result: Any) -> Any:
     if isinstance(result, (dict, list, str, int, float, bool)) or result is None:
         return result
     return str(result)
+
+
+def _derive_tool_outcome_from_result(
+    *,
+    tool_name: str,
+    result: Any,
+    state: dict[str, Any],
+) -> dict[str, Any] | None:
+    if tool_name not in {"create_reminder", "createReminder"} or not isinstance(result, dict):
+        return None
+    payload = result
+    status = str(result.get("status") or "").strip().lower()
+    if status in {"ok", "executed"} and isinstance(result.get("result"), dict):
+        payload = dict(result.get("result") or {})
+    reminder_id = str(payload.get("reminder_id") or "").strip()
+    fire_at = str(payload.get("fire_at") or "").strip()
+    if not reminder_id or not fire_at:
+        return None
+    message = str(payload.get("message") or "").strip()
+    for_whom = str(payload.get("for_whom") or state.get("channel_target") or "").strip()
+    if not for_whom:
+        for_whom = str(payload.get("delivery_target") or "").strip()
+    return {
+        "kind": "reminder_created",
+        "evidence": {
+            "reminder_id": reminder_id,
+            "fire_at": fire_at,
+            "message": message,
+            "for_whom": for_whom,
+        },
+    }
 
 
 def _repair_create_reminder_args(
