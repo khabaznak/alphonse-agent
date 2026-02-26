@@ -190,7 +190,16 @@ class McpCallTool:
             payload = exc.as_payload()
             metadata = dict(payload.get("metadata") or {})
             metadata["mode"] = mode
+            metadata["mcp_profile"] = profile_key
+            metadata["mcp_operation"] = operation_key
             payload["metadata"] = metadata
+            error = payload.get("error")
+            if isinstance(error, dict):
+                details = dict(error.get("details") or {}) if isinstance(error.get("details"), dict) else {}
+                details.setdefault("mcp_profile", profile_key)
+                details.setdefault("mcp_operation", operation_key)
+                error["details"] = details
+                payload["error"] = error
             return payload
 
 

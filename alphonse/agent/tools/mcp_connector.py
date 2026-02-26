@@ -9,6 +9,7 @@ import subprocess
 import time
 from dataclasses import dataclass
 from typing import Any
+from typing import Literal
 
 from alphonse.agent.tools.mcp.registry import McpOperationProfile
 from alphonse.agent.tools.mcp.registry import McpProfileRegistry
@@ -150,12 +151,18 @@ class McpConnector:
         timeout_seconds: float,
     ) -> dict[str, Any]:
         launcher_argv = _launcher_argv(profile)
+        transport = _native_transport(profile)
         operation = str(operation_key or "").strip()
         if not operation:
             raise McpInvocationError("mcp_operation_not_found", f"Unknown operation '{operation_key}' for MCP profile '{profile.key}'.")
 
         try:
-            with _McpJsonRpcStdioClient(launcher_argv=launcher_argv, cwd=cwd, timeout_seconds=timeout_seconds) as client:
+            with _McpJsonRpcStdioClient(
+                launcher_argv=launcher_argv,
+                cwd=cwd,
+                timeout_seconds=timeout_seconds,
+                transport=transport,
+            ) as client:
                 client.initialize()
                 tools = client.list_tools()
                 tool_names = [str(item.get("name") or "").strip() for item in tools if str(item.get("name") or "").strip()]
@@ -182,6 +189,7 @@ class McpConnector:
                             "mcp_operation": operation,
                             "mcp_command": " ".join(shlex.quote(part) for part in launcher_argv),
                             "mcp_native": True,
+                            "mcp_transport": transport,
                         },
                     }
 
@@ -194,6 +202,16 @@ class McpConnector:
                     )
 
                 call_result = client.call_tool(name=resolved_operation, arguments=arguments)
+                if isinstance(call_result, dict) and bool(call_result.get("isError")):
+                    content = call_result.get("content")
+                    message = "MCP tool reported an error"
+                    if isinstance(content, list) and content:
+                        first = content[0]
+                        if isinstance(first, dict):
+                            text = str(first.get("text") or "").strip()
+                            if text:
+                                message = text
+                    raise McpInvocationError("mcp_tools_call_failed", message)
                 return {
                     "status": "ok",
                     "result": call_result,
@@ -212,6 +230,7 @@ class McpConnector:
                         "mcp_requested_operation": operation,
                         "mcp_command": " ".join(shlex.quote(part) for part in launcher_argv),
                         "mcp_native": True,
+                        "mcp_transport": transport,
                         "available_tools": tool_names,
                     },
                 }
@@ -250,10 +269,18 @@ class McpConnector:
 
 
 class _McpJsonRpcStdioClient:
-    def __init__(self, *, launcher_argv: list[str], cwd: str, timeout_seconds: float) -> None:
+    def __init__(
+        self,
+        *,
+        launcher_argv: list[str],
+        cwd: str,
+        timeout_seconds: float,
+        transport: Literal["content_length", "ndjson"],
+    ) -> None:
         self._launcher_argv = list(launcher_argv)
         self._cwd = cwd
         self._timeout_seconds = max(float(timeout_seconds), 1.0)
+        self._transport: Literal["content_length", "ndjson"] = transport
         self._proc: subprocess.Popen[bytes] | None = None
         self._seq = 0
         self._buffer = bytearray()
@@ -346,11 +373,30 @@ class _McpJsonRpcStdioClient:
         if proc is None or proc.stdin is None:
             raise McpInvocationError("mcp_transport_closed", "MCP transport is not available")
         body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
-        header = f"Content-Length: {len(body)}\r\n\r\n".encode("ascii")
-        proc.stdin.write(header + body)
+        if self._transport == "ndjson":
+            proc.stdin.write(body + b"\n")
+        else:
+            header = f"Content-Length: {len(body)}\r\n\r\n".encode("ascii")
+            proc.stdin.write(header + body)
         proc.stdin.flush()
 
     def _read_message(self, *, deadline: float) -> dict[str, Any]:
+        if self._transport == "ndjson":
+            return self._read_ndjson_message(deadline=deadline)
+        return self._read_content_length_message(deadline=deadline)
+
+    def _read_ndjson_message(self, *, deadline: float) -> dict[str, Any]:
+        line = self._readline(deadline=deadline)
+        text = line.decode("utf-8", errors="replace").strip()
+        if not text:
+            raise McpInvocationError("mcp_protocol_error", "Received empty MCP JSON-RPC line")
+        try:
+            parsed = json.loads(text)
+        except Exception as exc:
+            raise McpInvocationError("mcp_protocol_error", "Invalid NDJSON payload from MCP server") from exc
+        return dict(parsed) if isinstance(parsed, dict) else {}
+
+    def _read_content_length_message(self, *, deadline: float) -> dict[str, Any]:
         headers: dict[str, str] = {}
         while True:
             line = self._readline(deadline=deadline)
@@ -438,20 +484,38 @@ def _launcher_expression(profile: McpServerProfile) -> str:
 
 
 def _launcher_argv(profile: McpServerProfile) -> list[str]:
+    metadata = profile.metadata if isinstance(profile.metadata, dict) else {}
+    extra_args_raw = metadata.get("launcher_args")
+    extra_args = [
+        str(item).strip()
+        for item in (extra_args_raw if isinstance(extra_args_raw, list) else [])
+        if str(item).strip()
+    ]
     for binary in profile.binary_candidates:
         name = str(binary or "").strip()
         if not name:
             continue
         resolved = shutil.which(name)
         if resolved:
-            return [resolved]
+            return [resolved, *extra_args]
     package = str(profile.npx_package_fallback or "").strip()
     if package:
-        return ["npx", "-y", package]
+        return ["npx", "-y", package, *extra_args]
     raise McpInvocationError(
         "mcp_binary_not_found",
         f"No MCP launcher found for profile '{profile.key}'.",
     )
+
+
+def _native_transport(profile: McpServerProfile) -> Literal["content_length", "ndjson"]:
+    metadata = profile.metadata if isinstance(profile.metadata, dict) else {}
+    configured = str(metadata.get("mcp_transport") or "").strip().lower()
+    if configured in {"ndjson", "content_length"}:
+        return configured  # type: ignore[return-value]
+    binaries = {str(item or "").strip().lower() for item in profile.binary_candidates}
+    if "chrome-devtools-mcp" in binaries or "chrome-mcp" in binaries:
+        return "ndjson"
+    return "content_length"
 
 
 def _supports_native_tools(profile: McpServerProfile) -> bool:
