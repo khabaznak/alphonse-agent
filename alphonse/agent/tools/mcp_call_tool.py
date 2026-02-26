@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from typing import Any
 
 from alphonse.agent.observability.log_manager import get_component_logger
@@ -61,7 +62,7 @@ def normalize_mcp_call_invocation(raw: dict[str, Any]) -> tuple[dict[str, Any], 
     if payload.get("mode") is not None:
         ignored.append("mode")
 
-    for key in payload.keys():
+    for key, value in payload.items():
         if key in {
             "profile",
             "operation",
@@ -75,7 +76,11 @@ def normalize_mcp_call_invocation(raw: dict[str, Any]) -> tuple[dict[str, Any], 
             "state",
         }:
             continue
-        ignored.append(key)
+        if key not in canonical_arguments:
+            canonical_arguments[key] = value
+            mapped.append(f"{key}->arguments.{key}")
+        else:
+            ignored.append(f"{key}(already_present)")
 
     normalized = {
         "profile": profile,
@@ -165,6 +170,10 @@ class McpCallTool:
                 "metadata": {"mode": mode, "tool": "mcp_call"},
             }
         try:
+            requested_timeout_seconds = normalized.get("timeout_seconds")
+            requested_timeout_ms = normalized.get("timeout_ms")
+            if requested_timeout_seconds is None and requested_timeout_ms is None:
+                requested_timeout_seconds = _read_mcp_default_timeout_seconds()
             return self._connector.execute(
                 profile_key=profile_key,
                 operation_key=operation_key,
@@ -173,8 +182,8 @@ class McpCallTool:
                 allowed_roots=roots,
                 mode=mode,
                 timeout_seconds=_resolve_timeout(
-                    normalized.get("timeout_seconds"),
-                    normalized.get("timeout_ms"),
+                    requested_timeout_seconds,
+                    requested_timeout_ms,
                 ),
             )
         except McpInvocationError as exc:
@@ -183,3 +192,15 @@ class McpCallTool:
             metadata["mode"] = mode
             payload["metadata"] = metadata
             return payload
+
+
+def _read_mcp_default_timeout_seconds() -> float:
+    raw = str(os.getenv("ALPHONSE_MCP_DEFAULT_TIMEOUT_SECONDS") or "").strip()
+    if raw:
+        try:
+            parsed = float(raw)
+            if parsed > 0:
+                return parsed
+        except ValueError:
+            pass
+    return 45.0

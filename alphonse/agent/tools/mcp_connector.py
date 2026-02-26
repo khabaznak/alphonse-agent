@@ -64,6 +64,9 @@ class McpConnector:
                 "mcp_operation_not_found",
                 f"Unknown operation '{operation_key}' for MCP profile '{profile.key}'.",
             )
+        mismatch = _contract_mismatch(profile=profile, operation=operation)
+        if mismatch:
+            raise McpInvocationError("mcp_operation_contract_mismatch", mismatch)
         command = self._build_command(
             profile=profile,
             operation=operation,
@@ -95,10 +98,26 @@ class McpConnector:
                 "error": {"code": "mcp_connector_invalid_result", "message": "MCP connector returned invalid result"},
                 "metadata": metadata,
             }
+        error_payload = outcome.get("error") if isinstance(outcome.get("error"), dict) else None
+        result_payload = outcome.get("result") if isinstance(outcome.get("result"), dict) else {}
+        if str(outcome.get("status") or "").strip().lower() == "failed" and isinstance(error_payload, dict):
+            stderr_preview = str(result_payload.get("stderr") or "").strip()
+            stdout_preview = str(result_payload.get("stdout") or "").strip()
+            details = error_payload.get("details")
+            merged_details = dict(details) if isinstance(details, dict) else {}
+            if stderr_preview:
+                merged_details["stderr_preview"] = stderr_preview[:600]
+            if stdout_preview:
+                merged_details["stdout_preview"] = stdout_preview[:400]
+            merged_details["mcp_command"] = command
+            error_payload = {
+                **error_payload,
+                "details": merged_details,
+            }
         return {
             "status": str(outcome.get("status") or "failed"),
             "result": outcome.get("result"),
-            "error": outcome.get("error"),
+            "error": error_payload if error_payload is not None else outcome.get("error"),
             "metadata": metadata,
         }
 
@@ -148,3 +167,16 @@ def _launcher_expression(profile: McpServerProfile) -> str:
     if package:
         checks.append(f'if [ -z "$MCP_BIN" ]; then MCP_BIN="npx -y {shlex.quote(package)}"; fi')
     return " ; ".join(checks).strip()
+
+
+def _contract_mismatch(*, profile: McpServerProfile, operation: McpOperationProfile) -> str:
+    binaries = {str(item or "").strip().lower() for item in profile.binary_candidates}
+    template = str(operation.command_template or "").strip().lower()
+    if operation.key == "web_search" and template.startswith("search ") and (
+        "chrome-devtools-mcp" in binaries or "chrome-mcp" in binaries
+    ):
+        return (
+            "Profile operation `web_search` uses one-shot command_template `search {query}` "
+            "but chrome-devtools-mcp/chrome-mcp are MCP server launchers, not search CLIs."
+        )
+    return ""

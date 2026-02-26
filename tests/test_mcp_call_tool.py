@@ -42,11 +42,11 @@ def test_mcp_call_executes_with_policy_envelope(monkeypatch: pytest.MonkeyPatch,
                 "binary_candidates": ["chrome-devtools-mcp", "chrome-mcp"],
                 "aliases": ["chrome-devtools"],
                 "operations": {
-                    "web_search": {
-                        "key": "web_search",
-                        "description": "search web",
-                        "command_template": "search {query}",
-                        "required_args": ["query"],
+                    "open_page": {
+                        "key": "open_page",
+                        "description": "open page",
+                        "command_template": "open {url}",
+                        "required_args": ["url"],
                     }
                 },
                 "npx_package_fallback": "chrome-devtools-mcp",
@@ -60,8 +60,8 @@ def test_mcp_call_executes_with_policy_envelope(monkeypatch: pytest.MonkeyPatch,
 
     result = tool.execute(
         profile="chrome",
-        operation="web_search",
-        arguments={"query": "Veloswim company profile"},
+        operation="open_page",
+        arguments={"url": "https://example.com"},
         cwd=str(tmp_path),
     )
 
@@ -71,14 +71,14 @@ def test_mcp_call_executes_with_policy_envelope(monkeypatch: pytest.MonkeyPatch,
     command = str(call.get("command") or "")
     assert "chrome-devtools-mcp" in command or "chrome-mcp" in command or "npx -y chrome-devtools-mcp" in command
     assert "fi search" not in command
-    assert 'eval "$MCP_BIN search' in command
+    assert 'eval "$MCP_BIN ' in command
     metadata = result.get("metadata")
     assert isinstance(metadata, dict)
     envelope = metadata.get("policy_envelope")
     assert isinstance(envelope, dict)
     assert envelope.get("execution_surface") == "mcp"
     assert envelope.get("profile") == "chrome"
-    assert envelope.get("operation") == "web_search"
+    assert envelope.get("operation") == "open_page"
 
 
 def test_mcp_call_rejects_unknown_profile(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -115,11 +115,11 @@ def test_mcp_call_normalizes_legacy_query_and_ignores_mode(
                 "description": "Chrome MCP",
                 "binary_candidates": ["chrome-devtools-mcp"],
                 "operations": {
-                    "web_search": {
-                        "key": "web_search",
-                        "description": "search web",
-                        "command_template": "search {query}",
-                        "required_args": ["query"],
+                    "open_page": {
+                        "key": "open_page",
+                        "description": "open page",
+                        "command_template": "open {url}",
+                        "required_args": ["url"],
                     }
                 },
             }
@@ -132,8 +132,8 @@ def test_mcp_call_normalizes_legacy_query_and_ignores_mode(
 
     result = tool.execute(
         profile="chrome",
-        operation="web_search",
-        query="Veloswim",
+        operation="open_page",
+        url="https://example.com",
         mode="headless",
         cwd=str(tmp_path),
     )
@@ -141,12 +141,97 @@ def test_mcp_call_normalizes_legacy_query_and_ignores_mode(
     assert result["status"] == "ok"
     assert dummy_terminal.calls
     command = str(dummy_terminal.calls[0].get("command") or "")
-    assert "Veloswim" in command
+    assert "https://example.com" in command
 
 
 def test_mcp_call_normalizes_nested_args_payload(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
+    monkeypatch.setenv("ALPHONSE_EXECUTION_MODE", "ops")
+    monkeypatch.setattr(mcp_call_tool_module, "_allowed_roots", lambda: [str(tmp_path)])
+    profiles_dir = tmp_path / "profiles"
+    profiles_dir.mkdir(parents=True, exist_ok=True)
+    (profiles_dir / "chrome.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "key": "chrome",
+                "description": "Chrome MCP",
+                "binary_candidates": ["chrome-devtools-mcp"],
+                "operations": {
+                    "open_page": {
+                        "key": "open_page",
+                        "description": "open page",
+                        "command_template": "open {url}",
+                        "required_args": ["url"],
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("ALPHONSE_MCP_PROFILES_DIR", str(profiles_dir))
+    dummy_terminal = _DummyTerminal()
+    tool = McpCallTool(connector=McpConnector(terminal=dummy_terminal))
+
+    result = tool.execute(
+        args={
+            "profile": "chrome",
+            "operation": "open_page",
+            "url": "https://example.org",
+        },
+        cwd=str(tmp_path),
+    )
+
+    assert result["status"] == "ok"
+    assert dummy_terminal.calls
+    command = str(dummy_terminal.calls[0].get("command") or "")
+    assert "https://example.org" in command
+
+
+def test_mcp_call_uses_short_default_timeout(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("ALPHONSE_EXECUTION_MODE", "ops")
+    monkeypatch.setattr(mcp_call_tool_module, "_allowed_roots", lambda: [str(tmp_path)])
+    monkeypatch.delenv("ALPHONSE_MCP_DEFAULT_TIMEOUT_SECONDS", raising=False)
+    profiles_dir = tmp_path / "profiles"
+    profiles_dir.mkdir(parents=True, exist_ok=True)
+    (profiles_dir / "chrome.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "key": "chrome",
+                "description": "Chrome MCP",
+                "binary_candidates": ["chrome-devtools-mcp"],
+                "operations": {
+                    "open_page": {
+                        "key": "open_page",
+                        "description": "open url",
+                        "command_template": "open {url}",
+                        "required_args": ["url"],
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("ALPHONSE_MCP_PROFILES_DIR", str(profiles_dir))
+    dummy_terminal = _DummyTerminal()
+    tool = McpCallTool(connector=McpConnector(terminal=dummy_terminal))
+
+    result = tool.execute(
+        profile="chrome",
+        operation="open_page",
+        arguments={"url": "https://example.com"},
+        cwd=str(tmp_path),
+    )
+
+    assert result["status"] == "ok"
+    assert dummy_terminal.calls
+    timeout_value = float(dummy_terminal.calls[0].get("timeout_seconds") or 0)
+    assert timeout_value == 45.0
+
+
+def test_mcp_call_fast_fails_contract_mismatch(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("ALPHONSE_EXECUTION_MODE", "ops")
     monkeypatch.setattr(mcp_call_tool_module, "_allowed_roots", lambda: [str(tmp_path)])
     profiles_dir = tmp_path / "profiles"
@@ -175,15 +260,14 @@ def test_mcp_call_normalizes_nested_args_payload(
     tool = McpCallTool(connector=McpConnector(terminal=dummy_terminal))
 
     result = tool.execute(
-        args={
-            "profile": "chrome",
-            "operation": "web_search",
-            "query": "Veloswim nested",
-        },
+        profile="chrome",
+        operation="web_search",
+        arguments={"query": "Veloswim"},
         cwd=str(tmp_path),
     )
 
-    assert result["status"] == "ok"
-    assert dummy_terminal.calls
-    command = str(dummy_terminal.calls[0].get("command") or "")
-    assert "Veloswim nested" in command
+    assert result["status"] == "failed"
+    assert not dummy_terminal.calls
+    error = result.get("error")
+    assert isinstance(error, dict)
+    assert error.get("code") == "mcp_operation_contract_mismatch"

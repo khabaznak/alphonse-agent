@@ -222,9 +222,16 @@ def _execute_call_tool_step(
             if isinstance(raw_error, dict):
                 error_code = str(raw_error.get("code") or "tool_failed")
                 error_message = str(raw_error.get("message") or "").strip()
+                error_details = raw_error.get("details")
             else:
                 error_code = str(raw_error or "tool_failed")
                 error_message = ""
+                error_details = None
+            failure_context = _tool_failure_context(
+                tool_name=tool_name,
+                result=result if isinstance(result, dict) else {},
+                error_details=error_details if isinstance(error_details, dict) else {},
+            )
             append_trace_event(
                 task_state,
                 {
@@ -262,6 +269,7 @@ def _execute_call_tool_step(
                 error_code=error_code,
                 error_message=error_message,
                 **terminal_context,
+                **failure_context,
             )
             return {"task_state": task_state}
         derived_outcome = _derive_tool_outcome_from_result(
@@ -406,6 +414,36 @@ def _terminal_command_context(*, tool_name: str, args: dict[str, Any]) -> dict[s
         "terminal_command": command,
         "terminal_cwd": cwd,
     }
+
+
+def _tool_failure_context(*, tool_name: str, result: dict[str, Any], error_details: dict[str, Any]) -> dict[str, Any]:
+    context: dict[str, Any] = {}
+    if str(tool_name or "").strip() != "mcp_call":
+        return context
+    result_payload = result.get("result") if isinstance(result.get("result"), dict) else {}
+    metadata = result.get("metadata") if isinstance(result.get("metadata"), dict) else {}
+    mcp_command = str(
+        error_details.get("mcp_command")
+        or metadata.get("mcp_command")
+        or ""
+    ).strip()
+    stderr_preview = str(
+        error_details.get("stderr_preview")
+        or result_payload.get("stderr")
+        or ""
+    ).strip()
+    stdout_preview = str(
+        error_details.get("stdout_preview")
+        or result_payload.get("stdout")
+        or ""
+    ).strip()
+    if mcp_command:
+        context["mcp_command"] = mcp_command
+    if stderr_preview:
+        context["stderr_preview"] = stderr_preview[:600]
+    if stdout_preview:
+        context["stdout_preview"] = stdout_preview[:400]
+    return context
 
 
 def _coerce_error(value: Any) -> dict[str, Any]:
