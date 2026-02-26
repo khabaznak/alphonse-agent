@@ -5,6 +5,7 @@ import logging
 from typing import Any, Callable
 
 from alphonse.agent.cognition.tool_schemas import planner_tool_schemas
+from alphonse.agent.cortex.llm_output.json_parse import parse_json_object
 from alphonse.agent.cortex.task_mode.prompt_templates import NEXT_STEP_REPAIR_USER_TEMPLATE
 from alphonse.agent.cortex.task_mode.prompt_templates import NEXT_STEP_SYSTEM_PROMPT
 from alphonse.agent.cortex.task_mode.prompt_templates import NEXT_STEP_USER_TEMPLATE
@@ -284,7 +285,7 @@ def _propose_next_step_with_llm(
             system_prompt=NEXT_STEP_SYSTEM_PROMPT,
             user_prompt=user_prompt,
         )
-        parsed = _parse_json_payload(raw)
+        parsed = parse_json_object(raw)
         normalized = _normalize_next_step_proposal(parsed)
         if normalized is not None:
             return normalized, False, diagnostics
@@ -307,7 +308,7 @@ def _propose_next_step_with_llm(
         system_prompt=NEXT_STEP_SYSTEM_PROMPT,
         user_prompt=repair_prompt,
     )
-    repair_parsed = _parse_json_payload(repair_raw)
+    repair_parsed = parse_json_object(repair_raw)
     repaired = _normalize_next_step_proposal(repair_parsed)
     if repaired is not None:
         return repaired, False, diagnostics
@@ -513,35 +514,6 @@ def _call_llm_text(*, llm_client: Any, system_prompt: str, user_prompt: str) -> 
             return ""
     except Exception:
         return ""
-
-
-def _parse_json_payload(raw: Any) -> dict[str, Any] | None:
-    if isinstance(raw, dict):
-        return raw
-    candidate = str(raw or "").strip()
-    if not candidate:
-        return None
-    if candidate.startswith("```"):
-        candidate = candidate.strip("`")
-        if candidate.startswith("json"):
-            candidate = candidate[4:].strip()
-    parsed = _json_loads(candidate)
-    if isinstance(parsed, dict):
-        return parsed
-    start = candidate.find("{")
-    end = candidate.rfind("}")
-    if start >= 0 and end > start:
-        parsed = _json_loads(candidate[start : end + 1])
-        if isinstance(parsed, dict):
-            return parsed
-    return None
-
-
-def _json_loads(text: str) -> Any:
-    try:
-        return json.loads(text)
-    except Exception:
-        return None
 
 
 def _normalize_next_step_proposal(payload: Any) -> NextStepProposal | None:
