@@ -121,25 +121,30 @@ class McpConnector:
             raise McpInvocationError("missing_required_args", f"Missing required MCP argument: {missing}") from exc
 
         launcher = _launcher_expression(profile)
-        shell_script = f"{launcher} {operation_segment}".strip()
+        shell_script = (
+            f"{launcher} ; "
+            'if [ -z "$MCP_BIN" ]; then echo MCP_BINARY_NOT_FOUND; exit 127; fi ; '
+            f'eval "$MCP_BIN {operation_segment}"'
+        ).strip()
         return f"sh -lc {shlex.quote(shell_script)}"
 
 
 def _launcher_expression(profile: McpServerProfile) -> str:
-    checks: list[str] = []
-    branch_index = 0
+    checks: list[str] = ['MCP_BIN=""']
+    branch_open = False
     for binary in profile.binary_candidates:
         name = str(binary or "").strip()
         if not name:
             continue
-        prefix = "if" if branch_index == 0 else "elif"
-        checks.append(f"{prefix} command -v {shlex.quote(name)} >/dev/null 2>&1; then {shlex.quote(name)}")
-        branch_index += 1
-    fallback = "echo MCP_BINARY_NOT_FOUND; exit 127"
+        quoted = shlex.quote(name)
+        if not branch_open:
+            checks.append(f"if command -v {quoted} >/dev/null 2>&1; then MCP_BIN={quoted}")
+            branch_open = True
+        else:
+            checks.append(f"elif command -v {quoted} >/dev/null 2>&1; then MCP_BIN={quoted}")
+    if branch_open:
+        checks.append("fi")
     package = str(profile.npx_package_fallback or "").strip()
     if package:
-        fallback = f"npx -y {shlex.quote(package)}"
-    if not checks:
-        return fallback
-    chain = " ; ".join(checks)
-    return f"{chain} ; else {fallback} ; fi"
+        checks.append(f'if [ -z "$MCP_BIN" ]; then MCP_BIN="npx -y {shlex.quote(package)}"; fi')
+    return " ; ".join(checks).strip()

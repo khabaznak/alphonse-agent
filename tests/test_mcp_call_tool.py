@@ -70,6 +70,8 @@ def test_mcp_call_executes_with_policy_envelope(monkeypatch: pytest.MonkeyPatch,
     call = dummy_terminal.calls[0]
     command = str(call.get("command") or "")
     assert "chrome-devtools-mcp" in command or "chrome-mcp" in command or "npx -y chrome-devtools-mcp" in command
+    assert "fi search" not in command
+    assert 'eval "$MCP_BIN search' in command
     metadata = result.get("metadata")
     assert isinstance(metadata, dict)
     envelope = metadata.get("policy_envelope")
