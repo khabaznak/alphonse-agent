@@ -16,7 +16,6 @@ from alphonse.agent.cortex.task_mode.pdca import route_after_validate_step
 from alphonse.agent.cortex.task_mode.pdca import progress_critic_node
 from alphonse.agent.cortex.task_mode.pdca import update_state_node
 from alphonse.agent.cortex.task_mode.pdca import validate_step_node
-from alphonse.agent.cortex.task_mode.execute_step import _infer_reminder_message
 from alphonse.agent.cortex.task_mode.state import build_default_task_state
 from alphonse.agent.tools.registry import ToolRegistry
 from alphonse.agent.tools.registry import build_default_tool_registry
@@ -319,7 +318,7 @@ def test_pdca_create_reminder_structured_failure_keeps_running() -> None:
     assert error.get("code") == "time_expression_unresolvable"
 
 
-def test_pdca_create_reminder_auto_repairs_missing_fields() -> None:
+def test_pdca_create_reminder_missing_fields_stays_failed() -> None:
     reminder = _RecoverableReminder()
     tool_registry = ToolRegistry()
     tool_registry.register("createReminder", reminder)
@@ -358,37 +357,18 @@ def test_pdca_create_reminder_auto_repairs_missing_fields() -> None:
     assert isinstance(plan, dict)
     steps = plan.get("steps")
     assert isinstance(steps, list)
-    assert steps[0].get("status") == "executed"
+    assert steps[0].get("status") == "failed"
     facts = next_state.get("facts")
     assert isinstance(facts, dict)
     fact = facts.get("step_1")
     assert isinstance(fact, dict)
     result = fact.get("result")
     assert isinstance(result, dict)
-    assert result.get("status") == "ok"
-    payload = result.get("result")
-    assert isinstance(payload, dict)
-    assert payload.get("reminder_id") == "rem-repaired-1"
-    assert payload.get("fire_at") == "ok please set a reminder for me in 1 min."
-    assert payload.get("message") == "ok please set a reminder for me in 1 min."
-    assert len(reminder.calls) == 2
-
-
-def test_infer_reminder_message_ignores_metadata_tokens() -> None:
-    packed = (
-        "## RAW MESSAGE\n"
-        "- channel: telegram\n"
-        "- correlation_id: abc\n"
-        "- text: Recuérdame irme a dormir en 30 segundos\n\n"
-        "## RAW JSON\n"
-        "```json\n"
-        "{\"update_id\":123,\"message\":{\"text\":\"Recuérdame irme a dormir en 30 segundos\"}}\n"
-        "```\n"
-    )
-    state = {"last_user_message": packed, "locale": "es-MX"}
-    inferred = _infer_reminder_message(state=state)
-    assert inferred != "update_id"
-    assert "dormir" in inferred
+    assert result.get("status") == "failed"
+    error = result.get("error")
+    assert isinstance(error, dict)
+    assert error.get("code") == "missing_time"
+    assert len(reminder.calls) == 1
 
 
 def test_pdca_validation_error_routes_back_then_asks_user() -> None:
