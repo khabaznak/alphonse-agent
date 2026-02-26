@@ -19,6 +19,7 @@ class TerminalExecuteTool:
         command: str,
         cwd: str = ".",
         timeout_seconds: float | None = None,
+        timeout_ms: float | int | None = None,
         state: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         _ = state
@@ -39,7 +40,7 @@ class TerminalExecuteTool:
             cwd=_normalize_cwd(cwd=cwd, roots=roots),
             allowed_roots=roots,
             mode=mode,
-            timeout_seconds=_resolve_timeout(timeout_seconds),
+            timeout_seconds=_resolve_timeout(timeout_seconds, timeout_ms),
         )
         return result
 
@@ -67,18 +68,23 @@ def _root_priority(record: dict[str, Any]) -> tuple[int, str]:
     return (2, alias)
 
 
-def _resolve_timeout(value: float | None) -> float:
+def _resolve_timeout(value_seconds: float | None, value_ms: float | int | None) -> float:
     default_timeout = _read_positive_float(
         "ALPHONSE_TERMINAL_DEFAULT_TIMEOUT_SECONDS",
         120.0,
     )
-    if value is None:
-        requested = default_timeout
-    else:
+    if value_seconds is not None:
         try:
-            requested = float(value)
+            requested = float(value_seconds)
         except (TypeError, ValueError):
             requested = default_timeout
+    elif value_ms is not None:
+        try:
+            requested = float(value_ms) / 1000.0
+        except (TypeError, ValueError):
+            requested = default_timeout
+    else:
+        requested = default_timeout
     max_timeout = _read_positive_float(
         "ALPHONSE_TERMINAL_MAX_TIMEOUT_SECONDS",
         1800.0,
