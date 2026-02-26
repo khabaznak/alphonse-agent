@@ -52,5 +52,6 @@ def wire_task_mode_pdca(graph: StateGraph, *, tool_registry: Any) -> None:
         route_after_act,
         {
             "next_step_node": "next_step_node",
+            "respond_node": "respond_node",
         },
     )
