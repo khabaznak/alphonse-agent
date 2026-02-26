@@ -5,8 +5,6 @@ import logging
 from typing import Any, Callable
 
 from alphonse.agent.cognition.tool_schemas import planner_tool_schemas
-from alphonse.agent.cortex.task_mode.prompt_templates import GOAL_CLARIFICATION_SYSTEM_PROMPT
-from alphonse.agent.cortex.task_mode.prompt_templates import GOAL_CLARIFICATION_USER_TEMPLATE
 from alphonse.agent.cortex.task_mode.prompt_templates import NEXT_STEP_REPAIR_USER_TEMPLATE
 from alphonse.agent.cortex.task_mode.prompt_templates import NEXT_STEP_SYSTEM_PROMPT
 from alphonse.agent.cortex.task_mode.prompt_templates import NEXT_STEP_USER_TEMPLATE
@@ -228,11 +226,7 @@ def _propose_next_step_with_llm(
     task_state: dict[str, Any],
     tool_registry: Any,
 ) -> tuple[NextStepProposal, bool, list[dict[str, Any]]]:
-    goal = str(task_state.get("goal") or "").strip()
     diagnostics: list[dict[str, Any]] = []
-    if not goal:
-        question = _build_goal_clarification_question(state=state, llm_client=llm_client)
-        return {"kind": "ask_user", "question": question}, False, diagnostics
 
     tool_menu = _build_tool_menu(tool_registry)
     working_view = _build_working_state_view(task_state)
@@ -328,28 +322,6 @@ def _propose_next_step_with_llm(
     )
 
     return {"kind": "ask_user", "question": ""}, True, diagnostics
-
-
-def _build_goal_clarification_question(*, state: dict[str, Any], llm_client: Any) -> str:
-    user_prompt = render_pdca_prompt(
-        GOAL_CLARIFICATION_USER_TEMPLATE,
-        {
-            "LOCALE": str(state.get("locale") or ""),
-            "LATEST_USER_MESSAGE": str(state.get("last_user_message") or "").strip(),
-        },
-    )
-    question = _call_llm_text(
-        llm_client=llm_client,
-        system_prompt=GOAL_CLARIFICATION_SYSTEM_PROMPT,
-        user_prompt=user_prompt,
-    )
-    rendered = str(question or "").strip()
-    if rendered:
-        return rendered
-    latest = str(state.get("last_user_message") or "").strip()
-    if latest:
-        return f"To help correctly, what exact task should I do with: \"{latest}\"?"
-    return "What exact task should I execute now?"
 
 
 def _provider_model_from_state(state: dict[str, Any]) -> tuple[str | None, str | None]:
