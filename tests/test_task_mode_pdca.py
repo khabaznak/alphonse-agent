@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import alphonse.agent.cortex.task_mode.pdca as pdca_module
+import alphonse.agent.cortex.task_mode.progress_critic_node as progress_critic_node_module
 from alphonse.agent.cortex.nodes.respond import respond_finalize_node
 from alphonse.agent.cortex.task_mode.pdca import act_node
 from alphonse.agent.cortex.task_mode.pdca import build_next_step_node
@@ -982,7 +983,7 @@ def test_progress_critic_emits_wip_update_every_five_cycles(monkeypatch) -> None
         if phase == "wip_update":
             emitted.append(detail)
 
-    monkeypatch.setattr(pdca_module, "emit_transition_event", _capture_transition)
+    monkeypatch.setattr(progress_critic_node_module, "emit_transition_event", _capture_transition)
 
     task_state = build_default_task_state()
     task_state["status"] = "running"

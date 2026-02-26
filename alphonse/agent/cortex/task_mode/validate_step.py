@@ -3,6 +3,8 @@ from __future__ import annotations
 import logging
 from typing import Any, Callable
 
+from alphonse.agent.cognition.tool_schemas import planner_tool_schemas
+
 
 def validate_step_node_impl(
     state: dict[str, Any],
@@ -12,7 +14,6 @@ def validate_step_node_impl(
     correlation_id: Callable[[dict[str, Any]], str | None],
     task_plan: Callable[[dict[str, Any]], dict[str, Any]],
     current_step: Callable[[dict[str, Any]], dict[str, Any] | None],
-    validate_proposal: Callable[..., dict[str, Any]],
     append_trace_event: Callable[[dict[str, Any], dict[str, Any]], None],
     logger: logging.Logger,
     log_task_event: Callable[..., None],
@@ -23,7 +24,7 @@ def validate_step_node_impl(
     _ = task_plan(task_state)
     current = current_step(task_state)
     proposal = (current or {}).get("proposal")
-    validation = validate_proposal(proposal=proposal, tool_registry=tool_registry)
+    validation = _validate_proposal(proposal=proposal, tool_registry=tool_registry)
 
     if validation["ok"]:
         task_state["last_validation_error"] = None
@@ -82,3 +83,93 @@ def validate_step_node_impl(
         repair_attempts=attempts,
     )
     return {"task_state": task_state}
+
+
+def _validate_proposal(*, proposal: Any, tool_registry: Any) -> dict[str, Any]:
+    if not isinstance(proposal, dict):
+        return {"ok": False, "executable": False, "reason": "missing_proposal"}
+    kind = str(proposal.get("kind") or "").strip()
+    if kind == "ask_user":
+        question = str(proposal.get("question") or "").strip()
+        if not question:
+            return {"ok": False, "executable": False, "reason": "missing_question"}
+        return {"ok": True, "executable": True, "reason": None}
+    if kind == "finish":
+        final_text = str(proposal.get("final_text") or "").strip()
+        if not final_text:
+            return {"ok": False, "executable": False, "reason": "missing_final_text"}
+        return {"ok": True, "executable": True, "reason": None}
+    if kind != "call_tool":
+        return {"ok": False, "executable": False, "reason": "unknown_kind"}
+
+    tool_name = str(proposal.get("tool_name") or "").strip()
+    if not tool_name:
+        return {"ok": False, "executable": False, "reason": "missing_tool_name"}
+    if not _tool_exists(tool_registry, tool_name):
+        return {"ok": False, "executable": False, "reason": f"tool_not_found:{tool_name}"}
+
+    args = proposal.get("args")
+    if args is not None and not isinstance(args, dict):
+        return {"ok": False, "executable": False, "reason": "invalid_args_type"}
+
+    required = _required_args_for_tool(tool_name)
+    provided = set(dict(args or {}).keys())
+    missing = [key for key in required if key not in provided]
+    if missing:
+        missing_keys = ",".join(missing)
+        return {"ok": False, "executable": False, "reason": f"missing_required_args:{missing_keys}"}
+    invalid_keys = _invalid_args_for_tool(tool_name=tool_name, args=dict(args or {}))
+    if invalid_keys:
+        keys = ",".join(invalid_keys)
+        return {"ok": False, "executable": False, "reason": f"invalid_args_keys:{keys}"}
+    return {"ok": True, "executable": True, "reason": None}
+
+
+def _tool_exists(tool_registry: Any, tool_name: str) -> bool:
+    if hasattr(tool_registry, "get"):
+        return tool_registry.get(tool_name) is not None
+    return False
+
+
+def _required_args_for_tool(tool_name: str) -> list[str]:
+    for schema in planner_tool_schemas():
+        fn = schema.get("function")
+        if not isinstance(fn, dict):
+            continue
+        if str(fn.get("name") or "") != tool_name:
+            continue
+        params = fn.get("parameters") if isinstance(fn.get("parameters"), dict) else {}
+        required = params.get("required")
+        if isinstance(required, list):
+            return [str(item) for item in required if str(item)]
+        return []
+    return []
+
+
+def _invalid_args_for_tool(*, tool_name: str, args: dict[str, Any]) -> list[str]:
+    params = _tool_parameters_for_tool(tool_name)
+    if not isinstance(params, dict):
+        return []
+    additional_properties = params.get("additionalProperties")
+    if additional_properties is not False:
+        return []
+    props = params.get("properties")
+    if not isinstance(props, dict):
+        return []
+    allowed = {str(k) for k in props.keys()}
+    invalid = [key for key in args.keys() if str(key) not in allowed]
+    return sorted([str(item) for item in invalid if str(item)])
+
+
+def _tool_parameters_for_tool(tool_name: str) -> dict[str, Any] | None:
+    for schema in planner_tool_schemas():
+        fn = schema.get("function")
+        if not isinstance(fn, dict):
+            continue
+        if str(fn.get("name") or "") != tool_name:
+            continue
+        params = fn.get("parameters")
+        if isinstance(params, dict):
+            return params
+        return None
+    return None

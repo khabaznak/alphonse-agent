@@ -1,237 +1,75 @@
 from __future__ import annotations
 
-import inspect
-import json
 from typing import Any, Callable
 
-from alphonse.agent.cognition.tool_schemas import planner_tool_schemas
+from alphonse.agent.cortex.task_mode.act_node import act_node_stateful
+from alphonse.agent.cortex.task_mode.act_node import evaluate_tool_execution
+from alphonse.agent.cortex.task_mode.act_node import route_after_act_stateful
+from alphonse.agent.cortex.task_mode.check_state import derive_outcome_from_state
+from alphonse.agent.cortex.task_mode.check_state import goal_satisfied
 from alphonse.agent.cortex.transitions import emit_transition_event
-from alphonse.agent.cortex.task_mode.progress_critic import progress_critic_node as _progress_critic_node_impl
-from alphonse.agent.cortex.task_mode.progress_critic import route_after_progress_critic as _route_after_progress_critic_impl
+from alphonse.agent.cortex.task_mode.plan import build_next_step_node_impl
+from alphonse.agent.cortex.task_mode.plan import route_after_next_step_impl
+from alphonse.agent.cortex.task_mode.progress_critic_node import DEFAULT_PROGRESS_CHECK_CYCLE_THRESHOLD
+from alphonse.agent.cortex.task_mode.progress_critic_node import DEFAULT_WIP_EMIT_EVERY_CYCLES
+from alphonse.agent.cortex.task_mode.progress_critic_node import progress_critic_node_stateful
+from alphonse.agent.cortex.task_mode.progress_critic_node import route_after_progress_critic_stateful
 from alphonse.agent.cortex.task_mode.observability import log_task_event
-from alphonse.agent.cortex.task_mode.prompt_templates import GOAL_CLARIFICATION_SYSTEM_PROMPT
-from alphonse.agent.cortex.task_mode.prompt_templates import GOAL_CLARIFICATION_USER_TEMPLATE
-from alphonse.agent.cortex.task_mode.prompt_templates import NEXT_STEP_REPAIR_USER_TEMPLATE
-from alphonse.agent.cortex.task_mode.prompt_templates import NEXT_STEP_SYSTEM_PROMPT
-from alphonse.agent.cortex.task_mode.prompt_templates import NEXT_STEP_USER_TEMPLATE
-from alphonse.agent.cortex.task_mode.prompt_templates import PROGRESS_CHECKIN_SYSTEM_PROMPT
-from alphonse.agent.cortex.task_mode.prompt_templates import PROGRESS_CHECKIN_USER_TEMPLATE
-from alphonse.agent.cortex.task_mode.prompt_templates import render_pdca_prompt
 from alphonse.agent.cortex.task_mode.execute_step import execute_step_node_impl
-from alphonse.agent.cortex.task_mode.state import build_default_task_state
+from alphonse.agent.cortex.task_mode.task_state_helpers import append_trace_event
+from alphonse.agent.cortex.task_mode.task_state_helpers import correlation_id
+from alphonse.agent.cortex.task_mode.task_state_helpers import current_step
+from alphonse.agent.cortex.task_mode.task_state_helpers import has_acceptance_criteria
+from alphonse.agent.cortex.task_mode.task_state_helpers import next_step_id
+from alphonse.agent.cortex.task_mode.task_state_helpers import normalize_acceptance_criteria_values
+from alphonse.agent.cortex.task_mode.task_state_helpers import task_plan
+from alphonse.agent.cortex.task_mode.task_state_helpers import task_state_with_defaults
+from alphonse.agent.cortex.task_mode.task_state_helpers import task_trace
 from alphonse.agent.cortex.task_mode.validate_step import validate_step_node_impl
-from alphonse.agent.cortex.task_mode.types import NextStepProposal
-from alphonse.agent.cortex.task_mode.types import TraceEvent
 from alphonse.agent.observability.log_manager import get_component_logger
-from alphonse.agent.session.day_state import render_recent_conversation_block
-from alphonse.agent.tools.base import ensure_tool_result
 logger = get_component_logger("task_mode.pdca")
 
-_PROGRESS_CHECK_CYCLE_THRESHOLD = 25
-_WIP_EMIT_EVERY_CYCLES = 5
-_NEXT_STEP_MAX_ATTEMPTS = 2
-
-# Strict JSON Schema for NextStepProposal structured output
-_NEXT_STEP_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "additionalProperties": False,
-    "required": ["kind"],
-    "properties": {
-        "kind": {"type": "string", "enum": ["ask_user", "call_tool", "finish"]},
-        "question": {"type": "string"},
-        "tool_name": {"type": "string"},
-        "args": {"type": "object"},
-        "final_text": {"type": "string"},
-        "acceptance_criteria": {"type": "array", "items": {"type": "string"}},
-    },
-    "oneOf": [
-        {
-            "type": "object",
-            "additionalProperties": False,
-            "properties": {
-                "kind": {"const": "ask_user"},
-                "question": {"type": "string", "minLength": 1},
-                "acceptance_criteria": {"type": "array", "items": {"type": "string"}},
-            },
-            "required": ["kind", "question"],
-        },
-        {
-            "type": "object",
-            "additionalProperties": False,
-            "properties": {
-                "kind": {"const": "call_tool"},
-                "tool_name": {"type": "string", "minLength": 1},
-                "args": {"type": "object"},
-                "acceptance_criteria": {"type": "array", "items": {"type": "string"}},
-            },
-            "required": ["kind", "tool_name", "args"],
-        },
-        {
-            "type": "object",
-            "additionalProperties": False,
-            "properties": {
-                "kind": {"const": "finish"},
-                "final_text": {"type": "string", "minLength": 1},
-                "acceptance_criteria": {"type": "array", "items": {"type": "string"}},
-            },
-            "required": ["kind", "final_text"],
-        },
-    ],
-}
+_PROGRESS_CHECK_CYCLE_THRESHOLD = DEFAULT_PROGRESS_CHECK_CYCLE_THRESHOLD
+_WIP_EMIT_EVERY_CYCLES = DEFAULT_WIP_EMIT_EVERY_CYCLES
 
 
 def build_next_step_node(*, tool_registry: Any) -> Callable[[dict[str, Any]], dict[str, Any]]:
     def _node(state: dict[str, Any]) -> dict[str, Any]:
         emit_transition_event(state, "thinking")
-        task_state = _task_state_with_defaults(state)
-        task_state["pdca_phase"] = "plan"
-        correlation_id = _correlation_id(state)
-        llm_client = state.get("_llm_client")
-        proposal, parse_failed, diagnostics = _propose_next_step_with_llm(
-            llm_client=llm_client,
+        return build_next_step_node_impl(
             state=state,
-            task_state=task_state,
             tool_registry=tool_registry,
-        )
-        if diagnostics:
-            for item in diagnostics:
-                if not isinstance(item, dict):
-                    continue
-                log_task_event(
-                    logger=logger,
-                    state=state,
-                    task_state=task_state,
-                    node="next_step_node",
-                    event="graph.next_step.parse_invalid",
-                    attempt=int(item.get("attempt") or 0),
-                    parse_error_type=str(item.get("parse_error_type") or ""),
-                    validation_errors=item.get("validation_errors"),
-                    raw_output_preview=str(item.get("raw_output_preview") or ""),
-                    provider=str(item.get("provider") or ""),
-                    model=str(item.get("model") or ""),
-                )
-        if not _has_acceptance_criteria(task_state):
-            proposed_criteria = _normalize_acceptance_criteria_values(
-                proposal.get("acceptance_criteria") if isinstance(proposal, dict) else None
-            )
-            if proposed_criteria:
-                task_state["acceptance_criteria"] = proposed_criteria
-                _append_trace_event(
-                    task_state,
-                    {
-                        "type": "acceptance_criteria_derived",
-                        "summary": "Derived acceptance criteria from planning context.",
-                        "correlation_id": correlation_id,
-                    },
-                )
-
-        if parse_failed:
-            task_state["status"] = "failed"
-            task_state["next_user_question"] = None
-            provider, model = _provider_model_from_state(state)
-            attempts = int((diagnostics[-1] if diagnostics else {}).get("attempt") or _NEXT_STEP_MAX_ATTEMPTS)
-            task_state["last_validation_error"] = {
-                "reason": "next_step_parse_failed",
-                "attempts": attempts,
-                "schema": "NextStepProposal",
-                "provider": provider,
-                "model": model,
-            }
-            _append_trace_event(
-                task_state,
-                {
-                    "type": "parse_failed",
-                    "summary": "Next-step parse failed; task paused as internal degradation.",
-                    "correlation_id": _correlation_id(state),
-                },
-            )
-            log_task_event(
-                logger=logger,
-                state=state,
-                task_state=task_state,
-                node="next_step_node",
-                event="graph.next_step.degraded",
-                reason="next_step_parse_failed",
-                attempts=attempts,
-                provider=provider,
-                model=model,
-            )
-            logger.warning(
-                "task_mode next_step degraded correlation_id=%s reason=next_step_parse_failed attempts=%s provider=%s model=%s",
-                correlation_id,
-                attempts,
-                provider,
-                model,
-            )
-            return {"task_state": task_state}
-        step_id = _next_step_id(task_state)
-        step_entry = {
-            "step_id": step_id,
-            "proposal": proposal,
-            "status": "proposed",
-        }
-        plan = _task_plan(task_state)
-        plan["steps"].append(step_entry)
-        plan["current_step_id"] = step_id
-        task_state["next_user_question"] = None
-        task_state["last_validation_error"] = None
-        _append_trace_event(
-            task_state,
-            {
-                "type": "proposal_created",
-                "summary": f"Created {_proposal_summary(proposal)} ({step_id}).",
-                "correlation_id": correlation_id,
-            },
-        )
-        logger.info(
-            "task_mode next_step proposal correlation_id=%s step_id=%s kind=%s summary=%s parse_failed=%s",
-            correlation_id,
-            step_id,
-            str(proposal.get("kind") or ""),
-            _proposal_summary(proposal),
-            parse_failed,
-        )
-        log_task_event(
+            task_state_with_defaults=task_state_with_defaults,
+            correlation_id=correlation_id,
+            next_step_id=next_step_id,
+            task_plan=task_plan,
+            has_acceptance_criteria=has_acceptance_criteria,
+            normalize_acceptance_criteria_values=normalize_acceptance_criteria_values,
+            append_trace_event=append_trace_event,
             logger=logger,
-            state=state,
-            task_state=task_state,
-            node="next_step_node",
-            event="graph.next_step.proposed",
-            step_id=step_id,
-            kind=str(proposal.get("kind") or ""),
-            parse_failed=parse_failed,
-            summary=_proposal_summary(proposal),
+            log_task_event=log_task_event,
         )
-        return {"task_state": task_state}
 
     return _node
 
 
 def route_after_next_step(state: dict[str, Any]) -> str:
-    task_state = state.get("task_state")
-    if isinstance(task_state, dict) and str(task_state.get("status") or "").strip().lower() in {"waiting_user", "failed"}:
-        logger.info(
-            "task_mode route_after_next_step correlation_id=%s route=respond_node reason=terminal_status",
-            _correlation_id(state),
-        )
-        return "respond_node"
-    logger.info(
-        "task_mode route_after_next_step correlation_id=%s route=execute_step_node",
-        _correlation_id(state),
+    return route_after_next_step_impl(
+        state,
+        correlation_id=correlation_id,
+        logger=logger,
     )
-    return "execute_step_node"
 
 
 def validate_step_node(state: dict[str, Any], *, tool_registry: Any) -> dict[str, Any]:
     return validate_step_node_impl(
         state,
         tool_registry=tool_registry,
-        task_state_with_defaults=_task_state_with_defaults,
-        correlation_id=_correlation_id,
-        task_plan=_task_plan,
-        current_step=_current_step,
-        validate_proposal=_validate_proposal,
-        append_trace_event=_append_trace_event,
+        task_state_with_defaults=task_state_with_defaults,
+        correlation_id=correlation_id,
+        task_plan=task_plan,
+        current_step=current_step,
+        append_trace_event=append_trace_event,
         logger=logger,
         log_task_event=log_task_event,
     )
@@ -242,18 +80,18 @@ def route_after_validate_step(state: dict[str, Any]) -> str:
     if isinstance(task_state, dict) and str(task_state.get("status") or "") == "waiting_user":
         logger.info(
             "task_mode route_after_validate correlation_id=%s route=respond_node reason=waiting_user",
-            _correlation_id(state),
+            correlation_id(state),
         )
         return "respond_node"
     if isinstance(task_state, dict) and task_state.get("last_validation_error") is not None:
         logger.info(
             "task_mode route_after_validate correlation_id=%s route=next_step_node reason=validation_error",
-            _correlation_id(state),
+            correlation_id(state),
         )
         return "next_step_node"
     logger.info(
         "task_mode route_after_validate correlation_id=%s route=execute_step_node reason=validated",
-        _correlation_id(state),
+        correlation_id(state),
     )
     return "execute_step_node"
 
@@ -263,37 +101,35 @@ def execute_step_node(state: dict[str, Any], *, tool_registry: Any) -> dict[str,
     return execute_step_node_impl(
         state,
         tool_registry=tool_registry,
-        task_state_with_defaults=_task_state_with_defaults,
-        correlation_id=_correlation_id,
-        current_step=_current_step,
-        append_trace_event=_append_trace_event,
-        serialize_result=_serialize_result,
-        execute_tool_call=_execute_tool_call,
+        task_state_with_defaults=task_state_with_defaults,
+        correlation_id=correlation_id,
+        current_step=current_step,
+        append_trace_event=append_trace_event,
         logger=logger,
         log_task_event=log_task_event,
     )
 
 
 def update_state_node(state: dict[str, Any]) -> dict[str, Any]:
-    task_state = _task_state_with_defaults(state)
+    task_state = task_state_with_defaults(state)
     task_state["pdca_phase"] = "check"
-    correlation_id = _correlation_id(state)
+    corr = correlation_id(state)
     task_state["cycle_index"] = int(task_state.get("cycle_index") or 0) + 1
-    outcome = _derive_outcome_from_state(state=state, task_state=task_state)
+    outcome = derive_outcome_from_state(state=state, task_state=task_state, current_step=current_step)
     task_state["outcome"] = outcome
-    trace = _task_trace(task_state)
+    trace = task_trace(task_state)
     trace["summary"] = f"PDCA cycle {task_state['cycle_index']} complete."
-    _append_trace_event(
+    append_trace_event(
         task_state,
         {
             "type": "state_updated",
             "summary": f"State updated at cycle {task_state['cycle_index']}.",
-            "correlation_id": correlation_id,
+            "correlation_id": corr,
         },
     )
     logger.info(
         "task_mode update_state correlation_id=%s cycle=%s status=%s has_outcome=%s",
-        correlation_id,
+        corr,
         int(task_state.get("cycle_index") or 0),
         str(task_state.get("status") or ""),
         bool(outcome),
@@ -310,1072 +146,46 @@ def update_state_node(state: dict[str, Any]) -> dict[str, Any]:
 
 
 def progress_critic_node(state: dict[str, Any]) -> dict[str, Any]:
-    return _progress_critic_node_impl(
+    return progress_critic_node_stateful(
         state,
-        task_state_with_defaults=_task_state_with_defaults,
-        correlation_id=_correlation_id,
-        current_step=_current_step,
-        goal_satisfied=_goal_satisfied,
-        evaluate_tool_execution=_evaluate_tool_execution,
-        append_trace_event=_append_trace_event,
-        build_progress_checkin_question=_build_progress_checkin_question,
-        maybe_emit_periodic_wip_update=_maybe_emit_periodic_wip_update,
+        task_state_with_defaults=task_state_with_defaults,
+        correlation_id=correlation_id,
+        current_step=current_step,
+        goal_satisfied=lambda task_state: goal_satisfied(
+            task_state,
+            has_acceptance_criteria=has_acceptance_criteria,
+        ),
+        evaluate_tool_execution=lambda *, task_state, current_step: evaluate_tool_execution(
+            task_state=task_state,
+            current_step=current_step,
+            task_plan=task_plan,
+        ),
+        append_trace_event=append_trace_event,
+        logger=logger,
         progress_check_cycle_threshold=_PROGRESS_CHECK_CYCLE_THRESHOLD,
+        wip_emit_every_cycles=_WIP_EMIT_EVERY_CYCLES,
     )
-
-
-def _maybe_emit_periodic_wip_update(
-    *,
-    state: dict[str, Any],
-    task_state: dict[str, Any],
-    cycle: int,
-    current_step: dict[str, Any] | None,
-) -> None:
-    if cycle <= 0 or cycle % _WIP_EMIT_EVERY_CYCLES != 0:
-        return
-    detail = {
-        "text": _build_wip_update_text(task_state=task_state, cycle=cycle, current_step=current_step),
-        "cycle": cycle,
-        "goal": str(task_state.get("goal") or "").strip(),
-        "tool": _current_tool_name(current_step),
-    }
-    emit_transition_event(state, "wip_update", detail)
-    logger.info(
-        "task_mode progress_critic wip_update correlation_id=%s cycle=%s",
-        _correlation_id(state),
-        cycle,
-    )
-
-
-def _build_wip_update_text(
-    *,
-    task_state: dict[str, Any],
-    cycle: int,
-    current_step: dict[str, Any] | None,
-) -> str:
-    goal = str(task_state.get("goal") or "").strip() or "the current task"
-    tool = _current_tool_name(current_step)
-    if tool:
-        return f"Working on: {goal}. Cycle {cycle}. Current step: using `{tool}`."
-    return f"Working on: {goal}. Cycle {cycle}."
-
-
-def _current_tool_name(current_step: dict[str, Any] | None) -> str:
-    if not isinstance(current_step, dict):
-        return ""
-    proposal = current_step.get("proposal") if isinstance(current_step.get("proposal"), dict) else {}
-    return str(proposal.get("tool_name") or "").strip()
 
 
 def route_after_progress_critic(state: dict[str, Any]) -> str:
-    return _route_after_progress_critic_impl(state, correlation_id=_correlation_id)
+    return route_after_progress_critic_stateful(state, correlation_id=correlation_id)
 
 
 def act_node(state: dict[str, Any]) -> dict[str, Any]:
-    task_state = _task_state_with_defaults(state)
-    task_state["pdca_phase"] = "act"
-    correlation_id = _correlation_id(state)
-    status = str(task_state.get("status") or "running")
-    current = _current_step(task_state)
-    current_status = str((current or {}).get("status") or "").strip().lower()
-
-    if status == "waiting_user":
-        logger.info(
-            "task_mode act waiting_user correlation_id=%s step_id=%s",
-            correlation_id,
-            str((current or {}).get("step_id") or ""),
-        )
-        return {"task_state": task_state}
-
-    if status == "failed":
-        logger.info(
-            "task_mode act failed correlation_id=%s step_id=%s",
-            correlation_id,
-            str((current or {}).get("step_id") or ""),
-        )
-        return {"task_state": task_state}
-
-    if status == "done":
-        logger.info(
-            "task_mode act already_done correlation_id=%s step_id=%s",
-            correlation_id,
-            str((current or {}).get("step_id") or ""),
-        )
-        return {"task_state": task_state}
-
-    if current_status == "executed":
-        logger.info(
-            "task_mode act continue_unsatisfied correlation_id=%s step_id=%s",
-            correlation_id,
-            str((current or {}).get("step_id") or ""),
-        )
-        task_state["status"] = "running"
-        return {"task_state": task_state}
-
-    if current_status == "failed":
-        evaluation = _evaluate_tool_execution(task_state=task_state, current_step=current)
-        task_state["execution_eval"] = evaluation
-        if evaluation.get("should_pause"):
-            task_state["status"] = "waiting_user"
-            task_state["next_user_question"] = _build_execution_pause_prompt(evaluation)
-            _append_trace_event(
-                task_state,
-                {
-                    "type": "status_changed",
-                    "summary": str(evaluation.get("summary") or "Status changed to waiting_user after repeated failures."),
-                    "correlation_id": correlation_id,
-                },
-            )
-            logger.info(
-                "task_mode act waiting_user_execution_eval correlation_id=%s step_id=%s tool=%s reason=%s total_failures=%s same_signature=%s",
-                correlation_id,
-                str((current or {}).get("step_id") or ""),
-                str(evaluation.get("tool_name") or ""),
-                str(evaluation.get("reason") or ""),
-                int(evaluation.get("total_failures") or 0),
-                int(evaluation.get("same_signature_failures") or 0),
-            )
-            return {"task_state": task_state}
-        task_state["status"] = "running"
-        logger.info(
-            "task_mode act continue_after_failure correlation_id=%s step_id=%s tool=%s reason=%s total_failures=%s same_signature=%s",
-            correlation_id,
-            str((current or {}).get("step_id") or ""),
-            str(evaluation.get("tool_name") or ""),
-            str(evaluation.get("reason") or ""),
-            int(evaluation.get("total_failures") or 0),
-            int(evaluation.get("same_signature_failures") or 0),
-        )
-        return {"task_state": task_state}
-
-    task_state["status"] = "running"
-    logger.info(
-        "task_mode act continue correlation_id=%s step_id=%s",
-        correlation_id,
-        str((current or {}).get("step_id") or ""),
+    return act_node_stateful(
+        state,
+        task_state_with_defaults=task_state_with_defaults,
+        correlation_id=correlation_id,
+        current_step=current_step,
+        append_trace_event=append_trace_event,
+        task_plan=task_plan,
+        logger=logger,
     )
-    return {"task_state": task_state}
 
 
 def route_after_act(state: dict[str, Any]) -> str:
-    task_state = state.get("task_state")
-    status = str((task_state or {}).get("status") or "").strip().lower() if isinstance(task_state, dict) else ""
-    if status == "waiting_user":
-        logger.info(
-            "task_mode route_after_act correlation_id=%s route=respond_node status=%s",
-            _correlation_id(state),
-            status,
-        )
-        return "respond_node"
-    logger.info(
-        "task_mode route_after_act correlation_id=%s route=next_step_node status=%s",
-        _correlation_id(state),
-        status or "running",
-    )
-    return "next_step_node"
-
-
-def _validate_proposal(*, proposal: Any, tool_registry: Any) -> dict[str, Any]:
-    if not isinstance(proposal, dict):
-        return {"ok": False, "executable": False, "reason": "missing_proposal"}
-    kind = str(proposal.get("kind") or "").strip()
-    if kind == "ask_user":
-        question = str(proposal.get("question") or "").strip()
-        if not question:
-            return {"ok": False, "executable": False, "reason": "missing_question"}
-        return {"ok": True, "executable": True, "reason": None}
-    if kind == "finish":
-        final_text = str(proposal.get("final_text") or "").strip()
-        if not final_text:
-            return {"ok": False, "executable": False, "reason": "missing_final_text"}
-        return {"ok": True, "executable": True, "reason": None}
-    if kind != "call_tool":
-        return {"ok": False, "executable": False, "reason": "unknown_kind"}
-
-    tool_name = str(proposal.get("tool_name") or "").strip()
-    if not tool_name:
-        return {"ok": False, "executable": False, "reason": "missing_tool_name"}
-    if not _tool_exists(tool_registry, tool_name):
-        return {"ok": False, "executable": False, "reason": f"tool_not_found:{tool_name}"}
-
-    args = proposal.get("args")
-    if args is not None and not isinstance(args, dict):
-        return {"ok": False, "executable": False, "reason": "invalid_args_type"}
-
-    required = _required_args_for_tool(tool_name)
-    provided = set(dict(args or {}).keys())
-    missing = [key for key in required if key not in provided]
-    if missing:
-        missing_keys = ",".join(missing)
-        return {"ok": False, "executable": False, "reason": f"missing_required_args:{missing_keys}"}
-    invalid_keys = _invalid_args_for_tool(tool_name=tool_name, args=dict(args or {}))
-    if invalid_keys:
-        keys = ",".join(invalid_keys)
-        return {"ok": False, "executable": False, "reason": f"invalid_args_keys:{keys}"}
-    return {"ok": True, "executable": True, "reason": None}
-
-
-def _execute_tool_call(
-    *,
-    state: dict[str, Any],
-    tool_registry: Any,
-    tool_name: str,
-    args: dict[str, Any],
-) -> Any:
-    tool = tool_registry.get(tool_name) if hasattr(tool_registry, "get") else None
-    if tool is None:
-        raise RuntimeError(f"tool_not_found:{tool_name}")
-    execute = getattr(tool, "execute", None)
-    if not callable(execute):
-        raise RuntimeError(f"tool_not_executable:{tool_name}")
-    try:
-        call_args = dict(args or {})
-        signature = inspect.signature(execute)
-        accepts_state = "state" in signature.parameters or any(
-            p.kind == inspect.Parameter.VAR_KEYWORD for p in signature.parameters.values()
-        )
-        if accepts_state:
-            raw_result = execute(**call_args, state=state)
-        else:
-            raw_result = execute(**call_args)
-    except TypeError as exc:
-        return {
-            "status": "failed",
-            "result": None,
-            "error": {
-                "code": "invalid_tool_arguments",
-                "message": str(exc) or "invalid tool arguments",
-                "retryable": False,
-                "details": {
-                    "tool": tool_name,
-                    "args_keys": sorted(list(dict(args or {}).keys())),
-                },
-            },
-            "metadata": {"tool": tool_name},
-        }
-    except Exception as exc:
-        as_payload = getattr(exc, "as_payload", None)
-        if callable(as_payload):
-            error_payload = as_payload()
-            if not isinstance(error_payload, dict):
-                error_payload = {"code": "tool_execution_exception", "message": str(exc)}
-        else:
-            error_payload = {
-                "code": "tool_execution_exception",
-                "message": str(exc) or type(exc).__name__,
-                "retryable": True,
-                "details": {"exception_type": type(exc).__name__},
-            }
-        return {
-            "status": "failed",
-            "result": None,
-            "error": _coerce_error(error_payload),
-            "metadata": {"tool": tool_name},
-        }
-    return _coerce_tool_result(tool_name=tool_name, raw_result=raw_result)
-
-
-def _coerce_tool_result(*, tool_name: str, raw_result: Any) -> dict[str, Any]:
-    return ensure_tool_result(tool_key=tool_name, value=raw_result)
-
-
-def _coerce_error(value: Any) -> dict[str, Any]:
-    if isinstance(value, dict):
-        code = str(value.get("code") or "tool_execution_error")
-        message = str(value.get("message") or code)
-        retryable = bool(value.get("retryable", False))
-        details = value.get("details")
-        if not isinstance(details, dict):
-            details = {}
-        return {"code": code, "message": message, "retryable": retryable, "details": details}
-    if isinstance(value, str):
-        text = value.strip() or "tool_execution_error"
-        return {"code": text, "message": text, "retryable": False, "details": {}}
-    return {"code": "tool_execution_error", "message": "Tool execution failed", "retryable": False, "details": {}}
-
-
-def _propose_next_step_with_llm(
-    *,
-    llm_client: Any,
-    state: dict[str, Any],
-    task_state: dict[str, Any],
-    tool_registry: Any,
-) -> tuple[NextStepProposal, bool, list[dict[str, Any]]]:
-    goal = str(task_state.get("goal") or "").strip()
-    diagnostics: list[dict[str, Any]] = []
-    if not goal:
-        question = _build_goal_clarification_question(state=state, llm_client=llm_client)
-        return {"kind": "ask_user", "question": question}, False, diagnostics
-
-    tool_menu = _build_tool_menu(tool_registry)
-    working_view = _build_working_state_view(task_state)
-    # Optional injected guidance blocks (kept short; can be expanded later).
-    injected_blocks: list[str] = []
-    philosophy = str(state.get("philosophy_block") or "").strip()
-    soul = str(state.get("soul_block") or "").strip()
-    agents = str(state.get("agents_block") or "").strip()
-    if philosophy:
-        injected_blocks.append("## Philosophy\n" + philosophy)
-    if soul:
-        injected_blocks.append("## SOUL\n" + soul)
-    if agents:
-        injected_blocks.append("## AGENTS\n" + agents)
-    injected_guidance = "\n\n".join(injected_blocks).strip()
-    user_prompt_body = render_pdca_prompt(
-        NEXT_STEP_USER_TEMPLATE,
-        {
-            "TOOL_MENU": tool_menu,
-            "INJECTED_GUIDANCE_BLOCK": injected_guidance,
-            "WORKING_STATE_VIEW_JSON": json.dumps(working_view, ensure_ascii=False),
-        },
-    )
-    recent_conversation_block = str(state.get("recent_conversation_block") or "").strip()
-    if not recent_conversation_block:
-        session_state = state.get("session_state") if isinstance(state.get("session_state"), dict) else None
-        if session_state:
-            recent_conversation_block = render_recent_conversation_block(session_state)
-    user_prompt = (
-        f"{recent_conversation_block}\n\n{user_prompt_body}".strip()
-        if recent_conversation_block
-        else user_prompt_body
-    )
-
-    structured_supported, parsed_structured = _call_llm_structured(
-        llm_client=llm_client,
-        system_prompt=NEXT_STEP_SYSTEM_PROMPT,
-        user_prompt=user_prompt,
-    )
-    if structured_supported:
-        normalized = _normalize_next_step_proposal(parsed_structured)
-        if normalized is not None:
-            return normalized, False, diagnostics
-        diagnostics.append(
-            _build_parse_diagnostic(
-                state=state,
-                attempt=1,
-                parse_error_type="structured_payload_invalid",
-                validation_errors=["structured_output_failed_schema_validation"],
-                raw_output=parsed_structured,
-            )
-        )
-    else:
-        raw = _call_llm_text(
-            llm_client=llm_client,
-            system_prompt=NEXT_STEP_SYSTEM_PROMPT,
-            user_prompt=user_prompt,
-        )
-        parsed = _parse_json_payload(raw)
-        normalized = _normalize_next_step_proposal(parsed)
-        if normalized is not None:
-            return normalized, False, diagnostics
-        diagnostics.append(
-            _build_parse_diagnostic(
-                state=state,
-                attempt=1,
-                parse_error_type="text_payload_invalid",
-                validation_errors=["text_output_not_valid_next_step_json"],
-                raw_output=raw,
-            )
-        )
-
-    repair_prompt = _build_next_step_repair_prompt(
-        original_user_prompt=user_prompt,
-        latest_diagnostic=diagnostics[-1] if diagnostics else {},
-    )
-    repair_raw = _call_llm_text(
-        llm_client=llm_client,
-        system_prompt=NEXT_STEP_SYSTEM_PROMPT,
-        user_prompt=repair_prompt,
-    )
-    repair_parsed = _parse_json_payload(repair_raw)
-    repaired = _normalize_next_step_proposal(repair_parsed)
-    if repaired is not None:
-        return repaired, False, diagnostics
-    diagnostics.append(
-        _build_parse_diagnostic(
-            state=state,
-            attempt=2,
-            parse_error_type="repair_payload_invalid",
-            validation_errors=["repair_output_not_valid_next_step_json"],
-            raw_output=repair_raw,
-        )
-    )
-
-    logger.info("task_mode next_step parse failure correlation_id=%s", _correlation_id(state))
-    return {"kind": "ask_user", "question": ""}, True, diagnostics
-
-
-def _build_goal_clarification_question(*, state: dict[str, Any], llm_client: Any) -> str:
-    user_prompt = render_pdca_prompt(
-        GOAL_CLARIFICATION_USER_TEMPLATE,
-        {
-            "LOCALE": str(state.get("locale") or ""),
-            "LATEST_USER_MESSAGE": str(state.get("last_user_message") or "").strip(),
-        },
-    )
-    question = _call_llm_text(
-        llm_client=llm_client,
-        system_prompt=GOAL_CLARIFICATION_SYSTEM_PROMPT,
-        user_prompt=user_prompt,
-    )
-    rendered = str(question or "").strip()
-    if rendered:
-        return rendered
-    latest = str(state.get("last_user_message") or "").strip()
-    if latest:
-        return f"To help correctly, what exact task should I do with: \"{latest}\"?"
-    return "What exact task should I execute now?"
-
-
-def _provider_model_from_state(state: dict[str, Any]) -> tuple[str | None, str | None]:
-    llm_client = state.get("_llm_client")
-    provider = str(getattr(llm_client, "provider", "") or "").strip() or None
-    model = str(getattr(llm_client, "model", "") or "").strip() or None
-    return provider, model
-
-
-def _build_parse_diagnostic(
-    *,
-    state: dict[str, Any],
-    attempt: int,
-    parse_error_type: str,
-    validation_errors: list[str],
-    raw_output: Any,
-) -> dict[str, Any]:
-    provider, model = _provider_model_from_state(state)
-    preview = _truncate_text(_redact_secrets(str(raw_output or "")), limit=280)
-    return {
-        "attempt": int(attempt),
-        "parse_error_type": str(parse_error_type or "next_step_parse_invalid"),
-        "validation_errors": validation_errors,
-        "raw_output_preview": preview,
-        "provider": provider,
-        "model": model,
-    }
-
-
-def _build_next_step_repair_prompt(*, original_user_prompt: str, latest_diagnostic: dict[str, Any]) -> str:
-    parse_error_type = str((latest_diagnostic or {}).get("parse_error_type") or "").strip()
-    validation_errors = latest_diagnostic.get("validation_errors")
-    lines = []
-    if isinstance(validation_errors, list):
-        lines = [f"- {str(item)}" for item in validation_errors if str(item).strip()]
-    if not lines:
-        lines = ["- next_step_output_invalid"]
-    return render_pdca_prompt(
-        NEXT_STEP_REPAIR_USER_TEMPLATE,
-        {
-            "ORIGINAL_USER_PROMPT": original_user_prompt,
-            "PARSE_ERROR_TYPE": parse_error_type or "unknown",
-            "VALIDATION_ERRORS_LINES": "\n".join(lines),
-        },
-    )
-
-
-def _redact_secrets(text: str) -> str:
-    value = str(text or "")
-    lowered = value.lower()
-    redacted = value
-    secret_tokens = ("password", "pass", "token", "api_key", "secret")
-    if any(token in lowered for token in secret_tokens):
-        for token in secret_tokens:
-            redacted = redacted.replace(token, "[redacted_key]")
-    return redacted
-
-
-def _truncate_text(text: str, *, limit: int) -> str:
-    value = str(text or "")
-    if len(value) <= limit:
-        return value
-    return value[:limit]
-
-
-def _build_working_state_view(task_state: dict[str, Any]) -> dict[str, Any]:
-    facts = task_state.get("facts")
-    relevant_facts = dict(facts) if isinstance(facts, dict) else {}
-    if len(relevant_facts) > 8:
-        keys = sorted(relevant_facts.keys())[-8:]
-        relevant_facts = {key: relevant_facts[key] for key in keys}
-    acceptance_criteria = _normalize_acceptance_criteria_values(task_state.get("acceptance_criteria"))
-    failure_diagnostics = _latest_failure_diagnostics(task_state)
-    return {
-        "goal": str(task_state.get("goal") or "").strip(),
-        "acceptance_criteria": acceptance_criteria,
-        "relevant_facts": relevant_facts,
-        "latest_failure_diagnostics": failure_diagnostics,
-        "execution_eval": task_state.get("execution_eval") if isinstance(task_state.get("execution_eval"), dict) else {},
-        "last_validation_error": task_state.get("last_validation_error"),
-        "repair_attempts": int(task_state.get("repair_attempts") or 0),
-        "pending_question": str(task_state.get("next_user_question") or "").strip() or None,
-    }
-
-
-def _latest_failure_diagnostics(task_state: dict[str, Any]) -> dict[str, Any]:
-    plan = _task_plan(task_state)
-    steps = plan.get("steps") if isinstance(plan.get("steps"), list) else []
-    facts = task_state.get("facts") if isinstance(task_state.get("facts"), dict) else {}
-    for raw_step in reversed(steps):
-        if not isinstance(raw_step, dict):
-            continue
-        if str(raw_step.get("status") or "").strip().lower() != "failed":
-            continue
-        step_id = str(raw_step.get("step_id") or "").strip()
-        proposal = raw_step.get("proposal") if isinstance(raw_step.get("proposal"), dict) else {}
-        tool_name = str(proposal.get("tool_name") or "").strip()
-        args = proposal.get("args") if isinstance(proposal.get("args"), dict) else {}
-        fact_entry = facts.get(step_id) if step_id else None
-        result = fact_entry.get("result") if isinstance(fact_entry, dict) and isinstance(fact_entry.get("result"), dict) else {}
-        error = result.get("error") if isinstance(result.get("error"), dict) else {}
-        return {
-            "step_id": step_id,
-            "tool_name": tool_name,
-            "args": args,
-            "error_code": str(error.get("code") or "").strip(),
-            "error_message": str(error.get("message") or "").strip(),
-        }
-    return {}
-
-
-def _build_tool_menu(tool_registry: Any) -> str:
-    descriptions = _tool_descriptions()
-    keys = sorted(descriptions.keys())
-    lines: list[str] = []
-    for name in keys:
-        if not _tool_exists(tool_registry, name):
-            continue
-        summary = descriptions.get(name) or "Tool available."
-        lines.append(f"- `{name}`: {summary}")
-    return "\n".join(lines) or "- (no tools)"
-
-
-def _tool_descriptions() -> dict[str, str]:
-    menu: dict[str, str] = {}
-    for schema in planner_tool_schemas():
-        fn = schema.get("function")
-        if not isinstance(fn, dict):
-            continue
-        name = str(fn.get("name") or "").strip()
-        if not name:
-            continue
-        description = str(fn.get("description") or "Tool available.").strip()
-        menu[name] = description
-    return menu
-
-
-def _call_llm_structured(
-    *,
-    llm_client: Any,
-    system_prompt: str,
-    user_prompt: str,
-) -> tuple[bool, dict[str, Any] | None]:
-    complete_json = getattr(llm_client, "complete_json", None)
-    if callable(complete_json):
-        try:
-            payload = complete_json(
-                system_prompt=system_prompt,
-                user_prompt=user_prompt,
-                schema=_NEXT_STEP_SCHEMA,
-            )
-            if isinstance(payload, dict):
-                return True, payload
-        except Exception:
-            return True, None
-        return True, None
-    complete_with_schema = getattr(llm_client, "complete_with_schema", None)
-    if callable(complete_with_schema):
-        try:
-            payload = complete_with_schema(
-                system_prompt=system_prompt,
-                user_prompt=user_prompt,
-                schema=_NEXT_STEP_SCHEMA,
-            )
-            if isinstance(payload, dict):
-                return True, payload
-        except Exception:
-            return True, None
-        return True, None
-    return False, None
-
-
-def _call_llm_text(*, llm_client: Any, system_prompt: str, user_prompt: str) -> str:
-    complete = getattr(llm_client, "complete", None)
-    if not callable(complete):
-        return ""
-    try:
-        return str(complete(system_prompt=system_prompt, user_prompt=user_prompt))
-    except TypeError:
-        try:
-            return str(complete(system_prompt, user_prompt))
-        except Exception:
-            return ""
-    except Exception:
-        return ""
-
-
-def _build_progress_checkin_question(
-    *,
-    state: dict[str, Any],
-    task_state: dict[str, Any],
-    evaluation: dict[str, Any],
-) -> str:
-    llm_client = state.get("_llm_client")
-    goal = str(task_state.get("goal") or "").strip()
-    cycle = int(task_state.get("cycle_index") or 0)
-    current = _current_step(task_state)
-    proposal = (current or {}).get("proposal") if isinstance(current, dict) else {}
-    current_kind = str((proposal or {}).get("kind") or "").strip()
-    current_tool = str((proposal or {}).get("tool_name") or "").strip()
-    summary = str((evaluation or {}).get("summary") or "").strip()
-    acceptance_criteria = task_state.get("acceptance_criteria")
-    criteria_lines = (
-        "\n".join(f"- {str(item).strip()}" for item in acceptance_criteria if str(item).strip())
-        if isinstance(acceptance_criteria, list)
-        else ""
-    )
-    if not criteria_lines:
-        criteria_lines = "- (not provided)"
-    user_prompt = render_pdca_prompt(
-        PROGRESS_CHECKIN_USER_TEMPLATE,
-        {
-            "LOCALE": str(state.get("locale") or ""),
-            "CYCLE_COUNT": cycle,
-            "TASK_GOAL": goal,
-            "CURRENT_STEP_KIND": current_kind,
-            "CURRENT_TOOL": current_tool,
-            "PROGRESS_SUMMARY": summary,
-            "ACCEPTANCE_CRITERIA_LINES": criteria_lines,
-        },
-    )
-    question = _call_llm_text(
-        llm_client=llm_client,
-        system_prompt=PROGRESS_CHECKIN_SYSTEM_PROMPT,
-        user_prompt=user_prompt,
-    )
-    rendered = str(question or "").strip()
-    if rendered:
-        return rendered
-    fallback_goal = goal or "this task"
-    fallback_wip = current_tool or "the current plan"
-    return (
-        f"I have been working on {fallback_goal} for {cycle} cycles and I am currently using {fallback_wip}. "
-        "Would you like me to continue or stop?"
-    )
-
-
-def _parse_json_payload(raw: Any) -> dict[str, Any] | None:
-    if isinstance(raw, dict):
-        return raw
-    candidate = str(raw or "").strip()
-    if not candidate:
-        return None
-    if candidate.startswith("```"):
-        candidate = candidate.strip("`")
-        if candidate.startswith("json"):
-            candidate = candidate[4:].strip()
-    parsed = _json_loads(candidate)
-    if isinstance(parsed, dict):
-        return parsed
-    start = candidate.find("{")
-    end = candidate.rfind("}")
-    if start >= 0 and end > start:
-        parsed = _json_loads(candidate[start : end + 1])
-        if isinstance(parsed, dict):
-            return parsed
-    return None
-
-
-def _json_loads(text: str) -> Any:
-    try:
-        return json.loads(text)
-    except Exception:
-        return None
-
-
-def _normalize_next_step_proposal(payload: Any) -> NextStepProposal | None:
-    if not isinstance(payload, dict):
-        return None
-    kind = str(payload.get("kind") or "").strip()
-    criteria = _normalize_acceptance_criteria_values(payload.get("acceptance_criteria"))
-    if kind == "ask_user":
-        question = str(payload.get("question") or "").strip()
-        if not question:
-            return None
-        out: NextStepProposal = {"kind": "ask_user", "question": question}
-        if criteria:
-            out["acceptance_criteria"] = criteria
-        return out
-    if kind == "call_tool":
-        tool_name = str(payload.get("tool_name") or "").strip()
-        args = payload.get("args")
-        if not tool_name or not isinstance(args, dict):
-            return None
-        out = {"kind": "call_tool", "tool_name": tool_name, "args": dict(args)}
-        if criteria:
-            out["acceptance_criteria"] = criteria
-        return out
-    if kind == "finish":
-        final_text = str(payload.get("final_text") or "").strip()
-        if not final_text:
-            return None
-        out = {"kind": "finish", "final_text": final_text}
-        if criteria:
-            out["acceptance_criteria"] = criteria
-        return out
-    return None
-
-
-def _goal_satisfied(task_state: dict[str, Any]) -> bool:
-    outcome = task_state.get("outcome")
-    if not isinstance(outcome, dict) or not outcome:
-        return False
-    kind = str(outcome.get("kind") or "").strip().lower()
-    if kind == "task_completed":
-        summary = str(
-            outcome.get("final_text")
-            or outcome.get("summary")
-            or ""
-        ).strip()
-        if not summary or _looks_like_question(summary):
-            return False
-        return _has_acceptance_criteria(task_state)
-    return True
-
-
-def _looks_like_question(text: str) -> bool:
-    rendered = str(text or "").strip().lower()
-    if not rendered:
-        return False
-    if "?" in rendered:
-        return True
-    starters = (
-        "can ",
-        "could ",
-        "would ",
-        "should ",
-        "do ",
-        "did ",
-        "is ",
-        "are ",
-        "what ",
-        "when ",
-        "where ",
-        "why ",
-        "how ",
-    )
-    return rendered.startswith(starters)
-
-
-def _derive_outcome_from_state(*, state: dict[str, Any], task_state: dict[str, Any]) -> dict[str, Any] | None:
-    current = _current_step(task_state)
-    if not isinstance(current, dict):
-        return task_state.get("outcome") if isinstance(task_state.get("outcome"), dict) else None
-    step_id = str(current.get("step_id") or "").strip()
-    if not step_id:
-        return task_state.get("outcome") if isinstance(task_state.get("outcome"), dict) else None
-    facts = task_state.get("facts")
-    if not isinstance(facts, dict):
-        return task_state.get("outcome") if isinstance(task_state.get("outcome"), dict) else None
-    entry = facts.get(step_id)
-    if not isinstance(entry, dict):
-        return task_state.get("outcome") if isinstance(task_state.get("outcome"), dict) else None
-
-    tool_name = str(entry.get("tool") or "").strip()
-    result = entry.get("result")
-    if tool_name not in {"create_reminder", "createReminder"} or not isinstance(result, dict):
-        return task_state.get("outcome") if isinstance(task_state.get("outcome"), dict) else None
-
-    payload = result
-    if str(result.get("status") or "").strip().lower() in {"ok", "executed"} and isinstance(
-        result.get("result"), dict
-    ):
-        payload = dict(result.get("result") or {})
-
-    reminder_id = str(payload.get("reminder_id") or "").strip()
-    fire_at = str(payload.get("fire_at") or "").strip()
-    message = str(payload.get("message") or "").strip()
-    if not reminder_id or not fire_at:
-        return task_state.get("outcome") if isinstance(task_state.get("outcome"), dict) else None
-
-    for_whom = str(payload.get("for_whom") or state.get("channel_target") or "").strip()
-    if not for_whom:
-        for_whom = str(payload.get("delivery_target") or "").strip()
-    return {
-        "kind": "reminder_created",
-        "evidence": {
-            "reminder_id": reminder_id,
-            "fire_at": fire_at,
-            "message": message,
-            "for_whom": for_whom,
-        },
-    }
-
-
-def _proposal_summary(proposal: dict[str, Any]) -> str:
-    kind = str(proposal.get("kind") or "").strip()
-    if kind == "call_tool":
-        tool = str(proposal.get("tool_name") or "").strip()
-        return f"call_tool:{tool or 'unknown'}"
-    if kind == "ask_user":
-        question = str(proposal.get("question") or "").strip()
-        return f"ask_user:{question[:48]}"
-    if kind == "finish":
-        text = str(proposal.get("final_text") or "").strip()
-        return f"finish:{text[:48]}"
-    return kind or "unknown"
-
-
-def _task_state_with_defaults(state: dict[str, Any]) -> dict[str, Any]:
-    existing = state.get("task_state")
-    task_state = dict(existing) if isinstance(existing, dict) else {}
-    defaults = build_default_task_state()
-    for key, value in defaults.items():
-        if key not in task_state:
-            task_state[key] = value
-    _task_plan(task_state)
-    _task_trace(task_state)
-    task_state.setdefault("facts", {})
-    task_state.setdefault("status", "running")
-    task_state.setdefault("repair_attempts", 0)
-    task_state.setdefault("acceptance_criteria", [])
-    return task_state
-
-
-def _has_acceptance_criteria(task_state: dict[str, Any]) -> bool:
-    return bool(_normalize_acceptance_criteria_values(task_state.get("acceptance_criteria")))
-
-
-def _normalize_acceptance_criteria_values(value: Any) -> list[str]:
-    if not isinstance(value, list):
-        return []
-    out: list[str] = []
-    for item in value:
-        text = str(item or "").strip()
-        if not text:
-            continue
-        out.append(text[:180])
-        if len(out) >= 8:
-            break
-    return out
-
-
-def _task_plan(task_state: dict[str, Any]) -> dict[str, Any]:
-    plan = task_state.get("plan")
-    if not isinstance(plan, dict):
-        plan = {"version": 1, "steps": [], "current_step_id": None}
-        task_state["plan"] = plan
-    if not isinstance(plan.get("steps"), list):
-        plan["steps"] = []
-    if "version" not in plan:
-        plan["version"] = 1
-    if "current_step_id" not in plan:
-        plan["current_step_id"] = None
-    return plan
-
-
-def _task_trace(task_state: dict[str, Any]) -> dict[str, Any]:
-    trace = task_state.get("trace")
-    if not isinstance(trace, dict):
-        trace = {"summary": "", "recent": []}
-        task_state["trace"] = trace
-    if not isinstance(trace.get("recent"), list):
-        trace["recent"] = []
-    if "summary" not in trace:
-        trace["summary"] = ""
-    return trace
-
-
-def _append_trace_event(task_state: dict[str, Any], event: TraceEvent) -> None:
-    trace = _task_trace(task_state)
-    recent = trace["recent"]
-    recent.append(
-        {
-            "type": str(event.get("type") or "event"),
-            "summary": str(event.get("summary") or "").strip()[:180],
-            "correlation_id": event.get("correlation_id"),
-        }
-    )
-    trace["recent"] = recent[-25:]
-
-
-def _tool_exists(tool_registry: Any, tool_name: str) -> bool:
-    if hasattr(tool_registry, "get"):
-        return tool_registry.get(tool_name) is not None
-    return False
-
-
-def _required_args_for_tool(tool_name: str) -> list[str]:
-    for schema in planner_tool_schemas():
-        fn = schema.get("function")
-        if not isinstance(fn, dict):
-            continue
-        if str(fn.get("name") or "") != tool_name:
-            continue
-        params = fn.get("parameters")
-        if not isinstance(params, dict):
-            return []
-        required = params.get("required")
-        if isinstance(required, list):
-            return [str(item) for item in required if str(item)]
-        return []
-    return []
-
-
-def _invalid_args_for_tool(*, tool_name: str, args: dict[str, Any]) -> list[str]:
-    params = _tool_parameters_for_tool(tool_name)
-    if not isinstance(params, dict):
-        return []
-    additional_properties = params.get("additionalProperties")
-    if additional_properties is not False:
-        return []
-    properties = params.get("properties")
-    if not isinstance(properties, dict):
-        return []
-    allowed = {str(k) for k in properties.keys()}
-    invalid = [key for key in args.keys() if str(key) not in allowed]
-    return sorted([str(item) for item in invalid if str(item)])
-
-
-def _tool_parameters_for_tool(tool_name: str) -> dict[str, Any] | None:
-    for schema in planner_tool_schemas():
-        fn = schema.get("function")
-        if not isinstance(fn, dict):
-            continue
-        if str(fn.get("name") or "") != tool_name:
-            continue
-        params = fn.get("parameters")
-        if isinstance(params, dict):
-            return params
-        return None
-    return None
-
-
-def _next_step_id(task_state: dict[str, Any]) -> str:
-    steps = _task_plan(task_state).get("steps")
-    index = len(steps) + 1 if isinstance(steps, list) else 1
-    return f"step_{index}"
-
-
-def _current_step(task_state: dict[str, Any]) -> dict[str, Any] | None:
-    plan = _task_plan(task_state)
-    current_id = str(plan.get("current_step_id") or "").strip()
-    steps = plan.get("steps")
-    if not current_id or not isinstance(steps, list):
-        return None
-    for step in steps:
-        if not isinstance(step, dict):
-            continue
-        if str(step.get("step_id") or "") == current_id:
-            return step
-    return None
-
-
-def _serialize_result(result: Any) -> Any:
-    if isinstance(result, (dict, list, str, int, float, bool)) or result is None:
-        return result
-    return str(result)
-
-
-def _correlation_id(state: dict[str, Any]) -> str | None:
-    value = state.get("correlation_id")
-    if value is None:
-        return None
-    return str(value)
-
-
-def _tool_name_for_step(step: dict[str, Any] | None) -> str:
-    if not isinstance(step, dict):
-        return ""
-    proposal = step.get("proposal") if isinstance(step.get("proposal"), dict) else {}
-    return str(proposal.get("tool_name") or "").strip()
-
-
-def _tool_signature_for_step(step: dict[str, Any] | None) -> str:
-    if not isinstance(step, dict):
-        return ""
-    proposal = step.get("proposal") if isinstance(step.get("proposal"), dict) else {}
-    tool_name = str(proposal.get("tool_name") or "").strip()
-    args = proposal.get("args") if isinstance(proposal.get("args"), dict) else {}
-    try:
-        args_text = json.dumps(args, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-    except Exception:
-        args_text = str(args)
-    return f"{tool_name}|{args_text}"
-
-
-def _evaluate_tool_execution(*, task_state: dict[str, Any], current_step: dict[str, Any] | None) -> dict[str, Any]:
-    max_evolving_failures = 10
-    immediate_repeat_limit = 2
-    current_signature = _tool_signature_for_step(current_step)
-    current_tool = _tool_name_for_step(current_step)
-    plan = _task_plan(task_state)
-    steps = plan.get("steps") if isinstance(plan.get("steps"), list) else []
-
-    failed_steps: list[dict[str, Any]] = [
-        step
-        for step in steps
-        if isinstance(step, dict) and str(step.get("status") or "").strip().lower() == "failed"
-    ]
-    total_failures = len(failed_steps)
-    same_signature_failures = 0
-    signatures: list[str] = []
-    for step in failed_steps:
-        signature = _tool_signature_for_step(step)
-        if signature:
-            signatures.append(signature)
-        if current_signature and signature == current_signature:
-            same_signature_failures += 1
-    unique_signatures = len({item for item in signatures if item})
-    evolving = unique_signatures > 1
-
-    if same_signature_failures >= immediate_repeat_limit:
-        return {
-            "should_pause": True,
-            "reason": "repeated_identical_failure",
-            "summary": f"Repeated identical tool attempt failed for {current_tool or 'tool'}.",
-            "tool_name": current_tool,
-            "total_failures": total_failures,
-            "same_signature_failures": same_signature_failures,
-            "unique_signatures": unique_signatures,
-            "evolving": evolving,
-            "max_evolving_failures": max_evolving_failures,
-        }
-    if total_failures >= max_evolving_failures:
-        return {
-            "should_pause": True,
-            "reason": "failure_budget_exhausted",
-            "summary": "Failure budget exhausted while trying multiple strategies.",
-            "tool_name": current_tool,
-            "total_failures": total_failures,
-            "same_signature_failures": same_signature_failures,
-            "unique_signatures": unique_signatures,
-            "evolving": evolving,
-            "max_evolving_failures": max_evolving_failures,
-        }
-    return {
-        "should_pause": False,
-        "reason": "continue_learning" if evolving else "single_failure",
-        "summary": "Continue with next planning attempt.",
-        "tool_name": current_tool,
-        "total_failures": total_failures,
-        "same_signature_failures": same_signature_failures,
-        "unique_signatures": unique_signatures,
-        "evolving": evolving,
-        "max_evolving_failures": max_evolving_failures,
-    }
-
-
-def _build_execution_pause_prompt(evaluation: dict[str, Any]) -> str:
-    reason = str(evaluation.get("reason") or "")
-    tool_name = str(evaluation.get("tool_name") or "tool")
-    total = int(evaluation.get("total_failures") or 0)
-    unique = int(evaluation.get("unique_signatures") or 0)
-    if reason == "repeated_identical_failure":
-        return (
-            f"I got stuck repeating the same failed action with `{tool_name}`. "
-            "I paused the plan to avoid waste. Do you want me to keep trying with your approval, "
-            "or provide steering on a different approach?"
-        )
-    return (
-        f"I tried {total} times across {unique} strategy variants and I'm still blocked. "
-        "I paused the plan. Should I keep pursuing this goal, or do you want to steer me?"
+    return route_after_act_stateful(
+        state,
+        correlation_id=correlation_id,
+        logger=logger,
     )

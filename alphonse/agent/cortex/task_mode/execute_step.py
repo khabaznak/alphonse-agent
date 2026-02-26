@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import inspect
 import logging
 import re
 from typing import Any, Callable
+
+from alphonse.agent.tools.base import ensure_tool_result
 
 
 def execute_step_node_impl(
@@ -13,8 +16,6 @@ def execute_step_node_impl(
     correlation_id: Callable[[dict[str, Any]], str | None],
     current_step: Callable[[dict[str, Any]], dict[str, Any] | None],
     append_trace_event: Callable[[dict[str, Any], dict[str, Any]], None],
-    serialize_result: Callable[[Any], Any],
-    execute_tool_call: Callable[..., Any],
     logger: logging.Logger,
     log_task_event: Callable[..., None],
 ) -> dict[str, Any]:
@@ -102,7 +103,7 @@ def execute_step_node_impl(
     step_id = str((current or {}).get("step_id") or "")
     send_after_search = _is_send_after_user_search(tool_name=tool_name, task_state=task_state)
     try:
-        result = execute_tool_call(
+        result = _execute_tool_call(
             state=state,
             tool_registry=tool_registry,
             tool_name=tool_name,
@@ -116,12 +117,11 @@ def execute_step_node_impl(
             args=params,
             result=result,
             correlation_id=correlation_id,
-            execute_tool_call=execute_tool_call,
             logger=logger,
         )
         facts = task_state.get("facts")
         fact_bucket = dict(facts) if isinstance(facts, dict) else {}
-        result_payload = serialize_result(result)
+        result_payload = _serialize_result(result)
         fact_entry = {
             "tool": tool_name,
             "result": result_payload,
@@ -249,7 +249,6 @@ def _maybe_retry_repaired_reminder_call(
     args: dict[str, Any],
     result: Any,
     correlation_id: Callable[[dict[str, Any]], str | None],
-    execute_tool_call: Callable[..., Any],
     logger: logging.Logger,
 ) -> Any:
     if tool_name not in {"create_reminder", "createReminder"} or not isinstance(result, dict):
@@ -275,12 +274,97 @@ def _maybe_retry_repaired_reminder_call(
         correlation_id(state),
         error_code,
     )
-    return execute_tool_call(
+    return _execute_tool_call(
         state=state,
         tool_registry=tool_registry,
         tool_name=tool_name,
         args=repaired_args,
     )
+
+
+def _execute_tool_call(
+    *,
+    state: dict[str, Any],
+    tool_registry: Any,
+    tool_name: str,
+    args: dict[str, Any],
+) -> Any:
+    tool = tool_registry.get(tool_name) if hasattr(tool_registry, "get") else None
+    if tool is None:
+        raise RuntimeError(f"tool_not_found:{tool_name}")
+    execute = getattr(tool, "execute", None)
+    if not callable(execute):
+        raise RuntimeError(f"tool_not_executable:{tool_name}")
+    try:
+        call_args = dict(args or {})
+        signature = inspect.signature(execute)
+        accepts_state = "state" in signature.parameters or any(
+            p.kind == inspect.Parameter.VAR_KEYWORD for p in signature.parameters.values()
+        )
+        if accepts_state:
+            raw_result = execute(**call_args, state=state)
+        else:
+            raw_result = execute(**call_args)
+    except TypeError as exc:
+        return {
+            "status": "failed",
+            "result": None,
+            "error": {
+                "code": "invalid_tool_arguments",
+                "message": str(exc) or "invalid tool arguments",
+                "retryable": False,
+                "details": {
+                    "tool": tool_name,
+                    "args_keys": sorted(list(dict(args or {}).keys())),
+                },
+            },
+            "metadata": {"tool": tool_name},
+        }
+    except Exception as exc:
+        as_payload = getattr(exc, "as_payload", None)
+        if callable(as_payload):
+            error_payload = as_payload()
+            if not isinstance(error_payload, dict):
+                error_payload = {"code": "tool_execution_exception", "message": str(exc)}
+        else:
+            error_payload = {
+                "code": "tool_execution_exception",
+                "message": str(exc) or type(exc).__name__,
+                "retryable": True,
+                "details": {"exception_type": type(exc).__name__},
+            }
+        return {
+            "status": "failed",
+            "result": None,
+            "error": _coerce_error(error_payload),
+            "metadata": {"tool": tool_name},
+        }
+    return _coerce_tool_result(tool_name=tool_name, raw_result=raw_result)
+
+
+def _coerce_tool_result(*, tool_name: str, raw_result: Any) -> dict[str, Any]:
+    return ensure_tool_result(tool_key=tool_name, value=raw_result)
+
+
+def _coerce_error(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        code = str(value.get("code") or "tool_execution_error")
+        message = str(value.get("message") or code)
+        retryable = bool(value.get("retryable", False))
+        details = value.get("details")
+        if not isinstance(details, dict):
+            details = {}
+        return {"code": code, "message": message, "retryable": retryable, "details": details}
+    if isinstance(value, str):
+        text = value.strip() or "tool_execution_error"
+        return {"code": text, "message": text, "retryable": False, "details": {}}
+    return {"code": "tool_execution_error", "message": "Tool execution failed", "retryable": False, "details": {}}
+
+
+def _serialize_result(result: Any) -> Any:
+    if isinstance(result, (dict, list, str, int, float, bool)) or result is None:
+        return result
+    return str(result)
 
 
 def _repair_create_reminder_args(
