@@ -192,6 +192,7 @@ def _execute_call_tool_step(
     tool_name = str(proposal.get("tool_name") or "").strip()
     args = proposal.get("args")
     params = dict(args) if isinstance(args, dict) else {}
+    terminal_context = _terminal_command_context(tool_name=tool_name, args=params)
     step_id = str((current or {}).get("step_id") or "")
     send_after_search = _is_send_after_user_search(tool_name=tool_name, task_state=task_state)
     try:
@@ -260,6 +261,7 @@ def _execute_call_tool_step(
                 tool=tool_name,
                 error_code=error_code,
                 error_message=error_message,
+                **terminal_context,
             )
             return {"task_state": task_state}
         derived_outcome = _derive_tool_outcome_from_result(
@@ -299,6 +301,7 @@ def _execute_call_tool_step(
             event="graph.tool.succeeded",
             step_id=step_id,
             tool=tool_name,
+            **terminal_context,
         )
         return {"task_state": task_state}
     except Exception as exc:
@@ -391,6 +394,18 @@ def _execute_tool_call(
 
 def _coerce_tool_result(*, tool_name: str, raw_result: Any) -> dict[str, Any]:
     return ensure_tool_result(tool_key=tool_name, value=raw_result)
+
+
+def _terminal_command_context(*, tool_name: str, args: dict[str, Any]) -> dict[str, Any]:
+    normalized = str(tool_name or "").strip().lower()
+    if normalized not in {"terminal_sync", "terminal_async", "ssh_terminal"}:
+        return {}
+    command = str(args.get("command") or "").strip()
+    cwd = str(args.get("cwd") or "").strip()
+    return {
+        "terminal_command": command,
+        "terminal_cwd": cwd,
+    }
 
 
 def _coerce_error(value: Any) -> dict[str, Any]:
