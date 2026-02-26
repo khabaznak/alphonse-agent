@@ -210,15 +210,19 @@ class HandleIncomingMessageAction(Action):
                 payload={"steps": [str(getattr(plan, "tool", "unknown")) for plan in result.plans]},
             )
 
-        save_state(session_key, result.cognition_state)
-        if isinstance(result.cognition_state, dict):
+        cognition_state = _flush_cognition_state_if_task_succeeded(
+            result.cognition_state if isinstance(result.cognition_state, dict) else {},
+            correlation_id=incoming.correlation_id,
+        )
+        save_state(session_key, cognition_state)
+        if cognition_state:
             _LOG.emit(
                 event="incoming_message.state_saved",
                 component="handle_incoming_message",
                 correlation_id=incoming.correlation_id,
                 channel=incoming.channel_type,
                 user_id=incoming.person_id,
-                payload={"pending_interaction": result.cognition_state.get("pending_interaction")},
+                payload={"pending_interaction": cognition_state.get("pending_interaction")},
             )
 
         executor = PlanExecutor()
@@ -229,12 +233,8 @@ class HandleIncomingMessageAction(Action):
             correlation_id=incoming.correlation_id,
         )
         if result.reply_text:
-            locale = outgoing_locale(result.cognition_state)
-            result_locale = (
-                str((result.cognition_state or {}).get("locale") or "").strip()
-                if isinstance(result.cognition_state, dict)
-                else ""
-            )
+            locale = outgoing_locale(cognition_state)
+            result_locale = str(cognition_state.get("locale") or "").strip()
             if not result_locale:
                 state_locale = str(state.get("locale") or "").strip()
                 if state_locale:
@@ -258,7 +258,6 @@ class HandleIncomingMessageAction(Action):
             reply_text=str(result.reply_text or ""),
             correlation_id=incoming.correlation_id,
         )
-        cognition_state = result.cognition_state if isinstance(result.cognition_state, dict) else {}
         session_assistant_message = _resolve_assistant_session_message(
             reply_text=str(result.reply_text or ""),
             plans=result.plans or [],
@@ -293,6 +292,24 @@ class HandleIncomingMessageAction(Action):
             payload={"message": "noop"},
         )
         return ActionResult(intention_key="NOOP", payload={}, urgency=None)
+
+
+def _flush_cognition_state_if_task_succeeded(
+    cognition_state: dict[str, Any],
+    *,
+    correlation_id: str | None = None,
+) -> dict[str, Any]:
+    task_state = cognition_state.get("task_state")
+    if not isinstance(task_state, dict):
+        return dict(cognition_state)
+    status = str(task_state.get("status") or "").strip().lower()
+    if status != "done" or not task_state.get("outcome"):
+        return dict(cognition_state)
+    logger.info(
+        "HandleIncomingMessageAction flush_after_task_success correlation_id=%s",
+        str(correlation_id or ""),
+    )
+    return {}
 
 
 def _text_log_snippet(text: str, limit: int = 80) -> str:

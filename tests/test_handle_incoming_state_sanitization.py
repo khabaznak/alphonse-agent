@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 from alphonse.agent.actions.handle_incoming_message import IncomingContext
+from alphonse.agent.actions.handle_incoming_message import _flush_cognition_state_if_task_succeeded
 from alphonse.agent.actions.state_context import build_cortex_state
 from alphonse.agent.nervous_system.migrate import apply_schema
 
@@ -87,3 +88,23 @@ def test_build_cortex_state_keeps_active_pending_interaction(
 
     assert state.get("pending_interaction") == pending
     assert state.get("ability_state") == ability_state
+
+
+def test_flush_cognition_state_if_task_succeeded_clears_state() -> None:
+    state = {
+        "locale": "en-US",
+        "pending_interaction": {"type": "SLOT_FILL", "key": "answer"},
+        "task_state": {"status": "done", "outcome": {"summary": "ok"}},
+    }
+    assert _flush_cognition_state_if_task_succeeded(state) == {}
+
+
+def test_flush_cognition_state_if_task_succeeded_keeps_running_state() -> None:
+    state = {
+        "locale": "en-US",
+        "pending_interaction": {"type": "SLOT_FILL", "key": "answer"},
+        "task_state": {"status": "running", "outcome": None},
+    }
+    result = _flush_cognition_state_if_task_succeeded(state)
+    assert result == state
+    assert result is not state
