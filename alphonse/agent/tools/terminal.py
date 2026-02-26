@@ -417,7 +417,20 @@ def _run_command(
     use_shell: bool,
     timeout_seconds: float | None,
 ) -> "_TerminalRunResult":
-    if not use_shell and _requires_stdin_without_input(argv):
+    env_overrides: dict[str, str] = {}
+    argv_to_run = argv
+    if not use_shell:
+        env_overrides, argv_to_run = _split_leading_env_assignments(argv)
+        if env_overrides and not argv_to_run:
+            raise _TerminalInputRequiredError(
+                code="invalid_command",
+                message="Environment assignments provided without an executable command.",
+                stdout="",
+                stderr="",
+                elapsed_ms=0,
+            )
+
+    if not use_shell and _requires_stdin_without_input(argv_to_run):
         raise _TerminalInputRequiredError(
             code="stdin_required_no_input",
             message="Command expects stdin input but none was provided.",
@@ -430,6 +443,8 @@ def _run_command(
     wall_timeout = None if timeout_seconds is None else max(1.0, float(timeout_seconds))
     idle_timeout = _effective_idle_timeout(wall_timeout)
     env = _scrub_env(os.environ)
+    if env_overrides:
+        env.update(env_overrides)
     if use_shell:
         process = subprocess.Popen(
             command,
@@ -443,7 +458,7 @@ def _run_command(
         )
     else:
         process = subprocess.Popen(
-            argv,
+            argv_to_run,
             cwd=str(cwd),
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -688,6 +703,32 @@ def _requires_stdin_without_input(argv: list[str]) -> bool:
     if head not in {"python", "python3", "bash", "sh", "zsh", "node"}:
         return False
     return any(str(token).strip() == "-" for token in argv[1:])
+
+
+def _split_leading_env_assignments(argv: list[str]) -> tuple[dict[str, str], list[str]]:
+    env_overrides: dict[str, str] = {}
+    idx = 0
+    for token in argv:
+        text = str(token or "").strip()
+        if not text:
+            break
+        if "=" not in text:
+            break
+        name, value = text.split("=", 1)
+        if not name or not _is_valid_env_name(name):
+            break
+        env_overrides[name] = value
+        idx += 1
+    return env_overrides, argv[idx:]
+
+
+def _is_valid_env_name(name: str) -> bool:
+    if not name:
+        return False
+    first = name[0]
+    if not (first.isalpha() or first == "_"):
+        return False
+    return all(ch.isalnum() or ch == "_" for ch in name[1:])
 
 
 def _drain_output_queue(
