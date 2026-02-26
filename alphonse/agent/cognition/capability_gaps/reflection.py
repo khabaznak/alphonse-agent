@@ -5,6 +5,11 @@ from alphonse.agent.observability.log_manager import get_component_logger
 from datetime import datetime, timezone
 from typing import Any
 
+from alphonse.agent.cognition.prompt_templates_runtime import (
+    CAPABILITY_GAP_REFLECTION_SYSTEM_PROMPT,
+    CAPABILITY_GAP_REFLECTION_USER_TEMPLATE,
+    render_prompt_template,
+)
 from alphonse.agent.cognition.capability_gaps.triage import (
     detect_language,
     triage_gap_text,
@@ -106,20 +111,18 @@ def _llm_proposal(
 ) -> dict[str, Any] | None:
     if not llm_client or not text:
         return None
-    system = (
-        "You classify user gaps into proposals. "
-        "Return JSON with keys: proposed_category, confidence, proposed_next_action, "
-        "proposed_intent_name, proposed_clarifying_question, notes. "
-        "Categories: intent_missing, slot_missing, skill_missing, execution_error. "
-        "Next actions: plan, investigate, fix_now, ask_clarifying, ignore. "
-        "Use confidence 0..1."
-    )
-    prompt = (
-        f"User text ({language}): {text}\n"
-        "Respond with JSON only."
+    prompt = render_prompt_template(
+        CAPABILITY_GAP_REFLECTION_USER_TEMPLATE,
+        {
+            "LANGUAGE": language,
+            "USER_TEXT": text,
+        },
     )
     try:
-        raw = llm_client.complete(system_prompt=system, user_prompt=prompt)
+        raw = llm_client.complete(
+            system_prompt=CAPABILITY_GAP_REFLECTION_SYSTEM_PROMPT,
+            user_prompt=prompt,
+        )
     except Exception as exc:
         logger.warning("Gap reflection LLM failed: %s", exc)
         return None

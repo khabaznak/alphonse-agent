@@ -3,6 +3,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from alphonse.agent.cognition.prompt_templates_runtime import (
+    JOBS_YOU_JUST_REMEMBERED_SYSTEM_PROMPT,
+)
 from alphonse.agent.nervous_system.prompt_artifacts import create_prompt_artifact
 from alphonse.agent.services.job_runner import JobRunner
 from alphonse.agent.services.job_store import JobStore
@@ -360,12 +363,7 @@ def _you_just_remembered_paraphrase(*, llm_client: Any | None, source_instructio
     complete = getattr(llm_client, "complete", None) if llm_client is not None else None
     if not callable(complete):
         return f"You just remembered: {source}"
-    system_prompt = (
-        "Rewrite the source instruction as a first-person internal reminder.\n"
-        "Technique: 'You Just Remembered'.\n"
-        "Keep the same language as source text.\n"
-        "One concise sentence. Plain text only."
-    )
+    system_prompt = JOBS_YOU_JUST_REMEMBERED_SYSTEM_PROMPT
     user_prompt = f"Source instruction:\n{source}"
     try:
         rendered = str(complete(system_prompt=system_prompt, user_prompt=user_prompt)).strip()

@@ -3,21 +3,14 @@ from __future__ import annotations
 from pathlib import Path
 
 from alphonse.agent.cognition.prompt_templates_runtime import render_prompt_template
+from alphonse.agent.cognition.template_loader import load_template_or_fallback
 
 _TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
-
-_TEMPLATE_MISSING_FALLBACK = (
-    "Template configuration problem detected. "
-    "Tell the user there is a prompt-template issue and ask them to contact the administrator."
-)
 
 
 def _load_template(filename: str) -> str:
     path = _TEMPLATES_DIR / filename
-    try:
-        return path.read_text(encoding="utf-8")
-    except Exception:
-        return _TEMPLATE_MISSING_FALLBACK
+    return load_template_or_fallback(path)
 
 
 NEXT_STEP_SYSTEM_PROMPT = _load_template("pdca.next_step.system.j2")

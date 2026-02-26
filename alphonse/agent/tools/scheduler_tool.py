@@ -9,6 +9,10 @@ from zoneinfo import ZoneInfo
 
 from alphonse.agent.nervous_system.prompt_artifacts import create_prompt_artifact
 from alphonse.agent.services.scheduler_service import SchedulerService
+from alphonse.agent.cognition.prompt_templates_runtime import (
+    SCHEDULER_NORMALIZE_TIME_SYSTEM_PROMPT,
+    SCHEDULER_PARAPHRASE_SYSTEM_PROMPT,
+)
 from alphonse.config import settings
 
 logger = get_component_logger("tools.scheduler_tool")
@@ -288,11 +292,7 @@ def _paraphrase_reminder_message(*, llm_client: Any | None, source_instruction: 
             source,
         )
         return source
-    system_prompt = (
-        "You are Alphonse the family's genius butler and virtual assistant.\n"
-        "Rewrite reminder content as a clear execution cue for future trigger time.\n"
-        "Keep the same language as the source text only if between quotes; otherwise rely the message content.\n"    
-    )
+    system_prompt = SCHEDULER_PARAPHRASE_SYSTEM_PROMPT
     user_prompt = (
         "Source reminder content:\n"
         f"{source}\n\n"
@@ -324,14 +324,7 @@ def _normalize_with_llm(*, expression: str, timezone_name: str, llm_client: Any 
     if client is None:
         return None
     now_local = datetime.now(ZoneInfo(timezone_name))
-    system_prompt = (
-        "# Role\n"
-        "You convert natural language time expressions into a single ISO timestamp.\n"
-        "# Output Contract\n"
-        "- Return ONLY one line.\n"
-        "- Either a valid ISO-8601 datetime in UTC (offset +00:00) or UNRESOLVABLE.\n"
-        "- No markdown, no extra words."
-    )
+    system_prompt = SCHEDULER_NORMALIZE_TIME_SYSTEM_PROMPT
     user_prompt = (
         "## Input\n"
         f"- timezone: {timezone_name}\n"
