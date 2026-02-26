@@ -6,9 +6,11 @@ import select
 import shlex
 import shutil
 import subprocess
+import threading
 import time
 from dataclasses import dataclass
 from typing import Any
+from typing import Callable
 from typing import Literal
 
 from alphonse.agent.tools.mcp.registry import McpOperationProfile
@@ -36,15 +38,45 @@ class McpInvocationError(Exception):
         }
 
 
+@dataclass
+class _NativeSession:
+    key: str
+    profile_key: str
+    cwd: str
+    mode: str
+    transport: Literal["content_length", "ndjson"]
+    launcher_argv: tuple[str, ...]
+    client: "_McpJsonRpcStdioClient"
+    last_used_at: float
+
+
 class McpConnector:
     def __init__(
         self,
         *,
         terminal: TerminalTool | None = None,
         profile_registry: McpProfileRegistry | None = None,
+        native_client_factory: Callable[..., "_McpJsonRpcStdioClient"] | None = None,
+        session_ttl_seconds: float | None = None,
+        max_native_sessions: int | None = None,
+        time_fn: Callable[[], float] | None = None,
     ) -> None:
         self._terminal = terminal or TerminalTool()
         self._profiles = profile_registry or McpProfileRegistry()
+        self._native_client_factory = native_client_factory or _McpJsonRpcStdioClient
+        self._native_session_ttl_seconds = (
+            float(session_ttl_seconds)
+            if session_ttl_seconds is not None
+            else _read_float_env("ALPHONSE_MCP_SESSION_TTL_SECONDS", 600.0)
+        )
+        self._max_native_sessions = (
+            int(max_native_sessions)
+            if max_native_sessions is not None
+            else int(_read_float_env("ALPHONSE_MCP_MAX_SESSIONS", 8.0))
+        )
+        self._time = time_fn or time.monotonic
+        self._native_sessions: dict[str, _NativeSession] = {}
+        self._native_sessions_lock = threading.Lock()
 
     def execute(
         self,
@@ -155,91 +187,221 @@ class McpConnector:
         operation = str(operation_key or "").strip()
         if not operation:
             raise McpInvocationError("mcp_operation_not_found", f"Unknown operation '{operation_key}' for MCP profile '{profile.key}'.")
+        key = self._native_session_key(
+            profile_key=profile.key,
+            mode=mode,
+            cwd=cwd,
+            transport=transport,
+            launcher_argv=launcher_argv,
+        )
+        for attempt in range(2):
+            session = self._get_or_create_native_session(
+                key=key,
+                profile=profile,
+                mode=mode,
+                cwd=cwd,
+                transport=transport,
+                launcher_argv=launcher_argv,
+                timeout_seconds=timeout_seconds,
+            )
+            try:
+                return self._execute_with_session(
+                    session=session,
+                    profile=profile,
+                    operation=operation,
+                    arguments=arguments,
+                    mode=mode,
+                    cwd=cwd,
+                )
+            except McpInvocationError as exc:
+                if attempt == 0 and _is_recoverable_native_error(exc):
+                    self._close_native_session(key)
+                    continue
+                raise
+            except TimeoutError as exc:
+                if attempt == 0:
+                    self._close_native_session(key)
+                    continue
+                raise McpInvocationError("mcp_timeout", str(exc)) from exc
+            except Exception as exc:
+                if attempt == 0:
+                    self._close_native_session(key)
+                    continue
+                raise McpInvocationError("mcp_native_call_failed", str(exc)) from exc
+        raise McpInvocationError("mcp_native_call_failed", "Failed to execute MCP operation after retry")
 
-        try:
-            with _McpJsonRpcStdioClient(
+    def _execute_with_session(
+        self,
+        *,
+        session: _NativeSession,
+        profile: McpServerProfile,
+        operation: str,
+        arguments: dict[str, Any],
+        mode: str,
+        cwd: str,
+    ) -> dict[str, Any]:
+        tools = session.client.list_tools()
+        tool_names = [str(item.get("name") or "").strip() for item in tools if str(item.get("name") or "").strip()]
+
+        if operation in {"list_tools", "discover_tools"}:
+            self._touch_native_session(session.key)
+            return {
+                "status": "ok",
+                "result": {
+                    "tools": tools,
+                    "tool_names": tool_names,
+                    "count": len(tool_names),
+                },
+                "error": None,
+                "metadata": {
+                    "tool": "mcp_call",
+                    "policy_envelope": {
+                        "execution_surface": "mcp_native",
+                        "profile": profile.key,
+                        "operation": operation,
+                        "mode": mode,
+                        "cwd": cwd,
+                    },
+                    "mcp_profile": profile.key,
+                    "mcp_operation": operation,
+                    "mcp_command": " ".join(shlex.quote(part) for part in session.launcher_argv),
+                    "mcp_native": True,
+                    "mcp_transport": session.transport,
+                    "mcp_session_reused": True,
+                },
+            }
+
+        resolved_operation = _resolve_native_tool_name(operation=operation, available=tool_names)
+        if not resolved_operation:
+            available = ", ".join(tool_names[:20])
+            raise McpInvocationError(
+                "mcp_operation_not_found",
+                f"Unknown operation '{operation}' for MCP profile '{profile.key}'. Available tools: {available or '(none)'}.",
+            )
+
+        call_result = session.client.call_tool(name=resolved_operation, arguments=arguments)
+        if isinstance(call_result, dict) and bool(call_result.get("isError")):
+            content = call_result.get("content")
+            message = "MCP tool reported an error"
+            if isinstance(content, list) and content:
+                first = content[0]
+                if isinstance(first, dict):
+                    text = str(first.get("text") or "").strip()
+                    if text:
+                        message = text
+            raise McpInvocationError("mcp_tools_call_failed", message)
+
+        self._touch_native_session(session.key)
+        return {
+            "status": "ok",
+            "result": call_result,
+            "error": None,
+            "metadata": {
+                "tool": "mcp_call",
+                "policy_envelope": {
+                    "execution_surface": "mcp_native",
+                    "profile": profile.key,
+                    "operation": resolved_operation,
+                    "mode": mode,
+                    "cwd": cwd,
+                },
+                "mcp_profile": profile.key,
+                "mcp_operation": resolved_operation,
+                "mcp_requested_operation": operation,
+                "mcp_command": " ".join(shlex.quote(part) for part in session.launcher_argv),
+                "mcp_native": True,
+                "mcp_transport": session.transport,
+                "mcp_session_reused": True,
+                "available_tools": tool_names,
+            },
+        }
+
+    def _native_session_key(
+        self,
+        *,
+        profile_key: str,
+        mode: str,
+        cwd: str,
+        transport: Literal["content_length", "ndjson"],
+        launcher_argv: list[str],
+    ) -> str:
+        launcher = " ".join(launcher_argv)
+        return f"{profile_key}|{mode}|{cwd}|{transport}|{launcher}"
+
+    def _get_or_create_native_session(
+        self,
+        *,
+        key: str,
+        profile: McpServerProfile,
+        mode: str,
+        cwd: str,
+        transport: Literal["content_length", "ndjson"],
+        launcher_argv: list[str],
+        timeout_seconds: float,
+    ) -> _NativeSession:
+        now = self._time()
+        with self._native_sessions_lock:
+            self._cleanup_expired_native_sessions_locked(now=now)
+            existing = self._native_sessions.get(key)
+            if existing and existing.client.is_alive():
+                existing.last_used_at = now
+                return existing
+            if existing:
+                self._close_native_session_locked(key)
+            if len(self._native_sessions) >= max(self._max_native_sessions, 1):
+                self._evict_oldest_native_session_locked()
+            client = self._native_client_factory(
                 launcher_argv=launcher_argv,
                 cwd=cwd,
                 timeout_seconds=timeout_seconds,
                 transport=transport,
-            ) as client:
-                client.initialize()
-                tools = client.list_tools()
-                tool_names = [str(item.get("name") or "").strip() for item in tools if str(item.get("name") or "").strip()]
+            )
+            client.start()
+            client.initialize()
+            session = _NativeSession(
+                key=key,
+                profile_key=profile.key,
+                cwd=cwd,
+                mode=mode,
+                transport=transport,
+                launcher_argv=tuple(launcher_argv),
+                client=client,
+                last_used_at=now,
+            )
+            self._native_sessions[key] = session
+            return session
 
-                if operation in {"list_tools", "discover_tools"}:
-                    return {
-                        "status": "ok",
-                        "result": {
-                            "tools": tools,
-                            "tool_names": tool_names,
-                            "count": len(tool_names),
-                        },
-                        "error": None,
-                        "metadata": {
-                            "tool": "mcp_call",
-                            "policy_envelope": {
-                                "execution_surface": "mcp_native",
-                                "profile": profile.key,
-                                "operation": operation,
-                                "mode": mode,
-                                "cwd": cwd,
-                            },
-                            "mcp_profile": profile.key,
-                            "mcp_operation": operation,
-                            "mcp_command": " ".join(shlex.quote(part) for part in launcher_argv),
-                            "mcp_native": True,
-                            "mcp_transport": transport,
-                        },
-                    }
+    def _touch_native_session(self, key: str) -> None:
+        now = self._time()
+        with self._native_sessions_lock:
+            item = self._native_sessions.get(key)
+            if item:
+                item.last_used_at = now
 
-                resolved_operation = _resolve_native_tool_name(operation=operation, available=tool_names)
-                if not resolved_operation:
-                    available = ", ".join(tool_names[:20])
-                    raise McpInvocationError(
-                        "mcp_operation_not_found",
-                        f"Unknown operation '{operation}' for MCP profile '{profile.key}'. Available tools: {available or '(none)'}.",
-                    )
+    def _close_native_session(self, key: str) -> None:
+        with self._native_sessions_lock:
+            self._close_native_session_locked(key)
 
-                call_result = client.call_tool(name=resolved_operation, arguments=arguments)
-                if isinstance(call_result, dict) and bool(call_result.get("isError")):
-                    content = call_result.get("content")
-                    message = "MCP tool reported an error"
-                    if isinstance(content, list) and content:
-                        first = content[0]
-                        if isinstance(first, dict):
-                            text = str(first.get("text") or "").strip()
-                            if text:
-                                message = text
-                    raise McpInvocationError("mcp_tools_call_failed", message)
-                return {
-                    "status": "ok",
-                    "result": call_result,
-                    "error": None,
-                    "metadata": {
-                        "tool": "mcp_call",
-                        "policy_envelope": {
-                            "execution_surface": "mcp_native",
-                            "profile": profile.key,
-                            "operation": resolved_operation,
-                            "mode": mode,
-                            "cwd": cwd,
-                        },
-                        "mcp_profile": profile.key,
-                        "mcp_operation": resolved_operation,
-                        "mcp_requested_operation": operation,
-                        "mcp_command": " ".join(shlex.quote(part) for part in launcher_argv),
-                        "mcp_native": True,
-                        "mcp_transport": transport,
-                        "available_tools": tool_names,
-                    },
-                }
-        except McpInvocationError:
-            raise
-        except TimeoutError as exc:
-            raise McpInvocationError("mcp_timeout", str(exc)) from exc
-        except Exception as exc:
-            raise McpInvocationError("mcp_native_call_failed", str(exc)) from exc
+    def _close_native_session_locked(self, key: str) -> None:
+        item = self._native_sessions.pop(key, None)
+        if item:
+            item.client.close()
+
+    def _evict_oldest_native_session_locked(self) -> None:
+        if not self._native_sessions:
+            return
+        oldest_key = min(self._native_sessions.items(), key=lambda kv: kv[1].last_used_at)[0]
+        self._close_native_session_locked(oldest_key)
+
+    def _cleanup_expired_native_sessions_locked(self, *, now: float) -> None:
+        ttl = max(self._native_session_ttl_seconds, 1.0)
+        expired = [
+            key
+            for key, session in self._native_sessions.items()
+            if (now - session.last_used_at) > ttl or not session.client.is_alive()
+        ]
+        for key in expired:
+            self._close_native_session_locked(key)
 
     def _build_command(
         self,
@@ -285,7 +447,9 @@ class _McpJsonRpcStdioClient:
         self._seq = 0
         self._buffer = bytearray()
 
-    def __enter__(self) -> _McpJsonRpcStdioClient:
+    def start(self) -> None:
+        if self._proc is not None and self._proc.poll() is None:
+            return
         self._proc = subprocess.Popen(
             self._launcher_argv,
             stdin=subprocess.PIPE,
@@ -294,9 +458,10 @@ class _McpJsonRpcStdioClient:
             cwd=self._cwd,
             env=dict(os.environ),
         )
-        return self
+        self._seq = 0
+        self._buffer = bytearray()
 
-    def __exit__(self, exc_type, exc, tb) -> None:
+    def close(self) -> None:
         proc = self._proc
         self._proc = None
         if proc is None:
@@ -307,6 +472,16 @@ class _McpJsonRpcStdioClient:
                 proc.wait(timeout=1.0)
             except Exception:
                 proc.kill()
+
+    def is_alive(self) -> bool:
+        return self._proc is not None and self._proc.poll() is None
+
+    def __enter__(self) -> _McpJsonRpcStdioClient:
+        self.start()
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        self.close()
 
     def initialize(self) -> None:
         versions = ("2024-11-05", "2024-10-07", "0.1.0")
@@ -565,3 +740,27 @@ def _contract_mismatch(*, profile: McpServerProfile, operation: McpOperationProf
             "but chrome-devtools-mcp/chrome-mcp are MCP server launchers, not search CLIs."
         )
     return ""
+
+
+def _is_recoverable_native_error(exc: McpInvocationError) -> bool:
+    code = str(exc.code or "").strip().lower()
+    return code in {
+        "mcp_transport_closed",
+        "mcp_timeout",
+        "mcp_protocol_error",
+        "mcp_initialize_failed",
+        "mcp_native_call_failed",
+    }
+
+
+def _read_float_env(name: str, default: float) -> float:
+    raw = str(os.getenv(name) or "").strip()
+    if not raw:
+        return float(default)
+    try:
+        value = float(raw)
+        if value > 0:
+            return value
+    except Exception:
+        pass
+    return float(default)

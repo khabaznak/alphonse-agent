@@ -319,3 +319,92 @@ def test_mcp_call_routes_unknown_operation_to_native_connector(
 
     assert result["status"] == "ok"
     assert called.get("operation_key") == "list_tools"
+
+
+class _FakeNativeClient:
+    starts = 0
+    closes = 0
+    initializes = 0
+    calls: list[tuple[str, dict[str, object]]] = []
+
+    def __init__(self, **kwargs):
+        _ = kwargs
+        self.alive = False
+
+    def start(self) -> None:
+        self.alive = True
+        type(self).starts += 1
+
+    def close(self) -> None:
+        self.alive = False
+        type(self).closes += 1
+
+    def is_alive(self) -> bool:
+        return self.alive
+
+    def initialize(self) -> None:
+        type(self).initializes += 1
+
+    def list_tools(self) -> list[dict[str, object]]:
+        return [
+            {"name": "new_page", "description": "open page", "inputSchema": {"type": "object", "properties": {"url": {"type": "string"}}, "required": ["url"]}},
+            {"name": "evaluate_script", "description": "eval", "inputSchema": {"type": "object", "properties": {"function": {"type": "string"}}, "required": ["function"]}},
+        ]
+
+    def call_tool(self, *, name: str, arguments: dict[str, object]) -> dict[str, object]:
+        type(self).calls.append((name, dict(arguments)))
+        return {"ok": True, "name": name}
+
+
+def test_mcp_call_reuses_native_session_across_calls(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("ALPHONSE_EXECUTION_MODE", "ops")
+    monkeypatch.setattr(mcp_call_tool_module, "_allowed_roots", lambda: [str(tmp_path)])
+    profiles_dir = tmp_path / "profiles"
+    profiles_dir.mkdir(parents=True, exist_ok=True)
+    (profiles_dir / "chrome.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "key": "chrome",
+                "description": "Chrome MCP",
+                "binary_candidates": ["chrome-devtools-mcp"],
+                "operations": {},
+                "metadata": {"native_tools": True},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("ALPHONSE_MCP_PROFILES_DIR", str(profiles_dir))
+
+    _FakeNativeClient.starts = 0
+    _FakeNativeClient.closes = 0
+    _FakeNativeClient.initializes = 0
+    _FakeNativeClient.calls = []
+
+    connector = McpConnector(
+        terminal=_DummyTerminal(),
+        native_client_factory=lambda **kwargs: _FakeNativeClient(**kwargs),
+        session_ttl_seconds=3600,
+    )
+    tool = McpCallTool(connector=connector)
+
+    first = tool.execute(
+        profile="chrome",
+        operation="new_page",
+        arguments={"url": "https://example.com"},
+        cwd=str(tmp_path),
+    )
+    second = tool.execute(
+        profile="chrome",
+        operation="evaluate_script",
+        arguments={"function": "() => document.title"},
+        cwd=str(tmp_path),
+    )
+
+    assert first["status"] == "ok"
+    assert second["status"] == "ok"
+    assert _FakeNativeClient.starts == 1
+    assert _FakeNativeClient.initializes == 1
+    assert len(_FakeNativeClient.calls) == 2
