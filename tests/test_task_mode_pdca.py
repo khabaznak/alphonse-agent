@@ -200,6 +200,7 @@ def _write_mcp_profile(tmp_path: Path) -> Path:
                         "required_args": ["query"],
                     }
                 },
+                "metadata": {"category": "browser"},
             }
         ),
         encoding="utf-8",
@@ -752,6 +753,7 @@ def test_pdca_next_step_prompt_includes_mcp_capabilities(tmp_path: Path, monkeyp
     assert "## MCP Capabilities" in prompt
     assert "profile `chrome`" in prompt
     assert "operation `web_search`" in prompt
+    assert "interactive_browser" in prompt
 
 
 def test_pdca_validation_rejects_unknown_mcp_profile(tmp_path: Path, monkeypatch) -> None:

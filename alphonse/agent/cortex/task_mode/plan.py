@@ -525,6 +525,10 @@ def _tool_exists(tool_registry: Any, name: str) -> bool:
 def _build_mcp_capability_menu() -> tuple[str, dict[str, Any]]:
     registry = McpProfileRegistry()
     lines: list[str] = []
+    if registry.keys():
+        lines.append(
+            "- MCP profiles are tool surfaces. Prefer the profile's capability model when planning actions."
+        )
     operation_count = 0
     for profile_key in registry.keys():
         profile = registry.get(profile_key)
@@ -534,6 +538,12 @@ def _build_mcp_capability_menu() -> tuple[str, dict[str, Any]]:
             f"- profile `{profile.key}`: {profile.description} "
             f"(allowed_modes: {', '.join(profile.allowed_modes) or 'n/a'})"
         )
+        category = str((profile.metadata or {}).get("category") or "").strip().lower()
+        if category == "browser":
+            lines.append(
+                "  - capability_model `interactive_browser`: use this like a normal browser for agent tasks "
+                "(open search engines, navigate websites, and read/extract page information)."
+            )
         for operation in sorted(profile.operations.values(), key=lambda item: item.key):
             operation_count += 1
             args_hint = ", ".join(operation.required_args) if operation.required_args else "none"
