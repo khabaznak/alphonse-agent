@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any, Callable
 
 from alphonse.agent.cortex.task_mode.progress_critic import progress_critic_node as _progress_critic_node_impl
@@ -79,6 +80,7 @@ def _maybe_emit_periodic_wip_update(
         "cycle": cycle,
         "goal": str(task_state.get("goal") or "").strip(),
         "tool": _current_tool_name(current_step),
+        "intention": _current_intention(current_step),
     }
     emit_transition_event(state, "wip_update", detail)
     logger.info(
@@ -96,6 +98,11 @@ def _build_wip_update_text(
 ) -> str:
     goal = str(task_state.get("goal") or "").strip() or "the current task"
     tool = _current_tool_name(current_step)
+    intention = _current_intention(current_step)
+    if intention and tool:
+        return f"Working on: {goal}. Cycle {cycle}. Intention: {intention}. Current step: using `{tool}`."
+    if intention:
+        return f"Working on: {goal}. Cycle {cycle}. Intention: {intention}."
     if tool:
         return f"Working on: {goal}. Cycle {cycle}. Current step: using `{tool}`."
     return f"Working on: {goal}. Cycle {cycle}."
@@ -106,6 +113,87 @@ def _current_tool_name(current_step: dict[str, Any] | None) -> str:
         return ""
     proposal = current_step.get("proposal") if isinstance(current_step.get("proposal"), dict) else {}
     return str(proposal.get("tool_name") or "").strip()
+
+
+def _current_intention(current_step: dict[str, Any] | None) -> str:
+    if not isinstance(current_step, dict):
+        return ""
+    proposal = current_step.get("proposal") if isinstance(current_step.get("proposal"), dict) else {}
+    kind = str(proposal.get("kind") or "").strip()
+    if kind == "ask_user":
+        return "I am preparing a clarifying question"
+    if kind == "finish":
+        return "I am preparing the final response"
+    if kind != "call_tool":
+        return ""
+    tool = str(proposal.get("tool_name") or "").strip()
+    args = proposal.get("args") if isinstance(proposal.get("args"), dict) else {}
+    if tool in {"terminal_sync", "terminal_async", "ssh_terminal"}:
+        command = str(args.get("command") or "").strip()
+        return _terminal_intention(command)
+    if tool in {"send_message", "sendMessage"}:
+        return "I am preparing and sending an update"
+    if tool in {"telegram_download_file"}:
+        return "I am downloading the file required for the task"
+    if tool:
+        return f"I am using `{tool}` to advance the task"
+    return ""
+
+
+def _terminal_intention(command: str) -> str:
+    text = str(command or "").strip()
+    if not text:
+        return "I am running a terminal command to advance the task"
+    lowered = text.lower()
+
+    if _contains_any(lowered, ("npm install", "pip install", "apt-get install", "brew install", "npx -y")):
+        pkg = _extract_package_name(text)
+        if pkg:
+            return f"I am trying to install dependency `{pkg}`"
+        return "I am trying to install a dependency required by this task"
+    if _contains_any(lowered, ("command -v", "which ")):
+        target = _extract_probe_target(text)
+        if target:
+            return f"I am checking whether `{target}` is available in this environment"
+        return "I am checking whether a required command is available"
+    if _contains_any(lowered, (".sqlite", "sqlite3", "pragma", "select ")):
+        return "I am querying the database to extract the requested information"
+    if _contains_any(lowered, ("npm search", "pip index", "curl ", "wget ")):
+        return "I am searching for the required dependency or source"
+    if _contains_any(lowered, ("cat ", "tee ", "echo ", ">>", ">")):
+        return "I am creating or updating a file with new information"
+    return "I am executing a terminal step to gather evidence for the task"
+
+
+def _contains_any(haystack: str, needles: tuple[str, ...]) -> bool:
+    return any(item in haystack for item in needles)
+
+
+def _extract_package_name(command: str) -> str:
+    patterns = [
+        r"npm\s+install(?:\s+-g)?\s+([@\w./-]+)",
+        r"npx\s+-y\s+([@\w./-]+)",
+        r"pip(?:3)?\s+install\s+([@\w./:-]+)",
+        r"brew\s+install\s+([@\w./:-]+)",
+        r"apt-get\s+install(?:\s+-y)?\s+([@\w./:-]+)",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, command, flags=re.IGNORECASE)
+        if match:
+            return str(match.group(1)).strip()
+    return ""
+
+
+def _extract_probe_target(command: str) -> str:
+    patterns = [
+        r"command\s+-v\s+([@\w./-]+)",
+        r"which\s+([@\w./-]+)",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, command, flags=re.IGNORECASE)
+        if match:
+            return str(match.group(1)).strip()
+    return ""
 
 
 def _build_progress_checkin_question(
