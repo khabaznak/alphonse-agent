@@ -10,6 +10,7 @@ from alphonse.agent.cortex.task_mode.prompt_templates import PROGRESS_CHECKIN_SY
 from alphonse.agent.cortex.task_mode.prompt_templates import PROGRESS_CHECKIN_USER_TEMPLATE
 from alphonse.agent.cortex.task_mode.prompt_templates import render_pdca_prompt
 from alphonse.agent.cortex.transitions import emit_transition_event
+from alphonse.config import settings
 
 DEFAULT_PROGRESS_CHECK_CYCLE_THRESHOLD = 25
 DEFAULT_WIP_EMIT_EVERY_CYCLES = 5
@@ -73,7 +74,10 @@ def _maybe_emit_periodic_wip_update(
     logger: logging.Logger,
     wip_emit_every_cycles: int,
 ) -> None:
-    if cycle <= 0 or cycle % wip_emit_every_cycles != 0:
+    if cycle <= 0:
+        return
+    emit_every = 1 if settings.get_execution_mode() == "ops" else max(1, int(wip_emit_every_cycles))
+    if cycle % emit_every != 0:
         return
     detail = {
         "text": _build_wip_update_text(task_state=task_state, cycle=cycle, current_step=current_step),
