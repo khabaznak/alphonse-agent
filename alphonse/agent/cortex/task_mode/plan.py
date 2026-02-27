@@ -717,6 +717,10 @@ def _normalize_tool_selection_payload(payload: Any) -> NextStepProposal | None:
                 continue
             arguments = call.get("arguments")
             args = dict(arguments) if isinstance(arguments, dict) else {}
+            if tool_name == "askQuestion":
+                question = str(args.get("question") or "").strip()
+                if question:
+                    return {"kind": "ask_user", "question": question}
             return {"kind": "call_tool", "tool_name": tool_name, "args": args}
     content = payload.get("content")
     if isinstance(content, str) and content.strip():

@@ -740,6 +740,50 @@ def test_pdca_next_step_uses_complete_with_tools_when_available() -> None:
     assert llm.complete_calls == 0
 
 
+def test_pdca_maps_ask_question_tool_call_to_ask_user_proposal() -> None:
+    tool_registry = build_default_tool_registry()
+    next_step = build_next_step_node(tool_registry=tool_registry)
+    llm = _ToolCallLlm(
+        {
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "call-ask-1",
+                    "name": "askQuestion",
+                    "arguments": {"question": "Which company should I prioritize first?"},
+                }
+            ],
+            "assistant_message": {"role": "assistant", "content": ""},
+        }
+    )
+
+    task_state = build_default_task_state()
+    task_state["acceptance_criteria"] = ["done when requested outcome is produced"]
+    task_state["goal"] = "find linkedin contacts"
+    state: dict[str, object] = {
+        "correlation_id": "corr-pdca-ask-question-tool-bridge",
+        "_llm_client": llm,
+        "task_state": task_state,
+    }
+
+    state = _apply(state, next_step(state))
+    next_state = state["task_state"]
+    assert isinstance(next_state, dict)
+    plan = next_state.get("plan")
+    assert isinstance(plan, dict)
+    steps = plan.get("steps")
+    assert isinstance(steps, list)
+    assert steps
+    first = steps[0]
+    assert isinstance(first, dict)
+    proposal = first.get("proposal")
+    assert isinstance(proposal, dict)
+    assert proposal.get("kind") == "ask_user"
+    assert proposal.get("question") == "Which company should I prioritize first?"
+    assert llm.complete_with_tools_calls == 1
+    assert llm.complete_calls == 0
+
+
 def test_pdca_next_step_falls_back_to_text_when_tool_call_payload_is_empty() -> None:
     tool_registry = build_default_tool_registry()
     next_step = build_next_step_node(tool_registry=tool_registry)
@@ -1427,6 +1471,45 @@ def test_progress_critic_emits_wip_update_every_five_cycles(monkeypatch) -> None
     assert isinstance(detail, dict)
     assert detail.get("cycle") == 5
     assert "Check package delivery" in str(detail.get("text") or "")
+
+
+def test_progress_critic_wip_text_explains_mcp_purpose(monkeypatch: pytest.MonkeyPatch) -> None:
+    emitted: list[dict[str, object] | None] = []
+
+    def _capture_transition(_state: dict[str, object], phase: str, detail: dict[str, object] | None = None) -> None:
+        if phase == "wip_update":
+            emitted.append(detail)
+
+    monkeypatch.setattr(progress_critic_node_module, "emit_transition_event", _capture_transition)
+
+    task_state = build_default_task_state()
+    task_state["status"] = "running"
+    task_state["cycle_index"] = 5
+    task_state["goal"] = "find contact leads on LinkedIn"
+    task_state["plan"]["current_step_id"] = "step_1"
+    task_state["plan"]["steps"] = [
+        {
+            "step_id": "step_1",
+            "proposal": {
+                "kind": "call_tool",
+                "tool_name": "mcp_call",
+                "args": {"profile": "chrome", "operation": "new_page", "arguments": {}},
+            },
+            "status": "executed",
+        }
+    ]
+    state: dict[str, object] = {
+        "correlation_id": "corr-wip-mcp-purpose",
+        "task_state": task_state,
+    }
+
+    progress_critic_node(state)
+    assert emitted
+    detail = emitted[-1]
+    assert isinstance(detail, dict)
+    text = str(detail.get("text") or "")
+    assert "opening a browser page" in text
+    assert "Current action: `mcp_call`." in text
 
 
 def test_progress_critic_accepts_structured_task_completed_outcome() -> None:

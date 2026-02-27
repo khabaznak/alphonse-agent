@@ -84,7 +84,7 @@ def _maybe_emit_periodic_wip_update(
         "cycle": cycle,
         "goal": str(task_state.get("goal") or "").strip(),
         "tool": _current_tool_name(current_step),
-        "intention": _current_intention(current_step),
+        "intention": _current_intention(current_step, goal=str(task_state.get("goal") or "").strip()),
     }
     emit_transition_event(state, "wip_update", detail)
     logger.info(
@@ -104,13 +104,18 @@ def _build_wip_update_text(
 ) -> str:
     goal = str(task_state.get("goal") or "").strip() or "the current task"
     tool = _current_tool_name(current_step)
-    intention = _current_intention(current_step)
+    intention = _current_intention(current_step, goal=goal)
     if intention and tool:
-        return f"Working on: {goal}. Cycle {cycle}. Intention: {intention}. Current step: using `{tool}`."
+        return (
+            f"Working on: {goal}. "
+            f"Cycle {cycle}. "
+            f"Why this step: {intention}. "
+            f"Current action: `{tool}`."
+        )
     if intention:
-        return f"Working on: {goal}. Cycle {cycle}. Intention: {intention}."
+        return f"Working on: {goal}. Cycle {cycle}. Why this step: {intention}."
     if tool:
-        return f"Working on: {goal}. Cycle {cycle}. Current step: using `{tool}`."
+        return f"Working on: {goal}. Cycle {cycle}. Current action: `{tool}`."
     return f"Working on: {goal}. Cycle {cycle}."
 
 
@@ -121,62 +126,92 @@ def _current_tool_name(current_step: dict[str, Any] | None) -> str:
     return str(proposal.get("tool_name") or "").strip()
 
 
-def _current_intention(current_step: dict[str, Any] | None) -> str:
+def _current_intention(current_step: dict[str, Any] | None, *, goal: str) -> str:
     if not isinstance(current_step, dict):
         return ""
     proposal = current_step.get("proposal") if isinstance(current_step.get("proposal"), dict) else {}
     kind = str(proposal.get("kind") or "").strip()
     if kind == "ask_user":
-        return "I am preparing a clarifying question"
+        return "I need one missing detail from you so I can continue confidently"
     if kind == "finish":
-        return "I am preparing the final response"
+        return "I have enough evidence to complete the task and deliver the final response"
     if kind != "call_tool":
         return ""
     tool = str(proposal.get("tool_name") or "").strip()
     args = proposal.get("args") if isinstance(proposal.get("args"), dict) else {}
-    specific_intention = _tool_specific_intention(tool=tool, args=args)
+    specific_intention = _tool_specific_intention(tool=tool, args=args, goal=goal)
     if specific_intention:
         return specific_intention
     if tool in {"terminal_sync", "terminal_async", "ssh_terminal"}:
         command = str(args.get("command") or "").strip()
         return _terminal_intention(command)
     if tool in {"send_message", "sendMessage"}:
-        return "I am preparing and sending an update"
+        return "I am sending the requested update to the recipient"
     if tool in {"telegram_download_file"}:
         return "I am downloading the file required for the task"
     if tool == "mcp_call":
         profile = str(args.get("profile") or "").strip()
         operation = str(args.get("operation") or "").strip()
         if profile and operation:
-            return f"I am invoking MCP profile `{profile}` operation `{operation}`"
+            return (
+                f"I am using the {profile} MCP tools ({operation}) "
+                f"to make progress on your request"
+            )
         if profile:
-            return f"I am invoking MCP profile `{profile}`"
-        return "I am invoking an MCP operation to advance the task"
+            return f"I am using the {profile} MCP tools to make progress on your request"
+        return "I am using MCP tools to complete your request"
     if tool:
-        return f"I am using `{tool}` to advance the task"
+        return f"I am using `{tool}` because it directly advances: {goal}"
     return ""
 
 
-def _tool_specific_intention(*, tool: str, args: dict[str, Any]) -> str:
+def _tool_specific_intention(*, tool: str, args: dict[str, Any], goal: str) -> str:
     normalized = str(tool or "").strip()
     if normalized in {"local_audio_output_render"}:
-        return "I am generating the audio file needed for the voice note"
+        return "I am generating the audio file first so I can send your voice note next"
     if normalized in {"send_voice_note", "sendVoiceNote"}:
-        return "I am delivering the generated voice note to the user"
+        return "I am delivering the generated voice note to you now"
     if normalized in {"create_reminder", "createReminder"}:
         time_value = str(args.get("Time") or args.get("time") or "").strip()
         if time_value:
-            return f"I am scheduling the reminder for {time_value}"
-        return "I am scheduling the reminder with the provided details"
+            return f"I am scheduling the reminder at {time_value} so you get it at the right time"
+        return "I am scheduling the reminder with the details you gave me"
     if normalized in {"job_create"}:
         name = str(args.get("name") or "").strip()
         if name:
-            return f"I am creating the scheduled job `{name}`"
-        return "I am creating the scheduled job requested by the user"
+            return f"I am creating the scheduled job `{name}` to automate your request"
+        return "I am creating the scheduled job needed to automate your request"
     if normalized in {"job_list"}:
-        return "I am checking the current scheduled jobs"
+        return "I am checking scheduled jobs so I can report accurate status"
     if normalized in {"get_time", "getTime"}:
-        return "I am resolving the current time context needed for this task"
+        return "I am checking the current time so I can resolve timing correctly"
+    if normalized == "mcp_call":
+        profile = str(args.get("profile") or "").strip()
+        operation = str(args.get("operation") or "").strip()
+        operation_lower = operation.lower()
+        nested_args = args.get("arguments") if isinstance(args.get("arguments"), dict) else {}
+        query = str(
+            nested_args.get("query")
+            or nested_args.get("q")
+            or nested_args.get("text")
+            or ""
+        ).strip()
+        url = str(nested_args.get("url") or "").strip()
+        if operation_lower in {"list_tools", "discover_tools"}:
+            return (
+                "I am first discovering the available browser actions so I can choose the safest "
+                "and most direct step for your request"
+            )
+        if operation_lower in {"new_page", "new_tab"}:
+            return "I am opening a browser page so I can run the web research you asked for"
+        if operation_lower in {"navigate", "go_to"} and url:
+            return f"I am navigating to {url} to gather the information you requested"
+        if operation_lower in {"web_search", "search"} and query:
+            return f"I am searching the web for “{query}” to move your task forward"
+        if profile and operation:
+            return (
+                f"I am using Chrome MCP ({operation}) to make progress on: {goal}"
+            )
     return ""
 
 
