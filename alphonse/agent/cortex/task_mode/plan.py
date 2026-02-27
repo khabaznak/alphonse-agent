@@ -287,6 +287,7 @@ def _propose_next_step_with_llm(
     max_attempts = _next_step_max_attempts()
 
     tool_menu = _build_tool_menu(tool_registry)
+    tool_contract_hints = _build_tool_contract_hints()
     mcp_capability_menu, _ = _build_mcp_capability_menu()
     mcp_live_tools_menu = _build_mcp_live_tools_menu(task_state)
     working_view = _build_working_state_view(task_state)
@@ -305,6 +306,7 @@ def _propose_next_step_with_llm(
         NEXT_STEP_USER_TEMPLATE,
         {
             "TOOL_MENU": tool_menu,
+            "TOOL_CONTRACT_HINTS": tool_contract_hints,
             "MCP_CAPABILITY_MENU": mcp_capability_menu,
             "MCP_LIVE_TOOLS_MENU": mcp_live_tools_menu,
             "INJECTED_GUIDANCE_BLOCK": injected_guidance,
@@ -517,6 +519,39 @@ def _build_tool_menu(tool_registry: Any) -> str:
         summary = descriptions.get(name) or "Tool available."
         lines.append(f"- `{name}`: {summary}")
     return "\n".join(lines) or "- (no tools)"
+
+
+def _build_tool_contract_hints() -> str:
+    # Keep this compact: only include high-friction tools that frequently fail
+    # from argument-shape mismatches.
+    target_tools = {"job_create", "mcp_call", "terminal_sync"}
+    lines: list[str] = []
+    for schema in planner_tool_schemas():
+        function = schema.get("function")
+        if not isinstance(function, dict):
+            continue
+        tool_name = str(function.get("name") or "").strip()
+        if tool_name not in target_tools:
+            continue
+        params = function.get("parameters") if isinstance(function.get("parameters"), dict) else {}
+        required = params.get("required") if isinstance(params.get("required"), list) else []
+        required_fields = [str(item).strip() for item in required if str(item).strip()]
+        lines.append(f"- `{tool_name}` required fields: {', '.join(required_fields) or '(none)'}")
+        properties = params.get("properties") if isinstance(params.get("properties"), dict) else {}
+        payload_type = properties.get("payload_type") if isinstance(properties.get("payload_type"), dict) else {}
+        enum_values = payload_type.get("enum") if isinstance(payload_type.get("enum"), list) else []
+        if tool_name == "job_create" and enum_values:
+            rendered = ", ".join(str(item) for item in enum_values if str(item).strip())
+            lines.append(f"  - `payload_type` must be one of: {rendered}")
+        if tool_name == "job_create":
+            lines.append(
+                "  - `schedule` must be an object with `type`, `dtstart`, `rrule` (NOT a plain string)."
+            )
+        if tool_name == "mcp_call":
+            lines.append(
+                "  - args shape: `{\"profile\":\"...\",\"operation\":\"...\",\"arguments\":{...}}`."
+            )
+    return "\n".join(lines).strip()
 
 
 def _tool_descriptions() -> dict[str, str]:

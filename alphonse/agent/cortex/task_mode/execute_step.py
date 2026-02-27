@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import inspect
+import json
 import logging
 from typing import Any, Callable
 
@@ -218,6 +219,7 @@ def _execute_call_tool_step(
             task_state["status"] = "running"
             if isinstance(current, dict):
                 current["status"] = "failed"
+            args_preview = _safe_args_preview(params)
             raw_error = (result or {}).get("error") if isinstance(result, dict) else None
             if isinstance(raw_error, dict):
                 error_code = str(raw_error.get("code") or "tool_failed")
@@ -244,12 +246,13 @@ def _execute_call_tool_step(
                 },
             )
             logger.info(
-                "task_mode execute tool_failed_reported correlation_id=%s step_id=%s tool=%s error_code=%s error_message=%s",
+                "task_mode execute tool_failed_reported correlation_id=%s step_id=%s tool=%s error_code=%s error_message=%s args_preview=%s",
                 corr,
                 step_id,
                 tool_name,
                 error_code,
                 error_message,
+                args_preview,
             )
             if send_after_search:
                 logger.info(
@@ -268,6 +271,7 @@ def _execute_call_tool_step(
                 tool=tool_name,
                 error_code=error_code,
                 error_message=error_message,
+                args_preview=args_preview,
                 **terminal_context,
                 **failure_context,
             )
@@ -510,3 +514,29 @@ def _is_send_after_user_search(*, tool_name: str, task_state: dict[str, Any]) ->
         if str(entry.get("tool") or "").strip() == "user_search":
             return True
     return False
+
+
+def _safe_args_preview(args: dict[str, Any]) -> str:
+    redacted = _redact_sensitive(args)
+    try:
+        rendered = json.dumps(redacted, ensure_ascii=False, sort_keys=True)
+    except Exception:
+        rendered = str(redacted)
+    return rendered[:800]
+
+
+def _redact_sensitive(value: Any) -> Any:
+    secret_tokens = ("password", "pass", "token", "api_key", "secret", "authorization")
+    if isinstance(value, dict):
+        out: dict[str, Any] = {}
+        for key, item in value.items():
+            key_text = str(key or "")
+            lowered = key_text.lower()
+            if any(token in lowered for token in secret_tokens):
+                out[key_text] = "[redacted]"
+            else:
+                out[key_text] = _redact_sensitive(item)
+        return out
+    if isinstance(value, list):
+        return [_redact_sensitive(item) for item in value]
+    return value

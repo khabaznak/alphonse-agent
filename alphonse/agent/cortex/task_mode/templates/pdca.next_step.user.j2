@@ -1,6 +1,11 @@
 ## Tool Menu
 {{ TOOL_MENU }}
 
+{% if TOOL_CONTRACT_HINTS %}
+## Tool Contract Hints
+{{ TOOL_CONTRACT_HINTS }}
+
+{% endif %}
 {% if MCP_CAPABILITY_MENU %}
 ## MCP Capabilities
 {{ MCP_CAPABILITY_MENU }}
