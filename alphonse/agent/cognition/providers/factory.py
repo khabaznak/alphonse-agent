@@ -50,7 +50,7 @@ def _build_opencode_client() -> OpenCodeClient:
     base_url = os.getenv("OPENCODE_BASE_URL", "http://127.0.0.1:4096")
     model = os.getenv("OPENCODE_MODEL") or os.getenv(
         "LOCAL_LLM_MODEL",
-        "ollama/mistral:7b-instruct",
+        "openai/gpt-5.1-codex",
     )
     timeout_seconds = _parse_float(os.getenv("OPENCODE_TIMEOUT_SECONDS"), default=60.0)
     chat_path = os.getenv("OPENCODE_CHAT_COMPLETIONS_PATH", "/v1/chat/completions")

@@ -12,7 +12,7 @@ class OpenCodeClient:
         self,
         *,
         base_url: str = "http://127.0.0.1:4096",
-        model: str = "ollama/mistral:7b-instruct",
+        model: str = "openai/gpt-5.1-codex",
         timeout: float = 120.0,
         chat_path: str = "/v1/chat/completions",
         api_key_env: str = "OPENCODE_API_KEY",
