@@ -109,6 +109,8 @@ def build_next_step_node_impl(
         state=state,
         task_state=task_state,
         tool_registry=tool_registry,
+        logger=logger,
+        correlation=corr,
     )
     if diagnostics:
         for item in diagnostics:
@@ -282,6 +284,8 @@ def _propose_next_step_with_llm(
     state: dict[str, Any],
     task_state: dict[str, Any],
     tool_registry: Any,
+    logger: logging.Logger,
+    correlation: str | None,
 ) -> tuple[NextStepProposal, bool, list[dict[str, Any]]]:
     diagnostics: list[dict[str, Any]] = []
     max_attempts = _next_step_max_attempts()
@@ -322,6 +326,12 @@ def _propose_next_step_with_llm(
         f"{recent_conversation_block}\n\n{user_prompt_body}".strip()
         if recent_conversation_block
         else user_prompt_body
+    )
+    logger.info(
+        "task_mode next_step planner_prompt_prepared correlation_id=%s system_prompt=%s user_prompt=%s",
+        correlation,
+        NEXT_STEP_SYSTEM_PROMPT,
+        user_prompt,
     )
 
     structured_supported, parsed_structured = _call_llm_structured(
