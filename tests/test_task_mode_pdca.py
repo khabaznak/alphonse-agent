@@ -4,6 +4,8 @@ from datetime import datetime, timezone
 import json
 from pathlib import Path
 
+import pytest
+
 import alphonse.agent.cortex.task_mode.pdca as pdca_module
 import alphonse.agent.cortex.task_mode.progress_critic_node as progress_critic_node_module
 from alphonse.agent.cortex.nodes.respond import respond_finalize_node
@@ -33,6 +35,13 @@ class _QueuedLlm:
         if not self._responses:
             return ""
         return self._responses.pop(0)
+
+
+class _ExplodingLlm:
+    def complete(self, system_prompt: str, user_prompt: str) -> str:
+        _ = system_prompt
+        _ = user_prompt
+        raise RuntimeError("planner llm exploded")
 
 
 class _PromptCaptureLlm:
@@ -579,6 +588,24 @@ def test_pdca_parse_failure_degrades_to_failed() -> None:
     assert any(isinstance(event, dict) and event.get("type") == "parse_failed" for event in recent)
 
 
+def test_pdca_next_step_llm_exception_bubbles() -> None:
+    tool_registry = build_default_tool_registry()
+    next_step = build_next_step_node(tool_registry=tool_registry)
+    llm = _ExplodingLlm()
+
+    task_state = build_default_task_state()
+    task_state["acceptance_criteria"] = ["done when requested outcome is produced"]
+    task_state["goal"] = "do something"
+    state: dict[str, object] = {
+        "correlation_id": "corr-pdca-llm-explodes",
+        "_llm_client": llm,
+        "task_state": task_state,
+    }
+
+    with pytest.raises(RuntimeError, match="planner llm exploded"):
+        next_step(state)
+
+
 def test_pdca_parse_failure_retry_can_recover_with_valid_json() -> None:
     tool_registry = build_default_tool_registry()
     next_step = build_next_step_node(tool_registry=tool_registry)
@@ -614,6 +641,30 @@ def test_pdca_parse_failure_retry_can_recover_with_valid_json() -> None:
     assert isinstance(proposal, dict)
     assert proposal.get("kind") == "call_tool"
     assert proposal.get("tool_name") == "job_list"
+
+
+def test_pdca_parse_failure_respects_configured_max_attempts(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ALPHONSE_TASK_MODE_NEXT_STEP_MAX_ATTEMPTS", "1")
+    tool_registry = build_default_tool_registry()
+    next_step = build_next_step_node(tool_registry=tool_registry)
+    llm = _QueuedLlm(["not-json output", '{"kind":"call_tool","tool_name":"job_list","args":{"limit":10}}'])
+
+    task_state = build_default_task_state()
+    task_state["acceptance_criteria"] = ["done when requested outcome is produced"]
+    task_state["goal"] = "do something"
+    state: dict[str, object] = {
+        "correlation_id": "corr-pdca-parse-fail-max1",
+        "_llm_client": llm,
+        "task_state": task_state,
+    }
+
+    state = _apply(state, next_step(state))
+    next_state = state["task_state"]
+    assert isinstance(next_state, dict)
+    assert next_state.get("status") == "failed"
+    last_error = next_state.get("last_validation_error")
+    assert isinstance(last_error, dict)
+    assert int(last_error.get("attempts") or 0) == 1
 
 
 def test_pdca_derives_acceptance_criteria_from_next_step_proposal() -> None:

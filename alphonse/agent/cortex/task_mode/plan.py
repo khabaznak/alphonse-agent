@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import logging
+import inspect
+import os
 from typing import Any, Callable
 
 from alphonse.agent.cognition.tool_schemas import planner_tool_schemas
@@ -15,7 +17,7 @@ from alphonse.agent.session.day_state import render_recent_conversation_block
 from alphonse.agent.tools.mcp.loader import default_profiles_dir
 from alphonse.agent.tools.mcp.registry import McpProfileRegistry
 
-_NEXT_STEP_MAX_ATTEMPTS = 2
+_NEXT_STEP_MAX_ATTEMPTS_DEFAULT = 2
 
 # Strict JSON Schema for NextStepProposal structured output
 _NEXT_STEP_SCHEMA: dict[str, Any] = {
@@ -144,7 +146,7 @@ def build_next_step_node_impl(
         task_state["status"] = "failed"
         task_state["next_user_question"] = None
         provider, model = _provider_model_from_state(state)
-        attempts = int((diagnostics[-1] if diagnostics else {}).get("attempt") or _NEXT_STEP_MAX_ATTEMPTS)
+        attempts = int((diagnostics[-1] if diagnostics else {}).get("attempt") or _next_step_max_attempts())
         task_state["last_validation_error"] = {
             "reason": "next_step_parse_failed",
             "attempts": attempts,
@@ -282,6 +284,7 @@ def _propose_next_step_with_llm(
     tool_registry: Any,
 ) -> tuple[NextStepProposal, bool, list[dict[str, Any]]]:
     diagnostics: list[dict[str, Any]] = []
+    max_attempts = _next_step_max_attempts()
 
     tool_menu = _build_tool_menu(tool_registry)
     mcp_capability_menu, _ = _build_mcp_capability_menu()
@@ -357,30 +360,42 @@ def _propose_next_step_with_llm(
             )
         )
 
-    repair_prompt = _build_next_step_repair_prompt(
-        original_user_prompt=user_prompt,
-        latest_diagnostic=diagnostics[-1] if diagnostics else {},
-    )
-    repair_raw = _call_llm_text(
-        llm_client=llm_client,
-        system_prompt=NEXT_STEP_SYSTEM_PROMPT,
-        user_prompt=repair_prompt,
-    )
-    repair_parsed = parse_json_object(repair_raw)
-    repaired = _normalize_next_step_proposal(repair_parsed)
-    if repaired is not None:
-        return repaired, False, diagnostics
-    diagnostics.append(
-        _build_parse_diagnostic(
-            state=state,
-            attempt=2,
-            parse_error_type="repair_payload_invalid",
-            validation_errors=["repair_output_not_valid_next_step_json"],
-            raw_output=repair_raw,
+    for attempt in range(2, max_attempts + 1):
+        repair_prompt = _build_next_step_repair_prompt(
+            original_user_prompt=user_prompt,
+            latest_diagnostic=diagnostics[-1] if diagnostics else {},
         )
-    )
+        repair_raw = _call_llm_text(
+            llm_client=llm_client,
+            system_prompt=NEXT_STEP_SYSTEM_PROMPT,
+            user_prompt=repair_prompt,
+        )
+        repair_parsed = parse_json_object(repair_raw)
+        repaired = _normalize_next_step_proposal(repair_parsed)
+        if repaired is not None:
+            return repaired, False, diagnostics
+        diagnostics.append(
+            _build_parse_diagnostic(
+                state=state,
+                attempt=attempt,
+                parse_error_type="repair_payload_invalid",
+                validation_errors=["repair_output_not_valid_next_step_json"],
+                raw_output=repair_raw,
+            )
+        )
 
     return {"kind": "ask_user", "question": ""}, True, diagnostics
+
+
+def _next_step_max_attempts() -> int:
+    raw = str(os.getenv("ALPHONSE_TASK_MODE_NEXT_STEP_MAX_ATTEMPTS") or "").strip()
+    if not raw:
+        return _NEXT_STEP_MAX_ATTEMPTS_DEFAULT
+    try:
+        value = int(raw)
+    except ValueError:
+        return _NEXT_STEP_MAX_ATTEMPTS_DEFAULT
+    return value if value >= 1 else 1
 
 
 def _provider_model_from_state(state: dict[str, Any]) -> tuple[str | None, str | None]:
@@ -625,29 +640,23 @@ def _call_llm_structured(
 ) -> tuple[bool, dict[str, Any] | None]:
     complete_json = getattr(llm_client, "complete_json", None)
     if callable(complete_json):
-        try:
-            payload = complete_json(
-                system_prompt=system_prompt,
-                user_prompt=user_prompt,
-                schema=_NEXT_STEP_SCHEMA,
-            )
-            if isinstance(payload, dict):
-                return True, payload
-        except Exception:
-            return True, None
+        payload = complete_json(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            schema=_NEXT_STEP_SCHEMA,
+        )
+        if isinstance(payload, dict):
+            return True, payload
         return True, None
     complete_with_schema = getattr(llm_client, "complete_with_schema", None)
     if callable(complete_with_schema):
-        try:
-            payload = complete_with_schema(
-                system_prompt=system_prompt,
-                user_prompt=user_prompt,
-                schema=_NEXT_STEP_SCHEMA,
-            )
-            if isinstance(payload, dict):
-                return True, payload
-        except Exception:
-            return True, None
+        payload = complete_with_schema(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            schema=_NEXT_STEP_SCHEMA,
+        )
+        if isinstance(payload, dict):
+            return True, payload
         return True, None
     return False, None
 
@@ -657,14 +666,22 @@ def _call_llm_text(*, llm_client: Any, system_prompt: str, user_prompt: str) -> 
     if not callable(complete):
         return ""
     try:
+        signature = inspect.signature(complete)
+    except (TypeError, ValueError):
+        signature = None
+    if signature and _supports_prompt_keywords(signature):
         return str(complete(system_prompt=system_prompt, user_prompt=user_prompt))
-    except TypeError:
-        try:
-            return str(complete(system_prompt, user_prompt))
-        except Exception:
-            return ""
-    except Exception:
-        return ""
+    return str(complete(system_prompt, user_prompt))
+
+
+def _supports_prompt_keywords(signature: inspect.Signature) -> bool:
+    names = set()
+    for parameter in signature.parameters.values():
+        if parameter.kind == inspect.Parameter.VAR_KEYWORD:
+            return True
+        if parameter.kind in {inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY}:
+            names.add(parameter.name)
+    return {"system_prompt", "user_prompt"}.issubset(names)
 
 
 def _normalize_next_step_proposal(payload: Any) -> NextStepProposal | None:
