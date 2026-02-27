@@ -134,6 +134,9 @@ def _current_intention(current_step: dict[str, Any] | None) -> str:
         return ""
     tool = str(proposal.get("tool_name") or "").strip()
     args = proposal.get("args") if isinstance(proposal.get("args"), dict) else {}
+    specific_intention = _tool_specific_intention(tool=tool, args=args)
+    if specific_intention:
+        return specific_intention
     if tool in {"terminal_sync", "terminal_async", "ssh_terminal"}:
         command = str(args.get("command") or "").strip()
         return _terminal_intention(command)
@@ -151,6 +154,29 @@ def _current_intention(current_step: dict[str, Any] | None) -> str:
         return "I am invoking an MCP operation to advance the task"
     if tool:
         return f"I am using `{tool}` to advance the task"
+    return ""
+
+
+def _tool_specific_intention(*, tool: str, args: dict[str, Any]) -> str:
+    normalized = str(tool or "").strip()
+    if normalized in {"local_audio_output_render"}:
+        return "I am generating the audio file needed for the voice note"
+    if normalized in {"send_voice_note", "sendVoiceNote"}:
+        return "I am delivering the generated voice note to the user"
+    if normalized in {"create_reminder", "createReminder"}:
+        time_value = str(args.get("Time") or args.get("time") or "").strip()
+        if time_value:
+            return f"I am scheduling the reminder for {time_value}"
+        return "I am scheduling the reminder with the provided details"
+    if normalized in {"job_create"}:
+        name = str(args.get("name") or "").strip()
+        if name:
+            return f"I am creating the scheduled job `{name}`"
+        return "I am creating the scheduled job requested by the user"
+    if normalized in {"job_list"}:
+        return "I am checking the current scheduled jobs"
+    if normalized in {"get_time", "getTime"}:
+        return "I am resolving the current time context needed for this task"
     return ""
 
 
