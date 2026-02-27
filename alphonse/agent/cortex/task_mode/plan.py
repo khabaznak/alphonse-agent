@@ -333,6 +333,13 @@ def _propose_next_step_with_llm(
         NEXT_STEP_SYSTEM_PROMPT,
         user_prompt,
     )
+    tool_supported, tool_based_proposal = _call_llm_tool_selection(
+        llm_client=llm_client,
+        system_prompt=NEXT_STEP_SYSTEM_PROMPT,
+        user_prompt=user_prompt,
+    )
+    if tool_supported and tool_based_proposal is not None:
+        return tool_based_proposal, False, diagnostics
 
     structured_supported, parsed_structured = _call_llm_structured(
         llm_client=llm_client,
@@ -675,6 +682,47 @@ def _build_mcp_live_tools_menu(task_state: dict[str, Any]) -> str:
         lines.append("  - invoke with `mcp_call` using `operation` equal to the tool name above.")
         return "\n".join(lines)
     return ""
+
+
+def _call_llm_tool_selection(
+    *,
+    llm_client: Any,
+    system_prompt: str,
+    user_prompt: str,
+) -> tuple[bool, NextStepProposal | None]:
+    complete_with_tools = getattr(llm_client, "complete_with_tools", None)
+    if not callable(complete_with_tools):
+        return False, None
+    payload = complete_with_tools(
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+        tools=planner_tool_schemas(),
+        tool_choice="auto",
+    )
+    return True, _normalize_tool_selection_payload(payload)
+
+
+def _normalize_tool_selection_payload(payload: Any) -> NextStepProposal | None:
+    if not isinstance(payload, dict):
+        return None
+    tool_calls = payload.get("tool_calls")
+    if isinstance(tool_calls, list):
+        for call in tool_calls:
+            if not isinstance(call, dict):
+                continue
+            tool_name = str(call.get("name") or "").strip()
+            if not tool_name:
+                continue
+            arguments = call.get("arguments")
+            args = dict(arguments) if isinstance(arguments, dict) else {}
+            return {"kind": "call_tool", "tool_name": tool_name, "args": args}
+    content = payload.get("content")
+    if isinstance(content, str) and content.strip():
+        parsed = parse_json_object(content)
+        return _normalize_next_step_proposal(parsed)
+    return None
 
 
 def _call_llm_structured(

@@ -55,6 +55,58 @@ class _PromptCaptureLlm:
         return self._response
 
 
+class _ToolCallLlm:
+    def __init__(self, payload: dict[str, object]) -> None:
+        self.payload = payload
+        self.complete_calls = 0
+        self.complete_with_tools_calls = 0
+
+    def complete(self, system_prompt: str, user_prompt: str) -> str:
+        _ = system_prompt
+        _ = user_prompt
+        self.complete_calls += 1
+        raise RuntimeError("complete should not be used when complete_with_tools is available")
+
+    def complete_with_tools(
+        self,
+        *,
+        messages: list[dict[str, object]],
+        tools: list[dict[str, object]],
+        tool_choice: str = "auto",
+    ) -> dict[str, object]:
+        _ = messages
+        _ = tools
+        _ = tool_choice
+        self.complete_with_tools_calls += 1
+        return self.payload
+
+
+class _BrokenToolCallLlm:
+    def __init__(self, fallback_response: str) -> None:
+        self.fallback_response = fallback_response
+        self.complete_calls = 0
+        self.complete_with_tools_calls = 0
+
+    def complete(self, system_prompt: str, user_prompt: str) -> str:
+        _ = system_prompt
+        _ = user_prompt
+        self.complete_calls += 1
+        return self.fallback_response
+
+    def complete_with_tools(
+        self,
+        *,
+        messages: list[dict[str, object]],
+        tools: list[dict[str, object]],
+        tool_choice: str = "auto",
+    ) -> dict[str, object]:
+        _ = messages
+        _ = tools
+        _ = tool_choice
+        self.complete_with_tools_calls += 1
+        return {"content": "", "tool_calls": []}
+
+
 class _SessionAwareTaskLlm:
     def __init__(self) -> None:
         self.next_step_prompt = ""
@@ -641,6 +693,83 @@ def test_pdca_parse_failure_retry_can_recover_with_valid_json() -> None:
     assert isinstance(proposal, dict)
     assert proposal.get("kind") == "call_tool"
     assert proposal.get("tool_name") == "job_list"
+
+
+def test_pdca_next_step_uses_complete_with_tools_when_available() -> None:
+    tool_registry = build_default_tool_registry()
+    next_step = build_next_step_node(tool_registry=tool_registry)
+    llm = _ToolCallLlm(
+        {
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "call-1",
+                    "name": "job_list",
+                    "arguments": {"limit": 10},
+                }
+            ],
+            "assistant_message": {"role": "assistant", "content": ""},
+        }
+    )
+
+    task_state = build_default_task_state()
+    task_state["acceptance_criteria"] = ["done when requested outcome is produced"]
+    task_state["goal"] = "do something"
+    state: dict[str, object] = {
+        "correlation_id": "corr-pdca-tool-call-path",
+        "_llm_client": llm,
+        "task_state": task_state,
+    }
+
+    state = _apply(state, next_step(state))
+    next_state = state["task_state"]
+    assert isinstance(next_state, dict)
+    plan = next_state.get("plan")
+    assert isinstance(plan, dict)
+    steps = plan.get("steps")
+    assert isinstance(steps, list)
+    assert steps
+    first = steps[0]
+    assert isinstance(first, dict)
+    proposal = first.get("proposal")
+    assert isinstance(proposal, dict)
+    assert proposal.get("kind") == "call_tool"
+    assert proposal.get("tool_name") == "job_list"
+    assert proposal.get("args") == {"limit": 10}
+    assert llm.complete_with_tools_calls == 1
+    assert llm.complete_calls == 0
+
+
+def test_pdca_next_step_falls_back_to_text_when_tool_call_payload_is_empty() -> None:
+    tool_registry = build_default_tool_registry()
+    next_step = build_next_step_node(tool_registry=tool_registry)
+    llm = _BrokenToolCallLlm('{"kind":"call_tool","tool_name":"job_list","args":{"limit":10}}')
+
+    task_state = build_default_task_state()
+    task_state["acceptance_criteria"] = ["done when requested outcome is produced"]
+    task_state["goal"] = "do something"
+    state: dict[str, object] = {
+        "correlation_id": "corr-pdca-tool-call-fallback",
+        "_llm_client": llm,
+        "task_state": task_state,
+    }
+
+    state = _apply(state, next_step(state))
+    next_state = state["task_state"]
+    assert isinstance(next_state, dict)
+    plan = next_state.get("plan")
+    assert isinstance(plan, dict)
+    steps = plan.get("steps")
+    assert isinstance(steps, list)
+    assert steps
+    first = steps[0]
+    assert isinstance(first, dict)
+    proposal = first.get("proposal")
+    assert isinstance(proposal, dict)
+    assert proposal.get("kind") == "call_tool"
+    assert proposal.get("tool_name") == "job_list"
+    assert llm.complete_with_tools_calls == 1
+    assert llm.complete_calls >= 1
 
 
 def test_pdca_parse_failure_respects_configured_max_attempts(monkeypatch: pytest.MonkeyPatch) -> None:
