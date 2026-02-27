@@ -408,3 +408,107 @@ def test_mcp_call_reuses_native_session_across_calls(
     assert _FakeNativeClient.starts == 1
     assert _FakeNativeClient.initializes == 1
     assert len(_FakeNativeClient.calls) == 2
+
+
+def test_mcp_call_native_headless_override_false_removes_headless_arg(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("ALPHONSE_EXECUTION_MODE", "ops")
+    monkeypatch.setattr(mcp_call_tool_module, "_allowed_roots", lambda: [str(tmp_path)])
+    profiles_dir = tmp_path / "profiles"
+    profiles_dir.mkdir(parents=True, exist_ok=True)
+    (profiles_dir / "chrome.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "key": "chrome",
+                "description": "Chrome MCP",
+                "binary_candidates": ["chrome-devtools-mcp"],
+                "operations": {},
+                "metadata": {
+                    "native_tools": True,
+                    "launcher_args": ["--headless", "--isolated"],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("ALPHONSE_MCP_PROFILES_DIR", str(profiles_dir))
+
+    seen_argv: list[list[str]] = []
+
+    class _CaptureNativeClient(_FakeNativeClient):
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            seen_argv.append(list(kwargs.get("launcher_argv") or []))
+
+    connector = McpConnector(
+        terminal=_DummyTerminal(),
+        native_client_factory=lambda **kwargs: _CaptureNativeClient(**kwargs),
+        session_ttl_seconds=3600,
+    )
+    tool = McpCallTool(connector=connector)
+    result = tool.execute(
+        profile="chrome",
+        operation="list_tools",
+        arguments={},
+        headless=False,
+        cwd=str(tmp_path),
+    )
+
+    assert result["status"] == "ok"
+    assert seen_argv
+    assert "--headless" not in seen_argv[0]
+    assert "--isolated" in seen_argv[0]
+
+
+def test_mcp_call_native_headless_override_true_adds_headless_arg(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("ALPHONSE_EXECUTION_MODE", "ops")
+    monkeypatch.setattr(mcp_call_tool_module, "_allowed_roots", lambda: [str(tmp_path)])
+    profiles_dir = tmp_path / "profiles"
+    profiles_dir.mkdir(parents=True, exist_ok=True)
+    (profiles_dir / "chrome.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "key": "chrome",
+                "description": "Chrome MCP",
+                "binary_candidates": ["chrome-devtools-mcp"],
+                "operations": {},
+                "metadata": {
+                    "native_tools": True,
+                    "launcher_args": ["--isolated"],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("ALPHONSE_MCP_PROFILES_DIR", str(profiles_dir))
+
+    seen_argv: list[list[str]] = []
+
+    class _CaptureNativeClient(_FakeNativeClient):
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            seen_argv.append(list(kwargs.get("launcher_argv") or []))
+
+    connector = McpConnector(
+        terminal=_DummyTerminal(),
+        native_client_factory=lambda **kwargs: _CaptureNativeClient(**kwargs),
+        session_ttl_seconds=3600,
+    )
+    tool = McpCallTool(connector=connector)
+    result = tool.execute(
+        profile="chrome",
+        operation="list_tools",
+        arguments={},
+        headless=True,
+        cwd=str(tmp_path),
+    )
+
+    assert result["status"] == "ok"
+    assert seen_argv
+    assert "--headless" in seen_argv[0]
+    assert "--isolated" in seen_argv[0]

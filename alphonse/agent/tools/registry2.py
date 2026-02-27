@@ -521,6 +521,7 @@ def _default_specs() -> list[ToolSpec]:
                     "profile": {"type": "string"},
                     "operation": {"type": "string"},
                     "arguments": {"type": "object"},
+                    "headless": {"type": "boolean"},
                     "cwd": {"type": "string"},
                     "timeout_seconds": {"type": "number"},
                 },

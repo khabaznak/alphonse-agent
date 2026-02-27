@@ -84,6 +84,7 @@ class McpConnector:
         profile_key: str,
         operation_key: str,
         arguments: dict[str, Any],
+        headless: bool | None,
         cwd: str,
         allowed_roots: list[str],
         mode: str,
@@ -104,6 +105,7 @@ class McpConnector:
                 profile=profile,
                 operation_key=str(operation_key or "").strip(),
                 arguments=arguments,
+                headless=headless,
                 cwd=cwd,
                 mode=mode,
                 timeout_seconds=timeout_seconds,
@@ -178,11 +180,12 @@ class McpConnector:
         profile: McpServerProfile,
         operation_key: str,
         arguments: dict[str, Any],
+        headless: bool | None,
         cwd: str,
         mode: str,
         timeout_seconds: float,
     ) -> dict[str, Any]:
-        launcher_argv = _launcher_argv(profile)
+        launcher_argv = _launcher_argv(profile, headless=headless)
         transport = _native_transport(profile)
         operation = str(operation_key or "").strip()
         if not operation:
@@ -658,7 +661,7 @@ def _launcher_expression(profile: McpServerProfile) -> str:
     return " ; ".join(checks).strip()
 
 
-def _launcher_argv(profile: McpServerProfile) -> list[str]:
+def _launcher_argv(profile: McpServerProfile, *, headless: bool | None = None) -> list[str]:
     metadata = profile.metadata if isinstance(profile.metadata, dict) else {}
     extra_args_raw = metadata.get("launcher_args")
     extra_args = [
@@ -666,6 +669,7 @@ def _launcher_argv(profile: McpServerProfile) -> list[str]:
         for item in (extra_args_raw if isinstance(extra_args_raw, list) else [])
         if str(item).strip()
     ]
+    extra_args = _apply_headless_override(extra_args, headless=headless)
     for binary in profile.binary_candidates:
         name = str(binary or "").strip()
         if not name:
@@ -680,6 +684,15 @@ def _launcher_argv(profile: McpServerProfile) -> list[str]:
         "mcp_binary_not_found",
         f"No MCP launcher found for profile '{profile.key}'.",
     )
+
+
+def _apply_headless_override(args: list[str], *, headless: bool | None) -> list[str]:
+    if headless is None:
+        return list(args)
+    filtered = [item for item in args if str(item).strip() != "--headless"]
+    if headless:
+        return ["--headless", *filtered]
+    return filtered
 
 
 def _native_transport(profile: McpServerProfile) -> Literal["content_length", "ndjson"]:

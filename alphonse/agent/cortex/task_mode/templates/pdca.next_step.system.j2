@@ -45,6 +45,7 @@ Propose only the single next action.
   - For `tool_name = "mcp_call"`, `args` MUST use this canonical shape only:
     - `{"profile":"<profile_key>","operation":"<operation_key>","arguments":{...}}`
   - Put operation inputs under `arguments`.
+  - Optional: include `"headless": false` to allow manual captcha solving in a visible browser for native browser MCP profiles.
   - Do NOT use top-level `args`, `query`, `mode`, `input`, or any other extra top-level keys in `mcp_call` args.
   - If an operation has no inputs, set `"arguments": {}`.
   - For native MCP profiles, run discovery first with `operation = "list_tools"` and then set `operation` to an actual discovered tool name.

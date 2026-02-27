@@ -60,7 +60,13 @@ def normalize_mcp_call_invocation(raw: dict[str, Any]) -> tuple[dict[str, Any], 
             ignored.append("query(already_present)")
 
     if payload.get("mode") is not None:
-        ignored.append("mode")
+        mode_value = str(payload.get("mode") or "").strip().lower()
+        if mode_value in {"headless", "headed", "visible"} and payload.get("headless") is None:
+            headless = mode_value == "headless"
+            payload["headless"] = headless
+            mapped.append("mode->headless")
+        else:
+            ignored.append("mode")
 
     for key, value in payload.items():
         if key in {
@@ -86,6 +92,7 @@ def normalize_mcp_call_invocation(raw: dict[str, Any]) -> tuple[dict[str, Any], 
         "profile": profile,
         "operation": operation,
         "arguments": canonical_arguments,
+        "headless": payload.get("headless"),
         "cwd": str(payload.get("cwd") or "."),
         "timeout_seconds": payload.get("timeout_seconds"),
         "timeout_ms": payload.get("timeout_ms"),
@@ -108,6 +115,7 @@ class McpCallTool:
         profile: str | None = None,
         operation: str | None = None,
         arguments: dict[str, Any] | None = None,
+        headless: bool | None = None,
         cwd: str = ".",
         timeout_seconds: float | None = None,
         timeout_ms: float | int | None = None,
@@ -118,6 +126,7 @@ class McpCallTool:
             "profile": profile,
             "operation": operation,
             "arguments": arguments,
+            "headless": headless,
             "cwd": cwd,
             "timeout_seconds": timeout_seconds,
             "timeout_ms": timeout_ms,
@@ -178,6 +187,7 @@ class McpCallTool:
                 profile_key=profile_key,
                 operation_key=operation_key,
                 arguments=canonical_arguments,
+                headless=_coerce_optional_bool(normalized.get("headless")),
                 cwd=_normalize_cwd(cwd=str(normalized.get("cwd") or "."), roots=roots),
                 allowed_roots=roots,
                 mode=mode,
@@ -213,3 +223,16 @@ def _read_mcp_default_timeout_seconds() -> float:
         except ValueError:
             pass
     return 45.0
+
+
+def _coerce_optional_bool(value: Any) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return None
+    text = str(value).strip().lower()
+    if text in {"1", "true", "yes", "on"}:
+        return True
+    if text in {"0", "false", "no", "off"}:
+        return False
+    return None

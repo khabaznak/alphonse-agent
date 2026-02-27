@@ -568,6 +568,9 @@ def _build_tool_contract_hints() -> str:
             lines.append(
                 "  - args shape: `{\"profile\":\"...\",\"operation\":\"...\",\"arguments\":{...}}`."
             )
+            lines.append(
+                "  - optional `headless` (boolean) controls browser visibility for native browser MCP profiles."
+            )
     return "\n".join(lines).strip()
 
 
