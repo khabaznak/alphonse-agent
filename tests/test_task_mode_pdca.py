@@ -107,6 +107,43 @@ class _BrokenToolCallLlm:
         return {"content": "", "tool_calls": []}
 
 
+class _ToolListCaptureLlm:
+    def __init__(self) -> None:
+        self.complete_with_tools_calls = 0
+        self.tool_names: list[str] = []
+
+    def complete_with_tools(
+        self,
+        *,
+        messages: list[dict[str, object]],
+        tools: list[dict[str, object]],
+        tool_choice: str = "auto",
+    ) -> dict[str, object]:
+        _ = messages
+        _ = tool_choice
+        self.complete_with_tools_calls += 1
+        names: list[str] = []
+        for item in tools:
+            function = item.get("function") if isinstance(item, dict) else None
+            if not isinstance(function, dict):
+                continue
+            name = str(function.get("name") or "").strip()
+            if name:
+                names.append(name)
+        self.tool_names = names
+        return {
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "call-voice-1",
+                    "name": "send_voice_note",
+                    "arguments": {"To": "me", "AudioFilePath": "/tmp/test.ogg"},
+                }
+            ],
+            "assistant_message": {"role": "assistant", "content": ""},
+        }
+
+
 class _SessionAwareTaskLlm:
     def __init__(self) -> None:
         self.next_step_prompt = ""
@@ -814,6 +851,36 @@ def test_pdca_next_step_falls_back_to_text_when_tool_call_payload_is_empty() -> 
     assert proposal.get("tool_name") == "job_list"
     assert llm.complete_with_tools_calls == 1
     assert llm.complete_calls >= 1
+
+
+def test_pdca_tool_call_schema_includes_context_tools_when_runtime_registered() -> None:
+    tool_registry = build_default_tool_registry()
+    next_step = build_next_step_node(tool_registry=tool_registry)
+    llm = _ToolListCaptureLlm()
+
+    task_state = build_default_task_state()
+    task_state["acceptance_criteria"] = ["done when requested outcome is produced"]
+    task_state["goal"] = "send me a test voice note"
+    state: dict[str, object] = {
+        "correlation_id": "corr-pdca-tool-schema-runtime-only",
+        "_llm_client": llm,
+        "task_state": task_state,
+    }
+
+    updated = next_step(state)
+    next_state = updated.get("task_state")
+    assert isinstance(next_state, dict)
+    plan = next_state.get("plan")
+    assert isinstance(plan, dict)
+    steps = plan.get("steps")
+    assert isinstance(steps, list)
+    assert steps
+    proposal = steps[0].get("proposal") if isinstance(steps[0], dict) else None
+    assert isinstance(proposal, dict)
+    assert proposal.get("tool_name") == "send_voice_note"
+    assert llm.complete_with_tools_calls == 1
+    assert "get_user_details" in llm.tool_names
+    assert "get_my_settings" in llm.tool_names
 
 
 def test_pdca_parse_failure_respects_configured_max_attempts(monkeypatch: pytest.MonkeyPatch) -> None:

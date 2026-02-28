@@ -6,7 +6,7 @@ import inspect
 import os
 from typing import Any, Callable
 
-from alphonse.agent.cognition.tool_schemas import planner_tool_schemas
+from alphonse.agent.cognition.tool_schemas import llm_tool_schemas
 from alphonse.agent.cortex.llm_output.json_parse import parse_json_object
 from alphonse.agent.cortex.task_mode.prompt_templates import NEXT_STEP_REPAIR_USER_TEMPLATE
 from alphonse.agent.cortex.task_mode.prompt_templates import NEXT_STEP_SYSTEM_PROMPT
@@ -290,8 +290,7 @@ def _propose_next_step_with_llm(
     diagnostics: list[dict[str, Any]] = []
     max_attempts = _next_step_max_attempts()
 
-    tool_menu = _build_tool_menu(tool_registry)
-    tool_contract_hints = _build_tool_contract_hints()
+    tool_contract_hints = _build_tool_contract_hints(tool_registry)
     mcp_capability_menu, _ = _build_mcp_capability_menu()
     mcp_live_tools_menu = _build_mcp_live_tools_menu(task_state)
     working_view = _build_working_state_view(task_state)
@@ -309,7 +308,6 @@ def _propose_next_step_with_llm(
     user_prompt_body = render_pdca_prompt(
         NEXT_STEP_USER_TEMPLATE,
         {
-            "TOOL_MENU": tool_menu,
             "TOOL_CONTRACT_HINTS": tool_contract_hints,
             "MCP_CAPABILITY_MENU": mcp_capability_menu,
             "MCP_LIVE_TOOLS_MENU": mcp_live_tools_menu,
@@ -337,6 +335,7 @@ def _propose_next_step_with_llm(
         llm_client=llm_client,
         system_prompt=NEXT_STEP_SYSTEM_PROMPT,
         user_prompt=user_prompt,
+        tool_registry=tool_registry,
     )
     if tool_supported and tool_based_proposal is not None:
         return tool_based_proposal, False, diagnostics
@@ -526,24 +525,12 @@ def _latest_failure_diagnostics(task_state: dict[str, Any]) -> dict[str, Any]:
     return {}
 
 
-def _build_tool_menu(tool_registry: Any) -> str:
-    descriptions = _tool_descriptions()
-    keys = sorted(descriptions.keys())
-    lines: list[str] = []
-    for name in keys:
-        if not _tool_exists(tool_registry, name):
-            continue
-        summary = descriptions.get(name) or "Tool available."
-        lines.append(f"- `{name}`: {summary}")
-    return "\n".join(lines) or "- (no tools)"
-
-
-def _build_tool_contract_hints() -> str:
+def _build_tool_contract_hints(tool_registry: Any) -> str:
     # Keep this compact: only include high-friction tools that frequently fail
     # from argument-shape mismatches.
     target_tools = {"job_create", "mcp_call", "terminal_sync"}
     lines: list[str] = []
-    for schema in planner_tool_schemas():
+    for schema in llm_tool_schemas(tool_registry):
         function = schema.get("function")
         if not isinstance(function, dict):
             continue
@@ -572,26 +559,6 @@ def _build_tool_contract_hints() -> str:
                 "  - optional `headless` (boolean) controls browser visibility for native browser MCP profiles."
             )
     return "\n".join(lines).strip()
-
-
-def _tool_descriptions() -> dict[str, str]:
-    menu: dict[str, str] = {}
-    for schema in planner_tool_schemas():
-        fn = schema.get("function")
-        if not isinstance(fn, dict):
-            continue
-        name = str(fn.get("name") or "").strip()
-        if not name:
-            continue
-        description = str(fn.get("description") or "Tool available.").strip()
-        menu[name] = description
-    return menu
-
-
-def _tool_exists(tool_registry: Any, name: str) -> bool:
-    if hasattr(tool_registry, "get"):
-        return tool_registry.get(name) is not None
-    return False
 
 
 def _build_mcp_capability_menu() -> tuple[str, dict[str, Any]]:
@@ -692,16 +659,18 @@ def _call_llm_tool_selection(
     llm_client: Any,
     system_prompt: str,
     user_prompt: str,
+    tool_registry: Any,
 ) -> tuple[bool, NextStepProposal | None]:
     complete_with_tools = getattr(llm_client, "complete_with_tools", None)
     if not callable(complete_with_tools):
         return False, None
+    allowed_tools = llm_tool_schemas(tool_registry)
     payload = complete_with_tools(
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
         ],
-        tools=planner_tool_schemas(),
+        tools=allowed_tools,
         tool_choice="auto",
     )
     return True, _normalize_tool_selection_payload(payload)

@@ -5,7 +5,8 @@ import re
 import shlex
 from typing import Any, Callable
 
-from alphonse.agent.cognition.tool_schemas import planner_tool_schemas
+from alphonse.agent.cognition.tool_schemas import required_args
+from alphonse.agent.cognition.tool_schemas import tool_parameters
 from alphonse.agent.tools.mcp.registry import McpProfileRegistry
 
 
@@ -145,18 +146,7 @@ def _tool_exists(tool_registry: Any, tool_name: str) -> bool:
 
 
 def _required_args_for_tool(tool_name: str) -> list[str]:
-    for schema in planner_tool_schemas():
-        fn = schema.get("function")
-        if not isinstance(fn, dict):
-            continue
-        if str(fn.get("name") or "") != tool_name:
-            continue
-        params = fn.get("parameters") if isinstance(fn.get("parameters"), dict) else {}
-        required = params.get("required")
-        if isinstance(required, list):
-            return [str(item) for item in required if str(item)]
-        return []
-    return []
+    return required_args(tool_name)
 
 
 def _invalid_args_for_tool(*, tool_name: str, args: dict[str, Any]) -> list[str]:
@@ -175,17 +165,7 @@ def _invalid_args_for_tool(*, tool_name: str, args: dict[str, Any]) -> list[str]
 
 
 def _tool_parameters_for_tool(tool_name: str) -> dict[str, Any] | None:
-    for schema in planner_tool_schemas():
-        fn = schema.get("function")
-        if not isinstance(fn, dict):
-            continue
-        if str(fn.get("name") or "") != tool_name:
-            continue
-        params = fn.get("parameters")
-        if isinstance(params, dict):
-            return params
-        return None
-    return None
+    return tool_parameters(tool_name)
 
 
 def _terminal_command_from_tool_call(*, tool_name: str, args: dict[str, Any]) -> str:

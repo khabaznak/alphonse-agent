@@ -73,6 +73,7 @@ class CortexGraph:
             "first_decision_node",
             build_first_decision_node(
                 llm_client_from_state=self._llm_client_from_state,
+                tool_registry=self._tool_registry,
             ),
         )
         graph.add_node(

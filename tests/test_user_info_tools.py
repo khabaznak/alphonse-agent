@@ -4,8 +4,8 @@ from alphonse.agent.nervous_system.migrate import apply_schema
 from alphonse.agent.nervous_system import users as users_store
 from alphonse.agent.nervous_system import user_service_resolvers as resolvers
 from alphonse.agent.nervous_system.services import TELEGRAM_SERVICE_ID
+from alphonse.agent.cognition.tool_schemas import llm_tool_schemas
 from alphonse.agent.tools.registry import build_default_tool_registry
-from alphonse.agent.tools.registry2 import build_planner_tool_registry
 from alphonse.agent.tools.user_contact_tools import UserSearchTool
 
 
@@ -28,9 +28,13 @@ def _seed_user(display_name: str, telegram_id: str) -> str:
 
 def test_user_search_tool_registered() -> None:
     runtime = build_default_tool_registry()
-    planner = build_planner_tool_registry()
     assert runtime.get("user_search") is not None
-    assert planner.get("user_search") is not None
+    schema_names = {
+        str(item.get("function", {}).get("name") or "")
+        for item in llm_tool_schemas(runtime)
+        if isinstance(item, dict)
+    }
+    assert "user_search" in schema_names
 
 
 def test_user_search_returns_matches_with_telegram_ids(monkeypatch, tmp_path) -> None:

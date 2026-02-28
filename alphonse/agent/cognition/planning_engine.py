@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any
 
-from alphonse.agent.cognition.tool_catalog_renderer import render_tool_catalog
-from alphonse.agent.tools.registry2 import build_planner_tool_registry
+from alphonse.agent.cognition.tool_schemas import canonical_tool_names
+from alphonse.agent.cognition.tool_schemas import llm_tool_schemas
+from alphonse.agent.tools.registry import build_default_tool_registry
 
 
 def format_available_abilities() -> str:
@@ -12,18 +12,34 @@ def format_available_abilities() -> str:
 
 
 def format_available_ability_catalog() -> str:
-    template_dir = Path(__file__).resolve().parent / "templates"
-    return render_tool_catalog(build_planner_tool_registry(), template_dir)
+    payload = planner_tool_catalog_data()
+    tools = payload.get("tools") if isinstance(payload, dict) else []
+    lines = ["# Available Tools"]
+    for item in tools if isinstance(tools, list) else []:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("tool") or "").strip()
+        if not name:
+            continue
+        desc = str(item.get("description") or "").strip()
+        lines.append(f"### `{name}`")
+        if desc:
+            lines.append(desc)
+    return "\n\n".join(lines).strip()
 
 
 def planner_tool_catalog_data() -> dict[str, Any]:
-    registry = build_planner_tool_registry()
+    registry = build_default_tool_registry()
+    schemas = llm_tool_schemas(registry)
     tools: list[dict[str, Any]] = []
-    for spec in registry.specs_for_catalog():
+    for schema in schemas:
+        fn = schema.get("function") if isinstance(schema, dict) else None
+        if not isinstance(fn, dict):
+            continue
         params: list[dict[str, Any]] = []
-        schema = spec.input_schema if isinstance(spec.input_schema, dict) else {}
-        properties = schema.get("properties") if isinstance(schema.get("properties"), dict) else {}
-        required_raw = schema.get("required") if isinstance(schema.get("required"), list) else []
+        params_schema = fn.get("parameters") if isinstance(fn.get("parameters"), dict) else {}
+        properties = params_schema.get("properties") if isinstance(params_schema.get("properties"), dict) else {}
+        required_raw = params_schema.get("required") if isinstance(params_schema.get("required"), list) else []
         required = {str(item).strip() for item in required_raw if str(item).strip()}
         for name, definition in properties.items():
             if not isinstance(definition, dict):
@@ -37,10 +53,10 @@ def planner_tool_catalog_data() -> dict[str, Any]:
             )
         tools.append(
             {
-                "tool": spec.key,
-                "description": spec.description,
-                "when_to_use": spec.when_to_use,
-                "returns": spec.returns,
+                "tool": str(fn.get("name") or "").strip(),
+                "description": str(fn.get("description") or "").strip(),
+                "when_to_use": "",
+                "returns": "",
                 "input_parameters": params,
             }
         )
@@ -48,8 +64,4 @@ def planner_tool_catalog_data() -> dict[str, Any]:
 
 
 def planner_tool_names() -> list[str]:
-    return [
-        str(item.get("tool") or "").strip()
-        for item in (planner_tool_catalog_data().get("tools") or [])
-        if isinstance(item, dict) and str(item.get("tool") or "").strip()
-    ]
+    return canonical_tool_names(build_default_tool_registry())

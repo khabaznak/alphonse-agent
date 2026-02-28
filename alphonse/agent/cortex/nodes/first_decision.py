@@ -3,9 +3,9 @@ from __future__ import annotations
 from functools import partial
 from typing import Any, Callable
 
+from alphonse.agent.cognition.tool_schemas import canonical_tool_names
 from alphonse.agent.cognition.first_decision_engine import decide_first_action
 from alphonse.agent.cognition.intent_types import IntentCategory
-from alphonse.agent.cognition.planning_engine import planner_tool_names
 from alphonse.agent.cognition.pending_interaction import (
     PendingInteractionType,
     build_pending_interaction,
@@ -19,6 +19,7 @@ def first_decision_node(
     state: dict[str, Any],
     *,
     llm_client_from_state: Callable[[dict[str, Any]], Any],
+    tool_registry: Any,
     decide_first_action_fn: Callable[..., dict[str, Any]] = decide_first_action,
 ) -> dict[str, Any]:
     emit_brain_state(
@@ -47,7 +48,7 @@ def first_decision_node(
         return _return({"route_decision": "respond"})
 
     llm_client = llm_client_from_state(state)
-    tool_names = planner_tool_names()
+    tool_names = canonical_tool_names(tool_registry)
     recent_conversation_block = str(state.get("recent_conversation_block") or "").strip()
     if not recent_conversation_block:
         session_state = state.get("session_state") if isinstance(state.get("session_state"), dict) else None
@@ -109,10 +110,12 @@ def first_decision_node(
 def build_first_decision_node(
     *,
     llm_client_from_state: Callable[[dict[str, Any]], Any],
+    tool_registry: Any,
 ) -> Callable[[dict[str, Any]], dict[str, Any]]:
     return partial(
         first_decision_node,
         llm_client_from_state=llm_client_from_state,
+        tool_registry=tool_registry,
     )
 
 

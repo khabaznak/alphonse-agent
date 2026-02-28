@@ -39,7 +39,7 @@ Propose only the single next action.
 - If a tool accepts a natural time expression (e.g., 'in 1 minute'), pass it through; do NOT call get_time just to interpret it.
 - Call get_time only when a tool explicitly requires an absolute timestamp and you must compute it.
 - Prefer actions that reduce uncertainty early.
-- Use only tools listed in the tool menu.
+- Use only tools provided in the tool schemas for this call.
 - Never execute MCP-like binaries directly through terminal tools. For MCP capabilities, use `mcp_call` with profile + operation.
 - MCP CALL CONTRACT (STRICT):
   - For `tool_name = "mcp_call"`, `args` MUST use this canonical shape only:

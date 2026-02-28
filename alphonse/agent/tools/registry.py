@@ -5,6 +5,8 @@ from typing import Any
 
 from alphonse.agent.services import JobRunner, JobStore
 from alphonse.agent.tools.clock import ClockTool
+from alphonse.agent.tools.context_tools import GetMySettingsTool
+from alphonse.agent.tools.context_tools import GetUserDetailsTool
 from alphonse.agent.tools.job_tools import JobCreateTool
 from alphonse.agent.tools.job_tools import JobDeleteTool
 from alphonse.agent.tools.job_tools import JobListTool
@@ -52,6 +54,8 @@ class ToolRegistry:
 def build_default_tool_registry() -> ToolRegistry:
     registry = ToolRegistry()
     clock = ClockTool()
+    get_my_settings = GetMySettingsTool()
+    get_user_details = GetUserDetailsTool()
     scheduler = SchedulerTool()
     send_message = SendMessageTool()
     send_voice_note = SendVoiceNoteTool(_send_message_tool=send_message)
@@ -84,6 +88,8 @@ def build_default_tool_registry() -> ToolRegistry:
     user_search = UserSearchTool()
     registry.register("get_time", clock)
     registry.register("create_reminder", scheduler)
+    registry.register("get_my_settings", get_my_settings)
+    registry.register("get_user_details", get_user_details)
     registry.register("send_message", send_message)
     registry.register("send_voice_note", send_voice_note)
     registry.register("local_audio_output_speak", local_audio_output)
