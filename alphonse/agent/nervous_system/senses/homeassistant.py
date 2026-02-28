@@ -4,6 +4,7 @@ from alphonse.agent.observability.log_manager import get_component_logger
 from alphonse.agent.nervous_system.senses.base import Sense, SignalSpec
 from alphonse.agent.nervous_system.senses.bus import Bus, Signal
 from alphonse.integrations.domotics import SubscribeSpec, SubscriptionHandle, get_domotics_facade
+from alphonse.integrations.homeassistant.config import load_homeassistant_config
 
 logger = get_component_logger("senses.homeassistant")
 
@@ -29,15 +30,30 @@ class HomeAssistantSense(Sense):
     def start(self, bus: Bus) -> None:
         if self._running:
             return
+        try:
+            config = load_homeassistant_config()
+        except Exception as exc:
+            logger.warning("HomeAssistant integration disabled (invalid config): %s", exc)
+            return
+        if config is None:
+            logger.info(
+                "HomeAssistant integration disabled (missing HA_BASE_URL/HA_TOKEN)"
+            )
+            return
         facade = get_domotics_facade()
         if facade is None:
-            logger.info("HomeAssistant integration disabled (missing config)")
+            logger.warning("HomeAssistant integration disabled (facade unavailable)")
             return
 
         self._bus = bus
         self._subscription = facade.subscribe(SubscribeSpec(event_type="state_changed"), self._on_event)
         self._running = True
-        logger.info("HomeAssistantSense started")
+        logger.info(
+            "HomeAssistantSense started base_url=%s allowed_domains=%s allowed_entities=%s",
+            config.base_url,
+            len(config.allowed_domains),
+            len(config.allowed_entity_ids),
+        )
 
     def stop(self) -> None:
         if not self._running:

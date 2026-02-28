@@ -27,6 +27,45 @@ _TOOL_SCHEMA_DEFS: dict[str, dict[str, Any]] = {
             ["ForWhom", "Time", "Message"],
         ),
     },
+    "domotics.query": {
+        "description": "Query domotics states through the configured backend (Home Assistant in v1).",
+        "parameters": _object_schema(
+            {
+                "kind": {"type": "string", "enum": ["states", "state"]},
+                "entity_id": {"type": "string"},
+                "filters": {"type": "object"},
+            },
+            ["kind"],
+        ),
+    },
+    "domotics.execute": {
+        "description": "Execute a domotics service action and optionally verify effect via readback.",
+        "parameters": _object_schema(
+            {
+                "domain": {"type": "string"},
+                "service": {"type": "string"},
+                "data": {"type": "object"},
+                "target": {"type": "object"},
+                "readback": {"type": "boolean"},
+                "readback_entity_id": {"type": "string"},
+                "expected_state": {"type": "string"},
+                "expected_attributes": {"type": "object"},
+            },
+            ["domain", "service"],
+        ),
+    },
+    "domotics.subscribe": {
+        "description": "Subscribe to domotics events for a short capture window and return normalized events.",
+        "parameters": _object_schema(
+            {
+                "event_type": {"type": "string"},
+                "duration_seconds": {"type": "number"},
+                "filters": {"type": "object"},
+                "max_events": {"type": "integer"},
+            },
+            [],
+        ),
+    },
     "get_my_settings": {
         "description": "Get runtime settings for current conversation context.",
         "parameters": _object_schema({}, []),
@@ -258,7 +297,7 @@ def canonical_tool_names(tool_registry: Any) -> list[str]:
         if key not in _TOOL_SCHEMA_DEFS:
             continue
         # Canonical LLM-facing names only.
-        if "." in key:
+        if "." in key and not key.startswith("domotics."):
             continue
         if any(ch.isupper() for ch in key):
             continue

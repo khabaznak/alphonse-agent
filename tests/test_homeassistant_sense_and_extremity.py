@@ -12,6 +12,7 @@ from alphonse.integrations.domotics.contracts import (
     NormalizedEvent,
     SubscriptionHandle,
 )
+from alphonse.integrations.homeassistant.config import HomeAssistantConfig
 
 
 @dataclass
@@ -40,6 +41,10 @@ class StubFacade:
 
 def test_homeassistant_sense_disabled_logs_health(monkeypatch, caplog) -> None:
     monkeypatch.setattr(
+        "alphonse.agent.nervous_system.senses.homeassistant.load_homeassistant_config",
+        lambda: None,
+    )
+    monkeypatch.setattr(
         "alphonse.agent.nervous_system.senses.homeassistant.get_domotics_facade",
         lambda: None,
     )
@@ -49,13 +54,17 @@ def test_homeassistant_sense_disabled_logs_health(monkeypatch, caplog) -> None:
     sense.start(Bus())
 
     assert any(
-        "HomeAssistant integration disabled (missing config)" in rec.getMessage()
+        "HomeAssistant integration disabled (missing HA_BASE_URL/HA_TOKEN)" in rec.getMessage()
         for rec in caplog.records
     )
 
 
 def test_homeassistant_sense_emits_state_changed(monkeypatch) -> None:
     facade = StubFacade()
+    monkeypatch.setattr(
+        "alphonse.agent.nervous_system.senses.homeassistant.load_homeassistant_config",
+        lambda: HomeAssistantConfig(base_url="http://ha.local:8123", token="token"),
+    )
     monkeypatch.setattr(
         "alphonse.agent.nervous_system.senses.homeassistant.get_domotics_facade",
         lambda: facade,

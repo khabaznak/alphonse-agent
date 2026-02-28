@@ -7,6 +7,11 @@ from alphonse.agent.services import JobRunner, JobStore
 from alphonse.agent.tools.clock import ClockTool
 from alphonse.agent.tools.context_tools import GetMySettingsTool
 from alphonse.agent.tools.context_tools import GetUserDetailsTool
+from alphonse.agent.tools.domotics_tools import (
+    DomoticsExecuteTool,
+    DomoticsQueryTool,
+    DomoticsSubscribeTool,
+)
 from alphonse.agent.tools.job_tools import JobCreateTool
 from alphonse.agent.tools.job_tools import JobDeleteTool
 from alphonse.agent.tools.job_tools import JobListTool
@@ -94,6 +99,9 @@ def build_default_tool_registry() -> ToolRegistry:
     user_register_from_contact = UserRegisterFromContactTool()
     user_remove_from_contact = UserRemoveFromContactTool()
     user_search = UserSearchTool()
+    domotics_query = DomoticsQueryTool()
+    domotics_execute = DomoticsExecuteTool()
+    domotics_subscribe = DomoticsSubscribeTool()
     registry.register("get_time", clock)
     registry.register("create_reminder", scheduler)
     registry.register("get_my_settings", get_my_settings)
@@ -138,5 +146,8 @@ def build_default_tool_registry() -> ToolRegistry:
     registry.register("user_register_from_contact", user_register_from_contact)
     registry.register("user_remove_from_contact", user_remove_from_contact)
     registry.register("user_search", user_search)
+    registry.register("domotics.query", domotics_query)
+    registry.register("domotics.execute", domotics_execute)
+    registry.register("domotics.subscribe", domotics_subscribe)
     job_runner.set_tool_registry(registry)
     return registry

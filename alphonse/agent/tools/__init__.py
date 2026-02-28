@@ -12,6 +12,11 @@ from alphonse.agent.tools.terminal_async_tools import (
     TerminalCommandSubmitTool,
 )
 from alphonse.agent.tools.terminal import TerminalTool, TerminalExecutionResult
+from alphonse.agent.tools.domotics_tools import (
+    DomoticsExecuteTool,
+    DomoticsQueryTool,
+    DomoticsSubscribeTool,
+)
 from alphonse.agent.tools.registry import ToolRegistry, build_default_tool_registry
 
 __all__ = [
@@ -27,6 +32,9 @@ __all__ = [
     "TerminalCommandStatusTool",
     "TerminalTool",
     "TerminalExecutionResult",
+    "DomoticsQueryTool",
+    "DomoticsExecuteTool",
+    "DomoticsSubscribeTool",
     "ToolRegistry",
     "build_default_tool_registry",
 ]
