@@ -76,16 +76,15 @@ def _maybe_emit_periodic_wip_update(
 ) -> None:
     if cycle <= 0:
         return
+    # Keep periodic WIP updates in-phase with proposed work only.
+    # Executed/failed steps are already behind execution and can feel stale to users.
+    step_status = str((current_step or {}).get("status") or "").strip().lower() if isinstance(current_step, dict) else ""
+    if step_status != "proposed":
+        return
     emit_every = 1 if settings.get_execution_mode() == "ops" else max(1, int(wip_emit_every_cycles))
     if cycle % emit_every != 0:
         return
-    detail = {
-        "text": _build_wip_update_text(task_state=task_state, cycle=cycle, current_step=current_step),
-        "cycle": cycle,
-        "goal": str(task_state.get("goal") or "").strip(),
-        "tool": _current_tool_name(current_step),
-        "intention": _current_intention(current_step, goal=str(task_state.get("goal") or "").strip()),
-    }
+    detail = build_wip_update_detail(task_state=task_state, cycle=cycle, current_step=current_step)
     emit_transition_event(state, "wip_update", detail)
     logger.info(
         "task_mode progress_critic wip_update correlation_id=%s cycle=%s intention=%s text=%s",
@@ -94,6 +93,22 @@ def _maybe_emit_periodic_wip_update(
         str(detail.get("intention") or ""),
         str(detail.get("text") or ""),
     )
+
+
+def build_wip_update_detail(
+    *,
+    task_state: dict[str, Any],
+    cycle: int,
+    current_step: dict[str, Any] | None,
+) -> dict[str, Any]:
+    goal = str(task_state.get("goal") or "").strip()
+    return {
+        "text": _build_wip_update_text(task_state=task_state, cycle=cycle, current_step=current_step),
+        "cycle": cycle,
+        "goal": goal,
+        "tool": _current_tool_name(current_step),
+        "intention": _current_intention(current_step, goal=goal),
+    }
 
 
 def _build_wip_update_text(

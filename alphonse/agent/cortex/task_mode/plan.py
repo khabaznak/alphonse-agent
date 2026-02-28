@@ -12,7 +12,9 @@ from alphonse.agent.cortex.task_mode.prompt_templates import NEXT_STEP_REPAIR_US
 from alphonse.agent.cortex.task_mode.prompt_templates import NEXT_STEP_SYSTEM_PROMPT
 from alphonse.agent.cortex.task_mode.prompt_templates import NEXT_STEP_USER_TEMPLATE
 from alphonse.agent.cortex.task_mode.prompt_templates import render_pdca_prompt
+from alphonse.agent.cortex.task_mode.progress_critic_node import build_wip_update_detail
 from alphonse.agent.cortex.task_mode.types import NextStepProposal
+from alphonse.agent.cortex.transitions import emit_transition_event
 from alphonse.agent.session.day_state import render_recent_conversation_block
 from alphonse.agent.tools.mcp.loader import default_profiles_dir
 from alphonse.agent.tools.mcp.registry import McpProfileRegistry
@@ -221,6 +223,20 @@ def build_next_step_node_impl(
         parse_failed=parse_failed,
         summary=_proposal_summary(proposal),
     )
+    proposed_cycle = int(task_state.get("cycle_index") or 0) + 1
+    wip_detail = build_wip_update_detail(
+        task_state=task_state,
+        cycle=proposed_cycle,
+        current_step=step_entry,
+    )
+    emit_transition_event(state, "wip_update", wip_detail)
+    logger.info(
+        "task_mode next_step wip_update correlation_id=%s cycle=%s intention=%s text=%s",
+        corr,
+        int(wip_detail.get("cycle") or 0),
+        str(wip_detail.get("intention") or ""),
+        str(wip_detail.get("text") or ""),
+    )
     return {"task_state": task_state}
 
 
@@ -326,10 +342,10 @@ def _propose_next_step_with_llm(
         else user_prompt_body
     )
     logger.info(
-        "task_mode next_step planner_prompt_prepared correlation_id=%s system_prompt=%s user_prompt=%s",
+        "task_mode next_step planner_prompt_prepared correlation_id=%s system_prompt_chars=%s user_prompt_chars=%s",
         correlation,
-        NEXT_STEP_SYSTEM_PROMPT,
-        user_prompt,
+        len(NEXT_STEP_SYSTEM_PROMPT),
+        len(user_prompt),
     )
     tool_supported, tool_based_proposal = _call_llm_tool_selection(
         llm_client=llm_client,

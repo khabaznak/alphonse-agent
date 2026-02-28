@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 import alphonse.agent.cortex.task_mode.pdca as pdca_module
+import alphonse.agent.cortex.task_mode.plan as plan_module
 import alphonse.agent.cortex.task_mode.progress_critic_node as progress_critic_node_module
 from alphonse.agent.cortex.nodes.respond import respond_finalize_node
 from alphonse.agent.cortex.task_mode.pdca import act_node
@@ -1504,7 +1505,38 @@ def test_respond_finalize_waiting_user_with_pending_renders_question() -> None:
     assert transitions and transitions[-1] == "waiting_user"
 
 
-def test_progress_critic_emits_wip_update_every_five_cycles(monkeypatch) -> None:
+def test_next_step_emits_wip_update_on_proposal(monkeypatch: pytest.MonkeyPatch) -> None:
+    emitted: list[dict[str, object] | None] = []
+
+    def _capture_transition(_state: dict[str, object], phase: str, detail: dict[str, object] | None = None) -> None:
+        if phase == "wip_update":
+            emitted.append(detail)
+
+    monkeypatch.setattr(plan_module, "emit_transition_event", _capture_transition)
+
+    tool_registry = build_default_tool_registry()
+    next_step = build_next_step_node(tool_registry=tool_registry)
+    llm = _QueuedLlm(['{"kind":"call_tool","tool_name":"local_audio_output_render","args":{"text":"hello"}}'])
+    task_state = build_default_task_state()
+    task_state["status"] = "running"
+    task_state["goal"] = "Send an English voice note"
+    state: dict[str, object] = {
+        "correlation_id": "corr-next-step-wip-proposal",
+        "_llm_client": llm,
+        "task_state": task_state,
+    }
+
+    updated = next_step(state)
+    assert isinstance(updated.get("task_state"), dict)
+    assert len(emitted) == 1
+    detail = emitted[0]
+    assert isinstance(detail, dict)
+    assert detail.get("cycle") == 1
+    assert detail.get("tool") == "local_audio_output_render"
+    assert "Send an English voice note" in str(detail.get("text") or "")
+
+
+def test_progress_critic_emits_wip_update_every_five_cycles_when_step_proposed(monkeypatch) -> None:
     emitted: list[dict[str, object] | None] = []
 
     def _capture_transition(_state: dict[str, object], phase: str, detail: dict[str, object] | None = None) -> None:
@@ -1522,7 +1554,7 @@ def test_progress_critic_emits_wip_update_every_five_cycles(monkeypatch) -> None
         {
             "step_id": "step_1",
             "proposal": {"kind": "call_tool", "tool_name": "get_time", "args": {}},
-            "status": "executed",
+            "status": "proposed",
         }
     ]
     state: dict[str, object] = {
@@ -1540,7 +1572,7 @@ def test_progress_critic_emits_wip_update_every_five_cycles(monkeypatch) -> None
     assert "Check package delivery" in str(detail.get("text") or "")
 
 
-def test_progress_critic_wip_text_explains_mcp_purpose(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_progress_critic_wip_text_explains_mcp_purpose_when_step_proposed(monkeypatch: pytest.MonkeyPatch) -> None:
     emitted: list[dict[str, object] | None] = []
 
     def _capture_transition(_state: dict[str, object], phase: str, detail: dict[str, object] | None = None) -> None:
@@ -1562,7 +1594,7 @@ def test_progress_critic_wip_text_explains_mcp_purpose(monkeypatch: pytest.Monke
                 "tool_name": "mcp_call",
                 "args": {"profile": "chrome", "operation": "new_page", "arguments": {}},
             },
-            "status": "executed",
+            "status": "proposed",
         }
     ]
     state: dict[str, object] = {

@@ -44,9 +44,9 @@ def decide_first_action(
         },
     )
     logger.debug(
-        "first_decision prompt system_prompt=%s user_prompt=%s",
-        FIRST_DECISION_SYSTEM_PROMPT,
-        user_prompt,
+        "first_decision prompt_prepared system_prompt_chars=%s user_prompt_chars=%s",
+        len(FIRST_DECISION_SYSTEM_PROMPT),
+        len(user_prompt),
     )
     raw = _call_llm(
         llm_client,
