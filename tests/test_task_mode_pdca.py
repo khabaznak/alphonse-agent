@@ -262,6 +262,22 @@ class _ArgStrictTool:
         }
 
 
+class _DomoticsExecuteConfirmedTool:
+    def execute(self, **kwargs):  # noqa: ANN003
+        _ = kwargs
+        return {
+            "status": "ok",
+            "result": {
+                "transport_ok": True,
+                "effect_applied_ok": True,
+                "readback_performed": True,
+                "readback_state": {"entity_id": "light.estudio", "state": "on"},
+            },
+            "error": None,
+            "metadata": {"tool": "domotics.execute"},
+        }
+
+
 def _build_fake_registry() -> ToolRegistry:
     registry = ToolRegistry()
     registry.register("getTime", _FakeClock())
@@ -1298,6 +1314,46 @@ def test_execute_step_handles_structured_tool_failure() -> None:
     error = result.get("error")
     assert isinstance(error, dict)
     assert error.get("code") == "asset_not_found"
+
+
+def test_execute_step_derives_task_completed_outcome_from_domotics_execute_confirmed() -> None:
+    registry = ToolRegistry()
+    registry.register("domotics.execute", _DomoticsExecuteConfirmedTool())
+    task_state = build_default_task_state()
+    task_state["acceptance_criteria"] = ["done when requested outcome is produced"]
+    task_state["plan"] = {
+        "version": 1,
+        "steps": [
+            {
+                "step_id": "step_1",
+                "proposal": {
+                    "kind": "call_tool",
+                    "tool_name": "domotics.execute",
+                    "args": {
+                        "domain": "light",
+                        "service": "turn_on",
+                        "target": {"entity_id": "light.estudio"},
+                        "readback": True,
+                        "expected_state": "on",
+                    },
+                },
+                "status": "validated",
+            }
+        ],
+        "current_step_id": "step_1",
+    }
+    state: dict[str, object] = {"correlation_id": "corr-pdca-domotics-outcome", "task_state": task_state}
+
+    state = _apply(state, execute_step_node(state, tool_registry=registry))
+    state = _apply(state, update_state_node(state))
+    state = _apply(state, progress_critic_node(state))
+
+    next_state = state["task_state"]
+    assert isinstance(next_state, dict)
+    assert next_state.get("status") == "done"
+    outcome = next_state.get("outcome")
+    assert isinstance(outcome, dict)
+    assert outcome.get("kind") == "task_completed"
 
 
 def test_act_node_stops_after_repeated_same_tool_failures() -> None:

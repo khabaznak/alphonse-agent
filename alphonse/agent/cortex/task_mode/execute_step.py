@@ -554,6 +554,26 @@ def _derive_tool_outcome_from_result(
     result: Any,
     state: dict[str, Any],
 ) -> dict[str, Any] | None:
+    if tool_name in {"domotics.execute", "domotics_execute"} and isinstance(result, dict):
+        status = str(result.get("status") or "").strip().lower()
+        payload = result.get("result") if isinstance(result.get("result"), dict) else {}
+        if status in {"ok", "executed"} and bool(payload.get("transport_ok")) and payload.get("effect_applied_ok") is True:
+            readback_state = payload.get("readback_state") if isinstance(payload.get("readback_state"), dict) else {}
+            entity_id = str(readback_state.get("entity_id") or "").strip() or None
+            state_value = str(readback_state.get("state") or "").strip() or None
+            return {
+                "kind": "task_completed",
+                "summary": "Domotics action applied successfully and confirmed by readback.",
+                "final_text": "Done. I executed the domotics action and confirmed it via readback.",
+                "evidence": {
+                    "tool": "domotics.execute",
+                    "transport_ok": True,
+                    "effect_applied_ok": True,
+                    "entity_id": entity_id,
+                    "state": state_value,
+                },
+            }
+
     if tool_name not in {"create_reminder", "createReminder"} or not isinstance(result, dict):
         return None
     payload = result
