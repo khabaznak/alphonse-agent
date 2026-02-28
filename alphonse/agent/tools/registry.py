@@ -15,6 +15,10 @@ from alphonse.agent.tools.job_tools import JobResumeTool
 from alphonse.agent.tools.job_tools import JobRunNowTool
 from alphonse.agent.tools.local_audio_output import LocalAudioOutputSpeakTool
 from alphonse.agent.tools.local_audio_output import LocalAudioOutputRenderTool
+from alphonse.agent.tools.memory_tools import GetMissionTool
+from alphonse.agent.tools.memory_tools import GetWorkspacePointerTool
+from alphonse.agent.tools.memory_tools import ListActiveMissionsTool
+from alphonse.agent.tools.memory_tools import SearchEpisodesTool
 from alphonse.agent.tools.mcp_call_tool import McpCallTool
 from alphonse.agent.tools.scheduler_tool import SchedulerTool
 from alphonse.agent.tools.send_message_tool import SendMessageTool
@@ -56,6 +60,10 @@ def build_default_tool_registry() -> ToolRegistry:
     clock = ClockTool()
     get_my_settings = GetMySettingsTool()
     get_user_details = GetUserDetailsTool()
+    search_episodes = SearchEpisodesTool()
+    get_mission = GetMissionTool()
+    list_active_missions = ListActiveMissionsTool()
+    get_workspace_pointer = GetWorkspacePointerTool()
     scheduler = SchedulerTool()
     send_message = SendMessageTool()
     send_voice_note = SendVoiceNoteTool(_send_message_tool=send_message)
@@ -90,6 +98,10 @@ def build_default_tool_registry() -> ToolRegistry:
     registry.register("create_reminder", scheduler)
     registry.register("get_my_settings", get_my_settings)
     registry.register("get_user_details", get_user_details)
+    registry.register("search_episodes", search_episodes)
+    registry.register("get_mission", get_mission)
+    registry.register("list_active_missions", list_active_missions)
+    registry.register("get_workspace_pointer", get_workspace_pointer)
     registry.register("send_message", send_message)
     registry.register("send_voice_note", send_voice_note)
     registry.register("local_audio_output_speak", local_audio_output)

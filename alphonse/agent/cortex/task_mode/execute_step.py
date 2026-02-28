@@ -3,8 +3,13 @@ from __future__ import annotations
 import inspect
 import json
 import logging
+import mimetypes
+import os
+from pathlib import Path
 from typing import Any, Callable
 
+from alphonse.agent.cognition.memory import append_episode
+from alphonse.agent.cognition.memory import put_artifact
 from alphonse.agent.tools.base import ensure_tool_result
 
 
@@ -132,6 +137,13 @@ def _execute_ask_user_step(
         event="graph.step.ask_user",
         step_id=str((current or {}).get("step_id") or ""),
     )
+    _record_step_completion_memory(
+        state=state,
+        task_state=task_state,
+        current=current,
+        proposal=proposal,
+        correlation_id=corr,
+    )
     return {"task_state": task_state}
 
 
@@ -174,6 +186,13 @@ def _execute_finish_step(
         node="execute_step_node",
         event="graph.task.completed",
         step_id=str((current or {}).get("step_id") or ""),
+    )
+    _record_step_completion_memory(
+        state=state,
+        task_state=task_state,
+        current=current,
+        proposal=proposal,
+        correlation_id=corr,
     )
     return {"task_state": task_state}
 
@@ -275,6 +294,22 @@ def _execute_call_tool_step(
                 **terminal_context,
                 **failure_context,
             )
+            _record_after_tool_call_memory(
+                state=state,
+                task_state=task_state,
+                current=current,
+                tool_name=tool_name,
+                args=params,
+                result=result if isinstance(result, dict) else {"status": "failed"},
+                correlation_id=corr,
+            )
+            _record_step_completion_memory(
+                state=state,
+                task_state=task_state,
+                current=current,
+                proposal=proposal,
+                correlation_id=corr,
+            )
             return {"task_state": task_state}
         derived_outcome = _derive_tool_outcome_from_result(
             tool_name=tool_name,
@@ -315,6 +350,22 @@ def _execute_call_tool_step(
             tool=tool_name,
             **terminal_context,
         )
+        _record_after_tool_call_memory(
+            state=state,
+            task_state=task_state,
+            current=current,
+            tool_name=tool_name,
+            args=params,
+            result=result if isinstance(result, dict) else {"status": "ok"},
+            correlation_id=corr,
+        )
+        _record_step_completion_memory(
+            state=state,
+            task_state=task_state,
+            current=current,
+            proposal=proposal,
+            correlation_id=corr,
+        )
         return {"task_state": task_state}
     except Exception as exc:
         task_state["status"] = "failed"
@@ -341,6 +392,25 @@ def _execute_call_tool_step(
                 corr,
                 type(exc).__name__,
             )
+        _record_after_tool_call_memory(
+            state=state,
+            task_state=task_state,
+            current=current,
+            tool_name=tool_name,
+            args=params,
+            result={
+                "status": "failed",
+                "error": {"code": "tool_execution_exception", "message": str(exc), "details": {"type": type(exc).__name__}},
+            },
+            correlation_id=corr,
+        )
+        _record_step_completion_memory(
+            state=state,
+            task_state=task_state,
+            current=current,
+            proposal=proposal,
+            correlation_id=corr,
+        )
         return {"task_state": task_state}
 
 
@@ -540,3 +610,205 @@ def _redact_sensitive(value: Any) -> Any:
     if isinstance(value, list):
         return [_redact_sensitive(item) for item in value]
     return value
+
+
+def _record_after_tool_call_memory(
+    *,
+    state: dict[str, Any],
+    task_state: dict[str, Any],
+    current: dict[str, Any] | None,
+    tool_name: str,
+    args: dict[str, Any],
+    result: dict[str, Any],
+    correlation_id: str | None,
+) -> None:
+    if not _memory_hooks_enabled():
+        return
+    if str(tool_name or "").strip() in {"search_episodes", "get_mission", "list_active_missions", "get_workspace_pointer"}:
+        return
+    user_id = _memory_user_id(state)
+    mission_id = _memory_mission_id(task_state=task_state, correlation_id=correlation_id)
+    artifacts = _memory_artifacts_from_result(
+        mission_id=mission_id,
+        tool_name=tool_name,
+        result=result,
+    )
+    status = str((result or {}).get("status") or "").strip().lower()
+    payload = {
+        "intent": str(task_state.get("goal") or "").strip() or "task execution",
+        "action": f"{tool_name}({_safe_args_preview(args)})",
+        "result": f"status={status or 'unknown'}",
+        "step_id": str((current or {}).get("step_id") or "").strip() or None,
+        "next": _memory_next_hint(task_state=task_state, current=current),
+    }
+    _memory_append_episode(
+        user_id=user_id,
+        mission_id=mission_id,
+        event_type="after_tool_call",
+        payload=payload,
+        artifacts=artifacts,
+    )
+
+
+def _record_step_completion_memory(
+    *,
+    state: dict[str, Any],
+    task_state: dict[str, Any],
+    current: dict[str, Any] | None,
+    proposal: dict[str, Any],
+    correlation_id: str | None,
+) -> None:
+    if not _memory_hooks_enabled():
+        return
+    user_id = _memory_user_id(state)
+    mission_id = _memory_mission_id(task_state=task_state, correlation_id=correlation_id)
+    payload = {
+        "intent": str(task_state.get("goal") or "").strip() or "task execution",
+        "step_id": str((current or {}).get("step_id") or "").strip() or None,
+        "action": str(proposal.get("kind") or "").strip(),
+        "result": f"step_status={str((current or {}).get('status') or '').strip() or 'unknown'}",
+        "next": _memory_next_hint(task_state=task_state, current=current),
+    }
+    _memory_append_episode(
+        user_id=user_id,
+        mission_id=mission_id,
+        event_type="plan_step_completed",
+        payload=payload,
+        artifacts=[],
+    )
+
+
+def _memory_hooks_enabled() -> bool:
+    raw = str(os.getenv("ALPHONSE_MEMORY_HOOKS_ENABLED", "true")).strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
+def _memory_user_id(state: dict[str, Any]) -> str:
+    for key in ("incoming_user_id", "actor_person_id", "channel_target", "chat_id", "conversation_key"):
+        value = str(state.get(key) or "").strip()
+        if value:
+            return value
+    return "anonymous"
+
+
+def _memory_mission_id(*, task_state: dict[str, Any], correlation_id: str | None) -> str:
+    explicit = str(task_state.get("mission_id") or "").strip()
+    if explicit:
+        return explicit
+    task_id = str(task_state.get("task_id") or "").strip()
+    if task_id:
+        return task_id
+    corr = str(correlation_id or "").strip()
+    if corr:
+        return f"corr_{corr}"
+    return "ad_hoc"
+
+
+def _memory_next_hint(*, task_state: dict[str, Any], current: dict[str, Any] | None) -> str:
+    status = str(task_state.get("status") or "").strip().lower()
+    if status == "waiting_user":
+        return str(task_state.get("next_user_question") or "waiting for user input").strip()
+    if status == "done":
+        return "mission complete"
+    return f"continue from step {str((current or {}).get('step_id') or '').strip() or '?'}"
+
+
+def _memory_append_episode(
+    *,
+    user_id: str,
+    mission_id: str,
+    event_type: str,
+    payload: dict[str, Any],
+    artifacts: list[dict[str, Any]],
+) -> None:
+    try:
+        append_episode(
+            user_id=user_id,
+            mission_id=mission_id,
+            event_type=event_type,
+            payload=payload,
+            artifacts=artifacts,
+        )
+    except Exception:
+        return
+
+
+def _memory_artifacts_from_result(
+    *,
+    mission_id: str,
+    tool_name: str,
+    result: dict[str, Any],
+) -> list[dict[str, Any]]:
+    refs: list[dict[str, Any]] = []
+    max_items = max(1, int(str(os.getenv("ALPHONSE_MEMORY_MAX_ARTIFACTS_PER_EVENT") or "5").strip() or "5"))
+    max_bytes = max(1024, int(str(os.getenv("ALPHONSE_MEMORY_MAX_ARTIFACT_SIZE_BYTES") or str(20 * 1024 * 1024)).strip() or str(20 * 1024 * 1024)))
+    paths = _extract_path_candidates(result)
+    seen: set[str] = set()
+    for candidate in paths:
+        if len(refs) >= max_items:
+            break
+        text = str(candidate or "").strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        if text.startswith("http://") or text.startswith("https://"):
+            refs.append({"url": text})
+            continue
+        file_path = Path(text)
+        if not file_path.exists() or not file_path.is_file():
+            continue
+        try:
+            size = file_path.stat().st_size
+        except Exception:
+            continue
+        if size > max_bytes:
+            refs.append({"path": str(file_path), "note": "artifact_too_large"})
+            continue
+        try:
+            data = file_path.read_bytes()
+            mime = mimetypes.guess_type(str(file_path))[0] or "application/octet-stream"
+            artifact_ref = put_artifact(
+                mission_id=mission_id,
+                content=data,
+                mime=mime,
+                name_hint=file_path.name,
+            )
+            if isinstance(artifact_ref, dict):
+                artifact_ref.setdefault("source_path", str(file_path))
+                artifact_ref.setdefault("tool", tool_name)
+                refs.append(artifact_ref)
+        except Exception:
+            refs.append({"path": str(file_path), "note": "artifact_copy_failed"})
+            continue
+    return refs
+
+
+def _extract_path_candidates(value: Any) -> list[str]:
+    out: list[str] = []
+
+    def _walk(node: Any, parent_key: str = "") -> None:
+        if isinstance(node, dict):
+            for key, item in node.items():
+                _walk(item, str(key))
+            return
+        if isinstance(node, list):
+            for item in node:
+                _walk(item, parent_key)
+            return
+        if not isinstance(node, str):
+            return
+        text = node.strip()
+        if not text:
+            return
+        key_hint = parent_key.lower()
+        if any(token in key_hint for token in ("path", "file", "url", "artifact", "snapshot")):
+            out.append(text)
+            return
+        if text.startswith("/") or text.startswith("./") or text.startswith("../"):
+            out.append(text)
+            return
+        if text.startswith("http://") or text.startswith("https://"):
+            out.append(text)
+
+    _walk(value)
+    return out

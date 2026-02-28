@@ -36,6 +36,44 @@ _TOOL_SCHEMA_DEFS: dict[str, dict[str, Any]] = {
         "description": "Get known user and channel details for current conversation context.",
         "parameters": _object_schema({}, []),
     },
+    "search_episodes": {
+        "description": "Search episodic memory entries for the current user with optional mission and time filters.",
+        "parameters": _object_schema(
+            {
+                "query": {"type": "string"},
+                "user_id": {"type": "string"},
+                "mission_id": {"type": "string"},
+                "start_time": {"type": "string"},
+                "end_time": {"type": "string"},
+                "limit": {"type": "integer"},
+            },
+            ["query"],
+        ),
+    },
+    "get_mission": {
+        "description": "Get mission details from memory by mission_id.",
+        "parameters": _object_schema(
+            {
+                "mission_id": {"type": "string"},
+                "user_id": {"type": "string"},
+            },
+            ["mission_id"],
+        ),
+    },
+    "list_active_missions": {
+        "description": "List active missions from memory for the current user.",
+        "parameters": _object_schema({"user_id": {"type": "string"}}, []),
+    },
+    "get_workspace_pointer": {
+        "description": "Get a workspace pointer by key from memory for the current user.",
+        "parameters": _object_schema(
+            {
+                "key": {"type": "string"},
+                "user_id": {"type": "string"},
+            },
+            ["key"],
+        ),
+    },
     "job_create": {
         "description": "Create a scheduled job with RRULE timing, payload routing, safety, and retry policy.",
         "parameters": _object_schema(
