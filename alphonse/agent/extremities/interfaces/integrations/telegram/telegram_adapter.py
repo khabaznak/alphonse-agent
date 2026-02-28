@@ -7,6 +7,7 @@ import mimetypes
 import threading
 import time
 from pathlib import Path
+from urllib import error as urlerror
 from urllib import parse, request
 from typing import Any
 
@@ -50,6 +51,10 @@ class TelegramAdapter(IntegrationAdapter):
 
         self._poll_interval_sec = float(config.get("poll_interval_sec", 1.0))
         self._poll_summary_interval_sec = float(config.get("poll_summary_interval_sec", 300.0))
+        self._poll_conflict_backoff_sec = float(config.get("poll_conflict_backoff_sec", 5.0))
+        self._poll_conflict_log_interval_sec = float(config.get("poll_conflict_log_interval_sec", 60.0))
+        self._poll_conflict_backoff_until = 0.0
+        self._last_poll_conflict_log_at = 0.0
         self._poll_count = 0
         self._empty_poll_count = 0
         self._updates_received = 0
@@ -164,6 +169,10 @@ class TelegramAdapter(IntegrationAdapter):
 
     def _run_polling(self) -> None:
         while self._running:
+            now = time.monotonic()
+            if now < self._poll_conflict_backoff_until:
+                time.sleep(min(self._poll_interval_sec, self._poll_conflict_backoff_until - now))
+                continue
             offset = (self._last_update_id or 0) + 1
             updates = self._fetch_updates(offset)
             if updates is None:
@@ -221,6 +230,23 @@ class TelegramAdapter(IntegrationAdapter):
         try:
             with request.urlopen(req, timeout=10) as response:
                 body = response.read().decode("utf-8", errors="ignore")
+        except urlerror.HTTPError as exc:
+            if int(getattr(exc, "code", 0) or 0) == 409:
+                now = time.monotonic()
+                self._poll_conflict_backoff_until = max(
+                    self._poll_conflict_backoff_until,
+                    now + max(1.0, self._poll_conflict_backoff_sec),
+                )
+                if now - self._last_poll_conflict_log_at >= max(1.0, self._poll_conflict_log_interval_sec):
+                    logger.warning(
+                        "TelegramAdapter getUpdates conflict (409). "
+                        "Another poller/webhook may be active; backing off %.1fs.",
+                        max(1.0, self._poll_conflict_backoff_sec),
+                    )
+                    self._last_poll_conflict_log_at = now
+                return None
+            logger.error("TelegramAdapter %s failed: %s", endpoint, exc)
+            return None
         except Exception as exc:
             logger.error("TelegramAdapter %s failed: %s", endpoint, exc)
             return None
