@@ -40,7 +40,11 @@ class HomeAssistantSense(Sense):
                 "HomeAssistant integration disabled (missing HA_BASE_URL/HA_TOKEN)"
             )
             return
-        facade = get_domotics_facade()
+        try:
+            facade = get_domotics_facade()
+        except Exception as exc:
+            logger.warning("HomeAssistant integration disabled (init error): %s", exc)
+            return
         if facade is None:
             logger.warning("HomeAssistant integration disabled (facade unavailable)")
             return
