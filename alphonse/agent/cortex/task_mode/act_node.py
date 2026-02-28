@@ -133,6 +133,7 @@ def evaluate_tool_execution(
     immediate_repeat_limit = 2
     current_signature = _tool_signature_for_step(current_step)
     current_tool = _tool_name_for_step(current_step)
+    retryable = _failure_retryable(current_step)
     plan = task_plan(task_state)
     steps = plan.get("steps") if isinstance(plan.get("steps"), list) else []
 
@@ -153,6 +154,18 @@ def evaluate_tool_execution(
     unique_signatures = len({item for item in signatures if item})
     evolving = unique_signatures > 1
 
+    if retryable is False:
+        return {
+            "should_pause": True,
+            "reason": "non_retryable_failure",
+            "summary": f"Tool {current_tool or 'tool'} failed with a non-retryable error.",
+            "tool_name": current_tool,
+            "total_failures": total_failures,
+            "same_signature_failures": same_signature_failures,
+            "unique_signatures": unique_signatures,
+            "evolving": evolving,
+            "max_evolving_failures": max_evolving_failures,
+        }
     if same_signature_failures >= immediate_repeat_limit:
         return {
             "should_pause": True,
@@ -195,6 +208,12 @@ def build_execution_pause_prompt(evaluation: dict[str, Any]) -> str:
     tool_name = str(evaluation.get("tool_name") or "tool")
     total = int(evaluation.get("total_failures") or 0)
     unique = int(evaluation.get("unique_signatures") or 0)
+    if reason == "non_retryable_failure":
+        return (
+            f"`{tool_name}` failed with a non-retryable condition. "
+            "I paused the plan to avoid repeating a request that cannot succeed right now. "
+            "Please confirm what to do next."
+        )
     if reason == "repeated_identical_failure":
         return (
             f"I got stuck repeating the same failed action with `{tool_name}`. "
@@ -225,3 +244,12 @@ def _tool_signature_for_step(step: dict[str, Any] | None) -> str:
     except Exception:
         args_text = str(args)
     return f"{tool_name}|{args_text}"
+
+
+def _failure_retryable(step: dict[str, Any] | None) -> bool | None:
+    if not isinstance(step, dict):
+        return None
+    value = step.get("failure_retryable")
+    if value is None:
+        return None
+    return bool(value)

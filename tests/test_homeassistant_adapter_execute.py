@@ -105,3 +105,31 @@ def test_execute_readback_false(monkeypatch) -> None:
     assert result.transport_ok is True
     assert result.readback_performed is False
     assert result.effect_applied_ok is None
+
+
+def test_execute_fails_fast_when_entity_unavailable(monkeypatch) -> None:
+    fake_rest = FakeRestClient()
+    fake_rest._state = {
+        "entity_id": "light.kitchen",
+        "state": "unavailable",
+        "attributes": {},
+    }
+    monkeypatch.setattr("alphonse.integrations.homeassistant.adapter.HomeAssistantRestClient", lambda _cfg: fake_rest)
+    monkeypatch.setattr("alphonse.integrations.homeassistant.adapter.HomeAssistantWsClient", lambda _cfg: FakeWsClient())
+
+    adapter = HomeAssistantAdapter(_config())
+    result = adapter.execute(
+        ActionRequest(
+            action_type="call_service",
+            domain="light",
+            service="turn_on",
+            target={"entity_id": "light.kitchen"},
+            readback=True,
+            expected_state="on",
+        )
+    )
+
+    assert fake_rest.called is False
+    assert result.transport_ok is False
+    assert result.error_code == "entity_unavailable"
+    assert result.readback_performed is True

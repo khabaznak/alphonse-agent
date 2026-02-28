@@ -1410,6 +1410,39 @@ def test_act_node_pauses_after_failure_budget_exhausted() -> None:
     assert "paused the plan" in question
 
 
+def test_act_node_pauses_on_non_retryable_failure() -> None:
+    task_state = build_default_task_state()
+    task_state["acceptance_criteria"] = ["done when requested outcome is produced"]
+    task_state["status"] = "running"
+    task_state["plan"] = {
+        "version": 1,
+        "steps": [
+            {
+                "step_id": "step_1",
+                "proposal": {"kind": "call_tool", "tool_name": "domotics.execute", "args": {"domain": "light"}},
+                "status": "failed",
+                "failure_retryable": False,
+                "failure_error_code": "entity_unavailable",
+            }
+        ],
+        "current_step_id": "step_1",
+    }
+    state: dict[str, object] = {
+        "correlation_id": "corr-pdca-non-retryable",
+        "task_state": task_state,
+    }
+
+    updated = act_node(state)
+    next_state = updated["task_state"]
+    assert isinstance(next_state, dict)
+    assert next_state.get("status") == "waiting_user"
+    eval_payload = next_state.get("execution_eval")
+    assert isinstance(eval_payload, dict)
+    assert eval_payload.get("reason") == "non_retryable_failure"
+    question = str(next_state.get("next_user_question") or "")
+    assert "non-retryable" in question
+
+
 def test_execute_finish_persists_final_text_outcome() -> None:
     task_state = build_default_task_state()
     task_state["acceptance_criteria"] = ["done when requested outcome is produced"]

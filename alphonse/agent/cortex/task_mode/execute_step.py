@@ -244,10 +244,15 @@ def _execute_call_tool_step(
                 error_code = str(raw_error.get("code") or "tool_failed")
                 error_message = str(raw_error.get("message") or "").strip()
                 error_details = raw_error.get("details")
+                error_retryable = bool(raw_error.get("retryable", False))
             else:
                 error_code = str(raw_error or "tool_failed")
                 error_message = ""
                 error_details = None
+                error_retryable = False
+            if isinstance(current, dict):
+                current["failure_retryable"] = error_retryable
+                current["failure_error_code"] = error_code
             failure_context = _tool_failure_context(
                 tool_name=tool_name,
                 result=result if isinstance(result, dict) else {},
@@ -321,6 +326,8 @@ def _execute_call_tool_step(
         task_state["status"] = "running"
         if isinstance(current, dict):
             current["status"] = "executed"
+            current.pop("failure_retryable", None)
+            current.pop("failure_error_code", None)
         append_trace_event(
             task_state,
             {

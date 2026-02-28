@@ -57,6 +57,18 @@ class HomeAssistantAdapter:
                 error_code="unsupported_action_type",
                 error_detail=f"action_type={action_request.action_type}",
             )
+        entity_id = _resolve_readback_entity_id(action_request)
+        if entity_id:
+            current_state = self._rest.get_state(entity_id)
+            if _state_value(current_state) == "unavailable":
+                return ActionResult(
+                    transport_ok=False,
+                    effect_applied_ok=None,
+                    readback_performed=True,
+                    readback_state=_normalize_state(current_state),
+                    error_code="entity_unavailable",
+                    error_detail=f"entity_id={entity_id} is unavailable",
+                )
         try:
             self._rest.call_service(
                 domain=action_request.domain,
@@ -82,7 +94,6 @@ class HomeAssistantAdapter:
                 readback_state=None,
             )
 
-        entity_id = _resolve_readback_entity_id(action_request)
         if not entity_id:
             return ActionResult(
                 transport_ok=True,
@@ -98,6 +109,15 @@ class HomeAssistantAdapter:
                 effect_applied_ok=False,
                 readback_performed=True,
                 readback_state=None,
+            )
+        if _state_value(readback_state) == "unavailable":
+            return ActionResult(
+                transport_ok=False,
+                effect_applied_ok=False,
+                readback_performed=True,
+                readback_state=_normalize_state(readback_state),
+                error_code="entity_unavailable",
+                error_detail=f"entity_id={entity_id} is unavailable",
             )
 
         effect = _matches_expectations(readback_state, action_request)
@@ -166,6 +186,15 @@ def _resolve_readback_entity_id(action_request: ActionRequest) -> str | None:
     if entity_id is None:
         return None
     return str(entity_id)
+
+
+def _state_value(item: dict[str, Any] | None) -> str | None:
+    if not isinstance(item, dict):
+        return None
+    value = item.get("state")
+    if value is None:
+        return None
+    return str(value).strip().lower()
 
 
 def _matches_expectations(state: dict[str, Any], action: ActionRequest) -> bool | None:

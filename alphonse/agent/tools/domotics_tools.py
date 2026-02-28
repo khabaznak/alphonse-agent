@@ -78,13 +78,14 @@ class DomoticsExecuteTool:
         result = facade.execute(request)
         payload = asdict(result)
         if not result.transport_ok:
+            error_code = str(result.error_code or "domotics_transport_failed")
             return {
                 "status": "failed",
                 "result": payload,
                 "error": {
-                    "code": str(result.error_code or "domotics_transport_failed"),
+                    "code": error_code,
                     "message": str(result.error_detail or "domotics transport failed"),
-                    "retryable": True,
+                    "retryable": _is_retryable_domotics_error(error_code),
                     "details": payload,
                 },
                 "metadata": {"tool": "domotics.execute"},
@@ -171,3 +172,10 @@ def _failed(code: str, message: str) -> dict[str, Any]:
         },
         "metadata": {"tool": "domotics"},
     }
+
+
+def _is_retryable_domotics_error(error_code: str) -> bool:
+    normalized = str(error_code or "").strip().lower()
+    if normalized in {"entity_unavailable", "unsupported_action_type"}:
+        return False
+    return True

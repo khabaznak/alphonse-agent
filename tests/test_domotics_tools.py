@@ -47,6 +47,25 @@ class _FakeFacade:
         return SubscriptionHandle(subscription_id="sub-1", unsubscribe=lambda: None)
 
 
+@dataclass
+class _UnavailableFacade:
+    def query(self, _spec):
+        return QueryResult(ok=True, item=None)
+
+    def execute(self, _request):
+        return ActionResult(
+            transport_ok=False,
+            effect_applied_ok=None,
+            readback_performed=True,
+            readback_state={"entity_id": "light.kitchen", "state": "unavailable"},
+            error_code="entity_unavailable",
+            error_detail="entity_id=light.kitchen is unavailable",
+        )
+
+    def subscribe(self, _spec, _on_event):
+        return SubscriptionHandle(subscription_id="sub-1", unsubscribe=lambda: None)
+
+
 def test_domotics_query_tool(monkeypatch) -> None:
     monkeypatch.setattr(
         "alphonse.agent.tools.domotics_tools.get_domotics_facade",
@@ -71,6 +90,22 @@ def test_domotics_execute_tool(monkeypatch) -> None:
 
     assert result["status"] == "ok"
     assert (result["result"] or {}).get("transport_ok") is True
+
+
+def test_domotics_execute_marks_entity_unavailable_as_non_retryable(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "alphonse.agent.tools.domotics_tools.get_domotics_facade",
+        lambda: _UnavailableFacade(),
+    )
+
+    tool = DomoticsExecuteTool()
+    result = tool.execute(domain="light", service="turn_on", target={"entity_id": "light.kitchen"})
+
+    assert result["status"] == "failed"
+    error = result.get("error")
+    assert isinstance(error, dict)
+    assert error.get("code") == "entity_unavailable"
+    assert error.get("retryable") is False
 
 
 def test_domotics_subscribe_tool(monkeypatch) -> None:
