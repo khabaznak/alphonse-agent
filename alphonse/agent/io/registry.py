@@ -8,6 +8,10 @@ from alphonse.agent.io.telegram_channel import (
     TelegramSenseAdapter,
     TelegramExtremityAdapter,
 )
+from alphonse.agent.io.homeassistant_channel import (
+    HomeAssistantSenseAdapter,
+    HomeAssistantExtremityAdapter,
+)
 from alphonse.agent.io.web_channel import WebSenseAdapter, WebExtremityAdapter
 from alphonse.agent.io.voice_channel import VoiceExtremityAdapter
 
@@ -22,12 +26,14 @@ def build_default_io_registry() -> AdapterRegistry:
     registry.register_sense(WebSenseAdapter())
     registry.register_sense(ApiSenseAdapter())
     registry.register_sense(TerminalSenseAdapter())
+    registry.register_sense(HomeAssistantSenseAdapter())
 
     registry.register_extremity(TelegramExtremityAdapter())
     registry.register_extremity(CliExtremityAdapter())
     registry.register_extremity(WebExtremityAdapter())
     registry.register_extremity(TerminalExtremityAdapter())
     registry.register_extremity(VoiceExtremityAdapter())
+    registry.register_extremity(HomeAssistantExtremityAdapter())
     return registry
 
 
