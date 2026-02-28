@@ -117,21 +117,21 @@ def _build_wip_update_text(
     cycle: int,
     current_step: dict[str, Any] | None,
 ) -> str:
+    _ = cycle
     goal = str(task_state.get("goal") or "").strip() or "the current task"
     tool = _current_tool_name(current_step)
     intention = _current_intention(current_step, goal=goal)
     if intention and tool:
         return (
-            f"Working on: {goal}. "
-            f"Cycle {cycle}. "
+            "Work in progress. "
             f"Why this step: {intention}. "
             f"Current action: `{tool}`."
         )
     if intention:
-        return f"Working on: {goal}. Cycle {cycle}. Why this step: {intention}."
+        return f"Work in progress. Why this step: {intention}."
     if tool:
-        return f"Working on: {goal}. Cycle {cycle}. Current action: `{tool}`."
-    return f"Working on: {goal}. Cycle {cycle}."
+        return f"Work in progress. Current action: `{tool}`."
+    return "Work in progress."
 
 
 def _current_tool_name(current_step: dict[str, Any] | None) -> str:

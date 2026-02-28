@@ -1533,7 +1533,10 @@ def test_next_step_emits_wip_update_on_proposal(monkeypatch: pytest.MonkeyPatch)
     assert isinstance(detail, dict)
     assert detail.get("cycle") == 1
     assert detail.get("tool") == "local_audio_output_render"
-    assert "Send an English voice note" in str(detail.get("text") or "")
+    text = str(detail.get("text") or "")
+    assert text.startswith("Work in progress.")
+    assert "Why this step:" in text
+    assert "Current action: `local_audio_output_render`." in text
 
 
 def test_progress_critic_emits_wip_update_every_five_cycles_when_step_proposed(monkeypatch) -> None:
@@ -1569,7 +1572,10 @@ def test_progress_critic_emits_wip_update_every_five_cycles_when_step_proposed(m
     detail = emitted[0]
     assert isinstance(detail, dict)
     assert detail.get("cycle") == 5
-    assert "Check package delivery" in str(detail.get("text") or "")
+    text = str(detail.get("text") or "")
+    assert text.startswith("Work in progress.")
+    assert "Why this step:" in text
+    assert "Current action: `get_time`." in text
 
 
 def test_progress_critic_wip_text_explains_mcp_purpose_when_step_proposed(monkeypatch: pytest.MonkeyPatch) -> None:
