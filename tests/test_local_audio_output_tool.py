@@ -32,7 +32,7 @@ def test_local_audio_output_blocking_success_on_macos(monkeypatch) -> None:
     result = tool.execute(text="Hola mundo", voice="Monica", blocking=True)
 
     assert result["status"] == "ok"
-    assert result["mode"] == "blocking"
+    assert (result.get("result") or {}).get("mode") == "blocking"
     assert captured["cmd"] == ["say", "-v", "Monica", "Hola mundo"]
 
 
@@ -62,7 +62,7 @@ def test_local_audio_output_non_blocking_success_on_macos(monkeypatch) -> None:
     result = tool.execute(text="Hola", blocking=False)
 
     assert result["status"] == "ok"
-    assert result["mode"] == "non_blocking"
+    assert (result.get("result") or {}).get("mode") == "non_blocking"
     assert captured["cmd"] == ["say", "Hola"]
 
 
@@ -71,7 +71,7 @@ def test_local_audio_output_not_supported_non_macos(monkeypatch) -> None:
     tool = LocalAudioOutputSpeakTool()
     result = tool.execute(text="Hola mundo")
     assert result["status"] == "failed"
-    assert result["error"] == "local_audio_output_not_supported"
+    assert (result.get("error") or {}).get("code") == "local_audio_output_not_supported"
 
 
 def test_local_audio_output_rejects_empty_text(monkeypatch) -> None:
@@ -79,4 +79,4 @@ def test_local_audio_output_rejects_empty_text(monkeypatch) -> None:
     tool = LocalAudioOutputSpeakTool()
     result = tool.execute(text="   ")
     assert result["status"] == "failed"
-    assert result["error"] == "text_required"
+    assert (result.get("error") or {}).get("code") == "text_required"
