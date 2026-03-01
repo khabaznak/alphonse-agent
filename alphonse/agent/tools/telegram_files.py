@@ -187,65 +187,13 @@ class TranscribeTelegramAudioTool:
             return _failed("transcribe_telegram_audio", str(exc) or "transcription_failed", retryable=True)
 
 
-class AnalyzeTelegramImageTool:
-    def __init__(self, *, bot_token: str | None = None) -> None:
-        self._bot_token = str(bot_token or os.getenv("TELEGRAM_BOT_TOKEN") or "").strip()
-        self._vision = VisionAnalyzeImageTool()
-
-    def execute(
-        self,
-        *,
-        file_id: str | None = None,
-        prompt: str | None = None,
-        sandbox_alias: str = DEFAULT_SANDBOX_ALIAS,
-        state: dict[str, Any] | None = None,
-    ) -> dict[str, Any]:
-        if not self._bot_token:
-            return _failed("analyze_telegram_image", "telegram_bot_token_missing")
-        selected_file_id = str(file_id or "").strip() or _extract_image_file_id_from_state(state)
-        if not selected_file_id:
-            return _failed("analyze_telegram_image", "telegram_image_file_id_missing")
-        user_scope = _state_user_scope(state)
-        scoped_relative_path = _scoped_telegram_relative_path(
-            file_id=selected_file_id,
-            user_scope=user_scope,
-        )
-        download = TelegramDownloadFileTool(bot_token=self._bot_token).execute(
-            file_id=selected_file_id,
-            sandbox_alias=sandbox_alias,
-            relative_path=scoped_relative_path,
-        )
-        if str(download.get("status") or "") != "ok":
-            return download
-        payload = download.get("result") if isinstance(download.get("result"), dict) else {}
-        relative_path = str(payload.get("relative_path") or "").strip()
-        alias = str(payload.get("sandbox_alias") or sandbox_alias or DEFAULT_SANDBOX_ALIAS).strip()
-        if not relative_path:
-            return _failed("analyze_telegram_image", "image_path_missing")
-        result = self._vision.execute(
-            sandbox_alias=alias,
-            relative_path=relative_path,
-            prompt=prompt,
-        )
-        if str(result.get("status") or "") != "ok":
-            return result
-        result_payload = result.get("result") if isinstance(result.get("result"), dict) else {}
-        return _ok(
-            "analyze_telegram_image",
-            {
-                "file_id": selected_file_id,
-                "sandbox_alias": alias,
-                "relative_path": relative_path,
-                "analysis": result_payload.get("analysis"),
-                "model": result_payload.get("model"),
-            },
-        )
-
-
 class VisionAnalyzeImageTool:
     def __init__(self) -> None:
         self._ollama_base_url = str(os.getenv("OLLAMA_BASE_URL") or "http://localhost:11434").strip()
-        self._model = str(os.getenv("ALPHONSE_VISION_MODEL") or "qwen3-vl:4b").strip() or "qwen3-vl:4b"
+        self._model = _resolve_vision_model(
+            primary_env="ALPHONSE_VISION_ANALYZE_MODEL",
+            default_model="qwen4-vl:4b",
+        )
         self._timeout_seconds = int(str(os.getenv("ALPHONSE_VISION_TIMEOUT_SECONDS") or "60").strip() or "60")
 
     def execute(
@@ -288,11 +236,7 @@ class VisionAnalyzeImageTool:
             if resp.status_code >= 400:
                 return _failed("vision_analyze_image", f"vision_http_{resp.status_code}")
             body = resp.json() if resp.content else {}
-            text = ""
-            if isinstance(body, dict):
-                message = body.get("message")
-                if isinstance(message, dict):
-                    text = str(message.get("content") or "")
+            text = _extract_message_content_text(body)
             return _ok(
                 "vision_analyze_image",
                 {
@@ -306,51 +250,75 @@ class VisionAnalyzeImageTool:
             return _failed("vision_analyze_image", str(exc) or "vision_failed")
 
 
-def _extract_image_file_id_from_state(state: dict[str, Any] | None) -> str:
-    if not isinstance(state, dict):
-        return ""
-    raw = state.get("provider_event")
-    if not isinstance(raw, dict):
-        return ""
-    message = raw.get("message")
-    if not isinstance(message, dict):
-        return ""
-    photo = message.get("photo")
-    if isinstance(photo, list):
-        for item in reversed(photo):
-            if not isinstance(item, dict):
-                continue
-            file_id = str(item.get("file_id") or "").strip()
-            if file_id:
-                return file_id
-    document = message.get("document")
-    if isinstance(document, dict):
-        mime = str(document.get("mime_type") or "").strip().lower()
-        file_id = str(document.get("file_id") or "").strip()
-    if file_id and mime.startswith("image/"):
-        return file_id
-    return ""
+class VisionExtractTool:
+    def __init__(self) -> None:
+        self._ollama_base_url = str(os.getenv("OLLAMA_BASE_URL") or "http://localhost:11434").strip()
+        self._model = _resolve_vision_model(
+            primary_env="ALPHONSE_VISION_EXTRACT_MODEL",
+            default_model="qwen4-vl:4b",
+        )
+        self._timeout_seconds = int(str(os.getenv("ALPHONSE_VISION_TIMEOUT_SECONDS") or "60").strip() or "60")
 
-
-def _state_user_scope(state: dict[str, Any] | None) -> str:
-    if not isinstance(state, dict):
-        return "unknown"
-    for key in ("user_id", "channel_target", "session_id"):
-        value = str(state.get(key) or "").strip()
-        if value:
-            return _sanitize_path_segment(value)
-    return "unknown"
-
-
-def _sanitize_path_segment(value: str) -> str:
-    cleaned = "".join(ch if ch.isalnum() or ch in {"-", "_"} else "_" for ch in value.strip().lower())
-    cleaned = cleaned.strip("_")
-    return cleaned or "unknown"
-
-
-def _scoped_telegram_relative_path(*, file_id: str, user_scope: str) -> str:
-    safe_file_id = _sanitize_path_segment(file_id)
-    return f"users/{user_scope}/images/{safe_file_id}.bin"
+    def execute(
+        self,
+        *,
+        sandbox_alias: str,
+        relative_path: str,
+        prompt: str | None = None,
+    ) -> dict[str, Any]:
+        alias = str(sandbox_alias or DEFAULT_SANDBOX_ALIAS).strip() or DEFAULT_SANDBOX_ALIAS
+        rel = str(relative_path or "").strip()
+        if not rel:
+            return _failed("vision_extract", "image_path_missing")
+        local_path = resolve_sandbox_path(alias=alias, relative_path=rel)
+        if not local_path.exists():
+            return _failed("vision_extract", "image_not_found")
+        if not local_path.is_file():
+            return _failed("vision_extract", "image_not_a_file")
+        try:
+            image_bytes = local_path.read_bytes()
+            image_b64 = base64.b64encode(image_bytes).decode("ascii")
+            user_text = str(
+                prompt
+                or (
+                    "Extract all visible text from this image exactly as written. "
+                    "Preserve line breaks when possible. "
+                    "Do not infer or hallucinate missing text."
+                )
+            )
+            payload = {
+                "model": self._model,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": user_text,
+                        "images": [image_b64],
+                    }
+                ],
+                "stream": False,
+            }
+            base_url = self._ollama_base_url.rstrip("/")
+            resp = requests.post(
+                f"{base_url}/api/chat",
+                json=payload,
+                timeout=self._timeout_seconds,
+            )
+            if resp.status_code >= 400:
+                return _failed("vision_extract", f"vision_http_{resp.status_code}")
+            body = resp.json() if resp.content else {}
+            text, blocks = _extract_ocr_text_and_blocks(body)
+            return _ok(
+                "vision_extract",
+                {
+                    "sandbox_alias": alias,
+                    "relative_path": rel,
+                    "text": text,
+                    "blocks": blocks,
+                    "model": self._model,
+                },
+            )
+        except Exception as exc:
+            return _failed("vision_extract", str(exc) or "vision_failed")
 
 
 def _read_whisper_output(output_dir: Path) -> dict[str, Any] | None:
@@ -362,6 +330,85 @@ def _read_whisper_output(output_dir: Path) -> dict[str, Any] | None:
     except Exception:
         return None
     return parsed if isinstance(parsed, dict) else None
+
+
+def _resolve_vision_model(*, primary_env: str, default_model: str) -> str:
+    return str(
+        os.getenv(primary_env)
+        or os.getenv("ALPHONSE_VISION_MODEL")
+        or default_model
+    ).strip() or default_model
+
+
+def _extract_message_content_text(body: Any) -> str:
+    if not isinstance(body, dict):
+        return ""
+    message = body.get("message")
+    if not isinstance(message, dict):
+        return ""
+    content = message.get("content")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for item in content:
+            if isinstance(item, dict):
+                text = str(item.get("text") or "").strip()
+                if text:
+                    parts.append(text)
+            elif isinstance(item, str):
+                text = item.strip()
+                if text:
+                    parts.append(text)
+        return "\n".join(parts)
+    return str(content or "")
+
+
+def _extract_ocr_text_and_blocks(body: Any) -> tuple[str, list[dict[str, Any]]]:
+    raw_text = _extract_message_content_text(body).strip()
+    parsed: Any = None
+    if raw_text:
+        try:
+            parsed = json.loads(raw_text)
+        except Exception:
+            parsed = None
+    if isinstance(parsed, dict):
+        text = str(parsed.get("text") or "").strip()
+        if text:
+            blocks = _normalize_ocr_blocks(parsed.get("blocks"), fallback_text=text)
+            return text, blocks
+    blocks = _normalize_ocr_blocks(None, fallback_text=raw_text)
+    return raw_text, blocks
+
+
+def _normalize_ocr_blocks(raw_blocks: Any, *, fallback_text: str) -> list[dict[str, Any]]:
+    if isinstance(raw_blocks, list):
+        out: list[dict[str, Any]] = []
+        for idx, item in enumerate(raw_blocks):
+            if not isinstance(item, dict):
+                continue
+            text = str(item.get("text") or "").strip()
+            if not text:
+                continue
+            block: dict[str, Any] = {"text": text}
+            kind = item.get("kind")
+            if kind is not None:
+                block["kind"] = str(kind)
+            index_value = item.get("index")
+            if isinstance(index_value, int):
+                block["index"] = index_value
+            else:
+                block["index"] = idx
+            bbox = item.get("bbox")
+            if isinstance(bbox, dict):
+                block["bbox"] = bbox
+            out.append(block)
+        if out:
+            return out
+    fallback = fallback_text.strip()
+    if not fallback:
+        return []
+    return [{"text": fallback, "kind": "paragraph", "index": 0}]
 
 
 def _language_code(language_hint: str | None) -> str | None:

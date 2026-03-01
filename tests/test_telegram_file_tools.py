@@ -87,26 +87,44 @@ def test_transcribe_and_analyze_with_ollama(monkeypatch, tmp_path: Path) -> None
     assert transcribe_details.get("sandbox_alias") == "telegram_files"
     assert transcribe_details.get("relative_path")
 
-    analyze = telegram_files.AnalyzeTelegramImageTool().execute(
-        file_id=None,
-        state={
-            "channel_target": "8553589429",
-            "provider_event": {
-                "message": {
-                    "photo": [
-                        {"file_id": "small-photo"},
-                        {"file_id": "best-photo"},
-                    ]
-                }
-            },
-        },
+
+def test_vision_analyze_and_extract_success(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(
+        telegram_files.requests,
+        "post",
+        lambda *args, **kwargs: _FakeVisionResponse(
+            200,
+            {"message": {"content": "Detected a handwritten note and one receipt."}},
+        ),
+    )
+    db_path = tmp_path / "nerve-db"
+    monkeypatch.setenv("NERVE_DB_PATH", str(db_path))
+    monkeypatch.setenv("ALPHONSE_SANDBOX_ROOT", str(tmp_path / "sandbox-root"))
+    apply_schema(db_path)
+    image_path = tmp_path / "sandbox-root" / "telegram_files" / "users" / "u1" / "images" / "sample.bin"
+    image_path.parent.mkdir(parents=True, exist_ok=True)
+    image_path.write_bytes(b"img")
+
+    analyze = telegram_files.VisionAnalyzeImageTool().execute(
+        sandbox_alias="telegram_files",
+        relative_path="users/u1/images/sample.bin",
     )
     assert analyze["status"] == "ok"
     analyze_payload = analyze.get("result")
     assert isinstance(analyze_payload, dict)
-    assert analyze_payload.get("sandbox_alias") == "telegram_files"
-    assert str(analyze_payload.get("relative_path") or "").startswith("users/8553589429/images/")
     assert analyze_payload.get("analysis") == "Detected a handwritten note and one receipt."
+
+    extract = telegram_files.VisionExtractTool().execute(
+        sandbox_alias="telegram_files",
+        relative_path="users/u1/images/sample.bin",
+    )
+    assert extract["status"] == "ok"
+    extract_payload = extract.get("result")
+    assert isinstance(extract_payload, dict)
+    assert isinstance(extract_payload.get("text"), str)
+    blocks = extract_payload.get("blocks")
+    assert isinstance(blocks, list)
+    assert (blocks or [{}])[0].get("text")
 
 
 def test_vision_analyze_image_http_failure(monkeypatch, tmp_path: Path) -> None:
@@ -131,3 +149,40 @@ def test_vision_analyze_image_http_failure(monkeypatch, tmp_path: Path) -> None:
     error = result.get("error")
     assert isinstance(error, dict)
     assert error.get("code") == "vision_http_500"
+
+
+def test_vision_extract_http_failure(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(
+        telegram_files.requests,
+        "post",
+        lambda *args, **kwargs: _FakeVisionResponse(500, {}),
+    )
+    db_path = tmp_path / "nerve-db"
+    monkeypatch.setenv("NERVE_DB_PATH", str(db_path))
+    monkeypatch.setenv("ALPHONSE_SANDBOX_ROOT", str(tmp_path / "sandbox-root"))
+    apply_schema(db_path)
+    image_path = tmp_path / "sandbox-root" / "telegram_files" / "users" / "u1" / "images" / "sample.bin"
+    image_path.parent.mkdir(parents=True, exist_ok=True)
+    image_path.write_bytes(b"img")
+
+    result = telegram_files.VisionExtractTool().execute(
+        sandbox_alias="telegram_files",
+        relative_path="users/u1/images/sample.bin",
+    )
+    assert result["status"] == "failed"
+    error = result.get("error")
+    assert isinstance(error, dict)
+    assert error.get("code") == "vision_http_500"
+
+
+def test_vision_model_resolution_prefers_specific_env(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("ALPHONSE_VISION_MODEL", "legacy-model")
+    monkeypatch.setenv("ALPHONSE_VISION_ANALYZE_MODEL", "analyze-model")
+    monkeypatch.setenv("ALPHONSE_VISION_EXTRACT_MODEL", "extract-model")
+    db_path = tmp_path / "nerve-db"
+    monkeypatch.setenv("NERVE_DB_PATH", str(db_path))
+    monkeypatch.setenv("ALPHONSE_SANDBOX_ROOT", str(tmp_path / "sandbox-root"))
+    apply_schema(db_path)
+
+    assert telegram_files.VisionAnalyzeImageTool()._model == "analyze-model"
+    assert telegram_files.VisionExtractTool()._model == "extract-model"

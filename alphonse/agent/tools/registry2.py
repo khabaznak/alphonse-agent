@@ -257,27 +257,9 @@ def _default_specs() -> list[ToolSpec]:
             examples=[{"file_id": "CQACAgQAAx...", "language": "es"}],
         ),
         ToolSpec(
-            key="analyze_telegram_image",
-            description="Download Telegram image by file_id and analyze it with a prompt.",
-            when_to_use="Use when an inbound telegram image requires semantic analysis.",
-            returns="image_analysis",
-            input_schema=_object_schema(
-                properties={
-                    "file_id": {"type": "string"},
-                    "prompt": {"type": "string"},
-                    "sandbox_alias": {"type": "string"},
-                },
-                required=[],
-            ),
-            domain_tags=["telegram", "image", "analysis"],
-            safety_level=SafetyLevel.HIGH,
-            expose_in_catalog=False,
-            examples=[{"file_id": "AgACAgQAAx...", "prompt": "Describe the image briefly."}],
-        ),
-        ToolSpec(
             key="vision_analyze_image",
-            description="Analyze a sandboxed image using Alphonse's dedicated vision model.",
-            when_to_use="Use for image interpretation tasks like receipts, notes, package checks, and object descriptions.",
+            description="Analyze a sandboxed image using Alphonse's dedicated local vision model.",
+            when_to_use="Use for semantic image understanding tasks like scene/object description and visual interpretation.",
             returns="image_analysis",
             input_schema=_object_schema(
                 properties={
@@ -294,6 +276,29 @@ def _default_specs() -> list[ToolSpec]:
                     "sandbox_alias": "telegram_files",
                     "relative_path": "users/8553589429/images/abc123.bin",
                     "prompt": "Extract the items and totals from this receipt.",
+                }
+            ],
+        ),
+        ToolSpec(
+            key="vision_extract",
+            description="Extract visible text (OCR) from a sandboxed image using Alphonse's dedicated local vision model.",
+            when_to_use="Use for OCR tasks over receipts, screenshots, notes, labels, and documents saved in sandbox.",
+            returns="ocr_text_and_blocks",
+            input_schema=_object_schema(
+                properties={
+                    "sandbox_alias": {"type": "string"},
+                    "relative_path": {"type": "string"},
+                    "prompt": {"type": "string"},
+                },
+                required=["sandbox_alias", "relative_path"],
+            ),
+            domain_tags=["vision", "ocr", "image", "extraction"],
+            safety_level=SafetyLevel.MEDIUM,
+            examples=[
+                {
+                    "sandbox_alias": "telegram_files",
+                    "relative_path": "users/8553589429/images/abc123.bin",
+                    "prompt": "Extract all text exactly as shown, preserving line breaks.",
                 }
             ],
         ),

@@ -13,13 +13,6 @@ def _object_schema(properties: dict[str, Any], required: list[str]) -> dict[str,
 
 
 _TOOL_SCHEMA_DEFS: dict[str, dict[str, Any]] = {
-    "analyze_telegram_image": {
-        "description": "Download Telegram image by file_id and analyze it with a prompt.",
-        "parameters": _object_schema(
-            {"file_id": {"type": "string"}, "prompt": {"type": "string"}, "sandbox_alias": {"type": "string"}},
-            [],
-        ),
-    },
     "create_reminder": {
         "description": "Create a reminder for someone at a specific time.",
         "parameters": _object_schema(
@@ -277,7 +270,14 @@ _TOOL_SCHEMA_DEFS: dict[str, dict[str, Any]] = {
         "parameters": _object_schema({"query": {"type": "string"}, "limit": {"type": "integer"}}, ["query"]),
     },
     "vision_analyze_image": {
-        "description": "Analyze a sandboxed image using Alphonse's dedicated vision model.",
+        "description": "Analyze a sandboxed image for semantic understanding and description using the local vision model.",
+        "parameters": _object_schema(
+            {"sandbox_alias": {"type": "string"}, "relative_path": {"type": "string"}, "prompt": {"type": "string"}},
+            ["sandbox_alias", "relative_path"],
+        ),
+    },
+    "vision_extract": {
+        "description": "Extract visible text (OCR) from a sandboxed image using the local vision model.",
         "parameters": _object_schema(
             {"sandbox_alias": {"type": "string"}, "relative_path": {"type": "string"}, "prompt": {"type": "string"}},
             ["sandbox_alias", "relative_path"],

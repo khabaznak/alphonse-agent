@@ -20,8 +20,8 @@ Runtime registrations are wired in:
 | `telegram_get_file_meta` | `telegram_get_file_meta(file_id)` | `telegram, files` | Resolve Telegram file metadata | Before download/transcription | `medium / no` |
 | `telegram_download_file` | `telegram_download_file(file_id, sandbox_alias?, relative_path?)` | `telegram, files` | Download Telegram file | Prepare file for downstream tools | `high / no` |
 | `transcribe_telegram_audio` | `transcribe_telegram_audio(file_id, language?, sandbox_alias?)` | `telegram, audio, transcription` | Download+transcribe Telegram audio | Direct Telegram voice handling | `high / no` |
-| `analyze_telegram_image` | `analyze_telegram_image(file_id?, prompt?, sandbox_alias?)` | `telegram, image, analysis` | Download+analyze Telegram image | Telegram inbound image semantics | `high / no` |
-| `vision_analyze_image` | `vision_analyze_image(sandbox_alias, relative_path, prompt?)` | `vision, image, analysis` | Analyze sandbox image with dedicated vision model | Receipts, notes, package checks, object ID | `medium / no` |
+| `vision_analyze_image` | `vision_analyze_image(sandbox_alias, relative_path, prompt?)` | `vision, image, analysis` | Analyze sandbox image with dedicated local vision model | Semantic image understanding, descriptions | `medium / no` |
+| `vision_extract` | `vision_extract(sandbox_alias, relative_path, prompt?)` | `vision, ocr, extraction` | Extract visible text (OCR) from sandbox image | Receipts, screenshots, notes, labels | `medium / no` |
 | `job_create` | `job_create(name, description, schedule, payload_type, payload, timezone?, domain_tags?, safety_level?, requires_confirmation?, retry_policy?, idempotency?, enabled?)` | `automation, jobs, productivity` | Create scheduled job | Recurring/background automation | `medium / no` |
 | `job_list` | `job_list(enabled?, domain_tag?, limit?)` | `automation, jobs, productivity` | List jobs | Review configured automations | `low / no` |
 | `job_pause` | `job_pause(job_id)` | `automation, jobs, control` | Pause job | Temporarily disable automation | `medium / no` |
@@ -45,3 +45,6 @@ These are registered for compatibility/internal routing and are not distinct bus
 
 - Tool schemas used by the planner are generated dynamically from ToolSpec via `/Users/alex/Code Projects/atrium-server/alphonse/agent/cognition/tool_schemas.py`.
 - Tool catalog markdown for prompts is rendered from ToolSpec via `/Users/alex/Code Projects/atrium-server/alphonse/agent/cognition/tool_catalog_renderer.py`.
+- Recommended Telegram image flow:
+  1. `telegram_download_file`
+  2. `vision_extract` for OCR or `vision_analyze_image` for description

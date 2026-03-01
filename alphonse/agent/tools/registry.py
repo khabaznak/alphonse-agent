@@ -31,11 +31,11 @@ from alphonse.agent.tools.send_message_tool import SendVoiceNoteTool
 from alphonse.agent.tools.ssh_terminal_tool import SshTerminalTool
 from alphonse.agent.tools.stt_transcribe import SttTranscribeTool
 from alphonse.agent.tools.terminal_execute_tool import TerminalExecuteTool
-from alphonse.agent.tools.telegram_files import AnalyzeTelegramImageTool
 from alphonse.agent.tools.telegram_files import TelegramDownloadFileTool
 from alphonse.agent.tools.telegram_files import TelegramGetFileMetaTool
 from alphonse.agent.tools.telegram_files import TranscribeTelegramAudioTool
 from alphonse.agent.tools.telegram_files import VisionAnalyzeImageTool
+from alphonse.agent.tools.telegram_files import VisionExtractTool
 from alphonse.agent.tools.terminal_async_tools import TerminalCommandStatusTool
 from alphonse.agent.tools.terminal_async_tools import TerminalCommandSubmitTool
 from alphonse.agent.tools.user_contact_tools import UserRegisterFromContactTool
@@ -78,8 +78,8 @@ def build_default_tool_registry() -> ToolRegistry:
     telegram_get_file = TelegramGetFileMetaTool()
     telegram_download_file = TelegramDownloadFileTool()
     transcribe_audio = TranscribeTelegramAudioTool()
-    analyze_image = AnalyzeTelegramImageTool()
     vision_analyze_image = VisionAnalyzeImageTool()
+    vision_extract = VisionExtractTool()
     terminal_sync = TerminalExecuteTool()
     mcp_call = McpCallTool()
     terminal_async = TerminalCommandSubmitTool()
@@ -118,8 +118,8 @@ def build_default_tool_registry() -> ToolRegistry:
     registry.register("telegram_get_file_meta", telegram_get_file)
     registry.register("telegram_download_file", telegram_download_file)
     registry.register("transcribe_telegram_audio", transcribe_audio)
-    registry.register("analyze_telegram_image", analyze_image)
     registry.register("vision_analyze_image", vision_analyze_image)
+    registry.register("vision_extract", vision_extract)
     # Internal aliases kept for compatibility.
     registry.register("clock", clock)
     registry.register("getTime", clock)
@@ -131,7 +131,6 @@ def build_default_tool_registry() -> ToolRegistry:
     registry.register("telegramGetFileMeta", telegram_get_file)
     registry.register("telegramDownloadFile", telegram_download_file)
     registry.register("transcribeTelegramAudio", transcribe_audio)
-    registry.register("analyzeTelegramImage", analyze_image)
     registry.register("terminal_sync", terminal_sync)
     registry.register("mcp_call", mcp_call)
     registry.register("terminal_async", terminal_async)

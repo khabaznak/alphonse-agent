@@ -59,8 +59,8 @@ The tool resolves file location internally from Nerve-DB + sandbox alias, so raw
 ## Pattern for future senses
 
 Reuse the same envelope + asset registry for:
-- OCR: `kind=image` + `ocr_extract(asset_id)`
-- Vision: `kind=image` + `analyze_image(asset_id, prompt)`
+- OCR: `kind=image` + `vision_extract(sandbox_alias, relative_path, prompt?)`
+- Vision: `kind=image` + `vision_analyze_image(sandbox_alias, relative_path, prompt?)`
 - PDF parsing: `kind=document` + `extract_pdf_text(asset_id)`
 
 Keep all of them asset-id based and policy-gated in tool availability.
