@@ -192,7 +192,7 @@ class VisionAnalyzeImageTool:
         self._ollama_base_url = str(os.getenv("OLLAMA_BASE_URL") or "http://localhost:11434").strip()
         self._model = _resolve_vision_model(
             primary_env="ALPHONSE_VISION_ANALYZE_MODEL",
-            default_model="qwen4-vl:4b",
+            default_model="qwen3-vl:4b",
         )
         self._timeout_seconds = int(str(os.getenv("ALPHONSE_VISION_TIMEOUT_SECONDS") or "60").strip() or "60")
 
@@ -234,7 +234,7 @@ class VisionAnalyzeImageTool:
                 timeout=self._timeout_seconds,
             )
             if resp.status_code >= 400:
-                return _failed("vision_analyze_image", f"vision_http_{resp.status_code}")
+                return _failed_http("vision_analyze_image", resp)
             body = resp.json() if resp.content else {}
             text = _extract_message_content_text(body)
             return _ok(
@@ -255,7 +255,7 @@ class VisionExtractTool:
         self._ollama_base_url = str(os.getenv("OLLAMA_BASE_URL") or "http://localhost:11434").strip()
         self._model = _resolve_vision_model(
             primary_env="ALPHONSE_VISION_EXTRACT_MODEL",
-            default_model="qwen4-vl:4b",
+            default_model="qwen3-vl:4b",
         )
         self._timeout_seconds = int(str(os.getenv("ALPHONSE_VISION_TIMEOUT_SECONDS") or "60").strip() or "60")
 
@@ -304,7 +304,7 @@ class VisionExtractTool:
                 timeout=self._timeout_seconds,
             )
             if resp.status_code >= 400:
-                return _failed("vision_extract", f"vision_http_{resp.status_code}")
+                return _failed_http("vision_extract", resp)
             body = resp.json() if resp.content else {}
             text, blocks = _extract_ocr_text_and_blocks(body)
             return _ok(
@@ -449,6 +449,54 @@ def _failed(
         },
         "metadata": {"tool": tool},
     }
+
+
+def _failed_http(tool: str, response: requests.Response) -> dict[str, Any]:
+    status_code = int(getattr(response, "status_code", 0) or 0)
+    code = f"vision_http_{status_code}"
+    preview = _http_response_preview(response)
+    message = f"{code}: {preview}" if preview else code
+    details: dict[str, Any] = {"status_code": status_code}
+    if preview:
+        details["response_preview"] = preview
+    return {
+        "status": "failed",
+        "result": None,
+        "error": {
+            "code": code,
+            "message": message,
+            "retryable": False,
+            "details": details,
+        },
+        "metadata": {"tool": tool},
+    }
+
+
+def _http_response_preview(response: requests.Response) -> str:
+    text = ""
+    try:
+        raw_text = getattr(response, "text", None)
+        if isinstance(raw_text, str) and raw_text.strip():
+            text = raw_text.strip()
+        else:
+            raw_content = getattr(response, "content", b"")
+            if isinstance(raw_content, bytes):
+                text = raw_content.decode("utf-8", errors="replace").strip()
+            elif raw_content:
+                text = str(raw_content).strip()
+    except Exception:
+        text = ""
+    if not text:
+        try:
+            body = response.json()
+            if body is not None:
+                text = json.dumps(body, ensure_ascii=False)
+        except Exception:
+            text = ""
+    text = " ".join(str(text or "").split())
+    if len(text) > 300:
+        return text[:297].rstrip() + "..."
+    return text
 
 
 def _normalize_segments(raw: Any) -> list[dict[str, Any]]:

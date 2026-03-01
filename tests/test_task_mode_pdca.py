@@ -1024,7 +1024,11 @@ def test_pdca_next_step_prompt_includes_failure_diagnostics_for_remediation() ->
             "tool": "ssh_terminal",
             "result": {
                 "status": "failed",
-                "error": {"code": "paramiko_not_installed", "message": "paramiko_not_installed"},
+                "error": {
+                    "code": "paramiko_not_installed",
+                    "message": "paramiko_not_installed",
+                    "details": {"stderr_preview": "ModuleNotFoundError: No module named 'paramiko'"},
+                },
             },
         }
     }
@@ -1038,6 +1042,8 @@ def test_pdca_next_step_prompt_includes_failure_diagnostics_for_remediation() ->
     prompt = llm.last_user_prompt
     assert "latest_failure_diagnostics" in prompt
     assert "paramiko_not_installed" in prompt
+    assert "stderr_preview" in prompt
+    assert "ModuleNotFoundError" in prompt
     assert "execution_eval" in prompt
 
 
@@ -1704,6 +1710,56 @@ def test_progress_critic_wip_text_explains_mcp_purpose_when_step_proposed(monkey
     text = str(detail.get("text") or "")
     assert "opening a browser page" in text
     assert "Current action: `mcp_call`." in text
+
+
+def test_wip_update_sanitizes_raw_telegram_goal_payload() -> None:
+    raw_goal = """## RAW MESSAGE
+
+- channel: telegram
+- correlation_id: 808f632f-a0d4-4a4f-adc3-166019fcca24
+
+## RAW JSON
+```json
+{
+  "update_id": 31223897,
+  "message": {"message_id": 3389}
+}
+```"""
+    task_state = build_default_task_state()
+    task_state["goal"] = raw_goal
+    detail = progress_critic_node_module.build_wip_update_detail(
+        task_state=task_state,
+        cycle=2,
+        current_step={
+            "proposal": {"kind": "call_tool", "tool_name": "vision_extract", "args": {}},
+            "status": "proposed",
+        },
+    )
+    text = str(detail.get("text") or "")
+    assert "## RAW MESSAGE" not in text
+    assert "## RAW JSON" not in text
+    assert "update_id" not in text
+    assert "correlation_id" not in text
+    assert "the current task" in text
+    assert "Current action: `vision_extract`." in text
+
+
+def test_wip_update_compacts_and_truncates_goal_text() -> None:
+    long_goal = "Summarize this receipt total " + ("with details " * 60)
+    task_state = build_default_task_state()
+    task_state["goal"] = long_goal
+    detail = progress_critic_node_module.build_wip_update_detail(
+        task_state=task_state,
+        cycle=3,
+        current_step={
+            "proposal": {"kind": "call_tool", "tool_name": "vision_extract", "args": {}},
+            "status": "proposed",
+        },
+    )
+    text = str(detail.get("text") or "")
+    assert "\n" not in text
+    assert "Current action: `vision_extract`." in text
+    assert len(text) < 420
 
 
 def test_progress_critic_accepts_structured_task_completed_outcome() -> None:

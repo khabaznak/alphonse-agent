@@ -149,6 +149,10 @@ def test_vision_analyze_image_http_failure(monkeypatch, tmp_path: Path) -> None:
     error = result.get("error")
     assert isinstance(error, dict)
     assert error.get("code") == "vision_http_500"
+    assert "vision_http_500" in str(error.get("message") or "")
+    details = error.get("details")
+    assert isinstance(details, dict)
+    assert details.get("status_code") == 500
 
 
 def test_vision_extract_http_failure(monkeypatch, tmp_path: Path) -> None:
@@ -173,6 +177,10 @@ def test_vision_extract_http_failure(monkeypatch, tmp_path: Path) -> None:
     error = result.get("error")
     assert isinstance(error, dict)
     assert error.get("code") == "vision_http_500"
+    assert "vision_http_500" in str(error.get("message") or "")
+    details = error.get("details")
+    assert isinstance(details, dict)
+    assert details.get("status_code") == 500
 
 
 def test_vision_model_resolution_prefers_specific_env(monkeypatch, tmp_path: Path) -> None:

@@ -14,6 +14,14 @@ from alphonse.config import settings
 
 DEFAULT_PROGRESS_CHECK_CYCLE_THRESHOLD = 25
 DEFAULT_WIP_EMIT_EVERY_CYCLES = 5
+_MAX_WIP_GOAL_CHARS = 220
+_RAW_GOAL_MARKERS = (
+    "## raw message",
+    "## raw json",
+    "```json",
+    "\"update_id\"",
+    "\"message_id\"",
+)
 
 
 def progress_critic_node_stateful(
@@ -101,7 +109,7 @@ def build_wip_update_detail(
     cycle: int,
     current_step: dict[str, Any] | None,
 ) -> dict[str, Any]:
-    goal = str(task_state.get("goal") or "").strip()
+    goal = _sanitize_goal_for_wip(str(task_state.get("goal") or ""))
     return {
         "text": _build_wip_update_text(task_state=task_state, cycle=cycle, current_step=current_step),
         "cycle": cycle,
@@ -118,7 +126,7 @@ def _build_wip_update_text(
     current_step: dict[str, Any] | None,
 ) -> str:
     _ = cycle
-    goal = str(task_state.get("goal") or "").strip() or "the current task"
+    goal = _sanitize_goal_for_wip(str(task_state.get("goal") or "")) or "the current task"
     tool = _current_tool_name(current_step)
     intention = _current_intention(current_step, goal=goal)
     if intention and tool:
@@ -176,8 +184,23 @@ def _current_intention(current_step: dict[str, Any] | None, *, goal: str) -> str
             return f"I am using the {profile} MCP tools to make progress on your request"
         return "I am using MCP tools to complete your request"
     if tool:
-        return f"I am using `{tool}` because it directly advances: {goal}"
+        if goal:
+            return f"I am using `{tool}` because it directly advances: {goal}"
+        return f"I am using `{tool}` because it directly advances the task"
     return ""
+
+
+def _sanitize_goal_for_wip(goal: str) -> str:
+    text = str(goal or "").strip()
+    if not text:
+        return ""
+    lowered = text.lower()
+    if any(marker in lowered for marker in _RAW_GOAL_MARKERS):
+        return ""
+    compact = re.sub(r"\s+", " ", text).strip()
+    if len(compact) > _MAX_WIP_GOAL_CHARS:
+        return compact[: _MAX_WIP_GOAL_CHARS - 3].rstrip() + "..."
+    return compact
 
 
 def _tool_specific_intention(*, tool: str, args: dict[str, Any], goal: str) -> str:

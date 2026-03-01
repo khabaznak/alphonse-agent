@@ -531,14 +531,34 @@ def _latest_failure_diagnostics(task_state: dict[str, Any]) -> dict[str, Any]:
         fact_entry = facts.get(step_id) if step_id else None
         result = fact_entry.get("result") if isinstance(fact_entry, dict) and isinstance(fact_entry.get("result"), dict) else {}
         error = result.get("error") if isinstance(result.get("error"), dict) else {}
+        error_details = error.get("details") if isinstance(error.get("details"), dict) else {}
         return {
             "step_id": step_id,
             "tool_name": tool_name,
             "args": args,
             "error_code": str(error.get("code") or "").strip(),
             "error_message": str(error.get("message") or "").strip(),
+            "error_details": _compact_error_details(error_details),
         }
     return {}
+
+
+def _compact_error_details(details: dict[str, Any]) -> dict[str, Any]:
+    compact: dict[str, Any] = {}
+    for key, value in details.items():
+        if len(compact) >= 12:
+            break
+        name = str(key or "").strip()
+        if not name:
+            continue
+        if isinstance(value, str):
+            compact[name] = _truncate_text(value.strip(), limit=300)
+            continue
+        if isinstance(value, (int, float, bool)) or value is None:
+            compact[name] = value
+            continue
+        compact[name] = _truncate_text(str(value), limit=300)
+    return compact
 
 
 def _build_tool_contract_hints(tool_registry: Any) -> str:
