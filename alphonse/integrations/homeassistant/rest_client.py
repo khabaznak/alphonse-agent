@@ -50,11 +50,7 @@ class HomeAssistantRestClient:
         data: dict[str, Any] | None = None,
         target: dict[str, Any] | None = None,
     ) -> list[dict[str, Any]]:
-        payload: dict[str, Any] = {}
-        if isinstance(data, dict):
-            payload.update(data)
-        if isinstance(target, dict) and target:
-            payload["target"] = target
+        payload = _build_service_payload(data=data, target=target)
         response = self._request("POST", f"/api/services/{domain}/{service}", json=payload)
         body = response.json()
         return body if isinstance(body, list) else []
@@ -119,3 +115,22 @@ class HomeAssistantRestClient:
             self._config.retry.base_delay_sec * (2 ** max(0, attempt - 1)),
         )
         time.sleep(max(0.0, delay))
+
+
+def _build_service_payload(
+    *,
+    data: dict[str, Any] | None,
+    target: dict[str, Any] | None,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {}
+    if isinstance(data, dict):
+        payload.update(data)
+    if not isinstance(target, dict):
+        return payload
+
+    # Home Assistant REST service calls expect targeting keys in the top-level body.
+    # Keep explicit service data precedence for conflicting keys.
+    for key in ("entity_id", "device_id", "area_id"):
+        if key in target and key not in payload:
+            payload[key] = target[key]
+    return payload
