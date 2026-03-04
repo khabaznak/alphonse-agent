@@ -58,8 +58,9 @@ def test_chat_route_skips_task_state_entry() -> None:
         }
     )
 
-    assert result.get("response_text") == "Hi!"
-    assert "task_state" not in result
+    assert isinstance(result.get("task_state"), dict)
+    response = str(result.get("response_text") or "").strip()
+    assert response
 
 
 def test_task_mode_entry_extracts_goal_from_incoming_payload_not_raw_blob() -> None:

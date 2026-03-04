@@ -25,48 +25,13 @@ _NEXT_STEP_MAX_ATTEMPTS_DEFAULT = 2
 _NEXT_STEP_SCHEMA: dict[str, Any] = {
     "type": "object",
     "additionalProperties": False,
-    "required": ["kind"],
+    "required": ["kind", "tool_name", "args"],
     "properties": {
-        "kind": {"type": "string", "enum": ["ask_user", "call_tool", "finish"]},
-        "question": {"type": "string"},
-        "tool_name": {"type": "string"},
+        "kind": {"type": "string", "enum": ["call_tool"]},
+        "tool_name": {"type": "string", "minLength": 1},
         "args": {"type": "object"},
-        "final_text": {"type": "string"},
         "acceptance_criteria": {"type": "array", "items": {"type": "string"}},
     },
-    "oneOf": [
-        {
-            "type": "object",
-            "additionalProperties": False,
-            "properties": {
-                "kind": {"const": "ask_user"},
-                "question": {"type": "string", "minLength": 1},
-                "acceptance_criteria": {"type": "array", "items": {"type": "string"}},
-            },
-            "required": ["kind", "question"],
-        },
-        {
-            "type": "object",
-            "additionalProperties": False,
-            "properties": {
-                "kind": {"const": "call_tool"},
-                "tool_name": {"type": "string", "minLength": 1},
-                "args": {"type": "object"},
-                "acceptance_criteria": {"type": "array", "items": {"type": "string"}},
-            },
-            "required": ["kind", "tool_name", "args"],
-        },
-        {
-            "type": "object",
-            "additionalProperties": False,
-            "properties": {
-                "kind": {"const": "finish"},
-                "final_text": {"type": "string", "minLength": 1},
-                "acceptance_criteria": {"type": "array", "items": {"type": "string"}},
-            },
-            "required": ["kind", "final_text"],
-        },
-    ],
 }
 
 
@@ -725,10 +690,6 @@ def _normalize_tool_selection_payload(payload: Any) -> NextStepProposal | None:
                 continue
             arguments = call.get("arguments")
             args = dict(arguments) if isinstance(arguments, dict) else {}
-            if tool_name == "askQuestion":
-                question = str(args.get("question") or "").strip()
-                if question:
-                    return {"kind": "ask_user", "question": question}
             return {"kind": "call_tool", "tool_name": tool_name, "args": args}
     content = payload.get("content")
     if isinstance(content, str) and content.strip():
@@ -794,28 +755,12 @@ def _normalize_next_step_proposal(payload: Any) -> NextStepProposal | None:
         return None
     kind = str(payload.get("kind") or "").strip()
     criteria = _normalize_acceptance_criteria_values(payload.get("acceptance_criteria"))
-    if kind == "ask_user":
-        question = str(payload.get("question") or "").strip()
-        if not question:
-            return None
-        out: NextStepProposal = {"kind": "ask_user", "question": question}
-        if criteria:
-            out["acceptance_criteria"] = criteria
-        return out
     if kind == "call_tool":
         tool_name = str(payload.get("tool_name") or "").strip()
         args = payload.get("args")
         if not tool_name or not isinstance(args, dict):
             return None
         out = {"kind": "call_tool", "tool_name": tool_name, "args": dict(args)}
-        if criteria:
-            out["acceptance_criteria"] = criteria
-        return out
-    if kind == "finish":
-        final_text = str(payload.get("final_text") or "").strip()
-        if not final_text:
-            return None
-        out = {"kind": "finish", "final_text": final_text}
         if criteria:
             out["acceptance_criteria"] = criteria
         return out
@@ -841,10 +786,4 @@ def _proposal_summary(proposal: dict[str, Any]) -> str:
     if kind == "call_tool":
         tool = str(proposal.get("tool_name") or "").strip()
         return f"call_tool:{tool or 'unknown'}"
-    if kind == "ask_user":
-        question = str(proposal.get("question") or "").strip()
-        return f"ask_user:{question[:48]}"
-    if kind == "finish":
-        text = str(proposal.get("final_text") or "").strip()
-        return f"finish:{text[:48]}"
     return kind or "unknown"

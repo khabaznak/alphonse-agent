@@ -7,10 +7,8 @@ from langgraph.graph import END, StateGraph
 
 from alphonse.agent.cognition.plans import CortexPlan, CortexResult
 from alphonse.agent.cortex.nodes import build_apology_node
-from alphonse.agent.cortex.nodes import build_first_decision_node
 from alphonse.agent.cortex.nodes import task_mode_entry_node
 from alphonse.agent.cortex.nodes import respond_finalize_node
-from alphonse.agent.cortex.nodes import route_after_first_decision
 from alphonse.agent.cortex.task_mode.state import TaskState
 from alphonse.agent.cortex.task_mode.graph import wire_task_mode_pdca
 from alphonse.agent.cortex.transitions import emit_transition_event
@@ -70,13 +68,6 @@ class CortexGraph:
     def build(self) -> StateGraph:
         graph = StateGraph(CortexState)
         graph.add_node(
-            "first_decision_node",
-            build_first_decision_node(
-                llm_client_from_state=self._llm_client_from_state,
-                tool_registry=self._tool_registry,
-            ),
-        )
-        graph.add_node(
             "apology_node",
             build_apology_node(
                 llm_client_from_state=self._llm_client_from_state,
@@ -95,15 +86,7 @@ class CortexGraph:
         )
         wire_task_mode_pdca(graph, tool_registry=self._tool_registry)
 
-        graph.set_entry_point("first_decision_node")
-        graph.add_conditional_edges(
-            "first_decision_node",
-            route_after_first_decision,
-            {
-                "task_mode_entry_node": "task_mode_entry_node",
-                "respond_node": "respond_node",
-            },
-        )
+        graph.set_entry_point("task_mode_entry_node")
         graph.add_edge("apology_node", "respond_node")
         graph.add_edge("respond_node", END)
         return graph

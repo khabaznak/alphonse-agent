@@ -38,26 +38,6 @@ def execute_step_node_impl(
 
     kind = str(proposal.get("kind") or "").strip()
     handlers: dict[str, Callable[[], dict[str, Any]]] = {
-        "ask_user": lambda: _execute_ask_user_step(
-            state=state,
-            task_state=task_state,
-            current=current,
-            proposal=proposal,
-            corr=corr,
-            append_trace_event=append_trace_event,
-            logger=logger,
-            log_task_event=log_task_event,
-        ),
-        "finish": lambda: _execute_finish_step(
-            state=state,
-            task_state=task_state,
-            current=current,
-            proposal=proposal,
-            corr=corr,
-            append_trace_event=append_trace_event,
-            logger=logger,
-            log_task_event=log_task_event,
-        ),
         "call_tool": lambda: _execute_call_tool_step(
             state=state,
             task_state=task_state,
@@ -214,6 +194,66 @@ def _execute_call_tool_step(
     params = dict(args) if isinstance(args, dict) else {}
     terminal_context = _terminal_command_context(tool_name=tool_name, args=params)
     step_id = str((current or {}).get("step_id") or "")
+    if tool_name == "askQuestion":
+        question = str(params.get("question") or "").strip()
+        if not question:
+            task_state["status"] = "failed"
+            if isinstance(current, dict):
+                current["status"] = "failed"
+            append_trace_event(
+                task_state,
+                {
+                    "type": "validation_failed",
+                    "summary": "askQuestion call_tool reached execute without question.",
+                    "correlation_id": corr,
+                },
+            )
+            log_task_event(
+                logger=logger,
+                state=state,
+                task_state=task_state,
+                node="execute_step_node",
+                event="graph.step.ask_question_invalid",
+                level="warning",
+                step_id=step_id,
+                reason="missing_question",
+            )
+            return {"task_state": task_state}
+        task_state["status"] = "waiting_user"
+        task_state["next_user_question"] = question
+        facts = task_state.get("facts")
+        fact_bucket = dict(facts) if isinstance(facts, dict) else {}
+        fact_bucket[step_id or f"result_{len(fact_bucket) + 1}"] = {
+            "tool": "askQuestion",
+            "result": {"status": "ok", "question": question},
+        }
+        task_state["facts"] = fact_bucket
+        if isinstance(current, dict):
+            current["status"] = "executed"
+        append_trace_event(
+            task_state,
+            {
+                "type": "status_changed",
+                "summary": "Status changed to waiting_user by askQuestion tool call.",
+                "correlation_id": corr,
+            },
+        )
+        log_task_event(
+            logger=logger,
+            state=state,
+            task_state=task_state,
+            node="execute_step_node",
+            event="graph.step.ask_question",
+            step_id=step_id,
+        )
+        _record_step_completion_memory(
+            state=state,
+            task_state=task_state,
+            current=current,
+            proposal=proposal,
+            correlation_id=corr,
+        )
+        return {"task_state": task_state}
     send_after_search = _is_send_after_user_search(tool_name=tool_name, task_state=task_state)
     try:
         result = _execute_tool_call(

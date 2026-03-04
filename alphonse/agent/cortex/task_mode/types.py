@@ -4,11 +4,9 @@ from typing import Any, Literal, TypedDict
 
 
 class NextStepProposal(TypedDict, total=False):
-    kind: Literal["call_tool", "ask_user", "finish"]
+    kind: Literal["call_tool"]
     tool_name: str
     args: dict[str, Any]
-    question: str
-    final_text: str
     acceptance_criteria: list[str]
 
 

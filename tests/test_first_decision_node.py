@@ -60,10 +60,10 @@ def test_first_decision_clarify_sets_pending_interaction() -> None:
             "_llm_client": llm,
         }
     )
-    assert result.get("response_text") == "When do you want the reminder?"
-    pending = result.get("pending_interaction")
-    assert isinstance(pending, dict)
-    assert pending.get("key") == "answer"
+    task_state = result.get("task_state")
+    assert isinstance(task_state, dict)
+    assert task_state.get("status") == "waiting_user"
+    assert task_state.get("next_user_question") == "When do you want the reminder?"
 
 
 def test_first_decision_prompt_uses_recent_conversation_not_session_state() -> None:

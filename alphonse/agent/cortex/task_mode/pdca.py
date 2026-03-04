@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
-from alphonse.agent.cortex.task_mode.act_node import act_node_stateful
+from alphonse.agent.cognition.first_decision_engine import decide_first_action
+from alphonse.agent.cognition.tool_schemas import canonical_tool_names
 from alphonse.agent.cortex.task_mode.act_node import evaluate_tool_execution
-from alphonse.agent.cortex.task_mode.act_node import route_after_act_stateful
 from alphonse.agent.cortex.task_mode.check_state import derive_outcome_from_state
 from alphonse.agent.cortex.task_mode.check_state import goal_satisfied
 from alphonse.agent.cortex.task_mode.mcp_handler import mcp_handler_node_impl
@@ -26,8 +26,8 @@ from alphonse.agent.cortex.task_mode.task_state_helpers import normalize_accepta
 from alphonse.agent.cortex.task_mode.task_state_helpers import task_plan
 from alphonse.agent.cortex.task_mode.task_state_helpers import task_state_with_defaults
 from alphonse.agent.cortex.task_mode.task_state_helpers import task_trace
-from alphonse.agent.cortex.task_mode.validate_step import validate_step_node_impl
 from alphonse.agent.observability.log_manager import get_component_logger
+from alphonse.agent.session.day_state import render_recent_conversation_block
 logger = get_component_logger("task_mode.pdca")
 
 _PROGRESS_CHECK_CYCLE_THRESHOLD = DEFAULT_PROGRESS_CHECK_CYCLE_THRESHOLD
@@ -63,37 +63,16 @@ def route_after_next_step(state: dict[str, Any]) -> str:
 
 
 def validate_step_node(state: dict[str, Any], *, tool_registry: Any) -> dict[str, Any]:
-    return validate_step_node_impl(
-        state,
-        tool_registry=tool_registry,
-        task_state_with_defaults=task_state_with_defaults,
-        correlation_id=correlation_id,
-        task_plan=task_plan,
-        current_step=current_step,
-        append_trace_event=append_trace_event,
-        logger=logger,
-        log_task_event=log_task_event,
-    )
+    # Compatibility wrapper: validation stage was removed from runtime wiring.
+    _ = tool_registry
+    return {"task_state": task_state_with_defaults(state)}
 
 
 def route_after_validate_step(state: dict[str, Any]) -> str:
+    # Compatibility wrapper: runtime path now routes through check -> act.
     task_state = state.get("task_state")
-    if isinstance(task_state, dict) and str(task_state.get("status") or "") == "waiting_user":
-        logger.info(
-            "task_mode route_after_validate correlation_id=%s route=respond_node reason=waiting_user",
-            correlation_id(state),
-        )
+    if isinstance(task_state, dict) and str(task_state.get("status") or "").strip().lower() == "waiting_user":
         return "respond_node"
-    if isinstance(task_state, dict) and task_state.get("last_validation_error") is not None:
-        logger.info(
-            "task_mode route_after_validate correlation_id=%s route=next_step_node reason=validation_error",
-            correlation_id(state),
-        )
-        return "next_step_node"
-    logger.info(
-        "task_mode route_after_validate correlation_id=%s route=execute_step_node reason=validated",
-        correlation_id(state),
-    )
     return "execute_step_node"
 
 
@@ -121,6 +100,85 @@ def mcp_handler_node(state: dict[str, Any]) -> dict[str, Any]:
         logger=logger,
         log_task_event=log_task_event,
     )
+
+
+def check_node(state: dict[str, Any], *, tool_registry: Any) -> dict[str, Any]:
+    task_state = task_state_with_defaults(state)
+    task_state["pdca_phase"] = "check"
+    corr = correlation_id(state)
+    cycle = int(task_state.get("cycle_index") or 0)
+
+    if not has_acceptance_criteria(task_state):
+        goal = str(task_state.get("goal") or "").strip()
+        if goal:
+            task_state["acceptance_criteria"] = [
+                f"The request is satisfied for goal: {goal[:160]}"
+            ]
+            append_trace_event(
+                task_state,
+                {
+                    "type": "acceptance_criteria_derived",
+                    "summary": "Check node derived default acceptance criteria.",
+                    "correlation_id": corr,
+                },
+            )
+
+    status = str(task_state.get("status") or "").strip().lower()
+    if cycle == 0 and status not in {"done", "failed", "waiting_user"}:
+        llm_client = state.get("_llm_client")
+        text = str(state.get("last_user_message") or "").strip()
+        if llm_client and text:
+            recent = str(state.get("recent_conversation_block") or "").strip()
+            if not recent:
+                session_state = state.get("session_state") if isinstance(state.get("session_state"), dict) else None
+                if session_state:
+                    recent = render_recent_conversation_block(session_state)
+            decision = decide_first_action(
+                text=text,
+                llm_client=llm_client,
+                locale=state.get("locale"),
+                tone=state.get("tone"),
+                address_style=state.get("address_style"),
+                channel_type=state.get("channel_type"),
+                available_tool_names=canonical_tool_names(tool_registry),
+                recent_conversation_block=recent,
+            )
+            route = str(decision.get("route") or "").strip().lower()
+            if route == "direct_reply":
+                reply_text = str(decision.get("reply_text") or "").strip()
+                if reply_text:
+                    task_state["status"] = ""
+                    task_state["check_route"] = "respond_node"
+                    return {"task_state": task_state, "response_text": reply_text}
+            elif route == "clarify":
+                question = str(decision.get("clarify_question") or "").strip()
+                if question:
+                    task_state["status"] = "waiting_user"
+                    task_state["next_user_question"] = question
+
+    if goal_satisfied(task_state, has_acceptance_criteria=has_acceptance_criteria):
+        task_state["status"] = "done"
+
+    status = str(task_state.get("status") or "").strip().lower()
+    check_route = "respond_node" if status in {"waiting_user", "failed", "done"} else "next_step_node"
+    task_state["check_route"] = check_route
+    logger.info(
+        "task_mode check correlation_id=%s cycle=%s status=%s route=%s",
+        corr,
+        cycle,
+        status or "running",
+        check_route,
+    )
+    return {"task_state": task_state}
+
+
+def route_after_check(state: dict[str, Any]) -> str:
+    task_state = state.get("task_state") if isinstance(state.get("task_state"), dict) else {}
+    route = str(task_state.get("check_route") or "").strip().lower()
+    if route in {"respond_node", "next_step_node"}:
+        return route
+    status = str(task_state.get("status") or "").strip().lower()
+    return "respond_node" if status in {"waiting_user", "failed", "done"} else "next_step_node"
 
 
 def update_state_node(state: dict[str, Any]) -> dict[str, Any]:
@@ -185,20 +243,23 @@ def route_after_progress_critic(state: dict[str, Any]) -> str:
 
 
 def act_node(state: dict[str, Any]) -> dict[str, Any]:
-    return act_node_stateful(
-        state,
-        task_state_with_defaults=task_state_with_defaults,
-        correlation_id=correlation_id,
-        current_step=current_step,
-        append_trace_event=append_trace_event,
-        task_plan=task_plan,
-        logger=logger,
-    )
+    task_state = task_state_with_defaults(state)
+    task_state["pdca_phase"] = "act"
+    return {"task_state": task_state}
 
 
 def route_after_act(state: dict[str, Any]) -> str:
-    return route_after_act_stateful(
-        state,
-        correlation_id=correlation_id,
-        logger=logger,
+    task_state = state.get("task_state") if isinstance(state.get("task_state"), dict) else {}
+    route = str(task_state.get("check_route") or "").strip().lower()
+    if route in {"respond_node", "next_step_node"}:
+        logger.info(
+            "task_mode route_after_act correlation_id=%s route=%s",
+            correlation_id(state),
+            route,
+        )
+        return route
+    logger.info(
+        "task_mode route_after_act correlation_id=%s route=next_step_node",
+        correlation_id(state),
     )
+    return "next_step_node"

@@ -513,6 +513,7 @@ def test_pdca_create_reminder_missing_fields_stays_failed() -> None:
     assert len(reminder.calls) == 1
 
 
+@pytest.mark.skip(reason="Legacy validate_step flow removed from runtime.")
 def test_pdca_validation_error_routes_back_then_asks_user() -> None:
     tool_registry = build_default_tool_registry()
     next_step = build_next_step_node(tool_registry=tool_registry)
@@ -551,6 +552,7 @@ def test_pdca_validation_error_routes_back_then_asks_user() -> None:
     assert rendered.get("response_text") == "Which account should I use?"
 
 
+@pytest.mark.skip(reason="Legacy validate_step flow removed from runtime.")
 def test_pdca_validation_rejects_unknown_tool_args_keys() -> None:
     tool_registry = build_default_tool_registry()
     task_state = build_default_task_state()
@@ -594,6 +596,7 @@ def test_pdca_validation_rejects_unknown_tool_args_keys() -> None:
     assert "payloadType" in reason
 
 
+@pytest.mark.skip(reason="Legacy validate_step flow removed from runtime.")
 def test_pdca_validation_rejects_direct_terminal_mcp_binaries() -> None:
     tool_registry = build_default_tool_registry()
     task_state = build_default_task_state()
@@ -794,6 +797,7 @@ def test_pdca_next_step_uses_complete_with_tools_when_available() -> None:
     assert llm.complete_calls == 0
 
 
+@pytest.mark.skip(reason="Planner now emits call_tool only; askQuestion remains a tool call.")
 def test_pdca_maps_ask_question_tool_call_to_ask_user_proposal() -> None:
     tool_registry = build_default_tool_registry()
     next_step = build_next_step_node(tool_registry=tool_registry)
@@ -1122,6 +1126,7 @@ def test_pdca_next_step_prompt_includes_mcp_live_tools_menu() -> None:
     assert "required_args: url" in prompt
 
 
+@pytest.mark.skip(reason="Legacy validate_step flow removed from runtime.")
 def test_pdca_validation_rejects_unknown_mcp_profile(tmp_path: Path, monkeypatch) -> None:
     profiles_dir = _write_mcp_profile(tmp_path)
     monkeypatch.setenv("ALPHONSE_MCP_PROFILES_DIR", str(profiles_dir))
@@ -1151,6 +1156,7 @@ def test_pdca_validation_rejects_unknown_mcp_profile(tmp_path: Path, monkeypatch
     assert str(err.get("reason") or "").startswith("unknown_mcp_profile:")
 
 
+@pytest.mark.skip(reason="Legacy validate_step flow removed from runtime.")
 def test_pdca_validation_rejects_unknown_mcp_operation(tmp_path: Path, monkeypatch) -> None:
     profiles_dir = _write_mcp_profile(tmp_path)
     monkeypatch.setenv("ALPHONSE_MCP_PROFILES_DIR", str(profiles_dir))
@@ -1247,6 +1253,7 @@ def test_route_after_next_step_uses_mcp_handler_for_mcp_call() -> None:
     assert route_after_next_step(state) == "mcp_handler_node"
 
 
+@pytest.mark.skip(reason="Legacy finish proposal path removed from planner schema.")
 def test_pdca_can_answer_last_tool_question_from_recent_conversation_block() -> None:
     tool_registry = build_default_tool_registry()
     next_step = build_next_step_node(tool_registry=tool_registry)
@@ -1362,6 +1369,7 @@ def test_execute_step_derives_task_completed_outcome_from_domotics_execute_confi
     assert outcome.get("kind") == "task_completed"
 
 
+@pytest.mark.skip(reason="Act node is now routing-only in Check-first architecture.")
 def test_act_node_stops_after_repeated_same_tool_failures() -> None:
     task_state = build_default_task_state()
     task_state["acceptance_criteria"] = ["done when requested outcome is produced"]
@@ -1400,6 +1408,7 @@ def test_act_node_stops_after_repeated_same_tool_failures() -> None:
     assert route_after_act(route_state) == "respond_node"
 
 
+@pytest.mark.skip(reason="Act node is now routing-only in Check-first architecture.")
 def test_act_node_allows_evolving_failures_under_budget() -> None:
     task_state = build_default_task_state()
     task_state["acceptance_criteria"] = ["done when requested outcome is produced"]
@@ -1434,6 +1443,7 @@ def test_act_node_allows_evolving_failures_under_budget() -> None:
     assert eval_payload.get("reason") == "continue_learning"
 
 
+@pytest.mark.skip(reason="Act node is now routing-only in Check-first architecture.")
 def test_act_node_pauses_after_failure_budget_exhausted() -> None:
     steps = []
     for idx in range(1, 11):
@@ -1472,6 +1482,7 @@ def test_act_node_pauses_after_failure_budget_exhausted() -> None:
     assert "paused the plan" in question
 
 
+@pytest.mark.skip(reason="Act node is now routing-only in Check-first architecture.")
 def test_act_node_pauses_on_non_retryable_failure() -> None:
     task_state = build_default_task_state()
     task_state["acceptance_criteria"] = ["done when requested outcome is produced"]
@@ -1505,6 +1516,7 @@ def test_act_node_pauses_on_non_retryable_failure() -> None:
     assert "non-retryable" in question
 
 
+@pytest.mark.skip(reason="Legacy finish proposal path removed from planner schema.")
 def test_execute_finish_persists_final_text_outcome() -> None:
     task_state = build_default_task_state()
     task_state["acceptance_criteria"] = ["done when requested outcome is produced"]
