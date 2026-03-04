@@ -10,6 +10,24 @@ class NextStepProposal(TypedDict, total=False):
     acceptance_criteria: list[str]
 
 
+class CurrentPlanStep(TypedDict, total=False):
+    step_id: str
+    tool_call: NextStepProposal
+    planner_intent: str
+
+
+class CheckDecision(TypedDict, total=False):
+    route: Literal["direct_reply", "tool_plan", "clarify"]
+    intent: str
+    confidence: float
+    reply_text: str
+    clarify_question: str
+    acceptance_criteria: list[str]
+    parse_ok: bool
+    retried: bool
+    invalid_json_fallback: bool
+
+
 class ValidationResult(TypedDict, total=False):
     ok: bool
     executable: bool

@@ -1,0 +1,37 @@
+# UTTERANCE POLICY
+{{ POLICY_BLOCK }}
+
+# AVAILABLE TOOL NAMES (AWARENESS ONLY)
+{{ TOOL_NAMES }}
+
+{{ RECENT_CONVERSATION }}
+
+# CURRENT TASK SNAPSHOT
+- goal: {{ GOAL }}
+- status: {{ STATUS }}
+- cycle_index: {{ CYCLE_INDEX }}
+- is_continuation: {{ IS_CONTINUATION }}
+- has_acceptance_criteria: {{ HAS_ACCEPTANCE_CRITERIA }}
+- facts_keys: {{ FACT_KEYS }}
+- plan_steps_count: {{ PLAN_STEPS_COUNT }}
+- current_step_id: {{ CURRENT_STEP_ID }}
+
+# USER MESSAGE
+{{ USER_MESSAGE }}
+
+# Decision Rules
+- Decide exactly one route: `direct_reply`, `clarify`, or `tool_plan`.
+- `direct_reply`: use for greetings/simple conversation/capability chat that needs no tools.
+- `clarify`: ask one short question only if a missing detail blocks safe progress.
+- `tool_plan`: only when tools/side effects are required.
+- If this is the first cycle and `tool_plan` is selected for a non-continuation task, include acceptance criteria.
+
+# Output Contract (strict JSON only)
+{
+  "route": "direct_reply | clarify | tool_plan",
+  "intent": "short_intent_label",
+  "confidence": 0.0,
+  "reply_text": "non-empty only for direct_reply",
+  "clarify_question": "non-empty only for clarify",
+  "acceptance_criteria": ["required only when route=tool_plan and first non-continuation"]
+}

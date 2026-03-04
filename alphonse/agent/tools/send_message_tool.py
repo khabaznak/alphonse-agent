@@ -29,6 +29,13 @@ class SendMessageTool:
         to = str(args.get("To") or args.get("to") or args.get("recipient") or "").strip()
         channel = str(args.get("Channel") or args.get("channel") or "").strip().lower() or None
         urgency = str(args.get("Urgency") or args.get("urgency") or "normal").strip().lower() or "normal"
+        internal_progress = _as_bool(args.get("InternalProgress") if args.get("InternalProgress") is not None else args.get("internal_progress"))
+        visibility = str(args.get("Visibility") or args.get("visibility") or "").strip().lower()
+        if internal_progress:
+            visibility = "internal"
+        max_chars = _as_positive_int(args.get("MaxChars") if args.get("MaxChars") is not None else args.get("max_chars"))
+        if max_chars > 0:
+            message = _cap_message(message, limit=max_chars)
         delivery_mode = str(args.get("DeliveryMode") or args.get("delivery_mode") or "text").strip().lower() or "text"
         audio_file_path = str(args.get("AudioFilePath") or args.get("audio_file_path") or "").strip() or None
         as_voice = bool(args.get("AsVoice") if args.get("AsVoice") is not None else args.get("as_voice", True))
@@ -71,6 +78,8 @@ class SendMessageTool:
             tool="send_message",
             payload={
                 **({"locale": locale} if locale else {}),
+                **({"internal_progress": True} if internal_progress else {}),
+                **({"visibility": visibility} if visibility else {}),
                 **(
                     {
                         "delivery_mode": delivery_mode,
@@ -101,6 +110,7 @@ class SendMessageTool:
                 "channel": channel or origin_channel,
                 "recipient": to,
                 "urgency": urgency,
+                "visibility": visibility or "public",
             },
             "error": None,
             "metadata": {"tool": "send_message"},
@@ -227,6 +237,30 @@ def _user_delivery_ref(user: dict[str, Any]) -> str:
 
 def _normalize_text(value: str) -> str:
     return re.sub(r"\s+", " ", str(value or "").strip().lower())
+
+
+def _as_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    rendered = str(value or "").strip().lower()
+    return rendered in {"1", "true", "yes", "on"}
+
+
+def _as_positive_int(value: Any) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return 0
+    return parsed if parsed > 0 else 0
+
+
+def _cap_message(message: str, *, limit: int) -> str:
+    compact = str(message or "").strip()
+    if len(compact) <= limit:
+        return compact
+    if limit <= 1:
+        return compact[:limit]
+    return compact[: limit - 1].rstrip() + "…"
 
 
 def _failed(*, code: str, message: str) -> dict[str, Any]:

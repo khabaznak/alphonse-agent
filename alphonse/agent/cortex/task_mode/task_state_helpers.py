@@ -20,8 +20,18 @@ def task_state_with_defaults(state: dict[str, Any]) -> dict[str, Any]:
     task_state.setdefault("repair_attempts", 0)
     task_state.setdefault("acceptance_criteria", [])
     task_state.setdefault("pending_plan_raw", None)
+    task_state.setdefault("current_plan_step", None)
+    task_state.setdefault("pending_control_tool_call", None)
+    task_state.setdefault("planner_intent_last", None)
+    task_state.setdefault("planner_intent_last_sent", None)
+    task_state.setdefault("surface_planner_intent", True)
+    task_state.setdefault("success_evaluation_last", None)
+    task_state.setdefault("completion_decision", None)
+    task_state.setdefault("zero_progress_last_signature", None)
+    task_state.setdefault("zero_progress_streak", 0)
     task_state.setdefault("planner_error_streak", 0)
     task_state.setdefault("planner_error_last", None)
+    task_state.setdefault("check_decision_last", None)
     return task_state
 
 

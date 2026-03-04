@@ -5,4 +5,12 @@ Your previous output did not satisfy the required JSON contract.
 - parse_error_type: {{ PARSE_ERROR_TYPE }}
 Validation errors:
 {{ VALIDATION_ERRORS_LINES }}
-Return ONLY valid JSON matching the Output Contract.
+Return ONLY valid JSON with this exact top-level shape:
+{
+  "tool_call": {
+    "kind": "call_tool",
+    "tool_name": "<string>",
+    "args": {}
+  },
+  "planner_intent": "<string, max 160 chars>"
+}

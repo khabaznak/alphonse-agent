@@ -18,11 +18,19 @@ from alphonse.agent.tools.mcp.registry import McpProfileRegistry
 _NEXT_STEP_SCHEMA: dict[str, Any] = {
     "type": "object",
     "additionalProperties": False,
-    "required": ["kind", "tool_name", "args"],
+    "required": ["tool_call", "planner_intent"],
     "properties": {
-        "kind": {"type": "string", "enum": ["call_tool"]},
-        "tool_name": {"type": "string", "minLength": 1},
-        "args": {"type": "object"},
+        "tool_call": {
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["kind", "tool_name", "args"],
+            "properties": {
+                "kind": {"type": "string", "enum": ["call_tool"]},
+                "tool_name": {"type": "string", "minLength": 1},
+                "args": {"type": "object"},
+            },
+        },
+        "planner_intent": {"type": "string", "minLength": 1},
     },
 }
 
@@ -104,6 +112,7 @@ def build_next_step_node_impl(
 
     # Keep transition semantics for UI progress pulses; no decision-making here.
     candidate_dict = _extract_candidate_dict(raw_candidate)
+    intent_text = _extract_planner_intent(raw_candidate)
     emit_transition_event(
         state,
         "wip_update",
@@ -111,7 +120,7 @@ def build_next_step_node_impl(
             "cycle": int(task_state.get("cycle_index") or 0) + 1,
             "tool": str((candidate_dict or {}).get("tool_name") or ""),
             "intention": "planning_next_step",
-            "text": "Work in progress. Planning the next tool call.",
+            "text": intent_text or "Estoy analizando el siguiente paso para avanzar la tarea.",
         },
     )
 
@@ -140,6 +149,9 @@ def route_after_next_step_impl(
 
 def _extract_candidate_dict(raw: Any) -> dict[str, Any] | None:
     if isinstance(raw, dict):
+        tool_call = raw.get("tool_call")
+        if isinstance(tool_call, dict):
+            return _extract_candidate_dict(tool_call)
         tool_calls = raw.get("tool_calls")
         if isinstance(tool_calls, list):
             for call in tool_calls:
@@ -164,6 +176,20 @@ def _extract_candidate_dict(raw: Any) -> dict[str, Any] | None:
         parsed = parse_json_object(raw)
         return _extract_candidate_dict(parsed)
     return None
+
+
+def _extract_planner_intent(raw: Any) -> str:
+    if isinstance(raw, dict):
+        text = str(raw.get("planner_intent") or "").strip()
+        if text:
+            return text[:160]
+        content = raw.get("content")
+        if isinstance(content, str) and content.strip():
+            return _extract_planner_intent(parse_json_object(content))
+        return ""
+    if isinstance(raw, str) and raw.strip():
+        return _extract_planner_intent(parse_json_object(raw))
+    return ""
 
 
 def _request_raw_candidate(

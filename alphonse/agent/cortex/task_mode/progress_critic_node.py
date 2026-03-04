@@ -127,19 +127,25 @@ def _build_wip_update_text(
 ) -> str:
     _ = cycle
     goal = _sanitize_goal_for_wip(str(task_state.get("goal") or "")) or "the current task"
+    planner_intent = str(task_state.get("planner_intent_last") or "").strip()
+    criterion = _active_acceptance_criterion(task_state)
     tool = _current_tool_name(current_step)
     intention = _current_intention(current_step, goal=goal)
+    if planner_intent:
+        if criterion:
+            return _limit_wip_text(f"{planner_intent} Validando criterio: {criterion}.")
+        return _limit_wip_text(planner_intent)
     if intention and tool:
-        return (
-            "Work in progress. "
-            f"Why this step: {intention}. "
-            f"Current action: `{tool}`."
-        )
+        if criterion:
+            return _limit_wip_text(f"Estoy usando `{tool}` porque {intention}. Criterio: {criterion}.")
+        return _limit_wip_text(f"Estoy usando `{tool}` porque {intention}.")
     if intention:
-        return f"Work in progress. Why this step: {intention}."
+        if criterion:
+            return _limit_wip_text(f"{intention}. Criterio: {criterion}.")
+        return _limit_wip_text(intention)
     if tool:
-        return f"Work in progress. Current action: `{tool}`."
-    return "Work in progress."
+        return _limit_wip_text(f"Estoy ejecutando `{tool}` para avanzar la tarea.")
+    return "Estoy avanzando paso a paso en tu solicitud."
 
 
 def _current_tool_name(current_step: dict[str, Any] | None) -> str:
@@ -258,7 +264,6 @@ def _terminal_intention(command: str) -> str:
     if not text:
         return "I am running a terminal command to advance the task"
     lowered = text.lower()
-
     if _contains_any(lowered, ("npm install", "pip install", "apt-get install", "brew install", "npx -y")):
         pkg = _extract_package_name(text)
         if pkg:
@@ -276,6 +281,24 @@ def _terminal_intention(command: str) -> str:
     if _contains_any(lowered, ("cat ", "tee ", "echo ", ">>", ">")):
         return "I am creating or updating a file with new information"
     return "I am executing a terminal step to gather evidence for the task"
+
+
+def _active_acceptance_criterion(task_state: dict[str, Any]) -> str:
+    criteria = task_state.get("acceptance_criteria")
+    if not isinstance(criteria, list):
+        return ""
+    for item in criteria:
+        rendered = str(item or "").strip()
+        if rendered:
+            return rendered[:70]
+    return ""
+
+
+def _limit_wip_text(text: str) -> str:
+    compact = re.sub(r"\s+", " ", str(text or "").strip())
+    if len(compact) <= 160:
+        return compact
+    return compact[:157].rstrip() + "..."
 
 
 def _contains_any(haystack: str, needles: tuple[str, ...]) -> bool:

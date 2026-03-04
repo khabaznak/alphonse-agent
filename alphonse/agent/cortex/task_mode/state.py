@@ -19,8 +19,18 @@ class TaskState(TypedDict, total=False):
     initialized: bool
     acceptance_criteria: list[str]
     pending_plan_raw: Any | None
+    current_plan_step: dict[str, Any] | None
+    pending_control_tool_call: dict[str, Any] | None
+    planner_intent_last: str | None
+    planner_intent_last_sent: str | None
+    surface_planner_intent: bool
+    success_evaluation_last: dict[str, Any] | None
+    completion_decision: dict[str, Any] | None
+    zero_progress_last_signature: str | None
+    zero_progress_streak: int
     planner_error_streak: int
     planner_error_last: dict[str, Any] | None
+    check_decision_last: dict[str, Any] | None
 
 
 def build_default_task_state() -> TaskState:
@@ -47,6 +57,16 @@ def build_default_task_state() -> TaskState:
         "initialized": True,
         "acceptance_criteria": [],
         "pending_plan_raw": None,
+        "current_plan_step": None,
+        "pending_control_tool_call": None,
+        "planner_intent_last": None,
+        "planner_intent_last_sent": None,
+        "surface_planner_intent": True,
+        "success_evaluation_last": None,
+        "completion_decision": None,
+        "zero_progress_last_signature": None,
+        "zero_progress_streak": 0,
         "planner_error_streak": 0,
         "planner_error_last": None,
+        "check_decision_last": None,
     }

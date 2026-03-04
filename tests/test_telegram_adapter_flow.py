@@ -221,7 +221,7 @@ def test_telegram_waiting_user_reaction_is_safe_and_deduped(monkeypatch) -> None
         action for action in captured if action.get("type") == "set_message_reaction"
     ]
     assert len(reactions) == 1
-    assert reactions[0]["payload"]["emoji"] == "🤔"
+    assert reactions[0]["payload"]["emoji"] == "❓"
 
 
 def test_telegram_extremity_adapter_blocks_unauthorized_chat(monkeypatch) -> None:

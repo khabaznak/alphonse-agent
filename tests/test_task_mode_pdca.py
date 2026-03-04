@@ -398,25 +398,17 @@ def test_reminder_request_calls_create_reminder_within_two_cycles() -> None:
     assert route_after_act(state) == "next_step_node"
 
     state = _run_cycle(state, next_step=next_step, tool_registry=tool_registry)
-    assert route_after_progress_critic(state) == "respond_node"
+    assert route_after_progress_critic(state) == "act_node"
 
     next_state = state["task_state"]
     assert isinstance(next_state, dict)
-    assert next_state.get("status") == "done"
-    outcome = next_state.get("outcome")
-    assert isinstance(outcome, dict)
-    assert outcome.get("kind") == "reminder_created"
+    assert next_state.get("status") == "running"
     facts = next_state.get("facts")
     assert isinstance(facts, dict)
     assert any(
         isinstance(item, dict) and str(item.get("tool") or "") == "createReminder"
         for item in facts.values()
     )
-    rendered = respond_finalize_node(state, emit_transition_event=lambda *_args, **_kwargs: None)
-    utterance = rendered.get("utterance")
-    assert isinstance(utterance, dict)
-    assert utterance.get("type") == "reminder_created"
-    assert str(rendered.get("response_text") or "").strip()
 
 
 def test_gettime_does_not_terminate_without_reminder_evidence() -> None:
@@ -1415,7 +1407,7 @@ def test_execute_step_normalizes_mcp_call_payload_in_do() -> None:
     assert mcp_context.get("operation") == "web_search"
 
 
-def test_execute_step_derives_task_completed_outcome_from_domotics_execute_confirmed() -> None:
+def test_execute_step_records_evidence_for_domotics_execute_confirmed() -> None:
     registry = ToolRegistry()
     registry.register("domotics.execute", _DomoticsExecuteConfirmedTool())
     task_state = build_default_task_state()
@@ -1449,10 +1441,15 @@ def test_execute_step_derives_task_completed_outcome_from_domotics_execute_confi
 
     next_state = state["task_state"]
     assert isinstance(next_state, dict)
-    assert next_state.get("status") == "done"
+    assert next_state.get("status") == "running"
     outcome = next_state.get("outcome")
-    assert isinstance(outcome, dict)
-    assert outcome.get("kind") == "task_completed"
+    assert outcome is None
+    facts = next_state.get("facts")
+    assert isinstance(facts, dict)
+    entry = facts.get("step_1")
+    assert isinstance(entry, dict)
+    assert str(entry.get("tool") or "") == "domotics.execute"
+    assert str(entry.get("status") or "") == "ok"
 
 
 @pytest.mark.skip(reason="Act node is now routing-only in Check-first architecture.")
@@ -1727,8 +1724,8 @@ def test_next_step_emits_wip_update_on_proposal(monkeypatch: pytest.MonkeyPatch)
     assert detail.get("cycle") == 1
     assert detail.get("tool") == "local_audio_output_render"
     text = str(detail.get("text") or "")
-    assert text.startswith("Work in progress.")
-    assert "Planning the next tool call." in text
+    assert text
+    assert len(text) <= 160
 
 
 def test_progress_critic_emits_wip_update_every_five_cycles_when_step_proposed(monkeypatch) -> None:
@@ -1765,9 +1762,9 @@ def test_progress_critic_emits_wip_update_every_five_cycles_when_step_proposed(m
     assert isinstance(detail, dict)
     assert detail.get("cycle") == 5
     text = str(detail.get("text") or "")
-    assert text.startswith("Work in progress.")
-    assert "Why this step:" in text
-    assert "Current action: `get_time`." in text
+    assert text
+    assert len(text) <= 160
+    assert "`get_time`" in text
 
 
 def test_progress_critic_wip_text_explains_mcp_purpose_when_step_proposed(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1806,7 +1803,7 @@ def test_progress_critic_wip_text_explains_mcp_purpose_when_step_proposed(monkey
     assert isinstance(detail, dict)
     text = str(detail.get("text") or "")
     assert "opening a browser page" in text
-    assert "Current action: `mcp_call`." in text
+    assert "`mcp_call`" in text
 
 
 def test_wip_update_sanitizes_raw_telegram_goal_payload() -> None:
@@ -1838,7 +1835,7 @@ def test_wip_update_sanitizes_raw_telegram_goal_payload() -> None:
     assert "update_id" not in text
     assert "correlation_id" not in text
     assert "the current task" in text
-    assert "Current action: `vision_extract`." in text
+    assert "`vision_extract`" in text
 
 
 def test_wip_update_compacts_and_truncates_goal_text() -> None:
@@ -1855,8 +1852,8 @@ def test_wip_update_compacts_and_truncates_goal_text() -> None:
     )
     text = str(detail.get("text") or "")
     assert "\n" not in text
-    assert "Current action: `vision_extract`." in text
-    assert len(text) < 420
+    assert "`vision_extract`" in text
+    assert len(text) <= 160
 
 
 def test_progress_critic_accepts_structured_task_completed_outcome() -> None:

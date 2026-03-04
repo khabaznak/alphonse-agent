@@ -58,16 +58,16 @@ SLOT_QUESTION_SYSTEM_PROMPT = _seed_text(
     "slot_question.system.j2",
 )
 
-FIRST_DECISION_SYSTEM_PROMPT = _seed_text(
-    "first_decision.system.j2",
-)
-
 CHECK_SYSTEM_PROMPT = _seed_text(
     "check.system.j2",
 )
 
-FIRST_DECISION_USER_TEMPLATE = _seed_text(
-    "first_decision.user.j2",
+CHECK_USER_TEMPLATE = _seed_text(
+    "check.user.j2",
+)
+
+CHECK_REPAIR_USER_TEMPLATE = _seed_text(
+    "check.repair.user.j2",
 )
 
 PLANNING_SYSTEM_PROMPT = _seed_text(

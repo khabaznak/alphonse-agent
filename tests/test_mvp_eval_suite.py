@@ -64,8 +64,13 @@ class _EvalLlm:
         prompt_kind = str(system_prompt or "").lower()
         user_prompt_kind = str(user_prompt or "").lower()
         is_first_decision = (
-            "routing controller" in prompt_kind
-            or ("available tool names" in user_prompt_kind and "user message" in user_prompt_kind)
+            "check mode" in prompt_kind
+            or "routing controller" in prompt_kind
+            or (
+                "available tool names" in user_prompt_kind
+                and "user message" in user_prompt_kind
+                and "current task snapshot" in user_prompt_kind
+            )
         )
         if is_first_decision:
             message = _extract_message(user_prompt, prefix="User message:")
@@ -108,7 +113,8 @@ class _EvalLlm:
             return (
                 '{"route":"tool_plan","intent":"meta.query",'
                 '"confidence":0.80,"reply_text":"",'
-                '"clarify_question":""}'
+                '"clarify_question":"",'
+                '"acceptance_criteria":["Provide the requested system information to the user."]}'
             )
         return (
             '{"route":"direct_reply","intent":"conversation.generic",'
@@ -200,6 +206,9 @@ def test_mvp_eval_suite() -> None:
 def _classify_actual_route(*, result: dict[str, object], planning_calls: int) -> str:
     if planning_calls > 0:
         return "tool_plan"
+    task_state = result.get("task_state")
+    if isinstance(task_state, dict) and str(task_state.get("status") or "").strip().lower() == "waiting_user":
+        return "clarify"
     pending = result.get("pending_interaction")
     if isinstance(pending, dict):
         return "clarify"

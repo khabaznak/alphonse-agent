@@ -179,8 +179,16 @@ def route_after_act(state: dict[str, Any]) -> str:
             route,
         )
         return route
+    status = str(task_state.get("status") or "").strip().lower()
+    if status in {"done", "failed", "waiting_user"}:
+        logger.info(
+            "task_mode route_after_act correlation_id=%s route=respond_node status=%s",
+            correlation_id(state),
+            status,
+        )
+        return "respond_node"
     logger.info(
-        "task_mode route_after_act correlation_id=%s route=next_step_node",
+        "task_mode route_after_act correlation_id=%s route=next_step_node missing_check_route=true",
         correlation_id(state),
     )
     return "next_step_node"

@@ -255,7 +255,7 @@ def _telegram_reaction_for_phase(phase: str) -> str | None:
         "acknowledged": "👀",
         "thinking": "🤔",
         "executing": "🤔",
-        "waiting_user": "🤔",
+        "waiting_user": "❓",
         "done": "👍",
         "failed": "👎",
     }
@@ -273,8 +273,6 @@ def _telegram_phase_for_internal_event(event: dict[str, Any]) -> str | None:
     node = str(detail.get("node") or "").strip().lower()
     has_pending = bool(detail.get("has_pending_interaction"))
     if stage == "start":
-        if node == "first_decision_node":
-            return "acknowledged"
         if node in {"next_step_node", "progress_critic_node", "act_node", "apology_node"}:
             return "thinking"
         if node == "respond_node":

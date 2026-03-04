@@ -88,6 +88,7 @@ class HandleIncomingMessageAction(Action):
                 "address": incoming.address,
             },
         )
+        _emit_channel_transition(incoming, "acknowledged")
         session_timezone = _resolve_session_timezone(incoming)
         session_user_id = _resolve_session_user_id(incoming=incoming, payload=payload)
         day_session = resolve_day_session(

@@ -190,7 +190,7 @@ def _audience_from_payload(payload: dict[str, Any]) -> dict[str, str]:
 
 def _outbound_delivery_metadata(payload: dict[str, Any]) -> dict[str, Any]:
     metadata: dict[str, Any] = {}
-    for key in ("delivery_mode", "audio_file_path", "as_voice", "caption"):
+    for key in ("delivery_mode", "audio_file_path", "as_voice", "caption", "internal_progress", "visibility"):
         if key in payload:
             metadata[key] = payload.get(key)
     return metadata
