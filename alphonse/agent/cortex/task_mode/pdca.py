@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from typing import Any, Callable
 
 from alphonse.agent.cognition.first_decision_engine import decide_first_action
@@ -7,12 +8,12 @@ from alphonse.agent.cognition.tool_schemas import canonical_tool_names
 from alphonse.agent.cortex.task_mode.act_node import evaluate_tool_execution
 from alphonse.agent.cortex.task_mode.check_state import derive_outcome_from_state
 from alphonse.agent.cortex.task_mode.check_state import goal_satisfied
-from alphonse.agent.cortex.task_mode.mcp_handler import mcp_handler_node_impl
 from alphonse.agent.cortex.transitions import emit_transition_event
 from alphonse.agent.cortex.task_mode.plan import build_next_step_node_impl
 from alphonse.agent.cortex.task_mode.plan import route_after_next_step_impl
 from alphonse.agent.cortex.task_mode.progress_critic_node import DEFAULT_PROGRESS_CHECK_CYCLE_THRESHOLD
 from alphonse.agent.cortex.task_mode.progress_critic_node import DEFAULT_WIP_EMIT_EVERY_CYCLES
+from alphonse.agent.cortex.task_mode.progress_critic_node import build_wip_update_detail
 from alphonse.agent.cortex.task_mode.progress_critic_node import progress_critic_node_stateful
 from alphonse.agent.cortex.task_mode.progress_critic_node import route_after_progress_critic_stateful
 from alphonse.agent.cortex.task_mode.observability import log_task_event
@@ -32,6 +33,7 @@ logger = get_component_logger("task_mode.pdca")
 
 _PROGRESS_CHECK_CYCLE_THRESHOLD = DEFAULT_PROGRESS_CHECK_CYCLE_THRESHOLD
 _WIP_EMIT_EVERY_CYCLES = DEFAULT_WIP_EMIT_EVERY_CYCLES
+_PLANNER_RETRY_BUDGET_DEFAULT = 2
 
 
 def build_next_step_node(*, tool_registry: Any) -> Callable[[dict[str, Any]], dict[str, Any]]:
@@ -81,18 +83,6 @@ def execute_step_node(state: dict[str, Any], *, tool_registry: Any) -> dict[str,
     return execute_step_node_impl(
         state,
         tool_registry=tool_registry,
-        task_state_with_defaults=task_state_with_defaults,
-        correlation_id=correlation_id,
-        current_step=current_step,
-        append_trace_event=append_trace_event,
-        logger=logger,
-        log_task_event=log_task_event,
-    )
-
-
-def mcp_handler_node(state: dict[str, Any]) -> dict[str, Any]:
-    return mcp_handler_node_impl(
-        state,
         task_state_with_defaults=task_state_with_defaults,
         correlation_id=correlation_id,
         current_step=current_step,
@@ -156,10 +146,146 @@ def check_node(state: dict[str, Any], *, tool_registry: Any) -> dict[str, Any]:
                     task_state["status"] = "waiting_user"
                     task_state["next_user_question"] = question
 
+    planner_error = task_state.get("planner_error_last") if isinstance(task_state.get("planner_error_last"), dict) else None
+    if planner_error:
+        streak = int(task_state.get("planner_error_streak") or 0) + 1
+        task_state["planner_error_streak"] = streak
+        budget = _planner_retry_budget()
+        if streak <= budget:
+            task_state["status"] = "running"
+            task_state["next_user_question"] = None
+            task_state["last_validation_error"] = None
+            append_trace_event(
+                task_state,
+                {
+                    "type": "planner_retry",
+                    "summary": f"Planner output invalid; retrying planning ({streak}/{budget}).",
+                    "correlation_id": corr,
+                },
+            )
+            log_task_event(
+                logger=logger,
+                state=state,
+                task_state=task_state,
+                node="check_node",
+                event="graph.check.planner_retry",
+                planner_error_streak=streak,
+                planner_retry_budget=budget,
+                error_code=str(planner_error.get("code") or ""),
+                level="warning",
+            )
+            task_state["check_route"] = "next_step_node"
+            return {"task_state": task_state}
+
+        task_state["status"] = "failed"
+        task_state["next_user_question"] = None
+        task_state["last_validation_error"] = dict(planner_error)
+        append_trace_event(
+            task_state,
+            {
+                "type": "status_changed",
+                "summary": "Check marked task failed after planner retry budget exhausted.",
+                "correlation_id": corr,
+            },
+        )
+        log_task_event(
+            logger=logger,
+            state=state,
+            task_state=task_state,
+            node="check_node",
+            event="graph.check.planner_failed",
+            planner_error_streak=streak,
+            planner_retry_budget=budget,
+            error_code=str(planner_error.get("code") or ""),
+            level="warning",
+        )
+    else:
+        if int(task_state.get("planner_error_streak") or 0) != 0:
+            task_state["planner_error_streak"] = 0
+        if task_state.get("planner_error_last") is not None:
+            task_state["planner_error_last"] = None
+
+    current = current_step(task_state)
+    current_status = str((current or {}).get("status") or "").strip().lower()
+    if current_status == "failed":
+        evaluation = evaluate_tool_execution(task_state=task_state, current_step=current, task_plan=task_plan)
+        task_state["execution_eval"] = evaluation if isinstance(evaluation, dict) else {}
+        log_task_event(
+            logger=logger,
+            state=state,
+            task_state=task_state,
+            node="check_node",
+            event="graph.check.failure_evaluated",
+            step_id=str((current or {}).get("step_id") or ""),
+            reason=str((evaluation or {}).get("reason") or ""),
+            total_failures=int((evaluation or {}).get("total_failures") or 0),
+            same_signature_failures=int((evaluation or {}).get("same_signature_failures") or 0),
+            unique_signatures=int((evaluation or {}).get("unique_signatures") or 0),
+            level="warning",
+        )
+
+    if int(task_state.get("cycle_index") or 0) > 0:
+        emit_every = max(1, int(_WIP_EMIT_EVERY_CYCLES))
+        step_status = str((current or {}).get("status") or "").strip().lower()
+        if step_status == "proposed" and int(task_state.get("cycle_index") or 0) % emit_every == 0:
+            detail = build_wip_update_detail(
+                task_state=task_state,
+                cycle=int(task_state.get("cycle_index") or 0),
+                current_step=current,
+            )
+            emit_transition_event(state, "wip_update", detail)
+            log_task_event(
+                logger=logger,
+                state=state,
+                task_state=task_state,
+                node="check_node",
+                event="graph.check.wip_update",
+                cycle=int(detail.get("cycle") or 0),
+                tool=str(detail.get("tool") or ""),
+                intention=str(detail.get("intention") or ""),
+            )
+
     if goal_satisfied(task_state, has_acceptance_criteria=has_acceptance_criteria):
+        if str(task_state.get("status") or "").strip().lower() != "done":
+            append_trace_event(
+                task_state,
+                {
+                    "type": "status_changed",
+                    "summary": "Check marked task as done from outcome evidence.",
+                    "correlation_id": corr,
+                },
+            )
         task_state["status"] = "done"
+        log_task_event(
+            logger=logger,
+            state=state,
+            task_state=task_state,
+            node="check_node",
+            event="graph.task.completed",
+        )
 
     status = str(task_state.get("status") or "").strip().lower()
+    if status in {"done", "waiting_user", "failed"}:
+        log_task_event(
+            logger=logger,
+            state=state,
+            task_state=task_state,
+            node="check_node",
+            event="graph.check.skipped",
+            status=status,
+            cycle=cycle,
+            level="debug",
+        )
+    else:
+        log_task_event(
+            logger=logger,
+            state=state,
+            task_state=task_state,
+            node="check_node",
+            event="graph.check.continue",
+            cycle=cycle,
+            level="debug",
+        )
     check_route = "respond_node" if status in {"waiting_user", "failed", "done"} else "next_step_node"
     task_state["check_route"] = check_route
     logger.info(
@@ -170,6 +296,17 @@ def check_node(state: dict[str, Any], *, tool_registry: Any) -> dict[str, Any]:
         check_route,
     )
     return {"task_state": task_state}
+
+
+def _planner_retry_budget() -> int:
+    raw = str(os.getenv("ALPHONSE_TASK_MODE_PLANNER_RETRY_BUDGET") or "").strip()
+    if not raw:
+        return _PLANNER_RETRY_BUDGET_DEFAULT
+    try:
+        parsed = int(raw)
+    except ValueError:
+        return _PLANNER_RETRY_BUDGET_DEFAULT
+    return parsed if parsed >= 0 else 0
 
 
 def route_after_check(state: dict[str, Any]) -> str:

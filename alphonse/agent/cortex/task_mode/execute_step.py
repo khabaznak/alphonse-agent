@@ -10,6 +10,8 @@ from typing import Any, Callable
 
 from alphonse.agent.cognition.memory import append_episode
 from alphonse.agent.cognition.memory import put_artifact
+from alphonse.agent.cortex.llm_output.json_parse import parse_json_object
+from alphonse.agent.tools.mcp_call_tool import normalize_mcp_call_invocation
 from alphonse.agent.tools.base import ensure_tool_result
 
 
@@ -28,13 +30,54 @@ def execute_step_node_impl(
     task_state["pdca_phase"] = "do"
     corr = correlation_id(state)
     current = current_step(task_state)
-    proposal = (current or {}).get("proposal") if isinstance(current, dict) else None
+    proposal, proposal_error = _proposal_from_pending_plan_raw(task_state=task_state, current=current)
+    if isinstance(proposal_error, dict):
+        step_id = str((current or {}).get("step_id") or "")
+        if isinstance(current, dict):
+            current["status"] = "failed"
+        task_state["status"] = "failed"
+        task_state["planner_error_last"] = dict(proposal_error)
+        facts = task_state.get("facts")
+        fact_bucket = dict(facts) if isinstance(facts, dict) else {}
+        fact_bucket[step_id or f"result_{len(fact_bucket) + 1}"] = {
+            "tool": "planner_output",
+            "result": {
+                "status": "failed",
+                "error": {
+                    "code": str(proposal_error.get("code") or "invalid_planner_output"),
+                    "message": str(proposal_error.get("message") or "invalid planner output"),
+                    "retryable": bool(proposal_error.get("retryable", True)),
+                    "details": proposal_error.get("details") if isinstance(proposal_error.get("details"), dict) else {},
+                },
+            },
+        }
+        task_state["facts"] = fact_bucket
+        append_trace_event(
+            task_state,
+            {
+                "type": "planner_output_invalid",
+                "summary": str(proposal_error.get("message") or "Planner output could not be parsed into a tool call."),
+                "correlation_id": corr,
+            },
+        )
+        log_task_event(
+            logger=logger,
+            state=state,
+            task_state=task_state,
+            node="execute_step_node",
+            event="graph.plan_output.invalid",
+            level="warning",
+            step_id=step_id,
+            error_code=str(proposal_error.get("code") or "invalid_planner_output"),
+        )
+        return {"task_state": task_state}
     if not isinstance(proposal, dict):
         logger.info(
             "task_mode execute skipped correlation_id=%s reason=no_proposal",
             corr,
         )
         return {"task_state": task_state}
+    task_state["planner_error_last"] = None
 
     kind = str(proposal.get("kind") or "").strip()
     handlers: dict[str, Callable[[], dict[str, Any]]] = {
@@ -54,6 +97,60 @@ def execute_step_node_impl(
     if handler is None:
         return {"task_state": task_state}
     return handler()
+
+
+def _proposal_from_pending_plan_raw(
+    *,
+    task_state: dict[str, Any],
+    current: dict[str, Any] | None,
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    existing = (current or {}).get("proposal") if isinstance(current, dict) else None
+    if isinstance(existing, dict):
+        return dict(existing), None
+    raw = task_state.get("pending_plan_raw")
+    normalized = _normalize_raw_plan_candidate(raw)
+    if isinstance(normalized, dict):
+        if isinstance(current, dict):
+            current["proposal"] = normalized
+        task_state["pending_plan_raw"] = None
+        return normalized, None
+    preview = str(raw)[:280] if raw is not None else ""
+    return None, {
+        "reason": "invalid_planner_output",
+        "code": "invalid_planner_output",
+        "message": "Planner output is not a valid call_tool proposal.",
+        "retryable": True,
+        "details": {"raw_output_preview": preview},
+    }
+
+
+def _normalize_raw_plan_candidate(raw: Any) -> dict[str, Any] | None:
+    if isinstance(raw, dict):
+        tool_calls = raw.get("tool_calls")
+        if isinstance(tool_calls, list):
+            for call in tool_calls:
+                if not isinstance(call, dict):
+                    continue
+                name = str(call.get("name") or "").strip()
+                if not name:
+                    continue
+                arguments = call.get("arguments")
+                args = dict(arguments) if isinstance(arguments, dict) else {}
+                return {"kind": "call_tool", "tool_name": name, "args": args}
+        kind = str(raw.get("kind") or "").strip()
+        tool_name = str(raw.get("tool_name") or "").strip()
+        args = raw.get("args")
+        if kind == "call_tool" and tool_name and isinstance(args, dict):
+            return {"kind": "call_tool", "tool_name": tool_name, "args": dict(args)}
+        content = raw.get("content")
+        if isinstance(content, str) and content.strip():
+            parsed = parse_json_object(content)
+            return _normalize_raw_plan_candidate(parsed)
+        return None
+    if isinstance(raw, str) and raw.strip():
+        parsed = parse_json_object(raw)
+        return _normalize_raw_plan_candidate(parsed)
+    return None
 
 
 def _execute_ask_user_step(
@@ -192,6 +289,18 @@ def _execute_call_tool_step(
     tool_name = str(proposal.get("tool_name") or "").strip()
     args = proposal.get("args")
     params = dict(args) if isinstance(args, dict) else {}
+    params = _normalize_mcp_call_args(
+        state=state,
+        task_state=task_state,
+        current=current,
+        proposal=proposal,
+        tool_name=tool_name,
+        params=params,
+        corr=corr,
+        append_trace_event=append_trace_event,
+        logger=logger,
+        log_task_event=log_task_event,
+    )
     terminal_context = _terminal_command_context(tool_name=tool_name, args=params)
     step_id = str((current or {}).get("step_id") or "")
     if tool_name == "askQuestion":
@@ -459,6 +568,72 @@ def _execute_call_tool_step(
             correlation_id=corr,
         )
         return {"task_state": task_state}
+
+
+def _normalize_mcp_call_args(
+    *,
+    state: dict[str, Any],
+    task_state: dict[str, Any],
+    current: dict[str, Any] | None,
+    proposal: dict[str, Any],
+    tool_name: str,
+    params: dict[str, Any],
+    corr: str | None,
+    append_trace_event: Callable[[dict[str, Any], dict[str, Any]], None],
+    logger: logging.Logger,
+    log_task_event: Callable[..., None],
+) -> dict[str, Any]:
+    if str(tool_name or "").strip() != "mcp_call":
+        return params
+    normalized, report = normalize_mcp_call_invocation(params)
+    proposal["args"] = dict(normalized)
+    intent = str(
+        task_state.get("goal")
+        or state.get("intent")
+        or state.get("last_user_message")
+        or ""
+    ).strip()
+    task_state["mcp_context"] = {
+        "intent": intent,
+        "profile": str(normalized.get("profile") or ""),
+        "operation": str(normalized.get("operation") or ""),
+    }
+    append_trace_event(
+        task_state,
+        {
+            "type": "mcp_prepared",
+            "summary": (
+                "Prepared MCP invocation with canonical arguments."
+                if report.get("normalized")
+                else "Prepared MCP invocation."
+            ),
+            "correlation_id": corr,
+        },
+    )
+    logger.info(
+        "task_mode execute mcp_prepared correlation_id=%s step_id=%s intent=%s profile=%s operation=%s mapped=%s ignored=%s",
+        corr,
+        str((current or {}).get("step_id") or ""),
+        intent[:120],
+        str(normalized.get("profile") or ""),
+        str(normalized.get("operation") or ""),
+        list(report.get("mapped") or []),
+        list(report.get("ignored") or []),
+    )
+    log_task_event(
+        logger=logger,
+        state=state,
+        task_state=task_state,
+        node="execute_step_node",
+        event="graph.execute.mcp_prepared",
+        step_id=str((current or {}).get("step_id") or ""),
+        intent=intent[:500],
+        profile=str(normalized.get("profile") or ""),
+        operation=str(normalized.get("operation") or ""),
+        mapped=list(report.get("mapped") or []),
+        ignored=list(report.get("ignored") or []),
+    )
+    return dict(normalized)
 
 
 def _execute_tool_call(

@@ -18,6 +18,9 @@ class TaskState(TypedDict, total=False):
     cycle_index: int
     initialized: bool
     acceptance_criteria: list[str]
+    pending_plan_raw: Any | None
+    planner_error_streak: int
+    planner_error_last: dict[str, Any] | None
 
 
 def build_default_task_state() -> TaskState:
@@ -43,4 +46,7 @@ def build_default_task_state() -> TaskState:
         "cycle_index": 0,
         "initialized": True,
         "acceptance_criteria": [],
+        "pending_plan_raw": None,
+        "planner_error_streak": 0,
+        "planner_error_last": None,
     }

@@ -87,7 +87,7 @@ def test_execute_step_emits_memory_hooks_after_tool_call(monkeypatch) -> None:
     assert "plan_step_completed" in event_types
 
 
-def test_execute_finish_emits_plan_step_completion_memory(monkeypatch) -> None:
+def test_execute_ask_question_tool_emits_plan_step_completion_memory(monkeypatch) -> None:
     calls: list[dict[str, Any]] = []
 
     def _capture_memory(**kwargs: Any) -> None:
@@ -108,8 +108,9 @@ def test_execute_finish_emits_plan_step_completion_memory(monkeypatch) -> None:
                         "step_id": "step_2",
                         "status": "proposed",
                         "proposal": {
-                            "kind": "finish",
-                            "final_text": "done",
+                            "kind": "call_tool",
+                            "tool_name": "askQuestion",
+                            "args": {"question": "Can you clarify?"},
                         },
                     }
                 ],

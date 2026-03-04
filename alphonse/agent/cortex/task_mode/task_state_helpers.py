@@ -19,6 +19,9 @@ def task_state_with_defaults(state: dict[str, Any]) -> dict[str, Any]:
     task_state.setdefault("status", "running")
     task_state.setdefault("repair_attempts", 0)
     task_state.setdefault("acceptance_criteria", [])
+    task_state.setdefault("pending_plan_raw", None)
+    task_state.setdefault("planner_error_streak", 0)
+    task_state.setdefault("planner_error_last", None)
     return task_state
 
 

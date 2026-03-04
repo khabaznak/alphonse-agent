@@ -12,6 +12,7 @@ import alphonse.agent.cortex.task_mode.progress_critic_node as progress_critic_n
 from alphonse.agent.cortex.nodes.respond import respond_finalize_node
 from alphonse.agent.cortex.task_mode.pdca import act_node
 from alphonse.agent.cortex.task_mode.pdca import build_next_step_node
+from alphonse.agent.cortex.task_mode.pdca import check_node
 from alphonse.agent.cortex.task_mode.pdca import execute_step_node
 from alphonse.agent.cortex.task_mode.pdca import route_after_act
 from alphonse.agent.cortex.task_mode.pdca import route_after_next_step
@@ -275,6 +276,34 @@ class _DomoticsExecuteConfirmedTool:
             },
             "error": None,
             "metadata": {"tool": "domotics.execute"},
+        }
+
+
+class _CaptureMcpCallTool:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, object]] = []
+
+    def execute(
+        self,
+        *,
+        profile: str | None = None,
+        operation: str | None = None,
+        arguments: dict[str, object] | None = None,
+        **kwargs,  # noqa: ANN003
+    ) -> dict[str, object]:
+        self.calls.append(
+            {
+                "profile": profile,
+                "operation": operation,
+                "arguments": dict(arguments or {}),
+                "extra": dict(kwargs or {}),
+            }
+        )
+        return {
+            "status": "ok",
+            "result": {"profile": profile, "operation": operation, "arguments": dict(arguments or {})},
+            "error": None,
+            "metadata": {"tool": "mcp_call"},
         }
 
 
@@ -681,20 +710,32 @@ def test_pdca_parse_failure_degrades_to_failed() -> None:
     }
 
     state = _apply(state, next_step(state))
+    state = _apply(state, execute_step_node(state, tool_registry=tool_registry))
+    state = _apply(state, check_node(state, tool_registry=tool_registry))
+    next_state = state["task_state"]
+    assert isinstance(next_state, dict)
+    assert next_state.get("status") == "running"
+    assert int(next_state.get("planner_error_streak") or 0) == 1
+    assert route_after_act({"task_state": next_state, "correlation_id": "corr-pdca-parse-fail"}) == "next_step_node"
+    # Budget exhausted on third invalid planner output.
+    state = _apply(state, next_step(state))
+    state = _apply(state, execute_step_node(state, tool_registry=tool_registry))
+    state = _apply(state, check_node(state, tool_registry=tool_registry))
+    state = _apply(state, next_step(state))
+    state = _apply(state, execute_step_node(state, tool_registry=tool_registry))
+    state = _apply(state, check_node(state, tool_registry=tool_registry))
     next_state = state["task_state"]
     assert isinstance(next_state, dict)
     assert next_state.get("status") == "failed"
     assert next_state.get("next_user_question") is None
     last_error = next_state.get("last_validation_error")
     assert isinstance(last_error, dict)
-    assert last_error.get("reason") == "next_step_parse_failed"
-    assert int(last_error.get("attempts") or 0) == 2
-    assert route_after_next_step({"correlation_id": "corr-pdca-parse-fail", "task_state": next_state}) == "respond_node"
+    assert last_error.get("reason") == "invalid_planner_output"
     trace = next_state.get("trace")
     assert isinstance(trace, dict)
     recent = trace.get("recent")
     assert isinstance(recent, list)
-    assert any(isinstance(event, dict) and event.get("type") == "parse_failed" for event in recent)
+    assert any(isinstance(event, dict) and event.get("type") == "planner_retry" for event in recent)
 
 
 def test_pdca_next_step_llm_exception_bubbles() -> None:
@@ -735,6 +776,11 @@ def test_pdca_parse_failure_retry_can_recover_with_valid_json() -> None:
     }
 
     state = _apply(state, next_step(state))
+    raw_candidate = state["task_state"].get("pending_plan_raw") if isinstance(state.get("task_state"), dict) else None
+    assert raw_candidate == "not-json output"
+    state = _apply(state, execute_step_node(state, tool_registry=tool_registry))
+    state = _apply(state, check_node(state, tool_registry=tool_registry))
+    state = _apply(state, next_step(state))
     next_state = state["task_state"]
     assert isinstance(next_state, dict)
     assert next_state.get("status") != "failed"
@@ -746,10 +792,7 @@ def test_pdca_parse_failure_retry_can_recover_with_valid_json() -> None:
     assert steps
     first = steps[0]
     assert isinstance(first, dict)
-    proposal = first.get("proposal")
-    assert isinstance(proposal, dict)
-    assert proposal.get("kind") == "call_tool"
-    assert proposal.get("tool_name") == "job_list"
+    assert "proposal_raw" in first
 
 
 def test_pdca_next_step_uses_complete_with_tools_when_available() -> None:
@@ -788,11 +831,11 @@ def test_pdca_next_step_uses_complete_with_tools_when_available() -> None:
     assert steps
     first = steps[0]
     assert isinstance(first, dict)
-    proposal = first.get("proposal")
-    assert isinstance(proposal, dict)
-    assert proposal.get("kind") == "call_tool"
-    assert proposal.get("tool_name") == "job_list"
-    assert proposal.get("args") == {"limit": 10}
+    assert first.get("raw_source") == "complete_with_tools"
+    raw = next_state.get("pending_plan_raw")
+    assert isinstance(raw, dict)
+    tool_calls = raw.get("tool_calls")
+    assert isinstance(tool_calls, list)
     assert llm.complete_with_tools_calls == 1
     assert llm.complete_calls == 0
 
@@ -866,12 +909,9 @@ def test_pdca_next_step_falls_back_to_text_when_tool_call_payload_is_empty() -> 
     assert steps
     first = steps[0]
     assert isinstance(first, dict)
-    proposal = first.get("proposal")
-    assert isinstance(proposal, dict)
-    assert proposal.get("kind") == "call_tool"
-    assert proposal.get("tool_name") == "job_list"
+    assert first.get("raw_source") == "complete_with_tools"
     assert llm.complete_with_tools_calls == 1
-    assert llm.complete_calls >= 1
+    assert llm.complete_calls == 0
 
 
 def test_pdca_tool_call_schema_includes_context_tools_when_runtime_registered() -> None:
@@ -896,16 +936,16 @@ def test_pdca_tool_call_schema_includes_context_tools_when_runtime_registered() 
     steps = plan.get("steps")
     assert isinstance(steps, list)
     assert steps
-    proposal = steps[0].get("proposal") if isinstance(steps[0], dict) else None
-    assert isinstance(proposal, dict)
-    assert proposal.get("tool_name") == "send_voice_note"
+    first = steps[0]
+    assert isinstance(first, dict)
+    assert first.get("raw_source") == "complete_with_tools"
     assert llm.complete_with_tools_calls == 1
     assert "get_user_details" in llm.tool_names
     assert "get_my_settings" in llm.tool_names
 
 
 def test_pdca_parse_failure_respects_configured_max_attempts(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("ALPHONSE_TASK_MODE_NEXT_STEP_MAX_ATTEMPTS", "1")
+    monkeypatch.setenv("ALPHONSE_TASK_MODE_PLANNER_RETRY_BUDGET", "0")
     tool_registry = build_default_tool_registry()
     next_step = build_next_step_node(tool_registry=tool_registry)
     llm = _QueuedLlm(["not-json output", '{"kind":"call_tool","tool_name":"job_list","args":{"limit":10}}'])
@@ -920,12 +960,14 @@ def test_pdca_parse_failure_respects_configured_max_attempts(monkeypatch: pytest
     }
 
     state = _apply(state, next_step(state))
+    state = _apply(state, execute_step_node(state, tool_registry=tool_registry))
+    state = _apply(state, check_node(state, tool_registry=tool_registry))
     next_state = state["task_state"]
     assert isinstance(next_state, dict)
     assert next_state.get("status") == "failed"
     last_error = next_state.get("last_validation_error")
     assert isinstance(last_error, dict)
-    assert int(last_error.get("attempts") or 0) == 1
+    assert last_error.get("reason") == "invalid_planner_output"
 
 
 def test_pdca_derives_acceptance_criteria_from_next_step_proposal() -> None:
@@ -951,8 +993,7 @@ def test_pdca_derives_acceptance_criteria_from_next_step_proposal() -> None:
     assert isinstance(next_state, dict)
     criteria = next_state.get("acceptance_criteria")
     assert isinstance(criteria, list)
-    assert criteria
-    assert "number of scheduled jobs" in str(criteria[0]).lower()
+    assert criteria == []
     assert not isinstance(updated.get("pending_interaction"), dict)
 
 
@@ -1227,7 +1268,7 @@ def test_pdca_validation_allows_unknown_mcp_operation_for_native_profile(tmp_pat
     assert next_state.get("last_validation_error") is None
 
 
-def test_route_after_next_step_uses_mcp_handler_for_mcp_call() -> None:
+def test_route_after_next_step_routes_to_execute_step_node() -> None:
     task_state = build_default_task_state()
     task_state["plan"]["current_step_id"] = "step_1"
     task_state["plan"]["steps"] = [
@@ -1250,7 +1291,7 @@ def test_route_after_next_step_uses_mcp_handler_for_mcp_call() -> None:
         "task_state": task_state,
     }
 
-    assert route_after_next_step(state) == "mcp_handler_node"
+    assert route_after_next_step(state) == "execute_step_node"
 
 
 @pytest.mark.skip(reason="Legacy finish proposal path removed from planner schema.")
@@ -1327,6 +1368,51 @@ def test_execute_step_handles_structured_tool_failure() -> None:
     error = result.get("error")
     assert isinstance(error, dict)
     assert error.get("code") == "asset_not_found"
+
+
+def test_execute_step_normalizes_mcp_call_payload_in_do() -> None:
+    registry = ToolRegistry()
+    mcp_tool = _CaptureMcpCallTool()
+    registry.register("mcp_call", mcp_tool)
+    task_state = build_default_task_state()
+    task_state["goal"] = "Find veloswim"
+    task_state["plan"] = {
+        "version": 1,
+        "steps": [
+            {
+                "step_id": "step_1",
+                "proposal": {
+                    "kind": "call_tool",
+                    "tool_name": "mcp_call",
+                    "args": {
+                        "args": {
+                            "profile": "chrome",
+                            "operation": "web_search",
+                            "query": "Veloswim",
+                        }
+                    },
+                },
+                "status": "validated",
+            }
+        ],
+        "current_step_id": "step_1",
+    }
+    state: dict[str, object] = {"correlation_id": "corr-pdca-mcp-normalize-in-do", "task_state": task_state}
+
+    updated = execute_step_node(state, tool_registry=registry)
+    next_state = updated["task_state"]
+    assert isinstance(next_state, dict)
+    assert len(mcp_tool.calls) == 1
+    call = mcp_tool.calls[0]
+    assert call["profile"] == "chrome"
+    assert call["operation"] == "web_search"
+    arguments = call["arguments"]
+    assert isinstance(arguments, dict)
+    assert arguments.get("query") == "Veloswim"
+    mcp_context = next_state.get("mcp_context")
+    assert isinstance(mcp_context, dict)
+    assert mcp_context.get("profile") == "chrome"
+    assert mcp_context.get("operation") == "web_search"
 
 
 def test_execute_step_derives_task_completed_outcome_from_domotics_execute_confirmed() -> None:
@@ -1642,8 +1728,7 @@ def test_next_step_emits_wip_update_on_proposal(monkeypatch: pytest.MonkeyPatch)
     assert detail.get("tool") == "local_audio_output_render"
     text = str(detail.get("text") or "")
     assert text.startswith("Work in progress.")
-    assert "Why this step:" in text
-    assert "Current action: `local_audio_output_render`." in text
+    assert "Planning the next tool call." in text
 
 
 def test_progress_critic_emits_wip_update_every_five_cycles_when_step_proposed(monkeypatch) -> None:
