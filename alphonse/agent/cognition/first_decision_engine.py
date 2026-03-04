@@ -24,6 +24,7 @@ def decide_first_action(
     channel_type: str | None = None,
     available_tool_names: list[str] | None = None,
     recent_conversation_block: str | None = None,
+    system_prompt: str | None = None,
 ) -> dict[str, Any]:
     if not llm_client:
         return {"route": "tool_plan", "intent": "unknown", "confidence": 0.0}
@@ -43,14 +44,15 @@ def decide_first_action(
             "USER_MESSAGE": text.strip(),
         },
     )
+    chosen_system_prompt = str(system_prompt or FIRST_DECISION_SYSTEM_PROMPT)
     logger.debug(
         "first_decision prompt_prepared system_prompt_chars=%s user_prompt_chars=%s",
-        len(FIRST_DECISION_SYSTEM_PROMPT),
+        len(chosen_system_prompt),
         len(user_prompt),
     )
     raw = _call_llm(
         llm_client,
-        system_prompt=FIRST_DECISION_SYSTEM_PROMPT,
+        system_prompt=chosen_system_prompt,
         user_prompt=user_prompt,
     )
     payload = _parse_json(raw)

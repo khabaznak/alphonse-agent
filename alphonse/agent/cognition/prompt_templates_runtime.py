@@ -62,6 +62,10 @@ FIRST_DECISION_SYSTEM_PROMPT = _seed_text(
     "first_decision.system.j2",
 )
 
+CHECK_SYSTEM_PROMPT = _seed_text(
+    "check.system.j2",
+)
+
 FIRST_DECISION_USER_TEMPLATE = _seed_text(
     "first_decision.user.j2",
 )
