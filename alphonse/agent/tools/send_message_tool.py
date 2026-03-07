@@ -33,6 +33,9 @@ class SendMessageTool:
         visibility = str(args.get("Visibility") or args.get("visibility") or "").strip().lower()
         if internal_progress:
             visibility = "internal"
+        outbound_intent = str(args.get("OutboundIntent") or args.get("outbound_intent") or "").strip().lower()
+        if outbound_intent not in {"wip_transition", "internal_progress", "mission_public"}:
+            outbound_intent = "internal_progress" if internal_progress or visibility == "internal" else "mission_public"
         max_chars = _as_positive_int(args.get("MaxChars") if args.get("MaxChars") is not None else args.get("max_chars"))
         if max_chars > 0:
             message = _cap_message(message, limit=max_chars)
@@ -80,6 +83,7 @@ class SendMessageTool:
                 **({"locale": locale} if locale else {}),
                 **({"internal_progress": True} if internal_progress else {}),
                 **({"visibility": visibility} if visibility else {}),
+                **({"outbound_intent": outbound_intent} if outbound_intent else {}),
                 **(
                     {
                         "delivery_mode": delivery_mode,
@@ -111,6 +115,7 @@ class SendMessageTool:
                 "recipient": to,
                 "urgency": urgency,
                 "visibility": visibility or "public",
+                "outbound_intent": outbound_intent or "mission_public",
             },
             "error": None,
             "metadata": {"tool": "send_message"},

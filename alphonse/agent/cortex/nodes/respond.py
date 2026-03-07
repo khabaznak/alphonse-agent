@@ -114,6 +114,9 @@ def respond_finalize_node(
         emit_transition_event(state, "waiting_user")
         return _return({})
     if isinstance(task_state, dict):
+        if task_status == "failed" and _has_public_mission_send_success(task_state):
+            emit_transition_event(state, "failed")
+            return _return({})
         utterance = build_utterance_from_state(state)
         if isinstance(utterance, dict):
             emit_brain_state(
@@ -198,6 +201,8 @@ def build_utterance_from_state(state: dict[str, Any]) -> dict[str, Any] | None:
         }
         return utterance
     if status == "failed":
+        if _has_public_mission_send_success(task_state):
+            return None
         reason = task_state.get("last_validation_error")
         utterance["type"] = "task_failed"
         utterance["content"] = {
@@ -244,3 +249,29 @@ def build_utterance_from_state(state: dict[str, Any]) -> dict[str, Any] | None:
         utterance["content"] = {}
         return utterance
     return None
+
+
+def _has_public_mission_send_success(task_state: dict[str, Any]) -> bool:
+    facts = task_state.get("facts")
+    if not isinstance(facts, dict):
+        return False
+    for fact in facts.values():
+        if not isinstance(fact, dict):
+            continue
+        tool = str(fact.get("tool") or "").strip()
+        if tool not in {"send_message", "sendMessage"}:
+            continue
+        if bool(fact.get("internal")):
+            continue
+        status = str(fact.get("status") or "").strip().lower()
+        if status != "ok":
+            continue
+        result_payload = fact.get("result_payload")
+        visibility = (
+            str(result_payload.get("visibility") or "").strip().lower()
+            if isinstance(result_payload, dict)
+            else ""
+        )
+        if visibility in {"", "public"}:
+            return True
+    return False

@@ -171,6 +171,29 @@ def act_node(state: dict[str, Any]) -> dict[str, Any]:
 
 def route_after_act(state: dict[str, Any]) -> str:
     task_state = state.get("task_state") if isinstance(state.get("task_state"), dict) else {}
+    verdict = task_state.get("judge_verdict") if isinstance(task_state.get("judge_verdict"), dict) else {}
+    verdict_kind = str(verdict.get("kind") or "").strip().lower()
+    if verdict_kind == "plan":
+        logger.info(
+            "task_mode route_after_act correlation_id=%s route=next_step_node verdict=%s",
+            correlation_id(state),
+            verdict_kind,
+        )
+        return "next_step_node"
+    if verdict_kind == "mission_success":
+        logger.info(
+            "task_mode route_after_act correlation_id=%s route=end verdict=%s",
+            correlation_id(state),
+            verdict_kind,
+        )
+        return "end"
+    if verdict_kind in {"conversation", "mission_failed"}:
+        logger.info(
+            "task_mode route_after_act correlation_id=%s route=respond_node verdict=%s",
+            correlation_id(state),
+            verdict_kind,
+        )
+        return "respond_node"
     route = str(task_state.get("check_route") or "").strip().lower()
     if route in {"respond_node", "next_step_node"}:
         logger.info(

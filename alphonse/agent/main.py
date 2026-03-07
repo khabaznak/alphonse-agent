@@ -80,30 +80,39 @@ def main() -> None:
     )
 
     sense_manager = SenseManager(db_path=str(db_path), bus=bus)
-    sense_manager.start()
     pdca_queue_runner = PdcaQueueRunner(bus=bus)
-    pdca_queue_runner.start()
-
     api_server = _build_api_server()
-    if api_server:
-        api_server.start()
     relay_client = build_relay_client_from_env()
-    if relay_client:
-        relay_client.start()
     heart = load_heart(config, bus, ddfsm)
+    senses_started = False
+    queue_runner_started = False
+    api_started = False
+    relay_started = False
     try:
+        sense_manager.start()
+        senses_started = True
+        pdca_queue_runner.start()
+        queue_runner_started = True
+        if api_server:
+            api_server.start()
+            api_started = True
+        if relay_client:
+            relay_client.start()
+            relay_started = True
         heart.run()
     except KeyboardInterrupt:
         logging.info("Shutdown requested (KeyboardInterrupt).")
+    finally:
         heart.stop()
         bus.emit(Signal(type=SHUTDOWN, source="system"))
-    finally:
-        pdca_queue_runner.stop()
-        if api_server:
+        if queue_runner_started:
+            pdca_queue_runner.stop()
+        if api_server and api_started:
             api_server.stop()
-        if relay_client:
+        if relay_client and relay_started:
             relay_client.stop()
-        sense_manager.stop()
+        if senses_started:
+            sense_manager.stop()
 
 
 def _build_api_server() -> ApiServer | None:

@@ -17,6 +17,7 @@ def task_mode_entry_node(state: dict[str, Any]) -> dict[str, Any]:
     for key, value in defaults.items():
         if key not in merged:
             merged[key] = value
+    merged["check_provenance"] = "entry"
 
     goal = str(merged.get("goal") or "").strip()
     if not goal or _looks_like_raw_payload_block(goal):
@@ -65,10 +66,21 @@ def _parse_pending_interaction(raw: Any) -> PendingInteraction | None:
     )
 
 
-def _normalize_acceptance_criteria(text: str) -> list[str]:
+def _normalize_acceptance_criteria(text: str) -> list[dict[str, object]]:
     lines = [item.strip(" -\t") for item in str(text or "").replace(";", "\n").splitlines()]
     out = [item for item in lines if item]
-    return out[:8]
+    normalized: list[dict[str, object]] = []
+    for index, item in enumerate(out[:8], start=1):
+        normalized.append(
+            {
+                "id": f"ac_{index}",
+                "text": item[:180],
+                "status": "pending",
+                "evidence_refs": [],
+                "created_by_case": "new_request",
+            }
+        )
+    return normalized
 
 
 def _resolve_goal_text(state: dict[str, Any]) -> str:

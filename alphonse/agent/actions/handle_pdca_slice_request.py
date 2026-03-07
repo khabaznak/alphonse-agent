@@ -75,6 +75,7 @@ class HandlePdcaSliceRequestAction(Action):
 
         checkpoint = load_pdca_checkpoint(task_id)
         base_state = _base_state(task=task, checkpoint=checkpoint)
+        _stamp_check_provenance_for_slice(base_state=base_state, signal=signal, checkpoint=checkpoint)
         text = _resolve_slice_text(task=task, checkpoint=checkpoint, payload=payload)
         if not text:
             update_pdca_task_status(task_id=task_id, status="waiting_user")
@@ -357,6 +358,24 @@ def _as_optional_int(value: Any) -> int | None:
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+def _stamp_check_provenance_for_slice(
+    *,
+    base_state: dict[str, Any],
+    signal: object | None,
+    checkpoint: dict[str, Any] | None,
+) -> None:
+    signal_type = str(getattr(signal, "type", "") or "").strip().lower()
+    task_state = base_state.get("task_state")
+    if not isinstance(task_state, dict):
+        task_state = {}
+        base_state["task_state"] = task_state
+    if signal_type == "pdca.resume_requested":
+        task_state["check_provenance"] = "slice_resume"
+        return
+    if isinstance(checkpoint, dict):
+        task_state["check_provenance"] = "do"
 
 
 def _estimate_token_burn(request_text: str, reply_text: str) -> int:

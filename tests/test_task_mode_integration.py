@@ -3,6 +3,7 @@ from __future__ import annotations
 from alphonse.agent.cortex.nodes.task_mode import task_mode_entry_node
 from alphonse.agent.cortex.graph import CortexGraph
 from alphonse.agent.cortex.task_mode.pdca import build_next_step_node
+from alphonse.agent.cortex.task_mode.pdca import check_node
 from alphonse.agent.tools.registry import build_default_tool_registry
 
 
@@ -41,26 +42,28 @@ def test_task_route_initializes_task_state() -> None:
     assert task_state.get("initialized") is True
 
 
-def test_chat_route_skips_task_state_entry() -> None:
+def test_chat_route_now_starts_plan_first_even_for_greetings() -> None:
     llm = _FakeLlm(
-        '{"route":"direct_reply","intent":"conversation.generic","confidence":0.96,'
-        '"reply_text":"Hi!","clarify_question":""}'
+        '{"kind":"plan","case_type":"new_request","reason":"baseline plan first",'
+        '"confidence":0.8,"criteria_updates":[{"op":"append","text":"Maintain general conversation context"}],'
+        '"evidence_refs":[],"failure_class":null}'
     )
-    runner = CortexGraph().build().compile()
-    result = runner.invoke(
-        {
-            "chat_id": "123",
-            "channel_type": "telegram",
-            "channel_target": "123",
-            "last_user_message": "Hi",
-            "correlation_id": "corr-chat-route",
-            "_llm_client": llm,
-        }
-    )
-
-    assert isinstance(result.get("task_state"), dict)
-    response = str(result.get("response_text") or "").strip()
-    assert response
+    tool_registry = build_default_tool_registry()
+    state = {
+        "chat_id": "123",
+        "channel_type": "telegram",
+        "channel_target": "123",
+        "last_user_message": "Hi",
+        "correlation_id": "corr-chat-route",
+        "_llm_client": llm,
+    }
+    state.update(task_mode_entry_node(state))
+    state.update(check_node(state, tool_registry=tool_registry))
+    task_state = state.get("task_state")
+    assert isinstance(task_state, dict)
+    verdict = task_state.get("judge_verdict")
+    assert isinstance(verdict, dict)
+    assert verdict.get("kind") == "plan"
 
 
 def test_task_mode_entry_extracts_goal_from_incoming_payload_not_raw_blob() -> None:

@@ -288,7 +288,10 @@ def _active_acceptance_criterion(task_state: dict[str, Any]) -> str:
     if not isinstance(criteria, list):
         return ""
     for item in criteria:
-        rendered = str(item or "").strip()
+        if isinstance(item, dict):
+            rendered = str(item.get("text") or "").strip()
+        else:
+            rendered = str(item or "").strip()
         if rendered:
             return rendered[:70]
     return ""
@@ -348,11 +351,16 @@ def _build_progress_checkin_question(
     current_tool = str((proposal or {}).get("tool_name") or "").strip()
     summary = str((evaluation or {}).get("summary") or "").strip()
     acceptance_criteria = task_state.get("acceptance_criteria")
-    criteria_lines = (
-        "\n".join(f"- {str(item).strip()}" for item in acceptance_criteria if str(item).strip())
-        if isinstance(acceptance_criteria, list)
-        else ""
-    )
+    lines: list[str] = []
+    if isinstance(acceptance_criteria, list):
+        for item in acceptance_criteria:
+            if isinstance(item, dict):
+                text = str(item.get("text") or "").strip()
+            else:
+                text = str(item).strip()
+            if text:
+                lines.append(f"- {text}")
+    criteria_lines = "\n".join(lines)
     if not criteria_lines:
         criteria_lines = "- (not provided)"
     user_prompt = render_pdca_prompt(

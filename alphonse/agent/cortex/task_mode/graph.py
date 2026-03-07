@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from langgraph.graph import END
 from langgraph.graph import StateGraph
 
 from alphonse.agent.cortex.task_mode.pdca import act_node
@@ -38,6 +39,7 @@ def wire_task_mode_pdca(graph: StateGraph, *, tool_registry: Any) -> None:
         {
             "next_step_node": "next_step_node",
             "respond_node": "respond_node",
+            "end": END,
         },
     )
     graph.add_conditional_edges(
