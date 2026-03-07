@@ -3,16 +3,12 @@ from __future__ import annotations
 import inspect
 import json
 import logging
-import mimetypes
-import os
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any, Callable
 
-from alphonse.agent.cognition.memory import append_episode
-from alphonse.agent.cognition.memory import put_artifact
+from alphonse.agent.cognition.memory import record_after_tool_call
+from alphonse.agent.cognition.memory import record_plan_step_completion
 from alphonse.agent.cortex.llm_output.json_parse import parse_json_object
-from alphonse.agent.tools.mcp_call_tool import normalize_mcp_call_invocation
 from alphonse.agent.tools.base import ensure_tool_result
 
 
@@ -34,71 +30,122 @@ def execute_step_node_impl(
     current = current_step(task_state)
     proposal, proposal_error = _proposal_from_pending_plan_raw(task_state=task_state, current=current)
     if isinstance(proposal_error, dict):
-        step_id = str((current or {}).get("step_id") or "")
-        if isinstance(current, dict):
-            current["status"] = "failed"
-        task_state["status"] = "running"
-        task_state["planner_error_last"] = dict(proposal_error)
-        facts = task_state.get("facts")
-        fact_bucket = dict(facts) if isinstance(facts, dict) else {}
-        fact_bucket[step_id or f"result_{len(fact_bucket) + 1}"] = {
-            "tool": "planner_output",
-            "result": {
-                "status": "failed",
-                "error": {
-                    "code": str(proposal_error.get("code") or "invalid_planner_output"),
-                    "message": str(proposal_error.get("message") or "invalid planner output"),
-                    "retryable": bool(proposal_error.get("retryable", True)),
-                    "details": proposal_error.get("details") if isinstance(proposal_error.get("details"), dict) else {},
-                },
-            },
-        }
-        task_state["facts"] = fact_bucket
-        append_trace_event(
-            task_state,
-            {
-                "type": "planner_output_invalid",
-                "summary": str(proposal_error.get("message") or "Planner output could not be parsed into a tool call."),
-                "correlation_id": corr,
-            },
-        )
-        log_task_event(
-            logger=logger,
+        _record_planner_output_error(
             state=state,
             task_state=task_state,
-            node="execute_step_node",
-            event="graph.plan_output.invalid",
-            level="warning",
-            step_id=step_id,
-            error_code=str(proposal_error.get("code") or "invalid_planner_output"),
+            current=current,
+            corr=corr,
+            error_payload=proposal_error,
+            append_trace_event=append_trace_event,
+            logger=logger,
+            log_task_event=log_task_event,
         )
         return {"task_state": task_state}
     if not isinstance(proposal, dict):
-        logger.info(
-            "task_mode execute skipped correlation_id=%s reason=no_proposal",
-            corr,
+        _record_planner_output_error(
+            state=state,
+            task_state=task_state,
+            current=current,
+            corr=corr,
+            error_payload={
+                "code": "invalid_planner_output",
+                "raw_error": "no_executable_tool_call",
+                "details": {},
+            },
+            append_trace_event=append_trace_event,
+            logger=logger,
+            log_task_event=log_task_event,
         )
         return {"task_state": task_state}
     task_state["planner_error_last"] = None
 
     kind = str(proposal.get("kind") or "").strip()
-    handlers: dict[str, Callable[[], dict[str, Any]]] = {
-        "call_tool": lambda: _execute_call_tool_step(
+    if kind != "call_tool":
+        _record_planner_output_error(
             state=state,
             task_state=task_state,
             current=current,
-            proposal=proposal,
             corr=corr,
-            tool_registry=tool_registry,
+            error_payload={
+                "code": "invalid_planner_output",
+                "raw_error": f"unsupported_proposal_kind:{kind or 'unknown'}",
+                "details": {"proposal_kind": kind},
+            },
             append_trace_event=append_trace_event,
             logger=logger,
             log_task_event=log_task_event,
-        ),
-    }
-    handler = handlers.get(kind)
-    if handler is None:
+        )
         return {"task_state": task_state}
-    return handler()
+    return _execute_call_tool_step(
+        state=state,
+        task_state=task_state,
+        current=current,
+        proposal=proposal,
+        corr=corr,
+        tool_registry=tool_registry,
+        append_trace_event=append_trace_event,
+        logger=logger,
+        log_task_event=log_task_event,
+    )
+
+
+def _record_planner_output_error(
+    *,
+    state: dict[str, Any],
+    task_state: dict[str, Any],
+    current: dict[str, Any] | None,
+    corr: str | None,
+    error_payload: dict[str, Any],
+    append_trace_event: Callable[[dict[str, Any], dict[str, Any]], None],
+    logger: logging.Logger,
+    log_task_event: Callable[..., None],
+) -> None:
+    step_id = str((current or {}).get("step_id") or "")
+    if isinstance(current, dict):
+        current["status"] = "failed"
+    task_state["status"] = "running"
+    error_code = str(error_payload.get("code") or "invalid_planner_output")
+    raw_error = str(error_payload.get("raw_error") or error_code)
+    details = error_payload.get("details") if isinstance(error_payload.get("details"), dict) else {}
+    task_state["planner_error_last"] = {"code": error_code, "raw_error": raw_error, "details": details}
+    facts = task_state.get("facts")
+    fact_bucket = dict(facts) if isinstance(facts, dict) else {}
+    fact_bucket[step_id or f"result_{len(fact_bucket) + 1}"] = {
+        "tool": "planner_output",
+        "result": {
+            "status": "failed",
+            "error": {
+                "code": error_code,
+                "raw_error": raw_error,
+                "details": details,
+            },
+        },
+    }
+    task_state["facts"] = fact_bucket
+    append_trace_event(
+        task_state,
+        {
+            "type": "planner_output_invalid",
+            "summary": f"Planner output invalid: {raw_error}.",
+            "correlation_id": corr,
+        },
+    )
+    logger.info(
+        "task_mode execute planner_output_invalid correlation_id=%s step_id=%s error_code=%s",
+        corr,
+        step_id,
+        error_code,
+    )
+    log_task_event(
+        logger=logger,
+        state=state,
+        task_state=task_state,
+        node="execute_step_node",
+        event="graph.plan_output.invalid",
+        level="warning",
+        step_id=step_id,
+        error_code=error_code,
+    )
 
 
 def _proposal_from_pending_plan_raw(
@@ -116,10 +163,8 @@ def _proposal_from_pending_plan_raw(
         if not isinstance(tool_call, dict):
             preview = str(raw)[:280] if raw is not None else ""
             return None, {
-                "reason": "invalid_planner_output",
                 "code": "invalid_planner_output",
-                "message": "Planner artifact contains no parseable tool_call.",
-                "retryable": True,
+                "raw_error": "no_parseable_tool_call",
                 "details": {"raw_output_preview": preview},
             }
         task_state["current_plan_step"] = {
@@ -132,10 +177,8 @@ def _proposal_from_pending_plan_raw(
         return dict(tool_call), None
     preview = str(raw)[:280] if raw is not None else ""
     return None, {
-        "reason": "invalid_planner_output",
         "code": "invalid_planner_output",
-        "message": "Planner artifact malformed: could not parse tool_call.",
-        "retryable": True,
+        "raw_error": "malformed_or_unparseable_tool_call",
         "details": {"raw_output_preview": preview},
     }
 
@@ -205,18 +248,6 @@ def _execute_call_tool_step(
     tool_name = str(proposal.get("tool_name") or "").strip()
     args = proposal.get("args")
     params = dict(args) if isinstance(args, dict) else {}
-    params = _normalize_mcp_call_args(
-        state=state,
-        task_state=task_state,
-        current=current,
-        proposal=proposal,
-        tool_name=tool_name,
-        params=params,
-        corr=corr,
-        append_trace_event=append_trace_event,
-        logger=logger,
-        log_task_event=log_task_event,
-    )
     step_id = str((current or {}).get("step_id") or "")
     try:
         result = _execute_tool_call(
@@ -299,7 +330,7 @@ def _execute_call_tool_step(
                 tool=tool_name,
                 status="failed",
             )
-            _record_after_tool_call_memory(
+            record_after_tool_call(
                 state=state,
                 task_state=task_state,
                 current=current,
@@ -308,7 +339,7 @@ def _execute_call_tool_step(
                 result=result if isinstance(result, dict) else {"status": "failed"},
                 correlation_id=corr,
             )
-            _record_step_completion_memory(
+            record_plan_step_completion(
                 state=state,
                 task_state=task_state,
                 current=current,
@@ -354,7 +385,7 @@ def _execute_call_tool_step(
             tool=tool_name,
             status="ok",
         )
-        _record_after_tool_call_memory(
+        record_after_tool_call(
             state=state,
             task_state=task_state,
             current=current,
@@ -363,7 +394,7 @@ def _execute_call_tool_step(
             result=result if isinstance(result, dict) else {"status": "ok"},
             correlation_id=corr,
         )
-        _record_step_completion_memory(
+        record_plan_step_completion(
             state=state,
             task_state=task_state,
             current=current,
@@ -390,7 +421,7 @@ def _execute_call_tool_step(
             tool_name,
             type(exc).__name__,
         )
-        _record_after_tool_call_memory(
+        record_after_tool_call(
             state=state,
             task_state=task_state,
             current=current,
@@ -402,7 +433,7 @@ def _execute_call_tool_step(
             },
             correlation_id=corr,
         )
-        _record_step_completion_memory(
+        record_plan_step_completion(
             state=state,
             task_state=task_state,
             current=current,
@@ -434,72 +465,6 @@ def _build_mission_fact_entry(
         "internal": False,
         "ts": datetime.now(timezone.utc).isoformat(),
     }
-
-
-def _normalize_mcp_call_args(
-    *,
-    state: dict[str, Any],
-    task_state: dict[str, Any],
-    current: dict[str, Any] | None,
-    proposal: dict[str, Any],
-    tool_name: str,
-    params: dict[str, Any],
-    corr: str | None,
-    append_trace_event: Callable[[dict[str, Any], dict[str, Any]], None],
-    logger: logging.Logger,
-    log_task_event: Callable[..., None],
-) -> dict[str, Any]:
-    if str(tool_name or "").strip() != "mcp_call":
-        return params
-    normalized, report = normalize_mcp_call_invocation(params)
-    proposal["args"] = dict(normalized)
-    intent = str(
-        task_state.get("goal")
-        or state.get("intent")
-        or state.get("last_user_message")
-        or ""
-    ).strip()
-    task_state["mcp_context"] = {
-        "intent": intent,
-        "profile": str(normalized.get("profile") or ""),
-        "operation": str(normalized.get("operation") or ""),
-    }
-    append_trace_event(
-        task_state,
-        {
-            "type": "mcp_prepared",
-            "summary": (
-                "Prepared MCP invocation with canonical arguments."
-                if report.get("normalized")
-                else "Prepared MCP invocation."
-            ),
-            "correlation_id": corr,
-        },
-    )
-    logger.info(
-        "task_mode execute mcp_prepared correlation_id=%s step_id=%s intent=%s profile=%s operation=%s mapped=%s ignored=%s",
-        corr,
-        str((current or {}).get("step_id") or ""),
-        intent[:120],
-        str(normalized.get("profile") or ""),
-        str(normalized.get("operation") or ""),
-        list(report.get("mapped") or []),
-        list(report.get("ignored") or []),
-    )
-    log_task_event(
-        logger=logger,
-        state=state,
-        task_state=task_state,
-        node="execute_step_node",
-        event="graph.execute.mcp_prepared",
-        step_id=str((current or {}).get("step_id") or ""),
-        intent=intent[:500],
-        profile=str(normalized.get("profile") or ""),
-        operation=str(normalized.get("operation") or ""),
-        mapped=list(report.get("mapped") or []),
-        ignored=list(report.get("ignored") or []),
-    )
-    return dict(normalized)
 
 
 def _execute_tool_call(
@@ -611,205 +576,3 @@ def _redact_sensitive(value: Any) -> Any:
     if isinstance(value, list):
         return [_redact_sensitive(item) for item in value]
     return value
-
-
-def _record_after_tool_call_memory(
-    *,
-    state: dict[str, Any],
-    task_state: dict[str, Any],
-    current: dict[str, Any] | None,
-    tool_name: str,
-    args: dict[str, Any],
-    result: dict[str, Any],
-    correlation_id: str | None,
-) -> None:
-    if not _memory_hooks_enabled():
-        return
-    if str(tool_name or "").strip() in {"search_episodes", "get_mission", "list_active_missions", "get_workspace_pointer"}:
-        return
-    user_id = _memory_user_id(state)
-    mission_id = _memory_mission_id(task_state=task_state, correlation_id=correlation_id)
-    artifacts = _memory_artifacts_from_result(
-        mission_id=mission_id,
-        tool_name=tool_name,
-        result=result,
-    )
-    status = str((result or {}).get("status") or "").strip().lower()
-    payload = {
-        "intent": str(task_state.get("goal") or "").strip() or "task execution",
-        "action": f"{tool_name}({_safe_args_preview(args)})",
-        "result": f"status={status or 'unknown'}",
-        "step_id": str((current or {}).get("step_id") or "").strip() or None,
-        "next": _memory_next_hint(task_state=task_state, current=current),
-    }
-    _memory_append_episode(
-        user_id=user_id,
-        mission_id=mission_id,
-        event_type="after_tool_call",
-        payload=payload,
-        artifacts=artifacts,
-    )
-
-
-def _record_step_completion_memory(
-    *,
-    state: dict[str, Any],
-    task_state: dict[str, Any],
-    current: dict[str, Any] | None,
-    proposal: dict[str, Any],
-    correlation_id: str | None,
-) -> None:
-    if not _memory_hooks_enabled():
-        return
-    user_id = _memory_user_id(state)
-    mission_id = _memory_mission_id(task_state=task_state, correlation_id=correlation_id)
-    payload = {
-        "intent": str(task_state.get("goal") or "").strip() or "task execution",
-        "step_id": str((current or {}).get("step_id") or "").strip() or None,
-        "action": str(proposal.get("kind") or "").strip(),
-        "result": f"step_status={str((current or {}).get('status') or '').strip() or 'unknown'}",
-        "next": _memory_next_hint(task_state=task_state, current=current),
-    }
-    _memory_append_episode(
-        user_id=user_id,
-        mission_id=mission_id,
-        event_type="plan_step_completed",
-        payload=payload,
-        artifacts=[],
-    )
-
-
-def _memory_hooks_enabled() -> bool:
-    raw = str(os.getenv("ALPHONSE_MEMORY_HOOKS_ENABLED", "true")).strip().lower()
-    return raw in {"1", "true", "yes", "on"}
-
-
-def _memory_user_id(state: dict[str, Any]) -> str:
-    for key in ("incoming_user_id", "actor_person_id", "channel_target", "chat_id", "conversation_key"):
-        value = str(state.get(key) or "").strip()
-        if value:
-            return value
-    return "anonymous"
-
-
-def _memory_mission_id(*, task_state: dict[str, Any], correlation_id: str | None) -> str:
-    explicit = str(task_state.get("mission_id") or "").strip()
-    if explicit:
-        return explicit
-    task_id = str(task_state.get("task_id") or "").strip()
-    if task_id:
-        return task_id
-    corr = str(correlation_id or "").strip()
-    if corr:
-        return f"corr_{corr}"
-    return "ad_hoc"
-
-
-def _memory_next_hint(*, task_state: dict[str, Any], current: dict[str, Any] | None) -> str:
-    status = str(task_state.get("status") or "").strip().lower()
-    if status == "waiting_user":
-        return str(task_state.get("next_user_question") or "waiting for user input").strip()
-    if status == "done":
-        return "mission complete"
-    return f"continue from step {str((current or {}).get('step_id') or '').strip() or '?'}"
-
-
-def _memory_append_episode(
-    *,
-    user_id: str,
-    mission_id: str,
-    event_type: str,
-    payload: dict[str, Any],
-    artifacts: list[dict[str, Any]],
-) -> None:
-    try:
-        append_episode(
-            user_id=user_id,
-            mission_id=mission_id,
-            event_type=event_type,
-            payload=payload,
-            artifacts=artifacts,
-        )
-    except Exception:
-        return
-
-
-def _memory_artifacts_from_result(
-    *,
-    mission_id: str,
-    tool_name: str,
-    result: dict[str, Any],
-) -> list[dict[str, Any]]:
-    refs: list[dict[str, Any]] = []
-    max_items = max(1, int(str(os.getenv("ALPHONSE_MEMORY_MAX_ARTIFACTS_PER_EVENT") or "5").strip() or "5"))
-    max_bytes = max(1024, int(str(os.getenv("ALPHONSE_MEMORY_MAX_ARTIFACT_SIZE_BYTES") or str(20 * 1024 * 1024)).strip() or str(20 * 1024 * 1024)))
-    paths = _extract_path_candidates(result)
-    seen: set[str] = set()
-    for candidate in paths:
-        if len(refs) >= max_items:
-            break
-        text = str(candidate or "").strip()
-        if not text or text in seen:
-            continue
-        seen.add(text)
-        if text.startswith("http://") or text.startswith("https://"):
-            refs.append({"url": text})
-            continue
-        file_path = Path(text)
-        if not file_path.exists() or not file_path.is_file():
-            continue
-        try:
-            size = file_path.stat().st_size
-        except Exception:
-            continue
-        if size > max_bytes:
-            refs.append({"path": str(file_path), "note": "artifact_too_large"})
-            continue
-        try:
-            data = file_path.read_bytes()
-            mime = mimetypes.guess_type(str(file_path))[0] or "application/octet-stream"
-            artifact_ref = put_artifact(
-                mission_id=mission_id,
-                content=data,
-                mime=mime,
-                name_hint=file_path.name,
-            )
-            if isinstance(artifact_ref, dict):
-                artifact_ref.setdefault("source_path", str(file_path))
-                artifact_ref.setdefault("tool", tool_name)
-                refs.append(artifact_ref)
-        except Exception:
-            refs.append({"path": str(file_path), "note": "artifact_copy_failed"})
-            continue
-    return refs
-
-
-def _extract_path_candidates(value: Any) -> list[str]:
-    out: list[str] = []
-
-    def _walk(node: Any, parent_key: str = "") -> None:
-        if isinstance(node, dict):
-            for key, item in node.items():
-                _walk(item, str(key))
-            return
-        if isinstance(node, list):
-            for item in node:
-                _walk(item, parent_key)
-            return
-        if not isinstance(node, str):
-            return
-        text = node.strip()
-        if not text:
-            return
-        key_hint = parent_key.lower()
-        if any(token in key_hint for token in ("path", "file", "url", "artifact", "snapshot")):
-            out.append(text)
-            return
-        if text.startswith("/") or text.startswith("./") or text.startswith("../"):
-            out.append(text)
-            return
-        if text.startswith("http://") or text.startswith("https://"):
-            out.append(text)
-
-    _walk(value)
-    return out

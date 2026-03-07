@@ -50,13 +50,10 @@ def _current_step(task_state: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def test_execute_step_emits_memory_hooks_after_tool_call(monkeypatch) -> None:
-    calls: list[dict[str, Any]] = []
+    calls: list[str] = []
 
-    def _capture_memory(**kwargs: Any) -> None:
-        calls.append(dict(kwargs))
-
-    monkeypatch.setattr(execute_step_module, "_memory_append_episode", _capture_memory)
-    monkeypatch.setattr(execute_step_module, "_memory_artifacts_from_result", lambda **_: [])
+    monkeypatch.setattr(execute_step_module, "record_after_tool_call", lambda **_: calls.append("after_tool_call"))
+    monkeypatch.setattr(execute_step_module, "record_plan_step_completion", lambda **_: calls.append("plan_step_completed"))
 
     registry = ToolRegistry()
     registry.register("echo_tool", _EchoTool())
@@ -94,18 +91,15 @@ def test_execute_step_emits_memory_hooks_after_tool_call(monkeypatch) -> None:
         log_task_event=lambda **_kwargs: None,
     )
     assert isinstance(updated.get("task_state"), dict)
-    event_types = [str(item.get("event_type") or "") for item in calls]
-    assert "after_tool_call" in event_types
-    assert "plan_step_completed" in event_types
+    assert "after_tool_call" in calls
+    assert "plan_step_completed" in calls
 
 
 def test_execute_ask_question_tool_emits_plan_step_completion_memory(monkeypatch) -> None:
-    calls: list[dict[str, Any]] = []
+    calls: list[str] = []
 
-    def _capture_memory(**kwargs: Any) -> None:
-        calls.append(dict(kwargs))
-
-    monkeypatch.setattr(execute_step_module, "_memory_append_episode", _capture_memory)
+    monkeypatch.setattr(execute_step_module, "record_after_tool_call", lambda **_: calls.append("after_tool_call"))
+    monkeypatch.setattr(execute_step_module, "record_plan_step_completion", lambda **_: calls.append("plan_step_completed"))
 
     state: dict[str, Any] = {
         "correlation_id": "corr-memory-hook-2",
@@ -140,16 +134,14 @@ def test_execute_ask_question_tool_emits_plan_step_completion_memory(monkeypatch
         log_task_event=lambda **_kwargs: None,
     )
     assert isinstance(updated.get("task_state"), dict)
-    assert any(str(item.get("event_type") or "") == "plan_step_completed" for item in calls)
+    assert "plan_step_completed" in calls
 
 
 def test_send_message_call_writes_facts_and_memory(monkeypatch) -> None:
-    calls: list[dict[str, Any]] = []
+    calls: list[str] = []
 
-    def _capture_memory(**kwargs: Any) -> None:
-        calls.append(dict(kwargs))
-
-    monkeypatch.setattr(execute_step_module, "_memory_append_episode", _capture_memory)
+    monkeypatch.setattr(execute_step_module, "record_after_tool_call", lambda **_: calls.append("after_tool_call"))
+    monkeypatch.setattr(execute_step_module, "record_plan_step_completion", lambda **_: calls.append("plan_step_completed"))
 
     registry = ToolRegistry()
     registry.register("send_message", _InternalMessageTool())
@@ -197,5 +189,5 @@ def test_send_message_call_writes_facts_and_memory(monkeypatch) -> None:
     fact = facts.get("step_9")
     assert isinstance(fact, dict)
     assert fact.get("tool") == "send_message"
-    assert any(str(item.get("event_type") or "") == "after_tool_call" for item in calls)
-    assert any(str(item.get("event_type") or "") == "plan_step_completed" for item in calls)
+    assert "after_tool_call" in calls
+    assert "plan_step_completed" in calls

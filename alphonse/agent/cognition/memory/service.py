@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import mimetypes
 import os
 import shutil
 import subprocess
@@ -535,6 +536,72 @@ def get_workspace_pointer(user_id: str, key: str) -> Any:
     return MemoryService().get_workspace_pointer(user_id, key)
 
 
+def record_after_tool_call(
+    *,
+    state: dict[str, Any],
+    task_state: dict[str, Any],
+    current: dict[str, Any] | None,
+    tool_name: str,
+    args: dict[str, Any],
+    result: dict[str, Any],
+    correlation_id: str | None,
+) -> None:
+    if not _memory_hooks_enabled():
+        return
+    if str(tool_name or "").strip() in {"search_episodes", "get_mission", "list_active_missions", "get_workspace_pointer"}:
+        return
+    user_id = _memory_user_id(state)
+    mission_id = _memory_mission_id(task_state=task_state, correlation_id=correlation_id)
+    artifacts = _memory_artifacts_from_result(
+        mission_id=mission_id,
+        tool_name=tool_name,
+        result=result,
+    )
+    status = str((result or {}).get("status") or "").strip().lower()
+    payload = {
+        "intent": str(task_state.get("goal") or "").strip() or "task execution",
+        "action": f"{tool_name}({_safe_args_preview(args)})",
+        "result": f"status={status or 'unknown'}",
+        "step_id": str((current or {}).get("step_id") or "").strip() or None,
+        "next": _memory_next_hint(task_state=task_state, current=current),
+    }
+    _memory_append_episode(
+        user_id=user_id,
+        mission_id=mission_id,
+        event_type="after_tool_call",
+        payload=payload,
+        artifacts=artifacts,
+    )
+
+
+def record_plan_step_completion(
+    *,
+    state: dict[str, Any],
+    task_state: dict[str, Any],
+    current: dict[str, Any] | None,
+    proposal: dict[str, Any],
+    correlation_id: str | None,
+) -> None:
+    if not _memory_hooks_enabled():
+        return
+    user_id = _memory_user_id(state)
+    mission_id = _memory_mission_id(task_state=task_state, correlation_id=correlation_id)
+    payload = {
+        "intent": str(task_state.get("goal") or "").strip() or "task execution",
+        "step_id": str((current or {}).get("step_id") or "").strip() or None,
+        "action": str(proposal.get("kind") or "").strip(),
+        "result": f"step_status={str((current or {}).get('status') or '').strip() or 'unknown'}",
+        "next": _memory_next_hint(task_state=task_state, current=current),
+    }
+    _memory_append_episode(
+        user_id=user_id,
+        mission_id=mission_id,
+        event_type="plan_step_completed",
+        payload=payload,
+        artifacts=[],
+    )
+
+
 def _render_episode_entry(
     *,
     timestamp: datetime,
@@ -562,6 +629,168 @@ def _render_episode_entry(
         lines.extend(_render_field(key=key_text, value=value, indent=0))
     lines.append("")
     return "\n".join(lines) + "\n"
+
+
+def _memory_hooks_enabled() -> bool:
+    raw = str(os.getenv("ALPHONSE_MEMORY_HOOKS_ENABLED", "true")).strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
+def _memory_user_id(state: dict[str, Any]) -> str:
+    for key in ("incoming_user_id", "actor_person_id", "channel_target", "chat_id", "conversation_key"):
+        value = str(state.get(key) or "").strip()
+        if value:
+            return value
+    return "anonymous"
+
+
+def _memory_mission_id(*, task_state: dict[str, Any], correlation_id: str | None) -> str:
+    explicit = str(task_state.get("mission_id") or "").strip()
+    if explicit:
+        return explicit
+    task_id = str(task_state.get("task_id") or "").strip()
+    if task_id:
+        return task_id
+    corr = str(correlation_id or "").strip()
+    if corr:
+        return f"corr_{corr}"
+    return "ad_hoc"
+
+
+def _memory_next_hint(*, task_state: dict[str, Any], current: dict[str, Any] | None) -> str:
+    status = str(task_state.get("status") or "").strip().lower()
+    if status == "waiting_user":
+        return str(task_state.get("next_user_question") or "waiting for user input").strip()
+    if status == "done":
+        return "mission complete"
+    return f"continue from step {str((current or {}).get('step_id') or '').strip() or '?'}"
+
+
+def _memory_append_episode(
+    *,
+    user_id: str,
+    mission_id: str,
+    event_type: str,
+    payload: dict[str, Any],
+    artifacts: list[dict[str, Any]],
+) -> None:
+    try:
+        append_episode(
+            user_id=user_id,
+            mission_id=mission_id,
+            event_type=event_type,
+            payload=payload,
+            artifacts=artifacts,
+        )
+    except Exception:
+        return
+
+
+def _memory_artifacts_from_result(
+    *,
+    mission_id: str,
+    tool_name: str,
+    result: dict[str, Any],
+) -> list[dict[str, Any]]:
+    refs: list[dict[str, Any]] = []
+    max_items = max(1, int(str(os.getenv("ALPHONSE_MEMORY_MAX_ARTIFACTS_PER_EVENT") or "5").strip() or "5"))
+    max_bytes = max(1024, int(str(os.getenv("ALPHONSE_MEMORY_MAX_ARTIFACT_SIZE_BYTES") or str(20 * 1024 * 1024)).strip() or str(20 * 1024 * 1024)))
+    paths = _extract_path_candidates(result)
+    seen: set[str] = set()
+    for candidate in paths:
+        if len(refs) >= max_items:
+            break
+        text = str(candidate or "").strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        if text.startswith("http://") or text.startswith("https://"):
+            refs.append({"url": text})
+            continue
+        file_path = Path(text)
+        if not file_path.exists() or not file_path.is_file():
+            continue
+        try:
+            size = file_path.stat().st_size
+        except Exception:
+            continue
+        if size > max_bytes:
+            refs.append({"path": str(file_path), "note": "artifact_too_large"})
+            continue
+        try:
+            data = file_path.read_bytes()
+            mime = mimetypes.guess_type(str(file_path))[0] or "application/octet-stream"
+            artifact_ref = put_artifact(
+                mission_id=mission_id,
+                content=data,
+                mime=mime,
+                name_hint=file_path.name,
+            )
+            if isinstance(artifact_ref, dict):
+                artifact_ref.setdefault("source_path", str(file_path))
+                artifact_ref.setdefault("tool", tool_name)
+                refs.append(artifact_ref)
+        except Exception:
+            refs.append({"path": str(file_path), "note": "artifact_copy_failed"})
+            continue
+    return refs
+
+
+def _extract_path_candidates(value: Any) -> list[str]:
+    out: list[str] = []
+
+    def _walk(node: Any, parent_key: str = "") -> None:
+        if isinstance(node, dict):
+            for key, item in node.items():
+                _walk(item, str(key))
+            return
+        if isinstance(node, list):
+            for item in node:
+                _walk(item, parent_key)
+            return
+        if not isinstance(node, str):
+            return
+        text = node.strip()
+        if not text:
+            return
+        key_hint = parent_key.lower()
+        if any(token in key_hint for token in ("path", "file", "url", "artifact", "snapshot")):
+            out.append(text)
+            return
+        if text.startswith("/") or text.startswith("./") or text.startswith("../"):
+            out.append(text)
+            return
+        if text.startswith("http://") or text.startswith("https://"):
+            out.append(text)
+
+    _walk(value)
+    return out
+
+
+def _safe_args_preview(args: dict[str, Any]) -> str:
+    redacted = _redact_sensitive(args)
+    try:
+        rendered = json.dumps(redacted, ensure_ascii=False, sort_keys=True)
+    except Exception:
+        rendered = str(redacted)
+    return rendered[:800]
+
+
+def _redact_sensitive(value: Any) -> Any:
+    secret_tokens = ("password", "pass", "token", "api_key", "secret", "authorization")
+    if isinstance(value, dict):
+        out: dict[str, Any] = {}
+        for key, item in value.items():
+            key_text = str(key or "")
+            lowered = key_text.lower()
+            if any(token in lowered for token in secret_tokens):
+                out[key_text] = "[redacted]"
+            else:
+                out[key_text] = _redact_sensitive(item)
+        return out
+    if isinstance(value, list):
+        return [_redact_sensitive(item) for item in value]
+    return value
 
 
 def _render_field(*, key: str, value: Any, indent: int) -> list[str]:
