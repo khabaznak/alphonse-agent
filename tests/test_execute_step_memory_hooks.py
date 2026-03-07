@@ -143,7 +143,7 @@ def test_execute_ask_question_tool_emits_plan_step_completion_memory(monkeypatch
     assert any(str(item.get("event_type") or "") == "plan_step_completed" for item in calls)
 
 
-def test_internal_progress_message_does_not_write_facts_or_memory(monkeypatch) -> None:
+def test_send_message_call_writes_facts_and_memory(monkeypatch) -> None:
     calls: list[dict[str, Any]] = []
 
     def _capture_memory(**kwargs: Any) -> None:
@@ -192,5 +192,10 @@ def test_internal_progress_message_does_not_write_facts_or_memory(monkeypatch) -
     )
     next_state = updated.get("task_state")
     assert isinstance(next_state, dict)
-    assert next_state.get("facts") == {}
-    assert calls == []
+    facts = next_state.get("facts")
+    assert isinstance(facts, dict)
+    fact = facts.get("step_9")
+    assert isinstance(fact, dict)
+    assert fact.get("tool") == "send_message"
+    assert any(str(item.get("event_type") or "") == "after_tool_call" for item in calls)
+    assert any(str(item.get("event_type") or "") == "plan_step_completed" for item in calls)

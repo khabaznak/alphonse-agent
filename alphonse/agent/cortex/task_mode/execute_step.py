@@ -29,16 +29,8 @@ def execute_step_node_impl(
 ) -> dict[str, Any]:
     task_state = task_state_with_defaults(state)
     task_state["pdca_phase"] = "do"
+    task_state["check_provenance"] = "do"
     corr = correlation_id(state)
-    _execute_pending_control_tool_call(
-        state=state,
-        task_state=task_state,
-        tool_registry=tool_registry,
-        corr=corr,
-        append_trace_event=append_trace_event,
-        logger=logger,
-        log_task_event=log_task_event,
-    )
     current = current_step(task_state)
     proposal, proposal_error = _proposal_from_pending_plan_raw(task_state=task_state, current=current)
     if isinstance(proposal_error, dict):
@@ -87,16 +79,6 @@ def execute_step_node_impl(
             corr,
         )
         return {"task_state": task_state}
-    _queue_internal_progress_control_call(state=state, task_state=task_state)
-    _execute_pending_control_tool_call(
-        state=state,
-        task_state=task_state,
-        tool_registry=tool_registry,
-        corr=corr,
-        append_trace_event=append_trace_event,
-        logger=logger,
-        log_task_event=log_task_event,
-    )
     task_state["planner_error_last"] = None
 
     kind = str(proposal.get("kind") or "").strip()
@@ -131,31 +113,19 @@ def _proposal_from_pending_plan_raw(
     normalized = _normalize_raw_plan_artifact(raw)
     if isinstance(normalized, dict):
         tool_call = normalized.get("tool_call")
-        planner_intent = str(normalized.get("planner_intent") or "").strip()
         if not isinstance(tool_call, dict):
             preview = str(raw)[:280] if raw is not None else ""
             return None, {
                 "reason": "invalid_planner_output",
                 "code": "invalid_planner_output",
-                "message": "Planner output is missing a valid tool_call object.",
-                "retryable": True,
-                "details": {"raw_output_preview": preview},
-            }
-        if not planner_intent:
-            preview = str(raw)[:280] if raw is not None else ""
-            return None, {
-                "reason": "invalid_planner_output",
-                "code": "invalid_planner_output",
-                "message": "Planner output is missing planner_intent.",
+                "message": "Planner artifact contains no parseable tool_call.",
                 "retryable": True,
                 "details": {"raw_output_preview": preview},
             }
         task_state["current_plan_step"] = {
             "step_id": str((current or {}).get("step_id") or ""),
             "tool_call": dict(tool_call),
-            "planner_intent": planner_intent,
         }
-        task_state["planner_intent_last"] = planner_intent
         if isinstance(current, dict):
             current["proposal"] = dict(tool_call)
         task_state["pending_plan_raw"] = None
@@ -164,7 +134,7 @@ def _proposal_from_pending_plan_raw(
     return None, {
         "reason": "invalid_planner_output",
         "code": "invalid_planner_output",
-        "message": "Planner output is not a valid plan artifact with tool_call and planner_intent.",
+        "message": "Planner artifact malformed: could not parse tool_call.",
         "retryable": True,
         "details": {"raw_output_preview": preview},
     }
@@ -172,21 +142,14 @@ def _proposal_from_pending_plan_raw(
 
 def _normalize_raw_plan_artifact(raw: Any) -> dict[str, Any] | None:
     if isinstance(raw, dict):
-        legacy_tool_call = _normalize_raw_plan_candidate(raw)
-        if isinstance(legacy_tool_call, dict):
-            return {
-                "tool_call": legacy_tool_call,
-                "planner_intent": "Estoy preparando la siguiente acción para avanzar tu solicitud.",
-            }
         tool_call = raw.get("tool_call")
         if isinstance(tool_call, dict):
             normalized_tool_call = _normalize_raw_plan_candidate(tool_call)
             if isinstance(normalized_tool_call, dict):
-                return {
-                    "tool_call": normalized_tool_call,
-                    "planner_intent": str(raw.get("planner_intent") or "").strip(),
-                }
-            return None
+                return {"tool_call": normalized_tool_call}
+        normalized_candidate = _normalize_raw_plan_candidate(raw)
+        if isinstance(normalized_candidate, dict):
+            return {"tool_call": normalized_candidate}
         content = raw.get("content")
         if isinstance(content, str) and content.strip():
             parsed = parse_json_object(content)
@@ -227,209 +190,6 @@ def _normalize_raw_plan_candidate(raw: Any) -> dict[str, Any] | None:
     return None
 
 
-def _execute_pending_control_tool_call(
-    *,
-    state: dict[str, Any],
-    task_state: dict[str, Any],
-    tool_registry: Any,
-    corr: str | None,
-    append_trace_event: Callable[[dict[str, Any], dict[str, Any]], None],
-    logger: logging.Logger,
-    log_task_event: Callable[..., None],
-) -> None:
-    pending = task_state.get("pending_control_tool_call")
-    if not isinstance(pending, dict):
-        return
-    proposal = dict(pending)
-    args = proposal.get("args") if isinstance(proposal.get("args"), dict) else {}
-    if isinstance(args, dict):
-        args["internal_progress"] = True
-        proposal["args"] = args
-    before_status = str(task_state.get("status") or "").strip().lower() or "running"
-    result = _execute_call_tool_step(
-        state=state,
-        task_state=task_state,
-        current=None,
-        proposal=proposal,
-        corr=corr,
-        tool_registry=tool_registry,
-        append_trace_event=append_trace_event,
-        logger=logger,
-        log_task_event=log_task_event,
-    )
-    task_state["pending_control_tool_call"] = None
-    if str(task_state.get("status") or "").strip().lower() in {"failed", "waiting_user"}:
-        task_state["status"] = before_status
-        task_state["next_user_question"] = None
-    _ = result
-
-
-def _queue_internal_progress_control_call(
-    *,
-    state: dict[str, Any],
-    task_state: dict[str, Any],
-) -> None:
-    if not bool(task_state.get("surface_planner_intent", True)):
-        return
-    if task_state.get("pending_control_tool_call") is not None:
-        return
-    intent = str(task_state.get("planner_intent_last") or "").strip()
-    if not intent:
-        return
-    last_sent = str(task_state.get("planner_intent_last_sent") or "").strip()
-    if last_sent and _normalized_text(last_sent) == _normalized_text(intent):
-        return
-    recipient = str(
-        state.get("channel_target")
-        or state.get("target")
-        or state.get("chat_id")
-        or ""
-    ).strip()
-    if not recipient:
-        return
-    task_state["pending_control_tool_call"] = {
-        "kind": "call_tool",
-        "tool_name": "send_message",
-        "args": {
-            "message": intent,
-            "recipient": recipient,
-            "internal_progress": True,
-            "max_chars": 160,
-        },
-        "meta": {
-            "origin": "check_progress_visibility",
-            "internal_only": True,
-            "step_id": str((task_state.get("current_plan_step") or {}).get("step_id") or ""),
-        },
-    }
-    task_state["planner_intent_last_sent"] = intent
-
-
-def _normalized_text(value: str) -> str:
-    return " ".join(str(value or "").strip().lower().split())
-
-
-def _execute_ask_user_step(
-    *,
-    state: dict[str, Any],
-    task_state: dict[str, Any],
-    current: dict[str, Any] | None,
-    proposal: dict[str, Any],
-    corr: str | None,
-    append_trace_event: Callable[[dict[str, Any], dict[str, Any]], None],
-    logger: logging.Logger,
-    log_task_event: Callable[..., None],
-) -> dict[str, Any]:
-    question = str(proposal.get("question") or "").strip()
-    if not question:
-        task_state["status"] = "failed"
-        if isinstance(current, dict):
-            current["status"] = "failed"
-        append_trace_event(
-            task_state,
-            {
-                "type": "validation_failed",
-                "summary": "ask_user proposal reached execute without a question.",
-                "correlation_id": corr,
-            },
-        )
-        log_task_event(
-            logger=logger,
-            state=state,
-            task_state=task_state,
-            node="execute_step_node",
-            event="graph.step.ask_user_invalid",
-            level="warning",
-            step_id=str((current or {}).get("step_id") or ""),
-            reason="missing_question",
-        )
-        return {"task_state": task_state}
-    task_state["status"] = "waiting_user"
-    task_state["next_user_question"] = question
-    if isinstance(current, dict):
-        current["status"] = "executed"
-    append_trace_event(
-        task_state,
-        {
-            "type": "status_changed",
-            "summary": "Status changed to waiting_user by ask_user proposal.",
-            "correlation_id": corr,
-        },
-    )
-    logger.info(
-        "task_mode execute ask_user correlation_id=%s step_id=%s question=%s",
-        corr,
-        str((current or {}).get("step_id") or ""),
-        question,
-    )
-    log_task_event(
-        logger=logger,
-        state=state,
-        task_state=task_state,
-        node="execute_step_node",
-        event="graph.step.ask_user",
-        step_id=str((current or {}).get("step_id") or ""),
-    )
-    _record_step_completion_memory(
-        state=state,
-        task_state=task_state,
-        current=current,
-        proposal=proposal,
-        correlation_id=corr,
-    )
-    return {"task_state": task_state}
-
-
-def _execute_finish_step(
-    *,
-    state: dict[str, Any],
-    task_state: dict[str, Any],
-    current: dict[str, Any] | None,
-    proposal: dict[str, Any],
-    corr: str | None,
-    append_trace_event: Callable[[dict[str, Any], dict[str, Any]], None],
-    logger: logging.Logger,
-    log_task_event: Callable[..., None],
-) -> dict[str, Any]:
-    final_text = str(proposal.get("final_text") or "").strip()
-    task_state["status"] = "done"
-    task_state["outcome"] = {
-        "kind": "task_completed",
-        "final_text": final_text,
-    }
-    if isinstance(current, dict):
-        current["status"] = "executed"
-    append_trace_event(
-        task_state,
-        {
-            "type": "status_changed",
-            "summary": "Status changed to done by finish proposal.",
-            "correlation_id": corr,
-        },
-    )
-    logger.info(
-        "task_mode execute finish correlation_id=%s step_id=%s",
-        corr,
-        str((current or {}).get("step_id") or ""),
-    )
-    log_task_event(
-        logger=logger,
-        state=state,
-        task_state=task_state,
-        node="execute_step_node",
-        event="graph.task.completed",
-        step_id=str((current or {}).get("step_id") or ""),
-    )
-    _record_step_completion_memory(
-        state=state,
-        task_state=task_state,
-        current=current,
-        proposal=proposal,
-        correlation_id=corr,
-    )
-    return {"task_state": task_state}
-
-
 def _execute_call_tool_step(
     *,
     state: dict[str, Any],
@@ -445,28 +205,6 @@ def _execute_call_tool_step(
     tool_name = str(proposal.get("tool_name") or "").strip()
     args = proposal.get("args")
     params = dict(args) if isinstance(args, dict) else {}
-    is_internal_progress = _is_internal_progress_call(tool_name=tool_name, args=params)
-    if _should_suppress_mission_send_message(
-        task_state=task_state,
-        tool_name=tool_name,
-        params=params,
-        is_internal_progress=is_internal_progress,
-    ):
-        if isinstance(current, dict):
-            current["status"] = "executed"
-        task_state["status"] = "running"
-        log_task_event(
-            logger=logger,
-            state=state,
-            task_state=task_state,
-            node="execute_step_node",
-            event="graph.do.mission_step_suppressed",
-            level="warning",
-            step_id=str((current or {}).get("step_id") or ""),
-            tool=tool_name,
-            reason="duplicates_internal_progress_intent",
-        )
-        return {"task_state": task_state}
     params = _normalize_mcp_call_args(
         state=state,
         task_state=task_state,
@@ -549,18 +287,17 @@ def _execute_call_tool_step(
             tool_name=tool_name,
             args=params,
         )
-        if not is_internal_progress:
-            facts = task_state.get("facts")
-            fact_bucket = dict(facts) if isinstance(facts, dict) else {}
-            result_payload = _serialize_result(result)
-            fact_entry = _build_mission_fact_entry(
-                step_id=step_id,
-                tool_name=tool_name,
-                args=params,
-                result=result_payload,
-            )
-            fact_bucket[step_id or f"result_{len(fact_bucket) + 1}"] = fact_entry
-            task_state["facts"] = fact_bucket
+        facts = task_state.get("facts")
+        fact_bucket = dict(facts) if isinstance(facts, dict) else {}
+        result_payload = _serialize_result(result)
+        fact_entry = _build_mission_fact_entry(
+            step_id=step_id,
+            tool_name=tool_name,
+            args=params,
+            result=result_payload,
+        )
+        fact_bucket[step_id or f"result_{len(fact_bucket) + 1}"] = fact_entry
+        task_state["facts"] = fact_bucket
         result_status = ""
         if isinstance(result, dict):
             result_status = str(result.get("status") or "").strip().lower()
@@ -639,23 +376,22 @@ def _execute_call_tool_step(
                 tool=tool_name,
                 status="failed",
             )
-            if not is_internal_progress:
-                _record_after_tool_call_memory(
-                    state=state,
-                    task_state=task_state,
-                    current=current,
-                    tool_name=tool_name,
-                    args=params,
-                    result=result if isinstance(result, dict) else {"status": "failed"},
-                    correlation_id=corr,
-                )
-                _record_step_completion_memory(
-                    state=state,
-                    task_state=task_state,
-                    current=current,
-                    proposal=proposal,
-                    correlation_id=corr,
-                )
+            _record_after_tool_call_memory(
+                state=state,
+                task_state=task_state,
+                current=current,
+                tool_name=tool_name,
+                args=params,
+                result=result if isinstance(result, dict) else {"status": "failed"},
+                correlation_id=corr,
+            )
+            _record_step_completion_memory(
+                state=state,
+                task_state=task_state,
+                current=current,
+                proposal=proposal,
+                correlation_id=corr,
+            )
             return {"task_state": task_state}
         task_state["status"] = "running"
         if isinstance(current, dict):
@@ -691,47 +427,35 @@ def _execute_call_tool_step(
             tool=tool_name,
             **terminal_context,
         )
-        if is_internal_progress:
-            log_task_event(
-                logger=logger,
-                state=state,
-                task_state=task_state,
-                node="execute_step_node",
-                event="graph.do.internal_progress_executed",
-                step_id=step_id,
-                tool=tool_name,
-            )
-        else:
-            log_task_event(
-                logger=logger,
-                state=state,
-                task_state=task_state,
-                node="execute_step_node",
-                event="graph.do.mission_step_executed",
-                step_id=step_id,
-                tool=tool_name,
-                status="ok",
-            )
-        if not is_internal_progress:
-            _record_after_tool_call_memory(
-                state=state,
-                task_state=task_state,
-                current=current,
-                tool_name=tool_name,
-                args=params,
-                result=result if isinstance(result, dict) else {"status": "ok"},
-                correlation_id=corr,
-            )
-            _record_step_completion_memory(
-                state=state,
-                task_state=task_state,
-                current=current,
-                proposal=proposal,
-                correlation_id=corr,
-            )
+        log_task_event(
+            logger=logger,
+            state=state,
+            task_state=task_state,
+            node="execute_step_node",
+            event="graph.do.mission_step_executed",
+            step_id=step_id,
+            tool=tool_name,
+            status="ok",
+        )
+        _record_after_tool_call_memory(
+            state=state,
+            task_state=task_state,
+            current=current,
+            tool_name=tool_name,
+            args=params,
+            result=result if isinstance(result, dict) else {"status": "ok"},
+            correlation_id=corr,
+        )
+        _record_step_completion_memory(
+            state=state,
+            task_state=task_state,
+            current=current,
+            proposal=proposal,
+            correlation_id=corr,
+        )
         return {"task_state": task_state}
     except Exception as exc:
-        task_state["status"] = "running" if is_internal_progress else "failed"
+        task_state["status"] = "failed"
         if isinstance(current, dict):
             current["status"] = "failed"
         append_trace_event(
@@ -755,61 +479,26 @@ def _execute_call_tool_step(
                 corr,
                 type(exc).__name__,
             )
-        if not is_internal_progress:
-            _record_after_tool_call_memory(
-                state=state,
-                task_state=task_state,
-                current=current,
-                tool_name=tool_name,
-                args=params,
-                result={
-                    "status": "failed",
-                    "error": {"code": "tool_execution_exception", "message": str(exc), "details": {"type": type(exc).__name__}},
-                },
-                correlation_id=corr,
-            )
-            _record_step_completion_memory(
-                state=state,
-                task_state=task_state,
-                current=current,
-                proposal=proposal,
-                correlation_id=corr,
-            )
+        _record_after_tool_call_memory(
+            state=state,
+            task_state=task_state,
+            current=current,
+            tool_name=tool_name,
+            args=params,
+            result={
+                "status": "failed",
+                "error": {"code": "tool_execution_exception", "message": str(exc), "details": {"type": type(exc).__name__}},
+            },
+            correlation_id=corr,
+        )
+        _record_step_completion_memory(
+            state=state,
+            task_state=task_state,
+            current=current,
+            proposal=proposal,
+            correlation_id=corr,
+        )
         return {"task_state": task_state}
-
-
-def _is_internal_progress_call(*, tool_name: str, args: dict[str, Any]) -> bool:
-    if str(tool_name or "").strip() not in {"send_message", "sendMessage", "communicate"}:
-        return False
-    raw = args.get("internal_progress")
-    if isinstance(raw, bool):
-        return raw
-    text = str(raw or "").strip().lower()
-    return text in {"1", "true", "yes", "on"}
-
-
-def _should_suppress_mission_send_message(
-    *,
-    task_state: dict[str, Any],
-    tool_name: str,
-    params: dict[str, Any],
-    is_internal_progress: bool,
-) -> bool:
-    if is_internal_progress:
-        return False
-    if str(tool_name or "").strip() not in {"send_message", "sendMessage"}:
-        return False
-    message = str(
-        params.get("message")
-        or params.get("Message")
-        or params.get("text")
-        or params.get("Text")
-        or ""
-    ).strip()
-    planner_intent = str(task_state.get("planner_intent_last") or "").strip()
-    if not message or not planner_intent:
-        return False
-    return _normalized_text(message) == _normalized_text(planner_intent)
 
 
 def _build_mission_fact_entry(
@@ -1027,57 +716,6 @@ def _serialize_result(result: Any) -> Any:
     if isinstance(result, (dict, list, str, int, float, bool)) or result is None:
         return result
     return str(result)
-
-
-def _derive_tool_outcome_from_result(
-    *,
-    tool_name: str,
-    result: Any,
-    state: dict[str, Any],
-) -> dict[str, Any] | None:
-    if tool_name in {"domotics.execute", "domotics_execute"} and isinstance(result, dict):
-        status = str(result.get("status") or "").strip().lower()
-        payload = result.get("result") if isinstance(result.get("result"), dict) else {}
-        if status in {"ok", "executed"} and bool(payload.get("transport_ok")) and payload.get("effect_applied_ok") is True:
-            readback_state = payload.get("readback_state") if isinstance(payload.get("readback_state"), dict) else {}
-            entity_id = str(readback_state.get("entity_id") or "").strip() or None
-            state_value = str(readback_state.get("state") or "").strip() or None
-            return {
-                "kind": "task_completed",
-                "summary": "Domotics action applied successfully and confirmed by readback.",
-                "final_text": "Done. I executed the domotics action and confirmed it via readback.",
-                "evidence": {
-                    "tool": "domotics.execute",
-                    "transport_ok": True,
-                    "effect_applied_ok": True,
-                    "entity_id": entity_id,
-                    "state": state_value,
-                },
-            }
-
-    if tool_name not in {"create_reminder", "createReminder"} or not isinstance(result, dict):
-        return None
-    payload = result
-    status = str(result.get("status") or "").strip().lower()
-    if status in {"ok", "executed"} and isinstance(result.get("result"), dict):
-        payload = dict(result.get("result") or {})
-    reminder_id = str(payload.get("reminder_id") or "").strip()
-    fire_at = str(payload.get("fire_at") or "").strip()
-    if not reminder_id or not fire_at:
-        return None
-    message = str(payload.get("message") or "").strip()
-    for_whom = str(payload.get("for_whom") or state.get("channel_target") or "").strip()
-    if not for_whom:
-        for_whom = str(payload.get("delivery_target") or "").strip()
-    return {
-        "kind": "reminder_created",
-        "evidence": {
-            "reminder_id": reminder_id,
-            "fire_at": fire_at,
-            "message": message,
-            "for_whom": for_whom,
-        },
-    }
 
 
 def _is_send_after_user_search(*, tool_name: str, task_state: dict[str, Any]) -> bool:
