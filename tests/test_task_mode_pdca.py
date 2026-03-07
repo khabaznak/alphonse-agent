@@ -572,7 +572,10 @@ def test_pdca_execute_maps_typeerror_to_structured_tool_failure() -> None:
     assert result.get("status") == "failed"
     error = result.get("error")
     assert isinstance(error, dict)
-    assert error.get("code") == "invalid_tool_arguments"
+    assert error.get("code") == "tool_execution_exception"
+    details = error.get("details")
+    assert isinstance(details, dict)
+    assert details.get("exception_type") == "TypeError"
 
 
 def test_pdca_parse_failure_degrades_to_failed() -> None:
@@ -1206,7 +1209,9 @@ def test_execute_step_records_evidence_for_domotics_execute_confirmed() -> None:
     entry = facts.get("step_1")
     assert isinstance(entry, dict)
     assert str(entry.get("tool") or "") == "domotics.execute"
-    assert str(entry.get("status") or "") == "ok"
+    result = entry.get("result")
+    assert isinstance(result, dict)
+    assert str(result.get("status") or "") == "ok"
 
 
 def test_respond_finalize_done_ignores_stale_pending_interaction() -> None:

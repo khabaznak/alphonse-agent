@@ -248,160 +248,52 @@ def _execute_call_tool_step(
     args = proposal.get("args")
     params = dict(args) if isinstance(args, dict) else {}
     step_id = str((current or {}).get("step_id") or "")
-    try:
-        result = _execute_tool_call(
-            state=state,
-            tool_registry=tool_registry,
-            tool_name=tool_name,
-            args=params,
-        )
-        facts = task_state.get("facts")
-        fact_bucket = dict(facts) if isinstance(facts, dict) else {}
-        result_payload = _serialize_result(result)
-        fact_entry = _build_mission_fact_entry(
-            step_id=step_id,
-            tool_name=tool_name,
-            args=params,
-            result=result_payload,
-        )
-        fact_bucket[step_id or f"result_{len(fact_bucket) + 1}"] = fact_entry
-        task_state["facts"] = fact_bucket
-        result_status = str((result or {}).get("status") or "").strip().lower() if isinstance(result, dict) else ""
-        task_state["status"] = "running"
-        if isinstance(current, dict):
-            current["status"] = "executed"
-            current.pop("failure_retryable", None)
-            current.pop("failure_error_code", None)
-        append_trace_event(
-            task_state,
-            {
-                "type": "tool_executed",
-                "summary": f"Executed tool {tool_name} with reported_status={result_status or 'unknown'}.",
-                "correlation_id": corr,
-            },
-        )
-        logger.info(
-            "task_mode execute tool_executed correlation_id=%s step_id=%s tool=%s reported_status=%s",
-            corr,
-            step_id,
-            tool_name,
-            result_status or "unknown",
-        )
-        log_task_event(
-            logger=logger,
-            state=state,
-            task_state=task_state,
-            node="execute_step_node",
-            event="graph.tool.executed",
-            step_id=step_id,
-            tool=tool_name,
-            reported_status=result_status or "unknown",
-        )
-        log_task_event(
-            logger=logger,
-            state=state,
-            task_state=task_state,
-            node="execute_step_node",
-            event="graph.do.mission_step_executed",
-            step_id=step_id,
-            tool=tool_name,
-            status=result_status or "unknown",
-        )
-        record_after_tool_call(
-            state=state,
-            task_state=task_state,
-            current=current,
-            tool_name=tool_name,
-            args=params,
-            result=result if isinstance(result, dict) else {"status": "unknown"},
-            correlation_id=corr,
-        )
-        record_plan_step_completion(
-            state=state,
-            task_state=task_state,
-            current=current,
-            proposal=proposal,
-            correlation_id=corr,
-        )
-        return {"task_state": task_state}
-    except Exception as exc:
-        task_state["status"] = "running"
-        if isinstance(current, dict):
-            current["status"] = "executed"
-            current.pop("failure_retryable", None)
-            current.pop("failure_error_code", None)
-        result = {
-            "status": "failed",
-            "result": None,
-            "error": {
-                "code": "tool_execution_exception",
-                "message": str(exc),
-                "details": {"type": type(exc).__name__},
-            },
-        }
-        facts = task_state.get("facts")
-        fact_bucket = dict(facts) if isinstance(facts, dict) else {}
-        fact_entry = _build_mission_fact_entry(
-            step_id=step_id,
-            tool_name=tool_name,
-            args=params,
-            result=_serialize_result(result),
-        )
-        fact_bucket[step_id or f"result_{len(fact_bucket) + 1}"] = fact_entry
-        task_state["facts"] = fact_bucket
-        append_trace_event(
-            task_state,
-            {
-                "type": "tool_executed",
-                "summary": f"Executed tool {tool_name} with reported_status=failed.",
-                "correlation_id": corr,
-            },
-        )
-        logger.info(
-            "task_mode execute tool_executed correlation_id=%s step_id=%s tool=%s reported_status=failed error=%s",
-            corr,
-            step_id,
-            tool_name,
-            type(exc).__name__,
-        )
-        log_task_event(
-            logger=logger,
-            state=state,
-            task_state=task_state,
-            node="execute_step_node",
-            event="graph.tool.executed",
-            step_id=step_id,
-            tool=tool_name,
-            reported_status="failed",
-            error_code="tool_execution_exception",
-        )
-        log_task_event(
-            logger=logger,
-            state=state,
-            task_state=task_state,
-            node="execute_step_node",
-            event="graph.do.mission_step_executed",
-            step_id=step_id,
-            tool=tool_name,
-            status="failed",
-        )
-        record_after_tool_call(
-            state=state,
-            task_state=task_state,
-            current=current,
-            tool_name=tool_name,
-            args=params,
-            result=result,
-            correlation_id=corr,
-        )
-        record_plan_step_completion(
-            state=state,
-            task_state=task_state,
-            current=current,
-            proposal=proposal,
-            correlation_id=corr,
-        )
-        return {"task_state": task_state}
+    result = _execute_tool_call(
+        state=state,
+        tool_registry=tool_registry,
+        tool_name=tool_name,
+        args=params,
+    )
+    facts = task_state.get("facts")
+    fact_bucket = dict(facts) if isinstance(facts, dict) else {}
+    result_payload = _serialize_result(result)
+    fact_entry = _build_mission_fact_entry(
+        step_id=step_id,
+        tool_name=tool_name,
+        args=params,
+        result=result_payload,
+    )
+    fact_bucket[step_id or f"result_{len(fact_bucket) + 1}"] = fact_entry
+    task_state["facts"] = fact_bucket
+    result_status = str((result or {}).get("status") or "").strip().lower() if isinstance(result, dict) else ""
+    task_state["status"] = "running"
+    if isinstance(current, dict):
+        current["status"] = "executed"
+    append_trace_event(
+        task_state,
+        {
+            "type": "tool_executed",
+            "summary": f"Executed tool {tool_name} with reported_status={result_status or 'unknown'}.",
+            "correlation_id": corr,
+        },
+    )
+    record_after_tool_call(
+        state=state,
+        task_state=task_state,
+        current=current,
+        tool_name=tool_name,
+        args=params,
+        result=result if isinstance(result, dict) else {"status": "unknown"},
+        correlation_id=corr,
+    )
+    record_plan_step_completion(
+        state=state,
+        task_state=task_state,
+        current=current,
+        proposal=proposal,
+        correlation_id=corr,
+    )
+    return {"task_state": task_state}
 
 
 def _build_mission_fact_entry(
@@ -411,18 +303,11 @@ def _build_mission_fact_entry(
     args: dict[str, Any],
     result: Any,
 ) -> dict[str, Any]:
-    payload = result if isinstance(result, dict) else {}
-    status = str(payload.get("status") or "").strip().lower() if isinstance(payload, dict) else ""
-    result_payload = payload.get("result") if isinstance(payload, dict) else None
-    error_payload = payload.get("error") if isinstance(payload, dict) else None
     return {
         "step_id": step_id or None,
         "tool": tool_name,
         "args": _redact_sensitive(dict(args or {})),
-        "status": status or "unknown",
-        "result": payload,
-        "result_payload": _serialize_result(result_payload),
-        "error": _serialize_result(error_payload),
+        "result": _serialize_result(result),
         "internal": False,
         "ts": datetime.now(timezone.utc).isoformat(),
     }
@@ -451,21 +336,6 @@ def _execute_tool_call(
             raw_result = execute(**call_args, state=state)
         else:
             raw_result = execute(**call_args)
-    except TypeError as exc:
-        return {
-            "status": "failed",
-            "result": None,
-            "error": {
-                "code": "invalid_tool_arguments",
-                "message": str(exc) or "invalid tool arguments",
-                "retryable": False,
-                "details": {
-                    "tool": tool_name,
-                    "args_keys": sorted(list(dict(args or {}).keys())),
-                },
-            },
-            "metadata": {"tool": tool_name},
-        }
     except Exception as exc:
         as_payload = getattr(exc, "as_payload", None)
         if callable(as_payload):
@@ -476,7 +346,6 @@ def _execute_tool_call(
             error_payload = {
                 "code": "tool_execution_exception",
                 "message": str(exc) or type(exc).__name__,
-                "retryable": True,
                 "details": {"exception_type": type(exc).__name__},
             }
         return {

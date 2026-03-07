@@ -30,6 +30,18 @@ class _InternalMessageTool:
         }
 
 
+class _AskQuestionTool:
+    def execute(self, *, question: str, state: dict[str, Any] | None = None, **_: Any) -> dict[str, Any]:
+        _ = state
+        _ = question
+        return {
+            "status": "ok",
+            "result": {"queued": True},
+            "error": None,
+            "metadata": {"tool": "askQuestion"},
+        }
+
+
 def _task_state_with_defaults(state: dict[str, Any]) -> dict[str, Any]:
     task_state = state.get("task_state")
     assert isinstance(task_state, dict)
@@ -101,6 +113,9 @@ def test_execute_ask_question_tool_emits_plan_step_completion_memory(monkeypatch
     monkeypatch.setattr(execute_step_module, "record_after_tool_call", lambda **_: calls.append("after_tool_call"))
     monkeypatch.setattr(execute_step_module, "record_plan_step_completion", lambda **_: calls.append("plan_step_completed"))
 
+    registry = ToolRegistry()
+    registry.register("askQuestion", _AskQuestionTool())
+
     state: dict[str, Any] = {
         "correlation_id": "corr-memory-hook-2",
         "incoming_user_id": "alex",
@@ -125,7 +140,7 @@ def test_execute_ask_question_tool_emits_plan_step_completion_memory(monkeypatch
     }
     updated = execute_step_node_impl(
         state,
-        tool_registry=ToolRegistry(),
+        tool_registry=registry,
         task_state_with_defaults=_task_state_with_defaults,
         correlation_id=lambda s: str(s.get("correlation_id") or ""),
         current_step=_current_step,

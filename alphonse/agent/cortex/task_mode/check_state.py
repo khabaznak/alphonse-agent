@@ -35,7 +35,15 @@ def derive_outcome_from_state(
 def evaluate_success_from_evidence(task_state: dict[str, Any]) -> dict[str, Any]:
     goal = str(task_state.get("goal") or "").strip().lower()
     criteria = task_state.get("acceptance_criteria")
-    criteria_list = [str(item).strip().lower() for item in criteria if str(item).strip()] if isinstance(criteria, list) else []
+    criteria_list: list[str] = []
+    if isinstance(criteria, list):
+        for item in criteria:
+            if isinstance(item, dict):
+                text = str(item.get("text") or "").strip().lower()
+            else:
+                text = str(item).strip().lower()
+            if text:
+                criteria_list.append(text)
     facts = task_state.get("facts")
     fact_entries = [
         entry
@@ -189,6 +197,9 @@ def _has_message_delivery_evidence(fact_entries: list[dict[str, Any]]) -> bool:
         if tool not in {"send_message", "sendMessage"}:
             continue
         status = str(entry.get("status") or "").strip().lower()
+        if not status:
+            result = entry.get("result")
+            status = str(result.get("status") or "").strip().lower() if isinstance(result, dict) else ""
         if status == "ok":
             return True
     return False
@@ -197,4 +208,9 @@ def _has_message_delivery_evidence(fact_entries: list[dict[str, Any]]) -> bool:
 def _has_tool_failure(fact_entries: list[dict[str, Any]]) -> bool:
     latest = fact_entries[-1] if fact_entries else {}
     status = str((latest or {}).get("status") or "").strip().lower()
+    if not status:
+        result = (latest or {}).get("result")
+        status = str(result.get("status") or "").strip().lower() if isinstance(result, dict) else ""
+        if not status and isinstance(result, dict) and isinstance(result.get("error"), dict):
+            status = "failed"
     return status in {"failed", "error"}
