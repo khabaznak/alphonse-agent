@@ -468,7 +468,7 @@ def test_pdca_create_reminder_structured_failure_keeps_running() -> None:
     assert isinstance(plan, dict)
     steps = plan.get("steps")
     assert isinstance(steps, list)
-    assert steps[0].get("status") == "failed"
+    assert steps[0].get("status") == "executed"
     facts = next_state.get("facts")
     assert isinstance(facts, dict)
     fact = facts.get("step_1")
@@ -520,7 +520,7 @@ def test_pdca_create_reminder_missing_fields_stays_failed() -> None:
     assert isinstance(plan, dict)
     steps = plan.get("steps")
     assert isinstance(steps, list)
-    assert steps[0].get("status") == "failed"
+    assert steps[0].get("status") == "executed"
     facts = next_state.get("facts")
     assert isinstance(facts, dict)
     fact = facts.get("step_1")
@@ -534,118 +534,6 @@ def test_pdca_create_reminder_missing_fields_stays_failed() -> None:
     assert len(reminder.calls) == 1
 
 
-@pytest.mark.skip(reason="Legacy validate_step flow removed from runtime.")
-def test_pdca_validation_error_routes_back_then_asks_user() -> None:
-    tool_registry = build_default_tool_registry()
-    next_step = build_next_step_node(tool_registry=tool_registry)
-    llm = _QueuedLlm(
-        [
-            '{"kind":"call_tool","tool_name":"doesNotExist","args":{}}',
-            '{"kind":"ask_user","question":"Which account should I use?"}',
-            "Which account should I use?",
-        ]
-    )
-
-    task_state = build_default_task_state()
-    task_state["acceptance_criteria"] = ["done when requested outcome is produced"]
-    task_state["goal"] = "schedule something"
-    state: dict[str, object] = {
-        "correlation_id": "corr-pdca-repair",
-        "_llm_client": llm,
-        "task_state": task_state,
-    }
-
-    state = _apply(state, next_step(state))
-    state = _apply(state, validate_step_node(state, tool_registry=tool_registry))
-    assert route_after_validate_step(state) == "next_step_node"
-
-    state = _apply(state, next_step(state))
-    state = _apply(state, validate_step_node(state, tool_registry=tool_registry))
-    assert route_after_validate_step(state) == "execute_step_node"
-    state = _apply(state, execute_step_node(state, tool_registry=tool_registry))
-    state = _apply(state, update_state_node(state))
-    state = _apply(state, progress_critic_node(state))
-    assert route_after_progress_critic(state) == "respond_node"
-    next_state = state["task_state"]
-    assert isinstance(next_state, dict)
-    assert next_state.get("status") == "waiting_user"
-    rendered = respond_finalize_node(state, emit_transition_event=lambda *_args, **_kwargs: None)
-    assert rendered.get("response_text") == "Which account should I use?"
-
-
-@pytest.mark.skip(reason="Legacy validate_step flow removed from runtime.")
-def test_pdca_validation_rejects_unknown_tool_args_keys() -> None:
-    tool_registry = build_default_tool_registry()
-    task_state = build_default_task_state()
-    task_state["acceptance_criteria"] = ["done when requested outcome is produced"]
-    task_state["goal"] = "create recurring fx job"
-    task_state["plan"]["current_step_id"] = "step_1"
-    task_state["plan"]["steps"] = [
-        {
-            "step_id": "step_1",
-            "proposal": {
-                "kind": "call_tool",
-                "tool_name": "job_create",
-                "args": {
-                    "name": "FX update",
-                    "description": "Daily FX update",
-                    "schedule": {
-                        "type": "rrule",
-                        "dtstart": "2026-02-20T09:00:00+00:00",
-                        "rrule": "FREQ=DAILY;BYHOUR=9;BYMINUTE=0",
-                    },
-                    "payload_type": "prompt_to_brain",
-                    "payload": {"prompt_text": "USD to MXN update"},
-                    "payloadType": "prompt_to_brain",
-                },
-            },
-            "status": "proposed",
-        }
-    ]
-    state: dict[str, object] = {
-        "correlation_id": "corr-pdca-invalid-job-args",
-        "task_state": task_state,
-    }
-
-    state = _apply(state, validate_step_node(state, tool_registry=tool_registry))
-    next_state = state["task_state"]
-    assert isinstance(next_state, dict)
-    err = next_state.get("last_validation_error")
-    assert isinstance(err, dict)
-    reason = str(err.get("reason") or "")
-    assert reason.startswith("invalid_args_keys:")
-    assert "payloadType" in reason
-
-
-@pytest.mark.skip(reason="Legacy validate_step flow removed from runtime.")
-def test_pdca_validation_rejects_direct_terminal_mcp_binaries() -> None:
-    tool_registry = build_default_tool_registry()
-    task_state = build_default_task_state()
-    task_state["acceptance_criteria"] = ["done when requested outcome is produced"]
-    task_state["goal"] = "search web via chrome mcp"
-    task_state["plan"]["current_step_id"] = "step_1"
-    task_state["plan"]["steps"] = [
-        {
-            "step_id": "step_1",
-            "proposal": {
-                "kind": "call_tool",
-                "tool_name": "terminal_sync",
-                "args": {"command": 'chrome-devtools-mcp search "Veloswim"'},
-            },
-            "status": "proposed",
-        }
-    ]
-    state: dict[str, object] = {
-        "correlation_id": "corr-pdca-terminal-mcp-block",
-        "task_state": task_state,
-    }
-
-    state = _apply(state, validate_step_node(state, tool_registry=tool_registry))
-    next_state = state["task_state"]
-    assert isinstance(next_state, dict)
-    err = next_state.get("last_validation_error")
-    assert isinstance(err, dict)
-    assert err.get("reason") == "policy_violation:mcp_binaries_require_mcp_call"
 
 
 def test_pdca_execute_maps_typeerror_to_structured_tool_failure() -> None:
@@ -832,49 +720,6 @@ def test_pdca_next_step_uses_complete_with_tools_when_available() -> None:
     assert llm.complete_calls == 0
 
 
-@pytest.mark.skip(reason="Planner now emits call_tool only; askQuestion remains a tool call.")
-def test_pdca_maps_ask_question_tool_call_to_ask_user_proposal() -> None:
-    tool_registry = build_default_tool_registry()
-    next_step = build_next_step_node(tool_registry=tool_registry)
-    llm = _ToolCallLlm(
-        {
-            "content": "",
-            "tool_calls": [
-                {
-                    "id": "call-ask-1",
-                    "name": "askQuestion",
-                    "arguments": {"question": "Which company should I prioritize first?"},
-                }
-            ],
-            "assistant_message": {"role": "assistant", "content": ""},
-        }
-    )
-
-    task_state = build_default_task_state()
-    task_state["acceptance_criteria"] = ["done when requested outcome is produced"]
-    task_state["goal"] = "find linkedin contacts"
-    state: dict[str, object] = {
-        "correlation_id": "corr-pdca-ask-question-tool-bridge",
-        "_llm_client": llm,
-        "task_state": task_state,
-    }
-
-    state = _apply(state, next_step(state))
-    next_state = state["task_state"]
-    assert isinstance(next_state, dict)
-    plan = next_state.get("plan")
-    assert isinstance(plan, dict)
-    steps = plan.get("steps")
-    assert isinstance(steps, list)
-    assert steps
-    first = steps[0]
-    assert isinstance(first, dict)
-    proposal = first.get("proposal")
-    assert isinstance(proposal, dict)
-    assert proposal.get("kind") == "ask_user"
-    assert proposal.get("question") == "Which company should I prioritize first?"
-    assert llm.complete_with_tools_calls == 1
-    assert llm.complete_calls == 0
 
 
 def test_pdca_next_step_falls_back_to_text_when_tool_call_payload_is_empty() -> None:
@@ -1159,64 +1004,6 @@ def test_pdca_next_step_prompt_includes_mcp_live_tools_menu() -> None:
     assert "required_args: url" in prompt
 
 
-@pytest.mark.skip(reason="Legacy validate_step flow removed from runtime.")
-def test_pdca_validation_rejects_unknown_mcp_profile(tmp_path: Path, monkeypatch) -> None:
-    profiles_dir = _write_mcp_profile(tmp_path)
-    monkeypatch.setenv("ALPHONSE_MCP_PROFILES_DIR", str(profiles_dir))
-    tool_registry = build_default_tool_registry()
-    task_state = build_default_task_state()
-    task_state["acceptance_criteria"] = ["done when requested outcome is produced"]
-    task_state["goal"] = "search web via mcp"
-    task_state["plan"]["current_step_id"] = "step_1"
-    task_state["plan"]["steps"] = [
-        {
-            "step_id": "step_1",
-            "proposal": {
-                "kind": "call_tool",
-                "tool_name": "mcp_call",
-                "args": {"profile": "unknown", "operation": "web_search", "arguments": {"query": "Veloswim"}},
-            },
-            "status": "proposed",
-        }
-    ]
-    state: dict[str, object] = {"correlation_id": "corr-pdca-bad-mcp-profile", "task_state": task_state}
-
-    state = _apply(state, validate_step_node(state, tool_registry=tool_registry))
-    next_state = state["task_state"]
-    assert isinstance(next_state, dict)
-    err = next_state.get("last_validation_error")
-    assert isinstance(err, dict)
-    assert str(err.get("reason") or "").startswith("unknown_mcp_profile:")
-
-
-@pytest.mark.skip(reason="Legacy validate_step flow removed from runtime.")
-def test_pdca_validation_rejects_unknown_mcp_operation(tmp_path: Path, monkeypatch) -> None:
-    profiles_dir = _write_mcp_profile(tmp_path)
-    monkeypatch.setenv("ALPHONSE_MCP_PROFILES_DIR", str(profiles_dir))
-    tool_registry = build_default_tool_registry()
-    task_state = build_default_task_state()
-    task_state["acceptance_criteria"] = ["done when requested outcome is produced"]
-    task_state["goal"] = "search web via mcp"
-    task_state["plan"]["current_step_id"] = "step_1"
-    task_state["plan"]["steps"] = [
-        {
-            "step_id": "step_1",
-            "proposal": {
-                "kind": "call_tool",
-                "tool_name": "mcp_call",
-                "args": {"profile": "chrome", "operation": "wrong_op", "arguments": {"query": "Veloswim"}},
-            },
-            "status": "proposed",
-        }
-    ]
-    state: dict[str, object] = {"correlation_id": "corr-pdca-bad-mcp-operation", "task_state": task_state}
-
-    state = _apply(state, validate_step_node(state, tool_registry=tool_registry))
-    next_state = state["task_state"]
-    assert isinstance(next_state, dict)
-    err = next_state.get("last_validation_error")
-    assert isinstance(err, dict)
-    assert str(err.get("reason") or "").startswith("unknown_mcp_operation:")
 
 
 def test_pdca_validation_allows_unknown_mcp_operation_for_native_profile(tmp_path: Path, monkeypatch) -> None:
@@ -1286,40 +1073,6 @@ def test_route_after_next_step_routes_to_execute_step_node() -> None:
     assert route_after_next_step(state) == "execute_step_node"
 
 
-@pytest.mark.skip(reason="Legacy finish proposal path removed from planner schema.")
-def test_pdca_can_answer_last_tool_question_from_recent_conversation_block() -> None:
-    tool_registry = build_default_tool_registry()
-    next_step = build_next_step_node(tool_registry=tool_registry)
-    llm = _SessionAwareTaskLlm()
-
-    task_state = build_default_task_state()
-    task_state["acceptance_criteria"] = ["done when requested outcome is produced"]
-    task_state["goal"] = "what was the last tool you used?"
-    state: dict[str, object] = {
-        "correlation_id": "corr-pdca-last-tool-from-session-state",
-        "_llm_client": llm,
-        "channel_type": "telegram",
-        "channel_target": "8553589429",
-        "locale": "en-US",
-        "task_state": task_state,
-        "recent_conversation_block": (
-            "## RECENT CONVERSATION (last 10 turns)\n"
-            "- last_action: Played local audio output."
-        ),
-    }
-
-    state = _apply(state, next_step(state))
-    state = _apply(state, validate_step_node(state, tool_registry=tool_registry))
-    state = _apply(state, execute_step_node(state, tool_registry=tool_registry))
-    state = _apply(state, update_state_node(state))
-    state = _apply(state, act_node(state))
-
-    next_state = state["task_state"]
-    assert isinstance(next_state, dict)
-    assert next_state.get("status") == "done"
-    outcome = next_state.get("outcome")
-    assert isinstance(outcome, dict)
-    assert outcome.get("final_text") == "The last tool you used was local_audio_output.speak."
 
 
 def test_execute_step_handles_structured_tool_failure() -> None:
@@ -1349,7 +1102,7 @@ def test_execute_step_handles_structured_tool_failure() -> None:
     steps = plan.get("steps")
     assert isinstance(steps, list)
     assert isinstance(steps[0], dict)
-    assert steps[0].get("status") == "failed"
+    assert steps[0].get("status") == "executed"
     facts = next_state.get("facts")
     assert isinstance(facts, dict)
     entry = facts.get("step_1")
@@ -1362,7 +1115,7 @@ def test_execute_step_handles_structured_tool_failure() -> None:
     assert error.get("code") == "asset_not_found"
 
 
-def test_execute_step_normalizes_mcp_call_payload_in_do() -> None:
+def test_execute_step_passes_mcp_call_payload_through_without_do_normalization() -> None:
     registry = ToolRegistry()
     mcp_tool = _CaptureMcpCallTool()
     registry.register("mcp_call", mcp_tool)
@@ -1396,15 +1149,19 @@ def test_execute_step_normalizes_mcp_call_payload_in_do() -> None:
     assert isinstance(next_state, dict)
     assert len(mcp_tool.calls) == 1
     call = mcp_tool.calls[0]
-    assert call["profile"] == "chrome"
-    assert call["operation"] == "web_search"
+    assert call["profile"] is None
+    assert call["operation"] is None
     arguments = call["arguments"]
     assert isinstance(arguments, dict)
-    assert arguments.get("query") == "Veloswim"
-    mcp_context = next_state.get("mcp_context")
-    assert isinstance(mcp_context, dict)
-    assert mcp_context.get("profile") == "chrome"
-    assert mcp_context.get("operation") == "web_search"
+    assert arguments == {}
+    extra = call["extra"]
+    assert isinstance(extra, dict)
+    nested = extra.get("args")
+    assert isinstance(nested, dict)
+    assert nested.get("profile") == "chrome"
+    assert nested.get("operation") == "web_search"
+    assert nested.get("query") == "Veloswim"
+    assert next_state.get("mcp_context") is None
 
 
 def test_execute_step_records_evidence_for_domotics_execute_confirmed() -> None:
@@ -1450,183 +1207,6 @@ def test_execute_step_records_evidence_for_domotics_execute_confirmed() -> None:
     assert isinstance(entry, dict)
     assert str(entry.get("tool") or "") == "domotics.execute"
     assert str(entry.get("status") or "") == "ok"
-
-
-@pytest.mark.skip(reason="Act node is now routing-only in Check-first architecture.")
-def test_act_node_stops_after_repeated_same_tool_failures() -> None:
-    task_state = build_default_task_state()
-    task_state["acceptance_criteria"] = ["done when requested outcome is produced"]
-    task_state["status"] = "running"
-    task_state["plan"] = {
-        "version": 1,
-        "steps": [
-            {
-                "step_id": "step_1",
-                "proposal": {"kind": "call_tool", "tool_name": "terminal_sync", "args": {"command": "node -v"}},
-                "status": "failed",
-            },
-            {
-                "step_id": "step_2",
-                "proposal": {"kind": "call_tool", "tool_name": "terminal_sync", "args": {"command": "node -v"}},
-                "status": "failed",
-            },
-        ],
-        "current_step_id": "step_2",
-    }
-    state: dict[str, object] = {
-        "correlation_id": "corr-pdca-repeated-tool-failure",
-        "task_state": task_state,
-    }
-
-    updated = act_node(state)
-    next_state = updated["task_state"]
-    assert isinstance(next_state, dict)
-    assert next_state.get("status") == "waiting_user"
-    question = str(next_state.get("next_user_question") or "")
-    assert "same failed action" in question
-    eval_payload = next_state.get("execution_eval")
-    assert isinstance(eval_payload, dict)
-    assert eval_payload.get("reason") == "repeated_identical_failure"
-    route_state = {"task_state": next_state, "correlation_id": "corr-pdca-repeated-tool-failure"}
-    assert route_after_act(route_state) == "respond_node"
-
-
-@pytest.mark.skip(reason="Act node is now routing-only in Check-first architecture.")
-def test_act_node_allows_evolving_failures_under_budget() -> None:
-    task_state = build_default_task_state()
-    task_state["acceptance_criteria"] = ["done when requested outcome is produced"]
-    task_state["status"] = "running"
-    task_state["plan"] = {
-        "version": 1,
-        "steps": [
-            {
-                "step_id": "step_1",
-                "proposal": {"kind": "call_tool", "tool_name": "terminal_sync", "args": {"command": "node -v"}},
-                "status": "failed",
-            },
-            {
-                "step_id": "step_2",
-                "proposal": {"kind": "call_tool", "tool_name": "terminal_sync", "args": {"command": "npm -v"}},
-                "status": "failed",
-            },
-        ],
-        "current_step_id": "step_2",
-    }
-    state: dict[str, object] = {
-        "correlation_id": "corr-pdca-evolving-failures",
-        "task_state": task_state,
-    }
-
-    updated = act_node(state)
-    next_state = updated["task_state"]
-    assert isinstance(next_state, dict)
-    assert next_state.get("status") == "running"
-    eval_payload = next_state.get("execution_eval")
-    assert isinstance(eval_payload, dict)
-    assert eval_payload.get("reason") == "continue_learning"
-
-
-@pytest.mark.skip(reason="Act node is now routing-only in Check-first architecture.")
-def test_act_node_pauses_after_failure_budget_exhausted() -> None:
-    steps = []
-    for idx in range(1, 11):
-        steps.append(
-            {
-                "step_id": f"step_{idx}",
-                "proposal": {
-                    "kind": "call_tool",
-                    "tool_name": "terminal_sync",
-                    "args": {"command": f"tool-{idx} --version"},
-                },
-                "status": "failed",
-            }
-        )
-    task_state = build_default_task_state()
-    task_state["acceptance_criteria"] = ["done when requested outcome is produced"]
-    task_state["status"] = "running"
-    task_state["plan"] = {
-        "version": 1,
-        "steps": steps,
-        "current_step_id": "step_10",
-    }
-    state: dict[str, object] = {
-        "correlation_id": "corr-pdca-failure-budget",
-        "task_state": task_state,
-    }
-
-    updated = act_node(state)
-    next_state = updated["task_state"]
-    assert isinstance(next_state, dict)
-    assert next_state.get("status") == "waiting_user"
-    eval_payload = next_state.get("execution_eval")
-    assert isinstance(eval_payload, dict)
-    assert eval_payload.get("reason") == "failure_budget_exhausted"
-    question = str(next_state.get("next_user_question") or "")
-    assert "paused the plan" in question
-
-
-@pytest.mark.skip(reason="Act node is now routing-only in Check-first architecture.")
-def test_act_node_pauses_on_non_retryable_failure() -> None:
-    task_state = build_default_task_state()
-    task_state["acceptance_criteria"] = ["done when requested outcome is produced"]
-    task_state["status"] = "running"
-    task_state["plan"] = {
-        "version": 1,
-        "steps": [
-            {
-                "step_id": "step_1",
-                "proposal": {"kind": "call_tool", "tool_name": "domotics.execute", "args": {"domain": "light"}},
-                "status": "failed",
-                "failure_retryable": False,
-                "failure_error_code": "entity_unavailable",
-            }
-        ],
-        "current_step_id": "step_1",
-    }
-    state: dict[str, object] = {
-        "correlation_id": "corr-pdca-non-retryable",
-        "task_state": task_state,
-    }
-
-    updated = act_node(state)
-    next_state = updated["task_state"]
-    assert isinstance(next_state, dict)
-    assert next_state.get("status") == "waiting_user"
-    eval_payload = next_state.get("execution_eval")
-    assert isinstance(eval_payload, dict)
-    assert eval_payload.get("reason") == "non_retryable_failure"
-    question = str(next_state.get("next_user_question") or "")
-    assert "non-retryable" in question
-
-
-@pytest.mark.skip(reason="Legacy finish proposal path removed from planner schema.")
-def test_execute_finish_persists_final_text_outcome() -> None:
-    task_state = build_default_task_state()
-    task_state["acceptance_criteria"] = ["done when requested outcome is produced"]
-    task_state["plan"] = {
-        "version": 1,
-        "steps": [
-            {
-                "step_id": "step_1",
-                "proposal": {"kind": "finish", "final_text": "I'm online and operational."},
-                "status": "validated",
-            }
-        ],
-        "current_step_id": "step_1",
-    }
-    state: dict[str, object] = {
-        "correlation_id": "corr-pdca-finish-outcome",
-        "task_state": task_state,
-    }
-
-    updated = execute_step_node(state, tool_registry=build_default_tool_registry())
-    next_state = updated["task_state"]
-    assert isinstance(next_state, dict)
-    assert next_state.get("status") == "done"
-    outcome = next_state.get("outcome")
-    assert isinstance(outcome, dict)
-    assert outcome.get("kind") == "task_completed"
-    assert outcome.get("final_text") == "I'm online and operational."
 
 
 def test_respond_finalize_done_ignores_stale_pending_interaction() -> None:
@@ -1693,6 +1273,37 @@ def test_respond_finalize_waiting_user_with_pending_renders_question() -> None:
     assert isinstance(utterance, dict)
     assert utterance.get("type") == "question"
     assert transitions and transitions[-1] == "waiting_user"
+
+
+def test_respond_finalize_failed_suppresses_apology_after_public_send() -> None:
+    transitions: list[str] = []
+    state: dict[str, object] = {
+        "correlation_id": "corr-pdca-failed-suppress-apology",
+        "channel_type": "telegram",
+        "channel_target": "8553589429",
+        "locale": "es-MX",
+        "_llm_client": _QueuedLlm(["Perdón, no pude completarlo."]),
+        "task_state": {
+            "status": "failed",
+            "facts": {
+                "step_3": {
+                    "step_id": "step_3",
+                    "tool": "send_message",
+                    "status": "ok",
+                    "internal": False,
+                    "result_payload": {"visibility": "public"},
+                }
+            },
+        },
+    }
+
+    rendered = respond_finalize_node(
+        state,
+        emit_transition_event=lambda _state, phase, _payload=None: transitions.append(phase),
+    )
+    assert str(rendered.get("response_text") or "").strip() == ""
+    assert rendered.get("utterance") is None
+    assert transitions and transitions[-1] == "failed"
 
 
 def test_next_step_emits_wip_update_on_proposal(monkeypatch: pytest.MonkeyPatch) -> None:

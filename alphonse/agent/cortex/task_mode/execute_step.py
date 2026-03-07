@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import inspect
-import json
 import logging
 from datetime import datetime, timezone
 from typing import Any, Callable
@@ -267,86 +266,7 @@ def _execute_call_tool_step(
         )
         fact_bucket[step_id or f"result_{len(fact_bucket) + 1}"] = fact_entry
         task_state["facts"] = fact_bucket
-        result_status = ""
-        if isinstance(result, dict):
-            result_status = str(result.get("status") or "").strip().lower()
-        if result_status == "failed":
-            task_state["status"] = "running"
-            if isinstance(current, dict):
-                current["status"] = "failed"
-            args_preview = _safe_args_preview(params)
-            raw_error = (result or {}).get("error") if isinstance(result, dict) else None
-            if isinstance(raw_error, dict):
-                error_code = str(raw_error.get("code") or "tool_failed")
-                error_message = str(raw_error.get("message") or "").strip()
-                error_retryable = bool(raw_error.get("retryable", False))
-            else:
-                error_code = str(raw_error or "tool_failed")
-                error_message = ""
-                error_retryable = False
-            if isinstance(current, dict):
-                current["failure_retryable"] = error_retryable
-                current["failure_error_code"] = error_code
-            append_trace_event(
-                task_state,
-                {
-                    "type": "tool_failed",
-                    "summary": (
-                        f"Tool {tool_name} reported failure: {error_code}"
-                        + (f" ({error_message})." if error_message else ".")
-                    ),
-                    "correlation_id": corr,
-                },
-            )
-            logger.info(
-                "task_mode execute tool_failed_reported correlation_id=%s step_id=%s tool=%s error_code=%s error_message=%s args_preview=%s",
-                corr,
-                step_id,
-                tool_name,
-                error_code,
-                error_message,
-                args_preview,
-            )
-            log_task_event(
-                logger=logger,
-                state=state,
-                task_state=task_state,
-                node="execute_step_node",
-                event="graph.tool.failed",
-                level="warning",
-                step_id=step_id,
-                tool=tool_name,
-                error_code=error_code,
-                error_message=error_message,
-                args_preview=args_preview,
-            )
-            log_task_event(
-                logger=logger,
-                state=state,
-                task_state=task_state,
-                node="execute_step_node",
-                event="graph.do.mission_step_executed",
-                step_id=step_id,
-                tool=tool_name,
-                status="failed",
-            )
-            record_after_tool_call(
-                state=state,
-                task_state=task_state,
-                current=current,
-                tool_name=tool_name,
-                args=params,
-                result=result if isinstance(result, dict) else {"status": "failed"},
-                correlation_id=corr,
-            )
-            record_plan_step_completion(
-                state=state,
-                task_state=task_state,
-                current=current,
-                proposal=proposal,
-                correlation_id=corr,
-            )
-            return {"task_state": task_state}
+        result_status = str((result or {}).get("status") or "").strip().lower() if isinstance(result, dict) else ""
         task_state["status"] = "running"
         if isinstance(current, dict):
             current["status"] = "executed"
@@ -356,24 +276,26 @@ def _execute_call_tool_step(
             task_state,
             {
                 "type": "tool_executed",
-                "summary": f"Executed tool {tool_name}.",
+                "summary": f"Executed tool {tool_name} with reported_status={result_status or 'unknown'}.",
                 "correlation_id": corr,
             },
         )
         logger.info(
-            "task_mode execute tool_ok correlation_id=%s step_id=%s tool=%s",
+            "task_mode execute tool_executed correlation_id=%s step_id=%s tool=%s reported_status=%s",
             corr,
             step_id,
             tool_name,
+            result_status or "unknown",
         )
         log_task_event(
             logger=logger,
             state=state,
             task_state=task_state,
             node="execute_step_node",
-            event="graph.tool.succeeded",
+            event="graph.tool.executed",
             step_id=step_id,
             tool=tool_name,
+            reported_status=result_status or "unknown",
         )
         log_task_event(
             logger=logger,
@@ -383,7 +305,7 @@ def _execute_call_tool_step(
             event="graph.do.mission_step_executed",
             step_id=step_id,
             tool=tool_name,
-            status="ok",
+            status=result_status or "unknown",
         )
         record_after_tool_call(
             state=state,
@@ -391,7 +313,7 @@ def _execute_call_tool_step(
             current=current,
             tool_name=tool_name,
             args=params,
-            result=result if isinstance(result, dict) else {"status": "ok"},
+            result=result if isinstance(result, dict) else {"status": "unknown"},
             correlation_id=corr,
         )
         record_plan_step_completion(
@@ -403,23 +325,65 @@ def _execute_call_tool_step(
         )
         return {"task_state": task_state}
     except Exception as exc:
-        task_state["status"] = "failed"
+        task_state["status"] = "running"
         if isinstance(current, dict):
-            current["status"] = "failed"
+            current["status"] = "executed"
+            current.pop("failure_retryable", None)
+            current.pop("failure_error_code", None)
+        result = {
+            "status": "failed",
+            "result": None,
+            "error": {
+                "code": "tool_execution_exception",
+                "message": str(exc),
+                "details": {"type": type(exc).__name__},
+            },
+        }
+        facts = task_state.get("facts")
+        fact_bucket = dict(facts) if isinstance(facts, dict) else {}
+        fact_entry = _build_mission_fact_entry(
+            step_id=step_id,
+            tool_name=tool_name,
+            args=params,
+            result=_serialize_result(result),
+        )
+        fact_bucket[step_id or f"result_{len(fact_bucket) + 1}"] = fact_entry
+        task_state["facts"] = fact_bucket
         append_trace_event(
             task_state,
             {
-                "type": "tool_failed",
-                "summary": f"Tool {tool_name} failed: {type(exc).__name__}.",
+                "type": "tool_executed",
+                "summary": f"Executed tool {tool_name} with reported_status=failed.",
                 "correlation_id": corr,
             },
         )
         logger.info(
-            "task_mode execute tool_failed correlation_id=%s step_id=%s tool=%s error=%s",
+            "task_mode execute tool_executed correlation_id=%s step_id=%s tool=%s reported_status=failed error=%s",
             corr,
             step_id,
             tool_name,
             type(exc).__name__,
+        )
+        log_task_event(
+            logger=logger,
+            state=state,
+            task_state=task_state,
+            node="execute_step_node",
+            event="graph.tool.executed",
+            step_id=step_id,
+            tool=tool_name,
+            reported_status="failed",
+            error_code="tool_execution_exception",
+        )
+        log_task_event(
+            logger=logger,
+            state=state,
+            task_state=task_state,
+            node="execute_step_node",
+            event="graph.do.mission_step_executed",
+            step_id=step_id,
+            tool=tool_name,
+            status="failed",
         )
         record_after_tool_call(
             state=state,
@@ -427,10 +391,7 @@ def _execute_call_tool_step(
             current=current,
             tool_name=tool_name,
             args=params,
-            result={
-                "status": "failed",
-                "error": {"code": "tool_execution_exception", "message": str(exc), "details": {"type": type(exc).__name__}},
-            },
+            result=result,
             correlation_id=corr,
         )
         record_plan_step_completion(
@@ -550,15 +511,6 @@ def _serialize_result(result: Any) -> Any:
     if isinstance(result, (dict, list, str, int, float, bool)) or result is None:
         return result
     return str(result)
-
-
-def _safe_args_preview(args: dict[str, Any]) -> str:
-    redacted = _redact_sensitive(args)
-    try:
-        rendered = json.dumps(redacted, ensure_ascii=False, sort_keys=True)
-    except Exception:
-        rendered = str(redacted)
-    return rendered[:800]
 
 
 def _redact_sensitive(value: Any) -> Any:
