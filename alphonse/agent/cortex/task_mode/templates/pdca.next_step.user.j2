@@ -1,8 +1,3 @@
-{% if TOOL_CONTRACT_HINTS %}
-## Tool Contract Hints
-{{ TOOL_CONTRACT_HINTS }}
-
-{% endif %}
 {% if MCP_CAPABILITY_MENU %}
 ## MCP Capabilities
 {{ MCP_CAPABILITY_MENU }}
@@ -28,13 +23,13 @@ Return ONLY one JSON object with this shape (no markdown, no extra text):
     "tool_name": "<string>",
     "args": {"<key>": "<value>"}
   },
-  "planner_intent": "<short plain-language thought process, max 160 chars>"
+  "planner_intent": "<optional short plain-language thought process, max 160 chars>"
 }
 
 Rules:
 - `tool_call.kind` must be `call_tool`.
 - `tool_call.tool_name` and `tool_call.args` are required.
-- `planner_intent` is required, plain language, max 160 chars.
+- `planner_intent` is optional, plain language, max 160 chars when present.
 - `planner_intent` is internal progress metadata; do not emit `send_message` only to expose it.
 - Do not return acceptance criteria in this output.
 - If `tool_call.tool_name` is `mcp_call`, args MUST be:

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import inspect
 import json
 from typing import Any, Callable
 
@@ -13,27 +12,6 @@ from alphonse.agent.cortex.transitions import emit_transition_event
 from alphonse.agent.session.day_state import render_recent_conversation_block
 from alphonse.agent.tools.mcp.loader import default_profiles_dir
 from alphonse.agent.tools.mcp.registry import McpProfileRegistry
-
-# Schema is kept for providers that support schema-native generation.
-_NEXT_STEP_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "additionalProperties": False,
-    "required": ["tool_call", "planner_intent"],
-    "properties": {
-        "tool_call": {
-            "type": "object",
-            "additionalProperties": False,
-            "required": ["kind", "tool_name", "args"],
-            "properties": {
-                "kind": {"type": "string", "enum": ["call_tool"]},
-                "tool_name": {"type": "string", "minLength": 1},
-                "args": {"type": "object"},
-            },
-        },
-        "planner_intent": {"type": "string", "minLength": 1},
-    },
-}
-
 
 def build_next_step_node_impl(
     state: dict[str, Any],
@@ -212,34 +190,18 @@ def _request_raw_candidate(
             ),
             "complete_with_tools",
         )
-
-    complete_json = getattr(llm_client, "complete_json", None)
-    if callable(complete_json):
-        return (
-            complete_json(
-                system_prompt=system_prompt,
-                user_prompt=user_prompt,
-                schema=_NEXT_STEP_SCHEMA,
-            ),
-            "complete_json",
-        )
-
-    complete_with_schema = getattr(llm_client, "complete_with_schema", None)
-    if callable(complete_with_schema):
-        return (
-            complete_with_schema(
-                system_prompt=system_prompt,
-                user_prompt=user_prompt,
-                schema=_NEXT_STEP_SCHEMA,
-            ),
-            "complete_with_schema",
-        )
-
-    return _call_llm_text(llm_client=llm_client, system_prompt=system_prompt, user_prompt=user_prompt), "complete"
+    return (
+        {
+            "error": {
+                "code": "planner_capability_missing",
+                "message": "LLM client must implement complete_with_tools for task_mode planning.",
+            }
+        },
+        "complete_with_tools_unavailable",
+    )
 
 
 def _build_planner_user_prompt(*, state: dict[str, Any], task_state: dict[str, Any], tool_registry: Any) -> str:
-    tool_contract_hints = _build_tool_contract_hints(tool_registry)
     mcp_capability_menu, _ = _build_mcp_capability_menu()
     mcp_live_tools_menu = _build_mcp_live_tools_menu(task_state)
     working_view = _build_working_state_view(task_state)
@@ -257,7 +219,6 @@ def _build_planner_user_prompt(*, state: dict[str, Any], task_state: dict[str, A
     user_prompt_body = render_pdca_prompt(
         NEXT_STEP_USER_TEMPLATE,
         {
-            "TOOL_CONTRACT_HINTS": tool_contract_hints,
             "MCP_CAPABILITY_MENU": mcp_capability_menu,
             "MCP_LIVE_TOOLS_MENU": mcp_live_tools_menu,
             "INJECTED_GUIDANCE_BLOCK": injected_guidance,
@@ -317,23 +278,6 @@ def _latest_failure_diagnostics(task_state: dict[str, Any]) -> dict[str, Any]:
             "error_message": str(error.get("message") or "").strip(),
         }
     return {}
-
-
-def _build_tool_contract_hints(tool_registry: Any) -> str:
-    target_tools = {"job_create", "mcp_call", "terminal_sync"}
-    lines: list[str] = []
-    for schema in llm_tool_schemas(tool_registry):
-        function = schema.get("function") if isinstance(schema, dict) else None
-        if not isinstance(function, dict):
-            continue
-        tool_name = str(function.get("name") or "").strip()
-        if tool_name not in target_tools:
-            continue
-        params = function.get("parameters") if isinstance(function.get("parameters"), dict) else {}
-        required = params.get("required") if isinstance(params.get("required"), list) else []
-        required_fields = [str(item).strip() for item in required if str(item).strip()]
-        lines.append(f"- `{tool_name}` required fields: {', '.join(required_fields) or '(none)' }")
-    return "\n".join(lines).strip()
 
 
 def _build_mcp_capability_menu() -> tuple[str, dict[str, Any]]:
@@ -421,26 +365,3 @@ def _build_mcp_live_tools_menu(task_state: dict[str, Any]) -> str:
         lines.append("  - invoke with `mcp_call` using `operation` equal to the tool name above.")
         return "\n".join(lines)
     return ""
-
-
-def _call_llm_text(*, llm_client: Any, system_prompt: str, user_prompt: str) -> str:
-    complete = getattr(llm_client, "complete", None)
-    if not callable(complete):
-        return ""
-    try:
-        signature = inspect.signature(complete)
-    except (TypeError, ValueError):
-        signature = None
-    if signature and _supports_prompt_keywords(signature):
-        return str(complete(system_prompt=system_prompt, user_prompt=user_prompt))
-    return str(complete(system_prompt, user_prompt))
-
-
-def _supports_prompt_keywords(signature: inspect.Signature) -> bool:
-    names = set()
-    for parameter in signature.parameters.values():
-        if parameter.kind == inspect.Parameter.VAR_KEYWORD:
-            return True
-        if parameter.kind in {inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY}:
-            names.add(parameter.name)
-    return {"system_prompt", "user_prompt"}.issubset(names)

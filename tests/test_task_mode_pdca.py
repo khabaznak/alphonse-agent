@@ -38,11 +38,37 @@ class _QueuedLlm:
             return ""
         return self._responses.pop(0)
 
+    def complete_with_tools(
+        self,
+        *,
+        messages: list[dict[str, object]],
+        tools: list[dict[str, object]],
+        tool_choice: str = "auto",
+    ) -> str:
+        _ = messages
+        _ = tools
+        _ = tool_choice
+        if not self._responses:
+            return ""
+        return self._responses.pop(0)
+
 
 class _ExplodingLlm:
     def complete(self, system_prompt: str, user_prompt: str) -> str:
         _ = system_prompt
         _ = user_prompt
+        raise RuntimeError("planner llm exploded")
+
+    def complete_with_tools(
+        self,
+        *,
+        messages: list[dict[str, object]],
+        tools: list[dict[str, object]],
+        tool_choice: str = "auto",
+    ) -> dict[str, object]:
+        _ = messages
+        _ = tools
+        _ = tool_choice
         raise RuntimeError("planner llm exploded")
 
 
@@ -54,6 +80,20 @@ class _PromptCaptureLlm:
     def complete(self, system_prompt: str, user_prompt: str) -> str:
         _ = system_prompt
         self.last_user_prompt = user_prompt
+        return self._response
+
+    def complete_with_tools(
+        self,
+        *,
+        messages: list[dict[str, object]],
+        tools: list[dict[str, object]],
+        tool_choice: str = "auto",
+    ) -> str:
+        _ = tools
+        _ = tool_choice
+        user_message = messages[-1] if messages else {}
+        if isinstance(user_message, dict):
+            self.last_user_prompt = str(user_message.get("content") or "")
         return self._response
 
 
@@ -754,6 +794,38 @@ def test_pdca_next_step_falls_back_to_text_when_tool_call_payload_is_empty() -> 
     assert first.get("raw_source") == "complete_with_tools"
     assert llm.complete_with_tools_calls == 1
     assert llm.complete_calls == 0
+
+
+def test_pdca_next_step_requires_complete_with_tools_capability() -> None:
+    tool_registry = build_default_tool_registry()
+    next_step = build_next_step_node(tool_registry=tool_registry)
+    llm = _SessionAwareTaskLlm()
+
+    task_state = build_default_task_state()
+    task_state["acceptance_criteria"] = ["done when requested outcome is produced"]
+    task_state["goal"] = "do something"
+    state: dict[str, object] = {
+        "correlation_id": "corr-pdca-tools-required",
+        "_llm_client": llm,
+        "task_state": task_state,
+    }
+
+    state = _apply(state, next_step(state))
+    next_state = state["task_state"]
+    assert isinstance(next_state, dict)
+    plan = next_state.get("plan")
+    assert isinstance(plan, dict)
+    steps = plan.get("steps")
+    assert isinstance(steps, list)
+    assert steps
+    first = steps[0]
+    assert isinstance(first, dict)
+    assert first.get("raw_source") == "complete_with_tools_unavailable"
+    raw = next_state.get("pending_plan_raw")
+    assert isinstance(raw, dict)
+    error = raw.get("error")
+    assert isinstance(error, dict)
+    assert error.get("code") == "planner_capability_missing"
 
 
 def test_pdca_tool_call_schema_includes_context_tools_when_runtime_registered() -> None:
