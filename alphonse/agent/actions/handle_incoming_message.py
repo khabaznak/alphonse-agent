@@ -15,6 +15,9 @@ from alphonse.agent.actions.state_context import build_cortex_state
 from alphonse.agent.actions.state_context import ensure_conversation_locale
 from alphonse.agent.actions.state_context import outgoing_locale
 from alphonse.agent.actions.transitions import emit_agent_transitions_from_meta
+from alphonse.agent.actions.transitions import chat_action_for_phase
+from alphonse.agent.actions.transitions import phase_from_transition_event
+from alphonse.agent.actions.transitions import reaction_for_phase
 from alphonse.agent.cognition.plan_executor import PlanExecutionContext, PlanExecutor
 from alphonse.agent.cognition.preferences.store import resolve_preference_with_precedence
 from alphonse.agent.cognition.plans import CortexPlan
@@ -23,6 +26,7 @@ from alphonse.agent.cortex.graph import CortexGraph
 from alphonse.agent.cortex.state_store import load_state, save_state
 from alphonse.agent.identity import store as identity_store
 from alphonse.agent.io import get_io_registry
+from alphonse.agent.io.contracts import NormalizedOutboundMessage
 from alphonse.agent.nervous_system import users as users_store
 from alphonse.agent.nervous_system.pdca_queue_store import (
     append_pdca_event,
@@ -533,16 +537,24 @@ def _emit_channel_transition(incoming: IncomingContext, phase: str) -> None:
     adapter = registry.get_extremity(incoming.channel_type)
     if adapter is None:
         return
-    emit_fn = getattr(adapter, "emit_transition", None)
-    if not callable(emit_fn):
-        return
+    action = chat_action_for_phase(phase_value)
+    send_chat_action = getattr(adapter, "send_chat_action", None)
+    set_reaction = getattr(adapter, "set_reaction", None)
     try:
-        emit_fn(
-            channel_target=incoming.address,
-            phase=phase_value,
-            correlation_id=incoming.correlation_id,
-            message_id=incoming.message_id,
-        )
+        if action and callable(send_chat_action):
+            send_chat_action(
+                channel_target=incoming.address,
+                action=action,
+                correlation_id=incoming.correlation_id,
+            )
+        emoji = reaction_for_phase(phase_value)
+        if emoji and callable(set_reaction):
+            set_reaction(
+                channel_target=incoming.address,
+                message_id=incoming.message_id,
+                emoji=emoji,
+                correlation_id=incoming.correlation_id,
+            )
     except Exception:
         logger.exception(
             "HandleIncomingMessageAction transition emit failed channel=%s phase=%s",
@@ -554,29 +566,42 @@ def _emit_channel_transition(incoming: IncomingContext, phase: str) -> None:
 def _emit_channel_transition_event(incoming: IncomingContext, event: dict[str, object]) -> None:
     if not isinstance(event, dict):
         return
+    phase = phase_from_transition_event(event)
+    if not phase:
+        return
+    if phase == "wip_update":
+        detail = event.get("detail") if isinstance(event.get("detail"), dict) else {}
+        text = str(detail.get("text") or "").strip()
+        if text:
+            _deliver_transition_text(incoming, text)
+        return
+    _emit_channel_transition(incoming, phase)
+
+
+def _deliver_transition_text(incoming: IncomingContext, text: str) -> None:
     registry = get_io_registry()
     adapter = registry.get_extremity(incoming.channel_type)
     if adapter is None:
         return
-    emit_event_fn = getattr(adapter, "emit_transition_event", None)
-    if callable(emit_event_fn):
-        try:
-            emit_event_fn(
+    deliver = getattr(adapter, "deliver", None)
+    if not callable(deliver):
+        return
+    try:
+        deliver(
+            NormalizedOutboundMessage(
+                message=text,
+                channel_type=incoming.channel_type,
                 channel_target=incoming.address,
-                event=event,
+                audience={"kind": "system", "id": "system"},
                 correlation_id=incoming.correlation_id,
-                message_id=incoming.message_id,
+                metadata={},
             )
-            return
-        except Exception:
-            logger.exception(
-                "HandleIncomingMessageAction transition event emit failed channel=%s",
-                incoming.channel_type,
-            )
-            return
-    phase = str(event.get("phase") or "").strip().lower()
-    if phase:
-        _emit_channel_transition(incoming, phase)
+        )
+    except Exception:
+        logger.exception(
+            "HandleIncomingMessageAction transition text emit failed channel=%s",
+            incoming.channel_type,
+        )
 
 
 def _maybe_emit_local_audio_reply(*, payload: dict[str, object], reply_text: str, correlation_id: str) -> None:
@@ -633,10 +658,6 @@ def _attach_transition_sink(state: dict[str, object], incoming: IncomingContext)
     registry = get_io_registry()
     adapter = registry.get_extremity(incoming.channel_type)
     if adapter is None:
-        return False
-    emit_event_fn = getattr(adapter, "emit_transition_event", None)
-    emit_phase_fn = getattr(adapter, "emit_transition", None)
-    if not callable(emit_event_fn) and not callable(emit_phase_fn):
         return False
     state["_transition_sink"] = lambda event: _emit_channel_transition_event(incoming, event)
     return True

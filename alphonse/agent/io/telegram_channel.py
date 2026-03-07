@@ -73,6 +73,7 @@ class TelegramExtremityAdapter(ExtremityAdapter):
         if not self._adapter:
             logger.warning("TelegramExtremityAdapter missing adapter; message skipped")
             return
+        meta = message.metadata if isinstance(message.metadata, dict) else {}
         chat_id = _resolve_telegram_delivery_target(message)
         if not chat_id:
             logger.warning(
@@ -87,7 +88,6 @@ class TelegramExtremityAdapter(ExtremityAdapter):
                 chat_id,
             )
             return
-        meta = message.metadata if isinstance(message.metadata, dict) else {}
         delivery_mode = str(meta.get("delivery_mode") or "").strip().lower()
         if delivery_mode == "audio":
             audio_file_path = str(meta.get("audio_file_path") or "").strip()
@@ -119,84 +119,61 @@ class TelegramExtremityAdapter(ExtremityAdapter):
             }
         )
 
-    def emit_transition(
+    def send_chat_action(
         self,
         *,
         channel_target: str | None,
-        phase: str,
+        action: str,
         correlation_id: str | None = None,
-        message_id: str | None = None,
     ) -> None:
         if not self._adapter or not channel_target:
             return
-        action = _telegram_chat_action_for_phase(phase)
-        if action:
-            self._adapter.handle_action(
-                {
-                    "type": "send_chat_action",
-                    "payload": {
-                        "chat_id": channel_target,
-                        "action": action,
-                        "correlation_id": correlation_id,
-                    },
-                    "target_integration_id": "telegram",
-                }
-            )
-        reaction = _telegram_reaction_for_phase(phase)
-        if not reaction or not message_id:
-            return
-        cache_key = (str(channel_target), str(message_id))
-        if self._reaction_cache.get(cache_key) == reaction:
+        chat_id = str(channel_target).strip()
+        if not chat_id:
             return
         self._adapter.handle_action(
             {
-                "type": "set_message_reaction",
+                "type": "send_chat_action",
                 "payload": {
-                    "chat_id": channel_target,
-                    "message_id": message_id,
-                    "emoji": reaction,
+                    "chat_id": chat_id,
+                    "action": str(action or "").strip() or "typing",
                     "correlation_id": correlation_id,
                 },
                 "target_integration_id": "telegram",
             }
         )
-        self._reaction_cache[cache_key] = reaction
 
-    def emit_transition_event(
+    def set_reaction(
         self,
         *,
         channel_target: str | None,
-        event: dict[str, Any],
+        message_id: str | None,
+        emoji: str,
         correlation_id: str | None = None,
-        message_id: str | None = None,
     ) -> None:
-        phase_value = str(event.get("phase") or "").strip().lower()
-        if phase_value == "wip_update":
-            detail = event.get("detail") if isinstance(event.get("detail"), dict) else {}
-            text = str(detail.get("text") or "").strip()
-            if text and self._adapter and channel_target and can_deliver_to_chat(channel_target):
-                self._adapter.handle_action(
-                    {
-                        "type": "send_message",
-                        "payload": {
-                            "chat_id": channel_target,
-                            "text": text,
-                            "correlation_id": correlation_id,
-                        },
-                        "target_integration_id": "telegram",
-                    }
-                )
+        if not self._adapter or not channel_target or not message_id:
             return
-        phase = _telegram_phase_for_internal_event(event)
-        if not phase:
+        chat_id = str(channel_target).strip()
+        message_id_value = str(message_id).strip()
+        emoji_value = str(emoji or "").strip()
+        if not chat_id or not message_id_value or not emoji_value:
             return
-        self.emit_transition(
-            channel_target=channel_target,
-            phase=phase,
-            correlation_id=correlation_id,
-            message_id=message_id,
+        cache_key = (chat_id, message_id_value)
+        if self._reaction_cache.get(cache_key) == emoji_value:
+            return
+        self._adapter.handle_action(
+            {
+                "type": "set_message_reaction",
+                "payload": {
+                    "chat_id": chat_id,
+                    "message_id": message_id_value,
+                    "emoji": emoji_value,
+                    "correlation_id": correlation_id,
+                },
+                "target_integration_id": "telegram",
+            }
         )
-
+        self._reaction_cache[cache_key] = emoji_value
 
 def _as_optional_str(value: object | None) -> str | None:
     if value is None:
@@ -239,45 +216,3 @@ def _is_numeric_chat_id(value: str) -> bool:
     if rendered.startswith("-"):
         return rendered[1:].isdigit()
     return rendered.isdigit()
-
-
-def _telegram_chat_action_for_phase(phase: str) -> str | None:
-    mapped = {
-        "acknowledged": "typing",
-        "thinking": "typing",
-        "executing": "typing",
-    }
-    return mapped.get(str(phase or "").strip().lower())
-
-
-def _telegram_reaction_for_phase(phase: str) -> str | None:
-    mapped = {
-        "acknowledged": "👀",
-        "thinking": "🤔",
-        "executing": "🤔",
-        "waiting_user": "❓",
-        "done": "👍",
-        "failed": "👎",
-    }
-    return mapped.get(str(phase or "").strip().lower())
-
-
-def _telegram_phase_for_internal_event(event: dict[str, Any]) -> str | None:
-    phase = str(event.get("phase") or "").strip().lower()
-    if phase in {"acknowledged", "thinking", "executing", "waiting_user", "done", "failed"}:
-        return phase
-    if phase != "cortex.state":
-        return None
-    detail = event.get("detail") if isinstance(event.get("detail"), dict) else {}
-    stage = str(detail.get("stage") or "").strip().lower()
-    node = str(detail.get("node") or "").strip().lower()
-    has_pending = bool(detail.get("has_pending_interaction"))
-    if stage == "start":
-        if node in {"next_step_node", "progress_critic_node", "act_node", "apology_node"}:
-            return "thinking"
-        if node == "respond_node":
-            return "executing"
-    if stage == "done":
-        if has_pending:
-            return "waiting_user"
-    return None

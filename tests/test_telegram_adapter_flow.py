@@ -185,7 +185,7 @@ def test_telegram_extremity_adapter_resolves_internal_user_to_chat_id(monkeypatc
     assert captured[0]["payload"]["chat_id"] == "8553589429"
 
 
-def test_telegram_waiting_user_reaction_is_safe_and_deduped(monkeypatch) -> None:
+def test_telegram_set_reaction_is_safe_and_deduped(monkeypatch) -> None:
     captured: list[dict] = []
 
     class FakeTelegramAdapter:
@@ -204,15 +204,15 @@ def test_telegram_waiting_user_reaction_is_safe_and_deduped(monkeypatch) -> None
     monkeypatch.setattr(telegram_channel, "can_deliver_to_chat", lambda _chat_id: True)
 
     adapter = telegram_channel.TelegramExtremityAdapter()
-    adapter.emit_transition(
+    adapter.set_reaction(
         channel_target="12345",
-        phase="waiting_user",
+        emoji="❓",
         correlation_id="cid-1",
         message_id="999",
     )
-    adapter.emit_transition(
+    adapter.set_reaction(
         channel_target="12345",
-        phase="waiting_user",
+        emoji="❓",
         correlation_id="cid-1",
         message_id="999",
     )
@@ -257,7 +257,7 @@ def test_telegram_extremity_adapter_blocks_unauthorized_chat(monkeypatch) -> Non
     assert captured == []
 
 
-def test_telegram_transition_event_wip_update_sends_message(monkeypatch) -> None:
+def test_telegram_send_chat_action_emits_action(monkeypatch) -> None:
     captured: list[dict] = []
 
     class FakeTelegramAdapter:
@@ -276,17 +276,13 @@ def test_telegram_transition_event_wip_update_sends_message(monkeypatch) -> None
     monkeypatch.setattr(telegram_channel, "can_deliver_to_chat", lambda _chat_id: True)
 
     adapter = telegram_channel.TelegramExtremityAdapter()
-    adapter.emit_transition_event(
+    adapter.send_chat_action(
         channel_target="12345",
-        event={
-            "phase": "wip_update",
-            "detail": {"text": "Working on your request. Cycle 5."},
-        },
+        action="typing",
         correlation_id="cid-wip",
-        message_id="11",
     )
-
     assert len(captured) == 1
-    assert captured[0]["type"] == "send_message"
+    assert captured[0]["type"] == "send_chat_action"
     assert captured[0]["payload"]["chat_id"] == "12345"
-    assert captured[0]["payload"]["text"] == "Working on your request. Cycle 5."
+    assert captured[0]["payload"]["action"] == "typing"
+    assert captured[0]["payload"]["correlation_id"] == "cid-wip"
