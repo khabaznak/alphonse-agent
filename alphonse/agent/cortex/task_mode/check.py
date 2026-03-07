@@ -504,13 +504,24 @@ def _deterministic_hard_stop(*, task_state: dict[str, Any], case_type: str) -> d
 
 
 def _update_planner_invalid_streak(task_state: dict[str, Any]) -> int:
-    planner_error = task_state.get("planner_error_last")
-    if isinstance(planner_error, dict):
-        streak = int(task_state.get("planner_error_streak") or 0) + 1
-        task_state["planner_error_streak"] = streak
-        return streak
-    task_state["planner_error_streak"] = 0
-    return 0
+    facts = task_state.get("facts")
+    if not isinstance(facts, dict) or not facts:
+        task_state["planner_error_streak"] = 0
+        task_state["planner_error_last_fact_key"] = None
+        return 0
+    latest_key, latest_entry = next(reversed(facts.items()))
+    if not isinstance(latest_entry, dict) or str(latest_entry.get("tool") or "").strip() != "planner_output":
+        task_state["planner_error_streak"] = 0
+        task_state["planner_error_last_fact_key"] = None
+        return 0
+    key_text = str(latest_key)
+    last_key = str(task_state.get("planner_error_last_fact_key") or "")
+    if key_text == last_key:
+        return int(task_state.get("planner_error_streak") or 0)
+    streak = int(task_state.get("planner_error_streak") or 0) + 1
+    task_state["planner_error_streak"] = streak
+    task_state["planner_error_last_fact_key"] = key_text
+    return streak
 
 
 def _update_repeated_failure_signature(task_state: dict[str, Any]) -> int:

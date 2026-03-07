@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from alphonse.agent.cortex.task_mode.state import build_default_task_state
+from alphonse.agent.cortex.task_mode.types import AcceptanceCriterion
 from alphonse.agent.cortex.task_mode.types import TraceEvent
 
 
@@ -31,24 +32,67 @@ def task_state_with_defaults(state: dict[str, Any]) -> dict[str, Any]:
     task_state.setdefault("zero_progress_streak", 0)
     task_state.setdefault("planner_error_streak", 0)
     task_state.setdefault("planner_error_last", None)
+    task_state.setdefault("planner_error_last_fact_key", None)
     task_state.setdefault("check_decision_last", None)
+    task_state.setdefault("check_provenance", "entry")
+    task_state.setdefault("judge_verdict", None)
+    task_state.setdefault("judge_invalid_streak", 0)
     return task_state
 
 
 def has_acceptance_criteria(task_state: dict[str, Any]) -> bool:
-    return bool(normalize_acceptance_criteria_values(task_state.get("acceptance_criteria")))
+    return bool(normalize_acceptance_criteria_records(task_state.get("acceptance_criteria")))
 
 
 def normalize_acceptance_criteria_values(value: Any) -> list[str]:
+    return [item["text"] for item in normalize_acceptance_criteria_records(value)]
+
+
+def normalize_acceptance_criteria_records(value: Any) -> list[AcceptanceCriterion]:
     if not isinstance(value, list):
         return []
-    out: list[str] = []
-    for item in value:
+    out: list[AcceptanceCriterion] = []
+    for index, item in enumerate(value, start=1):
+        if isinstance(item, dict):
+            text = str(item.get("text") or "").strip()
+            if not text:
+                continue
+            criterion_id = str(item.get("id") or "").strip() or f"ac_{index}"
+            status = str(item.get("status") or "pending").strip().lower()
+            evidence_refs_raw = item.get("evidence_refs")
+            evidence_refs = (
+                [str(ref).strip() for ref in evidence_refs_raw if str(ref).strip()][:8]
+                if isinstance(evidence_refs_raw, list)
+                else []
+            )
+            created_by_case = str(item.get("created_by_case") or "").strip().lower() or "new_request"
+            if created_by_case not in {"new_request", "execution_review", "task_resumption"}:
+                created_by_case = "new_request"
+            out.append(
+                {
+                    "id": criterion_id[:40],
+                    "text": text[:180],
+                    "status": "satisfied" if status == "satisfied" else "pending",
+                    "evidence_refs": evidence_refs,
+                    "created_by_case": created_by_case,
+                }
+            )
+            if len(out) >= 16:
+                break
+            continue
         text = str(item or "").strip()
         if not text:
             continue
-        out.append(text[:180])
-        if len(out) >= 8:
+        out.append(
+            {
+                "id": f"ac_{index}",
+                "text": text[:180],
+                "status": "pending",
+                "evidence_refs": [],
+                "created_by_case": "new_request",
+            }
+        )
+        if len(out) >= 16:
             break
     return out
 

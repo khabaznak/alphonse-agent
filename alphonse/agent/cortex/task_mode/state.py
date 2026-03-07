@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from typing import Any, TypedDict
 
+from alphonse.agent.cortex.task_mode.types import AcceptanceCriterion
+from alphonse.agent.cortex.task_mode.types import JudgeVerdict
+
 
 class TaskState(TypedDict, total=False):
     mode: str
@@ -17,7 +20,7 @@ class TaskState(TypedDict, total=False):
     pdca_phase: str
     cycle_index: int
     initialized: bool
-    acceptance_criteria: list[str]
+    acceptance_criteria: list[AcceptanceCriterion]
     pending_plan_raw: Any | None
     current_plan_step: dict[str, Any] | None
     pending_control_tool_call: dict[str, Any] | None
@@ -30,7 +33,11 @@ class TaskState(TypedDict, total=False):
     zero_progress_streak: int
     planner_error_streak: int
     planner_error_last: dict[str, Any] | None
+    planner_error_last_fact_key: str | None
     check_decision_last: dict[str, Any] | None
+    check_provenance: str | None
+    judge_verdict: JudgeVerdict | None
+    judge_invalid_streak: int
 
 
 def build_default_task_state() -> TaskState:
@@ -68,5 +75,9 @@ def build_default_task_state() -> TaskState:
         "zero_progress_streak": 0,
         "planner_error_streak": 0,
         "planner_error_last": None,
+        "planner_error_last_fact_key": None,
         "check_decision_last": None,
+        "check_provenance": "entry",
+        "judge_verdict": None,
+        "judge_invalid_streak": 0,
     }

@@ -7,7 +7,6 @@ from typing import Any, Callable
 
 from alphonse.agent.cognition.memory import record_after_tool_call
 from alphonse.agent.cognition.memory import record_plan_step_completion
-from alphonse.agent.cortex.llm_output.json_parse import parse_json_object
 from alphonse.agent.tools.base import ensure_tool_result
 
 
@@ -22,6 +21,7 @@ def execute_step_node_impl(
     logger: logging.Logger,
     log_task_event: Callable[..., None],
 ) -> dict[str, Any]:
+    _ = (logger, log_task_event)
     task_state = task_state_with_defaults(state)
     task_state["pdca_phase"] = "do"
     task_state["check_provenance"] = "do"
@@ -30,19 +30,15 @@ def execute_step_node_impl(
     proposal, proposal_error = _proposal_from_pending_plan_raw(task_state=task_state, current=current)
     if isinstance(proposal_error, dict):
         _record_planner_output_error(
-            state=state,
             task_state=task_state,
             current=current,
             corr=corr,
             error_payload=proposal_error,
             append_trace_event=append_trace_event,
-            logger=logger,
-            log_task_event=log_task_event,
         )
         return {"task_state": task_state}
     if not isinstance(proposal, dict):
         _record_planner_output_error(
-            state=state,
             task_state=task_state,
             current=current,
             corr=corr,
@@ -52,16 +48,12 @@ def execute_step_node_impl(
                 "details": {},
             },
             append_trace_event=append_trace_event,
-            logger=logger,
-            log_task_event=log_task_event,
         )
         return {"task_state": task_state}
-    task_state["planner_error_last"] = None
 
     kind = str(proposal.get("kind") or "").strip()
     if kind != "call_tool":
         _record_planner_output_error(
-            state=state,
             task_state=task_state,
             current=current,
             corr=corr,
@@ -71,8 +63,6 @@ def execute_step_node_impl(
                 "details": {"proposal_kind": kind},
             },
             append_trace_event=append_trace_event,
-            logger=logger,
-            log_task_event=log_task_event,
         )
         return {"task_state": task_state}
     return _execute_call_tool_step(
@@ -83,43 +73,37 @@ def execute_step_node_impl(
         corr=corr,
         tool_registry=tool_registry,
         append_trace_event=append_trace_event,
-        logger=logger,
-        log_task_event=log_task_event,
     )
 
 
 def _record_planner_output_error(
     *,
-    state: dict[str, Any],
     task_state: dict[str, Any],
     current: dict[str, Any] | None,
     corr: str | None,
     error_payload: dict[str, Any],
     append_trace_event: Callable[[dict[str, Any], dict[str, Any]], None],
-    logger: logging.Logger,
-    log_task_event: Callable[..., None],
 ) -> None:
     step_id = str((current or {}).get("step_id") or "")
-    if isinstance(current, dict):
-        current["status"] = "failed"
     task_state["status"] = "running"
     error_code = str(error_payload.get("code") or "invalid_planner_output")
     raw_error = str(error_payload.get("raw_error") or error_code)
     details = error_payload.get("details") if isinstance(error_payload.get("details"), dict) else {}
-    task_state["planner_error_last"] = {"code": error_code, "raw_error": raw_error, "details": details}
     facts = task_state.get("facts")
     fact_bucket = dict(facts) if isinstance(facts, dict) else {}
-    fact_bucket[step_id or f"result_{len(fact_bucket) + 1}"] = {
-        "tool": "planner_output",
-        "result": {
-            "status": "failed",
+    fact_entry = _build_mission_fact_entry(
+        step_id=step_id,
+        tool_name="planner_output",
+        args={},
+        result={
             "error": {
                 "code": error_code,
                 "raw_error": raw_error,
                 "details": details,
             },
         },
-    }
+    )
+    fact_bucket[step_id or f"result_{len(fact_bucket) + 1}"] = fact_entry
     task_state["facts"] = fact_bucket
     append_trace_event(
         task_state,
@@ -128,22 +112,6 @@ def _record_planner_output_error(
             "summary": f"Planner output invalid: {raw_error}.",
             "correlation_id": corr,
         },
-    )
-    logger.info(
-        "task_mode execute planner_output_invalid correlation_id=%s step_id=%s error_code=%s",
-        corr,
-        step_id,
-        error_code,
-    )
-    log_task_event(
-        logger=logger,
-        state=state,
-        task_state=task_state,
-        node="execute_step_node",
-        event="graph.plan_output.invalid",
-        level="warning",
-        step_id=step_id,
-        error_code=error_code,
     )
 
 
@@ -154,81 +122,47 @@ def _proposal_from_pending_plan_raw(
 ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
     existing = (current or {}).get("proposal") if isinstance(current, dict) else None
     if isinstance(existing, dict):
-        return dict(existing), None
+        canonical = _coerce_canonical_tool_call(existing)
+        if isinstance(canonical, dict):
+            return canonical, None
+        return None, {
+            "code": "invalid_planner_output",
+            "raw_error": "current_step_proposal_non_canonical",
+            "details": {},
+        }
     raw = task_state.get("pending_plan_raw")
-    normalized = _normalize_raw_plan_artifact(raw)
-    if isinstance(normalized, dict):
-        tool_call = normalized.get("tool_call")
-        if not isinstance(tool_call, dict):
-            preview = str(raw)[:280] if raw is not None else ""
-            return None, {
-                "code": "invalid_planner_output",
-                "raw_error": "no_parseable_tool_call",
-                "details": {"raw_output_preview": preview},
-            }
+    if isinstance(raw, dict):
+        tool_call = raw.get("tool_call")
+        if isinstance(tool_call, dict):
+            canonical = _coerce_canonical_tool_call(tool_call)
+            if isinstance(canonical, dict):
+                task_state["current_plan_step"] = {
+                    "step_id": str((current or {}).get("step_id") or ""),
+                    "tool_call": dict(canonical),
+                }
+                if isinstance(current, dict):
+                    current["proposal"] = dict(canonical)
+                task_state["pending_plan_raw"] = None
+                return dict(canonical), None
         task_state["current_plan_step"] = {
             "step_id": str((current or {}).get("step_id") or ""),
-            "tool_call": dict(tool_call),
+            "tool_call": None,
         }
-        if isinstance(current, dict):
-            current["proposal"] = dict(tool_call)
-        task_state["pending_plan_raw"] = None
-        return dict(tool_call), None
     preview = str(raw)[:280] if raw is not None else ""
     return None, {
         "code": "invalid_planner_output",
-        "raw_error": "malformed_or_unparseable_tool_call",
+        "raw_error": "pending_plan_raw_non_canonical",
         "details": {"raw_output_preview": preview},
     }
 
 
-def _normalize_raw_plan_artifact(raw: Any) -> dict[str, Any] | None:
+def _coerce_canonical_tool_call(raw: Any) -> dict[str, Any] | None:
     if isinstance(raw, dict):
-        tool_call = raw.get("tool_call")
-        if isinstance(tool_call, dict):
-            normalized_tool_call = _normalize_raw_plan_candidate(tool_call)
-            if isinstance(normalized_tool_call, dict):
-                return {"tool_call": normalized_tool_call}
-        normalized_candidate = _normalize_raw_plan_candidate(raw)
-        if isinstance(normalized_candidate, dict):
-            return {"tool_call": normalized_candidate}
-        content = raw.get("content")
-        if isinstance(content, str) and content.strip():
-            parsed = parse_json_object(content)
-            return _normalize_raw_plan_artifact(parsed)
-        return None
-    if isinstance(raw, str) and raw.strip():
-        parsed = parse_json_object(raw)
-        return _normalize_raw_plan_artifact(parsed)
-    return None
-
-
-def _normalize_raw_plan_candidate(raw: Any) -> dict[str, Any] | None:
-    if isinstance(raw, dict):
-        tool_calls = raw.get("tool_calls")
-        if isinstance(tool_calls, list):
-            for call in tool_calls:
-                if not isinstance(call, dict):
-                    continue
-                name = str(call.get("name") or "").strip()
-                if not name:
-                    continue
-                arguments = call.get("arguments")
-                args = dict(arguments) if isinstance(arguments, dict) else {}
-                return {"kind": "call_tool", "tool_name": name, "args": args}
         kind = str(raw.get("kind") or "").strip()
         tool_name = str(raw.get("tool_name") or "").strip()
         args = raw.get("args")
         if kind == "call_tool" and tool_name and isinstance(args, dict):
             return {"kind": "call_tool", "tool_name": tool_name, "args": dict(args)}
-        content = raw.get("content")
-        if isinstance(content, str) and content.strip():
-            parsed = parse_json_object(content)
-            return _normalize_raw_plan_candidate(parsed)
-        return None
-    if isinstance(raw, str) and raw.strip():
-        parsed = parse_json_object(raw)
-        return _normalize_raw_plan_candidate(parsed)
     return None
 
 
@@ -241,8 +175,6 @@ def _execute_call_tool_step(
     corr: str | None,
     tool_registry: Any,
     append_trace_event: Callable[[dict[str, Any], dict[str, Any]], None],
-    logger: logging.Logger,
-    log_task_event: Callable[..., None],
 ) -> dict[str, Any]:
     tool_name = str(proposal.get("tool_name") or "").strip()
     args = proposal.get("args")

@@ -76,7 +76,8 @@ def build_next_step_node_impl(
         tool_registry=tool_registry,
     )
 
-    task_state["pending_plan_raw"] = raw_candidate
+    candidate_dict = _extract_candidate_dict(raw_candidate)
+    task_state["pending_plan_raw"] = {"tool_call": candidate_dict} if isinstance(candidate_dict, dict) else raw_candidate
     task_state.pop("planner_error_last", None)
 
     step_id = next_step_id(task_state)
@@ -111,7 +112,6 @@ def build_next_step_node_impl(
     )
 
     # Keep transition semantics for UI progress pulses; no decision-making here.
-    candidate_dict = _extract_candidate_dict(raw_candidate)
     intent_text = _extract_planner_intent(raw_candidate)
     emit_transition_event(
         state,

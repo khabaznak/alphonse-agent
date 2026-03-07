@@ -717,8 +717,10 @@ def test_pdca_next_step_uses_complete_with_tools_when_available() -> None:
     assert first.get("raw_source") == "complete_with_tools"
     raw = next_state.get("pending_plan_raw")
     assert isinstance(raw, dict)
-    tool_calls = raw.get("tool_calls")
-    assert isinstance(tool_calls, list)
+    tool_call = raw.get("tool_call")
+    assert isinstance(tool_call, dict)
+    assert tool_call.get("kind") == "call_tool"
+    assert tool_call.get("tool_name") == "job_list"
     assert llm.complete_with_tools_calls == 1
     assert llm.complete_calls == 0
 
