@@ -37,7 +37,7 @@ def execute_step_node_impl(
         step_id = str((current or {}).get("step_id") or "")
         if isinstance(current, dict):
             current["status"] = "failed"
-        task_state["status"] = "failed"
+        task_state["status"] = "running"
         task_state["planner_error_last"] = dict(proposal_error)
         facts = task_state.get("facts")
         fact_bucket = dict(facts) if isinstance(facts, dict) else {}
@@ -217,69 +217,7 @@ def _execute_call_tool_step(
         logger=logger,
         log_task_event=log_task_event,
     )
-    terminal_context = _terminal_command_context(tool_name=tool_name, args=params)
     step_id = str((current or {}).get("step_id") or "")
-    if tool_name == "askQuestion":
-        question = str(params.get("question") or "").strip()
-        if not question:
-            task_state["status"] = "failed"
-            if isinstance(current, dict):
-                current["status"] = "failed"
-            append_trace_event(
-                task_state,
-                {
-                    "type": "validation_failed",
-                    "summary": "askQuestion call_tool reached execute without question.",
-                    "correlation_id": corr,
-                },
-            )
-            log_task_event(
-                logger=logger,
-                state=state,
-                task_state=task_state,
-                node="execute_step_node",
-                event="graph.step.ask_question_invalid",
-                level="warning",
-                step_id=step_id,
-                reason="missing_question",
-            )
-            return {"task_state": task_state}
-        task_state["status"] = "waiting_user"
-        task_state["next_user_question"] = question
-        facts = task_state.get("facts")
-        fact_bucket = dict(facts) if isinstance(facts, dict) else {}
-        fact_bucket[step_id or f"result_{len(fact_bucket) + 1}"] = {
-            "tool": "askQuestion",
-            "result": {"status": "ok", "question": question},
-        }
-        task_state["facts"] = fact_bucket
-        if isinstance(current, dict):
-            current["status"] = "executed"
-        append_trace_event(
-            task_state,
-            {
-                "type": "status_changed",
-                "summary": "Status changed to waiting_user by askQuestion tool call.",
-                "correlation_id": corr,
-            },
-        )
-        log_task_event(
-            logger=logger,
-            state=state,
-            task_state=task_state,
-            node="execute_step_node",
-            event="graph.step.ask_question",
-            step_id=step_id,
-        )
-        _record_step_completion_memory(
-            state=state,
-            task_state=task_state,
-            current=current,
-            proposal=proposal,
-            correlation_id=corr,
-        )
-        return {"task_state": task_state}
-    send_after_search = _is_send_after_user_search(tool_name=tool_name, task_state=task_state)
     try:
         result = _execute_tool_call(
             state=state,
@@ -310,21 +248,14 @@ def _execute_call_tool_step(
             if isinstance(raw_error, dict):
                 error_code = str(raw_error.get("code") or "tool_failed")
                 error_message = str(raw_error.get("message") or "").strip()
-                error_details = raw_error.get("details")
                 error_retryable = bool(raw_error.get("retryable", False))
             else:
                 error_code = str(raw_error or "tool_failed")
                 error_message = ""
-                error_details = None
                 error_retryable = False
             if isinstance(current, dict):
                 current["failure_retryable"] = error_retryable
                 current["failure_error_code"] = error_code
-            failure_context = _tool_failure_context(
-                tool_name=tool_name,
-                result=result if isinstance(result, dict) else {},
-                error_details=error_details if isinstance(error_details, dict) else {},
-            )
             append_trace_event(
                 task_state,
                 {
@@ -345,12 +276,6 @@ def _execute_call_tool_step(
                 error_message,
                 args_preview,
             )
-            if send_after_search:
-                logger.info(
-                    "task_mode metric user_search_to_sendMessage correlation_id=%s outcome=failed error_code=%s",
-                    corr,
-                    error_code,
-                )
             log_task_event(
                 logger=logger,
                 state=state,
@@ -363,8 +288,6 @@ def _execute_call_tool_step(
                 error_code=error_code,
                 error_message=error_message,
                 args_preview=args_preview,
-                **terminal_context,
-                **failure_context,
             )
             log_task_event(
                 logger=logger,
@@ -412,11 +335,6 @@ def _execute_call_tool_step(
             step_id,
             tool_name,
         )
-        if send_after_search:
-            logger.info(
-                "task_mode metric user_search_to_sendMessage correlation_id=%s outcome=succeeded",
-                corr,
-            )
         log_task_event(
             logger=logger,
             state=state,
@@ -425,7 +343,6 @@ def _execute_call_tool_step(
             event="graph.tool.succeeded",
             step_id=step_id,
             tool=tool_name,
-            **terminal_context,
         )
         log_task_event(
             logger=logger,
@@ -473,12 +390,6 @@ def _execute_call_tool_step(
             tool_name,
             type(exc).__name__,
         )
-        if send_after_search:
-            logger.info(
-                "task_mode metric user_search_to_sendMessage correlation_id=%s outcome=exception error=%s",
-                corr,
-                type(exc).__name__,
-            )
         _record_after_tool_call_memory(
             state=state,
             task_state=task_state,
@@ -655,48 +566,6 @@ def _coerce_tool_result(*, tool_name: str, raw_result: Any) -> dict[str, Any]:
     return ensure_tool_result(tool_key=tool_name, value=raw_result)
 
 
-def _terminal_command_context(*, tool_name: str, args: dict[str, Any]) -> dict[str, Any]:
-    normalized = str(tool_name or "").strip().lower()
-    if normalized not in {"terminal_sync", "terminal_async", "ssh_terminal"}:
-        return {}
-    command = str(args.get("command") or "").strip()
-    cwd = str(args.get("cwd") or "").strip()
-    return {
-        "terminal_command": command,
-        "terminal_cwd": cwd,
-    }
-
-
-def _tool_failure_context(*, tool_name: str, result: dict[str, Any], error_details: dict[str, Any]) -> dict[str, Any]:
-    context: dict[str, Any] = {}
-    if str(tool_name or "").strip() != "mcp_call":
-        return context
-    result_payload = result.get("result") if isinstance(result.get("result"), dict) else {}
-    metadata = result.get("metadata") if isinstance(result.get("metadata"), dict) else {}
-    mcp_command = str(
-        error_details.get("mcp_command")
-        or metadata.get("mcp_command")
-        or ""
-    ).strip()
-    stderr_preview = str(
-        error_details.get("stderr_preview")
-        or result_payload.get("stderr")
-        or ""
-    ).strip()
-    stdout_preview = str(
-        error_details.get("stdout_preview")
-        or result_payload.get("stdout")
-        or ""
-    ).strip()
-    if mcp_command:
-        context["mcp_command"] = mcp_command
-    if stderr_preview:
-        context["stderr_preview"] = stderr_preview[:600]
-    if stdout_preview:
-        context["stdout_preview"] = stdout_preview[:400]
-    return context
-
-
 def _coerce_error(value: Any) -> dict[str, Any]:
     if isinstance(value, dict):
         code = str(value.get("code") or "tool_execution_error")
@@ -716,20 +585,6 @@ def _serialize_result(result: Any) -> Any:
     if isinstance(result, (dict, list, str, int, float, bool)) or result is None:
         return result
     return str(result)
-
-
-def _is_send_after_user_search(*, tool_name: str, task_state: dict[str, Any]) -> bool:
-    if str(tool_name or "").strip() not in {"send_message", "sendMessage"}:
-        return False
-    facts = task_state.get("facts")
-    if not isinstance(facts, dict):
-        return False
-    for _, entry in reversed(list(facts.items())):
-        if not isinstance(entry, dict):
-            continue
-        if str(entry.get("tool") or "").strip() == "user_search":
-            return True
-    return False
 
 
 def _safe_args_preview(args: dict[str, Any]) -> str:
