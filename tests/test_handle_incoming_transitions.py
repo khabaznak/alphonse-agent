@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from alphonse.agent.actions import handle_incoming_message as him
+from alphonse.agent.actions.transitions import presence_event_from_transition_event
 from alphonse.agent.actions.session_context import IncomingContext
 from alphonse.agent.io.contracts import NormalizedOutboundMessage
 
@@ -77,7 +78,7 @@ def test_emit_channel_transition_uses_primitives(monkeypatch) -> None:
     assert adapter.reactions[0]["emoji"] == "🤔"
 
 
-def test_emit_channel_transition_event_wip_delivers_text_via_deliver(monkeypatch) -> None:
+def test_emit_channel_transition_event_wip_projects_primitives_without_text_delivery(monkeypatch) -> None:
     adapter = _PrimitiveOnlyAdapter()
     monkeypatch.setattr(him, "get_io_registry", lambda: _FakeRegistry(adapter))
     incoming = IncomingContext(
@@ -93,6 +94,26 @@ def test_emit_channel_transition_event_wip_delivers_text_via_deliver(monkeypatch
         {"phase": "wip_update", "detail": {"text": "Working on it"}},
     )
 
-    assert len(adapter.deliveries) == 1
-    assert adapter.deliveries[0].message == "Working on it"
-    assert adapter.deliveries[0].channel_target == "8553589429"
+    assert adapter.deliveries == []
+    assert len(adapter.chat_actions) == 1
+    assert adapter.chat_actions[0]["action"] == "typing"
+    assert len(adapter.reactions) == 1
+    assert adapter.reactions[0]["emoji"] == "🤔"
+
+
+def test_presence_event_contract_for_wip_update() -> None:
+    event = {
+        "type": "agent.transition",
+        "phase": "wip_update",
+        "at": "2026-03-07T00:00:00+00:00",
+        "correlation_id": "corr-presence",
+        "detail": {"text": "Working on it", "tool": "job_list"},
+    }
+
+    presence = presence_event_from_transition_event(event)
+    assert isinstance(presence, dict)
+    assert presence.get("event_family") == "presence.progress"
+    assert presence.get("phase") == "thinking"
+    assert presence.get("correlation_id") == "corr-presence"
+    assert presence.get("hint") == "Working on it"
+    assert presence.get("tool_name") == "job_list"

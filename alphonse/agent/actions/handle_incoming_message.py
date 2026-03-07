@@ -16,7 +16,8 @@ from alphonse.agent.actions.state_context import ensure_conversation_locale
 from alphonse.agent.actions.state_context import outgoing_locale
 from alphonse.agent.actions.transitions import emit_agent_transitions_from_meta
 from alphonse.agent.actions.transitions import chat_action_for_phase
-from alphonse.agent.actions.transitions import phase_from_transition_event
+from alphonse.agent.actions.transitions import presence_event_from_transition_event
+from alphonse.agent.actions.transitions import projectable_phase_for_presence_event
 from alphonse.agent.actions.transitions import reaction_for_phase
 from alphonse.agent.cognition.plan_executor import PlanExecutionContext, PlanExecutor
 from alphonse.agent.cognition.preferences.store import resolve_preference_with_precedence
@@ -26,7 +27,6 @@ from alphonse.agent.cortex.graph import CortexGraph
 from alphonse.agent.cortex.state_store import load_state, save_state
 from alphonse.agent.identity import store as identity_store
 from alphonse.agent.io import get_io_registry
-from alphonse.agent.io.contracts import NormalizedOutboundMessage
 from alphonse.agent.nervous_system import users as users_store
 from alphonse.agent.nervous_system.pdca_queue_store import (
     append_pdca_event,
@@ -191,7 +191,7 @@ class HandleIncomingMessageAction(Action):
             emit_agent_transitions_from_meta(
                 incoming=incoming,
                 meta=result.meta if isinstance(result.meta, dict) else {},
-                emit_transition=lambda ctx, phase: _emit_channel_transition(ctx, phase),
+                emit_presence_event=lambda ctx, event: _emit_channel_transition_event(ctx, event),
                 skip_phases=set(),
             )
         _LOG.emit(
@@ -566,42 +566,122 @@ def _emit_channel_transition(incoming: IncomingContext, phase: str) -> None:
 def _emit_channel_transition_event(incoming: IncomingContext, event: dict[str, object]) -> None:
     if not isinstance(event, dict):
         return
-    phase = phase_from_transition_event(event)
+    presence_event = presence_event_from_transition_event(event)
+    if not isinstance(presence_event, dict):
+        return
+    corr = str(presence_event.get("correlation_id") or incoming.correlation_id or "")
+    _LOG.emit(
+        event="presence.stream.emitted",
+        component="actions.handle_incoming_message",
+        correlation_id=corr or None,
+        channel=incoming.channel_type,
+        user_id=incoming.person_id,
+        payload={
+            "event_family": str(presence_event.get("event_family") or ""),
+            "phase": str(presence_event.get("phase") or ""),
+            "tool_name": str(presence_event.get("tool_name") or ""),
+            "has_hint": bool(str(presence_event.get("hint") or "").strip()),
+        },
+    )
+    _project_presence_event(incoming=incoming, presence_event=presence_event)
+
+
+def _project_presence_event(*, incoming: IncomingContext, presence_event: dict[str, object]) -> None:
+    phase = projectable_phase_for_presence_event(presence_event)
     if not phase:
+        _LOG.emit(
+            event="presence.stream.projected",
+            component="actions.handle_incoming_message",
+            correlation_id=str(presence_event.get("correlation_id") or incoming.correlation_id or "") or None,
+            channel=incoming.channel_type,
+            user_id=incoming.person_id,
+            status="skipped",
+            payload={
+                "event_family": str(presence_event.get("event_family") or ""),
+                "reason": "non_projectable_phase",
+            },
+        )
         return
-    if phase == "wip_update":
-        detail = event.get("detail") if isinstance(event.get("detail"), dict) else {}
-        text = str(detail.get("text") or "").strip()
-        if text:
-            _deliver_transition_text(incoming, text)
-        return
-    _emit_channel_transition(incoming, phase)
-
-
-def _deliver_transition_text(incoming: IncomingContext, text: str) -> None:
     registry = get_io_registry()
     adapter = registry.get_extremity(incoming.channel_type)
     if adapter is None:
-        return
-    deliver = getattr(adapter, "deliver", None)
-    if not callable(deliver):
-        return
-    try:
-        deliver(
-            NormalizedOutboundMessage(
-                message=text,
-                channel_type=incoming.channel_type,
-                channel_target=incoming.address,
-                audience={"kind": "system", "id": "system"},
-                correlation_id=incoming.correlation_id,
-                metadata={},
-            )
+        _LOG.emit(
+            event="presence.stream.projected",
+            component="actions.handle_incoming_message",
+            correlation_id=str(presence_event.get("correlation_id") or incoming.correlation_id or "") or None,
+            channel=incoming.channel_type,
+            user_id=incoming.person_id,
+            status="skipped",
+            payload={
+                "event_family": str(presence_event.get("event_family") or ""),
+                "phase": phase,
+                "reason": "adapter_missing",
+            },
         )
+        return
+    action = chat_action_for_phase(phase)
+    emoji = reaction_for_phase(phase)
+    send_chat_action = getattr(adapter, "send_chat_action", None)
+    set_reaction = getattr(adapter, "set_reaction", None)
+    sent_action = False
+    sent_reaction = False
+    dropped_capabilities: list[str] = []
+    try:
+        if action:
+            if callable(send_chat_action):
+                send_chat_action(
+                    channel_target=incoming.address,
+                    action=action,
+                    correlation_id=incoming.correlation_id,
+                )
+                sent_action = True
+            else:
+                dropped_capabilities.append("send_chat_action")
+        if emoji:
+            if callable(set_reaction):
+                set_reaction(
+                    channel_target=incoming.address,
+                    message_id=incoming.message_id,
+                    emoji=emoji,
+                    correlation_id=incoming.correlation_id,
+                )
+                sent_reaction = True
+            else:
+                dropped_capabilities.append("set_reaction")
     except Exception:
         logger.exception(
-            "HandleIncomingMessageAction transition text emit failed channel=%s",
+            "HandleIncomingMessageAction presence projection failed channel=%s phase=%s",
             incoming.channel_type,
+            phase,
         )
+        _LOG.emit(
+            event="presence.stream.projected",
+            component="actions.handle_incoming_message",
+            correlation_id=str(presence_event.get("correlation_id") or incoming.correlation_id or "") or None,
+            channel=incoming.channel_type,
+            user_id=incoming.person_id,
+            status="failed",
+            payload={
+                "event_family": str(presence_event.get("event_family") or ""),
+                "phase": phase,
+            },
+        )
+        return
+    _LOG.emit(
+        event="presence.stream.projected",
+        component="actions.handle_incoming_message",
+        correlation_id=str(presence_event.get("correlation_id") or incoming.correlation_id or "") or None,
+        channel=incoming.channel_type,
+        user_id=incoming.person_id,
+        status="ok",
+        payload={
+            "event_family": str(presence_event.get("event_family") or ""),
+            "phase": phase,
+            "sent_chat_action": sent_action,
+            "sent_reaction": sent_reaction,
+            "dropped_capabilities": dropped_capabilities,
+        },
+    )
 
 
 def _maybe_emit_local_audio_reply(*, payload: dict[str, object], reply_text: str, correlation_id: str) -> None:

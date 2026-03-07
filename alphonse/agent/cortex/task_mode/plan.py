@@ -91,6 +91,10 @@ def build_next_step_node_impl(
 
     # Keep transition semantics for UI progress pulses; no decision-making here.
     intent_text = _extract_planner_intent(raw_candidate)
+    if intent_text:
+        task_state["planner_intent_last"] = intent_text
+    else:
+        task_state["planner_intent_last"] = ""
     emit_transition_event(
         state,
         "wip_update",
@@ -158,15 +162,12 @@ def _extract_candidate_dict(raw: Any) -> dict[str, Any] | None:
 
 def _extract_planner_intent(raw: Any) -> str:
     if isinstance(raw, dict):
-        text = str(raw.get("planner_intent") or "").strip()
-        if text:
-            return text[:160]
-        content = raw.get("content")
-        if isinstance(content, str) and content.strip():
-            return _extract_planner_intent(parse_json_object(content))
+        value = raw.get("planner_intent")
+        if isinstance(value, str):
+            text = value.strip()
+            if text:
+                return text[:160]
         return ""
-    if isinstance(raw, str) and raw.strip():
-        return _extract_planner_intent(parse_json_object(raw))
     return ""
 
 

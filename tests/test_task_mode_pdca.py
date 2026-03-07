@@ -828,6 +828,71 @@ def test_pdca_next_step_requires_complete_with_tools_capability() -> None:
     assert error.get("code") == "planner_capability_missing"
 
 
+def test_pdca_next_step_accepts_tool_call_without_planner_intent() -> None:
+    tool_registry = build_default_tool_registry()
+    next_step = build_next_step_node(tool_registry=tool_registry)
+    llm = _ToolCallLlm(
+        {
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "call-1",
+                    "name": "job_list",
+                    "arguments": {"limit": 5},
+                }
+            ],
+            "assistant_message": {"role": "assistant", "content": ""},
+        }
+    )
+    task_state = build_default_task_state()
+    task_state["goal"] = "list jobs"
+    task_state["status"] = "running"
+    state: dict[str, object] = {
+        "correlation_id": "corr-pdca-no-planner-intent",
+        "_llm_client": llm,
+        "task_state": task_state,
+    }
+
+    updated = next_step(state)
+    next_state = updated.get("task_state")
+    assert isinstance(next_state, dict)
+    raw = next_state.get("pending_plan_raw")
+    assert isinstance(raw, dict)
+    tool_call = raw.get("tool_call")
+    assert isinstance(tool_call, dict)
+    assert tool_call.get("tool_name") == "job_list"
+    assert str(next_state.get("planner_intent_last") or "") == ""
+
+
+def test_pdca_next_step_drops_malformed_planner_intent() -> None:
+    tool_registry = build_default_tool_registry()
+    next_step = build_next_step_node(tool_registry=tool_registry)
+    llm = _ToolCallLlm(
+        {
+            "tool_call": {"kind": "call_tool", "tool_name": "job_list", "args": {"limit": 3}},
+            "planner_intent": {"why": "not-a-string"},
+        }
+    )
+    task_state = build_default_task_state()
+    task_state["goal"] = "list jobs"
+    task_state["status"] = "running"
+    state: dict[str, object] = {
+        "correlation_id": "corr-pdca-malformed-planner-intent",
+        "_llm_client": llm,
+        "task_state": task_state,
+    }
+
+    updated = next_step(state)
+    next_state = updated.get("task_state")
+    assert isinstance(next_state, dict)
+    raw = next_state.get("pending_plan_raw")
+    assert isinstance(raw, dict)
+    tool_call = raw.get("tool_call")
+    assert isinstance(tool_call, dict)
+    assert tool_call.get("tool_name") == "job_list"
+    assert str(next_state.get("planner_intent_last") or "") == ""
+
+
 def test_pdca_tool_call_schema_includes_context_tools_when_runtime_registered() -> None:
     tool_registry = build_default_tool_registry()
     next_step = build_next_step_node(tool_registry=tool_registry)
