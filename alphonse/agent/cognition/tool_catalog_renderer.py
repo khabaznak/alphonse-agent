@@ -6,6 +6,7 @@ from typing import Any
 
 from jinja2 import Environment, FileSystemLoader
 
+from alphonse.agent.cognition.prompt_templates_runtime import PROMPT_SEEDS_DIR
 from alphonse.agent.tools.registry2 import ToolRegistry
 from alphonse.agent.tools.spec import ToolSpec
 
@@ -102,8 +103,9 @@ def build_render_context(specs: list[ToolSpec]) -> list[dict[str, Any]]:
     return ordered
 
 
-def render_tool_catalog(registry: ToolRegistry, template_dir: str | Path) -> str:
-    env = Environment(loader=FileSystemLoader(str(template_dir)), autoescape=False)
+def render_tool_catalog(registry: ToolRegistry, template_dir: str | Path | None = None) -> str:
+    resolved_template_dir = Path(template_dir) if template_dir is not None else PROMPT_SEEDS_DIR
+    env = Environment(loader=FileSystemLoader(str(resolved_template_dir)), autoescape=False)
     template = env.get_template("planning.tools.md.j2")
     specs = registry.specs_for_catalog()
     groups_context = build_render_context(specs)
