@@ -233,22 +233,6 @@ _TOOL_SCHEMA_DEFS: dict[str, dict[str, Any]] = {
         "description": "Resolve Telegram file metadata from a file_id.",
         "parameters": _object_schema({"file_id": {"type": "string"}}, ["file_id"]),
     },
-    "terminal_async": {
-        "description": "Submit a terminal command for asynchronous execution and return a command_id for polling.",
-        "parameters": _object_schema(
-            {
-                "command": {"type": "string"},
-                "cwd": {"type": "string"},
-                "timeout_seconds": {"type": "number"},
-                "sandbox_alias": {"type": "string"},
-            },
-            ["command"],
-        ),
-    },
-    "terminal_async_command_status": {
-        "description": "Get status and output for an asynchronous terminal command by command_id.",
-        "parameters": _object_schema({"command_id": {"type": "string"}}, ["command_id"]),
-    },
     "terminal_sync": {
         "description": "Execute terminal commands under global Alphonse execution mode and sandbox policy.",
         "parameters": _object_schema({"command": {"type": "string"}, "cwd": {"type": "string"}, "timeout_seconds": {"type": "number"}}, ["command"]),

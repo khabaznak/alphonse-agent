@@ -91,7 +91,7 @@ def test_timer_fired_job_trigger_emits_conscious_message_event(tmp_path: Path, m
     action.execute({"signal": signal, "ctx": bus, "state": None, "outcome": None})
     assert bus.events
     emitted = bus.events[-1]
-    assert emitted.type == "api.message_received"
+    assert emitted.type == "sense.api.message.user.received"
     payload = emitted.payload or {}
     actor = payload.get("actor") if isinstance(payload.get("actor"), dict) else {}
     content = payload.get("content") if isinstance(payload.get("content"), dict) else {}

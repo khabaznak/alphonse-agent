@@ -35,7 +35,7 @@ def test_conscious_reminder_dispatch_prefers_message_text_over_internal_prompt()
     action.execute({"signal": signal, "ctx": bus, "state": None, "outcome": None})
     assert bus.events
     emitted = bus.events[-1]
-    assert emitted.type == "api.message_received"
+    assert emitted.type == "sense.api.message.user.received"
     payload = emitted.payload if isinstance(emitted.payload, dict) else {}
     assert str(payload.get("text") or "") == "Hi alex"
 

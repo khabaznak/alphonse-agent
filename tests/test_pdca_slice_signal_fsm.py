@@ -52,5 +52,5 @@ def test_fsm_pdca_lifecycle_transitions_exist(
     assert fsm.lookup_outcome(state_ids["rehydrating_slice"], "action.succeeded").next_state_key == "executing"
     assert fsm.lookup_outcome(state_ids["executing"], "pdca.slice.persisted").next_state_key == "persisting_slice"
     assert fsm.lookup_outcome(state_ids["executing"], "pdca.waiting_user").next_state_key == "waiting_user"
-    assert fsm.lookup_outcome(state_ids["waiting_user"], "api.message_received").next_state_key == "rehydrating_slice"
+    assert fsm.lookup_outcome(state_ids["waiting_user"], "sense.api.message.user.received").next_state_key == "rehydrating_slice"
     assert fsm.lookup_outcome(state_ids["persisting_slice"], "action.succeeded").next_state_key == "idle"

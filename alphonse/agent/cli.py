@@ -563,11 +563,11 @@ def _command_say(args: argparse.Namespace, db_path: Path) -> None:
     pipeline = build_default_pipeline_with_bus(bus)
     correlation_id = args.correlation_id or str(uuid.uuid4())
     channel = str(args.channel).strip() or "cli"
-    signal_type = (
-        f"{channel}.message_received"
-        if channel in {"telegram", "cli", "api"}
-        else "cli.message_received"
-    )
+    signal_type = {
+        "telegram": "sense.telegram.message.user.received",
+        "cli": "sense.cli.message.user.received",
+        "api": "sense.api.message.user.received",
+    }.get(channel, "sense.cli.message.user.received")
     occurred_at = datetime.now(timezone.utc).isoformat()
     payload = build_incoming_message_envelope(
         message_id=str(args.chat_id or correlation_id),

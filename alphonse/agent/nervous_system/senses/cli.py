@@ -15,10 +15,10 @@ logger = get_component_logger("senses.cli")
 class CliSense(Sense):
     key = "cli"
     name = "CLI Sense"
-    description = "Reads CLI input and emits cli.message_received"
+    description = "Reads CLI input and emits sense.cli.message.user.received"
     source_type = "system"
     signals = [
-        SignalSpec(key="cli.message_received", name="CLI Message Received"),
+        SignalSpec(key="sense.cli.message.user.received", name="CLI User Message Received"),
     ]
 
     def __init__(self) -> None:
@@ -63,7 +63,7 @@ class CliSense(Sense):
             )
             self._bus.emit(
                 Signal(
-                    type="cli.message_received",
+                    type="sense.cli.message.user.received",
                     payload=build_incoming_message_envelope(
                         message_id=str(normalized.correlation_id or normalized.timestamp),
                         channel_type=normalized.channel_type,

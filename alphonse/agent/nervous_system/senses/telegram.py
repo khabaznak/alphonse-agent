@@ -24,10 +24,10 @@ class TelegramSettings:
 class TelegramSense(Sense):
     key = "telegram"
     name = "Telegram Sense"
-    description = "Receives Telegram messages and emits telegram.message_received"
+    description = "Receives Telegram messages and emits sense.telegram.message.user.received"
     source_type = "service"
     signals = [
-        SignalSpec(key="telegram.message_received", name="Telegram Message Received"),
+        SignalSpec(key="sense.telegram.message.user.received", name="Telegram User Message Received"),
     ]
 
     def __init__(self) -> None:
@@ -92,19 +92,33 @@ class TelegramSense(Sense):
             )
             self._bus.emit(
                 Signal(
-                    type="telegram.invite_requested",
-                    payload={
-                        "chat_id": str(chat_id),
-                        "from_user": from_user,
-                        "from_user_name": from_user_name,
-                        "text": text,
-                    },
+                    type="sense.telegram.message.user.received",
+                    payload=build_incoming_message_envelope(
+                        message_id=str(payload.get("message_id") or payload.get("update_id") or chat_id),
+                        channel_type="telegram",
+                        channel_target=str(chat_id),
+                        provider="telegram",
+                        text=text or "Telegram invite request",
+                        occurred_at=datetime.now(timezone.utc).isoformat(),
+                        correlation_id=str(chat_id),
+                        actor_external_user_id=str(from_user) if from_user is not None else None,
+                        actor_display_name=str(from_user_name or "").strip() or None,
+                        metadata={
+                            "message_kind": "invite_request",
+                            "invite": {
+                                "chat_id": str(chat_id),
+                                "chat_type": payload.get("chat_type"),
+                                "from_user": from_user,
+                                "from_user_name": from_user_name,
+                            },
+                        },
+                    ),
                     source="telegram",
                     correlation_id=str(chat_id),
                 )
             )
             logger.info(
-                "TelegramSense emitted telegram.invite_requested chat_id=%s",
+                "TelegramSense emitted sense.telegram.message.user.received (invite) chat_id=%s",
                 chat_id,
             )
             return
@@ -120,7 +134,7 @@ class TelegramSense(Sense):
         normalized = self._sense_adapter.normalize(payload)
         self._bus.emit(
             Signal(
-                type="telegram.message_received",
+                type="sense.telegram.message.user.received",
                 payload=build_incoming_message_envelope(
                     message_id=str(payload.get("message_id") or payload.get("update_id") or normalized.correlation_id or normalized.timestamp),
                     channel_type=normalized.channel_type,
@@ -144,7 +158,7 @@ class TelegramSense(Sense):
             )
         )
         logger.info(
-            "TelegramSense emitted telegram.message_received chat_id=%s message_id=%s",
+            "TelegramSense emitted sense.telegram.message.user.received chat_id=%s message_id=%s",
             payload.get("chat_id"),
             payload.get("message_id"),
         )

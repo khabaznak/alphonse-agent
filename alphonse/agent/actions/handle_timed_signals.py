@@ -50,39 +50,28 @@ class HandleTimedSignalsAction(Action):
             logger.warning("HandleTimedSignalsAction route skipped reason=no_bus")
             return ActionResult(intention_key="NOOP", payload={}, urgency=None)
 
-        routed_signal_type = (
-            "timed_signal.conscious_payload" if mind_layer == "conscious" else "timed_signal.subconscious_prompt"
-        )
-        routed_payload: dict[str, Any]
-        if routed_signal_type == "timed_signal.conscious_payload":
-            routed_payload = build_incoming_message_envelope(
-                message_id=str(payload.get("timed_signal_id") or _correlation_id(payload, signal) or "timed"),
-                channel_type=channel_type,
-                channel_target=target or user_id or channel_type,
-                provider=channel_type,
-                text=prompt,
-                occurred_at=datetime.now(timezone.utc).isoformat(),
-                correlation_id=_correlation_id(payload, signal),
-                actor_external_user_id=user_id or None,
-                metadata={
-                    "timed_signal": payload,
-                    "mind_layer": mind_layer,
-                    "channel_hint": channel_type,
-                },
+        if mind_layer != "conscious":
+            logger.info(
+                "HandleTimedSignalsAction deterministic_non_conscious_drop timed_signal_id=%s",
+                payload.get("timed_signal_id"),
             )
-        else:
-            routed_payload = {
-                "text": prompt,
-                "channel": channel_type,
-                "origin": channel_type,
-                "target": target or user_id,
-                "user_id": user_id or target,
-                "metadata": {
-                    "timed_signal": payload,
-                    "mind_layer": mind_layer,
-                    "channel_hint": channel_type,
-                },
-            }
+            return ActionResult(intention_key="NOOP", payload={}, urgency=None)
+        routed_signal_type = "timed_signal.conscious_payload"
+        routed_payload: dict[str, Any] = build_incoming_message_envelope(
+            message_id=str(payload.get("timed_signal_id") or _correlation_id(payload, signal) or "timed"),
+            channel_type=channel_type,
+            channel_target=target or user_id or channel_type,
+            provider=channel_type,
+            text=prompt,
+            occurred_at=datetime.now(timezone.utc).isoformat(),
+            correlation_id=_correlation_id(payload, signal),
+            actor_external_user_id=user_id or None,
+            metadata={
+                "timed_signal": payload,
+                "mind_layer": mind_layer,
+                "channel_hint": channel_type,
+            },
+        )
         bus.emit(
             BusSignal(
                 type=routed_signal_type,

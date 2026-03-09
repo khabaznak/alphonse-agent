@@ -37,9 +37,14 @@ class ToolRegistry:
 
 def build_planner_tool_registry(extra_specs: Iterable[ToolSpec] | None = None) -> ToolRegistry:
     registry = ToolRegistry()
+    disabled_keys = {"terminal_async", "terminal_async_command_status"}
     for spec in _default_specs():
+        if spec.key in disabled_keys:
+            continue
         registry.register(spec)
     for spec in extra_specs or []:
+        if spec.key in disabled_keys:
+            continue
         registry.register(spec)
     return registry
 

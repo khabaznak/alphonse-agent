@@ -31,6 +31,7 @@ class TerminalCommandSubmitTool:
         sandbox_alias: str | None = None,
         state: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        return _failed("disabled_pending_subagent", "terminal_async is disabled pending sub-agent orchestration.")
         aliases = _enabled_aliases()
         if not aliases:
             return _failed("sandbox_roots_not_configured", "No enabled sandbox directories found.")
@@ -88,6 +89,11 @@ class TerminalCommandSubmitTool:
 
 class TerminalCommandStatusTool:
     def execute(self, *, command_id: str) -> dict[str, Any]:
+        _ = command_id
+        return _failed(
+            "disabled_pending_subagent",
+            "terminal_async_command_status is disabled pending sub-agent orchestration.",
+        )
         item = get_terminal_command(str(command_id or "").strip())
         if not item:
             return _failed("terminal_command_not_found", "Terminal command not found.")

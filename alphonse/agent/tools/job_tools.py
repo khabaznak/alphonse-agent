@@ -293,7 +293,7 @@ def _brain_event_sink_from_state(
 
         bus.emit(
             Signal(
-                type="api.message_received",
+                type="sense.api.message.user.received",
                 payload=build_incoming_message_envelope(
                     message_id=str(correlation_id or payload.get("job_id") or "job-runner"),
                     channel_type=channel,

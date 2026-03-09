@@ -12,13 +12,7 @@ from alphonse.agent.nervous_system.senses.bus import Bus
 def test_intent_pipeline_registry_is_deterministic_only() -> None:
     pipeline = build_default_pipeline_with_bus(Bus())
     keys = set(pipeline.actions.list_keys())
-    assert "handle_conscious_message" in keys
-    assert "handle_timed_dispatch" in keys
-    assert "handle_subconscious_prompt" in keys
-    assert "shutdown" in keys
-    assert "handle_incoming_message" not in keys
-    assert "handle_status" not in keys
-    assert "handle_pdca_slice_request" not in keys
+    assert keys == {"handle_conscious_message", "handle_timed_dispatch", "shutdown"}
 
 
 def test_seed_routes_conscious_and_status_removed(tmp_path: Path) -> None:
@@ -47,3 +41,19 @@ def test_seed_routes_conscious_and_status_removed(tmp_path: Path) -> None:
             "SELECT COUNT(*) FROM transitions WHERE action_key = 'handle_incoming_message' AND is_enabled = 1"
         ).fetchone()
         assert int(legacy[0] or 0) == 0
+
+        removed_actions = conn.execute(
+            """
+            SELECT COUNT(*)
+            FROM transitions
+            WHERE is_enabled = 1
+              AND action_key IN (
+                'handle_telegram_invite',
+                'system_reminder',
+                'handle_action_failure',
+                'handle_timed_signals_query',
+                'handle_subconscious_prompt'
+              )
+            """
+        ).fetchone()
+        assert int(removed_actions[0] or 0) == 0

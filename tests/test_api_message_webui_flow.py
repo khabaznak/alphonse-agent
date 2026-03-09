@@ -49,7 +49,7 @@ def test_agent_message_webui_flow_returns_exchange_response() -> None:
     assert response.status_code == 200
     assert response.json() == {"message": "hello from worker", "data": {"ok": True}}
 
-    assert captured["signal_type"] == "api.message_received"
+    assert captured["signal_type"] == "sense.api.message.user.received"
     payload = captured["payload"]
     assert payload["schema_version"] == "1.0"
     assert payload["channel"]["type"] == "webui"

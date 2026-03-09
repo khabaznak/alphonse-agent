@@ -141,7 +141,7 @@ def test_job_run_now_routes_prompt_jobs_to_bus_when_present(tmp_path: Path) -> N
     assert run["status"] == "ok"
     assert bus.events
     emitted = bus.events[-1]
-    assert emitted.type == "api.message_received"
+    assert emitted.type == "sense.api.message.user.received"
     assert emitted.correlation_id == "corr-1"
     payload = emitted.payload or {}
     channel = payload.get("channel") if isinstance(payload.get("channel"), dict) else {}

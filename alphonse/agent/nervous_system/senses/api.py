@@ -24,8 +24,7 @@ class ApiSense(Sense):
     description = "Emits api.* signals from HTTP requests"
     source_type = "service"
     signals = [
-        SignalSpec(key="api.message_received", name="API Message Received"),
-        SignalSpec(key="api.timed_signals_requested", name="API Timed Signals Requested"),
+        SignalSpec(key="sense.api.message.user.received", name="API User Message Received"),
     ]
 
     def start(self, bus: Bus) -> None:
@@ -36,11 +35,12 @@ class ApiSense(Sense):
 
     def emit(self, bus: Bus, api_signal: ApiSignal) -> None:
         _assert_api_token(api_signal.payload)
+        signal_type = _canonical_api_signal_type(api_signal.type)
         if str(api_signal.payload.get("schema_version") or "").strip() == "1.0":
             correlation_id = str(api_signal.payload.get("correlation_id") or api_signal.correlation_id or "").strip() or api_signal.correlation_id
             bus.emit(
                 Signal(
-                    type=api_signal.type,
+                    type=signal_type,
                     payload=dict(api_signal.payload),
                     source="api",
                     correlation_id=correlation_id,
@@ -97,7 +97,7 @@ class ApiSense(Sense):
         )
         bus.emit(
             Signal(
-                type=api_signal.type,
+                type=signal_type,
                 payload=envelope,
                 source="api",
                 correlation_id=correlation_id,
@@ -117,3 +117,10 @@ def _assert_api_token(payload: dict[str, object]) -> None:
     provided = payload.get("api_token")
     if provided != expected:
         raise PermissionError("Invalid API token")
+
+
+def _canonical_api_signal_type(value: str) -> str:
+    rendered = str(value or "").strip()
+    if rendered in {"api.message_received", "sense.api.message.user.received"}:
+        return "sense.api.message.user.received"
+    return rendered

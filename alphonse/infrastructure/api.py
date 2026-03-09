@@ -330,7 +330,7 @@ def agent_message(
         session_hint=_as_optional_str(payload.get("session_hint")),
     )
     signal = gateway.build_signal(
-        "api.message_received",
+        "sense.api.message.user.received",
         envelope,
         correlation_id,
     )
@@ -367,20 +367,6 @@ async def create_agent_asset(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return record
-
-
-@app.get("/agent/timed-signals")
-def timed_signals(limit: int = 200, x_alphonse_api_token: str | None = Header(default=None)) -> dict[str, Any]:
-    _assert_api_token(x_alphonse_api_token)
-    signal = gateway.build_signal(
-        "api.timed_signals_requested",
-        {"limit": limit, "api_token": x_alphonse_api_token},
-        None,
-    )
-    response = gateway.emit_and_wait(signal, timeout=5.0)
-    if response is None:
-        raise HTTPException(status_code=503, detail="API gateway unavailable")
-    return response
 
 
 @app.get("/agent/events")

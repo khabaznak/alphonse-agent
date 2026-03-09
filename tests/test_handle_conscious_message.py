@@ -39,7 +39,7 @@ def test_handle_conscious_message_enqueues_pdca_slice(monkeypatch) -> None:
         correlation_id="c-1",
         actor_external_user_id="u-ext",
     )
-    result = action.execute({"signal": Signal(type="telegram.message_received", payload=envelope), "ctx": Bus()})
+    result = action.execute({"signal": Signal(type="sense.telegram.message.user.received", payload=envelope), "ctx": Bus()})
     assert result.intention_key == "NOOP"
     assert result.payload.get("task_id") == "task-123"
     assert called.get("session_user_id") == "u-1"
@@ -74,6 +74,6 @@ def test_handle_conscious_message_does_not_parse_control_intent(monkeypatch) -> 
         text="Please cancel task",
         correlation_id="c-1",
     )
-    result = action.execute({"signal": Signal(type="telegram.message_received", payload=envelope), "ctx": Bus()})
+    result = action.execute({"signal": Signal(type="sense.telegram.message.user.received", payload=envelope), "ctx": Bus()})
     assert result.payload.get("task_id") == "task-cancel-test"
     assert captured.get("payload", {}).get("text") == "Please cancel task"

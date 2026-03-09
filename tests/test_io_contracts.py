@@ -130,7 +130,7 @@ def test_api_sense_emits_normalized_payload(monkeypatch) -> None:
 
     sense = ApiSense()
     bus = FakeBus()
-    signal = build_api_signal("api.message_received", {"text": "hi", "channel": "webui"}, None)
+    signal = build_api_signal("sense.api.message.user.received", {"text": "hi", "channel": "webui"}, None)
     sense.emit(bus, signal)
 
     assert len(bus.emitted) == 1

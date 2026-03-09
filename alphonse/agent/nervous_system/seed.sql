@@ -30,17 +30,14 @@ VALUES
   ('shutdown_requested', 'Shutdown Requested', 'system', 'Shutdown requested', 1),
   ('action.succeeded', 'Action Succeeded', 'system', 'Action completed successfully', 1),
   ('action.failed', 'Action Failed', 'system', 'Action execution failed', 1),
-  ('telegram.message_received', 'Telegram Message Received', 'telegram', 'Incoming Telegram message', 1),
-  ('cli.message_received', 'CLI Message Received', 'cli', 'Incoming CLI message', 1),
-  ('api.message_received', 'API Message Received', 'api', 'Incoming API message', 1),
-  ('api.timed_signals_requested', 'API Timed Signals Requested', 'api', 'API timed signals request', 1),
+  ('sense.telegram.message.user.received', 'Telegram User Message Received', 'telegram', 'Incoming Telegram user message', 1),
+  ('sense.cli.message.user.received', 'CLI User Message Received', 'cli', 'Incoming CLI user message', 1),
+  ('sense.api.message.user.received', 'API User Message Received', 'api', 'Incoming API user message', 1),
   ('timer.fired', 'Timer Fired', 'timer', 'Scheduled timer fired', 1),
   ('timed_signal.fired', 'Timed Signal Fired', 'timer', 'Scheduled timed signal fired', 1),
   ('timed_signal.conscious_payload', 'Timed Signal Conscious Payload', 'timer', 'Timed signal routed to conscious ingress', 1),
-  ('timed_signal.subconscious_prompt', 'Timed Signal Subconscious Prompt', 'timer', 'Timed signal routed to subconscious handler', 1),
   ('terminal.command_updated', 'Terminal Command Updated', 'terminal', 'Terminal command updated', 1),
   ('terminal.command_executed', 'Terminal Command Executed', 'terminal_executor', 'Terminal command executed', 1),
-  ('telegram.invite_requested', 'Telegram Invite Requested', 'telegram', 'Telegram chat invite awaiting approval', 1),
   ('pdca.slice.requested', 'PDCA Slice Requested', 'pdca_queue_runner', 'Queue runner requested a PDCA execution slice', 1),
   ('pdca.resume_requested', 'PDCA Resume Requested', 'pdca_queue_runner', 'Resume previously persisted PDCA slice', 1),
   ('pdca.user_steering_received', 'PDCA User Steering Received', 'handle_conscious_message', 'User steering signal for active PDCA task', 1),
@@ -72,6 +69,17 @@ UPDATE signals
 SET is_enabled = 0
 WHERE key = 'api.status_requested';
 
+UPDATE signals
+SET is_enabled = 0
+WHERE key IN (
+  'api.timed_signals_requested',
+  'telegram.invite_requested',
+  'timed_signal.subconscious_prompt',
+  'telegram.message_received',
+  'cli.message_received',
+  'api.message_received'
+);
+
 UPDATE transitions
 SET action_key = 'handle_conscious_message'
 WHERE action_key = 'handle_incoming_message';
@@ -85,8 +93,27 @@ SET action_key = NULL
 WHERE action_key = 'handle_pdca_slice_request';
 
 UPDATE transitions
+SET action_key = NULL
+WHERE action_key IN (
+  'handle_status',
+  'handle_telegram_invite',
+  'system_reminder',
+  'handle_action_failure',
+  'handle_timed_signals_query',
+  'handle_subconscious_prompt'
+);
+
+UPDATE transitions
 SET is_enabled = 0
-WHERE action_key = 'handle_status';
+WHERE signal_id IN (
+  SELECT id
+  FROM signals
+  WHERE key IN (
+    'api.timed_signals_requested',
+    'telegram.invite_requested',
+    'timed_signal.subconscious_prompt'
+  )
+);
 
 INSERT OR IGNORE INTO transitions (
   state_id,
@@ -135,7 +162,7 @@ SELECT
   1,
   'telegram message received'
 FROM states s1
-JOIN signals sig ON sig.key = 'telegram.message_received'
+JOIN signals sig ON sig.key = 'sense.telegram.message.user.received'
 JOIN states s2 ON s2.key = 'idle';
 
 INSERT OR IGNORE INTO transitions (
@@ -185,7 +212,7 @@ SELECT
   1,
   'cli message received'
 FROM states s1
-JOIN signals sig ON sig.key = 'cli.message_received'
+JOIN signals sig ON sig.key = 'sense.cli.message.user.received'
 JOIN states s2 ON s2.key = 'idle';
 
 INSERT OR IGNORE INTO transitions (
@@ -210,7 +237,7 @@ SELECT
   1,
   'api message received'
 FROM states s1
-JOIN signals sig ON sig.key = 'api.message_received'
+JOIN signals sig ON sig.key = 'sense.api.message.user.received'
 JOIN states s2 ON s2.key = 'idle';
 
 INSERT OR IGNORE INTO transitions (
@@ -670,7 +697,7 @@ SELECT
   0,
   'incoming message resumes waiting pdca slice'
 FROM states s1
-JOIN signals sig ON sig.key IN ('telegram.message_received', 'cli.message_received', 'api.message_received')
+JOIN signals sig ON sig.key IN ('sense.telegram.message.user.received', 'sense.cli.message.user.received', 'sense.api.message.user.received')
 JOIN states s2 ON s2.key = 'rehydrating_slice'
 WHERE s1.key = 'waiting_user';
 
@@ -756,22 +783,42 @@ WHERE signal_id IN (
   SELECT id
   FROM signals
   WHERE key IN (
-    'telegram.message_received',
-    'cli.message_received',
-    'api.message_received',
+    'sense.telegram.message.user.received',
+    'sense.cli.message.user.received',
+    'sense.api.message.user.received',
     'terminal.command_updated',
     'terminal.command_executed',
     'timer.fired',
     'timed_signal.fired',
     'timed_signal.conscious_payload',
-    'timed_signal.subconscious_prompt',
-    'api.timed_signals_requested',
-    'telegram.invite_requested',
     'pdca.slice.requested',
     'pdca.resume_requested',
     'pdca.user_steering_received',
     'pdca.task_cancel_requested',
     'pdca.task_cancelled'
+  )
+);
+
+-- Final purge of removed action hooks after transition inserts.
+UPDATE transitions
+SET action_key = NULL
+WHERE action_key IN (
+  'handle_telegram_invite',
+  'system_reminder',
+  'handle_action_failure',
+  'handle_timed_signals_query',
+  'handle_subconscious_prompt'
+);
+
+UPDATE transitions
+SET is_enabled = 0
+WHERE signal_id IN (
+  SELECT id
+  FROM signals
+  WHERE key IN (
+    'api.timed_signals_requested',
+    'telegram.invite_requested',
+    'timed_signal.subconscious_prompt'
   )
 );
 
