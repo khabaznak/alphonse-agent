@@ -16,6 +16,7 @@ from alphonse.agent.nervous_system.pdca_queue_store import (
     upsert_pdca_task,
 )
 from alphonse.agent.nervous_system.senses.bus import Signal
+from alphonse.agent.nervous_system.senses.bus import Bus
 
 
 def test_handle_pdca_slice_request_without_text_moves_to_waiting_user(
@@ -382,3 +383,85 @@ def test_handle_pdca_slice_request_prefers_checkpoint_state_for_rehydration(
     checkpoint = load_pdca_checkpoint(task_id)
     assert checkpoint is not None
     assert checkpoint["task_state"]["cycle_index"] == 6
+
+
+def test_handle_pdca_slice_request_classifies_engine_unavailable_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db_path = tmp_path / "nerve-db"
+    monkeypatch.setenv("NERVE_DB_PATH", str(db_path))
+    apply_schema(db_path)
+    task_id = upsert_pdca_task(
+        {
+            "owner_id": "owner-1",
+            "conversation_key": "telegram:8553589429",
+            "status": "queued",
+            "metadata": {"pending_user_text": "hello"},
+        }
+    )
+
+    class _UnavailableGraph:
+        def invoke(self, state, text, *, llm_client=None):  # noqa: ANN001
+            _ = (state, text, llm_client)
+            raise RuntimeError(
+                "HTTPConnectionPool(host='127.0.0.1', port=4096): "
+                "Max retries exceeded with url: /session "
+                "(Caused by NewConnectionError('[Errno 61] Connection refused'))"
+            )
+
+    monkeypatch.setattr(hpsr, "_CORTEX_GRAPH", _UnavailableGraph())
+    monkeypatch.setattr(hpsr, "build_llm_client", lambda: None)
+    bus = Bus()
+    signal = Signal(
+        type="pdca.slice.requested",
+        payload={"task_id": task_id, "correlation_id": "cid-engine-down"},
+        source="pdca_queue_runner",
+    )
+    action = HandlePdcaSliceRequestAction()
+    _ = action.execute({"signal": signal, "ctx": bus})
+
+    emitted = bus.get(timeout=0.05)
+    assert emitted is not None
+    assert emitted.type == "pdca.failed"
+    assert emitted.payload.get("failure_code") == "engine_unavailable"
+    assert emitted.payload.get("user_notice_required") is True
+
+
+def test_handle_pdca_slice_request_classifies_generic_failure_without_notice(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db_path = tmp_path / "nerve-db"
+    monkeypatch.setenv("NERVE_DB_PATH", str(db_path))
+    apply_schema(db_path)
+    task_id = upsert_pdca_task(
+        {
+            "owner_id": "owner-1",
+            "conversation_key": "telegram:8553589429",
+            "status": "queued",
+            "metadata": {"pending_user_text": "hello"},
+        }
+    )
+
+    class _GenericFailureGraph:
+        def invoke(self, state, text, *, llm_client=None):  # noqa: ANN001
+            _ = (state, text, llm_client)
+            raise ValueError("bad_plan_shape")
+
+    monkeypatch.setattr(hpsr, "_CORTEX_GRAPH", _GenericFailureGraph())
+    monkeypatch.setattr(hpsr, "build_llm_client", lambda: None)
+    bus = Bus()
+    signal = Signal(
+        type="pdca.slice.requested",
+        payload={"task_id": task_id, "correlation_id": "cid-generic-fail"},
+        source="pdca_queue_runner",
+    )
+    action = HandlePdcaSliceRequestAction()
+    _ = action.execute({"signal": signal, "ctx": bus})
+
+    emitted = bus.get(timeout=0.05)
+    assert emitted is not None
+    assert emitted.type == "pdca.failed"
+    assert emitted.payload.get("failure_code") == "execution_failed"
+    assert emitted.payload.get("user_notice_required") is False

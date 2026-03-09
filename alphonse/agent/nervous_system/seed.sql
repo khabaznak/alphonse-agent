@@ -104,6 +104,13 @@ WHERE action_key IN (
 );
 
 UPDATE transitions
+SET action_key = 'handle_pdca_failure_notice'
+WHERE signal_id IN (
+  SELECT id FROM signals WHERE key = 'pdca.failed'
+)
+  AND is_enabled = 1;
+
+UPDATE transitions
 SET is_enabled = 0
 WHERE signal_id IN (
   SELECT id
@@ -809,6 +816,13 @@ WHERE action_key IN (
   'handle_timed_signals_query',
   'handle_subconscious_prompt'
 );
+
+UPDATE transitions
+SET action_key = 'handle_pdca_failure_notice'
+WHERE signal_id IN (
+  SELECT id FROM signals WHERE key = 'pdca.failed'
+)
+  AND is_enabled = 1;
 
 UPDATE transitions
 SET is_enabled = 0

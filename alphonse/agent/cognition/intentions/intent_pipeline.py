@@ -7,6 +7,7 @@ import traceback
 from alphonse.agent.actions.registry import ActionRegistry
 from alphonse.agent.actions.models import ActionResult
 from alphonse.agent.actions.handle_conscious_message import HandleConsciousMessageAction
+from alphonse.agent.actions.handle_pdca_failure_notice import HandlePdcaFailureNoticeAction
 from alphonse.agent.actions.handle_timed_signals import HandleTimedSignalsAction
 from alphonse.agent.actions.shutdown import ShutdownAction
 from alphonse.agent.nervous_system.senses.bus import Bus, Signal
@@ -69,6 +70,7 @@ def build_default_pipeline() -> IntentPipeline:
 def build_default_pipeline_with_bus(bus: Bus) -> IntentPipeline:
     actions = ActionRegistry()
     actions.register("handle_conscious_message", lambda _: HandleConsciousMessageAction())
+    actions.register("handle_pdca_failure_notice", lambda _: HandlePdcaFailureNoticeAction())
     actions.register("handle_timed_dispatch", lambda _: HandleTimedSignalsAction())
     actions.register("shutdown", lambda _: ShutdownAction())
     return IntentPipeline(

@@ -21,8 +21,10 @@ from alphonse.agent.nervous_system.pdca_queue_store import (
 )
 from alphonse.agent.nervous_system.senses.bus import Signal as BusSignal
 from alphonse.agent.observability.log_manager import get_component_logger
+from alphonse.agent.observability.log_manager import get_log_manager
 
 logger = get_component_logger("actions.handle_pdca_slice_request")
+_LOG = get_log_manager()
 _CORTEX_GRAPH = CortexGraph()
 
 
@@ -116,12 +118,28 @@ class HandlePdcaSliceRequestAction(Action):
         try:
             result = _CORTEX_GRAPH.invoke(base_state, text, llm_client=llm_client)
         except Exception as exc:
+            failure_code = _classify_failure_code(exc)
+            user_notice_required = failure_code == "engine_unavailable"
+            _LOG.emit(
+                event="pdca.slice.failed.classified",
+                component="actions.handle_pdca_slice_request",
+                correlation_id=correlation_id,
+                payload={
+                    "task_id": task_id,
+                    "failure_code": failure_code,
+                    "user_notice_required": user_notice_required,
+                },
+            )
             _finalize_failure(task=task, correlation_id=correlation_id, error=str(exc))
             _emit_slice_signal(
                 context=context,
                 event_type="pdca.failed",
                 task_id=task_id,
                 correlation_id=correlation_id,
+                extra_payload={
+                    "failure_code": failure_code,
+                    "user_notice_required": user_notice_required,
+                },
             )
             return ActionResult(intention_key="NOOP", payload={}, urgency=None)
 
@@ -393,13 +411,22 @@ def _status_signal(status: str) -> str:
     return "pdca.slice.persisted"
 
 
-def _emit_slice_signal(*, context: dict[str, Any], event_type: str, task_id: str, correlation_id: str | None) -> None:
+def _emit_slice_signal(
+    *,
+    context: dict[str, Any],
+    event_type: str,
+    task_id: str,
+    correlation_id: str | None,
+    extra_payload: dict[str, Any] | None = None,
+) -> None:
     bus = context.get("ctx")
     if not hasattr(bus, "emit"):
         return
     payload: dict[str, Any] = {"task_id": task_id}
     if correlation_id:
         payload["correlation_id"] = correlation_id
+    if isinstance(extra_payload, dict):
+        payload.update(extra_payload)
     bus.emit(
         BusSignal(
             type=event_type,
@@ -417,3 +444,21 @@ def _dispatch_cooldown_seconds() -> int:
     except ValueError:
         parsed = 30
     return max(parsed, 1)
+
+
+def _classify_failure_code(exc: Exception) -> str:
+    rendered = str(exc or "").strip().lower()
+    matchers = (
+        "connection refused",
+        "failed to establish a new connection",
+        "max retries exceeded",
+        "timed out",
+        "connect timeout",
+        "read timeout",
+        "unable to connect",
+        "endpoint unavailable",
+        "/session",
+    )
+    if any(token in rendered for token in matchers):
+        return "engine_unavailable"
+    return "execution_failed"
