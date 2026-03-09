@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from alphonse.agent.actions.conscious_message_handler import build_incoming_message_envelope
 from alphonse.agent.actions import handle_incoming_message as him
 from alphonse.agent.actions.handle_incoming_message import HandleIncomingMessageAction
 from alphonse.agent.cognition.plans import CortexPlan
@@ -49,12 +50,14 @@ def test_handle_incoming_triggers_local_audio_when_requested(tmp_path: Path, mon
     action = HandleIncomingMessageAction()
     signal = Signal(
         type="api.message_received",
-        payload={
-            "text": "Estado?",
-            "channel": "webui",
-            "target": "webui",
-            "controls": {"audio_mode": "local_audio"},
-        },
+        payload=build_incoming_message_envelope(
+            message_id="msg-audio-1",
+            channel_type="webui",
+            channel_target="webui",
+            provider="webui",
+            text="Estado?",
+            controls={"audio_mode": "local_audio"},
+        ),
         source="api",
     )
     action.execute({"signal": signal, "state": None, "outcome": None, "ctx": None})
@@ -101,7 +104,13 @@ def test_handle_incoming_persists_tts_transcript_when_reply_text_is_empty(tmp_pa
     action = HandleIncomingMessageAction()
     signal = Signal(
         type="api.message_received",
-        payload={"text": "mándamelo en audio", "channel": "webui", "target": "webui"},
+        payload=build_incoming_message_envelope(
+            message_id="msg-audio-2",
+            channel_type="webui",
+            channel_target="webui",
+            provider="webui",
+            text="mándamelo en audio",
+        ),
         source="api",
     )
     action.execute({"signal": signal, "state": None, "outcome": None, "ctx": None})

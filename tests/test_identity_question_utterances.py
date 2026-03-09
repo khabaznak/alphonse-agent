@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from alphonse.agent.actions.conscious_message_handler import build_incoming_message_envelope
 from alphonse.agent.actions import handle_incoming_message as him
 from alphonse.agent.actions.handle_incoming_message import HandleIncomingMessageAction
 from alphonse.agent.cortex.state_store import load_state
@@ -42,7 +43,14 @@ def _prepare_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
 def _send_text(action: HandleIncomingMessageAction, text: str, *, chat_id: str = "123") -> None:
     signal = Signal(
         type="telegram.message_received",
-        payload={"text": text, "channel": "telegram", "chat_id": chat_id},
+        payload=build_incoming_message_envelope(
+            message_id=f"tg-{chat_id}-{text or 'empty'}",
+            channel_type="telegram",
+            channel_target=chat_id,
+            provider="telegram",
+            text=text,
+            actor_external_user_id=chat_id,
+        ),
         source="telegram",
     )
     action.execute({"signal": signal, "state": None, "outcome": None, "ctx": None})

@@ -9,7 +9,7 @@ from alphonse.agent.cortex.task_mode.progress_critic import route_after_progress
 from alphonse.agent.cortex.task_mode.prompt_templates import PROGRESS_CHECKIN_SYSTEM_PROMPT
 from alphonse.agent.cortex.task_mode.prompt_templates import PROGRESS_CHECKIN_USER_TEMPLATE
 from alphonse.agent.cortex.task_mode.prompt_templates import render_pdca_prompt
-from alphonse.agent.cortex.transitions import emit_transition_event
+from alphonse.agent.cortex.transitions import emit_presence_transition_event
 from alphonse.config import settings
 
 DEFAULT_PROGRESS_CHECK_CYCLE_THRESHOLD = 25
@@ -51,7 +51,7 @@ def progress_critic_node_stateful(
             evaluation=evaluation,
             current_step=current_step,
         ),
-        maybe_emit_periodic_wip_update=lambda *, state, task_state, cycle, current_step: _maybe_emit_periodic_wip_update(
+        maybe_emit_periodic_wip_update=lambda *, state, task_state, cycle, current_step: _maybe_emit_periodic_progress_update(
             state=state,
             task_state=task_state,
             cycle=cycle,
@@ -72,7 +72,7 @@ def route_after_progress_critic_stateful(
     return _route_after_progress_critic_impl(state, correlation_id=correlation_id)
 
 
-def _maybe_emit_periodic_wip_update(
+def _maybe_emit_periodic_progress_update(
     *,
     state: dict[str, Any],
     task_state: dict[str, Any],
@@ -84,7 +84,7 @@ def _maybe_emit_periodic_wip_update(
 ) -> None:
     if cycle <= 0:
         return
-    # Keep periodic WIP updates in-phase with proposed work only.
+    # Keep periodic progress updates in-phase with proposed work only.
     # Executed/failed steps are already behind execution and can feel stale to users.
     step_status = str((current_step or {}).get("status") or "").strip().lower() if isinstance(current_step, dict) else ""
     if step_status != "proposed":
@@ -93,9 +93,14 @@ def _maybe_emit_periodic_wip_update(
     if cycle % emit_every != 0:
         return
     detail = build_wip_update_detail(task_state=task_state, cycle=cycle, current_step=current_step)
-    emit_transition_event(state, "wip_update", detail)
+    emit_presence_transition_event(
+        state,
+        event_family="presence.progress",
+        phase="thinking",
+        detail=detail,
+    )
     logger.info(
-        "task_mode progress_critic wip_update correlation_id=%s cycle=%s intention=%s text=%s",
+        "task_mode progress_critic presence_progress correlation_id=%s cycle=%s intention=%s text=%s",
         correlation_id(state),
         cycle,
         str(detail.get("intention") or ""),

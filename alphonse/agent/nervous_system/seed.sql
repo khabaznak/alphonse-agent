@@ -33,15 +33,19 @@ VALUES
   ('telegram.message_received', 'Telegram Message Received', 'telegram', 'Incoming Telegram message', 1),
   ('cli.message_received', 'CLI Message Received', 'cli', 'Incoming CLI message', 1),
   ('api.message_received', 'API Message Received', 'api', 'Incoming API message', 1),
-  ('api.status_requested', 'API Status Requested', 'api', 'API status request', 1),
   ('api.timed_signals_requested', 'API Timed Signals Requested', 'api', 'API timed signals request', 1),
   ('timer.fired', 'Timer Fired', 'timer', 'Scheduled timer fired', 1),
   ('timed_signal.fired', 'Timed Signal Fired', 'timer', 'Scheduled timed signal fired', 1),
+  ('timed_signal.conscious_payload', 'Timed Signal Conscious Payload', 'timer', 'Timed signal routed to conscious ingress', 1),
+  ('timed_signal.subconscious_prompt', 'Timed Signal Subconscious Prompt', 'timer', 'Timed signal routed to subconscious handler', 1),
   ('terminal.command_updated', 'Terminal Command Updated', 'terminal', 'Terminal command updated', 1),
   ('terminal.command_executed', 'Terminal Command Executed', 'terminal_executor', 'Terminal command executed', 1),
   ('telegram.invite_requested', 'Telegram Invite Requested', 'telegram', 'Telegram chat invite awaiting approval', 1),
   ('pdca.slice.requested', 'PDCA Slice Requested', 'pdca_queue_runner', 'Queue runner requested a PDCA execution slice', 1),
   ('pdca.resume_requested', 'PDCA Resume Requested', 'pdca_queue_runner', 'Resume previously persisted PDCA slice', 1),
+  ('pdca.user_steering_received', 'PDCA User Steering Received', 'handle_conscious_message', 'User steering signal for active PDCA task', 1),
+  ('pdca.task_cancel_requested', 'PDCA Task Cancel Requested', 'handle_conscious_message', 'User requested task cancellation', 1),
+  ('pdca.task_cancelled', 'PDCA Task Cancelled', 'pdca_executor', 'PDCA task was cancelled', 1),
   ('pdca.slice.persisted', 'PDCA Slice Persisted', 'handle_pdca_slice_request', 'PDCA slice checkpoint persisted', 1),
   ('pdca.slice.completed', 'PDCA Slice Completed', 'handle_pdca_slice_request', 'PDCA task reached terminal completion', 1),
   ('pdca.waiting_user', 'PDCA Waiting User', 'handle_pdca_slice_request', 'PDCA task needs user input', 1),
@@ -62,6 +66,27 @@ VALUES (
   'system',
   'daily_report'
 );
+
+-- Runtime hardening updates for existing databases (non-destructive).
+UPDATE signals
+SET is_enabled = 0
+WHERE key = 'api.status_requested';
+
+UPDATE transitions
+SET action_key = 'handle_conscious_message'
+WHERE action_key = 'handle_incoming_message';
+
+UPDATE transitions
+SET action_key = 'handle_timed_dispatch'
+WHERE action_key = 'handle_timed_signals';
+
+UPDATE transitions
+SET action_key = NULL
+WHERE action_key = 'handle_pdca_slice_request';
+
+UPDATE transitions
+SET is_enabled = 0
+WHERE action_key = 'handle_status';
 
 INSERT OR IGNORE INTO transitions (
   state_id,
@@ -106,7 +131,7 @@ SELECT
   30,
   1,
   NULL,
-  'handle_incoming_message',
+  'handle_conscious_message',
   1,
   'telegram message received'
 FROM states s1
@@ -156,7 +181,7 @@ SELECT
   30,
   1,
   NULL,
-  'handle_incoming_message',
+  'handle_conscious_message',
   1,
   'cli message received'
 FROM states s1
@@ -181,7 +206,7 @@ SELECT
   30,
   1,
   NULL,
-  'handle_incoming_message',
+  'handle_conscious_message',
   1,
   'api message received'
 FROM states s1
@@ -206,11 +231,86 @@ SELECT
   30,
   1,
   NULL,
-  'handle_status',
+  'handle_conscious_message',
   1,
-  'api status request'
+  'terminal command updated routes to conscious ingress'
 FROM states s1
-JOIN signals sig ON sig.key = 'api.status_requested'
+JOIN signals sig ON sig.key = 'terminal.command_updated'
+JOIN states s2 ON s2.key = 'idle';
+
+INSERT OR IGNORE INTO transitions (
+  state_id,
+  signal_id,
+  next_state_id,
+  priority,
+  is_enabled,
+  guard_key,
+  action_key,
+  match_any_state,
+  notes
+)
+SELECT
+  s1.id,
+  sig.id,
+  s2.id,
+  30,
+  1,
+  NULL,
+  'handle_conscious_message',
+  1,
+  'terminal command executed routes to conscious ingress'
+FROM states s1
+JOIN signals sig ON sig.key = 'terminal.command_executed'
+JOIN states s2 ON s2.key = 'idle';
+
+INSERT OR IGNORE INTO transitions (
+  state_id,
+  signal_id,
+  next_state_id,
+  priority,
+  is_enabled,
+  guard_key,
+  action_key,
+  match_any_state,
+  notes
+)
+SELECT
+  s1.id,
+  sig.id,
+  s2.id,
+  20,
+  1,
+  NULL,
+  'handle_conscious_message',
+  1,
+  'timed conscious payload routes to conscious ingress'
+FROM states s1
+JOIN signals sig ON sig.key = 'timed_signal.conscious_payload'
+JOIN states s2 ON s2.key = 'idle';
+
+INSERT OR IGNORE INTO transitions (
+  state_id,
+  signal_id,
+  next_state_id,
+  priority,
+  is_enabled,
+  guard_key,
+  action_key,
+  match_any_state,
+  notes
+)
+SELECT
+  s1.id,
+  sig.id,
+  s2.id,
+  20,
+  1,
+  NULL,
+  'handle_subconscious_prompt',
+  1,
+  'timed subconscious prompt routes to deterministic subconscious handler'
+FROM states s1
+JOIN signals sig ON sig.key = 'timed_signal.subconscious_prompt'
 JOIN states s2 ON s2.key = 'idle';
 
 INSERT OR IGNORE INTO transitions (
@@ -256,7 +356,7 @@ SELECT
   20,
   1,
   NULL,
-  'handle_timed_signals',
+  'handle_timed_dispatch',
   1,
   'timer fired'
 FROM states s1
@@ -281,7 +381,7 @@ SELECT
   20,
   1,
   NULL,
-  'handle_timed_signals',
+  'handle_timed_dispatch',
   1,
   'timed signal fired'
 FROM states s1
@@ -306,7 +406,7 @@ SELECT
   5,
   1,
   NULL,
-  'handle_pdca_slice_request',
+  NULL,
   0,
   'idle receives pdca slice request'
 FROM states s1
@@ -332,7 +432,7 @@ SELECT
   5,
   1,
   NULL,
-  'handle_pdca_slice_request',
+  NULL,
   0,
   'resume request enters rehydration'
 FROM states s1
@@ -391,6 +491,84 @@ FROM states s1
 JOIN signals sig ON sig.key = 'pdca.slice.persisted'
 JOIN states s2 ON s2.key = 'persisting_slice'
 WHERE s1.key = 'executing';
+
+INSERT OR IGNORE INTO transitions (
+  state_id,
+  signal_id,
+  next_state_id,
+  priority,
+  is_enabled,
+  guard_key,
+  action_key,
+  match_any_state,
+  notes
+)
+SELECT
+  s1.id,
+  sig.id,
+  s2.id,
+  1,
+  1,
+  NULL,
+  NULL,
+  0,
+  'user steering keeps execution state'
+FROM states s1
+JOIN signals sig ON sig.key = 'pdca.user_steering_received'
+JOIN states s2 ON s2.id = s1.id
+WHERE s1.key IN ('executing', 'waiting_user');
+
+INSERT OR IGNORE INTO transitions (
+  state_id,
+  signal_id,
+  next_state_id,
+  priority,
+  is_enabled,
+  guard_key,
+  action_key,
+  match_any_state,
+  notes
+)
+SELECT
+  s1.id,
+  sig.id,
+  s2.id,
+  1,
+  1,
+  NULL,
+  NULL,
+  0,
+  'cancel requested transitions to persisting/teardown lane'
+FROM states s1
+JOIN signals sig ON sig.key = 'pdca.task_cancel_requested'
+JOIN states s2 ON s2.key = 'persisting_slice'
+WHERE s1.key IN ('executing', 'waiting_user');
+
+INSERT OR IGNORE INTO transitions (
+  state_id,
+  signal_id,
+  next_state_id,
+  priority,
+  is_enabled,
+  guard_key,
+  action_key,
+  match_any_state,
+  notes
+)
+SELECT
+  s1.id,
+  sig.id,
+  s2.id,
+  1,
+  1,
+  NULL,
+  NULL,
+  0,
+  'cancel completed returns to idle'
+FROM states s1
+JOIN signals sig ON sig.key = 'pdca.task_cancelled'
+JOIN states s2 ON s2.key = 'idle'
+WHERE s1.key IN ('executing', 'waiting_user', 'persisting_slice');
 
 INSERT OR IGNORE INTO transitions (
   state_id,
@@ -570,6 +748,32 @@ SELECT
 FROM states s1
 JOIN signals sig ON sig.key = 'action.succeeded'
 JOIN states s2 ON s2.key = 'idle';
+
+-- Make routing explicit per state for conscious/timed/pdca routing signals.
+UPDATE transitions
+SET match_any_state = 0
+WHERE signal_id IN (
+  SELECT id
+  FROM signals
+  WHERE key IN (
+    'telegram.message_received',
+    'cli.message_received',
+    'api.message_received',
+    'terminal.command_updated',
+    'terminal.command_executed',
+    'timer.fired',
+    'timed_signal.fired',
+    'timed_signal.conscious_payload',
+    'timed_signal.subconscious_prompt',
+    'api.timed_signals_requested',
+    'telegram.invite_requested',
+    'pdca.slice.requested',
+    'pdca.resume_requested',
+    'pdca.user_steering_received',
+    'pdca.task_cancel_requested',
+    'pdca.task_cancelled'
+  )
+);
 
 INSERT OR IGNORE INTO channels (channel_id, channel_type, person_id, address, is_enabled, priority)
 VALUES

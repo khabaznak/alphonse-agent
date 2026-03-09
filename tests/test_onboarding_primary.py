@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from alphonse.agent.actions.conscious_message_handler import build_incoming_message_envelope
 from alphonse.agent.actions import handle_incoming_message as him
 from alphonse.agent.actions.handle_incoming_message import HandleIncomingMessageAction
 from alphonse.agent.cognition.preferences.store import (
@@ -73,7 +74,15 @@ def _send_text(
 ) -> None:
     signal = Signal(
         type="telegram.message_received",
-        payload={"text": text, "origin": "telegram", "chat_id": chat_id},
+        payload=build_incoming_message_envelope(
+            message_id=f"tg-{chat_id}-{text or 'empty'}",
+            channel_type="telegram",
+            channel_target=chat_id,
+            provider="telegram",
+            text=text,
+            actor_external_user_id=chat_id,
+            actor_display_name=chat_id,
+        ),
         source="telegram",
     )
     action.execute({"signal": signal, "state": None, "outcome": None, "ctx": None})

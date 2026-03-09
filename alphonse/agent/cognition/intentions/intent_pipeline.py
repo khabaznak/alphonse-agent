@@ -7,13 +7,13 @@ import traceback
 from alphonse.agent.actions.registry import ActionRegistry
 from alphonse.agent.actions.models import ActionResult
 from alphonse.agent.actions.system_reminder import SystemReminderAction
-from alphonse.agent.actions.handle_incoming_message import HandleIncomingMessageAction
-from alphonse.agent.actions.handle_status import HandleStatusAction
+from alphonse.agent.actions.handle_conscious_message import HandleConsciousMessageAction
 from alphonse.agent.actions.handle_timed_signals import HandleTimedSignalsAction
+from alphonse.agent.actions.handle_subconscious_prompt import HandleSubconsciousPromptAction
 from alphonse.agent.actions.handle_action_failure import HandleActionFailure
 from alphonse.agent.actions.handle_timed_signals_query import HandleTimedSignalsQueryAction
 from alphonse.agent.actions.handle_telegram_invite import HandleTelegramInviteAction
-from alphonse.agent.actions.handle_pdca_slice_request import HandlePdcaSliceRequestAction
+from alphonse.agent.actions.shutdown import ShutdownAction
 from alphonse.agent.nervous_system.senses.bus import Bus, Signal
 from alphonse.agent.nervous_system.trace_store import write_trace
 from alphonse.agent.cognition.narration.outbound_narration_orchestrator import (
@@ -73,14 +73,14 @@ def build_default_pipeline() -> IntentPipeline:
 
 def build_default_pipeline_with_bus(bus: Bus) -> IntentPipeline:
     actions = ActionRegistry()
-    actions.register("system_reminder", lambda _: SystemReminderAction())
-    actions.register("handle_incoming_message", lambda _: HandleIncomingMessageAction())
-    actions.register("handle_status", lambda _: HandleStatusAction())
-    actions.register("handle_timed_signals", lambda _: HandleTimedSignalsAction())
+    actions.register("handle_conscious_message", lambda _: HandleConsciousMessageAction())
+    actions.register("handle_timed_dispatch", lambda _: HandleTimedSignalsAction())
+    actions.register("handle_subconscious_prompt", lambda _: HandleSubconsciousPromptAction())
     actions.register("handle_timed_signals_query", lambda _: HandleTimedSignalsQueryAction())
     actions.register("handle_action_failure", lambda _: HandleActionFailure())
     actions.register("handle_telegram_invite", lambda _: HandleTelegramInviteAction())
-    actions.register("handle_pdca_slice_request", lambda _: HandlePdcaSliceRequestAction())
+    actions.register("system_reminder", lambda _: SystemReminderAction())
+    actions.register("shutdown", lambda _: ShutdownAction())
     return IntentPipeline(
         actions=actions,
         bus=bus,

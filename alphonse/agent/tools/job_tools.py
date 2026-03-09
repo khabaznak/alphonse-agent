@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from alphonse.agent.actions.conscious_message_handler import build_incoming_message_envelope
 from alphonse.agent.cognition.prompt_templates_runtime import (
     JOBS_YOU_JUST_REMEMBERED_SYSTEM_PROMPT,
 )
@@ -293,17 +294,19 @@ def _brain_event_sink_from_state(
         bus.emit(
             Signal(
                 type="api.message_received",
-                payload={
-                    "text": text,
-                    "channel": channel,
-                    "origin": channel,
-                    "target": target,
-                    "user_id": user_id,
-                    "metadata": {
+                payload=build_incoming_message_envelope(
+                    message_id=str(correlation_id or payload.get("job_id") or "job-runner"),
+                    channel_type=channel,
+                    channel_target=target,
+                    provider=channel,
+                    text=text,
+                    correlation_id=correlation_id,
+                    actor_external_user_id=user_id,
+                    metadata={
                         "source": "job_runner",
                         "job": payload,
                     },
-                },
+                ),
                 source="jobs",
                 correlation_id=correlation_id,
             )

@@ -4,6 +4,7 @@ import os
 from datetime import datetime, timezone
 from typing import Any
 
+from alphonse.agent.actions.conscious_message_handler import build_incoming_message_envelope
 from alphonse.agent.actions.base import Action
 from alphonse.agent.actions.models import ActionResult
 from alphonse.agent.nervous_system.senses.bus import Signal as BusSignal
@@ -17,7 +18,7 @@ logger = get_component_logger("actions.handle_timed_signals")
 
 
 class HandleTimedSignalsAction(Action):
-    key = "handle_timed_signals"
+    key = "handle_timed_dispatch"
 
     def execute(self, context: dict) -> ActionResult:
         signal = context.get("signal")
@@ -50,23 +51,42 @@ class HandleTimedSignalsAction(Action):
             return ActionResult(intention_key="NOOP", payload={}, urgency=None)
 
         routed_signal_type = (
-            "api.message_received" if mind_layer == "conscious" else "timed_signal.subconscious_prompt"
+            "timed_signal.conscious_payload" if mind_layer == "conscious" else "timed_signal.subconscious_prompt"
         )
+        routed_payload: dict[str, Any]
+        if routed_signal_type == "timed_signal.conscious_payload":
+            routed_payload = build_incoming_message_envelope(
+                message_id=str(payload.get("timed_signal_id") or _correlation_id(payload, signal) or "timed"),
+                channel_type=channel_type,
+                channel_target=target or user_id or channel_type,
+                provider=channel_type,
+                text=prompt,
+                occurred_at=datetime.now(timezone.utc).isoformat(),
+                correlation_id=_correlation_id(payload, signal),
+                actor_external_user_id=user_id or None,
+                metadata={
+                    "timed_signal": payload,
+                    "mind_layer": mind_layer,
+                    "channel_hint": channel_type,
+                },
+            )
+        else:
+            routed_payload = {
+                "text": prompt,
+                "channel": channel_type,
+                "origin": channel_type,
+                "target": target or user_id,
+                "user_id": user_id or target,
+                "metadata": {
+                    "timed_signal": payload,
+                    "mind_layer": mind_layer,
+                    "channel_hint": channel_type,
+                },
+            }
         bus.emit(
             BusSignal(
                 type=routed_signal_type,
-                payload={
-                    "text": prompt,
-                    "channel": channel_type,
-                    "origin": channel_type,
-                    "target": target or user_id,
-                    "user_id": user_id or target,
-                    "metadata": {
-                        "timed_signal": payload,
-                        "mind_layer": mind_layer,
-                        "channel_hint": channel_type,
-                    },
-                },
+                payload=routed_payload,
                 source="timer",
                 correlation_id=_correlation_id(payload, signal),
             )
@@ -233,15 +253,17 @@ def _emit_brain_payload_to_bus(
         metadata["job_id"] = job_id
     bus.emit(
         BusSignal(
-            type="api.message_received",
-            payload={
-                "text": text,
-                "channel": channel,
-                "origin": channel,
-                "target": target,
-                "user_id": user_id,
-                "metadata": metadata,
-            },
+            type="timed_signal.conscious_payload",
+            payload=build_incoming_message_envelope(
+                message_id=str((signal_payload or {}).get("message_id") or correlation_id),
+                channel_type=channel,
+                channel_target=target,
+                provider=str(channel or "timer"),
+                text=text,
+                correlation_id=correlation_id,
+                actor_external_user_id=user_id,
+                metadata=metadata,
+            ),
             source="timer",
             correlation_id=correlation_id,
         )

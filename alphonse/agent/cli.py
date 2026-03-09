@@ -17,6 +17,7 @@ from urllib import request
 
 from dotenv import load_dotenv
 
+from alphonse.agent.actions.conscious_message_handler import build_incoming_message_envelope
 from alphonse.agent.cognition.intentions.intent_pipeline import (
     build_default_pipeline_with_bus,
 )
@@ -567,18 +568,27 @@ def _command_say(args: argparse.Namespace, db_path: Path) -> None:
         if channel in {"telegram", "cli", "api"}
         else "cli.message_received"
     )
-    payload = {
-        "text": args.text,
-        "chat_id": args.chat_id,
-        "origin": channel,
-        "timestamp": time.time(),
-    }
+    occurred_at = datetime.now(timezone.utc).isoformat()
+    payload = build_incoming_message_envelope(
+        message_id=str(args.chat_id or correlation_id),
+        channel_type=channel,
+        channel_target=str(args.chat_id or channel),
+        provider=channel,
+        text=args.text,
+        occurred_at=occurred_at,
+        correlation_id=correlation_id,
+        actor_external_user_id=str(args.chat_id or "").strip() or None,
+        actor_person_id=args.person_id,
+        metadata={"source": "cli.say"},
+    )
     if args.planning_mode:
         payload["planning_mode"] = args.planning_mode
     if args.autonomy_level is not None:
         payload["autonomy_level"] = args.autonomy_level
     if args.person_id:
-        payload["person_id"] = args.person_id
+        actor = payload.get("actor") if isinstance(payload.get("actor"), dict) else {}
+        actor["person_id"] = args.person_id
+        payload["actor"] = actor
     signal = Signal(
         type=signal_type,
         payload=payload,
@@ -586,7 +596,7 @@ def _command_say(args: argparse.Namespace, db_path: Path) -> None:
         correlation_id=correlation_id,
     )
     pipeline.handle(
-        "handle_incoming_message",
+        "handle_conscious_message",
         {
             "signal": signal,
             "state": None,

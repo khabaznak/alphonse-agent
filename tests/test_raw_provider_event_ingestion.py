@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from alphonse.agent.actions.conscious_message_handler import build_incoming_message_envelope
 from alphonse.agent.actions import handle_incoming_message as him
 from alphonse.agent.actions.handle_incoming_message import HandleIncomingMessageAction
 from alphonse.agent.nervous_system.migrate import apply_schema
@@ -50,12 +51,15 @@ def test_handle_incoming_packs_provider_event_raw_json(tmp_path: Path, monkeypat
     }
     signal = Signal(
         type="telegram.message_received",
-        payload={
-            "text": "",
-            "channel": "telegram",
-            "chat_id": "8553589429",
-            "provider_event": provider_event,
-        },
+        payload=build_incoming_message_envelope(
+            message_id="tg-provider-1",
+            channel_type="telegram",
+            channel_target="8553589429",
+            provider="telegram",
+            text="",
+            attachments=[{"id": "voice-file-1", "kind": "audio"}],
+            metadata={"provider_event": provider_event},
+        ),
         source="telegram",
     )
     action.execute({"signal": signal, "state": None, "outcome": None, "ctx": None})
@@ -102,12 +106,14 @@ def test_handle_incoming_packs_provider_event_markdown_mode(tmp_path: Path, monk
     }
     signal = Signal(
         type="telegram.message_received",
-        payload={
-            "text": "hola",
-            "channel": "telegram",
-            "chat_id": "8553589429",
-            "provider_event": provider_event,
-        },
+        payload=build_incoming_message_envelope(
+            message_id="tg-provider-2",
+            channel_type="telegram",
+            channel_target="8553589429",
+            provider="telegram",
+            text="hola",
+            metadata={"provider_event": provider_event},
+        ),
         source="telegram",
     )
     action.execute({"signal": signal, "state": None, "outcome": None, "ctx": None})

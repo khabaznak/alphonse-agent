@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from datetime import datetime, timezone
 
+from alphonse.agent.actions.conscious_message_handler import build_incoming_message_envelope
 from alphonse.agent.extremities.interfaces.integrations.telegram.telegram_adapter import TelegramAdapter
 from alphonse.agent.io import TelegramSenseAdapter
 from alphonse.agent.observability.log_manager import get_component_logger
@@ -119,17 +121,24 @@ class TelegramSense(Sense):
         self._bus.emit(
             Signal(
                 type="telegram.message_received",
-                payload={
-                    "text": normalized.text,
-                    "channel": normalized.channel_type,
-                    "target": normalized.channel_target,
-                    "user_id": normalized.user_id,
-                    "user_name": normalized.user_name,
-                    "timestamp": normalized.timestamp,
-                    "correlation_id": normalized.correlation_id,
-                    "metadata": normalized.metadata,
-                    "provider_event": payload.get("provider_event") if isinstance(payload.get("provider_event"), dict) else None,
-                },
+                payload=build_incoming_message_envelope(
+                    message_id=str(payload.get("message_id") or payload.get("update_id") or normalized.correlation_id or normalized.timestamp),
+                    channel_type=normalized.channel_type,
+                    channel_target=str(normalized.channel_target or "telegram"),
+                    provider="telegram",
+                    text=normalized.text,
+                    occurred_at=datetime.fromtimestamp(float(normalized.timestamp), tz=timezone.utc).isoformat(),
+                    correlation_id=normalized.correlation_id,
+                    actor_external_user_id=normalized.user_id,
+                    actor_display_name=normalized.user_name,
+                    metadata={
+                        "normalized_metadata": normalized.metadata,
+                        "provider_event": payload.get("provider_event")
+                        if isinstance(payload.get("provider_event"), dict)
+                        else None,
+                    },
+                    reply_to_message_id=str(payload.get("reply_to_message_id") or "").strip() or None,
+                ),
                 source="telegram",
                 correlation_id=normalized.correlation_id,
             )

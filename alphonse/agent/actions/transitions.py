@@ -8,6 +8,20 @@ from alphonse.agent.actions.session_context import IncomingContext
 
 logger = get_component_logger("actions.transitions")
 
+_PRESENCE_PHASE_CHANGED = "presence.phase_changed"
+_PRESENCE_PROGRESS = "presence.progress"
+_PRESENCE_WAITING_INPUT = "presence.waiting_input"
+_PRESENCE_COMPLETED = "presence.completed"
+_PRESENCE_FAILED = "presence.failed"
+_REQUIRED_PRESENCE_KEYS = ("event_family", "correlation_id", "ts", "phase")
+_ALLOWED_FAMILY_PHASES: dict[str, set[str]] = {
+    _PRESENCE_PROGRESS: {"thinking"},
+    _PRESENCE_WAITING_INPUT: {"waiting_user"},
+    _PRESENCE_COMPLETED: {"done"},
+    _PRESENCE_FAILED: {"failed"},
+    _PRESENCE_PHASE_CHANGED: {"acknowledged", "thinking", "executing"},
+}
+
 
 def emit_agent_transitions_from_meta(
     *,
@@ -56,7 +70,7 @@ def reaction_for_phase(phase: str) -> str | None:
 
 def phase_from_transition_event(event: dict[str, Any]) -> str | None:
     phase = str(event.get("phase") or "").strip().lower()
-    if phase in {"acknowledged", "thinking", "executing", "waiting_user", "done", "failed", "wip_update"}:
+    if phase in {"acknowledged", "thinking", "executing", "waiting_user", "done", "failed"}:
         return phase
     if phase != "cortex.state":
         return None
@@ -79,7 +93,7 @@ def presence_event_from_transition_event(event: dict[str, Any]) -> dict[str, Any
     if not phase:
         return None
     detail = event.get("detail") if isinstance(event.get("detail"), dict) else {}
-    family = _presence_family_for_phase(phase)
+    family = _presence_family_for_phase(phase, detail)
     emitted_at = str(event.get("at") or "").strip() or datetime.now(timezone.utc).isoformat()
     hint = _presence_hint(detail)
     tool_name = _presence_tool_name(detail)
@@ -87,7 +101,7 @@ def presence_event_from_transition_event(event: dict[str, Any]) -> dict[str, Any
         "event_family": family,
         "correlation_id": str(event.get("correlation_id") or "").strip() or None,
         "ts": emitted_at,
-        "phase": "thinking" if phase == "wip_update" else phase,
+        "phase": phase,
     }
     if hint:
         payload["hint"] = hint
@@ -96,24 +110,49 @@ def presence_event_from_transition_event(event: dict[str, Any]) -> dict[str, Any
     return payload
 
 
-def projectable_phase_for_presence_event(presence_event: dict[str, Any]) -> str | None:
+def projectable_phase_for_presence_event(presence_event: dict[str, Any]) -> tuple[str | None, str | None]:
+    is_valid, reason = validate_presence_event_contract(presence_event)
+    if not is_valid:
+        return None, reason or "invalid_contract"
     phase = str(presence_event.get("phase") or "").strip().lower()
-    if phase in {"acknowledged", "thinking", "executing", "waiting_user", "done", "failed"}:
-        return phase
-    return None
+    return phase, None
 
 
-def _presence_family_for_phase(phase: str) -> str:
+def validate_presence_event_contract(presence_event: dict[str, Any]) -> tuple[bool, str | None]:
+    if not isinstance(presence_event, dict):
+        return False, "invalid_contract"
+    for key in _REQUIRED_PRESENCE_KEYS:
+        if key not in presence_event:
+            return False, f"missing_required_field:{key}"
+    event_family = str(presence_event.get("event_family") or "").strip().lower()
+    phase = str(presence_event.get("phase") or "").strip().lower()
+    ts = str(presence_event.get("ts") or "").strip()
+    if not event_family:
+        return False, "missing_required_field:event_family"
+    if not phase:
+        return False, "missing_required_field:phase"
+    if not ts:
+        return False, "missing_required_field:ts"
+    allowed_phases = _ALLOWED_FAMILY_PHASES.get(event_family)
+    if not isinstance(allowed_phases, set):
+        return False, "invalid_contract"
+    if phase not in allowed_phases:
+        return False, "family_phase_mismatch"
+    return True, None
+
+
+def _presence_family_for_phase(phase: str, detail: dict[str, Any]) -> str:
+    explicit = str(detail.get("presence_event_family") or "").strip().lower()
+    if explicit:
+        return explicit
     phase_value = str(phase or "").strip().lower()
-    if phase_value == "wip_update":
-        return "presence.progress"
     if phase_value == "waiting_user":
-        return "presence.waiting_input"
+        return _PRESENCE_WAITING_INPUT
     if phase_value == "done":
-        return "presence.completed"
+        return _PRESENCE_COMPLETED
     if phase_value == "failed":
-        return "presence.failed"
-    return "presence.phase_changed"
+        return _PRESENCE_FAILED
+    return _PRESENCE_PHASE_CHANGED
 
 
 def _presence_hint(detail: dict[str, Any]) -> str | None:

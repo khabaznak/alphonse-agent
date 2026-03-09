@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from alphonse.agent.actions.conscious_message_handler import build_incoming_message_envelope
 from alphonse.agent.actions import handle_incoming_message as him
 from alphonse.agent.actions.handle_incoming_message import HandleIncomingMessageAction
 from alphonse.agent.nervous_system.migrate import apply_schema
@@ -34,11 +35,13 @@ def test_incoming_message_enqueues_new_pdca_task_when_slicing_enabled(
     bus = Bus()
     signal = Signal(
         type="api.message_received",
-        payload={
-            "text": "Please help me with a long task",
-            "channel": "webui",
-            "target": "webui",
-        },
+        payload=build_incoming_message_envelope(
+            message_id="msg-1",
+            channel_type="webui",
+            channel_target="webui",
+            provider="webui",
+            text="Please help me with a long task",
+        ),
         source="api",
     )
     result = action.execute({"signal": signal, "state": None, "outcome": None, "ctx": bus})
@@ -83,11 +86,13 @@ def test_incoming_message_resumes_waiting_pdca_task_when_present(
     bus = Bus()
     signal = Signal(
         type="api.message_received",
-        payload={
-            "text": "Here is the missing detail",
-            "channel": "webui",
-            "target": "webui",
-        },
+        payload=build_incoming_message_envelope(
+            message_id="msg-2",
+            channel_type="webui",
+            channel_target="webui",
+            provider="webui",
+            text="Here is the missing detail",
+        ),
         source="api",
     )
     _ = action.execute({"signal": signal, "state": None, "outcome": None, "ctx": bus})

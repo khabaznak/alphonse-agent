@@ -51,13 +51,12 @@ def test_agent_message_webui_flow_returns_exchange_response() -> None:
 
     assert captured["signal_type"] == "api.message_received"
     payload = captured["payload"]
-    assert payload["text"] == "hello"
-    assert payload["channel"] == "webui"
-    assert payload["target"] == "webui"
-    assert payload["content"]["type"] == "asset"
-    assert payload["content"]["assets"][0]["asset_id"] == "asset-1"
+    assert payload["schema_version"] == "1.0"
+    assert payload["channel"]["type"] == "webui"
+    assert payload["channel"]["target"] == "webui"
+    assert payload["content"]["text"] == "hello"
     assert payload["controls"]["audio_mode"] == "local_audio"
-    assert payload["user_name"] is None
-    assert payload["metadata"]["raw"]["metadata"]["user_name"] == "UI Tester"
-    assert payload["origin"] == "api"
-    assert isinstance(payload["correlation_id"], str)
+    assert payload["metadata"]["content"]["type"] == "asset"
+    assert payload["metadata"]["content"]["assets"][0]["asset_id"] == "asset-1"
+    assert payload["actor"]["display_name"] is None
+    assert payload["correlation_id"] is None or isinstance(payload["correlation_id"], str)

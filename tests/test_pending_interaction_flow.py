@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from alphonse.agent.actions.conscious_message_handler import build_incoming_message_envelope
 from alphonse.agent.actions import handle_incoming_message as him
 from alphonse.agent.actions.handle_incoming_message import HandleIncomingMessageAction
 from alphonse.agent.cortex.state_store import save_state, load_state
@@ -14,7 +15,13 @@ from alphonse.agent.nervous_system.senses.bus import Signal
 def _send_text(action: HandleIncomingMessageAction, text: str) -> None:
     signal = Signal(
         type="cli.message_received",
-        payload={"text": text, "origin": "cli", "chat_id": "cli"},
+        payload=build_incoming_message_envelope(
+            message_id=f"cli-{text or 'empty'}",
+            channel_type="cli",
+            channel_target="cli",
+            provider="cli",
+            text=text,
+        ),
         source="cli",
     )
     action.execute({"signal": signal, "state": None, "outcome": None, "ctx": None})
@@ -68,7 +75,14 @@ def test_pending_name_raw_event_keeps_pending_interaction(tmp_path: Path, monkey
     action = HandleIncomingMessageAction()
     signal = Signal(
         type="telegram.message_received",
-        payload={"text": "Alex", "origin": "telegram", "chat_id": "123"},
+        payload=build_incoming_message_envelope(
+            message_id="tg-123-1",
+            channel_type="telegram",
+            channel_target="123",
+            provider="telegram",
+            text="Alex",
+            actor_external_user_id="123",
+        ),
         source="telegram",
     )
     action.execute({"signal": signal, "state": None, "outcome": None, "ctx": None})
@@ -98,7 +112,15 @@ def test_pending_non_consumable_empty_text_does_not_raise(tmp_path: Path, monkey
     action = HandleIncomingMessageAction()
     signal = Signal(
         type="telegram.message_received",
-        payload={"text": "", "origin": "telegram", "chat_id": "123"},
+        payload=build_incoming_message_envelope(
+            message_id="tg-123-2",
+            channel_type="telegram",
+            channel_target="123",
+            provider="telegram",
+            text="",
+            actor_external_user_id="123",
+            attachments=[{"id": "noop", "kind": "text"}],
+        ),
         source="telegram",
     )
     action.execute({"signal": signal, "state": None, "outcome": None, "ctx": None})

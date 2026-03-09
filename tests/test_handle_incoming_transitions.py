@@ -4,6 +4,7 @@ from dataclasses import dataclass
 
 from alphonse.agent.actions import handle_incoming_message as him
 from alphonse.agent.actions.transitions import presence_event_from_transition_event
+from alphonse.agent.actions.transitions import projectable_phase_for_presence_event
 from alphonse.agent.actions.session_context import IncomingContext
 from alphonse.agent.io.contracts import NormalizedOutboundMessage
 
@@ -59,7 +60,7 @@ class _PrimitiveOnlyAdapter:
         self.deliveries.append(message)
 
 
-def test_emit_channel_transition_uses_primitives(monkeypatch) -> None:
+def test_emit_presence_phase_changed_uses_primitives(monkeypatch) -> None:
     adapter = _PrimitiveOnlyAdapter()
     monkeypatch.setattr(him, "get_io_registry", lambda: _FakeRegistry(adapter))
     incoming = IncomingContext(
@@ -70,7 +71,11 @@ def test_emit_channel_transition_uses_primitives(monkeypatch) -> None:
         message_id="3638",
     )
 
-    him._emit_channel_transition(incoming, "thinking")
+    him._emit_presence_phase_changed(
+        incoming=incoming,
+        phase="thinking",
+        correlation_id="cid-primitive",
+    )
 
     assert len(adapter.chat_actions) == 1
     assert adapter.chat_actions[0]["action"] == "typing"
@@ -78,7 +83,7 @@ def test_emit_channel_transition_uses_primitives(monkeypatch) -> None:
     assert adapter.reactions[0]["emoji"] == "🤔"
 
 
-def test_emit_channel_transition_event_wip_projects_primitives_without_text_delivery(monkeypatch) -> None:
+def test_emit_channel_transition_event_progress_projects_primitives_without_text_delivery(monkeypatch) -> None:
     adapter = _PrimitiveOnlyAdapter()
     monkeypatch.setattr(him, "get_io_registry", lambda: _FakeRegistry(adapter))
     incoming = IncomingContext(
@@ -91,7 +96,10 @@ def test_emit_channel_transition_event_wip_projects_primitives_without_text_deli
 
     him._emit_channel_transition_event(
         incoming,
-        {"phase": "wip_update", "detail": {"text": "Working on it"}},
+        {
+            "phase": "thinking",
+            "detail": {"presence_event_family": "presence.progress", "text": "Working on it"},
+        },
     )
 
     assert adapter.deliveries == []
@@ -101,13 +109,17 @@ def test_emit_channel_transition_event_wip_projects_primitives_without_text_deli
     assert adapter.reactions[0]["emoji"] == "🤔"
 
 
-def test_presence_event_contract_for_wip_update() -> None:
+def test_presence_event_contract_for_progress_transition() -> None:
     event = {
         "type": "agent.transition",
-        "phase": "wip_update",
+        "phase": "thinking",
         "at": "2026-03-07T00:00:00+00:00",
         "correlation_id": "corr-presence",
-        "detail": {"text": "Working on it", "tool": "job_list"},
+        "detail": {
+            "presence_event_family": "presence.progress",
+            "text": "Working on it",
+            "tool": "job_list",
+        },
     }
 
     presence = presence_event_from_transition_event(event)
@@ -117,3 +129,31 @@ def test_presence_event_contract_for_wip_update() -> None:
     assert presence.get("correlation_id") == "corr-presence"
     assert presence.get("hint") == "Working on it"
     assert presence.get("tool_name") == "job_list"
+
+
+def test_presence_event_contract_for_terminal_transitions() -> None:
+    waiting_presence = presence_event_from_transition_event({"type": "agent.transition", "phase": "waiting_user"})
+    done_presence = presence_event_from_transition_event({"type": "agent.transition", "phase": "done"})
+    failed_presence = presence_event_from_transition_event({"type": "agent.transition", "phase": "failed"})
+
+    assert waiting_presence and waiting_presence.get("event_family") == "presence.waiting_input"
+    assert done_presence and done_presence.get("event_family") == "presence.completed"
+    assert failed_presence and failed_presence.get("event_family") == "presence.failed"
+
+
+def test_projectable_phase_rejects_invalid_family_phase_combo() -> None:
+    phase, reason = projectable_phase_for_presence_event(
+        {
+            "event_family": "presence.completed",
+            "correlation_id": "cid",
+            "ts": "2026-03-07T00:00:00+00:00",
+            "phase": "thinking",
+        }
+    )
+    assert phase is None
+    assert reason == "family_phase_mismatch"
+
+
+def test_presence_event_contract_rejects_legacy_wip_update_phase() -> None:
+    event = {"type": "agent.transition", "phase": "wip_update", "detail": {"text": "Working on it"}}
+    assert presence_event_from_transition_event(event) is None

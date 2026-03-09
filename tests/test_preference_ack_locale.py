@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from alphonse.agent.actions.conscious_message_handler import build_incoming_message_envelope
 from alphonse.agent.actions import handle_incoming_message as him
 from alphonse.agent.cognition.plans import CortexPlan
 from alphonse.agent.cognition.preferences.store import (
@@ -99,11 +100,14 @@ def _run_message(monkeypatch: pytest.MonkeyPatch, text: str) -> list:
 
     context = {
         "signal": DummySignal(
-            {
-                "text": text,
-                "chat_id": "8553589429",
-                "origin": "telegram",
-            }
+            build_incoming_message_envelope(
+                message_id=f"tg-ack-{text or 'empty'}",
+                channel_type="telegram",
+                channel_target="8553589429",
+                provider="telegram",
+                text=text,
+                actor_external_user_id="8553589429",
+            )
         )
     }
     action = him.HandleIncomingMessageAction()

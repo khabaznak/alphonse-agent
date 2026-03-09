@@ -8,7 +8,7 @@ from alphonse.agent.cortex.llm_output.json_parse import parse_json_object
 from alphonse.agent.cortex.task_mode.prompt_templates import NEXT_STEP_SYSTEM_PROMPT
 from alphonse.agent.cortex.task_mode.prompt_templates import NEXT_STEP_USER_TEMPLATE
 from alphonse.agent.cortex.task_mode.prompt_templates import render_pdca_prompt
-from alphonse.agent.cortex.transitions import emit_transition_event
+from alphonse.agent.cortex.transitions import emit_presence_transition_event
 from alphonse.agent.session.day_state import render_recent_conversation_block
 from alphonse.agent.tools.mcp.loader import default_profiles_dir
 from alphonse.agent.tools.mcp.registry import McpProfileRegistry
@@ -95,10 +95,11 @@ def build_next_step_node_impl(
         task_state["planner_intent_last"] = intent_text
     else:
         task_state["planner_intent_last"] = ""
-    emit_transition_event(
+    emit_presence_transition_event(
         state,
-        "wip_update",
-        {
+        event_family="presence.progress",
+        phase="thinking",
+        detail={
             "cycle": int(task_state.get("cycle_index") or 0) + 1,
             "tool": str((candidate_dict or {}).get("tool_name") or ""),
             "intention": "planning_next_step",

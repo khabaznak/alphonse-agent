@@ -1450,14 +1450,20 @@ def test_respond_finalize_failed_suppresses_apology_after_public_send() -> None:
     assert transitions and transitions[-1] == "failed"
 
 
-def test_next_step_emits_wip_update_on_proposal(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_next_step_emits_presence_progress_on_proposal(monkeypatch: pytest.MonkeyPatch) -> None:
     emitted: list[dict[str, object] | None] = []
 
-    def _capture_transition(_state: dict[str, object], phase: str, detail: dict[str, object] | None = None) -> None:
-        if phase == "wip_update":
+    def _capture_transition(
+        _state: dict[str, object],
+        *,
+        event_family: str,
+        phase: str,
+        detail: dict[str, object] | None = None,
+    ) -> None:
+        if phase == "thinking" and event_family == "presence.progress" and isinstance(detail, dict):
             emitted.append(detail)
 
-    monkeypatch.setattr(plan_module, "emit_transition_event", _capture_transition)
+    monkeypatch.setattr(plan_module, "emit_presence_transition_event", _capture_transition)
 
     tool_registry = build_default_tool_registry()
     next_step = build_next_step_node(tool_registry=tool_registry)
@@ -1483,14 +1489,20 @@ def test_next_step_emits_wip_update_on_proposal(monkeypatch: pytest.MonkeyPatch)
     assert len(text) <= 160
 
 
-def test_progress_critic_emits_wip_update_every_five_cycles_when_step_proposed(monkeypatch) -> None:
+def test_progress_critic_emits_presence_progress_every_five_cycles_when_step_proposed(monkeypatch) -> None:
     emitted: list[dict[str, object] | None] = []
 
-    def _capture_transition(_state: dict[str, object], phase: str, detail: dict[str, object] | None = None) -> None:
-        if phase == "wip_update":
+    def _capture_transition(
+        _state: dict[str, object],
+        *,
+        event_family: str,
+        phase: str,
+        detail: dict[str, object] | None = None,
+    ) -> None:
+        if phase == "thinking" and event_family == "presence.progress" and isinstance(detail, dict):
             emitted.append(detail)
 
-    monkeypatch.setattr(progress_critic_node_module, "emit_transition_event", _capture_transition)
+    monkeypatch.setattr(progress_critic_node_module, "emit_presence_transition_event", _capture_transition)
 
     task_state = build_default_task_state()
     task_state["status"] = "running"
@@ -1525,11 +1537,17 @@ def test_progress_critic_emits_wip_update_every_five_cycles_when_step_proposed(m
 def test_progress_critic_wip_text_explains_mcp_purpose_when_step_proposed(monkeypatch: pytest.MonkeyPatch) -> None:
     emitted: list[dict[str, object] | None] = []
 
-    def _capture_transition(_state: dict[str, object], phase: str, detail: dict[str, object] | None = None) -> None:
-        if phase == "wip_update":
+    def _capture_transition(
+        _state: dict[str, object],
+        *,
+        event_family: str,
+        phase: str,
+        detail: dict[str, object] | None = None,
+    ) -> None:
+        if phase == "thinking" and event_family == "presence.progress" and isinstance(detail, dict):
             emitted.append(detail)
 
-    monkeypatch.setattr(progress_critic_node_module, "emit_transition_event", _capture_transition)
+    monkeypatch.setattr(progress_critic_node_module, "emit_presence_transition_event", _capture_transition)
 
     task_state = build_default_task_state()
     task_state["status"] = "running"

@@ -3,6 +3,7 @@ from __future__ import annotations
 import threading
 import time
 
+from alphonse.agent.actions.conscious_message_handler import build_incoming_message_envelope
 from alphonse.agent.observability.log_manager import get_component_logger
 from alphonse.agent.nervous_system.senses.base import Sense, SignalSpec
 from alphonse.agent.nervous_system.senses.bus import Bus, Signal
@@ -63,16 +64,18 @@ class CliSense(Sense):
             self._bus.emit(
                 Signal(
                     type="cli.message_received",
-                    payload={
-                        "text": normalized.text,
-                        "channel": normalized.channel_type,
-                        "target": normalized.channel_target,
-                        "user_id": normalized.user_id,
-                        "user_name": normalized.user_name,
-                        "timestamp": normalized.timestamp,
-                        "correlation_id": normalized.correlation_id,
-                        "metadata": normalized.metadata,
-                    },
+                    payload=build_incoming_message_envelope(
+                        message_id=str(normalized.correlation_id or normalized.timestamp),
+                        channel_type=normalized.channel_type,
+                        channel_target=str(normalized.channel_target or "cli"),
+                        provider="cli",
+                        text=normalized.text,
+                        occurred_at=time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime(float(normalized.timestamp))),
+                        correlation_id=normalized.correlation_id,
+                        actor_external_user_id=normalized.user_id,
+                        actor_display_name=normalized.user_name,
+                        metadata={"normalized_metadata": normalized.metadata},
+                    ),
                     source="cli",
                     correlation_id=normalized.correlation_id,
                 )
