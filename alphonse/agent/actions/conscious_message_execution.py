@@ -68,7 +68,7 @@ class ConsciousMessageExecutionHandler:
         )
         self._deps.log_manager.emit(
             event="incoming_message.started",
-            component="handle_incoming_message",
+            component="actions.conscious_message_execution",
             correlation_id=correlation_id,
             channel=incoming.channel_type,
             user_id=incoming.person_id,
@@ -81,7 +81,7 @@ class ConsciousMessageExecutionHandler:
         session_key = build_session_key(incoming)
         self._deps.log_manager.emit(
             event="incoming_message.session_resolved",
-            component="handle_incoming_message",
+            component="actions.conscious_message_execution",
             correlation_id=correlation_id,
             channel=incoming.channel_type,
             user_id=incoming.person_id,
@@ -141,7 +141,7 @@ class ConsciousMessageExecutionHandler:
             self._deps.commit_session_state_fn(updated_day_session)
             self._deps.log_manager.emit(
                 event="incoming_message.completed",
-                component="handle_incoming_message",
+                component="actions.conscious_message_execution",
                 correlation_id=incoming.correlation_id,
                 channel=incoming.channel_type,
                 user_id=incoming.person_id,
@@ -156,7 +156,7 @@ class ConsciousMessageExecutionHandler:
             self._deps.log_manager.emit_exception(
                 event="incoming_message.llm_client_failed",
                 exc=exc,
-                component="handle_incoming_message",
+                component="actions.conscious_message_execution",
                 correlation_id=incoming.correlation_id,
                 channel=incoming.channel_type,
                 user_id=incoming.person_id,
@@ -170,7 +170,7 @@ class ConsciousMessageExecutionHandler:
             self._deps.log_manager.emit_exception(
                 event="incoming_message.cortex_invoke_failed",
                 exc=exc,
-                component="handle_incoming_message",
+                component="actions.conscious_message_execution",
                 correlation_id=incoming.correlation_id,
                 channel=incoming.channel_type,
                 user_id=incoming.person_id,
@@ -194,7 +194,7 @@ class ConsciousMessageExecutionHandler:
             )
         self._deps.log_manager.emit(
             event="incoming_message.cortex_result",
-            component="handle_incoming_message",
+            component="actions.conscious_message_execution",
             correlation_id=incoming.correlation_id,
             channel=incoming.channel_type,
             user_id=incoming.person_id,
@@ -206,7 +206,7 @@ class ConsciousMessageExecutionHandler:
         if result.plans:
             self._deps.log_manager.emit(
                 event="incoming_message.cortex_plans",
-                component="handle_incoming_message",
+                component="actions.conscious_message_execution",
                 correlation_id=incoming.correlation_id,
                 channel=incoming.channel_type,
                 user_id=incoming.person_id,
@@ -221,7 +221,7 @@ class ConsciousMessageExecutionHandler:
         if cognition_state:
             self._deps.log_manager.emit(
                 event="incoming_message.state_saved",
-                component="handle_incoming_message",
+                component="actions.conscious_message_execution",
                 correlation_id=incoming.correlation_id,
                 channel=incoming.channel_type,
                 user_id=incoming.person_id,
@@ -287,7 +287,7 @@ class ConsciousMessageExecutionHandler:
 
         self._deps.log_manager.emit(
             event="incoming_message.completed",
-            component="handle_incoming_message",
+            component="actions.conscious_message_execution",
             correlation_id=incoming.correlation_id,
             channel=incoming.channel_type,
             user_id=incoming.person_id,

@@ -14,9 +14,11 @@ from alphonse.agent.nervous_system.pdca_queue_store import (
 )
 from alphonse.agent.nervous_system.senses.bus import Bus
 from alphonse.agent.observability.log_manager import get_component_logger
+from alphonse.agent.observability.log_manager import get_log_manager
 from alphonse.agent.services.pdca_slice_executor import PdcaSliceExecutor
 
 logger = get_component_logger("services.pdca_queue_runner")
+_LOG = get_log_manager()
 
 
 class PdcaQueueRunner:
@@ -73,6 +75,12 @@ class PdcaQueueRunner:
         return self._enabled
 
     def start(self) -> None:
+        _LOG.emit(
+            event="pdca.slicing.mode",
+            component="services.pdca_queue_runner",
+            status="enabled" if self._enabled else "disabled",
+            payload={"worker_id": self._worker_id},
+        )
         if not self._enabled:
             return
         if self._thread and self._thread.is_alive():
@@ -249,8 +257,12 @@ class PdcaQueueRunner:
 def _is_enabled(value: bool | None) -> bool:
     if isinstance(value, bool):
         return value
-    raw = str(os.getenv("ALPHONSE_PDCA_SLICING_ENABLED", "false")).strip().lower()
-    return raw in {"1", "true", "yes", "on"}
+    raw = str(os.getenv("ALPHONSE_PDCA_SLICING_ENABLED", "true")).strip().lower()
+    return raw in {"1", "true", "yes", "on", "enabled"}
+
+
+def is_pdca_slicing_enabled() -> bool:
+    return _is_enabled(None)
 
 
 def _as_float(value: float | None, *, env_name: str, default: float, minimum: float) -> float:

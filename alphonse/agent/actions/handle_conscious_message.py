@@ -8,14 +8,18 @@ from alphonse.agent.actions.conscious_message_context_adapter import (
 )
 from alphonse.agent.actions.conscious_message_handler import IncomingMessageEnvelope
 from alphonse.agent.actions.models import ActionResult
+from alphonse.agent.actions.presence_projection import emit_presence_phase_changed
 from alphonse.agent.actions.session_context import build_session_key
 from alphonse.agent.observability.log_manager import get_component_logger
+from alphonse.agent.observability.log_manager import get_log_manager
 from alphonse.agent.services.pdca_ingress import enqueue_pdca_slice
+from alphonse.agent.services.pdca_queue_runner import is_pdca_slicing_enabled
 from alphonse.agent.services.session_identity_resolution import resolve_session_timezone
 from alphonse.agent.services.session_identity_resolution import resolve_session_user_id
 from alphonse.agent.session.day_state import resolve_day_session
 
 logger = get_component_logger("actions.handle_conscious_message")
+_LOG = get_log_manager()
 
 
 class HandleConsciousMessageAction(Action):
@@ -34,6 +38,54 @@ class HandleConsciousMessageAction(Action):
             envelope=envelope,
             correlation_id=str(correlation_id),
         )
+        _LOG.emit(
+            event="incoming_message.accepted",
+            component="actions.handle_conscious_message",
+            correlation_id=str(correlation_id),
+            channel=incoming.channel_type,
+            user_id=incoming.person_id,
+            payload={
+                "address": incoming.address,
+                "message_id": incoming.message_id,
+            },
+        )
+        emit_presence_phase_changed(
+            incoming=incoming,
+            phase="acknowledged",
+            correlation_id=str(correlation_id),
+        )
+
+        if not is_pdca_slicing_enabled():
+            _LOG.emit(
+                level="warning",
+                event="incoming_message.rejected",
+                component="actions.handle_conscious_message",
+                correlation_id=str(correlation_id),
+                channel=incoming.channel_type,
+                user_id=incoming.person_id,
+                error_code="pdca_slicing_disabled",
+                payload={
+                    "reason": "pdca_slicing_disabled",
+                    "address": incoming.address,
+                },
+            )
+            text = "I am temporarily unable to process messages right now. Please try again in a moment."
+            return ActionResult(
+                intention_key="MESSAGE_READY",
+                payload={
+                    "message": text,
+                    "channel_hint": incoming.channel_type,
+                    "target": incoming.address,
+                    "correlation_id": str(correlation_id),
+                    "direct_reply": {
+                        "channel_type": incoming.channel_type,
+                        "target": incoming.address,
+                        "text": text,
+                        "correlation_id": str(correlation_id),
+                    },
+                },
+                urgency="normal",
+            )
 
         session_key = build_session_key(incoming)
         session_user_id = resolve_session_user_id(incoming=incoming, payload=payload)
@@ -66,6 +118,14 @@ class HandleConsciousMessageAction(Action):
             task_id,
             incoming.channel_type,
             incoming.address,
+        )
+        _LOG.emit(
+            event="incoming_message.enqueued",
+            component="actions.handle_conscious_message",
+            correlation_id=str(correlation_id),
+            channel=incoming.channel_type,
+            user_id=incoming.person_id,
+            payload={"task_id": task_id},
         )
         return ActionResult(
             intention_key="NOOP",

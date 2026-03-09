@@ -37,7 +37,7 @@ def emit_channel_transition_event(incoming: IncomingContext, event: dict[str, ob
     corr = str(presence_event.get("correlation_id") or incoming.correlation_id or "")
     _LOG.emit(
         event="presence.stream.emitted",
-        component="actions.handle_incoming_message",
+        component="actions.presence_projection",
         correlation_id=corr or None,
         channel=incoming.channel_type,
         user_id=incoming.person_id,
@@ -56,7 +56,7 @@ def project_presence_event(*, incoming: IncomingContext, presence_event: dict[st
     if not phase:
         _LOG.emit(
             event="presence.stream.projected",
-            component="actions.handle_incoming_message",
+            component="actions.presence_projection",
             correlation_id=str(presence_event.get("correlation_id") or incoming.correlation_id or "") or None,
             channel=incoming.channel_type,
             user_id=incoming.person_id,
@@ -72,7 +72,7 @@ def project_presence_event(*, incoming: IncomingContext, presence_event: dict[st
     if adapter is None:
         _LOG.emit(
             event="presence.stream.projected",
-            component="actions.handle_incoming_message",
+            component="actions.presence_projection",
             correlation_id=str(presence_event.get("correlation_id") or incoming.correlation_id or "") or None,
             channel=incoming.channel_type,
             user_id=incoming.person_id,
@@ -121,7 +121,7 @@ def project_presence_event(*, incoming: IncomingContext, presence_event: dict[st
         )
         _LOG.emit(
             event="presence.stream.projected",
-            component="actions.handle_incoming_message",
+            component="actions.presence_projection",
             correlation_id=str(presence_event.get("correlation_id") or incoming.correlation_id or "") or None,
             channel=incoming.channel_type,
             user_id=incoming.person_id,
@@ -134,7 +134,7 @@ def project_presence_event(*, incoming: IncomingContext, presence_event: dict[st
         return
     _LOG.emit(
         event="presence.stream.projected",
-        component="actions.handle_incoming_message",
+        component="actions.presence_projection",
         correlation_id=str(presence_event.get("correlation_id") or incoming.correlation_id or "") or None,
         channel=incoming.channel_type,
         user_id=incoming.person_id,

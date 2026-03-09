@@ -25,6 +25,7 @@ from alphonse.agent.nervous_system.seed import apply_seed
 from alphonse.agent.cognition.brain_health import BrainUnavailable, require_brain_health
 from alphonse.agent.core.settings_store import init_db as init_settings_db
 from alphonse.agent.io import get_io_registry
+from alphonse.agent.observability.log_manager import get_log_manager
 from alphonse.agent.services.pdca_queue_runner import PdcaQueueRunner
 
 
@@ -81,6 +82,7 @@ def main() -> None:
 
     sense_manager = SenseManager(db_path=str(db_path), bus=bus)
     pdca_queue_runner = PdcaQueueRunner(bus=bus)
+    _emit_pdca_startup_mode(pdca_queue_runner.enabled)
     api_server = _build_api_server()
     relay_client = build_relay_client_from_env()
     heart = load_heart(config, bus, ddfsm)
@@ -115,6 +117,33 @@ def main() -> None:
             sense_manager.stop()
 
 
+def _emit_pdca_startup_mode(slicing_enabled: bool) -> None:
+    log = get_log_manager()
+    ingress = {
+        "telegram": _env_enabled("ALPHONSE_ENABLE_TELEGRAM", default=False),
+        "api": _env_enabled("ALPHONSE_ENABLE_API", default=True),
+        "cli": _env_enabled("ALPHONSE_ENABLE_CLI", default=False),
+    }
+    log.emit(
+        event="runtime.pdca_slicing.startup",
+        component="main",
+        status="enabled" if slicing_enabled else "disabled",
+        payload={"ingress": ingress},
+    )
+    if slicing_enabled:
+        return
+    if not any(ingress.values()):
+        return
+    log.emit(
+        level="warning",
+        event="runtime.pdca_slicing.disabled_with_ingress",
+        component="main",
+        status="disabled",
+        error_code="pdca_slicing_disabled",
+        payload={"ingress": ingress},
+    )
+
+
 def _build_api_server() -> ApiServer | None:
     enabled = os.getenv("ALPHONSE_ENABLE_API", "true").strip().lower() in {
         "1",
@@ -135,6 +164,13 @@ def _build_api_server() -> ApiServer | None:
 
 def _resolve_nerve_db_path() -> Path:
     return resolve_nervous_system_db_path()
+
+
+def _env_enabled(name: str, *, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return str(raw).strip().lower() in {"1", "true", "yes", "on", "enabled"}
 
 
 if __name__ == "__main__":
