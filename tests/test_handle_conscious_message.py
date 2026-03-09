@@ -53,6 +53,9 @@ def test_handle_conscious_message_enqueues_pdca_slice(monkeypatch) -> None:
     assert result.payload.get("task_id") == "task-123"
     assert called.get("session_user_id") == "u-1"
     assert presence.get("phase") == "acknowledged"
+    seeded_state = called.get("state")
+    assert isinstance(seeded_state, dict)
+    assert seeded_state.get("message_id") == "m-1"
 
 
 def test_handle_conscious_message_does_not_parse_control_intent(monkeypatch) -> None:

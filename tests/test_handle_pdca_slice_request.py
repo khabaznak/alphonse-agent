@@ -622,3 +622,21 @@ def test_emit_context_continuity_gap_when_ingress_context_dropped() -> None:
     payload = event.get("payload")
     assert isinstance(payload, dict)
     assert "channel_target" in list(payload.get("missing_in_invoke_state") or [])
+
+
+def test_resolve_incoming_context_includes_message_id() -> None:
+    task = {
+        "task_id": "task-msgid-1",
+        "conversation_key": "telegram:8553589429",
+        "metadata": {
+            "last_user_channel": "telegram",
+            "last_user_target": "8553589429",
+            "last_user_message_id": "321",
+            "state": {
+                "actor_person_id": "user-1",
+            },
+        },
+    }
+    incoming = hpsr._resolve_incoming_context(task=task, correlation_id="cid-msgid-1")
+    assert incoming is not None
+    assert incoming.message_id == "321"

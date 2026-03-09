@@ -37,6 +37,7 @@ def enqueue_pdca_slice(
         metadata["last_user_message"] = user_text
         metadata["last_user_channel"] = incoming.channel_type
         metadata["last_user_target"] = incoming.address
+        metadata["last_user_message_id"] = incoming.message_id
         metadata["last_enqueue_correlation_id"] = correlation_id
         metadata["last_enqueued_at"] = now
         update_pdca_task_metadata(task_id=task_id, metadata=metadata)
@@ -55,6 +56,7 @@ def enqueue_pdca_slice(
         "last_user_message": user_text,
         "last_user_channel": incoming.channel_type,
         "last_user_target": incoming.address,
+        "last_user_message_id": incoming.message_id,
         "last_enqueue_correlation_id": correlation_id,
         "state": {
             "conversation_key": session_key,
@@ -62,6 +64,7 @@ def enqueue_pdca_slice(
             "channel_type": incoming.channel_type,
             "channel_target": incoming.address,
             "actor_person_id": incoming.person_id,
+            "message_id": incoming.message_id,
             "incoming_user_id": str(payload.get("user_id") or "").strip() or None,
             "incoming_user_name": str(payload.get("user_name") or "").strip() or None,
             "locale": state.get("locale"),

@@ -591,6 +591,11 @@ def _resolve_incoming_context(*, task: dict[str, Any], correlation_id: str | Non
         str(metadata.get("last_user_target") or "").strip()
         or str(state.get("channel_target") or "").strip()
     )
+    message_id = (
+        str(metadata.get("last_user_message_id") or "").strip()
+        or str(state.get("message_id") or "").strip()
+        or None
+    )
     if (not channel_type or not channel_target) and ":" in str(task.get("conversation_key") or ""):
         inferred_channel, inferred_target = str(task.get("conversation_key") or "").split(":", 1)
         if not channel_type:
@@ -605,6 +610,7 @@ def _resolve_incoming_context(*, task: dict[str, Any], correlation_id: str | Non
         address=channel_target,
         person_id=str(state.get("actor_person_id") or "").strip() or None,
         correlation_id=resolved_correlation,
+        message_id=message_id,
     )
 
 
