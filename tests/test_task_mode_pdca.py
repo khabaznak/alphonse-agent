@@ -7,8 +7,7 @@ from pathlib import Path
 import pytest
 
 import alphonse.agent.cortex.task_mode.pdca as pdca_module
-import alphonse.agent.cortex.task_mode.plan as plan_module
-import alphonse.agent.cortex.task_mode.progress_critic_node as progress_critic_node_module
+import alphonse.agent.cortex.task_mode.execute_step as execute_step_module
 from alphonse.agent.cortex.nodes.respond import respond_finalize_node
 from alphonse.agent.cortex.task_mode.pdca import act_node
 from alphonse.agent.cortex.task_mode.pdca import build_next_step_node
@@ -16,9 +15,7 @@ from alphonse.agent.cortex.task_mode.pdca import check_node
 from alphonse.agent.cortex.task_mode.pdca import execute_step_node
 from alphonse.agent.cortex.task_mode.pdca import route_after_act
 from alphonse.agent.cortex.task_mode.pdca import route_after_next_step
-from alphonse.agent.cortex.task_mode.pdca import route_after_progress_critic
 from alphonse.agent.cortex.task_mode.pdca import route_after_validate_step
-from alphonse.agent.cortex.task_mode.pdca import progress_critic_node
 from alphonse.agent.cortex.task_mode.pdca import update_state_node
 from alphonse.agent.cortex.task_mode.pdca import validate_step_node
 from alphonse.agent.cortex.task_mode.state import build_default_task_state
@@ -405,9 +402,7 @@ def _run_cycle(
     if route == "execute_step_node":
         state = _apply(state, execute_step_node(state, tool_registry=tool_registry))
         state = _apply(state, update_state_node(state))
-        state = _apply(state, progress_critic_node(state))
-        if route_after_progress_critic(state) == "act_node":
-            state = _apply(state, act_node(state))
+        state = _apply(state, act_node(state))
     return state
 
 
@@ -438,7 +433,7 @@ def test_reminder_request_calls_create_reminder_within_two_cycles() -> None:
     assert route_after_act(state) == "next_step_node"
 
     state = _run_cycle(state, next_step=next_step, tool_registry=tool_registry)
-    assert route_after_progress_critic(state) == "act_node"
+    assert route_after_act(state) == "next_step_node"
 
     next_state = state["task_state"]
     assert isinstance(next_state, dict)
@@ -861,7 +856,6 @@ def test_pdca_next_step_accepts_tool_call_without_planner_intent() -> None:
     tool_call = raw.get("tool_call")
     assert isinstance(tool_call, dict)
     assert tool_call.get("tool_name") == "job_list"
-    assert str(next_state.get("planner_intent_last") or "") == ""
 
 
 def test_pdca_next_step_drops_malformed_planner_intent() -> None:
@@ -890,7 +884,6 @@ def test_pdca_next_step_drops_malformed_planner_intent() -> None:
     tool_call = raw.get("tool_call")
     assert isinstance(tool_call, dict)
     assert tool_call.get("tool_name") == "job_list"
-    assert str(next_state.get("planner_intent_last") or "") == ""
 
 
 def test_pdca_tool_call_schema_includes_context_tools_when_runtime_registered() -> None:
@@ -1336,7 +1329,7 @@ def test_execute_step_records_evidence_for_domotics_execute_confirmed() -> None:
 
     state = _apply(state, execute_step_node(state, tool_registry=registry))
     state = _apply(state, update_state_node(state))
-    state = _apply(state, progress_critic_node(state))
+    state = _apply(state, act_node(state))
 
     next_state = state["task_state"]
     assert isinstance(next_state, dict)
@@ -1450,7 +1443,7 @@ def test_respond_finalize_failed_suppresses_apology_after_public_send() -> None:
     assert transitions and transitions[-1] == "failed"
 
 
-def test_next_step_emits_presence_progress_on_proposal(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_execute_step_emits_presence_progress_from_planner_intent(monkeypatch: pytest.MonkeyPatch) -> None:
     emitted: list[dict[str, object] | None] = []
 
     def _capture_transition(
@@ -1463,188 +1456,36 @@ def test_next_step_emits_presence_progress_on_proposal(monkeypatch: pytest.Monke
         if phase == "thinking" and event_family == "presence.progress" and isinstance(detail, dict):
             emitted.append(detail)
 
-    monkeypatch.setattr(plan_module, "emit_presence_transition_event", _capture_transition)
+    monkeypatch.setattr(execute_step_module, "emit_presence_transition_event", _capture_transition)
+    tool_registry = ToolRegistry()
 
-    tool_registry = build_default_tool_registry()
-    next_step = build_next_step_node(tool_registry=tool_registry)
-    llm = _QueuedLlm(['{"kind":"call_tool","tool_name":"local_audio_output_render","args":{"text":"hello"}}'])
+    class _FakeTool:
+        def execute(self, **kwargs: object) -> dict[str, object]:
+            _ = kwargs
+            return {"status": "ok", "result": {"ok": True}, "error": None, "metadata": {}}
+
+    tool_registry.register("local_audio_output_render", _FakeTool())
     task_state = build_default_task_state()
     task_state["status"] = "running"
-    task_state["goal"] = "Send an English voice note"
+    task_state["cycle_index"] = 2
+    task_state["plan"]["current_step_id"] = "step_1"
+    task_state["plan"]["steps"] = [{"step_id": "step_1", "status": "proposed"}]
+    task_state["pending_plan_raw"] = {
+        "tool_call": {"kind": "call_tool", "tool_name": "local_audio_output_render", "args": {"text": "hello"}},
+        "planner_intent": "Preparing audio output for delivery.",
+    }
     state: dict[str, object] = {
-        "correlation_id": "corr-next-step-wip-proposal",
-        "_llm_client": llm,
+        "correlation_id": "corr-do-wip-proposal",
         "task_state": task_state,
     }
 
-    updated = next_step(state)
+    updated = execute_step_node(state, tool_registry=tool_registry)
     assert isinstance(updated.get("task_state"), dict)
     assert len(emitted) == 1
     detail = emitted[0]
     assert isinstance(detail, dict)
-    assert detail.get("cycle") == 1
+    assert detail.get("cycle") == 3
     assert detail.get("tool") == "local_audio_output_render"
     text = str(detail.get("text") or "")
-    assert text
-    assert len(text) <= 160
+    assert text == "Preparing audio output for delivery."
 
-
-def test_progress_critic_emits_presence_progress_every_five_cycles_when_step_proposed(monkeypatch) -> None:
-    emitted: list[dict[str, object] | None] = []
-
-    def _capture_transition(
-        _state: dict[str, object],
-        *,
-        event_family: str,
-        phase: str,
-        detail: dict[str, object] | None = None,
-    ) -> None:
-        if phase == "thinking" and event_family == "presence.progress" and isinstance(detail, dict):
-            emitted.append(detail)
-
-    monkeypatch.setattr(progress_critic_node_module, "emit_presence_transition_event", _capture_transition)
-
-    task_state = build_default_task_state()
-    task_state["status"] = "running"
-    task_state["cycle_index"] = 5
-    task_state["goal"] = "Check package delivery"
-    task_state["plan"]["current_step_id"] = "step_1"
-    task_state["plan"]["steps"] = [
-        {
-            "step_id": "step_1",
-            "proposal": {"kind": "call_tool", "tool_name": "get_time", "args": {}},
-            "status": "proposed",
-        }
-    ]
-    state: dict[str, object] = {
-        "correlation_id": "corr-wip-emit-5",
-        "task_state": task_state,
-    }
-
-    updated = progress_critic_node(state)
-    next_state = updated.get("task_state")
-    assert isinstance(next_state, dict)
-    assert len(emitted) == 1
-    detail = emitted[0]
-    assert isinstance(detail, dict)
-    assert detail.get("cycle") == 5
-    text = str(detail.get("text") or "")
-    assert text
-    assert len(text) <= 160
-    assert "`get_time`" in text
-
-
-def test_progress_critic_wip_text_explains_mcp_purpose_when_step_proposed(monkeypatch: pytest.MonkeyPatch) -> None:
-    emitted: list[dict[str, object] | None] = []
-
-    def _capture_transition(
-        _state: dict[str, object],
-        *,
-        event_family: str,
-        phase: str,
-        detail: dict[str, object] | None = None,
-    ) -> None:
-        if phase == "thinking" and event_family == "presence.progress" and isinstance(detail, dict):
-            emitted.append(detail)
-
-    monkeypatch.setattr(progress_critic_node_module, "emit_presence_transition_event", _capture_transition)
-
-    task_state = build_default_task_state()
-    task_state["status"] = "running"
-    task_state["cycle_index"] = 5
-    task_state["goal"] = "find contact leads on LinkedIn"
-    task_state["plan"]["current_step_id"] = "step_1"
-    task_state["plan"]["steps"] = [
-        {
-            "step_id": "step_1",
-            "proposal": {
-                "kind": "call_tool",
-                "tool_name": "mcp_call",
-                "args": {"profile": "chrome", "operation": "new_page", "arguments": {}},
-            },
-            "status": "proposed",
-        }
-    ]
-    state: dict[str, object] = {
-        "correlation_id": "corr-wip-mcp-purpose",
-        "task_state": task_state,
-    }
-
-    progress_critic_node(state)
-    assert emitted
-    detail = emitted[-1]
-    assert isinstance(detail, dict)
-    text = str(detail.get("text") or "")
-    assert "opening a browser page" in text
-    assert "`mcp_call`" in text
-
-
-def test_wip_update_sanitizes_raw_telegram_goal_payload() -> None:
-    raw_goal = """## RAW MESSAGE
-
-- channel: telegram
-- correlation_id: 808f632f-a0d4-4a4f-adc3-166019fcca24
-
-## RAW JSON
-```json
-{
-  "update_id": 31223897,
-  "message": {"message_id": 3389}
-}
-```"""
-    task_state = build_default_task_state()
-    task_state["goal"] = raw_goal
-    detail = progress_critic_node_module.build_wip_update_detail(
-        task_state=task_state,
-        cycle=2,
-        current_step={
-            "proposal": {"kind": "call_tool", "tool_name": "vision_extract", "args": {}},
-            "status": "proposed",
-        },
-    )
-    text = str(detail.get("text") or "")
-    assert "## RAW MESSAGE" not in text
-    assert "## RAW JSON" not in text
-    assert "update_id" not in text
-    assert "correlation_id" not in text
-    assert "the current task" in text
-    assert "`vision_extract`" in text
-
-
-def test_wip_update_compacts_and_truncates_goal_text() -> None:
-    long_goal = "Summarize this receipt total " + ("with details " * 60)
-    task_state = build_default_task_state()
-    task_state["goal"] = long_goal
-    detail = progress_critic_node_module.build_wip_update_detail(
-        task_state=task_state,
-        cycle=3,
-        current_step={
-            "proposal": {"kind": "call_tool", "tool_name": "vision_extract", "args": {}},
-            "status": "proposed",
-        },
-    )
-    text = str(detail.get("text") or "")
-    assert "\n" not in text
-    assert "`vision_extract`" in text
-    assert len(text) <= 160
-
-
-def test_progress_critic_accepts_structured_task_completed_outcome() -> None:
-    task_state = build_default_task_state()
-    task_state["status"] = "running"
-    task_state["acceptance_criteria"] = ["done when the user gets a concrete answer"]
-    task_state["cycle_index"] = 3
-    task_state["outcome"] = {
-        "kind": "task_completed",
-        "final_text": "Should I continue with another attempt?",
-    }
-    state: dict[str, object] = {
-        "correlation_id": "corr-progress-question-not-done",
-        "task_state": task_state,
-    }
-
-    updated = progress_critic_node(state)
-    next_state = updated.get("task_state")
-    assert isinstance(next_state, dict)
-    assert next_state.get("status") == "done"
-    assert route_after_progress_critic(updated) == "respond_node"

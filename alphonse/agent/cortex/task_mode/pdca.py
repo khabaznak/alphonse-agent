@@ -2,18 +2,12 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
-from alphonse.agent.cortex.task_mode.act_node import evaluate_tool_execution
 from alphonse.agent.cortex.task_mode.check import check_node_impl
 from alphonse.agent.cortex.task_mode.check import route_after_check_impl
 from alphonse.agent.cortex.task_mode.check_state import derive_outcome_from_state
-from alphonse.agent.cortex.task_mode.check_state import goal_satisfied
 from alphonse.agent.cortex.transitions import emit_transition_event
 from alphonse.agent.cortex.task_mode.plan import build_next_step_node_impl
 from alphonse.agent.cortex.task_mode.plan import route_after_next_step_impl
-from alphonse.agent.cortex.task_mode.progress_critic_node import DEFAULT_PROGRESS_CHECK_CYCLE_THRESHOLD
-from alphonse.agent.cortex.task_mode.progress_critic_node import DEFAULT_WIP_EMIT_EVERY_CYCLES
-from alphonse.agent.cortex.task_mode.progress_critic_node import progress_critic_node_stateful
-from alphonse.agent.cortex.task_mode.progress_critic_node import route_after_progress_critic_stateful
 from alphonse.agent.cortex.task_mode.observability import log_task_event
 from alphonse.agent.cortex.task_mode.execute_step import execute_step_node_impl
 from alphonse.agent.cortex.task_mode.task_state_helpers import append_trace_event
@@ -27,10 +21,6 @@ from alphonse.agent.cortex.task_mode.task_state_helpers import task_state_with_d
 from alphonse.agent.cortex.task_mode.task_state_helpers import task_trace
 from alphonse.agent.observability.log_manager import get_component_logger
 logger = get_component_logger("task_mode.pdca")
-
-_PROGRESS_CHECK_CYCLE_THRESHOLD = DEFAULT_PROGRESS_CHECK_CYCLE_THRESHOLD
-_WIP_EMIT_EVERY_CYCLES = DEFAULT_WIP_EMIT_EVERY_CYCLES
-
 
 def build_next_step_node(*, tool_registry: Any) -> Callable[[dict[str, Any]], dict[str, Any]]:
     def _node(state: dict[str, Any]) -> dict[str, Any]:
@@ -94,7 +84,7 @@ def check_node(state: dict[str, Any], *, tool_registry: Any) -> dict[str, Any]:
         tool_registry=tool_registry,
         logger=logger,
         log_task_event=log_task_event,
-        wip_emit_every_cycles=_WIP_EMIT_EVERY_CYCLES,
+        wip_emit_every_cycles=1,
     )
 
 
@@ -135,32 +125,6 @@ def update_state_node(state: dict[str, Any]) -> dict[str, Any]:
         has_outcome=bool(outcome),
     )
     return {"task_state": task_state}
-
-
-def progress_critic_node(state: dict[str, Any]) -> dict[str, Any]:
-    return progress_critic_node_stateful(
-        state,
-        task_state_with_defaults=task_state_with_defaults,
-        correlation_id=correlation_id,
-        current_step=current_step,
-        goal_satisfied=lambda task_state: goal_satisfied(
-            task_state,
-            has_acceptance_criteria=has_acceptance_criteria,
-        ),
-        evaluate_tool_execution=lambda *, task_state, current_step: evaluate_tool_execution(
-            task_state=task_state,
-            current_step=current_step,
-            task_plan=task_plan,
-        ),
-        append_trace_event=append_trace_event,
-        logger=logger,
-        progress_check_cycle_threshold=_PROGRESS_CHECK_CYCLE_THRESHOLD,
-        wip_emit_every_cycles=_WIP_EMIT_EVERY_CYCLES,
-    )
-
-
-def route_after_progress_critic(state: dict[str, Any]) -> str:
-    return route_after_progress_critic_stateful(state, correlation_id=correlation_id)
 
 
 def act_node(state: dict[str, Any]) -> dict[str, Any]:

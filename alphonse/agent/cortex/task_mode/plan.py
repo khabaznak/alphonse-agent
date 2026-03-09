@@ -8,7 +8,6 @@ from alphonse.agent.cortex.llm_output.json_parse import parse_json_object
 from alphonse.agent.cortex.task_mode.prompt_templates import NEXT_STEP_SYSTEM_PROMPT
 from alphonse.agent.cortex.task_mode.prompt_templates import NEXT_STEP_USER_TEMPLATE
 from alphonse.agent.cortex.task_mode.prompt_templates import render_pdca_prompt
-from alphonse.agent.cortex.transitions import emit_presence_transition_event
 from alphonse.agent.session.day_state import render_recent_conversation_block
 from alphonse.agent.tools.mcp.loader import default_profiles_dir
 from alphonse.agent.tools.mcp.registry import McpProfileRegistry
@@ -89,24 +88,6 @@ def build_next_step_node_impl(
         raw_type=type(raw_candidate).__name__,
     )
 
-    # Keep transition semantics for UI progress pulses; no decision-making here.
-    intent_text = _extract_planner_intent(raw_candidate)
-    if intent_text:
-        task_state["planner_intent_last"] = intent_text
-    else:
-        task_state["planner_intent_last"] = ""
-    emit_presence_transition_event(
-        state,
-        event_family="presence.progress",
-        phase="thinking",
-        detail={
-            "cycle": int(task_state.get("cycle_index") or 0) + 1,
-            "tool": str((candidate_dict or {}).get("tool_name") or ""),
-            "intention": "planning_next_step",
-            "text": intent_text or "Estoy analizando el siguiente paso para avanzar la tarea.",
-        },
-    )
-
     logger.info(
         "task_mode next_step raw_candidate correlation_id=%s step_id=%s source=%s raw_type=%s",
         corr,
@@ -159,17 +140,6 @@ def _extract_candidate_dict(raw: Any) -> dict[str, Any] | None:
         parsed = parse_json_object(raw)
         return _extract_candidate_dict(parsed)
     return None
-
-
-def _extract_planner_intent(raw: Any) -> str:
-    if isinstance(raw, dict):
-        value = raw.get("planner_intent")
-        if isinstance(value, str):
-            text = value.strip()
-            if text:
-                return text[:160]
-        return ""
-    return ""
 
 
 def _request_raw_candidate(

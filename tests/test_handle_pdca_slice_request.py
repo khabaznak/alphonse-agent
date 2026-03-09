@@ -67,9 +67,14 @@ def test_handle_pdca_slice_request_executes_and_persists_checkpoint(
             "owner_id": "owner-1",
             "conversation_key": "chat-1",
             "status": "queued",
-            "metadata": {"pending_user_text": "Please do the task"},
+            "metadata": {
+                "pending_user_text": "Please do the task",
+                "last_user_channel": "telegram",
+                "last_user_target": "8553589429",
+            },
         }
     )
+    projected: list[dict[str, object]] = []
 
     class _FakeResult:
         reply_text = ""
@@ -81,10 +86,18 @@ def test_handle_pdca_slice_request_executes_and_persists_checkpoint(
         def invoke(self, state, text, *, llm_client=None):  # noqa: ANN001
             _ = (state, llm_client)
             assert text == "Please do the task"
+            sink = state.get("_transition_sink")
+            assert callable(sink)
+            sink({"type": "agent.transition", "phase": "thinking", "detail": {"presence_event_family": "presence.progress"}})
             return _FakeResult()
 
     monkeypatch.setattr(hpsr, "_CORTEX_GRAPH", _FakeGraph())
     monkeypatch.setattr(hpsr, "build_llm_client", lambda: None)
+    monkeypatch.setattr(
+        hpsr,
+        "emit_channel_transition_event",
+        lambda _incoming, event: projected.append(event if isinstance(event, dict) else {}),
+    )
 
     action = HandlePdcaSliceRequestAction()
     signal = Signal(
@@ -104,10 +117,17 @@ def test_handle_pdca_slice_request_executes_and_persists_checkpoint(
     assert checkpoint is not None
     assert checkpoint["version"] >= 1
     assert checkpoint["task_state"]["status"] == "running"
+    assert "_transition_sink" not in checkpoint["state"]
 
     events = list_pdca_events(task_id=task_id, limit=20)
     assert any(item["event_type"] == "slice.request.signal_received" for item in events)
     assert any(item["event_type"] == "slice.completed.queued" for item in events)
+    families = {
+        str((event.get("detail") if isinstance(event.get("detail"), dict) else {}).get("presence_event_family") or "")
+        for event in projected
+    }
+    assert "presence.phase_changed" in families
+    assert "presence.progress" in families
 
 
 def test_handle_pdca_slice_request_without_task_id_is_noop() -> None:

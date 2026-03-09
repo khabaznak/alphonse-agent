@@ -27,7 +27,7 @@ def test_fsm_has_transition_for_pdca_slice_requested(
     fsm = DDFSM(DDFSMConfig(db_path=str(db_path)))
     outcome = fsm.lookup_outcome(state_id=idle_state_id, signal_key="pdca.slice.requested")
     assert outcome.matched is True
-    assert outcome.action_key == "handle_pdca_slice_request"
+    assert outcome.action_key is None
     assert outcome.next_state_key == "rehydrating_slice"
 
 

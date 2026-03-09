@@ -24,7 +24,7 @@ def test_log_task_event_emits_required_fields(caplog, tmp_path: Path, monkeypatc
             logger=logging.getLogger("alphonse.agent.cortex.task_mode.test"),
             state=state,
             task_state=task_state,
-            node="progress_critic_node",
+            node="check_node",
             event="graph.state.updated",
             tool="get_time",
         )

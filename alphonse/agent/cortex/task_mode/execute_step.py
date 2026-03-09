@@ -7,6 +7,7 @@ from typing import Any, Callable
 
 from alphonse.agent.cognition.memory import record_after_tool_call
 from alphonse.agent.cognition.memory import record_plan_step_completion
+from alphonse.agent.cortex.transitions import emit_presence_transition_event
 from alphonse.agent.tools.base import ensure_tool_result
 
 
@@ -27,7 +28,7 @@ def execute_step_node_impl(
     task_state["check_provenance"] = "do"
     corr = correlation_id(state)
     current = current_step(task_state)
-    proposal, proposal_error = _proposal_from_pending_plan_raw(task_state=task_state, current=current)
+    proposal, proposal_error, planner_intent = _proposal_from_pending_plan_raw(task_state=task_state, current=current)
     if isinstance(proposal_error, dict):
         _record_planner_output_error(
             task_state=task_state,
@@ -65,6 +66,12 @@ def execute_step_node_impl(
             append_trace_event=append_trace_event,
         )
         return {"task_state": task_state}
+    _emit_planner_intent_progress(
+        state=state,
+        task_state=task_state,
+        proposal=proposal,
+        planner_intent=planner_intent,
+    )
     return _execute_call_tool_step(
         state=state,
         task_state=task_state,
@@ -119,23 +126,24 @@ def _proposal_from_pending_plan_raw(
     *,
     task_state: dict[str, Any],
     current: dict[str, Any] | None,
-) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None, str]:
     existing = (current or {}).get("proposal") if isinstance(current, dict) else None
     if isinstance(existing, dict):
         canonical = _coerce_canonical_tool_call(existing)
         if isinstance(canonical, dict):
-            return canonical, None
+            return canonical, None, ""
         return None, {
             "code": "invalid_planner_output",
             "raw_error": "current_step_proposal_non_canonical",
             "details": {},
-        }
+        }, ""
     raw = task_state.get("pending_plan_raw")
     if isinstance(raw, dict):
         tool_call = raw.get("tool_call")
         if isinstance(tool_call, dict):
             canonical = _coerce_canonical_tool_call(tool_call)
             if isinstance(canonical, dict):
+                planner_intent = _extract_planner_intent(raw)
                 task_state["current_plan_step"] = {
                     "step_id": str((current or {}).get("step_id") or ""),
                     "tool_call": dict(canonical),
@@ -143,7 +151,7 @@ def _proposal_from_pending_plan_raw(
                 if isinstance(current, dict):
                     current["proposal"] = dict(canonical)
                 task_state["pending_plan_raw"] = None
-                return dict(canonical), None
+                return dict(canonical), None, planner_intent
         task_state["current_plan_step"] = {
             "step_id": str((current or {}).get("step_id") or ""),
             "tool_call": None,
@@ -153,7 +161,7 @@ def _proposal_from_pending_plan_raw(
         "code": "invalid_planner_output",
         "raw_error": "pending_plan_raw_non_canonical",
         "details": {"raw_output_preview": preview},
-    }
+    }, ""
 
 
 def _coerce_canonical_tool_call(raw: Any) -> dict[str, Any] | None:
@@ -164,6 +172,34 @@ def _coerce_canonical_tool_call(raw: Any) -> dict[str, Any] | None:
         if kind == "call_tool" and tool_name and isinstance(args, dict):
             return {"kind": "call_tool", "tool_name": tool_name, "args": dict(args)}
     return None
+
+
+def _extract_planner_intent(raw: dict[str, Any]) -> str:
+    value = raw.get("planner_intent")
+    if not isinstance(value, str):
+        return ""
+    text = value.strip()
+    return text[:160] if text else ""
+
+
+def _emit_planner_intent_progress(
+    *,
+    state: dict[str, Any],
+    task_state: dict[str, Any],
+    proposal: dict[str, Any],
+    planner_intent: str,
+) -> None:
+    emit_presence_transition_event(
+        state,
+        event_family="presence.progress",
+        phase="thinking",
+        detail={
+            "cycle": int(task_state.get("cycle_index") or 0) + 1,
+            "tool": str(proposal.get("tool_name") or ""),
+            "intention": "planning_next_step",
+            "text": planner_intent or "Estoy analizando el siguiente paso para avanzar la tarea.",
+        },
+    )
 
 
 def _execute_call_tool_step(

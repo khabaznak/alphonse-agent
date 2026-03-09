@@ -79,7 +79,7 @@ def phase_from_transition_event(event: dict[str, Any]) -> str | None:
     node = str(detail.get("node") or "").strip().lower()
     has_pending = bool(detail.get("has_pending_interaction"))
     if stage == "start":
-        if node in {"next_step_node", "progress_critic_node", "act_node", "apology_node"}:
+        if node in {"next_step_node", "act_node", "apology_node"}:
             return "thinking"
         if node == "respond_node":
             return "executing"

@@ -7,6 +7,8 @@ from typing import Any
 
 from alphonse.agent.actions.base import Action
 from alphonse.agent.actions.models import ActionResult
+from alphonse.agent.actions.presence_projection import emit_channel_transition_event
+from alphonse.agent.actions.session_context import IncomingContext
 from alphonse.agent.cognition.providers.factory import build_llm_client
 from alphonse.agent.cortex.graph import CortexGraph
 from alphonse.agent.cortex.state_store import load_state, save_state
@@ -78,6 +80,7 @@ class HandlePdcaSliceRequestAction(Action):
         checkpoint = load_pdca_checkpoint(task_id)
         base_state = _base_state(task=task, checkpoint=checkpoint)
         _stamp_check_provenance_for_slice(base_state=base_state, signal=signal, checkpoint=checkpoint)
+        incoming = _resolve_incoming_context(task=task, correlation_id=correlation_id)
         text = _resolve_slice_text(task=task, checkpoint=checkpoint, payload=payload)
         if not text:
             update_pdca_task_status(task_id=task_id, status="waiting_user")
@@ -85,6 +88,12 @@ class HandlePdcaSliceRequestAction(Action):
                 task_id=task_id,
                 event_type="slice.blocked.missing_text",
                 payload={"reason": "missing_input_text"},
+                correlation_id=correlation_id,
+            )
+            _emit_presence_lifecycle_event(
+                incoming=incoming,
+                event_family="presence.waiting_input",
+                phase="waiting_user",
                 correlation_id=correlation_id,
             )
             _emit_slice_signal(
@@ -102,6 +111,12 @@ class HandlePdcaSliceRequestAction(Action):
                 reason=str(budget_block.get("reason") or "budget_exhausted"),
                 details=budget_block,
             )
+            _emit_presence_lifecycle_event(
+                incoming=incoming,
+                event_family="presence.failed",
+                phase="failed",
+                correlation_id=correlation_id,
+            )
             _emit_slice_signal(
                 context=context,
                 event_type="pdca.failed",
@@ -115,8 +130,17 @@ class HandlePdcaSliceRequestAction(Action):
         except Exception:
             llm_client = None
 
+        _emit_presence_lifecycle_event(
+            incoming=incoming,
+            event_family="presence.phase_changed",
+            phase="executing",
+            correlation_id=correlation_id,
+        )
+        invoke_state = dict(base_state)
+        if incoming is not None:
+            invoke_state["_transition_sink"] = lambda event: emit_channel_transition_event(incoming, event)
         try:
-            result = _CORTEX_GRAPH.invoke(base_state, text, llm_client=llm_client)
+            result = _CORTEX_GRAPH.invoke(invoke_state, text, llm_client=llm_client)
         except Exception as exc:
             failure_code = _classify_failure_code(exc)
             user_notice_required = failure_code == "engine_unavailable"
@@ -131,6 +155,12 @@ class HandlePdcaSliceRequestAction(Action):
                 },
             )
             _finalize_failure(task=task, correlation_id=correlation_id, error=str(exc))
+            _emit_presence_lifecycle_event(
+                incoming=incoming,
+                event_family="presence.failed",
+                phase="failed",
+                correlation_id=correlation_id,
+            )
             _emit_slice_signal(
                 context=context,
                 event_type="pdca.failed",
@@ -156,6 +186,27 @@ class HandlePdcaSliceRequestAction(Action):
             save_state(conversation_key, merged_state)
 
         next_status = _next_status(cognition_state=cognition_state, reply_text=str(result.reply_text or ""))
+        if next_status == "waiting_user":
+            _emit_presence_lifecycle_event(
+                incoming=incoming,
+                event_family="presence.waiting_input",
+                phase="waiting_user",
+                correlation_id=correlation_id,
+            )
+        elif next_status == "done":
+            _emit_presence_lifecycle_event(
+                incoming=incoming,
+                event_family="presence.completed",
+                phase="done",
+                correlation_id=correlation_id,
+            )
+        elif next_status == "failed":
+            _emit_presence_lifecycle_event(
+                incoming=incoming,
+                event_family="presence.failed",
+                phase="failed",
+                correlation_id=correlation_id,
+            )
         _upsert_task_after_slice(task=task, status=next_status, request_text=text, reply_text=str(result.reply_text or ""))
         append_pdca_event(
             task_id=task_id,
@@ -462,3 +513,52 @@ def _classify_failure_code(exc: Exception) -> str:
     if any(token in rendered for token in matchers):
         return "engine_unavailable"
     return "execution_failed"
+
+
+def _resolve_incoming_context(*, task: dict[str, Any], correlation_id: str | None) -> IncomingContext | None:
+    metadata = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
+    state = metadata.get("state") if isinstance(metadata.get("state"), dict) else {}
+    channel_type = (
+        str(metadata.get("last_user_channel") or "").strip()
+        or str(state.get("channel_type") or "").strip()
+    )
+    channel_target = (
+        str(metadata.get("last_user_target") or "").strip()
+        or str(state.get("channel_target") or "").strip()
+    )
+    if (not channel_type or not channel_target) and ":" in str(task.get("conversation_key") or ""):
+        inferred_channel, inferred_target = str(task.get("conversation_key") or "").split(":", 1)
+        if not channel_type:
+            channel_type = str(inferred_channel or "").strip()
+        if not channel_target:
+            channel_target = str(inferred_target or "").strip()
+    if not channel_type or not channel_target:
+        return None
+    resolved_correlation = str(correlation_id or "").strip() or f"pdca:{str(task.get('task_id') or '').strip()}"
+    return IncomingContext(
+        channel_type=channel_type,
+        address=channel_target,
+        person_id=str(state.get("actor_person_id") or "").strip() or None,
+        correlation_id=resolved_correlation,
+    )
+
+
+def _emit_presence_lifecycle_event(
+    *,
+    incoming: IncomingContext | None,
+    event_family: str,
+    phase: str,
+    correlation_id: str | None,
+) -> None:
+    if incoming is None:
+        return
+    corr = str(correlation_id or incoming.correlation_id or "").strip() or None
+    emit_channel_transition_event(
+        incoming,
+        {
+            "type": "agent.transition",
+            "phase": str(phase or "").strip(),
+            "correlation_id": corr,
+            "detail": {"presence_event_family": str(event_family or "").strip()},
+        },
+    )
