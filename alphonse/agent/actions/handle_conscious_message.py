@@ -34,6 +34,11 @@ class HandleConsciousMessageAction(Action):
         envelope = IncomingMessageEnvelope.from_payload(raw_payload)
         correlation_id = envelope.correlation_id or getattr(signal, "correlation_id", None) or str(uuid.uuid4())
         payload = envelope.runtime_payload()
+        missing_actor_fields = [
+            key
+            for key in ("external_user_id", "display_name", "person_id")
+            if not str((envelope.actor or {}).get(key) or "").strip()
+        ]
         incoming = build_incoming_context_from_envelope(
             envelope=envelope,
             correlation_id=str(correlation_id),
@@ -49,6 +54,18 @@ class HandleConsciousMessageAction(Action):
                 "message_id": incoming.message_id,
             },
         )
+        if missing_actor_fields:
+            _LOG.emit(
+                event="incoming_message.context_missing_fields",
+                component="actions.handle_conscious_message",
+                correlation_id=str(correlation_id),
+                channel=incoming.channel_type,
+                user_id=incoming.person_id,
+                payload={
+                    "missing_fields": missing_actor_fields,
+                    "has_display_name": "display_name" not in missing_actor_fields,
+                },
+            )
         emit_presence_phase_changed(
             incoming=incoming,
             phase="acknowledged",
@@ -104,6 +121,8 @@ class HandleConsciousMessageAction(Action):
                 "channel_type": incoming.channel_type,
                 "channel_target": incoming.address,
                 "actor_person_id": incoming.person_id,
+                "incoming_user_id": str(payload.get("user_id") or "").strip() or None,
+                "incoming_user_name": str(payload.get("user_name") or "").strip() or None,
                 "locale": envelope.context.get("locale"),
                 "timezone": envelope.context.get("timezone"),
             },

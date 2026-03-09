@@ -42,6 +42,18 @@ def test_seed_routes_conscious_and_status_removed(tmp_path: Path) -> None:
         ).fetchone()
         assert int(terminal_routes[0] or 0) > 0
 
+        runtime_escalation_route = conn.execute(
+            """
+            SELECT COUNT(*)
+            FROM transitions t
+            JOIN signals s ON s.id = t.signal_id
+            WHERE t.is_enabled = 1
+              AND s.key = 'sense.runtime.message.user.received'
+              AND t.action_key = 'handle_conscious_message'
+            """
+        ).fetchone()
+        assert int(runtime_escalation_route[0] or 0) > 0
+
         legacy = conn.execute(
             "SELECT COUNT(*) FROM transitions WHERE action_key = 'handle_incoming_message' AND is_enabled = 1"
         ).fetchone()

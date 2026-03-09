@@ -4,19 +4,26 @@ from dataclasses import dataclass
 import os
 import traceback
 
+from alphonse.agent.actions.conscious_message_handler import build_incoming_message_envelope
 from alphonse.agent.actions.registry import ActionRegistry
 from alphonse.agent.actions.models import ActionResult
 from alphonse.agent.actions.handle_conscious_message import HandleConsciousMessageAction
 from alphonse.agent.actions.handle_pdca_failure_notice import HandlePdcaFailureNoticeAction
 from alphonse.agent.actions.handle_timed_signals import HandleTimedSignalsAction
 from alphonse.agent.actions.shutdown import ShutdownAction
+from alphonse.agent.observability.log_manager import get_log_manager
 from alphonse.agent.nervous_system.senses.bus import Bus, Signal
+from alphonse.agent.nervous_system import users as users_store
+from alphonse.agent.nervous_system.user_service_resolvers import resolve_telegram_chat_id_for_user
 from alphonse.agent.nervous_system.trace_store import write_trace
 from alphonse.agent.cognition.narration.outbound_narration_orchestrator import (
     build_default_coordinator,
     DeliveryCoordinator,
 )
 from alphonse.agent.io import get_io_registry, NormalizedOutboundMessage
+
+_LOG = get_log_manager()
+_RUNTIME_FAILURE_SIGNAL = "sense.runtime.message.user.received"
 
 
 @dataclass
@@ -40,6 +47,7 @@ class IntentPipeline:
                     self._deliver_normalized(delivery)
             self._emit_outcome(result, context, success=True, error=None)
         except Exception as exc:
+            self._escalate_subconscious_failure(action_key=action_key, context=context, error=exc)
             self._emit_outcome(None, context, success=False, error=exc)
 
     def _emit_outcome(
@@ -61,6 +69,75 @@ class IntentPipeline:
         if not adapter:
             return
         adapter.deliver(delivery)
+
+    def _escalate_subconscious_failure(self, *, action_key: str, context: dict, error: Exception) -> None:
+        signal = context.get("signal")
+        signal_type = str(getattr(signal, "type", "") or "").strip()
+        # PDCA/conscious flows already surface failures through dedicated lifecycles.
+        if signal_type.startswith("pdca.") or action_key in {
+            "handle_conscious_message",
+            "handle_pdca_failure_notice",
+        }:
+            return
+        admin_target = _resolve_admin_telegram_target()
+        if not admin_target:
+            _LOG.emit(
+                level="warning",
+                event="runtime.failure.escalation_skipped",
+                component="cognition.intentions.intent_pipeline",
+                correlation_id=_extract_correlation_id(context),
+                payload={
+                    "reason": "admin_target_unresolved",
+                    "action_key": action_key,
+                    "signal_type": signal_type or None,
+                    "error_type": type(error).__name__,
+                },
+            )
+            return
+        correlation_id = _extract_correlation_id(context)
+        text = (
+            "Runtime deterministic action failed. "
+            f"action={action_key} signal={signal_type or 'unknown'} "
+            f"error={type(error).__name__}: {str(error or '').strip()[:280]}"
+        )
+        envelope = build_incoming_message_envelope(
+            message_id=f"runtime-failure:{correlation_id or 'unknown'}",
+            channel_type="telegram",
+            channel_target=admin_target,
+            provider="runtime",
+            text=text,
+            correlation_id=correlation_id,
+            actor_external_user_id="runtime",
+            actor_display_name="Alphonse Runtime",
+            metadata={
+                "message_kind": "runtime_failure_escalation",
+                "failure": {
+                    "action_key": action_key,
+                    "signal_type": signal_type or None,
+                    "error_type": type(error).__name__,
+                },
+            },
+        )
+        self.bus.emit(
+            Signal(
+                type=_RUNTIME_FAILURE_SIGNAL,
+                payload=envelope,
+                source="system",
+                correlation_id=correlation_id,
+            )
+        )
+        _LOG.emit(
+            event="runtime.failure.escalated_to_admin",
+            component="cognition.intentions.intent_pipeline",
+            correlation_id=correlation_id,
+            payload={
+                "action_key": action_key,
+                "signal_type": signal_type or None,
+                "admin_channel_type": "telegram",
+                "admin_target": admin_target,
+                "error_type": type(error).__name__,
+            },
+        )
 
 
 def build_default_pipeline() -> IntentPipeline:
@@ -160,3 +237,33 @@ def _should_emit_outcome(context: dict) -> bool:
     payload = _extract_context_payload(context)
     depth = int(payload.get("depth", 0))
     return depth < max_depth
+
+
+def _resolve_admin_telegram_target() -> str | None:
+    try:
+        users = users_store.list_users(active_only=True, limit=200)
+    except Exception:
+        return None
+    for user in users:
+        if not isinstance(user, dict) or not bool(user.get("is_admin")):
+            continue
+        user_id = str(user.get("user_id") or "").strip()
+        if not user_id:
+            continue
+        resolved = resolve_telegram_chat_id_for_user(user_id)
+        if resolved:
+            return str(resolved).strip()
+    return None
+
+
+def _extract_correlation_id(context: dict) -> str | None:
+    signal = context.get("signal")
+    cid = str(getattr(signal, "correlation_id", "") or "").strip()
+    if cid:
+        return cid
+    payload = getattr(signal, "payload", {}) if signal else {}
+    if isinstance(payload, dict):
+        rendered = str(payload.get("correlation_id") or "").strip()
+        if rendered:
+            return rendered
+    return None

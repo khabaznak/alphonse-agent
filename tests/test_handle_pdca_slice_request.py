@@ -386,6 +386,9 @@ def test_handle_pdca_slice_request_prefers_checkpoint_state_for_rehydration(
             _ = llm_client
             assert state.get("from_checkpoint") is True
             assert state.get("from_session_store") is None
+            task_state = state.get("task_state")
+            assert isinstance(task_state, dict)
+            assert task_state.get("cycle_index") == 5
             assert text == "resume from checkpoint"
             return _FakeResult()
 
@@ -403,6 +406,102 @@ def test_handle_pdca_slice_request_prefers_checkpoint_state_for_rehydration(
     checkpoint = load_pdca_checkpoint(task_id)
     assert checkpoint is not None
     assert checkpoint["task_state"]["cycle_index"] == 6
+
+
+def test_handle_pdca_slice_request_sanitizes_stale_session_pdca_state_for_new_task(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db_path = tmp_path / "nerve-db"
+    monkeypatch.setenv("NERVE_DB_PATH", str(db_path))
+    monkeypatch.setenv("ALPHONSE_PDCA_QUEUE_DISPATCH_COOLDOWN_SECONDS", "10")
+    apply_schema(db_path)
+
+    task_id = upsert_pdca_task(
+        {
+            "owner_id": "owner-1",
+            "conversation_key": "telegram:8553589429",
+            "status": "queued",
+            "metadata": {
+                "pending_user_text": "Yo Alphonse!",
+                "last_user_channel": "telegram",
+                "last_user_target": "8553589429",
+            },
+        }
+    )
+    save_state(
+        "telegram:8553589429",
+        {
+            "conversation_key": "telegram:8553589429",
+            "channel_type": "telegram",
+            "channel_target": "8553589429",
+            "locale": "en-US",
+            "task_state": {
+                "status": "failed",
+                "planner_error_streak": 3,
+                "facts": {"step_99": {"tool": "planner_output"}},
+            },
+            "pending_interaction": {"type": "SLOT_FILL"},
+            "response_text": "stale-response",
+            "events": [{"type": "agent.transition", "phase": "failed"}],
+        },
+    )
+    observed: list[tuple[str, dict[str, object]]] = []
+
+    class _FakeResult:
+        reply_text = ""
+        plans = []
+        cognition_state = {"task_state": {"status": "running", "cycle_index": 1}}
+        meta = {}
+
+    class _FakeGraph:
+        def invoke(self, state, text, *, llm_client=None):  # noqa: ANN001
+            _ = llm_client
+            assert text == "Yo Alphonse!"
+            assert state.get("conversation_key") == "telegram:8553589429"
+            assert state.get("locale") == "en-US"
+            task_state = state.get("task_state")
+            assert isinstance(task_state, dict)
+            assert task_state.get("check_provenance") is None
+            assert task_state.get("planner_error_streak") is None
+            assert task_state.get("facts") is None
+            assert state.get("pending_interaction") is None
+            assert state.get("response_text") is None
+            assert state.get("events") is None
+            return _FakeResult()
+
+    monkeypatch.setattr(hpsr, "_CORTEX_GRAPH", _FakeGraph())
+    monkeypatch.setattr(hpsr, "build_llm_client", lambda: None)
+    monkeypatch.setattr(
+        hpsr,
+        "_LOG",
+        type(
+            "_CaptureLog",
+            (),
+            {"emit": staticmethod(lambda **kwargs: observed.append((str(kwargs.get("event") or ""), kwargs.get("payload") or {})))},
+        )(),
+    )
+
+    action = HandlePdcaSliceRequestAction()
+    signal = Signal(
+        type="pdca.slice.requested",
+        payload={"task_id": task_id, "correlation_id": "cid-sanitize"},
+        source="pdca_queue_runner",
+    )
+    _ = action.execute({"signal": signal, "ctx": None})
+
+    checkpoint = load_pdca_checkpoint(task_id)
+    assert checkpoint is not None
+    saved_state = checkpoint.get("state") if isinstance(checkpoint.get("state"), dict) else {}
+    assert "task_state" in saved_state  # only new cycle state from this run
+    assert "pending_interaction" not in saved_state
+    assert "response_text" in saved_state
+    assert "events" not in saved_state
+    sanitize_events = [payload for event, payload in observed if event == "pdca.slice.base_state.sanitized"]
+    assert sanitize_events
+    removed_keys = sanitize_events[-1].get("removed_keys")
+    assert isinstance(removed_keys, list)
+    assert "task_state" in removed_keys
 
 
 def test_handle_pdca_slice_request_classifies_engine_unavailable_failure(
@@ -485,3 +584,41 @@ def test_handle_pdca_slice_request_classifies_generic_failure_without_notice(
     assert emitted.type == "pdca.failed"
     assert emitted.payload.get("failure_code") == "execution_failed"
     assert emitted.payload.get("user_notice_required") is False
+
+
+def test_emit_context_continuity_gap_when_ingress_context_dropped() -> None:
+    emitted: list[dict[str, object]] = []
+
+    class _FakeLog:
+        def emit(self, **kwargs: object) -> None:
+            emitted.append(dict(kwargs))
+
+    original_log = hpsr._LOG
+    hpsr._LOG = _FakeLog()
+    task = {
+        "task_id": "task-gap-1",
+        "metadata": {
+            "state": {
+                "channel_type": "telegram",
+                "channel_target": "8553589429",
+                "actor_person_id": "user-1",
+                "incoming_user_id": "ext-1",
+                "incoming_user_name": "Alex",
+            }
+        },
+    }
+    invoke_state = {"channel_type": "telegram"}
+    try:
+        hpsr._emit_context_continuity_gap_if_any(
+            task=task,
+            invoke_state=invoke_state,
+            correlation_id="corr-gap-1",
+        )
+    finally:
+        hpsr._LOG = original_log
+
+    event = next((item for item in emitted if str(item.get("event") or "") == "pdca.context.continuity_gap"), None)
+    assert isinstance(event, dict)
+    payload = event.get("payload")
+    assert isinstance(payload, dict)
+    assert "channel_target" in list(payload.get("missing_in_invoke_state") or [])

@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+import alphonse.agent.cortex.nodes.respond as respond_module
 import alphonse.agent.cortex.task_mode.pdca as pdca_module
 import alphonse.agent.cortex.task_mode.execute_step as execute_step_module
 from alphonse.agent.cortex.nodes.respond import respond_finalize_node
@@ -18,6 +19,7 @@ from alphonse.agent.cortex.task_mode.pdca import route_after_next_step
 from alphonse.agent.cortex.task_mode.pdca import route_after_validate_step
 from alphonse.agent.cortex.task_mode.pdca import update_state_node
 from alphonse.agent.cortex.task_mode.pdca import validate_step_node
+from alphonse.agent.cortex.task_mode.prompt_templates import NEXT_STEP_SYSTEM_PROMPT
 from alphonse.agent.cortex.task_mode.state import build_default_task_state
 from alphonse.agent.tools.registry import ToolRegistry
 from alphonse.agent.tools.registry import build_default_tool_registry
@@ -1414,6 +1416,14 @@ def test_respond_finalize_waiting_user_with_pending_renders_question() -> None:
 
 def test_respond_finalize_failed_suppresses_apology_after_public_send() -> None:
     transitions: list[str] = []
+    emitted: list[dict[str, object]] = []
+
+    class _FakeLog:
+        def emit(self, **kwargs: object) -> None:
+            emitted.append(dict(kwargs))
+
+    original_log = respond_module._LOG
+    respond_module._LOG = _FakeLog()
     state: dict[str, object] = {
         "correlation_id": "corr-pdca-failed-suppress-apology",
         "channel_type": "telegram",
@@ -1434,13 +1444,70 @@ def test_respond_finalize_failed_suppresses_apology_after_public_send() -> None:
         },
     }
 
-    rendered = respond_finalize_node(
-        state,
-        emit_transition_event=lambda _state, phase, _payload=None: transitions.append(phase),
-    )
+    try:
+        rendered = respond_finalize_node(
+            state,
+            emit_transition_event=lambda _state, phase, _payload=None: transitions.append(phase),
+        )
+    finally:
+        respond_module._LOG = original_log
     assert str(rendered.get("response_text") or "").strip() == ""
     assert rendered.get("utterance") is None
     assert transitions and transitions[-1] == "failed"
+    assert any(str(item.get("event") or "") == "pdca.failure.user_reply_suppressed" for item in emitted)
+
+
+def test_respond_finalize_failed_emits_dispatched_event() -> None:
+    transitions: list[str] = []
+    emitted: list[dict[str, object]] = []
+
+    class _FakeLog:
+        def emit(self, **kwargs: object) -> None:
+            emitted.append(dict(kwargs))
+
+    original_log = respond_module._LOG
+    respond_module._LOG = _FakeLog()
+    state: dict[str, object] = {
+        "correlation_id": "corr-pdca-failed-dispatched",
+        "channel_type": "telegram",
+        "channel_target": "8553589429",
+        "locale": "en-US",
+        "_llm_client": _QueuedLlm(["I’m sorry, I could not complete this request."]),
+        "task_state": {
+            "status": "failed",
+            "last_validation_error": {
+                "reason": "engine_unavailable",
+                "message": "Inference backend unreachable.",
+                "retry_exhausted": True,
+            },
+            "facts": {
+                "step_1": {
+                    "step_id": "step_1",
+                    "tool": "local_audio_output_render",
+                    "status": "failed",
+                    "internal": False,
+                }
+            },
+        },
+    }
+    try:
+        rendered = respond_finalize_node(
+            state,
+            emit_transition_event=lambda _state, phase, _payload=None: transitions.append(phase),
+        )
+    finally:
+        respond_module._LOG = original_log
+    assert str(rendered.get("response_text") or "").strip()
+    assert transitions and transitions[-1] == "failed"
+    dispatched = next(
+        (item for item in emitted if str(item.get("event") or "") == "pdca.failure.user_reply_dispatched"),
+        None,
+    )
+    assert isinstance(dispatched, dict)
+    payload = dispatched.get("payload")
+    assert isinstance(payload, dict)
+    assert payload.get("failure_code") == "engine_unavailable"
+    assert payload.get("retry_exhausted") is True
 
 
 def test_execute_step_emits_presence_progress_from_planner_intent(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1489,3 +1556,55 @@ def test_execute_step_emits_presence_progress_from_planner_intent(monkeypatch: p
     text = str(detail.get("text") or "")
     assert text == "Preparing audio output for delivery."
 
+
+def test_next_step_system_prompt_includes_simple_conversation_send_message_rule() -> None:
+    prompt = NEXT_STEP_SYSTEM_PROMPT
+    assert "Simple Conversation Strategy" in prompt
+    assert 'tool_call.tool_name = "send_message"' in prompt
+    assert "Never return direct free-text as planner output" in prompt
+    assert "Produce exactly one canonical executable `tool_call`" in prompt
+
+
+def test_execute_step_accepts_canonical_send_message_from_planner_for_simple_conversation() -> None:
+    tool_registry = ToolRegistry()
+    captured: list[dict[str, object]] = []
+
+    class _SendMessageTool:
+        def execute(self, **kwargs: object) -> dict[str, object]:
+            captured.append(dict(kwargs))
+            return {
+                "status": "ok",
+                "result": {"message_id": "m-1", "delivery": "sent"},
+                "error": None,
+                "metadata": {"tool": "send_message"},
+            }
+
+    tool_registry.register("send_message", _SendMessageTool())
+    task_state = build_default_task_state()
+    task_state["status"] = "running"
+    task_state["plan"]["current_step_id"] = "step_1"
+    task_state["plan"]["steps"] = [{"step_id": "step_1", "status": "proposed"}]
+    task_state["pending_plan_raw"] = {
+        "tool_call": {
+            "kind": "call_tool",
+            "tool_name": "send_message",
+            "args": {"To": "8553589429", "Message": "Yo! Great to hear from you.", "Channel": "telegram"},
+        },
+        "planner_intent": "Responding to a simple greeting without complex execution.",
+    }
+    state: dict[str, object] = {
+        "correlation_id": "corr-do-simple-conversation-send-message",
+        "task_state": task_state,
+    }
+
+    updated = execute_step_node(state, tool_registry=tool_registry)
+    next_state = updated.get("task_state")
+    assert isinstance(next_state, dict)
+    assert len(captured) == 1
+    assert captured[0].get("To") == "8553589429"
+    assert captured[0].get("Channel") == "telegram"
+    facts = next_state.get("facts")
+    assert isinstance(facts, dict)
+    fact = facts.get("step_1")
+    assert isinstance(fact, dict)
+    assert fact.get("tool") == "send_message"

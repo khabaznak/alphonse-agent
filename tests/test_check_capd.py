@@ -134,6 +134,11 @@ def test_repeated_failure_hard_stop_can_force_mission_failed(monkeypatch) -> Non
     assert isinstance(verdict, dict)
     assert verdict.get("kind") == "mission_failed"
     assert verdict.get("failure_class") == "repeated_failure_signature"
+    assert verdict.get("retry_exhausted") is True
+    last_error = next_state.get("last_validation_error")
+    assert isinstance(last_error, dict)
+    assert last_error.get("reason") == "repeated_failure_signature"
+    assert last_error.get("retry_exhausted") is True
 
 
 def test_route_after_act_prefers_judge_verdict_kind() -> None:

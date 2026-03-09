@@ -33,6 +33,7 @@ VALUES
   ('sense.telegram.message.user.received', 'Telegram User Message Received', 'telegram', 'Incoming Telegram user message', 1),
   ('sense.cli.message.user.received', 'CLI User Message Received', 'cli', 'Incoming CLI user message', 1),
   ('sense.api.message.user.received', 'API User Message Received', 'api', 'Incoming API user message', 1),
+  ('sense.runtime.message.user.received', 'Runtime User Message Received', 'system', 'Runtime conscious escalation for admin notifications', 1),
   ('timer.fired', 'Timer Fired', 'timer', 'Scheduled timer fired', 1),
   ('timed_signal.fired', 'Timed Signal Fired', 'timer', 'Scheduled timed signal fired', 1),
   ('timed_signal.conscious_payload', 'Timed Signal Conscious Payload', 'timer', 'Timed signal routed to conscious ingress', 1),
@@ -245,6 +246,31 @@ SELECT
   'api message received'
 FROM states s1
 JOIN signals sig ON sig.key = 'sense.api.message.user.received'
+JOIN states s2 ON s2.key = 'idle';
+
+INSERT OR IGNORE INTO transitions (
+  state_id,
+  signal_id,
+  next_state_id,
+  priority,
+  is_enabled,
+  guard_key,
+  action_key,
+  match_any_state,
+  notes
+)
+SELECT
+  s1.id,
+  sig.id,
+  s2.id,
+  30,
+  1,
+  NULL,
+  'handle_conscious_message',
+  1,
+  'runtime failure escalation routed to conscious ingress'
+FROM states s1
+JOIN signals sig ON sig.key = 'sense.runtime.message.user.received'
 JOIN states s2 ON s2.key = 'idle';
 
 INSERT OR IGNORE INTO transitions (
@@ -793,6 +819,7 @@ WHERE signal_id IN (
     'sense.telegram.message.user.received',
     'sense.cli.message.user.received',
     'sense.api.message.user.received',
+    'sense.runtime.message.user.received',
     'terminal.command_updated',
     'terminal.command_executed',
     'timer.fired',

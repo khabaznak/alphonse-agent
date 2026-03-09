@@ -5,9 +5,11 @@ from typing import Any, Callable
 
 from alphonse.agent.cortex.nodes.capability_gap import has_capability_gap_plan
 from alphonse.agent.cortex.nodes.telemetry import emit_brain_state
+from alphonse.agent.observability.log_manager import get_log_manager
 from alphonse.agent.rendering.stage import render_stage
 from alphonse.agent.rendering.types import TextDeliverable
 
+_LOG = get_log_manager()
 
 def respond_node_impl(
     state: dict[str, Any],
@@ -115,6 +117,14 @@ def respond_finalize_node(
         return _return({})
     if isinstance(task_state, dict):
         if task_status == "failed" and _has_public_mission_send_success(task_state):
+            _LOG.emit(
+                event="pdca.failure.user_reply_suppressed",
+                component="cortex.nodes.respond",
+                correlation_id=str(state.get("correlation_id") or "").strip() or None,
+                channel=str(state.get("channel_type") or "").strip() or None,
+                user_id=str(state.get("actor_person_id") or "").strip() or None,
+                payload={"reason": "mission_public_send_already_succeeded"},
+            )
             emit_transition_event(state, "failed")
             return _return({})
         utterance = build_utterance_from_state(state)
@@ -143,6 +153,23 @@ def respond_finalize_node(
                 )
                 if isinstance(rendered_text, str) and rendered_text.strip():
                     if task_status == "failed":
+                        _LOG.emit(
+                            event="pdca.failure.user_reply_dispatched",
+                            component="cortex.nodes.respond",
+                            correlation_id=str(state.get("correlation_id") or "").strip() or None,
+                            channel=str(state.get("channel_type") or "").strip() or None,
+                            user_id=str(state.get("actor_person_id") or "").strip() or None,
+                            payload={
+                                "failure_code": str(
+                                    ((task_state.get("last_validation_error") or {}) if isinstance(task_state.get("last_validation_error"), dict) else {}).get("reason")
+                                    or "mission_failed"
+                                ),
+                                "retry_exhausted": bool(
+                                    ((task_state.get("last_validation_error") or {}) if isinstance(task_state.get("last_validation_error"), dict) else {}).get("retry_exhausted")
+                                ),
+                            },
+                        )
+                    if task_status == "failed":
                         emit_transition_event(state, "failed")
                     elif task_status == "waiting_user":
                         emit_transition_event(state, "waiting_user")
@@ -156,6 +183,17 @@ def respond_finalize_node(
                 stage="rendering_stage.failed",
                 error_type=result.error or "render_failed",
             )
+            if task_status == "failed":
+                _LOG.emit(
+                    level="warning",
+                    event="pdca.failure.user_reply_dispatch_failed",
+                    component="cortex.nodes.respond",
+                    correlation_id=str(state.get("correlation_id") or "").strip() or None,
+                    channel=str(state.get("channel_type") or "").strip() or None,
+                    user_id=str(state.get("actor_person_id") or "").strip() or None,
+                    error_code=str(result.error or "render_failed"),
+                    payload={"reason": "render_failed"},
+                )
             emit_transition_event(state, "failed", {"reason": "render_failed"})
             return _return({"utterance": utterance, "render_error": result.error})
     if state.get("response_text"):

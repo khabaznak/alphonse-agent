@@ -126,3 +126,52 @@ def test_handle_conscious_message_fail_fast_when_slicing_disabled(monkeypatch) -
     assert result.intention_key == "MESSAGE_READY"
     assert "temporarily unable to process messages" in str(result.payload.get("message") or "")
     assert called == {}
+
+
+def test_handle_conscious_message_logs_missing_actor_context(monkeypatch) -> None:
+    action = HandleConsciousMessageAction()
+    emitted: list[dict[str, object]] = []
+
+    class _FakeLog:
+        def emit(self, **kwargs: object) -> None:
+            emitted.append(dict(kwargs))
+
+    monkeypatch.setattr(
+        "alphonse.agent.actions.handle_conscious_message.resolve_session_user_id",
+        lambda **_: "u-1",
+    )
+    monkeypatch.setattr(
+        "alphonse.agent.actions.handle_conscious_message.resolve_session_timezone",
+        lambda *_: "UTC",
+    )
+    monkeypatch.setattr(
+        "alphonse.agent.actions.handle_conscious_message.resolve_day_session",
+        lambda **_: {"session_id": "s-1"},
+    )
+    monkeypatch.setattr(
+        "alphonse.agent.actions.handle_conscious_message.enqueue_pdca_slice",
+        lambda **_: "task-ctx-1",
+    )
+    monkeypatch.setattr(
+        "alphonse.agent.actions.handle_conscious_message.is_pdca_slicing_enabled",
+        lambda: True,
+    )
+    monkeypatch.setattr(
+        "alphonse.agent.actions.handle_conscious_message.emit_presence_phase_changed",
+        lambda **_: None,
+    )
+    monkeypatch.setattr(
+        "alphonse.agent.actions.handle_conscious_message._LOG",
+        _FakeLog(),
+    )
+
+    envelope = build_incoming_message_envelope(
+        message_id="m-ctx-1",
+        channel_type="telegram",
+        channel_target="123",
+        provider="telegram",
+        text="Hello",
+        correlation_id="c-ctx-1",
+    )
+    _ = action.execute({"signal": Signal(type="sense.telegram.message.user.received", payload=envelope), "ctx": Bus()})
+    assert any(str(item.get("event") or "") == "incoming_message.context_missing_fields" for item in emitted)

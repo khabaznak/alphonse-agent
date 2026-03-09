@@ -74,6 +74,7 @@ def check_node_impl(
             case_type=case_type,
             reason="Planner output remained invalid beyond retry budget.",
             failure_class="invalid_planner_output",
+            retry_exhausted=True,
         )
         return _finalize_check_cycle(
             state=state,
@@ -110,6 +111,7 @@ def check_node_impl(
                 case_type=case_type,
                 reason="Judge output remained invalid beyond retry budget.",
                 failure_class="judge_output_invalid",
+                retry_exhausted=True,
             )
         else:
             verdict = {
@@ -428,11 +430,37 @@ def _finalize_check_cycle(
             },
         }
     elif kind == "mission_failed":
+        failure_code = str(verdict.get("failure_class") or "mission_failed").strip() or "mission_failed"
+        failure_reason = reason or "Mission failed."
+        retry_exhausted = bool(verdict.get("retry_exhausted"))
         task_state["status"] = "failed"
         task_state["last_validation_error"] = {
-            "reason": str(verdict.get("failure_class") or "mission_failed"),
-            "message": reason or "Mission failed.",
+            "reason": failure_code,
+            "message": failure_reason,
+            "retry_exhausted": retry_exhausted,
         }
+        log_task_event(
+            logger=logger,
+            state=state,
+            task_state=task_state,
+            node="check_node",
+            event="pdca.failure.classified",
+            failure_code=failure_code,
+            failure_reason=failure_reason,
+            retry_exhausted=retry_exhausted,
+            cycle=cycle,
+        )
+        if retry_exhausted:
+            log_task_event(
+                logger=logger,
+                state=state,
+                task_state=task_state,
+                node="check_node",
+                event="pdca.failure.retry_exhausted",
+                failure_code=failure_code,
+                failure_reason=failure_reason,
+                cycle=cycle,
+            )
     elif kind == "conversation":
         task_state["status"] = "waiting_user"
         task_state["next_user_question"] = reason or "Could you tell me how I can help?"
@@ -490,6 +518,7 @@ def _deterministic_hard_stop(*, task_state: dict[str, Any], case_type: str) -> d
             case_type=case_type,
             reason="Repeated identical failure signature exceeded hard-stop limit.",
             failure_class="repeated_failure_signature",
+            retry_exhausted=True,
         )
 
     zero_progress = _update_zero_progress_state(task_state)
@@ -498,6 +527,7 @@ def _deterministic_hard_stop(*, task_state: dict[str, Any], case_type: str) -> d
             case_type=case_type,
             reason="Zero-progress streak exceeded hard-stop limit.",
             failure_class="zero_progress_streak",
+            retry_exhausted=True,
         )
 
     return None
@@ -645,7 +675,13 @@ def _call_llm(*, llm_client: object, system_prompt: str, user_prompt: str) -> st
     return ""
 
 
-def _mission_failed_verdict(*, case_type: str, reason: str, failure_class: str) -> dict[str, Any]:
+def _mission_failed_verdict(
+    *,
+    case_type: str,
+    reason: str,
+    failure_class: str,
+    retry_exhausted: bool = False,
+) -> dict[str, Any]:
     return {
         "kind": "mission_failed",
         "case_type": case_type if case_type in _CASE_TYPES else "execution_review",
@@ -654,6 +690,7 @@ def _mission_failed_verdict(*, case_type: str, reason: str, failure_class: str) 
         "criteria_updates": [],
         "evidence_refs": [],
         "failure_class": failure_class[:120],
+        "retry_exhausted": bool(retry_exhausted),
     }
 
 

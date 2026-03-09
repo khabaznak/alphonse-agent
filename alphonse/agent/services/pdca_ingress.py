@@ -62,6 +62,8 @@ def enqueue_pdca_slice(
             "channel_type": incoming.channel_type,
             "channel_target": incoming.address,
             "actor_person_id": incoming.person_id,
+            "incoming_user_id": str(payload.get("user_id") or "").strip() or None,
+            "incoming_user_name": str(payload.get("user_name") or "").strip() or None,
             "locale": state.get("locale"),
             "tone": state.get("tone"),
             "address_style": state.get("address_style"),

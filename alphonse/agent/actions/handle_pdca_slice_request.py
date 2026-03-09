@@ -78,7 +78,7 @@ class HandlePdcaSliceRequestAction(Action):
         )
 
         checkpoint = load_pdca_checkpoint(task_id)
-        base_state = _base_state(task=task, checkpoint=checkpoint)
+        base_state = _base_state(task=task, checkpoint=checkpoint, correlation_id=correlation_id)
         _stamp_check_provenance_for_slice(base_state=base_state, signal=signal, checkpoint=checkpoint)
         incoming = _resolve_incoming_context(task=task, correlation_id=correlation_id)
         text = _resolve_slice_text(task=task, checkpoint=checkpoint, payload=payload)
@@ -137,6 +137,11 @@ class HandlePdcaSliceRequestAction(Action):
             correlation_id=correlation_id,
         )
         invoke_state = dict(base_state)
+        _emit_context_continuity_gap_if_any(
+            task=task,
+            invoke_state=invoke_state,
+            correlation_id=correlation_id,
+        )
         if incoming is not None:
             invoke_state["_transition_sink"] = lambda event: emit_channel_transition_event(incoming, event)
         try:
@@ -232,15 +237,33 @@ class HandlePdcaSliceRequestAction(Action):
         return ActionResult(intention_key="NOOP", payload={}, urgency=None)
 
 
-def _base_state(*, task: dict[str, Any], checkpoint: dict[str, Any] | None) -> dict[str, Any]:
+def _base_state(
+    *,
+    task: dict[str, Any],
+    checkpoint: dict[str, Any] | None,
+    correlation_id: str | None,
+) -> dict[str, Any]:
     if isinstance(checkpoint, dict) and isinstance(checkpoint.get("state"), dict):
         return dict(checkpoint.get("state") or {})
+    metadata = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
+    seeded = metadata.get("state") if isinstance(metadata.get("state"), dict) else {}
     conversation_key = str(task.get("conversation_key") or "").strip()
     loaded = load_state(conversation_key) if conversation_key else None
     if isinstance(loaded, dict):
-        return dict(loaded)
-    metadata = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
-    seeded = metadata.get("state") if isinstance(metadata.get("state"), dict) else {}
+        sanitized, removed_keys = _sanitize_loaded_state_for_new_task(loaded)
+        _overlay_ingress_context(base=sanitized, seeded=seeded)
+        if removed_keys:
+            _LOG.emit(
+                event="pdca.slice.base_state.sanitized",
+                component="actions.handle_pdca_slice_request",
+                correlation_id=correlation_id,
+                payload={
+                    "task_id": str(task.get("task_id") or "").strip() or None,
+                    "conversation_key": conversation_key or None,
+                    "removed_keys": removed_keys,
+                },
+            )
+        return sanitized
     out = dict(seeded)
     out.setdefault("conversation_key", conversation_key)
     out.setdefault("chat_id", conversation_key)
@@ -263,6 +286,48 @@ def _resolve_slice_text(*, task: dict[str, Any], checkpoint: dict[str, Any] | No
         if value:
             return value
     return ""
+
+
+def _sanitize_loaded_state_for_new_task(loaded: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
+    sanitized = dict(loaded)
+    removed_keys: list[str] = []
+    for key in (
+        "task_state",
+        "pending_interaction",
+        "response_text",
+        "events",
+        "utterance",
+        "render_error",
+    ):
+        if key in sanitized:
+            removed_keys.append(key)
+            sanitized.pop(key, None)
+    return sanitized, removed_keys
+
+
+def _overlay_ingress_context(*, base: dict[str, Any], seeded: dict[str, Any]) -> None:
+    for key in (
+        "conversation_key",
+        "chat_id",
+        "channel_type",
+        "channel_target",
+        "actor_person_id",
+        "incoming_user_id",
+        "incoming_user_name",
+        "locale",
+        "tone",
+        "address_style",
+        "timezone",
+    ):
+        if str(base.get(key) or "").strip():
+            continue
+        value = seeded.get(key)
+        if value is None:
+            continue
+        rendered = str(value).strip()
+        if not rendered:
+            continue
+        base[key] = value
 
 
 def _merge_state(*, base: dict[str, Any], cognition_state: dict[str, Any], reply_text: str) -> dict[str, Any]:
@@ -540,6 +605,41 @@ def _resolve_incoming_context(*, task: dict[str, Any], correlation_id: str | Non
         address=channel_target,
         person_id=str(state.get("actor_person_id") or "").strip() or None,
         correlation_id=resolved_correlation,
+    )
+
+
+def _emit_context_continuity_gap_if_any(
+    *,
+    task: dict[str, Any],
+    invoke_state: dict[str, Any],
+    correlation_id: str | None,
+) -> None:
+    metadata = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
+    seeded = metadata.get("state") if isinstance(metadata.get("state"), dict) else {}
+    present_at_ingress = {
+        key: str(seeded.get(key) or "").strip()
+        for key in ("channel_type", "channel_target", "actor_person_id", "incoming_user_id", "incoming_user_name")
+    }
+    missing_in_invoke: list[str] = []
+    for key, seeded_value in present_at_ingress.items():
+        if not seeded_value:
+            continue
+        current = str(invoke_state.get(key) or "").strip()
+        if not current:
+            missing_in_invoke.append(key)
+    if not missing_in_invoke:
+        return
+    _LOG.emit(
+        level="warning",
+        event="pdca.context.continuity_gap",
+        component="actions.handle_pdca_slice_request",
+        correlation_id=correlation_id,
+        payload={
+            "task_id": str(task.get("task_id") or "").strip() or None,
+            "missing_in_invoke_state": missing_in_invoke,
+            "ingress_channel_type": present_at_ingress.get("channel_type") or None,
+            "ingress_channel_target": present_at_ingress.get("channel_target") or None,
+        },
     )
 
 
