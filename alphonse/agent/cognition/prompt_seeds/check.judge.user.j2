@@ -11,11 +11,15 @@ You are the CAPD Check Judge. Judge only. Do not plan or execute.
 {% if CASE_TYPE == "new_request" -%}
 - Always produce PLAN verdict.
 - Produce a global acceptance criteria baseline via criteria_updates append operations.
+- Baseline criteria MUST include both:
+  1) objective completion
+  2) user informed on the active channel.
 - Treat conversational asks as low-complexity goals but still PLAN.
 {% else -%}
 - Review all facts against acceptance criteria.
 - Mark satisfied criteria by id when evidence exists.
-- Use mission_success only if all criteria are satisfied.
+- Use mission_success only if all criteria are satisfied, including user-informed delivery criteria.
+- If objective criteria are satisfied but delivery evidence is missing, return PLAN.
 - Use mission_failed if clearly blocked or terminally failed.
 {% endif %}
 

@@ -174,6 +174,28 @@ def test_check_judge_prompt_renders_from_template_with_diagnostic_context() -> N
     assert "planner_invalid_streak" in prompt
     assert "repeated_failure_signature_streak" in prompt
     assert "zero_progress_streak" in prompt
+    assert "If objective criteria are satisfied but delivery evidence is missing, return PLAN" in prompt
+
+
+def test_check_judge_prompt_new_request_requires_objective_and_delivery_criteria() -> None:
+    tool_registry = build_default_tool_registry()
+    llm = _PromptCaptureLlm(
+        '{"kind":"plan","case_type":"new_request","reason":"build criteria","confidence":0.8,"criteria_updates":[{"op":"append","text":"objective"},{"op":"append","text":"inform user"}],"evidence_refs":[],"failure_class":null}'
+    )
+    task_state = build_default_task_state()
+    task_state["check_provenance"] = "entry"
+    state = {
+        "correlation_id": "corr-check-template-new-request",
+        "_llm_client": llm,
+        "last_user_message": "When is Megadeth coming to Guadalajara?",
+        "task_state": task_state,
+    }
+
+    _ = check_node(state, tool_registry=tool_registry)
+    prompt = llm.last_user_prompt
+    assert "Baseline criteria MUST include both" in prompt
+    assert "1) objective completion" in prompt
+    assert "2) user informed on the active channel." in prompt
 
 
 def test_check_template_failure_mission_fails_with_admin_message(monkeypatch) -> None:
