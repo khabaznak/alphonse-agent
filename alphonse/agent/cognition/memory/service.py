@@ -557,11 +557,16 @@ def record_after_tool_call(
         tool_name=tool_name,
         result=result,
     )
-    status = str((result or {}).get("status") or "").strip().lower()
+    exception_payload = (result or {}).get("exception")
+    exception_text = ""
+    if isinstance(exception_payload, dict):
+        exception_text = str(exception_payload.get("message") or exception_payload.get("code") or "").strip()
+    elif isinstance(exception_payload, str):
+        exception_text = exception_payload.strip()
     payload = {
         "intent": str(task_state.get("goal") or "").strip() or "task execution",
         "action": f"{tool_name}({_safe_args_preview(args)})",
-        "result": f"status={status or 'unknown'}",
+        "result": "exception=" + (exception_text or "none"),
         "step_id": str((current or {}).get("step_id") or "").strip() or None,
         "next": _memory_next_hint(task_state=task_state, current=current),
     }

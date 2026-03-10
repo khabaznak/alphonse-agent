@@ -324,18 +324,16 @@ def _err_code(exc: Exception) -> str:
 
 def _ok(*, result: dict[str, Any], metadata: dict[str, Any]) -> dict[str, Any]:
     return {
-        "status": "ok",
-        "result": result,
-        "error": None,
+        "output": result,
+        "exception": None,
         "metadata": metadata,
     }
 
 
 def _failed(*, code: str, message: str, metadata: dict[str, Any]) -> dict[str, Any]:
     return {
-        "status": "failed",
-        "result": None,
-        "error": {"code": code, "message": message},
+        "output": None,
+        "exception": {"code": code, "message": message},
         "metadata": metadata,
     }
 

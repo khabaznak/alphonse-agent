@@ -44,10 +44,12 @@ def test_google_geocoder_parses_location(monkeypatch: pytest.MonkeyPatch) -> Non
     tool = GoogleGeocoderTool()
     result = tool.geocode("Guadalajara")
     assert result is not None
-    assert result["status"] == "OK"
-    assert result["location"]["lat"] == 20.67
-    assert result["location"]["lng"] == -103.35
-    assert result["formatted_address"] == "Guadalajara, Jalisco, Mexico"
+    assert result["exception"] is None
+    payload = result["output"]
+    assert payload["provider_status"] == "OK"
+    assert payload["location"]["lat"] == 20.67
+    assert payload["location"]["lng"] == -103.35
+    assert payload["formatted_address"] == "Guadalajara, Jalisco, Mexico"
 
 
 def test_google_geocoder_requires_key(monkeypatch: pytest.MonkeyPatch) -> None:

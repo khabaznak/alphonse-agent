@@ -112,13 +112,12 @@ class SshTerminalTool:
         }
         if exit_code != 0:
             return {
-                "status": "failed",
-                "result": {
+                "output": {
                     "exit_code": int(exit_code),
                     "stdout": _truncate_output(stdout),
                     "stderr": _truncate_output(stderr),
                 },
-                "error": {
+                "exception": {
                     "code": "ssh_non_zero_exit",
                     "message": "remote command returned non-zero exit",
                     "retryable": False,
@@ -127,13 +126,12 @@ class SshTerminalTool:
             }
 
         return {
-            "status": "ok",
-            "result": {
+            "output": {
                 "exit_code": int(exit_code),
                 "stdout": _truncate_output(stdout),
                 "stderr": _truncate_output(stderr),
             },
-            "error": None,
+            "exception": None,
             "metadata": metadata,
         }
 
@@ -230,9 +228,8 @@ def _truncate_output(value: Any, *, limit: int = 8000) -> str:
 
 def _failed(error_code: str, *, retryable: bool, **kwargs: Any) -> dict[str, Any]:
     return {
-        "status": "failed",
-        "result": None,
-        "error": {
+        "output": None,
+        "exception": {
             "code": str(error_code or "ssh_terminal_failed"),
             "message": str(error_code or "ssh_terminal_failed"),
             "retryable": bool(retryable),

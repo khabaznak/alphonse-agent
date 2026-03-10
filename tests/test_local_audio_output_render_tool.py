@@ -27,8 +27,8 @@ def test_local_audio_output_render_m4a_on_macos(monkeypatch, tmp_path: Path) -> 
     tool = LocalAudioOutputRenderTool()
     result = tool.execute(text="Hola Alex", output_dir=str(tmp_path), format="m4a")
 
-    assert result["status"] == "ok"
-    payload = result["result"]
+    assert result["exception"] is None
+    payload = result["output"]
     assert str(payload["file_path"]).endswith(".m4a")
     assert payload["mime_type"] == "audio/mp4"
     assert calls[0][0] == "say"
@@ -55,8 +55,8 @@ def test_local_audio_output_render_ogg_on_macos(monkeypatch, tmp_path: Path) -> 
     tool = LocalAudioOutputRenderTool()
     result = tool.execute(text="Hola Alex", output_dir=str(tmp_path), format="ogg")
 
-    assert result["status"] == "ok"
-    payload = result["result"]
+    assert result["exception"] is None
+    payload = result["output"]
     assert str(payload["file_path"]).endswith(".ogg")
     assert payload["mime_type"] == "audio/ogg"
     assert calls[0][0] == "say"
@@ -77,16 +77,16 @@ def test_local_audio_output_render_ogg_requires_ffmpeg(monkeypatch, tmp_path: Pa
     monkeypatch.setattr(lao.subprocess, "run", _fake_run)
     tool = LocalAudioOutputRenderTool()
     result = tool.execute(text="Hola Alex", output_dir=str(tmp_path), format="ogg")
-    assert result["status"] == "failed"
-    assert str((result.get("error") or {}).get("code") or "") == "ffmpeg_not_installed"
+    assert result["exception"] is not None
+    assert str((result.get("exception") or {}).get("code") or "") == "ffmpeg_not_installed"
 
 
 def test_local_audio_output_render_rejects_non_macos(monkeypatch) -> None:
     monkeypatch.setattr(lao.platform, "system", lambda: "Linux")
     tool = LocalAudioOutputRenderTool()
     result = tool.execute(text="Hola Alex")
-    assert result["status"] == "failed"
-    assert (result.get("error") or {}).get("code") == "local_audio_output_not_supported"
+    assert result["exception"] is not None
+    assert (result.get("exception") or {}).get("code") == "local_audio_output_not_supported"
 
 
 def test_local_audio_output_render_defaults_to_authorized_workdir(monkeypatch, tmp_path: Path) -> None:
@@ -112,8 +112,8 @@ def test_local_audio_output_render_defaults_to_authorized_workdir(monkeypatch, t
     tool = LocalAudioOutputRenderTool()
     result = tool.execute(text="Hola Alex")
 
-    assert result["status"] == "ok"
-    rendered_path = Path(str((result.get("result") or {}).get("file_path") or ""))
+    assert result["exception"] is None
+    rendered_path = Path(str((result.get("output") or {}).get("file_path") or ""))
     assert rendered_path.parent == (tmp_path / "main-workdir" / "audio_output").resolve()
 
 
@@ -167,8 +167,8 @@ def test_local_audio_output_render_prunes_old_and_excess_files(monkeypatch, tmp_
     tool = LocalAudioOutputRenderTool()
     result = tool.execute(text="Hola Alex", output_dir=str(tmp_path), format="m4a")
 
-    assert result["status"] == "ok"
-    retention = (result.get("result") or {}).get("retention") or {}
+    assert result["exception"] is None
+    retention = (result.get("output") or {}).get("retention") or {}
     assert int(retention.get("removed_by_age") or 0) >= 2
     remaining = sorted(tmp_path.glob("*.m4a"))
     assert len(remaining) <= 2

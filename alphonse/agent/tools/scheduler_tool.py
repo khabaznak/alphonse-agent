@@ -77,9 +77,8 @@ class SchedulerTool:
             channel_target=str(channel_target or ""),
         )
         return {
-            "status": "ok",
-            "result": reminder,
-            "error": None,
+            "output": reminder,
+            "exception": None,
             "metadata": {"tool": "create_reminder"},
         }
 

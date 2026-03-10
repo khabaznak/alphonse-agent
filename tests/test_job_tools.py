@@ -49,28 +49,28 @@ def test_job_tools_crud(tmp_path: Path) -> None:
         timezone="UTC",
         safety_level="low",
     )
-    assert created["status"] == "ok"
-    job_id = created["result"]["job_id"]
+    assert created["exception"] is None
+    job_id = created["output"]["job_id"]
 
     listed = list_tool.execute(user_id="u1")
-    assert listed["status"] == "ok"
-    assert any(item.get("job_id") == job_id for item in listed["result"]["jobs"])
+    assert listed["exception"] is None
+    assert any(item.get("job_id") == job_id for item in listed["output"]["jobs"])
 
     paused = pause.execute(user_id="u1", job_id=job_id)
-    assert paused["status"] == "ok"
-    assert paused["result"]["enabled"] is False
+    assert paused["exception"] is None
+    assert paused["output"]["enabled"] is False
 
     resumed = resume.execute(user_id="u1", job_id=job_id)
-    assert resumed["status"] == "ok"
-    assert resumed["result"]["enabled"] is True
+    assert resumed["exception"] is None
+    assert resumed["output"]["enabled"] is True
 
     run = run_now.execute(user_id="u1", job_id=job_id)
-    assert run["status"] == "ok"
-    assert run["result"]["execution_id"]
+    assert run["exception"] is None
+    assert run["output"]["execution_id"]
 
     removed = delete.execute(user_id="u1", job_id=job_id)
-    assert removed["status"] == "ok"
-    assert removed["result"]["deleted"] is True
+    assert removed["exception"] is None
+    assert removed["output"]["deleted"] is True
 
 
 def test_job_run_now_accepts_job_name_alias(tmp_path: Path) -> None:
@@ -96,10 +96,10 @@ def test_job_run_now_accepts_job_name_alias(tmp_path: Path) -> None:
         timezone="UTC",
         safety_level="low",
     )
-    assert created["status"] == "ok"
+    assert created["exception"] is None
     run = run_now.execute(user_id="u1", job_name=job_name)
-    assert run["status"] == "ok"
-    assert run["result"]["execution_id"]
+    assert run["exception"] is None
+    assert run["output"]["execution_id"]
 
 
 def test_job_run_now_routes_prompt_jobs_to_bus_when_present(tmp_path: Path) -> None:
@@ -126,10 +126,10 @@ def test_job_run_now_routes_prompt_jobs_to_bus_when_present(tmp_path: Path) -> N
         timezone="UTC",
         safety_level="low",
     )
-    assert created["status"] == "ok"
+    assert created["exception"] is None
     run = run_now.execute(
         user_id="u1",
-        job_id=str(created["result"]["job_id"]),
+        job_id=str(created["output"]["job_id"]),
         state={
             "_bus": bus,
             "channel_type": "telegram",
@@ -138,7 +138,7 @@ def test_job_run_now_routes_prompt_jobs_to_bus_when_present(tmp_path: Path) -> N
             "correlation_id": "corr-1",
         },
     )
-    assert run["status"] == "ok"
+    assert run["exception"] is None
     assert bus.events
     emitted = bus.events[-1]
     assert emitted.type == "sense.api.message.user.received"

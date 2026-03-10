@@ -118,9 +118,10 @@ def test_repeated_failure_hard_stop_can_force_mission_failed(monkeypatch) -> Non
     task_state["check_provenance"] = "do"
     task_state["facts"] = {
         "step_1": {
-            "tool": "terminal_sync",
-            "status": "failed",
-            "error": {"code": "timeout", "message": "timeout"},
+            "tool_name": "terminal_sync",
+            "params": {},
+            "output": None,
+            "exception": {"message": "timeout", "code": "timeout"},
         }
     }
     state = {"correlation_id": "corr-hard-stop", "_llm_client": llm, "task_state": task_state}
@@ -143,4 +144,4 @@ def test_repeated_failure_hard_stop_can_force_mission_failed(monkeypatch) -> Non
 
 def test_route_after_act_prefers_judge_verdict_kind() -> None:
     assert route_after_act({"task_state": {"judge_verdict": {"kind": "plan"}}}) == "next_step_node"
-    assert route_after_act({"task_state": {"judge_verdict": {"kind": "mission_success"}}}) == "end"
+    assert route_after_act({"task_state": {"judge_verdict": {"kind": "mission_success"}}}) == "respond_node"

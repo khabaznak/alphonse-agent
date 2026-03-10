@@ -388,18 +388,16 @@ def _schedule_proactive_intro(
 
 def _ok(*, result: dict[str, Any], metadata: dict[str, Any]) -> dict[str, Any]:
     return {
-        "status": "ok",
-        "result": result,
-        "error": None,
+        "output": result,
+        "exception": None,
         "metadata": metadata,
     }
 
 
 def _failed(*, code: str, message: str, metadata: dict[str, Any]) -> dict[str, Any]:
     return {
-        "status": "failed",
-        "result": None,
-        "error": {
+        "output": None,
+        "exception": {
             "code": str(code or "user_contact_tool_failed"),
             "message": str(message or "User contact operation failed"),
         },

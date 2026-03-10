@@ -207,12 +207,11 @@ class _FakeClock:
         _ = kwargs
         now = datetime(2026, 2, 14, 12, 0, 0, tzinfo=timezone.utc)
         return {
-            "status": "ok",
-            "result": {
+            "output": {
                 "time": now.isoformat(),
                 "timezone": "UTC",
             },
-            "error": None,
+            "exception": None,
             "metadata": {"tool": "getTime"},
         }
 
@@ -227,14 +226,13 @@ class _FakeReminder:
         message = str(kwargs.get("Message") or "")
         _ = kwargs
         return {
-            "status": "ok",
-            "result": {
+            "output": {
                 "reminder_id": "rem-test-1",
                 "fire_at": time,
                 "delivery_target": for_whom,
                 "message": message,
             },
-            "error": None,
+            "exception": None,
             "metadata": {"tool": "createReminder"},
         }
 
@@ -264,14 +262,13 @@ class _RecoverableReminder:
         if not str(message or "").strip():
             raise SchedulerToolError(code="missing_message", message="message is required", retryable=False)
         return {
-            "status": "ok",
-            "result": {
+            "output": {
                 "reminder_id": "rem-repaired-1",
                 "fire_at": time,
                 "delivery_target": for_whom,
                 "message": message,
             },
-            "error": None,
+            "exception": None,
             "metadata": {"tool": "createReminder"},
         }
 
@@ -280,9 +277,8 @@ class _FailingTool:
     def execute(self, **kwargs):  # noqa: ANN003
         _ = kwargs
         return {
-            "status": "failed",
-            "result": None,
-            "error": {
+            "output": None,
+                    "exception": {
                 "code": "asset_not_found",
                 "message": "asset_not_found",
                 "retryable": False,
@@ -295,9 +291,8 @@ class _FailingTool:
 class _ArgStrictTool:
     def execute(self, *, foo: str) -> dict[str, object]:
         return {
-            "status": "ok",
-            "result": {"foo": foo},
-            "error": None,
+            "output": {"foo": foo},
+            "exception": None,
             "metadata": {"tool": "echo_tool"},
         }
 
@@ -306,14 +301,13 @@ class _DomoticsExecuteConfirmedTool:
     def execute(self, **kwargs):  # noqa: ANN003
         _ = kwargs
         return {
-            "status": "ok",
-            "result": {
+            "output": {
                 "transport_ok": True,
                 "effect_applied_ok": True,
                 "readback_performed": True,
                 "readback_state": {"entity_id": "light.estudio", "state": "on"},
             },
-            "error": None,
+            "exception": None,
             "metadata": {"tool": "domotics.execute"},
         }
 
@@ -339,9 +333,8 @@ class _CaptureMcpCallTool:
             }
         )
         return {
-            "status": "ok",
-            "result": {"profile": profile, "operation": operation, "arguments": dict(arguments or {})},
-            "error": None,
+            "output": {"profile": profile, "operation": operation, "arguments": dict(arguments or {})},
+            "exception": None,
             "metadata": {"tool": "mcp_call"},
         }
 
@@ -505,15 +498,15 @@ def test_pdca_create_reminder_structured_failure_keeps_running() -> None:
     assert isinstance(plan, dict)
     steps = plan.get("steps")
     assert isinstance(steps, list)
-    assert steps[0].get("status") == "executed"
+    assert steps[0].get("status") == "failed"
     facts = next_state.get("facts")
     assert isinstance(facts, dict)
     fact = facts.get("step_1")
     assert isinstance(fact, dict)
     result = fact.get("result")
     assert isinstance(result, dict)
-    assert result.get("status") == "failed"
-    error = result.get("error")
+    assert result.get("exception") is not None
+    error = result.get("exception")
     assert isinstance(error, dict)
     assert error.get("code") == "time_expression_unresolvable"
 
@@ -557,15 +550,15 @@ def test_pdca_create_reminder_missing_fields_stays_failed() -> None:
     assert isinstance(plan, dict)
     steps = plan.get("steps")
     assert isinstance(steps, list)
-    assert steps[0].get("status") == "executed"
+    assert steps[0].get("status") == "failed"
     facts = next_state.get("facts")
     assert isinstance(facts, dict)
     fact = facts.get("step_1")
     assert isinstance(fact, dict)
     result = fact.get("result")
     assert isinstance(result, dict)
-    assert result.get("status") == "failed"
-    error = result.get("error")
+    assert result.get("exception") is not None
+    error = result.get("exception")
     assert isinstance(error, dict)
     assert error.get("code") == "missing_time"
     assert len(reminder.calls) == 1
@@ -606,8 +599,8 @@ def test_pdca_execute_maps_typeerror_to_structured_tool_failure() -> None:
     assert isinstance(fact, dict)
     result = fact.get("result")
     assert isinstance(result, dict)
-    assert result.get("status") == "failed"
-    error = result.get("error")
+    assert result.get("exception") is not None
+    error = result.get("exception")
     assert isinstance(error, dict)
     assert error.get("code") == "tool_execution_exception"
     details = error.get("details")
@@ -1041,9 +1034,9 @@ def test_pdca_next_step_prompt_includes_failure_diagnostics_for_remediation() ->
     task_state["facts"] = {
         "step_1": {
             "tool": "ssh_terminal",
-            "result": {
+            "output": {
                 "status": "failed",
-                "error": {
+                "exception": {
                     "code": "paramiko_not_installed",
                     "message": "paramiko_not_installed",
                     "details": {"stderr_preview": "ModuleNotFoundError: No module named 'paramiko'"},
@@ -1099,9 +1092,8 @@ def test_pdca_next_step_prompt_includes_mcp_live_tools_menu() -> None:
     task_state["facts"] = {
         "step_1": {
             "tool": "mcp_call",
-            "result": {
-                "status": "ok",
-                "result": {
+            "output": {
+                "output": {
                     "tools": [
                         {
                             "name": "navigate",
@@ -1135,7 +1127,7 @@ def test_pdca_next_step_prompt_includes_mcp_live_tools_menu() -> None:
 
     _ = next_step(state)
     prompt = llm.last_user_prompt
-    assert "## MCP Live Tools" in prompt
+    assert "## MCP Capabilities" in prompt
     assert "profile `chrome`" in prompt
     assert "`navigate`" in prompt
     assert "required_args: url" in prompt
@@ -1239,15 +1231,15 @@ def test_execute_step_handles_structured_tool_failure() -> None:
     steps = plan.get("steps")
     assert isinstance(steps, list)
     assert isinstance(steps[0], dict)
-    assert steps[0].get("status") == "executed"
+    assert steps[0].get("status") == "failed"
     facts = next_state.get("facts")
     assert isinstance(facts, dict)
     entry = facts.get("step_1")
     assert isinstance(entry, dict)
     result = entry.get("result")
     assert isinstance(result, dict)
-    assert result.get("status") == "failed"
-    error = result.get("error")
+    assert result.get("exception") is not None
+    error = result.get("exception")
     assert isinstance(error, dict)
     assert error.get("code") == "asset_not_found"
 
@@ -1345,7 +1337,7 @@ def test_execute_step_records_evidence_for_domotics_execute_confirmed() -> None:
     assert str(entry.get("tool") or "") == "domotics.execute"
     result = entry.get("result")
     assert isinstance(result, dict)
-    assert str(result.get("status") or "") == "ok"
+    assert result.get("exception") is None
 
 
 def test_respond_finalize_done_ignores_stale_pending_interaction() -> None:
@@ -1436,9 +1428,9 @@ def test_respond_finalize_failed_suppresses_apology_after_public_send() -> None:
                 "step_3": {
                     "step_id": "step_3",
                     "tool": "send_message",
-                    "status": "ok",
+                    "output": {"visibility": "public"},
+                    "exception": None,
                     "internal": False,
-                    "result_payload": {"visibility": "public"},
                 }
             },
         },
@@ -1484,7 +1476,8 @@ def test_respond_finalize_failed_emits_dispatched_event() -> None:
                 "step_1": {
                     "step_id": "step_1",
                     "tool": "local_audio_output_render",
-                    "status": "failed",
+                    "output": None,
+                    "exception": {"message": "render_failed"},
                     "internal": False,
                 }
             },
@@ -1529,7 +1522,7 @@ def test_execute_step_emits_presence_progress_from_planner_intent(monkeypatch: p
     class _FakeTool:
         def execute(self, **kwargs: object) -> dict[str, object]:
             _ = kwargs
-            return {"status": "ok", "result": {"ok": True}, "error": None, "metadata": {}}
+            return {"output": {"ok": True}, "exception": None, "metadata": {}}
 
     tool_registry.register("local_audio_output_render", _FakeTool())
     task_state = build_default_task_state()
@@ -1573,9 +1566,8 @@ def test_execute_step_accepts_canonical_send_message_from_planner_for_simple_con
         def execute(self, **kwargs: object) -> dict[str, object]:
             captured.append(dict(kwargs))
             return {
-                "status": "ok",
-                "result": {"message_id": "m-1", "delivery": "sent"},
-                "error": None,
+                "output": {"message_id": "m-1", "delivery": "sent"},
+                "exception": None,
                 "metadata": {"tool": "send_message"},
             }
 

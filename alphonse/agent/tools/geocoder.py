@@ -52,24 +52,39 @@ class GoogleGeocoderTool(GeocoderTool):
         status = str(data.get("status") or "")
         if status != "OK":
             return {
-                "status": status,
-                "error_message": data.get("error_message"),
-                "results": [],
+                "output": {
+                    "provider_status": status,
+                    "error_message": data.get("error_message"),
+                    "results": [],
+                },
+                "exception": {
+                    "message": str(data.get("error_message") or status or "geocode_failed"),
+                    "code": "geocode_failed",
+                },
+                "metadata": {"tool": "google_geocoder"},
             }
         results = data.get("results") or []
         if not results:
-            return {"status": status, "results": []}
+            return {
+                "output": {"provider_status": status, "results": []},
+                "exception": {"message": "no_results", "code": "geocode_no_results"},
+                "metadata": {"tool": "google_geocoder"},
+            }
         first = results[0]
         geometry = first.get("geometry") or {}
         location = geometry.get("location") or {}
         return {
-            "status": status,
-            "formatted_address": first.get("formatted_address"),
-            "place_id": first.get("place_id"),
-            "types": first.get("types") or [],
-            "location": {
-                "lat": location.get("lat"),
-                "lng": location.get("lng"),
+            "output": {
+                "provider_status": status,
+                "formatted_address": first.get("formatted_address"),
+                "place_id": first.get("place_id"),
+                "types": first.get("types") or [],
+                "location": {
+                    "lat": location.get("lat"),
+                    "lng": location.get("lng"),
+                },
+                "raw": first,
             },
-            "raw": first,
+            "exception": None,
+            "metadata": {"tool": "google_geocoder"},
         }

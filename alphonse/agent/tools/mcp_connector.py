@@ -26,9 +26,8 @@ class McpInvocationError(Exception):
 
     def as_payload(self) -> dict[str, Any]:
         return {
-            "status": "failed",
-            "result": None,
-            "error": {
+            "output": None,
+        "exception": {
                 "code": self.code,
                 "message": self.message,
                 "retryable": False,
@@ -146,14 +145,22 @@ class McpConnector:
         metadata["mcp_command"] = command
         if not isinstance(outcome, dict):
             return {
-                "status": "failed",
-                "result": None,
-                "error": {"code": "mcp_connector_invalid_result", "message": "MCP connector returned invalid result"},
+                "output": None,
+        "exception": {"code": "mcp_connector_invalid_result", "message": "MCP connector returned invalid result"},
                 "metadata": metadata,
             }
-        error_payload = outcome.get("error") if isinstance(outcome.get("error"), dict) else None
-        result_payload = outcome.get("result") if isinstance(outcome.get("result"), dict) else {}
-        if str(outcome.get("status") or "").strip().lower() == "failed" and isinstance(error_payload, dict):
+        error_payload = (
+            outcome.get("exception")
+            if isinstance(outcome.get("exception"), dict)
+            else outcome.get("error") if isinstance(outcome.get("error"), dict) else None
+        )
+        result_payload = (
+            outcome.get("output")
+            if isinstance(outcome.get("output"), dict)
+            else outcome.get("result") if isinstance(outcome.get("result"), dict) else {}
+        )
+        has_exception = bool(error_payload)
+        if has_exception and isinstance(error_payload, dict):
             stderr_preview = str(result_payload.get("stderr") or "").strip()
             stdout_preview = str(result_payload.get("stdout") or "").strip()
             details = error_payload.get("details")
@@ -168,9 +175,8 @@ class McpConnector:
                 "details": merged_details,
             }
         return {
-            "status": str(outcome.get("status") or "failed"),
-            "result": outcome.get("result"),
-            "error": error_payload if error_payload is not None else outcome.get("error"),
+            "output": outcome.get("output") if "output" in outcome else outcome.get("result"),
+            "exception": error_payload if error_payload is not None else outcome.get("exception") or outcome.get("error"),
             "metadata": metadata,
         }
 
@@ -249,13 +255,12 @@ class McpConnector:
         if operation in {"list_tools", "discover_tools"}:
             self._touch_native_session(session.key)
             return {
-                "status": "ok",
-                "result": {
+                "output": {
                     "tools": tools,
                     "tool_names": tool_names,
                     "count": len(tool_names),
                 },
-                "error": None,
+                "exception": None,
                 "metadata": {
                     "tool": "mcp_call",
                     "policy_envelope": {
@@ -296,9 +301,8 @@ class McpConnector:
 
         self._touch_native_session(session.key)
         return {
-            "status": "ok",
-            "result": call_result,
-            "error": None,
+            "output": call_result,
+            "exception": None,
             "metadata": {
                 "tool": "mcp_call",
                 "policy_envelope": {

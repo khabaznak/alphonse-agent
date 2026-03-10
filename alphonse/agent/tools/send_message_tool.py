@@ -109,15 +109,14 @@ class SendMessageTool:
             return _map_send_error(exc)
 
         return {
-            "status": "ok",
-            "result": {
+            "output": {
                 "channel": channel or origin_channel,
                 "recipient": to,
                 "urgency": urgency,
                 "visibility": visibility or "public",
                 "outbound_intent": outbound_intent or "mission_public",
             },
-            "error": None,
+            "exception": None,
             "metadata": {"tool": "send_message"},
         }
 
@@ -188,12 +187,28 @@ def _latest_user_search_rows(state: dict[str, Any]) -> list[dict[str, Any]]:
     for _, entry in reversed(list(facts.items())):
         if not isinstance(entry, dict):
             continue
-        if str(entry.get("tool") or "").strip() != "user_search":
+        tool_name = str(entry.get("tool_name") or entry.get("tool") or "").strip()
+        if tool_name != "user_search":
             continue
+        payload: dict[str, Any] | None = None
+
         result = entry.get("result")
-        if not isinstance(result, dict):
-            continue
-        payload = result.get("result")
+        if isinstance(result, dict):
+            candidate = result.get("output")
+            if isinstance(candidate, dict):
+                payload = candidate
+            elif isinstance(entry.get("output"), dict):
+                payload = entry.get("output")
+
+        if payload is None:
+            output_entry = entry.get("output")
+            if isinstance(output_entry, dict):
+                candidate = output_entry.get("output")
+                if isinstance(candidate, dict):
+                    payload = candidate
+                else:
+                    payload = output_entry
+
         if not isinstance(payload, dict):
             continue
         users = payload.get("users")
@@ -270,9 +285,8 @@ def _cap_message(message: str, *, limit: int) -> str:
 
 def _failed(*, code: str, message: str) -> dict[str, Any]:
     return {
-        "status": "failed",
-        "result": None,
-        "error": {
+        "output": None,
+        "exception": {
             "code": str(code),
             "message": str(message),
             "retryable": False,

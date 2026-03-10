@@ -296,15 +296,29 @@ def _has_public_mission_send_success(task_state: dict[str, Any]) -> bool:
     for fact in facts.values():
         if not isinstance(fact, dict):
             continue
-        tool = str(fact.get("tool") or "").strip()
+        tool = str(fact.get("tool_name") or fact.get("tool") or "").strip()
         if tool not in {"send_message", "sendMessage"}:
             continue
         if bool(fact.get("internal")):
             continue
-        status = str(fact.get("status") or "").strip().lower()
-        if status != "ok":
+        exception_payload = fact.get("exception")
+        if exception_payload is None and isinstance(fact.get("result"), dict):
+            exception_payload = fact["result"].get("exception")
+        has_exception = False
+        if isinstance(exception_payload, str):
+            has_exception = bool(exception_payload.strip())
+        elif isinstance(exception_payload, dict):
+            has_exception = bool(exception_payload)
+        elif exception_payload is not None:
+            has_exception = True
+        if has_exception:
             continue
-        result_payload = fact.get("result_payload")
+        result_payload = fact.get("output")
+        if not isinstance(result_payload, dict):
+            result_payload = fact.get("result_payload")
+        if not isinstance(result_payload, dict) and isinstance(fact.get("result"), dict):
+            nested = fact.get("result")
+            result_payload = nested.get("output") if isinstance(nested.get("output"), dict) else None
         visibility = (
             str(result_payload.get("visibility") or "").strip().lower()
             if isinstance(result_payload, dict)

@@ -31,8 +31,8 @@ def test_local_audio_output_blocking_success_on_macos(monkeypatch) -> None:
     tool = LocalAudioOutputSpeakTool()
     result = tool.execute(text="Hola mundo", voice="Monica", blocking=True)
 
-    assert result["status"] == "ok"
-    assert (result.get("result") or {}).get("mode") == "blocking"
+    assert result["exception"] is None
+    assert (result.get("output") or {}).get("mode") == "blocking"
     assert captured["cmd"] == ["say", "-v", "Monica", "Hola mundo"]
 
 
@@ -61,8 +61,8 @@ def test_local_audio_output_non_blocking_success_on_macos(monkeypatch) -> None:
     tool = LocalAudioOutputSpeakTool()
     result = tool.execute(text="Hola", blocking=False)
 
-    assert result["status"] == "ok"
-    assert (result.get("result") or {}).get("mode") == "non_blocking"
+    assert result["exception"] is None
+    assert (result.get("output") or {}).get("mode") == "non_blocking"
     assert captured["cmd"] == ["say", "Hola"]
 
 
@@ -70,13 +70,13 @@ def test_local_audio_output_not_supported_non_macos(monkeypatch) -> None:
     monkeypatch.setattr(lao.platform, "system", lambda: "Linux")
     tool = LocalAudioOutputSpeakTool()
     result = tool.execute(text="Hola mundo")
-    assert result["status"] == "failed"
-    assert (result.get("error") or {}).get("code") == "local_audio_output_not_supported"
+    assert result["exception"] is not None
+    assert (result.get("exception") or {}).get("code") == "local_audio_output_not_supported"
 
 
 def test_local_audio_output_rejects_empty_text(monkeypatch) -> None:
     monkeypatch.setattr(lao.platform, "system", lambda: "Darwin")
     tool = LocalAudioOutputSpeakTool()
     result = tool.execute(text="   ")
-    assert result["status"] == "failed"
-    assert (result.get("error") or {}).get("code") == "text_required"
+    assert result["exception"] is not None
+    assert (result.get("exception") or {}).get("code") == "text_required"

@@ -24,7 +24,7 @@ class _FakeRegistry:
             def execute(self, *, value: str, state: dict | None = None):
                 _ = state
                 registry.called = True
-                return {"status": "ok", "result": {"echo": value}, "error": None, "metadata": {"tool": "dummy_tool"}}
+                return {"output": {"echo": value}, "exception": None, "metadata": {"tool": "dummy_tool"}}
 
         return _Tool()
 

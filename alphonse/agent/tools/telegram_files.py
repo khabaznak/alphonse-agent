@@ -116,9 +116,9 @@ class TranscribeTelegramAudioTool:
             file_id=file_id,
             sandbox_alias=sandbox_alias,
         )
-        if str(download.get("status") or "") != "ok":
+        if download.get("exception") is not None:
             return download
-        payload = download.get("result") if isinstance(download.get("result"), dict) else {}
+        payload = download.get("output") if isinstance(download.get("output"), dict) else {}
         relative_path = str(payload.get("relative_path") or "").strip()
         alias = str(payload.get("sandbox_alias") or sandbox_alias or DEFAULT_SANDBOX_ALIAS).strip()
         if not relative_path:
@@ -424,9 +424,8 @@ def _language_code(language_hint: str | None) -> str | None:
 
 def _ok(tool: str, result: dict[str, Any]) -> dict[str, Any]:
     return {
-        "status": "ok",
-        "result": result,
-        "error": None,
+        "output": result,
+        "exception": None,
         "metadata": {"tool": tool},
     }
 
@@ -439,9 +438,8 @@ def _failed(
     details: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     return {
-        "status": "failed",
-        "result": None,
-        "error": {
+        "output": None,
+        "exception": {
             "code": message,
             "message": message,
             "retryable": bool(retryable),
@@ -460,9 +458,8 @@ def _failed_http(tool: str, response: requests.Response) -> dict[str, Any]:
     if preview:
         details["response_preview"] = preview
     return {
-        "status": "failed",
-        "result": None,
-        "error": {
+        "output": None,
+        "exception": {
             "code": code,
             "message": message,
             "retryable": False,

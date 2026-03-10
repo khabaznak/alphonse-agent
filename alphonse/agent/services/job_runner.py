@@ -242,8 +242,8 @@ def _brain_payload(*, job: JobSpec, user_id: str, current: datetime) -> dict[str
 
 def _summarize_output(output: Any) -> str:
     if isinstance(output, dict):
-        if output.get("status") == "failed":
-            return str(output.get("error") or "tool_failed")
-        text = output.get("result")
+        if output.get("exception") is not None:
+            return str(output.get("exception") or "tool_failed")
+        text = output.get("output")
         return str(text)[:240]
     return str(output)[:240]

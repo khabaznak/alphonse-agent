@@ -146,11 +146,11 @@ def route_after_act(state: dict[str, Any]) -> str:
         return "next_step_node"
     if verdict_kind == "mission_success":
         logger.info(
-            "task_mode route_after_act correlation_id=%s route=end verdict=%s",
+            "task_mode route_after_act correlation_id=%s route=respond_node verdict=%s",
             correlation_id(state),
             verdict_kind,
         )
-        return "end"
+        return "respond_node"
     if verdict_kind in {"conversation", "mission_failed"}:
         logger.info(
             "task_mode route_after_act correlation_id=%s route=respond_node verdict=%s",

@@ -33,9 +33,8 @@ def run_toggle_smoke(*, entity_id: str, duration_seconds: float = 10.0) -> dict[
 
     if not query_tool or not subscribe_tool or not execute_tool:
         return {
-            "status": "failed",
-            "result": None,
-            "error": {
+            "output": None,
+            "exception": {
                 "code": "domotics_tools_not_registered",
                 "message": "domotics.query/domotics.execute/domotics.subscribe must be registered",
                 "retryable": False,
@@ -82,8 +81,7 @@ def run_toggle_smoke(*, entity_id: str, duration_seconds: float = 10.0) -> dict[
     after = query_tool.execute(kind="state", entity_id=entity_id)
 
     return {
-        "status": "ok",
-        "result": {
+        "output": {
             "entity_id": entity_id,
             "before": before,
             "subscribe": subscribe_result,
@@ -92,7 +90,7 @@ def run_toggle_smoke(*, entity_id: str, duration_seconds: float = 10.0) -> dict[
             "after": after,
             "instructions": INSTRUCTIONS,
         },
-        "error": None,
+        "exception": None,
         "metadata": {"tool": "domotics.smoke_toggle"},
     }
 

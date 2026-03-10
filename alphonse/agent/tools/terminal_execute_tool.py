@@ -27,9 +27,8 @@ class TerminalExecuteTool:
         roots = _allowed_roots()
         if not roots:
             return {
-                "status": "failed",
-                "result": None,
-                "error": {
+                "output": None,
+        "exception": {
                     "code": "sandbox_roots_not_configured",
                     "message": "No enabled sandbox directories found. Configure sandbox dirs in nerve-db.",
                 },

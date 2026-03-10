@@ -58,8 +58,8 @@ def test_register_from_contact_requires_admin(tmp_path: Path, monkeypatch) -> No
     tool = UserRegisterFromContactTool()
     result = tool.execute(state=_state_with_contact(sender_telegram_id="111", contact_telegram_id="222"))
 
-    assert result["status"] == "failed"
-    assert result["error"]["code"] == "permission_denied"
+    assert result["exception"] is not None
+    assert result["exception"]["code"] == "permission_denied"
 
 
 def test_register_from_contact_admin_schedules_intro(tmp_path: Path, monkeypatch) -> None:
@@ -85,8 +85,8 @@ def test_register_from_contact_admin_schedules_intro(tmp_path: Path, monkeypatch
         state=_state_with_contact(sender_telegram_id="111", contact_telegram_id="222"),
     )
 
-    assert result["status"] == "ok"
-    payload = result["result"]
+    assert result["exception"] is None
+    payload = result["output"]
     assert payload["telegram_user_id"] == "222"
     assert payload["scheduled_intro_signal_id"]
 
@@ -147,8 +147,8 @@ def test_remove_from_contact_deactivates_user(tmp_path: Path, monkeypatch) -> No
         }
     )
 
-    assert result["status"] == "ok"
-    assert result["result"]["deactivated"] is True
+    assert result["exception"] is None
+    assert result["output"]["deactivated"] is True
     user = users_store.get_user("u-target")
     assert user
     assert user["is_active"] is False
@@ -185,5 +185,5 @@ def test_register_from_contact_admin_fallbacks_to_channel_target(tmp_path: Path,
         }
     )
 
-    assert result["status"] == "ok"
-    assert result["result"]["telegram_user_id"] == "222"
+    assert result["exception"] is None
+    assert result["output"]["telegram_user_id"] == "222"

@@ -51,8 +51,8 @@ def test_stt_transcribe_tool_transcribes_by_asset_id(tmp_path: Path, monkeypatch
     tool = SttTranscribeTool(model="tiny")
     result = tool.execute(asset_id=asset_id, language_hint="es-MX")
 
-    assert result["status"] == "ok"
-    payload = result.get("result")
+    assert result["exception"] is None
+    payload = result.get("output")
     assert isinstance(payload, dict)
     assert payload.get("asset_id") == asset_id
     assert payload.get("text") == "hola mundo"
@@ -64,8 +64,8 @@ def test_stt_transcribe_tool_transcribes_by_asset_id(tmp_path: Path, monkeypatch
 def test_stt_transcribe_tool_fails_for_missing_asset() -> None:
     tool = SttTranscribeTool()
     result = tool.execute(asset_id="missing-asset-id")
-    assert result["status"] == "failed"
-    error = result.get("error")
+    assert result["exception"] is not None
+    error = result.get("exception")
     assert isinstance(error, dict)
     assert error.get("code") == "asset_not_found"
     assert error.get("retryable") is False

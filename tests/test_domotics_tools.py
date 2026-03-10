@@ -75,8 +75,8 @@ def test_domotics_query_tool(monkeypatch) -> None:
     tool = DomoticsQueryTool()
     result = tool.execute(kind="state", entity_id="light.kitchen")
 
-    assert result["status"] == "ok"
-    assert (result["result"] or {}).get("item", {}).get("entity_id") == "light.kitchen"
+    assert result["exception"] is None
+    assert (result["output"] or {}).get("item", {}).get("entity_id") == "light.kitchen"
 
 
 def test_domotics_execute_tool(monkeypatch) -> None:
@@ -88,8 +88,8 @@ def test_domotics_execute_tool(monkeypatch) -> None:
     tool = DomoticsExecuteTool()
     result = tool.execute(domain="light", service="turn_on", target={"entity_id": "light.kitchen"})
 
-    assert result["status"] == "ok"
-    assert (result["result"] or {}).get("transport_ok") is True
+    assert result["exception"] is None
+    assert (result["output"] or {}).get("transport_ok") is True
 
 
 def test_domotics_execute_marks_entity_unavailable_as_non_retryable(monkeypatch) -> None:
@@ -101,8 +101,8 @@ def test_domotics_execute_marks_entity_unavailable_as_non_retryable(monkeypatch)
     tool = DomoticsExecuteTool()
     result = tool.execute(domain="light", service="turn_on", target={"entity_id": "light.kitchen"})
 
-    assert result["status"] == "failed"
-    error = result.get("error")
+    assert result["exception"] is not None
+    error = result.get("exception")
     assert isinstance(error, dict)
     assert error.get("code") == "entity_unavailable"
     assert error.get("retryable") is False
@@ -117,5 +117,5 @@ def test_domotics_subscribe_tool(monkeypatch) -> None:
     tool = DomoticsSubscribeTool()
     result = tool.execute(duration_seconds=0.5)
 
-    assert result["status"] == "ok"
-    assert (result["result"] or {}).get("event_count", 0) >= 1
+    assert result["exception"] is None
+    assert (result["output"] or {}).get("event_count", 0) >= 1

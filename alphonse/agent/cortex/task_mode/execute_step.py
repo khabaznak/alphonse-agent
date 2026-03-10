@@ -102,12 +102,11 @@ def _record_planner_output_error(
         step_id=step_id,
         tool_name="planner_output",
         args={},
-        result={
-            "error": {
-                "code": error_code,
-                "raw_error": raw_error,
-                "details": details,
-            },
+        output=None,
+        exception={
+            "code": error_code,
+            "raw_error": raw_error,
+            "details": details,
         },
     )
     fact_bucket[step_id or f"result_{len(fact_bucket) + 1}"] = fact_entry
@@ -224,24 +223,27 @@ def _execute_call_tool_step(
     )
     facts = task_state.get("facts")
     fact_bucket = dict(facts) if isinstance(facts, dict) else {}
-    result_payload = _serialize_result(result)
+    output_payload = _serialize_result(result.get("output")) if isinstance(result, dict) else None
+    exception_payload = _serialize_result(result.get("exception")) if isinstance(result, dict) else {"message": "unknown_tool_error"}
     fact_entry = _build_mission_fact_entry(
         step_id=step_id,
         tool_name=tool_name,
         args=params,
-        result=result_payload,
+        output=output_payload,
+        exception=exception_payload,
     )
     fact_bucket[step_id or f"result_{len(fact_bucket) + 1}"] = fact_entry
     task_state["facts"] = fact_bucket
-    result_status = str((result or {}).get("status") or "").strip().lower() if isinstance(result, dict) else ""
+    has_exception = _has_exception_payload(exception_payload)
     task_state["status"] = "running"
     if isinstance(current, dict):
-        current["status"] = "executed"
+        current["status"] = "failed" if has_exception else "executed"
+        current["failure_retryable"] = _exception_retryable(exception_payload)
     append_trace_event(
         task_state,
         {
             "type": "tool_executed",
-            "summary": f"Executed tool {tool_name} with reported_status={result_status or 'unknown'}.",
+            "summary": f"Executed tool {tool_name} with exception={'yes' if has_exception else 'no'}.",
             "correlation_id": corr,
         },
     )
@@ -251,7 +253,7 @@ def _execute_call_tool_step(
         current=current,
         tool_name=tool_name,
         args=params,
-        result=result if isinstance(result, dict) else {"status": "unknown"},
+        result=result if isinstance(result, dict) else {"output": None, "exception": {"message": "unknown_tool_error"}, "metadata": {}},
         correlation_id=corr,
     )
     record_plan_step_completion(
@@ -269,13 +271,23 @@ def _build_mission_fact_entry(
     step_id: str,
     tool_name: str,
     args: dict[str, Any],
-    result: Any,
+    output: Any,
+    exception: Any,
 ) -> dict[str, Any]:
+    redacted_args = _redact_sensitive(dict(args or {}))
     return {
         "step_id": step_id or None,
+        "tool_name": tool_name,
+        "params": redacted_args,
+        "output": _serialize_result(output),
+        "exception": _serialize_result(exception),
+        # Compatibility aliases during migration.
         "tool": tool_name,
-        "args": _redact_sensitive(dict(args or {})),
-        "result": _serialize_result(result),
+        "args": redacted_args,
+        "result": {
+            "output": _serialize_result(output),
+            "exception": _serialize_result(exception),
+        },
         "internal": False,
         "ts": datetime.now(timezone.utc).isoformat(),
     }
@@ -317,9 +329,8 @@ def _execute_tool_call(
                 "details": {"exception_type": type(exc).__name__},
             }
         return {
-            "status": "failed",
-            "result": None,
-            "error": _coerce_error(error_payload),
+            "output": None,
+            "exception": _coerce_error(error_payload),
             "metadata": {"tool": tool_name},
         }
     return _coerce_tool_result(tool_name=tool_name, raw_result=raw_result)
@@ -340,8 +351,30 @@ def _coerce_error(value: Any) -> dict[str, Any]:
         return {"code": code, "message": message, "retryable": retryable, "details": details}
     if isinstance(value, str):
         text = value.strip() or "tool_execution_error"
-        return {"code": text, "message": text, "retryable": False, "details": {}}
-    return {"code": "tool_execution_error", "message": "Tool execution failed", "retryable": False, "details": {}}
+        return {"message": text}
+    return {"message": "Tool execution failed"}
+
+
+def _has_exception_payload(value: Any) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return bool(value.strip())
+    if isinstance(value, dict):
+        if str(value.get("message") or "").strip():
+            return True
+        if str(value.get("code") or "").strip():
+            return True
+        return bool(value)
+    return True
+
+
+def _exception_retryable(value: Any) -> bool | None:
+    if not isinstance(value, dict):
+        return None
+    if "retryable" not in value:
+        return None
+    return bool(value.get("retryable"))
 
 
 def _serialize_result(result: Any) -> Any:

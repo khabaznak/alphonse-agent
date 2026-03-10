@@ -77,9 +77,8 @@ class LocalAudioOutputSpeakTool:
                     stderr,
                 )
                 return {
-                    "status": "failed",
-                    "result": None,
-                    "error": {
+                    "output": None,
+        "exception": {
                         "code": "tts_command_failed",
                         "message": "tts command failed",
                         "retryable": False,
@@ -345,9 +344,8 @@ def _watch_say_process(proc: subprocess.Popen[str], preview: str) -> None:
 
 def _ok(result: dict[str, Any], *, tool: str = "local_audio_output_speak") -> dict[str, Any]:
     return {
-        "status": "ok",
-        "result": result,
-        "error": None,
+        "output": result,
+        "exception": None,
         "metadata": {"tool": tool},
     }
 
@@ -360,9 +358,8 @@ def _failed(
     tool: str = "local_audio_output_speak",
 ) -> dict[str, Any]:
     return {
-        "status": "failed",
-        "result": None,
-        "error": {
+        "output": None,
+        "exception": {
             "code": str(code),
             "message": str(message),
             "retryable": False,

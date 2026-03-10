@@ -56,9 +56,8 @@ class SearchEpisodesTool:
             limit=max(1, int(limit or 100)),
         )
         return {
-            "status": "ok",
-            "result": {"user_id": uid, "hits": rows, "count": len(rows)},
-            "error": None,
+            "output": {"user_id": uid, "hits": rows, "count": len(rows)},
+            "exception": None,
             "metadata": {"tool": "search_episodes"},
         }
 
@@ -76,9 +75,8 @@ class GetMissionTool:
         service = MemoryService()
         mission = service.get_mission(uid, str(mission_id or ""))
         return {
-            "status": "ok",
-            "result": {"user_id": uid, "mission": mission},
-            "error": None,
+            "output": {"user_id": uid, "mission": mission},
+            "exception": None,
             "metadata": {"tool": "get_mission"},
         }
 
@@ -95,9 +93,8 @@ class ListActiveMissionsTool:
         service = MemoryService()
         rows = service.list_active_missions(uid)
         return {
-            "status": "ok",
-            "result": {"user_id": uid, "missions": rows, "count": len(rows)},
-            "error": None,
+            "output": {"user_id": uid, "missions": rows, "count": len(rows)},
+            "exception": None,
             "metadata": {"tool": "list_active_missions"},
         }
 
@@ -115,8 +112,7 @@ class GetWorkspacePointerTool:
         service = MemoryService()
         value = service.get_workspace_pointer(uid, str(key or ""))
         return {
-            "status": "ok",
-            "result": {"user_id": uid, "key": str(key or ""), "value": value},
-            "error": None,
+            "output": {"user_id": uid, "key": str(key or ""), "value": value},
+            "exception": None,
             "metadata": {"tool": "get_workspace_pointer"},
         }

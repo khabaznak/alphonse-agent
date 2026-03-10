@@ -80,9 +80,8 @@ class SttTranscribeTool:
 
 def _failed(error: str, *, retryable: bool, asset_id: str | None) -> dict[str, Any]:
     return {
-        "status": "failed",
-        "result": None,
-        "error": {
+        "output": None,
+        "exception": {
             "code": str(error or "stt_transcribe_failed"),
             "message": str(error or "stt_transcribe_failed"),
             "retryable": bool(retryable),
@@ -96,9 +95,8 @@ def _failed(error: str, *, retryable: bool, asset_id: str | None) -> dict[str, A
 
 def _ok(result: dict[str, Any]) -> dict[str, Any]:
     return {
-        "status": "ok",
-        "result": result,
-        "error": None,
+        "output": result,
+        "exception": None,
         "metadata": {"tool": "stt_transcribe"},
     }
 

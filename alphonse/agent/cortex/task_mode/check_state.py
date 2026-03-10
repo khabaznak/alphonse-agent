@@ -51,8 +51,7 @@ def evaluate_success_from_evidence(task_state: dict[str, Any]) -> dict[str, Any]
         if isinstance(entry, dict) and not bool(entry.get("internal"))
     ] if isinstance(facts, dict) else []
     latest = fact_entries[-1] if fact_entries else {}
-    latest_tool = str(latest.get("tool") or "").strip()
-    latest_status = str(latest.get("status") or "").strip().lower()
+    latest_tool = str(latest.get("tool_name") or latest.get("tool") or "").strip()
 
     if not fact_entries:
         return {
@@ -100,7 +99,7 @@ def evaluate_success_from_evidence(task_state: dict[str, Any]) -> dict[str, Any]
                 "outcome_kind": "task_completed",
                 "confidence": 0.93,
                 "missing_evidence": [],
-                "supporting_facts": ["send_message status=ok"],
+                "supporting_facts": ["send_message produced output with no exception"],
                 "final_response_hint": "Listo, el mensaje fue enviado correctamente.",
             }
 
@@ -111,18 +110,29 @@ def evaluate_success_from_evidence(task_state: dict[str, Any]) -> dict[str, Any]
             "outcome_kind": "",
             "confidence": 0.2,
             "missing_evidence": ["Latest mission step failed."],
-            "supporting_facts": [f"{latest_tool} status={latest_status or 'unknown'}"] if latest_tool else [],
+            "supporting_facts": [f"{latest_tool} returned exception evidence"] if latest_tool else [],
             "final_response_hint": "",
         }
 
-    if latest_tool and latest_status == "ok" and latest_tool not in {"send_message", "sendMessage"}:
+    if latest_tool and latest_tool not in {"send_message", "sendMessage"}:
+        exception = _fact_exception_payload(latest)
+        if _has_exception_payload(exception):
+            return {
+                "is_done": False,
+                "reason": "criteria_not_satisfied",
+                "outcome_kind": "",
+                "confidence": 0.25,
+                "missing_evidence": ["Acceptance criteria are not fully satisfied yet."],
+                "supporting_facts": [f"{latest_tool} returned exception evidence"],
+                "final_response_hint": "",
+            }
         return {
             "is_done": False,
             "reason": "evidence_present_but_not_terminal",
             "outcome_kind": "",
             "confidence": 0.6,
             "missing_evidence": ["Need explicit completion evidence against acceptance criteria."],
-            "supporting_facts": [f"{latest_tool} returned status ok"],
+            "supporting_facts": [f"{latest_tool} produced evidence but completion remains unproven"],
             "final_response_hint": "",
         }
 
@@ -132,7 +142,7 @@ def evaluate_success_from_evidence(task_state: dict[str, Any]) -> dict[str, Any]
         "outcome_kind": "",
         "confidence": 0.25,
         "missing_evidence": ["Acceptance criteria are not fully satisfied yet."],
-        "supporting_facts": [f"{latest_tool} status={latest_status or 'unknown'}"] if latest_tool else [],
+        "supporting_facts": [f"{latest_tool} evidence does not yet satisfy criteria"] if latest_tool else [],
         "final_response_hint": "",
     }
 
@@ -158,12 +168,18 @@ def _looks_like_message_task(*, goal: str, criteria: list[str]) -> bool:
 
 def _extract_jobs_count(fact_entries: list[dict[str, Any]]) -> int | None:
     for entry in reversed(fact_entries):
-        if str(entry.get("tool") or "").strip() != "job_list":
+        if str(entry.get("tool_name") or entry.get("tool") or "").strip() != "job_list":
             continue
-        payload = entry.get("result_payload")
+        payload = entry.get("output")
+        if not isinstance(payload, dict):
+            payload = entry.get("result_payload")
         if not isinstance(payload, dict):
             result = entry.get("result")
-            payload = result.get("result") if isinstance(result, dict) and isinstance(result.get("result"), dict) else {}
+            payload = (
+                result.get("output")
+                if isinstance(result, dict) and isinstance(result.get("output"), dict)
+                else {}
+            )
         if isinstance(payload, dict):
             jobs = payload.get("jobs")
             if isinstance(jobs, list):
@@ -182,10 +198,19 @@ def _extract_jobs_count(fact_entries: list[dict[str, Any]]) -> int | None:
 
 def _has_reminder_evidence(fact_entries: list[dict[str, Any]]) -> bool:
     for entry in reversed(fact_entries):
-        tool = str(entry.get("tool") or "").strip()
+        tool = str(entry.get("tool_name") or entry.get("tool") or "").strip()
         if tool not in {"create_reminder", "createReminder"}:
             continue
-        payload = entry.get("result_payload")
+        payload = entry.get("output")
+        if not isinstance(payload, dict):
+            payload = entry.get("result_payload")
+        if not isinstance(payload, dict):
+            result = entry.get("result")
+            payload = (
+                result.get("output")
+                if isinstance(result, dict) and isinstance(result.get("output"), dict)
+                else {}
+            )
         if isinstance(payload, dict) and str(payload.get("reminder_id") or "").strip() and str(payload.get("fire_at") or "").strip():
             return True
     return False
@@ -193,24 +218,42 @@ def _has_reminder_evidence(fact_entries: list[dict[str, Any]]) -> bool:
 
 def _has_message_delivery_evidence(fact_entries: list[dict[str, Any]]) -> bool:
     for entry in reversed(fact_entries):
-        tool = str(entry.get("tool") or "").strip()
+        tool = str(entry.get("tool_name") or entry.get("tool") or "").strip()
         if tool not in {"send_message", "sendMessage"}:
             continue
-        status = str(entry.get("status") or "").strip().lower()
-        if not status:
-            result = entry.get("result")
-            status = str(result.get("status") or "").strip().lower() if isinstance(result, dict) else ""
-        if status == "ok":
+        output = entry.get("output")
+        if output is None and isinstance(entry.get("result"), dict):
+            output = entry["result"].get("output")
+        exception = _fact_exception_payload(entry)
+        if not _has_exception_payload(exception) and output is not None:
             return True
     return False
 
 
 def _has_tool_failure(fact_entries: list[dict[str, Any]]) -> bool:
     latest = fact_entries[-1] if fact_entries else {}
-    status = str((latest or {}).get("status") or "").strip().lower()
-    if not status:
-        result = (latest or {}).get("result")
-        status = str(result.get("status") or "").strip().lower() if isinstance(result, dict) else ""
-        if not status and isinstance(result, dict) and isinstance(result.get("error"), dict):
-            status = "failed"
-    return status in {"failed", "error"}
+    return _has_exception_payload(_fact_exception_payload(latest if isinstance(latest, dict) else {}))
+
+
+def _fact_exception_payload(entry: dict[str, Any]) -> Any:
+    exception = entry.get("exception")
+    if exception is not None:
+        return exception
+    result = entry.get("result")
+    if isinstance(result, dict):
+        return result.get("exception")
+    return None
+
+
+def _has_exception_payload(value: Any) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return bool(value.strip())
+    if isinstance(value, dict):
+        if str(value.get("message") or "").strip():
+            return True
+        if str(value.get("code") or "").strip():
+            return True
+        return bool(value)
+    return True

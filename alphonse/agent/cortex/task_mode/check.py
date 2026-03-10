@@ -259,7 +259,7 @@ def _build_judge_user_prompt(*, state: dict[str, Any], task_state: dict[str, Any
         f"- {str(item.get('id') or '')}: {str(item.get('text') or '')} [{str(item.get('status') or 'pending')}]"
         for item in criteria
     ) or "- (none)"
-    fact_lines = _compact_fact_lines(task_state)
+    fact_lines = _render_fact_evidence_blocks(task_state)
     policy = render_utterance_policy_block(
         locale=state.get("locale"),
         tone=state.get("tone"),
@@ -582,7 +582,7 @@ def _update_zero_progress_state(task_state: dict[str, Any]) -> int:
     return streak
 
 
-def _compact_fact_lines(task_state: dict[str, Any]) -> str:
+def _render_fact_evidence_blocks(task_state: dict[str, Any]) -> str:
     facts = task_state.get("facts")
     if not isinstance(facts, dict) or not facts:
         return "- (none)"
@@ -590,9 +590,22 @@ def _compact_fact_lines(task_state: dict[str, Any]) -> str:
     for key, entry in list(facts.items())[-10:]:
         if not isinstance(entry, dict):
             continue
-        tool = str(entry.get("tool") or "").strip() or "unknown_tool"
-        status = str(entry.get("status") or "").strip().lower() or _status_from_result(entry.get("result"))
-        lines.append(f"- fact:{str(key)} tool={tool} status={status or 'unknown'}")
+        tool = str(entry.get("tool_name") or entry.get("tool") or "").strip() or "unknown_tool"
+        params = entry.get("params")
+        if not isinstance(params, dict):
+            raw_args = entry.get("args")
+            params = raw_args if isinstance(raw_args, dict) else {}
+        output = entry.get("output")
+        if output is None and isinstance(entry.get("result"), dict):
+            output = entry["result"].get("output")
+        exception = entry.get("exception")
+        if exception is None and isinstance(entry.get("result"), dict):
+            exception = entry["result"].get("exception")
+        lines.append(f"- fact:{str(key)}")
+        lines.append(f"  tool_name: {tool}")
+        lines.append(f"  params: {_compact_json(params)}")
+        lines.append(f"  output: {_compact_json(output)}")
+        lines.append(f"  exception: {_compact_json(exception)}")
     return "\n".join(lines) if lines else "- (none)"
 
 
@@ -605,17 +618,14 @@ def _latest_failure_signature(task_state: dict[str, Any]) -> str:
             continue
         if bool(entry.get("internal")):
             continue
-        status = str(entry.get("status") or "").strip().lower() or _status_from_result(entry.get("result"))
-        if status not in {"failed", "error"}:
+        exception = _fact_exception_payload(entry)
+        if not _has_exception_payload(exception):
             continue
-        tool = str(entry.get("tool") or "").strip()
-        error = entry.get("error") if isinstance(entry.get("error"), dict) else {}
-        if not error and isinstance(entry.get("result"), dict):
-            result_error = entry["result"].get("error")
-            error = result_error if isinstance(result_error, dict) else {}
-        code = str(error.get("code") or "").strip()
-        message = str(error.get("message") or "").strip()
-        raw = f"{tool}|{status}|{code}|{message}"
+        tool = str(entry.get("tool_name") or entry.get("tool") or "").strip()
+        params = entry.get("params")
+        if not isinstance(params, dict):
+            params = entry.get("args") if isinstance(entry.get("args"), dict) else {}
+        raw = f"{tool}|{_compact_json(params)}|{_compact_json(exception)}"
         return hashlib.sha1(raw.encode("utf-8")).hexdigest()
     return ""
 
@@ -629,28 +639,50 @@ def _latest_mission_fact_signature(task_state: dict[str, Any]) -> str:
             continue
         if bool(entry.get("internal")):
             continue
-        tool = str(entry.get("tool") or "").strip()
-        status = str(entry.get("status") or "").strip().lower() or _status_from_result(entry.get("result"))
-        payload = entry.get("result_payload")
-        if payload is None:
-            payload = entry.get("result")
-        try:
-            payload_text = json.dumps(payload, ensure_ascii=False, sort_keys=True)[:400]
-        except Exception:
-            payload_text = str(payload)[:400]
-        raw = f"{tool}|{status}|{payload_text}"
+        tool = str(entry.get("tool_name") or entry.get("tool") or "").strip()
+        params = entry.get("params")
+        if not isinstance(params, dict):
+            params = entry.get("args") if isinstance(entry.get("args"), dict) else {}
+        payload = entry.get("output")
+        if payload is None and isinstance(entry.get("result"), dict):
+            payload = entry["result"].get("output")
+        exception = _fact_exception_payload(entry)
+        raw = f"{tool}|{_compact_json(params)}|{_compact_json(payload)}|{_compact_json(exception)}"
         return hashlib.sha1(raw.encode("utf-8")).hexdigest()
     return ""
 
 
-def _status_from_result(result: Any) -> str:
+def _fact_exception_payload(entry: dict[str, Any]) -> Any:
+    exception = entry.get("exception")
+    if exception is not None:
+        return exception
+    result = entry.get("result")
     if isinstance(result, dict):
-        status = str(result.get("status") or "").strip().lower()
-        if status:
-            return status
-        if isinstance(result.get("error"), dict):
-            return "failed"
-    return ""
+        return result.get("exception")
+    return None
+
+
+def _has_exception_payload(value: Any) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return bool(value.strip())
+    if isinstance(value, dict):
+        if str(value.get("message") or "").strip():
+            return True
+        if str(value.get("code") or "").strip():
+            return True
+        return bool(value)
+    return True
+
+
+def _compact_json(value: Any) -> str:
+    if value is None:
+        return "null"
+    try:
+        return json.dumps(value, ensure_ascii=False, sort_keys=True)[:500]
+    except Exception:
+        return str(value)[:500]
 
 
 def _next_criterion_id(existing: list[dict[str, Any]]) -> str:

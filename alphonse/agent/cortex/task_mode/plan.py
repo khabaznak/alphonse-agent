@@ -240,14 +240,20 @@ def _latest_failure_diagnostics(task_state: dict[str, Any]) -> dict[str, Any]:
         tool_name = str(proposal.get("tool_name") or "").strip()
         args = proposal.get("args") if isinstance(proposal.get("args"), dict) else {}
         fact_entry = facts.get(step_id) if step_id else None
-        result = fact_entry.get("result") if isinstance(fact_entry, dict) and isinstance(fact_entry.get("result"), dict) else {}
-        error = result.get("error") if isinstance(result.get("error"), dict) else {}
+        output = fact_entry.get("output") if isinstance(fact_entry, dict) else None
+        exception = fact_entry.get("exception") if isinstance(fact_entry, dict) else None
+        if exception is None:
+            result = fact_entry.get("result") if isinstance(fact_entry, dict) and isinstance(fact_entry.get("result"), dict) else {}
+            exception = result.get("exception") if isinstance(result, dict) else None
+            output = result.get("output") if isinstance(result, dict) else output
+        error = exception if isinstance(exception, dict) else {"message": str(exception or "").strip()} if exception else {}
         return {
             "step_id": step_id,
             "tool_name": tool_name,
             "args": args,
             "error_code": str(error.get("code") or "").strip(),
             "error_message": str(error.get("message") or "").strip(),
+            "output_preview": str(output)[:280] if output is not None else "",
         }
     return {}
 
@@ -302,16 +308,32 @@ def _build_mcp_live_tools_menu(task_state: dict[str, Any]) -> str:
     for fact in reversed(entries):
         if not isinstance(fact, dict):
             continue
-        if str(fact.get("tool") or "").strip() != "mcp_call":
+        tool_name = str(fact.get("tool_name") or fact.get("tool") or "").strip()
+        if tool_name != "mcp_call":
             continue
-        result = fact.get("result") if isinstance(fact.get("result"), dict) else {}
-        if str(result.get("status") or "").strip().lower() != "ok":
+
+        exception = fact.get("exception")
+        output = fact.get("output")
+        metadata = fact.get("metadata")
+
+        if exception is None and isinstance(fact.get("result"), dict):
+            legacy_result = fact.get("result")
+            exception = legacy_result.get("exception")
+            output = legacy_result.get("output")
+            metadata = legacy_result.get("metadata")
+
+        if exception is not None:
             continue
-        metadata = result.get("metadata") if isinstance(result.get("metadata"), dict) else {}
+        metadata = metadata if isinstance(metadata, dict) else {}
+        payload = output if isinstance(output, dict) else {}
+        if isinstance(payload.get("output"), dict):
+            nested_metadata = payload.get("metadata")
+            if isinstance(nested_metadata, dict) and not metadata:
+                metadata = nested_metadata
+            payload = payload.get("output")
         requested_operation = str(metadata.get("mcp_requested_operation") or metadata.get("mcp_operation") or "").strip()
         if requested_operation not in {"list_tools", "discover_tools"}:
             continue
-        payload = result.get("result") if isinstance(result.get("result"), dict) else {}
         tools = payload.get("tools") if isinstance(payload.get("tools"), list) else []
         if not tools:
             continue

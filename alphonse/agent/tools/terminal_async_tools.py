@@ -221,12 +221,12 @@ def _normalize_cwd(*, cwd: str | None, roots: list[str]) -> str:
 
 
 def _ok(result: dict[str, Any]) -> dict[str, Any]:
-    return {"status": "ok", "result": result, "error": None}
+    return {"output": result, "exception": None, "metadata": {"tool": "terminal_async"}}
 
 
 def _failed(code: str, message: str) -> dict[str, Any]:
     return {
-        "status": "failed",
-        "result": None,
-        "error": {"code": str(code), "message": str(message)},
+        "output": None,
+        "exception": {"code": str(code), "message": str(message)},
+        "metadata": {"tool": "terminal_async"},
     }

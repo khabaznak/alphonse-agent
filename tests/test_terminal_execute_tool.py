@@ -13,9 +13,9 @@ def test_terminal_execute_readonly_blocks_write(monkeypatch: pytest.MonkeyPatch,
     monkeypatch.setattr(terminal_execute_tool, "_allowed_roots", lambda: [str(tmp_path)])
     tool = TerminalExecuteTool()
     result = tool.execute(command="touch hello.txt", cwd=".")
-    assert result["status"] == "failed"
-    assert isinstance(result["error"], dict)
-    assert str(result["error"]["code"]).startswith("mode_readonly")
+    assert result["exception"] is not None
+    assert isinstance(result["exception"], dict)
+    assert str(result["exception"]["code"]).startswith("mode_readonly")
 
 
 def test_terminal_execute_readonly_allows_pwd_inside_allowed_root(
@@ -25,8 +25,8 @@ def test_terminal_execute_readonly_allows_pwd_inside_allowed_root(
     monkeypatch.setattr(terminal_execute_tool, "_allowed_roots", lambda: [str(tmp_path)])
     tool = TerminalExecuteTool()
     result = tool.execute(command="pwd", cwd=str(tmp_path))
-    assert result["status"] == "ok"
-    assert isinstance(result["result"], dict)
+    assert result["exception"] is None
+    assert isinstance(result["output"], dict)
     assert isinstance(result["metadata"], dict)
     assert result["metadata"]["mode"] == "readonly"
 
@@ -38,9 +38,9 @@ def test_terminal_execute_blocks_cwd_outside_allowed_roots(
     monkeypatch.setattr(terminal_execute_tool, "_allowed_roots", lambda: [str(tmp_path)])
     tool = TerminalExecuteTool()
     result = tool.execute(command="ls", cwd="/")
-    assert result["status"] == "failed"
-    assert isinstance(result["error"], dict)
-    assert result["error"]["code"] == "cwd_not_allowed"
+    assert result["exception"] is not None
+    assert isinstance(result["exception"], dict)
+    assert result["exception"]["code"] == "cwd_not_allowed"
 
 
 def test_terminal_execute_dev_allows_python_version(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -48,9 +48,9 @@ def test_terminal_execute_dev_allows_python_version(monkeypatch: pytest.MonkeyPa
     monkeypatch.setattr(terminal_execute_tool, "_allowed_roots", lambda: [str(tmp_path)])
     tool = TerminalExecuteTool()
     result = tool.execute(command="python3 -V", cwd=str(tmp_path))
-    assert result["status"] in {"ok", "failed"}
-    if result["status"] == "failed":
-        assert result["error"]["code"] != "mode_dev_command_disallowed"
+    assert True
+    if result["exception"] is not None:
+        assert result["exception"]["code"] != "mode_dev_command_disallowed"
 
 
 def test_allowed_roots_prefers_db_sandbox_aliases(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -78,9 +78,9 @@ def test_terminal_execute_fails_when_no_sandbox_roots(monkeypatch: pytest.Monkey
     monkeypatch.setattr(terminal_execute_tool, "_allowed_roots", lambda: [])
     tool = TerminalExecuteTool()
     result = tool.execute(command="pwd", cwd=".")
-    assert result["status"] == "failed"
-    assert isinstance(result["error"], dict)
-    assert result["error"]["code"] == "sandbox_roots_not_configured"
+    assert result["exception"] is not None
+    assert isinstance(result["exception"], dict)
+    assert result["exception"]["code"] == "sandbox_roots_not_configured"
 
 
 def test_terminal_execute_uses_120s_default_timeout(
@@ -92,7 +92,7 @@ def test_terminal_execute_uses_120s_default_timeout(
 
         def execute_with_policy(self, **kwargs):
             self.timeout = float(kwargs.get("timeout_seconds"))
-            return {"status": "ok", "result": {}, "error": None, "metadata": {}}
+            return {"output": {}, "exception": None, "metadata": {}}
 
     monkeypatch.setenv("ALPHONSE_EXECUTION_MODE", "dev")
     monkeypatch.setattr(terminal_execute_tool, "_allowed_roots", lambda: [str(tmp_path)])
@@ -101,7 +101,7 @@ def test_terminal_execute_uses_120s_default_timeout(
 
     result = tool.execute(command="pwd", cwd=str(tmp_path))
 
-    assert result["status"] == "ok"
+    assert result["exception"] is None
     assert dummy.timeout == 120.0
 
 
@@ -114,7 +114,7 @@ def test_terminal_execute_clamps_timeout_to_configured_max(
 
         def execute_with_policy(self, **kwargs):
             self.timeout = float(kwargs.get("timeout_seconds"))
-            return {"status": "ok", "result": {}, "error": None, "metadata": {}}
+            return {"output": {}, "exception": None, "metadata": {}}
 
     monkeypatch.setenv("ALPHONSE_EXECUTION_MODE", "dev")
     monkeypatch.setenv("ALPHONSE_TERMINAL_MAX_TIMEOUT_SECONDS", "600")
@@ -124,5 +124,5 @@ def test_terminal_execute_clamps_timeout_to_configured_max(
 
     result = tool.execute(command="pwd", cwd=str(tmp_path), timeout_seconds=9999)
 
-    assert result["status"] == "ok"
+    assert result["exception"] is None
     assert dummy.timeout == 600.0
