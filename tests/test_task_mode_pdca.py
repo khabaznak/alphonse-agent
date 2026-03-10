@@ -1555,6 +1555,7 @@ def test_next_step_system_prompt_includes_simple_conversation_send_message_rule(
     assert 'tool_call.tool_name = "send_message"' in prompt
     assert "Never return direct free-text as planner output" in prompt
     assert "Produce exactly one canonical executable `tool_call`" in prompt
+    assert "Never use placeholder tokens for recipients" in prompt
 
 
 def test_execute_step_accepts_canonical_send_message_from_planner_for_simple_conversation() -> None:
@@ -1599,3 +1600,65 @@ def test_execute_step_accepts_canonical_send_message_from_planner_for_simple_con
     fact = facts.get("step_1")
     assert isinstance(fact, dict)
     assert fact.get("tool") == "send_message"
+
+
+def test_next_step_prompt_exposes_delivery_context_to_planner() -> None:
+    tool_registry = build_default_tool_registry()
+    next_step = build_next_step_node(tool_registry=tool_registry)
+    llm = _PromptCaptureLlm('{"tool_call":{"kind":"call_tool","tool_name":"job_list","args":{"limit":1}}}')
+    task_state = build_default_task_state()
+    task_state["goal"] = "send a message"
+    task_state["channel_type"] = "telegram"
+    task_state["channel_target"] = "8553589429"
+    task_state["message_id"] = "m-123"
+    state: dict[str, object] = {
+        "correlation_id": "corr-next-step-delivery-context",
+        "_llm_client": llm,
+        "task_state": task_state,
+    }
+
+    _ = next_step(state)
+    prompt = llm.last_user_prompt
+    assert '"delivery_context"' in prompt
+    assert '"channel_type": "telegram"' in prompt
+    assert '"channel_target": "8553589429"' in prompt
+    assert '"message_id": "m-123"' in prompt
+
+
+def test_next_step_repairs_placeholder_recipient_before_execute_step() -> None:
+    tool_registry = build_default_tool_registry()
+    next_step = build_next_step_node(tool_registry=tool_registry)
+    llm = _QueuedLlm(
+        [
+            '{"tool_call":{"kind":"call_tool","tool_name":"send_message","args":{"To":"current_channel_target","Message":"Here is the answer.","Channel":"telegram"}}}',
+            '{"tool_call":{"kind":"call_tool","tool_name":"send_message","args":{"To":"8553589429","Message":"Here is the answer.","Channel":"telegram"}}}',
+        ]
+    )
+    task_state = build_default_task_state()
+    task_state["goal"] = "answer user and send result"
+    task_state["channel_type"] = "telegram"
+    task_state["channel_target"] = "8553589429"
+    state: dict[str, object] = {
+        "correlation_id": "corr-next-step-placeholder-repair",
+        "_llm_client": llm,
+        "task_state": task_state,
+    }
+
+    updated = next_step(state)
+    next_state = updated.get("task_state")
+    assert isinstance(next_state, dict)
+    raw = next_state.get("pending_plan_raw")
+    assert isinstance(raw, dict)
+    tool_call = raw.get("tool_call")
+    assert isinstance(tool_call, dict)
+    assert tool_call.get("tool_name") == "send_message"
+    args = tool_call.get("args")
+    assert isinstance(args, dict)
+    assert args.get("To") == "8553589429"
+    plan = next_state.get("plan")
+    assert isinstance(plan, dict)
+    steps = plan.get("steps")
+    assert isinstance(steps, list) and steps
+    first = steps[0]
+    assert isinstance(first, dict)
+    assert str(first.get("raw_source") or "").endswith(".repair")

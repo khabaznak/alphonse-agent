@@ -6,6 +6,7 @@ from typing import Any, Callable
 from alphonse.agent.cognition.tool_schemas import llm_tool_schemas
 from alphonse.agent.cortex.llm_output.json_parse import parse_json_object
 from alphonse.agent.cortex.task_mode.prompt_templates import NEXT_STEP_SYSTEM_PROMPT
+from alphonse.agent.cortex.task_mode.prompt_templates import NEXT_STEP_REPAIR_USER_TEMPLATE
 from alphonse.agent.cortex.task_mode.prompt_templates import NEXT_STEP_USER_TEMPLATE
 from alphonse.agent.cortex.task_mode.prompt_templates import render_pdca_prompt
 from alphonse.agent.session.day_state import render_recent_conversation_block
@@ -54,8 +55,32 @@ def build_next_step_node_impl(
     )
 
     candidate_dict = _extract_candidate_dict(raw_candidate)
+    validation_error = _validate_candidate(candidate_dict=candidate_dict, tool_registry=tool_registry)
+    if isinstance(validation_error, dict) and bool(validation_error.get("retryable_repair")):
+        repair_prompt = _build_repair_prompt(
+            original_user_prompt=user_prompt,
+            validation_error=validation_error,
+        )
+        repaired_raw, repaired_source = _request_raw_candidate(
+            llm_client=llm_client,
+            system_prompt=NEXT_STEP_SYSTEM_PROMPT,
+            user_prompt=repair_prompt,
+            tool_registry=tool_registry,
+        )
+        repaired_candidate = _extract_candidate_dict(repaired_raw)
+        repaired_validation_error = _validate_candidate(
+            candidate_dict=repaired_candidate,
+            tool_registry=tool_registry,
+        )
+        if repaired_validation_error is None:
+            raw_candidate = repaired_raw
+            candidate_dict = repaired_candidate
+            source = f"{repaired_source}.repair"
+        else:
+            task_state["planner_error_last"] = dict(repaired_validation_error)
+    else:
+        task_state.pop("planner_error_last", None)
     task_state["pending_plan_raw"] = {"tool_call": candidate_dict} if isinstance(candidate_dict, dict) else raw_candidate
-    task_state.pop("planner_error_last", None)
 
     step_id = next_step_id(task_state)
     step_entry = {
@@ -176,7 +201,7 @@ def _request_raw_candidate(
 def _build_planner_user_prompt(*, state: dict[str, Any], task_state: dict[str, Any], tool_registry: Any) -> str:
     mcp_capability_menu, _ = _build_mcp_capability_menu()
     mcp_live_tools_menu = _build_mcp_live_tools_menu(task_state)
-    working_view = _build_working_state_view(task_state)
+    working_view = _build_working_state_view(state=state, task_state=task_state)
     injected_blocks: list[str] = []
     philosophy = str(state.get("philosophy_block") or "").strip()
     soul = str(state.get("soul_block") or "").strip()
@@ -209,7 +234,7 @@ def _build_planner_user_prompt(*, state: dict[str, Any], task_state: dict[str, A
     )
 
 
-def _build_working_state_view(task_state: dict[str, Any]) -> dict[str, Any]:
+def _build_working_state_view(*, state: dict[str, Any], task_state: dict[str, Any]) -> dict[str, Any]:
     facts = task_state.get("facts")
     relevant_facts = dict(facts) if isinstance(facts, dict) else {}
     if len(relevant_facts) > 8:
@@ -219,10 +244,76 @@ def _build_working_state_view(task_state: dict[str, Any]) -> dict[str, Any]:
         "goal": str(task_state.get("goal") or "").strip(),
         "acceptance_criteria": task_state.get("acceptance_criteria") if isinstance(task_state.get("acceptance_criteria"), list) else [],
         "relevant_facts": relevant_facts,
+        "delivery_context": {
+            "channel_type": _first_non_empty(task_state.get("channel_type"), state.get("channel_type")),
+            "channel_target": _first_non_empty(task_state.get("channel_target"), state.get("channel_target")),
+            "message_id": _first_non_empty(task_state.get("message_id"), state.get("message_id")),
+        },
         "latest_failure_diagnostics": _latest_failure_diagnostics(task_state),
         "execution_eval": task_state.get("execution_eval") if isinstance(task_state.get("execution_eval"), dict) else {},
         "repair_attempts": int(task_state.get("repair_attempts") or 0),
         "pending_question": str(task_state.get("next_user_question") or "").strip() or None,
+    }
+
+
+def _first_non_empty(*values: Any) -> str | None:
+    for value in values:
+        rendered = str(value or "").strip()
+        if rendered:
+            return rendered
+    return None
+
+
+def _build_repair_prompt(*, original_user_prompt: str, validation_error: dict[str, Any]) -> str:
+    errors = validation_error.get("errors")
+    lines: list[str] = []
+    if isinstance(errors, list):
+        for item in errors:
+            text = str(item or "").strip()
+            if text:
+                lines.append(f"- {text}")
+    if not lines:
+        lines.append("- Candidate tool call failed validation.")
+    return render_pdca_prompt(
+        NEXT_STEP_REPAIR_USER_TEMPLATE,
+        {
+            "ORIGINAL_USER_PROMPT": str(original_user_prompt or "").strip(),
+            "PARSE_ERROR_TYPE": str(validation_error.get("code") or "planner_candidate_invalid"),
+            "VALIDATION_ERRORS_LINES": "\n".join(lines),
+        },
+    )
+
+
+def _validate_candidate(*, candidate_dict: dict[str, Any] | None, tool_registry: Any) -> dict[str, Any] | None:
+    if not isinstance(candidate_dict, dict):
+        return None
+    tool_name = str(candidate_dict.get("tool_name") or "").strip()
+    args = candidate_dict.get("args") if isinstance(candidate_dict.get("args"), dict) else {}
+    _ = tool_registry
+    errors: list[str] = []
+    if not tool_name:
+        return None
+    if tool_name in {"send_message", "send_voice_note"}:
+        target = str(args.get("To") or "").strip()
+        if _is_placeholder_target(target):
+            errors.append("Message recipient 'To' must be a concrete channel target; placeholders are not allowed.")
+    if errors:
+        return {"code": "planner_candidate_invalid", "errors": errors, "retryable_repair": True}
+    return None
+
+
+def _is_placeholder_target(value: str) -> bool:
+    rendered = str(value or "").strip().lower()
+    if not rendered:
+        return True
+    return rendered in {
+        "current_channel_target",
+        "current_target",
+        "channel_target",
+        "current_channel",
+        "target",
+        "recipient",
+        "current_user",
     }
 
 
