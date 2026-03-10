@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from alphonse.agent.cortex.nodes.task_mode import task_mode_entry_node
-from alphonse.agent.cortex.graph import CortexGraph
 from alphonse.agent.cortex.task_mode.pdca import build_next_step_node
 from alphonse.agent.cortex.task_mode.pdca import check_node
 from alphonse.agent.tools.registry import build_default_tool_registry
@@ -18,22 +17,14 @@ class _FakeLlm:
 
 
 def test_task_route_initializes_task_state() -> None:
-    llm = _FakeLlm(
-        '{"route":"tool_plan","intent":"meta.query","confidence":0.82,'
-        '"reply_text":"","clarify_question":""}'
-    )
-    runner = CortexGraph().build().compile()
-    result = runner.invoke(
-        {
-            "chat_id": "123",
-            "channel_type": "telegram",
-            "channel_target": "123",
-            "last_user_message": "What can you do?",
-            "correlation_id": "corr-task-entry",
-            "_llm_client": llm,
-        }
-    )
-
+    state = {
+        "chat_id": "123",
+        "channel_type": "telegram",
+        "channel_target": "123",
+        "last_user_message": "What can you do?",
+        "correlation_id": "corr-task-entry",
+    }
+    result = task_mode_entry_node(state)
     task_state = result.get("task_state")
     assert isinstance(task_state, dict)
     assert task_state.get("mode") == "task"

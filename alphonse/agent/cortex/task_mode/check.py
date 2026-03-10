@@ -5,7 +5,9 @@ import json
 import os
 from typing import Any
 
+from alphonse.agent.cognition.prompt_templates_runtime import CHECK_JUDGE_USER_TEMPLATE
 from alphonse.agent.cognition.prompt_templates_runtime import CHECK_SYSTEM_PROMPT
+from alphonse.agent.cognition.prompt_templates_runtime import render_prompt_template
 from alphonse.agent.cognition.utterance_policy import render_utterance_policy_block
 from alphonse.agent.cortex.llm_output.json_parse import parse_json_object
 from alphonse.agent.cortex.task_mode.task_state_helpers import append_trace_event
@@ -22,6 +24,12 @@ _PLANNER_INVALID_BUDGET_DEFAULT = 2
 
 _CASE_TYPES = {"new_request", "execution_review", "task_resumption"}
 _VERDICT_KINDS = {"conversation", "plan", "mission_success", "mission_failed"}
+
+
+class JudgePromptTemplateError(RuntimeError):
+    def __init__(self, *, template_id: str, message: str) -> None:
+        super().__init__(message)
+        self.template_id = template_id
 
 
 def check_node_impl(
@@ -69,11 +77,40 @@ def check_node_impl(
                 "correlation_id": corr,
             },
         )
-    if planner_invalid_streak > _planner_invalid_budget():
+    repeated_failure_streak = _update_repeated_failure_signature(task_state)
+    zero_progress_streak = _update_zero_progress_state(task_state)
+
+    try:
+        verdict = run_judge(
+            state=state,
+            task_state=task_state,
+            case_type=case_type,
+            diagnostic_context={
+                "planner_invalid_streak": planner_invalid_streak,
+                "planner_invalid_budget": _planner_invalid_budget(),
+                "repeated_failure_signature_streak": repeated_failure_streak,
+                "repeated_failure_signature_budget": _repeated_failure_budget(),
+                "zero_progress_streak": zero_progress_streak,
+                "zero_progress_budget": _zero_progress_budget(),
+            },
+        )
+    except JudgePromptTemplateError as exc:
+        log_task_event(
+            logger=logger,
+            state=state,
+            task_state=task_state,
+            node="check_node",
+            event="judge.prompt_template.failed",
+            level="error",
+            error_code="judge_prompt_template_failed",
+            template_id=exc.template_id,
+            error_message=str(exc),
+            cycle=cycle,
+        )
         verdict = _mission_failed_verdict(
             case_type=case_type,
-            reason="Planner output remained invalid beyond retry budget.",
-            failure_class="invalid_planner_output",
+            reason="The templating system failed. Please contact the admin.",
+            failure_class="judge_prompt_template_failed",
             retry_exhausted=True,
         )
         return _finalize_check_cycle(
@@ -85,24 +122,6 @@ def check_node_impl(
             corr=corr,
             cycle=cycle,
         )
-
-    hard_stop = _deterministic_hard_stop(task_state=task_state, case_type=case_type)
-    if isinstance(hard_stop, dict):
-        return _finalize_check_cycle(
-            state=state,
-            task_state=task_state,
-            verdict=hard_stop,
-            logger=logger,
-            log_task_event=log_task_event,
-            corr=corr,
-            cycle=cycle,
-        )
-
-    verdict = run_judge(
-        state=state,
-        task_state=task_state,
-        case_type=case_type,
-    )
     if not isinstance(verdict, dict):
         streak = int(task_state.get("judge_invalid_streak") or 0) + 1
         task_state["judge_invalid_streak"] = streak
@@ -173,6 +192,7 @@ def run_judge(
     state: dict[str, Any],
     task_state: dict[str, Any],
     case_type: str,
+    diagnostic_context: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     if case_type not in _CASE_TYPES:
         return None
@@ -180,7 +200,12 @@ def run_judge(
     if llm_client is None:
         return _fallback_judge_verdict(case_type=case_type, state=state, task_state=task_state)
 
-    user_prompt = _build_judge_user_prompt(state=state, task_state=task_state, case_type=case_type)
+    user_prompt = _build_judge_user_prompt(
+        state=state,
+        task_state=task_state,
+        case_type=case_type,
+        diagnostic_context=diagnostic_context,
+    )
     raw = _call_llm(llm_client=llm_client, system_prompt=CHECK_SYSTEM_PROMPT, user_prompt=user_prompt)
     parsed = parse_json_object(raw)
     if not isinstance(parsed, dict):
@@ -248,7 +273,13 @@ def apply_criteria_updates(
     return normalize_acceptance_criteria_records(out)
 
 
-def _build_judge_user_prompt(*, state: dict[str, Any], task_state: dict[str, Any], case_type: str) -> str:
+def _build_judge_user_prompt(
+    *,
+    state: dict[str, Any],
+    task_state: dict[str, Any],
+    case_type: str,
+    diagnostic_context: dict[str, Any] | None = None,
+) -> str:
     recent = str(state.get("recent_conversation_block") or "").strip()
     if not recent:
         session_state = state.get("session_state") if isinstance(state.get("session_state"), dict) else None
@@ -266,53 +297,34 @@ def _build_judge_user_prompt(*, state: dict[str, Any], task_state: dict[str, Any
         address_style=state.get("address_style"),
         channel_type=state.get("channel_type"),
     )
-    dynamic_contract = _dynamic_case_contract(case_type)
-    return (
-        "## ROLE\n"
-        "You are the CAPD Check Judge. Judge only. Do not plan or execute.\n\n"
-        "## POLICY\n"
-        f"{policy}\n\n"
-        "## CASE TYPE\n"
-        f"{case_type}\n\n"
-        "## CASE PROTOCOL\n"
-        f"{dynamic_contract}\n\n"
-        "## RECENT CONVERSATION\n"
-        f"{recent or '- (none)'}\n\n"
-        "## GOAL\n"
-        f"{str(task_state.get('goal') or '').strip()}\n\n"
-        "## ACCEPTANCE CRITERIA BASELINE\n"
-        f"{criteria_lines}\n\n"
-        "## FACT EVIDENCE SNAPSHOT\n"
-        f"{fact_lines}\n\n"
-        "## USER MESSAGE\n"
-        f"{str(state.get('last_user_message') or '').strip()}\n\n"
-        "## STRICT JSON OUTPUT\n"
-        "{\n"
-        '  "kind": "conversation|plan|mission_success|mission_failed",\n'
-        '  "case_type": "new_request|execution_review|task_resumption",\n'
-        '  "reason": "short reason",\n'
-        '  "confidence": 0.0,\n'
-        '  "criteria_updates": [{"op":"append","text":"..."},{"op":"mark_satisfied","criterion_id":"ac_1","evidence_refs":["fact:step_1"]}],\n'
-        '  "evidence_refs": ["fact:step_1"],\n'
-        '  "failure_class": null\n'
-        "}\n"
+    diagnostic = diagnostic_context if isinstance(diagnostic_context, dict) else {}
+    diagnostic_lines = (
+        f"- planner_invalid_streak: {int(diagnostic.get('planner_invalid_streak') or 0)} / "
+        f"{int(diagnostic.get('planner_invalid_budget') or _planner_invalid_budget())}\n"
+        f"- repeated_failure_signature_streak: {int(diagnostic.get('repeated_failure_signature_streak') or 0)} / "
+        f"{int(diagnostic.get('repeated_failure_signature_budget') or _repeated_failure_budget())}\n"
+        f"- zero_progress_streak: {int(diagnostic.get('zero_progress_streak') or 0)} / "
+        f"{int(diagnostic.get('zero_progress_budget') or _zero_progress_budget())}"
     )
-
-
-def _dynamic_case_contract(case_type: str) -> str:
-    if case_type == "new_request":
-        return (
-            "- Always produce PLAN verdict.\n"
-            "- Produce a global acceptance criteria baseline via criteria_updates append operations.\n"
-            "- Treat conversational asks as low-complexity goals but still PLAN."
+    try:
+        return render_prompt_template(
+            CHECK_JUDGE_USER_TEMPLATE,
+            {
+                "POLICY_BLOCK": policy,
+                "CASE_TYPE": case_type,
+                "RECENT_CONVERSATION": recent or "- (none)",
+                "GOAL": str(task_state.get("goal") or "").strip(),
+                "ACCEPTANCE_CRITERIA_BASELINE": criteria_lines,
+                "FACT_EVIDENCE_SNAPSHOT": fact_lines,
+                "USER_MESSAGE": str(state.get("last_user_message") or "").strip(),
+                "DIAGNOSTIC_BUDGET_CONTEXT": diagnostic_lines,
+            },
         )
-    return (
-        "- Review all facts against acceptance criteria.\n"
-        "- Mark satisfied criteria by id when evidence exists.\n"
-        "- Use mission_success only if all criteria are satisfied.\n"
-        "- Use mission_failed if clearly blocked or terminally failed."
-    )
-
+    except Exception as exc:
+        raise JudgePromptTemplateError(
+            template_id="check.judge.user.j2",
+            message=f"failed to render check judge template: {exc}",
+        ) from exc
 
 def _normalize_judge_payload(payload: dict[str, Any], *, case_type: str) -> dict[str, Any] | None:
     raw_kind = str(payload.get("kind") or "").strip().lower()
@@ -506,31 +518,6 @@ def post_check_route(verdict: dict[str, Any]) -> str:
     if kind == "plan":
         return "next_step_node"
     return "respond_node"
-
-
-def _deterministic_hard_stop(*, task_state: dict[str, Any], case_type: str) -> dict[str, Any] | None:
-    if case_type == "new_request":
-        return None
-
-    repeated = _update_repeated_failure_signature(task_state)
-    if repeated > _repeated_failure_budget():
-        return _mission_failed_verdict(
-            case_type=case_type,
-            reason="Repeated identical failure signature exceeded hard-stop limit.",
-            failure_class="repeated_failure_signature",
-            retry_exhausted=True,
-        )
-
-    zero_progress = _update_zero_progress_state(task_state)
-    if zero_progress > _zero_progress_budget():
-        return _mission_failed_verdict(
-            case_type=case_type,
-            reason="Zero-progress streak exceeded hard-stop limit.",
-            failure_class="zero_progress_streak",
-            retry_exhausted=True,
-        )
-
-    return None
 
 
 def _update_planner_invalid_streak(task_state: dict[str, Any]) -> int:

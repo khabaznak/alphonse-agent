@@ -66,6 +66,10 @@ CHECK_USER_TEMPLATE = _seed_text(
     "check.user.j2",
 )
 
+CHECK_JUDGE_USER_TEMPLATE = _seed_text(
+    "check.judge.user.j2",
+)
+
 CHECK_REPAIR_USER_TEMPLATE = _seed_text(
     "check.repair.user.j2",
 )

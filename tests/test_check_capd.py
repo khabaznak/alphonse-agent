@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import logging
+
 from alphonse.agent.cortex.task_mode.check import select_case_deterministically
+import alphonse.agent.cortex.task_mode.check as check_module
 from alphonse.agent.cortex.task_mode.pdca import check_node
 from alphonse.agent.cortex.task_mode.pdca import route_after_act
 from alphonse.agent.cortex.task_mode.state import build_default_task_state
@@ -16,6 +19,17 @@ class _QueuedLlm:
         if not self._responses:
             return ""
         return self._responses.pop(0)
+
+
+class _PromptCaptureLlm:
+    def __init__(self, response: str) -> None:
+        self._response = response
+        self.last_user_prompt = ""
+
+    def complete(self, system_prompt: str, user_prompt: str) -> str:
+        _ = system_prompt
+        self.last_user_prompt = user_prompt
+        return self._response
 
 
 def test_select_case_deterministic_mapping() -> None:
@@ -105,7 +119,7 @@ def test_execution_review_marks_criteria_and_reaches_success() -> None:
     assert verdict.get("kind") == "mission_success"
 
 
-def test_repeated_failure_hard_stop_can_force_mission_failed(monkeypatch) -> None:
+def test_repeated_failure_signature_is_advisory_and_does_not_force_mission_failed(monkeypatch) -> None:
     monkeypatch.setenv("ALPHONSE_CHECK_REPEATED_FAILURE_BUDGET", "1")
     tool_registry = build_default_tool_registry()
     llm = _QueuedLlm(
@@ -133,13 +147,71 @@ def test_repeated_failure_hard_stop_can_force_mission_failed(monkeypatch) -> Non
     assert isinstance(next_state, dict)
     verdict = next_state.get("judge_verdict")
     assert isinstance(verdict, dict)
+    assert verdict.get("kind") == "plan"
+    assert next_state.get("status") == "running"
+
+
+def test_check_judge_prompt_renders_from_template_with_diagnostic_context() -> None:
+    tool_registry = build_default_tool_registry()
+    llm = _PromptCaptureLlm(
+        '{"kind":"plan","case_type":"execution_review","reason":"continue","confidence":0.8,"criteria_updates":[],"evidence_refs":[],"failure_class":null}'
+    )
+    task_state = build_default_task_state()
+    task_state["check_provenance"] = "do"
+    task_state["facts"] = {
+        "step_1": {
+            "tool_name": "send_message",
+            "params": {"To": "current_channel_target"},
+            "output": None,
+            "exception": {"code": "unresolved_recipient", "message": "recipient could not be resolved"},
+        }
+    }
+    state = {"correlation_id": "corr-check-template-prompt", "_llm_client": llm, "task_state": task_state}
+
+    _ = check_node(state, tool_registry=tool_registry)
+    prompt = llm.last_user_prompt
+    assert "# DIAGNOSTIC BUDGET CONTEXT (ADVISORY, NON-AUTHORITATIVE)" in prompt
+    assert "planner_invalid_streak" in prompt
+    assert "repeated_failure_signature_streak" in prompt
+    assert "zero_progress_streak" in prompt
+
+
+def test_check_template_failure_mission_fails_with_admin_message(monkeypatch) -> None:
+    tool_registry = build_default_tool_registry()
+    llm = _QueuedLlm(
+        ['{"kind":"plan","case_type":"execution_review","reason":"continue","confidence":0.5,"criteria_updates":[],"evidence_refs":[],"failure_class":null}']
+    )
+    task_state = build_default_task_state()
+    task_state["check_provenance"] = "do"
+    state = {"correlation_id": "corr-check-template-fail", "_llm_client": llm, "task_state": task_state}
+
+    def _boom(template: str, variables: dict[str, object]) -> str:
+        _ = (template, variables)
+        raise RuntimeError("jinja exploded")
+
+    monkeypatch.setattr(check_module, "render_prompt_template", _boom)
+    emitted: list[dict[str, object]] = []
+
+    def _capture_log_task_event(**kwargs):
+        emitted.append(dict(kwargs))
+
+    out = check_module.check_node_impl(
+        state=state,
+        tool_registry=tool_registry,
+        logger=logging.getLogger("test.check"),
+        log_task_event=_capture_log_task_event,
+        wip_emit_every_cycles=1,
+    )
+    next_state = out.get("task_state")
+    assert isinstance(next_state, dict)
+    verdict = next_state.get("judge_verdict")
+    assert isinstance(verdict, dict)
     assert verdict.get("kind") == "mission_failed"
-    assert verdict.get("failure_class") == "repeated_failure_signature"
-    assert verdict.get("retry_exhausted") is True
-    last_error = next_state.get("last_validation_error")
-    assert isinstance(last_error, dict)
-    assert last_error.get("reason") == "repeated_failure_signature"
-    assert last_error.get("retry_exhausted") is True
+    assert verdict.get("failure_class") == "judge_prompt_template_failed"
+    reason = str(verdict.get("reason") or "")
+    assert "templating system failed" in reason
+    assert "contact the admin" in reason
+    assert any(str(item.get("event") or "") == "judge.prompt_template.failed" for item in emitted)
 
 
 def test_route_after_act_prefers_judge_verdict_kind() -> None:

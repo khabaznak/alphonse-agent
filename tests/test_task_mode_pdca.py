@@ -608,7 +608,7 @@ def test_pdca_execute_maps_typeerror_to_structured_tool_failure() -> None:
     assert details.get("exception_type") == "TypeError"
 
 
-def test_pdca_parse_failure_degrades_to_failed() -> None:
+def test_pdca_parse_failure_remains_judge_routed_and_does_not_hard_fail() -> None:
     tool_registry = build_default_tool_registry()
     next_step = build_next_step_node(tool_registry=tool_registry)
     llm = _QueuedLlm(["not-json output"])
@@ -630,7 +630,7 @@ def test_pdca_parse_failure_degrades_to_failed() -> None:
     assert next_state.get("status") == "running"
     assert int(next_state.get("planner_error_streak") or 0) == 1
     assert route_after_act({"task_state": next_state, "correlation_id": "corr-pdca-parse-fail"}) == "next_step_node"
-    # Budget exhausted on third invalid planner output.
+    # Repeated invalid planner outputs remain judge-routed (no deterministic hard-stop).
     state = _apply(state, next_step(state))
     state = _apply(state, execute_step_node(state, tool_registry=tool_registry))
     state = _apply(state, check_node(state, tool_registry=tool_registry))
@@ -643,7 +643,7 @@ def test_pdca_parse_failure_degrades_to_failed() -> None:
     assert next_state.get("next_user_question") is None
     last_error = next_state.get("last_validation_error")
     assert isinstance(last_error, dict)
-    assert last_error.get("reason") == "invalid_planner_output"
+    assert last_error.get("reason") == "judge_output_invalid"
     trace = next_state.get("trace")
     assert isinstance(trace, dict)
     recent = trace.get("recent")
@@ -931,10 +931,9 @@ def test_pdca_parse_failure_respects_configured_max_attempts(monkeypatch: pytest
     state = _apply(state, check_node(state, tool_registry=tool_registry))
     next_state = state["task_state"]
     assert isinstance(next_state, dict)
-    assert next_state.get("status") == "failed"
+    assert next_state.get("status") == "running"
     last_error = next_state.get("last_validation_error")
-    assert isinstance(last_error, dict)
-    assert last_error.get("reason") == "invalid_planner_output"
+    assert not isinstance(last_error, dict)
 
 
 def test_pdca_derives_acceptance_criteria_from_next_step_proposal() -> None:
