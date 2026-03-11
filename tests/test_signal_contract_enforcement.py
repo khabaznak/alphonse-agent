@@ -29,3 +29,15 @@ def test_bus_accepts_declared_signal_type_for_sense_source() -> None:
             correlation_id="c-1",
         )
     )
+
+
+def test_bus_accepts_timed_conscious_payload_for_timer_source() -> None:
+    bus = Bus()
+    bus.emit(
+        Signal(
+            type="timed_signal.conscious_payload",
+            payload={"schema_version": "1.0"},
+            source="timer",
+            correlation_id="c-2",
+        )
+    )

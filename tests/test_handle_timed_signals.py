@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from alphonse.agent.actions.handle_timed_signals import HandleTimedSignalsAction
+from alphonse.agent.nervous_system.senses.bus import Bus
 from alphonse.agent.nervous_system.senses.bus import Signal
 
 
@@ -39,6 +40,31 @@ def test_conscious_reminder_dispatch_prefers_message_text_over_internal_prompt()
     payload = emitted.payload if isinstance(emitted.payload, dict) else {}
     content = payload.get("content") if isinstance(payload.get("content"), dict) else {}
     assert str(content.get("text") or "") == "Hi alex"
+
+
+def test_conscious_reminder_dispatch_with_real_bus_contract() -> None:
+    action = HandleTimedSignalsAction()
+    bus = Bus()
+    signal = Signal(
+        type="timed_signal.fired",
+        payload={
+            "timed_signal_id": "tsig_2",
+            "mind_layer": "conscious",
+            "target": "8553589429",
+            "payload": {
+                "message_text": "Take a shower now.",
+                "delivery_target": "8553589429",
+            },
+        },
+        source="timer",
+        correlation_id="corr-reminder-real-bus",
+    )
+
+    result = action.execute({"signal": signal, "ctx": bus, "state": None, "outcome": None})
+    assert result.intention_key == "NOOP"
+    emitted = bus.get(timeout=0.1)
+    assert emitted is not None
+    assert emitted.type == "timed_signal.conscious_payload"
 
 
 def test_timer_fired_runs_jobs_reconcile_without_dispatch(monkeypatch) -> None:

@@ -40,6 +40,11 @@ class TimerSense(Sense):
     signals = [
         SignalSpec(key="timer.fired", name="Timer Fired", description="Periodic timer tick"),
         SignalSpec(key="timed_signal.fired", name="Timed Signal Fired", description="Timed signal fired"),
+        SignalSpec(
+            key="timed_signal.conscious_payload",
+            name="Timed Signal Conscious Payload",
+            description="Timed signal routed to conscious ingress",
+        ),
     ]
 
     def __init__(self) -> None:
