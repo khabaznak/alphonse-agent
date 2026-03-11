@@ -11,6 +11,7 @@ from alphonse.agent.nervous_system.pdca_queue_store import (
     update_pdca_task_status,
     upsert_pdca_task,
 )
+from alphonse.agent.session.day_state import render_recent_conversation_block
 
 
 def enqueue_pdca_slice(
@@ -71,6 +72,8 @@ def enqueue_pdca_slice(
             "tone": state.get("tone"),
             "address_style": state.get("address_style"),
             "timezone": state.get("timezone"),
+            "session_state": day_session,
+            "recent_conversation_block": render_recent_conversation_block(day_session),
         },
     }
     task_id = upsert_pdca_task(

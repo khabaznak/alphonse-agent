@@ -24,6 +24,12 @@ from alphonse.agent.nervous_system.pdca_queue_store import (
 from alphonse.agent.nervous_system.senses.bus import Signal as BusSignal
 from alphonse.agent.observability.log_manager import get_component_logger
 from alphonse.agent.observability.log_manager import get_log_manager
+from alphonse.agent.services.session_identity_resolution import resolve_assistant_session_message
+from alphonse.agent.session.day_state import build_next_session_state
+from alphonse.agent.session.day_state import commit_session_state
+from alphonse.agent.session.day_state import render_recent_conversation_block
+from alphonse.agent.session.day_state import resolve_day_session
+from alphonse.config import settings
 
 logger = get_component_logger("actions.handle_pdca_slice_request")
 _LOG = get_log_manager()
@@ -79,6 +85,7 @@ class HandlePdcaSliceRequestAction(Action):
 
         checkpoint = load_pdca_checkpoint(task_id)
         base_state = _base_state(task=task, checkpoint=checkpoint, correlation_id=correlation_id)
+        _inject_session_memory_context(base_state=base_state, task=task)
         _stamp_check_provenance_for_slice(base_state=base_state, signal=signal, checkpoint=checkpoint)
         incoming = _resolve_incoming_context(task=task, correlation_id=correlation_id)
         text = _resolve_slice_text(task=task, checkpoint=checkpoint, payload=payload)
@@ -142,6 +149,7 @@ class HandlePdcaSliceRequestAction(Action):
             invoke_state=invoke_state,
             correlation_id=correlation_id,
         )
+        invoke_state["_bus"] = context.get("ctx")
         if incoming is not None:
             invoke_state["_transition_sink"] = lambda event: emit_channel_transition_event(incoming, event)
         try:
@@ -189,6 +197,13 @@ class HandlePdcaSliceRequestAction(Action):
         conversation_key = str(task.get("conversation_key") or "").strip()
         if conversation_key:
             save_state(conversation_key, merged_state)
+        _update_day_session_memory(
+            task=task,
+            user_message=text,
+            reply_text=str(result.reply_text or ""),
+            cognition_state=cognition_state,
+            merged_state=merged_state,
+        )
 
         next_status = _next_status(cognition_state=cognition_state, reply_text=str(result.reply_text or ""))
         if next_status == "waiting_user":
@@ -269,6 +284,71 @@ def _base_state(
     out.setdefault("chat_id", conversation_key)
     out.setdefault("correlation_id", f"pdca:{task.get('task_id')}")
     return out
+
+
+def _inject_session_memory_context(*, base_state: dict[str, Any], task: dict[str, Any]) -> None:
+    owner_id = str(task.get("owner_id") or "").strip()
+    if not owner_id:
+        return
+    channel_type = str(base_state.get("channel_type") or "").strip() or "api"
+    timezone_name = str(base_state.get("timezone") or "").strip() or settings.get_timezone()
+    try:
+        day_session = resolve_day_session(
+            user_id=owner_id,
+            channel=channel_type,
+            timezone_name=timezone_name,
+        )
+    except Exception:
+        return
+    base_state["session_id"] = str(day_session.get("session_id") or "").strip() or base_state.get("session_id")
+    base_state["session_state"] = day_session
+    base_state["recent_conversation_block"] = render_recent_conversation_block(day_session)
+
+
+def _update_day_session_memory(
+    *,
+    task: dict[str, Any],
+    user_message: str,
+    reply_text: str,
+    cognition_state: dict[str, Any],
+    merged_state: dict[str, Any],
+) -> None:
+    owner_id = str(task.get("owner_id") or "").strip()
+    if not owner_id:
+        return
+    channel = str(merged_state.get("channel_type") or "").strip() or "api"
+    timezone_name = str(merged_state.get("timezone") or "").strip() or settings.get_timezone()
+    try:
+        day_session = resolve_day_session(
+            user_id=owner_id,
+            channel=channel,
+            timezone_name=timezone_name,
+        )
+        assistant_message = resolve_assistant_session_message(reply_text=reply_text, plans=[])
+        updated = build_next_session_state(
+            previous=day_session,
+            channel=channel,
+            user_message=str(user_message or ""),
+            assistant_message=assistant_message,
+            ability_state=cognition_state.get("ability_state")
+            if isinstance(cognition_state.get("ability_state"), dict)
+            else None,
+            task_state=cognition_state.get("task_state")
+            if isinstance(cognition_state.get("task_state"), dict)
+            else None,
+            planning_context=cognition_state.get("planning_context")
+            if isinstance(cognition_state.get("planning_context"), dict)
+            else None,
+            pending_interaction=merged_state.get("pending_interaction")
+            if isinstance(merged_state.get("pending_interaction"), dict)
+            else None,
+        )
+        commit_session_state(updated)
+        merged_state["session_id"] = str(updated.get("session_id") or "").strip() or merged_state.get("session_id")
+        merged_state["session_state"] = updated
+        merged_state["recent_conversation_block"] = render_recent_conversation_block(updated)
+    except Exception:
+        return
 
 
 def _resolve_slice_text(*, task: dict[str, Any], checkpoint: dict[str, Any] | None, payload: dict[str, Any]) -> str:
@@ -365,36 +445,39 @@ def _next_status(*, cognition_state: dict[str, Any], reply_text: str) -> str:
 
 
 def _upsert_task_after_slice(*, task: dict[str, Any], status: str, request_text: str, reply_text: str) -> None:
+    task_id = str(task.get("task_id") or "").strip()
+    latest = get_pdca_task(task_id) if task_id else None
+    base_task = latest if isinstance(latest, dict) else task
     now = datetime.now(timezone.utc)
     next_run_at = None
     if status == "queued":
         cooldown = _dispatch_cooldown_seconds()
         next_run_at = (now + timedelta(seconds=cooldown)).isoformat()
-    token_budget = task.get("token_budget_remaining")
+    token_budget = base_task.get("token_budget_remaining")
     tokens_used = _estimate_token_burn(request_text, reply_text)
     next_token_budget = int(token_budget) - tokens_used if token_budget is not None else None
-    failure_streak = int(task.get("failure_streak") or 0)
+    failure_streak = int(base_task.get("failure_streak") or 0)
     if status == "failed":
         failure_streak += 1
     else:
         failure_streak = 0
     upsert_pdca_task(
         {
-            "task_id": task.get("task_id"),
-            "owner_id": task.get("owner_id"),
-            "conversation_key": task.get("conversation_key"),
-            "session_id": task.get("session_id"),
+            "task_id": base_task.get("task_id"),
+            "owner_id": base_task.get("owner_id"),
+            "conversation_key": base_task.get("conversation_key"),
+            "session_id": base_task.get("session_id"),
             "status": status,
-            "priority": task.get("priority", 100),
+            "priority": base_task.get("priority", 100),
             "next_run_at": next_run_at,
-            "slice_cycles": task.get("slice_cycles", 5),
-            "max_cycles": task.get("max_cycles"),
-            "max_runtime_seconds": task.get("max_runtime_seconds"),
+            "slice_cycles": base_task.get("slice_cycles", 5),
+            "max_cycles": base_task.get("max_cycles"),
+            "max_runtime_seconds": base_task.get("max_runtime_seconds"),
             "token_budget_remaining": next_token_budget,
             "failure_streak": failure_streak,
-            "last_error": task.get("last_error"),
-            "metadata": task.get("metadata") if isinstance(task.get("metadata"), dict) else {},
-            "created_at": task.get("created_at"),
+            "last_error": base_task.get("last_error"),
+            "metadata": base_task.get("metadata") if isinstance(base_task.get("metadata"), dict) else {},
+            "created_at": base_task.get("created_at"),
         }
     )
 

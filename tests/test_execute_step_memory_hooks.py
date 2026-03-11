@@ -11,9 +11,8 @@ class _EchoTool:
     def execute(self, *, value: str, state: dict[str, Any] | None = None) -> dict[str, Any]:
         _ = state
         return {
-            "status": "ok",
-            "result": {"value": value},
-            "error": None,
+            "output": {"value": value},
+            "exception": None,
             "metadata": {"tool": "echo_tool"},
         }
 
@@ -23,9 +22,8 @@ class _InternalMessageTool:
         _ = state
         _ = recipient
         return {
-            "status": "ok",
-            "result": {"sent": True, "message": message},
-            "error": None,
+            "output": {"sent": True, "message": message},
+            "exception": None,
             "metadata": {"tool": "send_message"},
         }
 
@@ -35,9 +33,8 @@ class _AskQuestionTool:
         _ = state
         _ = question
         return {
-            "status": "ok",
-            "result": {"queued": True},
-            "error": None,
+            "output": {"queued": True},
+            "exception": None,
             "metadata": {"tool": "askQuestion"},
         }
 

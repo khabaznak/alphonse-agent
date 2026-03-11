@@ -13,6 +13,7 @@ from alphonse.agent.nervous_system.pdca_queue_store import (
     list_pdca_events,
     load_pdca_checkpoint,
     save_pdca_checkpoint,
+    update_pdca_task_metadata,
     upsert_pdca_task,
 )
 from alphonse.agent.nervous_system.senses.bus import Signal
@@ -128,6 +129,116 @@ def test_handle_pdca_slice_request_executes_and_persists_checkpoint(
     }
     assert "presence.phase_changed" in families
     assert "presence.progress" in families
+
+
+def test_handle_pdca_slice_request_injects_session_snapshot_for_plan_and_check(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db_path = tmp_path / "nerve-db"
+    monkeypatch.setenv("NERVE_DB_PATH", str(db_path))
+    apply_schema(db_path)
+
+    task_id = upsert_pdca_task(
+        {
+            "owner_id": "owner-session-1",
+            "conversation_key": "telegram:8553589429",
+            "status": "queued",
+            "metadata": {
+                "pending_user_text": "Need context",
+                "state": {
+                    "channel_type": "telegram",
+                    "channel_target": "8553589429",
+                    "timezone": "America/Mexico_City",
+                },
+            },
+        }
+    )
+
+    class _FakeResult:
+        reply_text = ""
+        plans = []
+        cognition_state = {"task_state": {"status": "queued", "cycle_index": 1}}
+        meta = {}
+
+    captured: dict[str, object] = {}
+
+    class _FakeGraph:
+        def invoke(self, state, text, *, llm_client=None):  # noqa: ANN001
+            _ = (text, llm_client)
+            captured["session_state"] = state.get("session_state")
+            captured["recent_conversation_block"] = state.get("recent_conversation_block")
+            return _FakeResult()
+
+    monkeypatch.setattr(hpsr, "_CORTEX_GRAPH", _FakeGraph())
+    monkeypatch.setattr(hpsr, "build_llm_client", lambda: None)
+
+    action = HandlePdcaSliceRequestAction()
+    signal = Signal(
+        type="pdca.slice.requested",
+        payload={"task_id": task_id, "correlation_id": "cid-session-1"},
+        source="pdca_queue_runner",
+    )
+    _ = action.execute({"signal": signal, "ctx": None})
+
+    assert isinstance(captured.get("session_state"), dict)
+    rendered = str(captured.get("recent_conversation_block") or "")
+    assert "RECENT CONVERSATION" in rendered
+
+
+def test_handle_pdca_slice_request_does_not_clobber_concurrent_incoming_metadata(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db_path = tmp_path / "nerve-db"
+    monkeypatch.setenv("NERVE_DB_PATH", str(db_path))
+    apply_schema(db_path)
+
+    task_id = upsert_pdca_task(
+        {
+            "owner_id": "owner-1",
+            "conversation_key": "chat-race",
+            "status": "queued",
+            "metadata": {
+                "pending_user_text": "old text",
+                "last_user_message_id": "100",
+            },
+        }
+    )
+
+    class _FakeResult:
+        reply_text = ""
+        plans = []
+        cognition_state = {"task_state": {"status": "queued", "cycle_index": 1}}
+        meta = {}
+
+    class _FakeGraph:
+        def invoke(self, state, text, *, llm_client=None):  # noqa: ANN001
+            _ = (state, text, llm_client)
+            task = get_pdca_task(task_id)
+            assert isinstance(task, dict)
+            metadata = dict(task.get("metadata") or {})
+            metadata["pending_user_text"] = "new text"
+            metadata["last_user_message_id"] = "999"
+            update_pdca_task_metadata(task_id=task_id, metadata=metadata)
+            return _FakeResult()
+
+    monkeypatch.setattr(hpsr, "_CORTEX_GRAPH", _FakeGraph())
+    monkeypatch.setattr(hpsr, "build_llm_client", lambda: None)
+
+    action = HandlePdcaSliceRequestAction()
+    signal = Signal(
+        type="pdca.slice.requested",
+        payload={"task_id": task_id, "correlation_id": "cid-race-1"},
+        source="pdca_queue_runner",
+    )
+    _ = action.execute({"signal": signal, "ctx": None})
+
+    task = get_pdca_task(task_id)
+    assert isinstance(task, dict)
+    metadata = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
+    assert metadata.get("pending_user_text") == "new text"
+    assert metadata.get("last_user_message_id") == "999"
 
 
 def test_handle_pdca_slice_request_without_task_id_is_noop() -> None:

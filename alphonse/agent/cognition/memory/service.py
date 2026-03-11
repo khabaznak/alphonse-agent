@@ -7,14 +7,20 @@ import mimetypes
 import os
 import shutil
 import subprocess
+import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+from alphonse.agent.actions.conscious_message_handler import build_incoming_message_envelope
 from alphonse.agent.cognition.memory.paths import resolve_memory_root
 from alphonse.agent.cognition.memory.paths import sanitize_segment
 from alphonse.agent.cognition.memory.paths import user_root
+from alphonse.agent.nervous_system import users as users_store
+from alphonse.agent.nervous_system.senses.bus import Signal as BusSignal
+from alphonse.agent.nervous_system.user_service_resolvers import resolve_telegram_chat_id_for_user
+from alphonse.agent.observability.log_manager import get_log_manager
 
 _DEFAULT_MAX_LINES = 20_000
 _DEFAULT_MAX_BYTES = 5 * 1024 * 1024
@@ -22,6 +28,9 @@ _DEFAULT_DAILY_RETENTION_DAYS = 30
 _DEFAULT_WEEKLY_RETENTION_DAYS = 90
 _ISO_DATE_FMT = "%Y-%m-%d"
 _EPISODE_TS_FMT = "%Y-%m-%d %H:%M:%S %z"
+_LOG = get_log_manager()
+_RUNTIME_FAILURE_SIGNAL = "sense.runtime.message.user.received"
+_MEMORY_ESCALATION_DEDUPE: set[str] = set()
 
 
 @dataclass(frozen=True)
@@ -546,8 +555,6 @@ def record_after_tool_call(
     result: dict[str, Any],
     correlation_id: str | None,
 ) -> None:
-    if not _memory_hooks_enabled():
-        return
     if str(tool_name or "").strip() in {"search_episodes", "get_mission", "list_active_missions", "get_workspace_pointer"}:
         return
     user_id = _memory_user_id(state)
@@ -571,6 +578,7 @@ def record_after_tool_call(
         "next": _memory_next_hint(task_state=task_state, current=current),
     }
     _memory_append_episode(
+        state=state,
         user_id=user_id,
         mission_id=mission_id,
         event_type="after_tool_call",
@@ -587,8 +595,6 @@ def record_plan_step_completion(
     proposal: dict[str, Any],
     correlation_id: str | None,
 ) -> None:
-    if not _memory_hooks_enabled():
-        return
     user_id = _memory_user_id(state)
     mission_id = _memory_mission_id(task_state=task_state, correlation_id=correlation_id)
     payload = {
@@ -599,6 +605,7 @@ def record_plan_step_completion(
         "next": _memory_next_hint(task_state=task_state, current=current),
     }
     _memory_append_episode(
+        state=state,
         user_id=user_id,
         mission_id=mission_id,
         event_type="plan_step_completed",
@@ -637,8 +644,8 @@ def _render_episode_entry(
 
 
 def _memory_hooks_enabled() -> bool:
-    raw = str(os.getenv("ALPHONSE_MEMORY_HOOKS_ENABLED", "true")).strip().lower()
-    return raw in {"1", "true", "yes", "on"}
+    # Memory writes are mandatory for subconscious continuity.
+    return True
 
 
 def _memory_user_id(state: dict[str, Any]) -> str:
@@ -673,22 +680,171 @@ def _memory_next_hint(*, task_state: dict[str, Any], current: dict[str, Any] | N
 
 def _memory_append_episode(
     *,
+    state: dict[str, Any],
     user_id: str,
     mission_id: str,
     event_type: str,
     payload: dict[str, Any],
     artifacts: list[dict[str, Any]],
 ) -> None:
-    try:
-        append_episode(
-            user_id=user_id,
-            mission_id=mission_id,
-            event_type=event_type,
-            payload=payload,
-            artifacts=artifacts,
-        )
-    except Exception:
+    correlation_id = str(state.get("correlation_id") or "").strip() or None
+    max_retries = max(1, _env_int("ALPHONSE_MEMORY_WRITE_MAX_RETRIES", 3))
+    backoff = max(0.0, _env_float("ALPHONSE_MEMORY_WRITE_RETRY_BACKOFF_SECONDS", 0.2))
+    last_error: Exception | None = None
+    for attempt in range(1, max_retries + 1):
+        try:
+            append_episode(
+                user_id=user_id,
+                mission_id=mission_id,
+                event_type=event_type,
+                payload=payload,
+                artifacts=artifacts,
+            )
+            if attempt > 1:
+                _LOG.emit(
+                    event="memory.write.retry_succeeded",
+                    component="cognition.memory.service",
+                    correlation_id=correlation_id,
+                    user_id=user_id,
+                    payload={
+                        "mission_id": mission_id,
+                        "event_type": event_type,
+                        "attempt": attempt,
+                    },
+                )
+            return
+        except Exception as exc:
+            last_error = exc
+            _LOG.emit(
+                level="warning",
+                event="memory.write.retry_attempt",
+                component="cognition.memory.service",
+                correlation_id=correlation_id,
+                user_id=user_id,
+                error_code=type(exc).__name__,
+                payload={
+                    "mission_id": mission_id,
+                    "event_type": event_type,
+                    "attempt": attempt,
+                    "max_retries": max_retries,
+                },
+            )
+            if attempt < max_retries and backoff > 0:
+                time.sleep(backoff * (2 ** (attempt - 1)))
+    _LOG.emit(
+        level="error",
+        event="memory.write.retry_exhausted",
+        component="cognition.memory.service",
+        correlation_id=correlation_id,
+        user_id=user_id,
+        error_code=type(last_error).__name__ if last_error else None,
+        payload={
+            "mission_id": mission_id,
+            "event_type": event_type,
+            "max_retries": max_retries,
+            "error": str(last_error or ""),
+        },
+    )
+    _emit_memory_failure_escalation(
+        state=state,
+        user_id=user_id,
+        mission_id=mission_id,
+        event_type=event_type,
+        error=last_error,
+    )
+
+
+def _emit_memory_failure_escalation(
+    *,
+    state: dict[str, Any],
+    user_id: str,
+    mission_id: str,
+    event_type: str,
+    error: Exception | None,
+) -> None:
+    bus = state.get("_bus")
+    if not hasattr(bus, "emit"):
         return
+    correlation_id = str(state.get("correlation_id") or "").strip() or None
+    dedupe_key = f"{user_id}:{mission_id}:{event_type}:{str(correlation_id or '')}"
+    if dedupe_key in _MEMORY_ESCALATION_DEDUPE:
+        return
+    admin_target = _resolve_admin_telegram_target()
+    if not admin_target:
+        return
+    _MEMORY_ESCALATION_DEDUPE.add(dedupe_key)
+    text = (
+        "Memory write pipeline exhausted retries. "
+        f"user={user_id} mission={mission_id} event={event_type} "
+        f"error={type(error).__name__ if error else 'unknown'}"
+    )
+    envelope = build_incoming_message_envelope(
+        message_id=f"memory-write-failure:{correlation_id or 'unknown'}",
+        channel_type="telegram",
+        channel_target=admin_target,
+        provider="runtime",
+        text=text,
+        correlation_id=correlation_id,
+        actor_external_user_id="runtime",
+        actor_display_name="Alphonse Runtime",
+        metadata={
+            "message_kind": "memory_write_failure_escalation",
+            "failure": {
+                "user_id": user_id,
+                "mission_id": mission_id,
+                "event_type": event_type,
+                "error_type": type(error).__name__ if error else None,
+                "error_message": str(error or "").strip()[:280],
+            },
+        },
+    )
+    bus.emit(
+        BusSignal(
+            type=_RUNTIME_FAILURE_SIGNAL,
+            payload=envelope,
+            source="system",
+            correlation_id=correlation_id,
+        )
+    )
+    _LOG.emit(
+        event="memory.write.escalated_to_admin",
+        component="cognition.memory.service",
+        correlation_id=correlation_id,
+        user_id=user_id,
+        payload={
+            "mission_id": mission_id,
+            "event_type": event_type,
+            "admin_target": admin_target,
+        },
+    )
+
+
+def _resolve_admin_telegram_target() -> str | None:
+    try:
+        users = users_store.list_users(active_only=True, limit=200)
+    except Exception:
+        return None
+    for user in users:
+        if not isinstance(user, dict) or not bool(user.get("is_admin")):
+            continue
+        user_id = str(user.get("user_id") or "").strip()
+        if not user_id:
+            continue
+        resolved = resolve_telegram_chat_id_for_user(user_id)
+        if resolved:
+            return str(resolved).strip()
+    return None
+
+
+def _env_float(key: str, default: float) -> float:
+    raw = str(os.getenv(key) or "").strip()
+    if not raw:
+        return float(default)
+    try:
+        value = float(raw)
+    except ValueError:
+        return float(default)
+    return float(value) if value >= 0 else float(default)
 
 
 def _memory_artifacts_from_result(
