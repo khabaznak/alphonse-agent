@@ -51,7 +51,7 @@ def test_send_message_tool_executes_delivery() -> None:
         Message="Hola Gaby",
         Channel="telegram",
     )
-    assert result["status"] == "ok"
+    assert result["exception"] is None
     assert fake.called is True
     assert str(fake.request.channel) == "telegram"
     assert str(fake.request.recipient_ref) == "Gabriela"
@@ -60,8 +60,8 @@ def test_send_message_tool_executes_delivery() -> None:
 def test_send_message_tool_validates_required_fields() -> None:
     tool = SendMessageTool(_communication=_FakeCommunication())
     result = tool.execute(state={"channel_type": "telegram"}, To="", Message="")
-    assert result["status"] == "failed"
-    assert str((result.get("error") or {}).get("code") or "") in {"missing_message", "missing_recipient"}
+    assert result["exception"] is not None
+    assert str((result.get("exception") or {}).get("code") or "") in {"missing_message", "missing_recipient"}
 
 
 @dataclass
@@ -81,8 +81,8 @@ def test_send_message_tool_maps_unresolved_recipient_error() -> None:
         Message="Hola Gaby",
         Channel="telegram",
     )
-    assert result["status"] == "failed"
-    assert str((result.get("error") or {}).get("code") or "") == "unresolved_recipient"
+    assert result["exception"] is not None
+    assert str((result.get("exception") or {}).get("code") or "") == "unresolved_recipient"
 
 
 def test_send_message_tool_maps_first_contact_from_user_search() -> None:
@@ -95,9 +95,8 @@ def test_send_message_tool_maps_first_contact_from_user_search() -> None:
             "facts": {
                 "step_1": {
                     "tool": "user_search",
-                    "result": {
-                        "status": "ok",
-                        "result": {
+                    "output": {
+                        "output": {
                             "users": [
                                 {
                                     "user_id": "u-1",
@@ -116,7 +115,7 @@ def test_send_message_tool_maps_first_contact_from_user_search() -> None:
         Message="Hola Gaby",
         Channel="telegram",
     )
-    assert result["status"] == "ok"
+    assert result["exception"] is None
     assert fake.called is True
     assert str(fake.request.recipient_ref) == "u-1"
     assert str(fake.request.target or "") == ""
@@ -132,9 +131,8 @@ def test_send_message_tool_maps_partial_name_from_user_search() -> None:
             "facts": {
                 "step_1": {
                     "tool": "user_search",
-                    "result": {
-                        "status": "ok",
-                        "result": {
+                    "output": {
+                        "output": {
                             "users": [
                                 {
                                     "user_id": "u-1",
@@ -153,7 +151,7 @@ def test_send_message_tool_maps_partial_name_from_user_search() -> None:
         Message="Hola Gaby",
         Channel="telegram",
     )
-    assert result["status"] == "ok"
+    assert result["exception"] is None
     assert fake.called is True
     assert str(fake.request.recipient_ref) == "u-1"
     assert str(fake.request.target or "") == ""
@@ -167,8 +165,8 @@ def test_send_message_audio_requires_audio_file_path() -> None:
         Message="Hola Gaby",
         DeliveryMode="audio",
     )
-    assert result["status"] == "failed"
-    assert str((result.get("error") or {}).get("code") or "") == "missing_audio_file_path"
+    assert result["exception"] is not None
+    assert str((result.get("exception") or {}).get("code") or "") == "missing_audio_file_path"
 
 
 def test_send_message_audio_payload_is_added_to_plan() -> None:
@@ -184,7 +182,7 @@ def test_send_message_audio_payload_is_added_to_plan() -> None:
         AsVoice=False,
         Caption="Hola por audio",
     )
-    assert result["status"] == "ok"
+    assert result["exception"] is None
     assert fake.called is True
     payload = dict(getattr(fake.plan, "payload", {}) or {})
     assert payload.get("delivery_mode") == "audio"
@@ -201,8 +199,8 @@ def test_send_message_tool_maps_audio_file_not_found_error() -> None:
         Message="Hola Gaby",
         Channel="telegram",
     )
-    assert result["status"] == "failed"
-    assert str((result.get("error") or {}).get("code") or "") == "audio_file_not_found"
+    assert result["exception"] is not None
+    assert str((result.get("exception") or {}).get("code") or "") == "audio_file_not_found"
 
 
 def test_send_voice_note_tool_enforces_audio_delivery_mode() -> None:
@@ -215,7 +213,7 @@ def test_send_voice_note_tool_enforces_audio_delivery_mode() -> None:
         Caption="Hola por voz",
         Channel="telegram",
     )
-    assert result["status"] == "ok"
+    assert result["exception"] is None
     assert fake.called is True
     payload = dict(getattr(fake.plan, "payload", {}) or {})
     assert payload.get("delivery_mode") == "audio"
@@ -233,6 +231,6 @@ def test_send_voice_note_tool_rejects_non_ogg_for_voice_notes() -> None:
         Channel="telegram",
         AsVoice=True,
     )
-    assert result["status"] == "failed"
-    assert str((result.get("error") or {}).get("code") or "") == "voice_note_requires_ogg"
+    assert result["exception"] is not None
+    assert str((result.get("exception") or {}).get("code") or "") == "voice_note_requires_ogg"
     assert fake.called is False

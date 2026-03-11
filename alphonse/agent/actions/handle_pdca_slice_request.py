@@ -7,6 +7,8 @@ from typing import Any
 
 from alphonse.agent.actions.base import Action
 from alphonse.agent.actions.models import ActionResult
+from alphonse.agent.actions.presence_projection import emit_channel_transition_event
+from alphonse.agent.actions.session_context import IncomingContext
 from alphonse.agent.cognition.providers.factory import build_llm_client
 from alphonse.agent.cortex.graph import CortexGraph
 from alphonse.agent.cortex.state_store import load_state, save_state
@@ -21,8 +23,16 @@ from alphonse.agent.nervous_system.pdca_queue_store import (
 )
 from alphonse.agent.nervous_system.senses.bus import Signal as BusSignal
 from alphonse.agent.observability.log_manager import get_component_logger
+from alphonse.agent.observability.log_manager import get_log_manager
+from alphonse.agent.services.session_identity_resolution import resolve_assistant_session_message
+from alphonse.agent.session.day_state import build_next_session_state
+from alphonse.agent.session.day_state import commit_session_state
+from alphonse.agent.session.day_state import render_recent_conversation_block
+from alphonse.agent.session.day_state import resolve_day_session
+from alphonse.config import settings
 
 logger = get_component_logger("actions.handle_pdca_slice_request")
+_LOG = get_log_manager()
 _CORTEX_GRAPH = CortexGraph()
 
 
@@ -74,7 +84,10 @@ class HandlePdcaSliceRequestAction(Action):
         )
 
         checkpoint = load_pdca_checkpoint(task_id)
-        base_state = _base_state(task=task, checkpoint=checkpoint)
+        base_state = _base_state(task=task, checkpoint=checkpoint, correlation_id=correlation_id)
+        _inject_session_memory_context(base_state=base_state, task=task)
+        _stamp_check_provenance_for_slice(base_state=base_state, signal=signal, checkpoint=checkpoint)
+        incoming = _resolve_incoming_context(task=task, correlation_id=correlation_id)
         text = _resolve_slice_text(task=task, checkpoint=checkpoint, payload=payload)
         if not text:
             update_pdca_task_status(task_id=task_id, status="waiting_user")
@@ -82,6 +95,12 @@ class HandlePdcaSliceRequestAction(Action):
                 task_id=task_id,
                 event_type="slice.blocked.missing_text",
                 payload={"reason": "missing_input_text"},
+                correlation_id=correlation_id,
+            )
+            _emit_presence_lifecycle_event(
+                incoming=incoming,
+                event_family="presence.waiting_input",
+                phase="waiting_user",
                 correlation_id=correlation_id,
             )
             _emit_slice_signal(
@@ -99,6 +118,12 @@ class HandlePdcaSliceRequestAction(Action):
                 reason=str(budget_block.get("reason") or "budget_exhausted"),
                 details=budget_block,
             )
+            _emit_presence_lifecycle_event(
+                incoming=incoming,
+                event_family="presence.failed",
+                phase="failed",
+                correlation_id=correlation_id,
+            )
             _emit_slice_signal(
                 context=context,
                 event_type="pdca.failed",
@@ -112,15 +137,57 @@ class HandlePdcaSliceRequestAction(Action):
         except Exception:
             llm_client = None
 
+        _emit_presence_lifecycle_event(
+            incoming=incoming,
+            event_family="presence.phase_changed",
+            phase="executing",
+            correlation_id=correlation_id,
+        )
+        invoke_state = dict(base_state)
+        invoke_state.setdefault("task_id", task_id)
+        invoke_state.setdefault("pdca_task_id", task_id)
+        task_state_for_id = invoke_state.get("task_state")
+        if isinstance(task_state_for_id, dict):
+            task_state_for_id.setdefault("task_id", task_id)
+        _emit_context_continuity_gap_if_any(
+            task=task,
+            invoke_state=invoke_state,
+            correlation_id=correlation_id,
+        )
+        invoke_state["_bus"] = context.get("ctx")
+        if incoming is not None:
+            invoke_state["_transition_sink"] = lambda event: emit_channel_transition_event(incoming, event)
         try:
-            result = _CORTEX_GRAPH.invoke(base_state, text, llm_client=llm_client)
+            result = _CORTEX_GRAPH.invoke(invoke_state, text, llm_client=llm_client)
         except Exception as exc:
+            failure_code = _classify_failure_code(exc)
+            user_notice_required = failure_code == "engine_unavailable"
+            _LOG.emit(
+                event="pdca.slice.failed.classified",
+                component="actions.handle_pdca_slice_request",
+                correlation_id=correlation_id,
+                payload={
+                    "task_id": task_id,
+                    "failure_code": failure_code,
+                    "user_notice_required": user_notice_required,
+                },
+            )
             _finalize_failure(task=task, correlation_id=correlation_id, error=str(exc))
+            _emit_presence_lifecycle_event(
+                incoming=incoming,
+                event_family="presence.failed",
+                phase="failed",
+                correlation_id=correlation_id,
+            )
             _emit_slice_signal(
                 context=context,
                 event_type="pdca.failed",
                 task_id=task_id,
                 correlation_id=correlation_id,
+                extra_payload={
+                    "failure_code": failure_code,
+                    "user_notice_required": user_notice_required,
+                },
             )
             return ActionResult(intention_key="NOOP", payload={}, urgency=None)
 
@@ -135,8 +202,36 @@ class HandlePdcaSliceRequestAction(Action):
         conversation_key = str(task.get("conversation_key") or "").strip()
         if conversation_key:
             save_state(conversation_key, merged_state)
+        _update_day_session_memory(
+            task=task,
+            user_message=text,
+            reply_text=str(result.reply_text or ""),
+            cognition_state=cognition_state,
+            merged_state=merged_state,
+        )
 
         next_status = _next_status(cognition_state=cognition_state, reply_text=str(result.reply_text or ""))
+        if next_status == "waiting_user":
+            _emit_presence_lifecycle_event(
+                incoming=incoming,
+                event_family="presence.waiting_input",
+                phase="waiting_user",
+                correlation_id=correlation_id,
+            )
+        elif next_status == "done":
+            _emit_presence_lifecycle_event(
+                incoming=incoming,
+                event_family="presence.completed",
+                phase="done",
+                correlation_id=correlation_id,
+            )
+        elif next_status == "failed":
+            _emit_presence_lifecycle_event(
+                incoming=incoming,
+                event_family="presence.failed",
+                phase="failed",
+                correlation_id=correlation_id,
+            )
         _upsert_task_after_slice(task=task, status=next_status, request_text=text, reply_text=str(result.reply_text or ""))
         append_pdca_event(
             task_id=task_id,
@@ -162,20 +257,103 @@ class HandlePdcaSliceRequestAction(Action):
         return ActionResult(intention_key="NOOP", payload={}, urgency=None)
 
 
-def _base_state(*, task: dict[str, Any], checkpoint: dict[str, Any] | None) -> dict[str, Any]:
+def _base_state(
+    *,
+    task: dict[str, Any],
+    checkpoint: dict[str, Any] | None,
+    correlation_id: str | None,
+) -> dict[str, Any]:
     if isinstance(checkpoint, dict) and isinstance(checkpoint.get("state"), dict):
         return dict(checkpoint.get("state") or {})
+    metadata = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
+    seeded = metadata.get("state") if isinstance(metadata.get("state"), dict) else {}
     conversation_key = str(task.get("conversation_key") or "").strip()
     loaded = load_state(conversation_key) if conversation_key else None
     if isinstance(loaded, dict):
-        return dict(loaded)
-    metadata = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
-    seeded = metadata.get("state") if isinstance(metadata.get("state"), dict) else {}
+        sanitized, removed_keys = _sanitize_loaded_state_for_new_task(loaded)
+        _overlay_ingress_context(base=sanitized, seeded=seeded)
+        if removed_keys:
+            _LOG.emit(
+                event="pdca.slice.base_state.sanitized",
+                component="actions.handle_pdca_slice_request",
+                correlation_id=correlation_id,
+                payload={
+                    "task_id": str(task.get("task_id") or "").strip() or None,
+                    "conversation_key": conversation_key or None,
+                    "removed_keys": removed_keys,
+                },
+            )
+        return sanitized
     out = dict(seeded)
     out.setdefault("conversation_key", conversation_key)
     out.setdefault("chat_id", conversation_key)
     out.setdefault("correlation_id", f"pdca:{task.get('task_id')}")
     return out
+
+
+def _inject_session_memory_context(*, base_state: dict[str, Any], task: dict[str, Any]) -> None:
+    owner_id = str(task.get("owner_id") or "").strip()
+    if not owner_id:
+        return
+    channel_type = str(base_state.get("channel_type") or "").strip() or "api"
+    timezone_name = str(base_state.get("timezone") or "").strip() or settings.get_timezone()
+    try:
+        day_session = resolve_day_session(
+            user_id=owner_id,
+            channel=channel_type,
+            timezone_name=timezone_name,
+        )
+    except Exception:
+        return
+    base_state["session_id"] = str(day_session.get("session_id") or "").strip() or base_state.get("session_id")
+    base_state["session_state"] = day_session
+    base_state["recent_conversation_block"] = render_recent_conversation_block(day_session)
+
+
+def _update_day_session_memory(
+    *,
+    task: dict[str, Any],
+    user_message: str,
+    reply_text: str,
+    cognition_state: dict[str, Any],
+    merged_state: dict[str, Any],
+) -> None:
+    owner_id = str(task.get("owner_id") or "").strip()
+    if not owner_id:
+        return
+    channel = str(merged_state.get("channel_type") or "").strip() or "api"
+    timezone_name = str(merged_state.get("timezone") or "").strip() or settings.get_timezone()
+    try:
+        day_session = resolve_day_session(
+            user_id=owner_id,
+            channel=channel,
+            timezone_name=timezone_name,
+        )
+        assistant_message = resolve_assistant_session_message(reply_text=reply_text, plans=[])
+        updated = build_next_session_state(
+            previous=day_session,
+            channel=channel,
+            user_message=str(user_message or ""),
+            assistant_message=assistant_message,
+            ability_state=cognition_state.get("ability_state")
+            if isinstance(cognition_state.get("ability_state"), dict)
+            else None,
+            task_state=cognition_state.get("task_state")
+            if isinstance(cognition_state.get("task_state"), dict)
+            else None,
+            planning_context=cognition_state.get("planning_context")
+            if isinstance(cognition_state.get("planning_context"), dict)
+            else None,
+            pending_interaction=merged_state.get("pending_interaction")
+            if isinstance(merged_state.get("pending_interaction"), dict)
+            else None,
+        )
+        commit_session_state(updated)
+        merged_state["session_id"] = str(updated.get("session_id") or "").strip() or merged_state.get("session_id")
+        merged_state["session_state"] = updated
+        merged_state["recent_conversation_block"] = render_recent_conversation_block(updated)
+    except Exception:
+        return
 
 
 def _resolve_slice_text(*, task: dict[str, Any], checkpoint: dict[str, Any] | None, payload: dict[str, Any]) -> str:
@@ -193,6 +371,48 @@ def _resolve_slice_text(*, task: dict[str, Any], checkpoint: dict[str, Any] | No
         if value:
             return value
     return ""
+
+
+def _sanitize_loaded_state_for_new_task(loaded: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
+    sanitized = dict(loaded)
+    removed_keys: list[str] = []
+    for key in (
+        "task_state",
+        "pending_interaction",
+        "response_text",
+        "events",
+        "utterance",
+        "render_error",
+    ):
+        if key in sanitized:
+            removed_keys.append(key)
+            sanitized.pop(key, None)
+    return sanitized, removed_keys
+
+
+def _overlay_ingress_context(*, base: dict[str, Any], seeded: dict[str, Any]) -> None:
+    for key in (
+        "conversation_key",
+        "chat_id",
+        "channel_type",
+        "channel_target",
+        "actor_person_id",
+        "incoming_user_id",
+        "incoming_user_name",
+        "locale",
+        "tone",
+        "address_style",
+        "timezone",
+    ):
+        if str(base.get(key) or "").strip():
+            continue
+        value = seeded.get(key)
+        if value is None:
+            continue
+        rendered = str(value).strip()
+        if not rendered:
+            continue
+        base[key] = value
 
 
 def _merge_state(*, base: dict[str, Any], cognition_state: dict[str, Any], reply_text: str) -> dict[str, Any]:
@@ -230,36 +450,39 @@ def _next_status(*, cognition_state: dict[str, Any], reply_text: str) -> str:
 
 
 def _upsert_task_after_slice(*, task: dict[str, Any], status: str, request_text: str, reply_text: str) -> None:
+    task_id = str(task.get("task_id") or "").strip()
+    latest = get_pdca_task(task_id) if task_id else None
+    base_task = latest if isinstance(latest, dict) else task
     now = datetime.now(timezone.utc)
     next_run_at = None
     if status == "queued":
         cooldown = _dispatch_cooldown_seconds()
         next_run_at = (now + timedelta(seconds=cooldown)).isoformat()
-    token_budget = task.get("token_budget_remaining")
+    token_budget = base_task.get("token_budget_remaining")
     tokens_used = _estimate_token_burn(request_text, reply_text)
     next_token_budget = int(token_budget) - tokens_used if token_budget is not None else None
-    failure_streak = int(task.get("failure_streak") or 0)
+    failure_streak = int(base_task.get("failure_streak") or 0)
     if status == "failed":
         failure_streak += 1
     else:
         failure_streak = 0
     upsert_pdca_task(
         {
-            "task_id": task.get("task_id"),
-            "owner_id": task.get("owner_id"),
-            "conversation_key": task.get("conversation_key"),
-            "session_id": task.get("session_id"),
+            "task_id": base_task.get("task_id"),
+            "owner_id": base_task.get("owner_id"),
+            "conversation_key": base_task.get("conversation_key"),
+            "session_id": base_task.get("session_id"),
             "status": status,
-            "priority": task.get("priority", 100),
+            "priority": base_task.get("priority", 100),
             "next_run_at": next_run_at,
-            "slice_cycles": task.get("slice_cycles", 5),
-            "max_cycles": task.get("max_cycles"),
-            "max_runtime_seconds": task.get("max_runtime_seconds"),
+            "slice_cycles": base_task.get("slice_cycles", 5),
+            "max_cycles": base_task.get("max_cycles"),
+            "max_runtime_seconds": base_task.get("max_runtime_seconds"),
             "token_budget_remaining": next_token_budget,
             "failure_streak": failure_streak,
-            "last_error": task.get("last_error"),
-            "metadata": task.get("metadata") if isinstance(task.get("metadata"), dict) else {},
-            "created_at": task.get("created_at"),
+            "last_error": base_task.get("last_error"),
+            "metadata": base_task.get("metadata") if isinstance(base_task.get("metadata"), dict) else {},
+            "created_at": base_task.get("created_at"),
         }
     )
 
@@ -359,6 +582,24 @@ def _as_optional_int(value: Any) -> int | None:
         return None
 
 
+def _stamp_check_provenance_for_slice(
+    *,
+    base_state: dict[str, Any],
+    signal: object | None,
+    checkpoint: dict[str, Any] | None,
+) -> None:
+    signal_type = str(getattr(signal, "type", "") or "").strip().lower()
+    task_state = base_state.get("task_state")
+    if not isinstance(task_state, dict):
+        task_state = {}
+        base_state["task_state"] = task_state
+    if signal_type == "pdca.resume_requested":
+        task_state["check_provenance"] = "slice_resume"
+        return
+    if isinstance(checkpoint, dict):
+        task_state["check_provenance"] = "do"
+
+
 def _estimate_token_burn(request_text: str, reply_text: str) -> int:
     chars = len(str(request_text or "").strip()) + len(str(reply_text or "").strip())
     return max(1, int(ceil(chars / 4)))
@@ -374,13 +615,22 @@ def _status_signal(status: str) -> str:
     return "pdca.slice.persisted"
 
 
-def _emit_slice_signal(*, context: dict[str, Any], event_type: str, task_id: str, correlation_id: str | None) -> None:
+def _emit_slice_signal(
+    *,
+    context: dict[str, Any],
+    event_type: str,
+    task_id: str,
+    correlation_id: str | None,
+    extra_payload: dict[str, Any] | None = None,
+) -> None:
     bus = context.get("ctx")
     if not hasattr(bus, "emit"):
         return
     payload: dict[str, Any] = {"task_id": task_id}
     if correlation_id:
         payload["correlation_id"] = correlation_id
+    if isinstance(extra_payload, dict):
+        payload.update(extra_payload)
     bus.emit(
         BusSignal(
             type=event_type,
@@ -398,3 +648,111 @@ def _dispatch_cooldown_seconds() -> int:
     except ValueError:
         parsed = 30
     return max(parsed, 1)
+
+
+def _classify_failure_code(exc: Exception) -> str:
+    rendered = str(exc or "").strip().lower()
+    matchers = (
+        "connection refused",
+        "failed to establish a new connection",
+        "max retries exceeded",
+        "timed out",
+        "connect timeout",
+        "read timeout",
+        "unable to connect",
+        "endpoint unavailable",
+        "/session",
+    )
+    if any(token in rendered for token in matchers):
+        return "engine_unavailable"
+    return "execution_failed"
+
+
+def _resolve_incoming_context(*, task: dict[str, Any], correlation_id: str | None) -> IncomingContext | None:
+    metadata = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
+    state = metadata.get("state") if isinstance(metadata.get("state"), dict) else {}
+    channel_type = (
+        str(metadata.get("last_user_channel") or "").strip()
+        or str(state.get("channel_type") or "").strip()
+    )
+    channel_target = (
+        str(metadata.get("last_user_target") or "").strip()
+        or str(state.get("channel_target") or "").strip()
+    )
+    message_id = (
+        str(metadata.get("last_user_message_id") or "").strip()
+        or str(state.get("message_id") or "").strip()
+        or None
+    )
+    if (not channel_type or not channel_target) and ":" in str(task.get("conversation_key") or ""):
+        inferred_channel, inferred_target = str(task.get("conversation_key") or "").split(":", 1)
+        if not channel_type:
+            channel_type = str(inferred_channel or "").strip()
+        if not channel_target:
+            channel_target = str(inferred_target or "").strip()
+    if not channel_type or not channel_target:
+        return None
+    resolved_correlation = str(correlation_id or "").strip() or f"pdca:{str(task.get('task_id') or '').strip()}"
+    return IncomingContext(
+        channel_type=channel_type,
+        address=channel_target,
+        person_id=str(state.get("actor_person_id") or "").strip() or None,
+        correlation_id=resolved_correlation,
+        message_id=message_id,
+    )
+
+
+def _emit_context_continuity_gap_if_any(
+    *,
+    task: dict[str, Any],
+    invoke_state: dict[str, Any],
+    correlation_id: str | None,
+) -> None:
+    metadata = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
+    seeded = metadata.get("state") if isinstance(metadata.get("state"), dict) else {}
+    present_at_ingress = {
+        key: str(seeded.get(key) or "").strip()
+        for key in ("channel_type", "channel_target", "actor_person_id", "incoming_user_id", "incoming_user_name")
+    }
+    missing_in_invoke: list[str] = []
+    for key, seeded_value in present_at_ingress.items():
+        if not seeded_value:
+            continue
+        current = str(invoke_state.get(key) or "").strip()
+        if not current:
+            missing_in_invoke.append(key)
+    if not missing_in_invoke:
+        return
+    _LOG.emit(
+        level="warning",
+        event="pdca.context.continuity_gap",
+        component="actions.handle_pdca_slice_request",
+        correlation_id=correlation_id,
+        payload={
+            "task_id": str(task.get("task_id") or "").strip() or None,
+            "missing_in_invoke_state": missing_in_invoke,
+            "ingress_channel_type": present_at_ingress.get("channel_type") or None,
+            "ingress_channel_target": present_at_ingress.get("channel_target") or None,
+        },
+    )
+
+
+def _emit_presence_lifecycle_event(
+    *,
+    incoming: IncomingContext | None,
+    event_family: str,
+    phase: str,
+    correlation_id: str | None,
+) -> None:
+    if incoming is None:
+        return
+    corr = str(correlation_id or incoming.correlation_id or "").strip() or None
+    emit_channel_transition_event(
+        incoming,
+        {
+            "type": "agent.transition",
+            "phase": str(phase or "").strip(),
+            "correlation_id": corr,
+            "detail": {"presence_event_family": str(event_family or "").strip()},
+        },
+    )

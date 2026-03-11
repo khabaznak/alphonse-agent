@@ -80,9 +80,8 @@ class DomoticsExecuteTool:
         if not result.transport_ok:
             error_code = str(result.error_code or "domotics_transport_failed")
             return {
-                "status": "failed",
-                "result": payload,
-                "error": {
+                "output": payload,
+                "exception": {
                     "code": error_code,
                     "message": str(result.error_detail or "domotics transport failed"),
                     "retryable": _is_retryable_domotics_error(error_code),
@@ -153,18 +152,16 @@ def _safe_facade():
 
 def _ok(result: dict[str, Any], *, tool: str) -> dict[str, Any]:
     return {
-        "status": "ok",
-        "result": result,
-        "error": None,
+        "output": result,
+        "exception": None,
         "metadata": {"tool": tool},
     }
 
 
 def _failed(code: str, message: str) -> dict[str, Any]:
     return {
-        "status": "failed",
-        "result": None,
-        "error": {
+        "output": None,
+        "exception": {
             "code": str(code),
             "message": str(message),
             "retryable": False,

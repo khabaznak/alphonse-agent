@@ -2,19 +2,12 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
-from alphonse.agent.cortex.task_mode.act_node import act_node_stateful
-from alphonse.agent.cortex.task_mode.act_node import evaluate_tool_execution
-from alphonse.agent.cortex.task_mode.act_node import route_after_act_stateful
+from alphonse.agent.cortex.task_mode.check import check_node_impl
+from alphonse.agent.cortex.task_mode.check import route_after_check_impl
 from alphonse.agent.cortex.task_mode.check_state import derive_outcome_from_state
-from alphonse.agent.cortex.task_mode.check_state import goal_satisfied
-from alphonse.agent.cortex.task_mode.mcp_handler import mcp_handler_node_impl
 from alphonse.agent.cortex.transitions import emit_transition_event
 from alphonse.agent.cortex.task_mode.plan import build_next_step_node_impl
 from alphonse.agent.cortex.task_mode.plan import route_after_next_step_impl
-from alphonse.agent.cortex.task_mode.progress_critic_node import DEFAULT_PROGRESS_CHECK_CYCLE_THRESHOLD
-from alphonse.agent.cortex.task_mode.progress_critic_node import DEFAULT_WIP_EMIT_EVERY_CYCLES
-from alphonse.agent.cortex.task_mode.progress_critic_node import progress_critic_node_stateful
-from alphonse.agent.cortex.task_mode.progress_critic_node import route_after_progress_critic_stateful
 from alphonse.agent.cortex.task_mode.observability import log_task_event
 from alphonse.agent.cortex.task_mode.execute_step import execute_step_node_impl
 from alphonse.agent.cortex.task_mode.task_state_helpers import append_trace_event
@@ -26,13 +19,8 @@ from alphonse.agent.cortex.task_mode.task_state_helpers import normalize_accepta
 from alphonse.agent.cortex.task_mode.task_state_helpers import task_plan
 from alphonse.agent.cortex.task_mode.task_state_helpers import task_state_with_defaults
 from alphonse.agent.cortex.task_mode.task_state_helpers import task_trace
-from alphonse.agent.cortex.task_mode.validate_step import validate_step_node_impl
 from alphonse.agent.observability.log_manager import get_component_logger
 logger = get_component_logger("task_mode.pdca")
-
-_PROGRESS_CHECK_CYCLE_THRESHOLD = DEFAULT_PROGRESS_CHECK_CYCLE_THRESHOLD
-_WIP_EMIT_EVERY_CYCLES = DEFAULT_WIP_EMIT_EVERY_CYCLES
-
 
 def build_next_step_node(*, tool_registry: Any) -> Callable[[dict[str, Any]], dict[str, Any]]:
     def _node(state: dict[str, Any]) -> dict[str, Any]:
@@ -63,37 +51,16 @@ def route_after_next_step(state: dict[str, Any]) -> str:
 
 
 def validate_step_node(state: dict[str, Any], *, tool_registry: Any) -> dict[str, Any]:
-    return validate_step_node_impl(
-        state,
-        tool_registry=tool_registry,
-        task_state_with_defaults=task_state_with_defaults,
-        correlation_id=correlation_id,
-        task_plan=task_plan,
-        current_step=current_step,
-        append_trace_event=append_trace_event,
-        logger=logger,
-        log_task_event=log_task_event,
-    )
+    # Compatibility wrapper: validation stage was removed from runtime wiring.
+    _ = tool_registry
+    return {"task_state": task_state_with_defaults(state)}
 
 
 def route_after_validate_step(state: dict[str, Any]) -> str:
+    # Compatibility wrapper: runtime path now routes through check -> act.
     task_state = state.get("task_state")
-    if isinstance(task_state, dict) and str(task_state.get("status") or "") == "waiting_user":
-        logger.info(
-            "task_mode route_after_validate correlation_id=%s route=respond_node reason=waiting_user",
-            correlation_id(state),
-        )
+    if isinstance(task_state, dict) and str(task_state.get("status") or "").strip().lower() == "waiting_user":
         return "respond_node"
-    if isinstance(task_state, dict) and task_state.get("last_validation_error") is not None:
-        logger.info(
-            "task_mode route_after_validate correlation_id=%s route=next_step_node reason=validation_error",
-            correlation_id(state),
-        )
-        return "next_step_node"
-    logger.info(
-        "task_mode route_after_validate correlation_id=%s route=execute_step_node reason=validated",
-        correlation_id(state),
-    )
     return "execute_step_node"
 
 
@@ -111,16 +78,18 @@ def execute_step_node(state: dict[str, Any], *, tool_registry: Any) -> dict[str,
     )
 
 
-def mcp_handler_node(state: dict[str, Any]) -> dict[str, Any]:
-    return mcp_handler_node_impl(
-        state,
-        task_state_with_defaults=task_state_with_defaults,
-        correlation_id=correlation_id,
-        current_step=current_step,
-        append_trace_event=append_trace_event,
+def check_node(state: dict[str, Any], *, tool_registry: Any) -> dict[str, Any]:
+    return check_node_impl(
+        state=state,
+        tool_registry=tool_registry,
         logger=logger,
         log_task_event=log_task_event,
+        wip_emit_every_cycles=1,
     )
+
+
+def route_after_check(state: dict[str, Any]) -> str:
+    return route_after_check_impl(state)
 
 
 def update_state_node(state: dict[str, Any]) -> dict[str, Any]:
@@ -158,47 +127,55 @@ def update_state_node(state: dict[str, Any]) -> dict[str, Any]:
     return {"task_state": task_state}
 
 
-def progress_critic_node(state: dict[str, Any]) -> dict[str, Any]:
-    return progress_critic_node_stateful(
-        state,
-        task_state_with_defaults=task_state_with_defaults,
-        correlation_id=correlation_id,
-        current_step=current_step,
-        goal_satisfied=lambda task_state: goal_satisfied(
-            task_state,
-            has_acceptance_criteria=has_acceptance_criteria,
-        ),
-        evaluate_tool_execution=lambda *, task_state, current_step: evaluate_tool_execution(
-            task_state=task_state,
-            current_step=current_step,
-            task_plan=task_plan,
-        ),
-        append_trace_event=append_trace_event,
-        logger=logger,
-        progress_check_cycle_threshold=_PROGRESS_CHECK_CYCLE_THRESHOLD,
-        wip_emit_every_cycles=_WIP_EMIT_EVERY_CYCLES,
-    )
-
-
-def route_after_progress_critic(state: dict[str, Any]) -> str:
-    return route_after_progress_critic_stateful(state, correlation_id=correlation_id)
-
-
 def act_node(state: dict[str, Any]) -> dict[str, Any]:
-    return act_node_stateful(
-        state,
-        task_state_with_defaults=task_state_with_defaults,
-        correlation_id=correlation_id,
-        current_step=current_step,
-        append_trace_event=append_trace_event,
-        task_plan=task_plan,
-        logger=logger,
-    )
+    task_state = task_state_with_defaults(state)
+    task_state["pdca_phase"] = "act"
+    return {"task_state": task_state}
 
 
 def route_after_act(state: dict[str, Any]) -> str:
-    return route_after_act_stateful(
-        state,
-        correlation_id=correlation_id,
-        logger=logger,
+    task_state = state.get("task_state") if isinstance(state.get("task_state"), dict) else {}
+    verdict = task_state.get("judge_verdict") if isinstance(task_state.get("judge_verdict"), dict) else {}
+    verdict_kind = str(verdict.get("kind") or "").strip().lower()
+    if verdict_kind == "plan":
+        logger.info(
+            "task_mode route_after_act correlation_id=%s route=next_step_node verdict=%s",
+            correlation_id(state),
+            verdict_kind,
+        )
+        return "next_step_node"
+    if verdict_kind == "mission_success":
+        logger.info(
+            "task_mode route_after_act correlation_id=%s route=respond_node verdict=%s",
+            correlation_id(state),
+            verdict_kind,
+        )
+        return "respond_node"
+    if verdict_kind in {"conversation", "mission_failed"}:
+        logger.info(
+            "task_mode route_after_act correlation_id=%s route=respond_node verdict=%s",
+            correlation_id(state),
+            verdict_kind,
+        )
+        return "respond_node"
+    route = str(task_state.get("check_route") or "").strip().lower()
+    if route in {"respond_node", "next_step_node"}:
+        logger.info(
+            "task_mode route_after_act correlation_id=%s route=%s",
+            correlation_id(state),
+            route,
+        )
+        return route
+    status = str(task_state.get("status") or "").strip().lower()
+    if status in {"done", "failed", "waiting_user"}:
+        logger.info(
+            "task_mode route_after_act correlation_id=%s route=respond_node status=%s",
+            correlation_id(state),
+            status,
+        )
+        return "respond_node"
+    logger.info(
+        "task_mode route_after_act correlation_id=%s route=next_step_node missing_check_route=true",
+        correlation_id(state),
     )
+    return "next_step_node"

@@ -1,0 +1,297 @@
+from __future__ import annotations
+
+import uuid
+from dataclasses import dataclass
+from typing import Any, Callable
+
+from alphonse.agent.actions.conscious_message_handler import IncomingMessageEnvelope
+from alphonse.agent.actions.models import ActionResult
+from alphonse.agent.actions.session_context import IncomingContext
+from alphonse.agent.actions.session_context import build_session_key
+from alphonse.agent.actions.state_context import build_cortex_state
+from alphonse.agent.actions.state_context import ensure_conversation_locale
+from alphonse.agent.actions.transitions import emit_agent_transitions_from_meta
+from alphonse.agent.cognition.plan_executor import PlanExecutionContext
+from alphonse.agent.cognition.plans import CortexPlan
+from alphonse.agent.cortex.state_store import load_state, save_state
+from alphonse.agent.session.day_state import render_recent_conversation_block
+from alphonse.agent.session.day_state import resolve_day_session
+
+
+@dataclass(frozen=True)
+class ConsciousMessageExecutionDeps:
+    logger: Any
+    log_manager: Any
+    cortex_graph: Any
+    build_incoming_context_from_envelope: Callable[..., IncomingContext]
+    pack_raw_provider_event_markdown: Callable[..., str]
+    text_log_snippet: Callable[[str], str]
+    emit_presence_phase_changed: Callable[..., None]
+    resolve_session_timezone: Callable[[IncomingContext], str]
+    resolve_session_user_id: Callable[..., str]
+    attach_transition_sink: Callable[[dict[str, object], IncomingContext], bool]
+    pdca_slicing_enabled: Callable[[], bool]
+    enqueue_pdca_slice: Callable[..., str]
+    emit_channel_transition_event: Callable[[IncomingContext, dict[str, object]], None]
+    flush_cognition_state_if_task_succeeded: Callable[..., dict[str, Any]]
+    resolve_assistant_session_message: Callable[..., str]
+    maybe_emit_local_audio_reply: Callable[..., None]
+    build_llm_client_fn: Callable[[], Any]
+    plan_executor_cls: Any
+    build_next_session_state_fn: Callable[..., dict[str, Any]]
+    commit_session_state_fn: Callable[[dict[str, Any]], None]
+    outgoing_locale_fn: Callable[[dict[str, Any] | None], str]
+
+
+class ConsciousMessageExecutionHandler:
+    def __init__(self, deps: ConsciousMessageExecutionDeps) -> None:
+        self._deps = deps
+
+    def execute(self, context: dict) -> ActionResult:
+        signal = context.get("signal")
+        raw_payload = getattr(signal, "payload", {}) if signal else {}
+        if not isinstance(raw_payload, dict):
+            raise ValueError("invalid_envelope: payload must be an object")
+        try:
+            envelope = IncomingMessageEnvelope.from_payload(raw_payload)
+        except ValueError as exc:
+            raise ValueError(f"invalid_envelope: {exc}") from exc
+        correlation_id = envelope.correlation_id or (getattr(signal, "correlation_id", None) if signal else None)
+        correlation_id = str(correlation_id or uuid.uuid4())
+
+        payload = envelope.runtime_payload()
+        incoming = self._deps.build_incoming_context_from_envelope(envelope=envelope, correlation_id=correlation_id)
+        packed_input = self._deps.pack_raw_provider_event_markdown(
+            channel_type=str(envelope.channel.get("type") or incoming.channel_type),
+            payload=envelope.to_dict(),
+            correlation_id=correlation_id,
+        )
+        self._deps.log_manager.emit(
+            event="incoming_message.started",
+            component="actions.conscious_message_execution",
+            correlation_id=correlation_id,
+            channel=incoming.channel_type,
+            user_id=incoming.person_id,
+            payload={
+                "address": incoming.address,
+                "text_snippet": self._deps.text_log_snippet(str(envelope.content.get("text") or "")),
+            },
+        )
+
+        session_key = build_session_key(incoming)
+        self._deps.log_manager.emit(
+            event="incoming_message.session_resolved",
+            component="actions.conscious_message_execution",
+            correlation_id=correlation_id,
+            channel=incoming.channel_type,
+            user_id=incoming.person_id,
+            payload={
+                "session_key": session_key,
+                "address": incoming.address,
+            },
+        )
+        self._deps.emit_presence_phase_changed(incoming=incoming, phase="acknowledged", correlation_id=correlation_id)
+        session_timezone = self._deps.resolve_session_timezone(incoming)
+        session_user_id = self._deps.resolve_session_user_id(incoming=incoming, payload=payload)
+        day_session = resolve_day_session(
+            user_id=session_user_id,
+            channel=incoming.channel_type,
+            timezone_name=session_timezone,
+        )
+
+        stored_state = load_state(session_key) or {}
+        ensure_conversation_locale(
+            conversation_key=session_key,
+            stored_state=stored_state,
+            incoming=incoming,
+        )
+        state = build_cortex_state(
+            stored_state=stored_state,
+            incoming=incoming,
+            correlation_id=correlation_id,
+            payload=payload,
+            normalized=None,
+        )
+        state["_bus"] = context.get("ctx")
+        state["session_id"] = day_session.get("session_id")
+        state["session_state"] = day_session
+        state["recent_conversation_block"] = render_recent_conversation_block(day_session)
+        has_live_transition_sink = self._deps.attach_transition_sink(state, incoming)
+        if self._deps.pdca_slicing_enabled():
+            task_id = self._deps.enqueue_pdca_slice(
+                context=context,
+                incoming=incoming,
+                state=state,
+                session_key=session_key,
+                session_user_id=session_user_id,
+                day_session=day_session,
+                payload=payload,
+                correlation_id=correlation_id,
+            )
+            updated_day_session = self._deps.build_next_session_state_fn(
+                previous=day_session,
+                channel=incoming.channel_type,
+                user_message=str(payload.get("text") or ""),
+                assistant_message="",
+                ability_state=None,
+                task_state=None,
+                planning_context=None,
+                pending_interaction={"type": "pdca_slice", "key": task_id} if task_id else None,
+            )
+            self._deps.commit_session_state_fn(updated_day_session)
+            self._deps.log_manager.emit(
+                event="incoming_message.completed",
+                component="actions.conscious_message_execution",
+                correlation_id=incoming.correlation_id,
+                channel=incoming.channel_type,
+                user_id=incoming.person_id,
+                status="done",
+                payload={"message": "enqueued_pdca_slice", "task_id": task_id},
+            )
+            return ActionResult(intention_key="NOOP", payload={"task_id": task_id} if task_id else {}, urgency=None)
+
+        try:
+            llm_client = self._deps.build_llm_client_fn()
+        except Exception as exc:
+            self._deps.log_manager.emit_exception(
+                event="incoming_message.llm_client_failed",
+                exc=exc,
+                component="actions.conscious_message_execution",
+                correlation_id=incoming.correlation_id,
+                channel=incoming.channel_type,
+                user_id=incoming.person_id,
+                message="Failed to build LLM client; continuing with fallback None",
+            )
+            self._deps.logger.exception("HandleIncomingMessageAction failed to build llm client")
+            llm_client = None
+        try:
+            result = self._deps.cortex_graph.invoke(state, packed_input, llm_client=llm_client)
+        except Exception as exc:
+            self._deps.log_manager.emit_exception(
+                event="incoming_message.cortex_invoke_failed",
+                exc=exc,
+                component="actions.conscious_message_execution",
+                correlation_id=incoming.correlation_id,
+                channel=incoming.channel_type,
+                user_id=incoming.person_id,
+                message="Cortex invoke failed",
+                payload={"target": incoming.address},
+            )
+            self._deps.logger.exception(
+                "HandleIncomingMessageAction cortex_invoke_failed channel=%s target=%s correlation_id=%s",
+                incoming.channel_type,
+                incoming.address,
+                incoming.correlation_id,
+            )
+            raise
+
+        if not has_live_transition_sink:
+            emit_agent_transitions_from_meta(
+                incoming=incoming,
+                meta=result.meta if isinstance(result.meta, dict) else {},
+                emit_presence_event=lambda ctx, event: self._deps.emit_channel_transition_event(ctx, event),
+                skip_phases=set(),
+            )
+        self._deps.log_manager.emit(
+            event="incoming_message.cortex_result",
+            component="actions.conscious_message_execution",
+            correlation_id=incoming.correlation_id,
+            channel=incoming.channel_type,
+            user_id=incoming.person_id,
+            payload={
+                "reply_len": len(str(result.reply_text or "")),
+                "plans": len(result.plans or []),
+            },
+        )
+        if result.plans:
+            self._deps.log_manager.emit(
+                event="incoming_message.cortex_plans",
+                component="actions.conscious_message_execution",
+                correlation_id=incoming.correlation_id,
+                channel=incoming.channel_type,
+                user_id=incoming.person_id,
+                payload={"steps": [str(getattr(plan, "tool", "unknown")) for plan in result.plans]},
+            )
+
+        cognition_state = self._deps.flush_cognition_state_if_task_succeeded(
+            result.cognition_state if isinstance(result.cognition_state, dict) else {},
+            correlation_id=incoming.correlation_id,
+        )
+        save_state(session_key, cognition_state)
+        if cognition_state:
+            self._deps.log_manager.emit(
+                event="incoming_message.state_saved",
+                component="actions.conscious_message_execution",
+                correlation_id=incoming.correlation_id,
+                channel=incoming.channel_type,
+                user_id=incoming.person_id,
+                payload={"pending_interaction": cognition_state.get("pending_interaction")},
+            )
+
+        executor = self._deps.plan_executor_cls()
+        exec_context = PlanExecutionContext(
+            channel_type=incoming.channel_type,
+            channel_target=incoming.address,
+            actor_person_id=incoming.person_id,
+            correlation_id=incoming.correlation_id,
+        )
+        if result.reply_text:
+            locale = self._deps.outgoing_locale_fn(cognition_state)
+            result_locale = str(cognition_state.get("locale") or "").strip()
+            if not result_locale:
+                state_locale = str(state.get("locale") or "").strip()
+                if state_locale:
+                    locale = state_locale
+            reply_plan = CortexPlan(
+                tool="communicate",
+                parameters={
+                    "message": str(result.reply_text),
+                    "locale": locale,
+                },
+                payload={
+                    "message": str(result.reply_text),
+                    "locale": locale,
+                },
+            )
+            executor.execute([reply_plan], context, exec_context)
+        if result.plans:
+            executor.execute(result.plans, context, exec_context)
+        self._deps.maybe_emit_local_audio_reply(
+            payload=payload,
+            reply_text=str(result.reply_text or ""),
+            correlation_id=incoming.correlation_id,
+        )
+        session_assistant_message = self._deps.resolve_assistant_session_message(
+            reply_text=str(result.reply_text or ""),
+            plans=result.plans or [],
+        )
+        updated_day_session = self._deps.build_next_session_state_fn(
+            previous=day_session,
+            channel=incoming.channel_type,
+            user_message=str(payload.get("text") or ""),
+            assistant_message=session_assistant_message,
+            ability_state=cognition_state.get("ability_state")
+            if isinstance(cognition_state.get("ability_state"), dict)
+            else None,
+            task_state=cognition_state.get("task_state")
+            if isinstance(cognition_state.get("task_state"), dict)
+            else None,
+            planning_context=cognition_state.get("planning_context")
+            if isinstance(cognition_state.get("planning_context"), dict)
+            else None,
+            pending_interaction=cognition_state.get("pending_interaction")
+            if isinstance(cognition_state.get("pending_interaction"), dict)
+            else None,
+        )
+        self._deps.commit_session_state_fn(updated_day_session)
+
+        self._deps.log_manager.emit(
+            event="incoming_message.completed",
+            component="actions.conscious_message_execution",
+            correlation_id=incoming.correlation_id,
+            channel=incoming.channel_type,
+            user_id=incoming.person_id,
+            status="done",
+            payload={"message": "noop"},
+        )
+        return ActionResult(intention_key="NOOP", payload={}, urgency=None)

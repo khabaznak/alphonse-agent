@@ -22,6 +22,26 @@ class ExtremityAdapter(Protocol):
     def deliver(self, message: NormalizedOutboundMessage) -> None:
         ...
 
+    # Optional channel primitives used by orchestration for transition UX.
+    def send_chat_action(
+        self,
+        *,
+        channel_target: str | None,
+        action: str,
+        correlation_id: str | None = None,
+    ) -> None:
+        ...
+
+    def set_reaction(
+        self,
+        *,
+        channel_target: str | None,
+        message_id: str | None,
+        emoji: str,
+        correlation_id: str | None = None,
+    ) -> None:
+        ...
+
 
 @dataclass
 class AdapterRegistry:

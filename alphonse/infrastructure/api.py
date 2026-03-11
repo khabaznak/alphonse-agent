@@ -3,12 +3,14 @@ from __future__ import annotations
 import json
 import os
 import time
+from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import FastAPI, Body, File, Form, HTTPException, Header, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
+from alphonse.agent.actions.conscious_message_handler import build_incoming_message_envelope
 from alphonse.agent.cognition.abilities.store import AbilitySpecStore
 from alphonse.agent.cognition.capability_gaps.coalescing import (
     coalesce_open_intent_gaps,
@@ -73,6 +75,8 @@ from alphonse.agent.nervous_system.terminal_tools import (
     upsert_terminal_sandbox,
 )
 from alphonse.agent.tools.terminal import TerminalTool
+from alphonse.agent.runtime import get_runtime
+from alphonse.agent.nervous_system.pdca_queue_store import get_pdca_queue_metrics
 from alphonse.agent.nervous_system.users import (
     delete_user,
     get_user,
@@ -280,15 +284,9 @@ class TelegramInviteStatusUpdate(BaseModel):
 @app.get("/agent/status")
 def agent_status(x_alphonse_api_token: str | None = Header(default=None)) -> dict[str, object]:
     _assert_api_token(x_alphonse_api_token)
-    signal = gateway.build_signal(
-        "api.status_requested",
-        {"api_token": x_alphonse_api_token},
-        None,
-    )
-    response = gateway.emit_and_wait(signal, timeout=40.0)
-    if response is None:
-        raise HTTPException(status_code=503, detail="API gateway unavailable")
-    return response
+    snapshot = get_runtime().snapshot()
+    snapshot["pdca_metrics"] = get_pdca_queue_metrics()
+    return snapshot
 
 
 @app.post("/agent/message")
@@ -306,23 +304,35 @@ def agent_message(
     controls = dict(controls_payload) if isinstance(controls_payload, dict) else {}
     channel = str(payload.get("channel") or payload.get("provider") or "webui")
     target = str(payload.get("target") or payload.get("channel_target") or channel)
-    signal = gateway.build_signal(
-        "api.message_received",
-        {
-            "text": text,
+    correlation_id = _as_optional_str(payload.get("correlation_id"))
+    message_id = str(payload.get("message_id") or payload.get("id") or correlation_id or f"{channel}:{target}:{int(time.time())}")
+    envelope = build_incoming_message_envelope(
+        message_id=message_id,
+        channel_type=channel,
+        channel_target=target,
+        provider=str(payload.get("provider") or channel),
+        text=text,
+        occurred_at=str(payload.get("occurred_at") or datetime.now(timezone.utc).isoformat()),
+        correlation_id=correlation_id,
+        actor_external_user_id=_as_optional_str(payload.get("user_id")),
+        actor_display_name=_as_optional_str(payload.get("user_name")),
+        actor_person_id=_as_optional_str(payload.get("person_id")),
+        controls=controls,
+        metadata={
             "args": payload.get("args") or {},
-            "user_id": payload.get("user_id"),
-            "user_name": payload.get("user_name"),
-            "channel": channel,
-            "target": target,
-            "provider": str(payload.get("provider") or channel),
+            "raw_metadata": metadata,
             "content": content,
-            "controls": controls,
-            "metadata": metadata,
-            "timestamp": payload.get("timestamp") or time.time(),
-            "api_token": x_alphonse_api_token,
+            "api_token_present": bool(x_alphonse_api_token),
         },
-        _as_optional_str(payload.get("correlation_id")),
+        locale=_as_optional_str(payload.get("locale")),
+        timezone_name=_as_optional_str(payload.get("timezone")),
+        reply_to_message_id=_as_optional_str(payload.get("reply_to_message_id")),
+        session_hint=_as_optional_str(payload.get("session_hint")),
+    )
+    signal = gateway.build_signal(
+        "sense.api.message.user.received",
+        envelope,
+        correlation_id,
     )
     response = gateway.emit_and_wait(signal, timeout=40.0)
     if response is None:
@@ -357,20 +367,6 @@ async def create_agent_asset(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return record
-
-
-@app.get("/agent/timed-signals")
-def timed_signals(limit: int = 200, x_alphonse_api_token: str | None = Header(default=None)) -> dict[str, Any]:
-    _assert_api_token(x_alphonse_api_token)
-    signal = gateway.build_signal(
-        "api.timed_signals_requested",
-        {"limit": limit, "api_token": x_alphonse_api_token},
-        None,
-    )
-    response = gateway.emit_and_wait(signal, timeout=5.0)
-    if response is None:
-        raise HTTPException(status_code=503, detail="API gateway unavailable")
-    return response
 
 
 @app.get("/agent/events")

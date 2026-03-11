@@ -17,13 +17,12 @@ class _DummyTerminal:
     def execute_with_policy(self, **kwargs):
         self.calls.append(dict(kwargs))
         return {
-            "status": "ok",
-            "result": {
+            "output": {
                 "exit_code": 0,
                 "stdout": "ok",
                 "stderr": "",
             },
-            "error": None,
+            "exception": None,
             "metadata": {"policy_decision": "allow"},
         }
 
@@ -65,7 +64,7 @@ def test_mcp_call_executes_with_policy_envelope(monkeypatch: pytest.MonkeyPatch,
         cwd=str(tmp_path),
     )
 
-    assert result["status"] == "ok"
+    assert result["exception"] is None
     assert dummy_terminal.calls
     call = dummy_terminal.calls[0]
     command = str(call.get("command") or "")
@@ -94,8 +93,8 @@ def test_mcp_call_rejects_unknown_profile(monkeypatch: pytest.MonkeyPatch, tmp_p
         cwd=str(tmp_path),
     )
 
-    assert result["status"] == "failed"
-    error = result.get("error")
+    assert result["exception"] is not None
+    error = result.get("exception")
     assert isinstance(error, dict)
     assert error.get("code") == "mcp_profile_not_found"
 
@@ -138,7 +137,7 @@ def test_mcp_call_normalizes_legacy_query_and_ignores_mode(
         cwd=str(tmp_path),
     )
 
-    assert result["status"] == "ok"
+    assert result["exception"] is None
     assert dummy_terminal.calls
     command = str(dummy_terminal.calls[0].get("command") or "")
     assert "https://example.com" in command
@@ -183,7 +182,7 @@ def test_mcp_call_normalizes_nested_args_payload(
         cwd=str(tmp_path),
     )
 
-    assert result["status"] == "ok"
+    assert result["exception"] is None
     assert dummy_terminal.calls
     command = str(dummy_terminal.calls[0].get("command") or "")
     assert "https://example.org" in command
@@ -225,7 +224,7 @@ def test_mcp_call_uses_short_default_timeout(monkeypatch: pytest.MonkeyPatch, tm
         cwd=str(tmp_path),
     )
 
-    assert result["status"] == "ok"
+    assert result["exception"] is None
     assert dummy_terminal.calls
     timeout_value = float(dummy_terminal.calls[0].get("timeout_seconds") or 0)
     assert timeout_value == 45.0
@@ -266,9 +265,9 @@ def test_mcp_call_fast_fails_contract_mismatch(monkeypatch: pytest.MonkeyPatch, 
         cwd=str(tmp_path),
     )
 
-    assert result["status"] == "failed"
+    assert result["exception"] is not None
     assert not dummy_terminal.calls
-    error = result.get("error")
+    error = result.get("exception")
     assert isinstance(error, dict)
     assert error.get("code") == "mcp_operation_contract_mismatch"
 
@@ -301,9 +300,8 @@ def test_mcp_call_routes_unknown_operation_to_native_connector(
     def _fake_native(**kwargs):
         called.update(kwargs)
         return {
-            "status": "ok",
-            "result": {"tools": ["navigate"]},
-            "error": None,
+            "output": {"tools": ["navigate"]},
+            "exception": None,
             "metadata": {"tool": "mcp_call", "mcp_native": True},
         }
 
@@ -317,7 +315,7 @@ def test_mcp_call_routes_unknown_operation_to_native_connector(
         cwd=str(tmp_path),
     )
 
-    assert result["status"] == "ok"
+    assert result["exception"] is None
     assert called.get("operation_key") == "list_tools"
 
 
@@ -403,8 +401,8 @@ def test_mcp_call_reuses_native_session_across_calls(
         cwd=str(tmp_path),
     )
 
-    assert first["status"] == "ok"
-    assert second["status"] == "ok"
+    assert first["exception"] is None
+    assert second["exception"] is None
     assert _FakeNativeClient.starts == 1
     assert _FakeNativeClient.initializes == 1
     assert len(_FakeNativeClient.calls) == 2
@@ -456,7 +454,7 @@ def test_mcp_call_native_headless_override_false_removes_headless_arg(
         cwd=str(tmp_path),
     )
 
-    assert result["status"] == "ok"
+    assert result["exception"] is None
     assert seen_argv
     assert "--headless" not in seen_argv[0]
     assert "--isolated" in seen_argv[0]
@@ -508,7 +506,7 @@ def test_mcp_call_native_headless_override_true_adds_headless_arg(
         cwd=str(tmp_path),
     )
 
-    assert result["status"] == "ok"
+    assert result["exception"] is None
     assert seen_argv
     assert "--headless" in seen_argv[0]
     assert "--isolated" in seen_argv[0]

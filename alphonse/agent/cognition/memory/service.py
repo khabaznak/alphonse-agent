@@ -3,17 +3,24 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import mimetypes
 import os
 import shutil
 import subprocess
+import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+from alphonse.agent.actions.conscious_message_handler import build_incoming_message_envelope
 from alphonse.agent.cognition.memory.paths import resolve_memory_root
 from alphonse.agent.cognition.memory.paths import sanitize_segment
 from alphonse.agent.cognition.memory.paths import user_root
+from alphonse.agent.nervous_system import users as users_store
+from alphonse.agent.nervous_system.senses.bus import Signal as BusSignal
+from alphonse.agent.nervous_system.user_service_resolvers import resolve_telegram_chat_id_for_user
+from alphonse.agent.observability.log_manager import get_log_manager
 
 _DEFAULT_MAX_LINES = 20_000
 _DEFAULT_MAX_BYTES = 5 * 1024 * 1024
@@ -21,6 +28,9 @@ _DEFAULT_DAILY_RETENTION_DAYS = 30
 _DEFAULT_WEEKLY_RETENTION_DAYS = 90
 _ISO_DATE_FMT = "%Y-%m-%d"
 _EPISODE_TS_FMT = "%Y-%m-%d %H:%M:%S %z"
+_LOG = get_log_manager()
+_RUNTIME_FAILURE_SIGNAL = "sense.runtime.message.user.received"
+_MEMORY_ESCALATION_DEDUPE: set[str] = set()
 
 
 @dataclass(frozen=True)
@@ -535,6 +545,75 @@ def get_workspace_pointer(user_id: str, key: str) -> Any:
     return MemoryService().get_workspace_pointer(user_id, key)
 
 
+def record_after_tool_call(
+    *,
+    state: dict[str, Any],
+    task_state: dict[str, Any],
+    current: dict[str, Any] | None,
+    tool_name: str,
+    args: dict[str, Any],
+    result: dict[str, Any],
+    correlation_id: str | None,
+) -> None:
+    if str(tool_name or "").strip() in {"search_episodes", "get_mission", "list_active_missions", "get_workspace_pointer"}:
+        return
+    user_id = _memory_user_id(state)
+    mission_id = _memory_mission_id(task_state=task_state, correlation_id=correlation_id)
+    artifacts = _memory_artifacts_from_result(
+        mission_id=mission_id,
+        tool_name=tool_name,
+        result=result,
+    )
+    exception_payload = (result or {}).get("exception")
+    exception_text = ""
+    if isinstance(exception_payload, dict):
+        exception_text = str(exception_payload.get("message") or exception_payload.get("code") or "").strip()
+    elif isinstance(exception_payload, str):
+        exception_text = exception_payload.strip()
+    payload = {
+        "intent": str(task_state.get("goal") or "").strip() or "task execution",
+        "action": f"{tool_name}({_safe_args_preview(args)})",
+        "result": "exception=" + (exception_text or "none"),
+        "step_id": str((current or {}).get("step_id") or "").strip() or None,
+        "next": _memory_next_hint(task_state=task_state, current=current),
+    }
+    _memory_append_episode(
+        state=state,
+        user_id=user_id,
+        mission_id=mission_id,
+        event_type="after_tool_call",
+        payload=payload,
+        artifacts=artifacts,
+    )
+
+
+def record_plan_step_completion(
+    *,
+    state: dict[str, Any],
+    task_state: dict[str, Any],
+    current: dict[str, Any] | None,
+    proposal: dict[str, Any],
+    correlation_id: str | None,
+) -> None:
+    user_id = _memory_user_id(state)
+    mission_id = _memory_mission_id(task_state=task_state, correlation_id=correlation_id)
+    payload = {
+        "intent": str(task_state.get("goal") or "").strip() or "task execution",
+        "step_id": str((current or {}).get("step_id") or "").strip() or None,
+        "action": str(proposal.get("kind") or "").strip(),
+        "result": f"step_status={str((current or {}).get('status') or '').strip() or 'unknown'}",
+        "next": _memory_next_hint(task_state=task_state, current=current),
+    }
+    _memory_append_episode(
+        state=state,
+        user_id=user_id,
+        mission_id=mission_id,
+        event_type="plan_step_completed",
+        payload=payload,
+        artifacts=[],
+    )
+
+
 def _render_episode_entry(
     *,
     timestamp: datetime,
@@ -562,6 +641,317 @@ def _render_episode_entry(
         lines.extend(_render_field(key=key_text, value=value, indent=0))
     lines.append("")
     return "\n".join(lines) + "\n"
+
+
+def _memory_hooks_enabled() -> bool:
+    # Memory writes are mandatory for subconscious continuity.
+    return True
+
+
+def _memory_user_id(state: dict[str, Any]) -> str:
+    for key in ("incoming_user_id", "actor_person_id", "channel_target", "chat_id", "conversation_key"):
+        value = str(state.get(key) or "").strip()
+        if value:
+            return value
+    return "anonymous"
+
+
+def _memory_mission_id(*, task_state: dict[str, Any], correlation_id: str | None) -> str:
+    explicit = str(task_state.get("mission_id") or "").strip()
+    if explicit:
+        return explicit
+    task_id = str(task_state.get("task_id") or "").strip()
+    if task_id:
+        return task_id
+    corr = str(correlation_id or "").strip()
+    if corr:
+        return f"corr_{corr}"
+    return "ad_hoc"
+
+
+def _memory_next_hint(*, task_state: dict[str, Any], current: dict[str, Any] | None) -> str:
+    status = str(task_state.get("status") or "").strip().lower()
+    if status == "waiting_user":
+        return str(task_state.get("next_user_question") or "waiting for user input").strip()
+    if status == "done":
+        return "mission complete"
+    return f"continue from step {str((current or {}).get('step_id') or '').strip() or '?'}"
+
+
+def _memory_append_episode(
+    *,
+    state: dict[str, Any],
+    user_id: str,
+    mission_id: str,
+    event_type: str,
+    payload: dict[str, Any],
+    artifacts: list[dict[str, Any]],
+) -> None:
+    correlation_id = str(state.get("correlation_id") or "").strip() or None
+    max_retries = max(1, _env_int("ALPHONSE_MEMORY_WRITE_MAX_RETRIES", 3))
+    backoff = max(0.0, _env_float("ALPHONSE_MEMORY_WRITE_RETRY_BACKOFF_SECONDS", 0.2))
+    last_error: Exception | None = None
+    for attempt in range(1, max_retries + 1):
+        try:
+            append_episode(
+                user_id=user_id,
+                mission_id=mission_id,
+                event_type=event_type,
+                payload=payload,
+                artifacts=artifacts,
+            )
+            if attempt > 1:
+                _LOG.emit(
+                    event="memory.write.retry_succeeded",
+                    component="cognition.memory.service",
+                    correlation_id=correlation_id,
+                    user_id=user_id,
+                    payload={
+                        "mission_id": mission_id,
+                        "event_type": event_type,
+                        "attempt": attempt,
+                    },
+                )
+            return
+        except Exception as exc:
+            last_error = exc
+            _LOG.emit(
+                level="warning",
+                event="memory.write.retry_attempt",
+                component="cognition.memory.service",
+                correlation_id=correlation_id,
+                user_id=user_id,
+                error_code=type(exc).__name__,
+                payload={
+                    "mission_id": mission_id,
+                    "event_type": event_type,
+                    "attempt": attempt,
+                    "max_retries": max_retries,
+                },
+            )
+            if attempt < max_retries and backoff > 0:
+                time.sleep(backoff * (2 ** (attempt - 1)))
+    _LOG.emit(
+        level="error",
+        event="memory.write.retry_exhausted",
+        component="cognition.memory.service",
+        correlation_id=correlation_id,
+        user_id=user_id,
+        error_code=type(last_error).__name__ if last_error else None,
+        payload={
+            "mission_id": mission_id,
+            "event_type": event_type,
+            "max_retries": max_retries,
+            "error": str(last_error or ""),
+        },
+    )
+    _emit_memory_failure_escalation(
+        state=state,
+        user_id=user_id,
+        mission_id=mission_id,
+        event_type=event_type,
+        error=last_error,
+    )
+
+
+def _emit_memory_failure_escalation(
+    *,
+    state: dict[str, Any],
+    user_id: str,
+    mission_id: str,
+    event_type: str,
+    error: Exception | None,
+) -> None:
+    bus = state.get("_bus")
+    if not hasattr(bus, "emit"):
+        return
+    correlation_id = str(state.get("correlation_id") or "").strip() or None
+    dedupe_key = f"{user_id}:{mission_id}:{event_type}:{str(correlation_id or '')}"
+    if dedupe_key in _MEMORY_ESCALATION_DEDUPE:
+        return
+    admin_target = _resolve_admin_telegram_target()
+    if not admin_target:
+        return
+    _MEMORY_ESCALATION_DEDUPE.add(dedupe_key)
+    text = (
+        "Memory write pipeline exhausted retries. "
+        f"user={user_id} mission={mission_id} event={event_type} "
+        f"error={type(error).__name__ if error else 'unknown'}"
+    )
+    envelope = build_incoming_message_envelope(
+        message_id=f"memory-write-failure:{correlation_id or 'unknown'}",
+        channel_type="telegram",
+        channel_target=admin_target,
+        provider="runtime",
+        text=text,
+        correlation_id=correlation_id,
+        actor_external_user_id="runtime",
+        actor_display_name="Alphonse Runtime",
+        metadata={
+            "message_kind": "memory_write_failure_escalation",
+            "failure": {
+                "user_id": user_id,
+                "mission_id": mission_id,
+                "event_type": event_type,
+                "error_type": type(error).__name__ if error else None,
+                "error_message": str(error or "").strip()[:280],
+            },
+        },
+    )
+    bus.emit(
+        BusSignal(
+            type=_RUNTIME_FAILURE_SIGNAL,
+            payload=envelope,
+            source="system",
+            correlation_id=correlation_id,
+        )
+    )
+    _LOG.emit(
+        event="memory.write.escalated_to_admin",
+        component="cognition.memory.service",
+        correlation_id=correlation_id,
+        user_id=user_id,
+        payload={
+            "mission_id": mission_id,
+            "event_type": event_type,
+            "admin_target": admin_target,
+        },
+    )
+
+
+def _resolve_admin_telegram_target() -> str | None:
+    try:
+        users = users_store.list_users(active_only=True, limit=200)
+    except Exception:
+        return None
+    for user in users:
+        if not isinstance(user, dict) or not bool(user.get("is_admin")):
+            continue
+        user_id = str(user.get("user_id") or "").strip()
+        if not user_id:
+            continue
+        resolved = resolve_telegram_chat_id_for_user(user_id)
+        if resolved:
+            return str(resolved).strip()
+    return None
+
+
+def _env_float(key: str, default: float) -> float:
+    raw = str(os.getenv(key) or "").strip()
+    if not raw:
+        return float(default)
+    try:
+        value = float(raw)
+    except ValueError:
+        return float(default)
+    return float(value) if value >= 0 else float(default)
+
+
+def _memory_artifacts_from_result(
+    *,
+    mission_id: str,
+    tool_name: str,
+    result: dict[str, Any],
+) -> list[dict[str, Any]]:
+    refs: list[dict[str, Any]] = []
+    max_items = max(1, int(str(os.getenv("ALPHONSE_MEMORY_MAX_ARTIFACTS_PER_EVENT") or "5").strip() or "5"))
+    max_bytes = max(1024, int(str(os.getenv("ALPHONSE_MEMORY_MAX_ARTIFACT_SIZE_BYTES") or str(20 * 1024 * 1024)).strip() or str(20 * 1024 * 1024)))
+    paths = _extract_path_candidates(result)
+    seen: set[str] = set()
+    for candidate in paths:
+        if len(refs) >= max_items:
+            break
+        text = str(candidate or "").strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        if text.startswith("http://") or text.startswith("https://"):
+            refs.append({"url": text})
+            continue
+        file_path = Path(text)
+        if not file_path.exists() or not file_path.is_file():
+            continue
+        try:
+            size = file_path.stat().st_size
+        except Exception:
+            continue
+        if size > max_bytes:
+            refs.append({"path": str(file_path), "note": "artifact_too_large"})
+            continue
+        try:
+            data = file_path.read_bytes()
+            mime = mimetypes.guess_type(str(file_path))[0] or "application/octet-stream"
+            artifact_ref = put_artifact(
+                mission_id=mission_id,
+                content=data,
+                mime=mime,
+                name_hint=file_path.name,
+            )
+            if isinstance(artifact_ref, dict):
+                artifact_ref.setdefault("source_path", str(file_path))
+                artifact_ref.setdefault("tool", tool_name)
+                refs.append(artifact_ref)
+        except Exception:
+            refs.append({"path": str(file_path), "note": "artifact_copy_failed"})
+            continue
+    return refs
+
+
+def _extract_path_candidates(value: Any) -> list[str]:
+    out: list[str] = []
+
+    def _walk(node: Any, parent_key: str = "") -> None:
+        if isinstance(node, dict):
+            for key, item in node.items():
+                _walk(item, str(key))
+            return
+        if isinstance(node, list):
+            for item in node:
+                _walk(item, parent_key)
+            return
+        if not isinstance(node, str):
+            return
+        text = node.strip()
+        if not text:
+            return
+        key_hint = parent_key.lower()
+        if any(token in key_hint for token in ("path", "file", "url", "artifact", "snapshot")):
+            out.append(text)
+            return
+        if text.startswith("/") or text.startswith("./") or text.startswith("../"):
+            out.append(text)
+            return
+        if text.startswith("http://") or text.startswith("https://"):
+            out.append(text)
+
+    _walk(value)
+    return out
+
+
+def _safe_args_preview(args: dict[str, Any]) -> str:
+    redacted = _redact_sensitive(args)
+    try:
+        rendered = json.dumps(redacted, ensure_ascii=False, sort_keys=True)
+    except Exception:
+        rendered = str(redacted)
+    return rendered[:800]
+
+
+def _redact_sensitive(value: Any) -> Any:
+    secret_tokens = ("password", "pass", "token", "api_key", "secret", "authorization")
+    if isinstance(value, dict):
+        out: dict[str, Any] = {}
+        for key, item in value.items():
+            key_text = str(key or "")
+            lowered = key_text.lower()
+            if any(token in lowered for token in secret_tokens):
+                out[key_text] = "[redacted]"
+            else:
+                out[key_text] = _redact_sensitive(item)
+        return out
+    if isinstance(value, list):
+        return [_redact_sensitive(item) for item in value]
+    return value
 
 
 def _render_field(*, key: str, value: Any, indent: int) -> list[str]:

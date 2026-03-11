@@ -233,9 +233,8 @@ class TerminalTool:
         }
         if not decision.allowed:
             return {
-                "status": "failed",
-                "result": None,
-                "error": {"code": decision.reason, "message": f"Command blocked by policy: {decision.reason}"},
+                "output": None,
+        "exception": {"code": decision.reason, "message": f"Command blocked by policy: {decision.reason}"},
                 "metadata": metadata,
             }
         cmd = str(command or "").strip()
@@ -246,9 +245,8 @@ class TerminalTool:
                 argv = shlex.split(cmd)
             except ValueError as exc:
                 return {
-                    "status": "failed",
-                    "result": None,
-                    "error": {"code": "invalid_command", "message": str(exc)},
+                    "output": None,
+        "exception": {"code": "invalid_command", "message": str(exc)},
                     "metadata": metadata,
                 }
         resolved_cwd = Path(decision.cwd)
@@ -262,13 +260,12 @@ class TerminalTool:
             )
         except _TerminalInputRequiredError as exc:
             return {
-                "status": "failed",
-                "result": {
+                "output": {
                     "exit_code": None,
                     "stdout": _truncate_text(exc.stdout),
                     "stderr": _truncate_text(exc.stderr),
                 },
-                "error": {"code": exc.code, "message": exc.message},
+                "exception": {"code": exc.code, "message": exc.message},
                 "metadata": {
                     **metadata,
                     "elapsed_ms": exc.elapsed_ms,
@@ -277,13 +274,12 @@ class TerminalTool:
             }
         except _TerminalWatchdogTimeout as exc:
             return {
-                "status": "failed",
-                "result": {
+                "output": {
                     "exit_code": None,
                     "stdout": _truncate_text(exc.stdout),
                     "stderr": _truncate_text(exc.stderr),
                 },
-                "error": {"code": exc.code, "message": exc.message},
+                "exception": {"code": exc.code, "message": exc.message},
                 "metadata": {
                     **metadata,
                     "elapsed_ms": exc.elapsed_ms,
@@ -292,33 +288,30 @@ class TerminalTool:
             }
         except Exception as exc:
             return {
-                "status": "failed",
-                "result": None,
-                "error": {"code": "execution_error", "message": str(exc)},
+                "output": None,
+        "exception": {"code": "execution_error", "message": str(exc)},
                 "metadata": metadata,
             }
         if int(completed.returncode or 0) != 0:
             return {
-                "status": "failed",
-                "result": {
+                "output": {
                     "exit_code": int(completed.returncode or 1),
                     "stdout": _truncate_text(completed.stdout),
                     "stderr": _truncate_text(completed.stderr),
                 },
-                "error": {"code": "subprocess_non_zero_exit", "message": "Command returned non-zero exit status"},
+                "exception": {"code": "subprocess_non_zero_exit", "message": "Command returned non-zero exit status"},
                 "metadata": {
                     **metadata,
                     "elapsed_ms": completed.elapsed_ms,
                 },
             }
         return {
-            "status": "ok",
-            "result": {
+            "output": {
                 "exit_code": int(completed.returncode or 0),
                 "stdout": _truncate_text(completed.stdout),
                 "stderr": _truncate_text(completed.stderr),
             },
-            "error": None,
+            "exception": None,
             "metadata": {
                 **metadata,
                 "elapsed_ms": completed.elapsed_ms,

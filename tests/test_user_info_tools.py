@@ -46,8 +46,8 @@ def test_user_search_returns_matches_with_telegram_ids(monkeypatch, tmp_path) ->
     _seed_user("Gabrielle", "777002")
     tool = UserSearchTool()
     result = tool.execute(query="gabr", limit=10, active_only=True)
-    assert result["status"] == "ok"
-    users = result["result"]["users"]
+    assert result["exception"] is None
+    users = result["output"]["users"]
     assert len(users) >= 2
     ids = {str(item.get("telegram_user_id") or "") for item in users}
     assert "777001" in ids
@@ -60,5 +60,5 @@ def test_user_search_requires_query(monkeypatch, tmp_path) -> None:
     apply_schema(db_path)
     tool = UserSearchTool()
     failed = tool.execute(query="")
-    assert failed["status"] == "failed"
-    assert str((failed.get("error") or {}).get("code") or "") == "missing_query"
+    assert failed["exception"] is not None
+    assert str((failed.get("exception") or {}).get("code") or "") == "missing_query"

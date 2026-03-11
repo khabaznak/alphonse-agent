@@ -13,12 +13,11 @@ class ClockTool:
         tz = str(timezone_name or "").strip() or "UTC"
         now = get_time_now(tz)
         return {
-            "status": "ok",
-            "result": {
+            "output": {
                 "time": now.isoformat(),
                 "timezone": tz,
             },
-            "error": None,
+            "exception": None,
             "metadata": {"tool": "get_time"},
         }
 

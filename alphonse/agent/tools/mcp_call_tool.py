@@ -152,9 +152,8 @@ class McpCallTool:
             )
         if not profile_key or not operation_key:
             return {
-                "status": "failed",
-                "result": None,
-                "error": {
+                "output": None,
+        "exception": {
                     "code": "invalid_tool_arguments",
                     "message": "mcp_call requires `profile` and `operation` (with inputs under `arguments`).",
                     "retryable": False,
@@ -170,9 +169,8 @@ class McpCallTool:
         roots = _allowed_roots()
         if not roots:
             return {
-                "status": "failed",
-                "result": None,
-                "error": {
+                "output": None,
+        "exception": {
                     "code": "sandbox_roots_not_configured",
                     "message": "No enabled sandbox directories found. Configure sandbox dirs in nerve-db.",
                 },
@@ -203,13 +201,13 @@ class McpCallTool:
             metadata["mcp_profile"] = profile_key
             metadata["mcp_operation"] = operation_key
             payload["metadata"] = metadata
-            error = payload.get("error")
+            error = payload.get("exception")
             if isinstance(error, dict):
                 details = dict(error.get("details") or {}) if isinstance(error.get("details"), dict) else {}
                 details.setdefault("mcp_profile", profile_key)
                 details.setdefault("mcp_operation", operation_key)
                 error["details"] = details
-                payload["error"] = error
+                payload["exception"] = error
             return payload
 
 

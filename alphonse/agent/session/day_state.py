@@ -112,6 +112,7 @@ def build_next_session_state(
     task_state: dict[str, Any] | None,
     planning_context: dict[str, Any] | None,
     pending_interaction: dict[str, Any] | None,
+    assistant_visibility: str = "public",
 ) -> dict[str, Any]:
     state = _normalize_state(previous)
     last_action = _infer_last_action(
@@ -120,7 +121,12 @@ def build_next_session_state(
         planning_context=planning_context,
     )
     user_line = _sanitize_line(user_message, max_len=100)
-    assistant_line = _sanitize_line(assistant_message, max_len=100)
+    visibility = str(assistant_visibility or "public").strip().lower() or "public"
+    assistant_line = (
+        _sanitize_line(assistant_message, max_len=100)
+        if visibility != "internal"
+        else ""
+    )
 
     working_set: list[str] = []
     if user_line:

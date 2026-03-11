@@ -6,20 +6,20 @@ from pathlib import Path
 
 import pytest
 
+import alphonse.agent.cortex.nodes.respond as respond_module
 import alphonse.agent.cortex.task_mode.pdca as pdca_module
-import alphonse.agent.cortex.task_mode.plan as plan_module
-import alphonse.agent.cortex.task_mode.progress_critic_node as progress_critic_node_module
+import alphonse.agent.cortex.task_mode.execute_step as execute_step_module
 from alphonse.agent.cortex.nodes.respond import respond_finalize_node
 from alphonse.agent.cortex.task_mode.pdca import act_node
 from alphonse.agent.cortex.task_mode.pdca import build_next_step_node
+from alphonse.agent.cortex.task_mode.pdca import check_node
 from alphonse.agent.cortex.task_mode.pdca import execute_step_node
 from alphonse.agent.cortex.task_mode.pdca import route_after_act
 from alphonse.agent.cortex.task_mode.pdca import route_after_next_step
-from alphonse.agent.cortex.task_mode.pdca import route_after_progress_critic
 from alphonse.agent.cortex.task_mode.pdca import route_after_validate_step
-from alphonse.agent.cortex.task_mode.pdca import progress_critic_node
 from alphonse.agent.cortex.task_mode.pdca import update_state_node
 from alphonse.agent.cortex.task_mode.pdca import validate_step_node
+from alphonse.agent.cortex.task_mode.prompt_templates import NEXT_STEP_SYSTEM_PROMPT
 from alphonse.agent.cortex.task_mode.state import build_default_task_state
 from alphonse.agent.tools.registry import ToolRegistry
 from alphonse.agent.tools.registry import build_default_tool_registry
@@ -37,11 +37,37 @@ class _QueuedLlm:
             return ""
         return self._responses.pop(0)
 
+    def complete_with_tools(
+        self,
+        *,
+        messages: list[dict[str, object]],
+        tools: list[dict[str, object]],
+        tool_choice: str = "auto",
+    ) -> str:
+        _ = messages
+        _ = tools
+        _ = tool_choice
+        if not self._responses:
+            return ""
+        return self._responses.pop(0)
+
 
 class _ExplodingLlm:
     def complete(self, system_prompt: str, user_prompt: str) -> str:
         _ = system_prompt
         _ = user_prompt
+        raise RuntimeError("planner llm exploded")
+
+    def complete_with_tools(
+        self,
+        *,
+        messages: list[dict[str, object]],
+        tools: list[dict[str, object]],
+        tool_choice: str = "auto",
+    ) -> dict[str, object]:
+        _ = messages
+        _ = tools
+        _ = tool_choice
         raise RuntimeError("planner llm exploded")
 
 
@@ -53,6 +79,20 @@ class _PromptCaptureLlm:
     def complete(self, system_prompt: str, user_prompt: str) -> str:
         _ = system_prompt
         self.last_user_prompt = user_prompt
+        return self._response
+
+    def complete_with_tools(
+        self,
+        *,
+        messages: list[dict[str, object]],
+        tools: list[dict[str, object]],
+        tool_choice: str = "auto",
+    ) -> str:
+        _ = tools
+        _ = tool_choice
+        user_message = messages[-1] if messages else {}
+        if isinstance(user_message, dict):
+            self.last_user_prompt = str(user_message.get("content") or "")
         return self._response
 
 
@@ -167,12 +207,11 @@ class _FakeClock:
         _ = kwargs
         now = datetime(2026, 2, 14, 12, 0, 0, tzinfo=timezone.utc)
         return {
-            "status": "ok",
-            "result": {
+            "output": {
                 "time": now.isoformat(),
                 "timezone": "UTC",
             },
-            "error": None,
+            "exception": None,
             "metadata": {"tool": "getTime"},
         }
 
@@ -187,14 +226,13 @@ class _FakeReminder:
         message = str(kwargs.get("Message") or "")
         _ = kwargs
         return {
-            "status": "ok",
-            "result": {
+            "output": {
                 "reminder_id": "rem-test-1",
                 "fire_at": time,
                 "delivery_target": for_whom,
                 "message": message,
             },
-            "error": None,
+            "exception": None,
             "metadata": {"tool": "createReminder"},
         }
 
@@ -224,14 +262,13 @@ class _RecoverableReminder:
         if not str(message or "").strip():
             raise SchedulerToolError(code="missing_message", message="message is required", retryable=False)
         return {
-            "status": "ok",
-            "result": {
+            "output": {
                 "reminder_id": "rem-repaired-1",
                 "fire_at": time,
                 "delivery_target": for_whom,
                 "message": message,
             },
-            "error": None,
+            "exception": None,
             "metadata": {"tool": "createReminder"},
         }
 
@@ -240,9 +277,8 @@ class _FailingTool:
     def execute(self, **kwargs):  # noqa: ANN003
         _ = kwargs
         return {
-            "status": "failed",
-            "result": None,
-            "error": {
+            "output": None,
+                    "exception": {
                 "code": "asset_not_found",
                 "message": "asset_not_found",
                 "retryable": False,
@@ -255,9 +291,8 @@ class _FailingTool:
 class _ArgStrictTool:
     def execute(self, *, foo: str) -> dict[str, object]:
         return {
-            "status": "ok",
-            "result": {"foo": foo},
-            "error": None,
+            "output": {"foo": foo},
+            "exception": None,
             "metadata": {"tool": "echo_tool"},
         }
 
@@ -266,15 +301,41 @@ class _DomoticsExecuteConfirmedTool:
     def execute(self, **kwargs):  # noqa: ANN003
         _ = kwargs
         return {
-            "status": "ok",
-            "result": {
+            "output": {
                 "transport_ok": True,
                 "effect_applied_ok": True,
                 "readback_performed": True,
                 "readback_state": {"entity_id": "light.estudio", "state": "on"},
             },
-            "error": None,
+            "exception": None,
             "metadata": {"tool": "domotics.execute"},
+        }
+
+
+class _CaptureMcpCallTool:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, object]] = []
+
+    def execute(
+        self,
+        *,
+        profile: str | None = None,
+        operation: str | None = None,
+        arguments: dict[str, object] | None = None,
+        **kwargs,  # noqa: ANN003
+    ) -> dict[str, object]:
+        self.calls.append(
+            {
+                "profile": profile,
+                "operation": operation,
+                "arguments": dict(arguments or {}),
+                "extra": dict(kwargs or {}),
+            }
+        )
+        return {
+            "output": {"profile": profile, "operation": operation, "arguments": dict(arguments or {})},
+            "exception": None,
+            "metadata": {"tool": "mcp_call"},
         }
 
 
@@ -336,9 +397,7 @@ def _run_cycle(
     if route == "execute_step_node":
         state = _apply(state, execute_step_node(state, tool_registry=tool_registry))
         state = _apply(state, update_state_node(state))
-        state = _apply(state, progress_critic_node(state))
-        if route_after_progress_critic(state) == "act_node":
-            state = _apply(state, act_node(state))
+        state = _apply(state, act_node(state))
     return state
 
 
@@ -369,25 +428,17 @@ def test_reminder_request_calls_create_reminder_within_two_cycles() -> None:
     assert route_after_act(state) == "next_step_node"
 
     state = _run_cycle(state, next_step=next_step, tool_registry=tool_registry)
-    assert route_after_progress_critic(state) == "respond_node"
+    assert route_after_act(state) == "next_step_node"
 
     next_state = state["task_state"]
     assert isinstance(next_state, dict)
-    assert next_state.get("status") == "done"
-    outcome = next_state.get("outcome")
-    assert isinstance(outcome, dict)
-    assert outcome.get("kind") == "reminder_created"
+    assert next_state.get("status") == "running"
     facts = next_state.get("facts")
     assert isinstance(facts, dict)
     assert any(
         isinstance(item, dict) and str(item.get("tool") or "") == "createReminder"
         for item in facts.values()
     )
-    rendered = respond_finalize_node(state, emit_transition_event=lambda *_args, **_kwargs: None)
-    utterance = rendered.get("utterance")
-    assert isinstance(utterance, dict)
-    assert utterance.get("type") == "reminder_created"
-    assert str(rendered.get("response_text") or "").strip()
 
 
 def test_gettime_does_not_terminate_without_reminder_evidence() -> None:
@@ -454,8 +505,8 @@ def test_pdca_create_reminder_structured_failure_keeps_running() -> None:
     assert isinstance(fact, dict)
     result = fact.get("result")
     assert isinstance(result, dict)
-    assert result.get("status") == "failed"
-    error = result.get("error")
+    assert result.get("exception") is not None
+    error = result.get("exception")
     assert isinstance(error, dict)
     assert error.get("code") == "time_expression_unresolvable"
 
@@ -506,122 +557,13 @@ def test_pdca_create_reminder_missing_fields_stays_failed() -> None:
     assert isinstance(fact, dict)
     result = fact.get("result")
     assert isinstance(result, dict)
-    assert result.get("status") == "failed"
-    error = result.get("error")
+    assert result.get("exception") is not None
+    error = result.get("exception")
     assert isinstance(error, dict)
     assert error.get("code") == "missing_time"
     assert len(reminder.calls) == 1
 
 
-def test_pdca_validation_error_routes_back_then_asks_user() -> None:
-    tool_registry = build_default_tool_registry()
-    next_step = build_next_step_node(tool_registry=tool_registry)
-    llm = _QueuedLlm(
-        [
-            '{"kind":"call_tool","tool_name":"doesNotExist","args":{}}',
-            '{"kind":"ask_user","question":"Which account should I use?"}',
-            "Which account should I use?",
-        ]
-    )
-
-    task_state = build_default_task_state()
-    task_state["acceptance_criteria"] = ["done when requested outcome is produced"]
-    task_state["goal"] = "schedule something"
-    state: dict[str, object] = {
-        "correlation_id": "corr-pdca-repair",
-        "_llm_client": llm,
-        "task_state": task_state,
-    }
-
-    state = _apply(state, next_step(state))
-    state = _apply(state, validate_step_node(state, tool_registry=tool_registry))
-    assert route_after_validate_step(state) == "next_step_node"
-
-    state = _apply(state, next_step(state))
-    state = _apply(state, validate_step_node(state, tool_registry=tool_registry))
-    assert route_after_validate_step(state) == "execute_step_node"
-    state = _apply(state, execute_step_node(state, tool_registry=tool_registry))
-    state = _apply(state, update_state_node(state))
-    state = _apply(state, progress_critic_node(state))
-    assert route_after_progress_critic(state) == "respond_node"
-    next_state = state["task_state"]
-    assert isinstance(next_state, dict)
-    assert next_state.get("status") == "waiting_user"
-    rendered = respond_finalize_node(state, emit_transition_event=lambda *_args, **_kwargs: None)
-    assert rendered.get("response_text") == "Which account should I use?"
-
-
-def test_pdca_validation_rejects_unknown_tool_args_keys() -> None:
-    tool_registry = build_default_tool_registry()
-    task_state = build_default_task_state()
-    task_state["acceptance_criteria"] = ["done when requested outcome is produced"]
-    task_state["goal"] = "create recurring fx job"
-    task_state["plan"]["current_step_id"] = "step_1"
-    task_state["plan"]["steps"] = [
-        {
-            "step_id": "step_1",
-            "proposal": {
-                "kind": "call_tool",
-                "tool_name": "job_create",
-                "args": {
-                    "name": "FX update",
-                    "description": "Daily FX update",
-                    "schedule": {
-                        "type": "rrule",
-                        "dtstart": "2026-02-20T09:00:00+00:00",
-                        "rrule": "FREQ=DAILY;BYHOUR=9;BYMINUTE=0",
-                    },
-                    "payload_type": "prompt_to_brain",
-                    "payload": {"prompt_text": "USD to MXN update"},
-                    "payloadType": "prompt_to_brain",
-                },
-            },
-            "status": "proposed",
-        }
-    ]
-    state: dict[str, object] = {
-        "correlation_id": "corr-pdca-invalid-job-args",
-        "task_state": task_state,
-    }
-
-    state = _apply(state, validate_step_node(state, tool_registry=tool_registry))
-    next_state = state["task_state"]
-    assert isinstance(next_state, dict)
-    err = next_state.get("last_validation_error")
-    assert isinstance(err, dict)
-    reason = str(err.get("reason") or "")
-    assert reason.startswith("invalid_args_keys:")
-    assert "payloadType" in reason
-
-
-def test_pdca_validation_rejects_direct_terminal_mcp_binaries() -> None:
-    tool_registry = build_default_tool_registry()
-    task_state = build_default_task_state()
-    task_state["acceptance_criteria"] = ["done when requested outcome is produced"]
-    task_state["goal"] = "search web via chrome mcp"
-    task_state["plan"]["current_step_id"] = "step_1"
-    task_state["plan"]["steps"] = [
-        {
-            "step_id": "step_1",
-            "proposal": {
-                "kind": "call_tool",
-                "tool_name": "terminal_sync",
-                "args": {"command": 'chrome-devtools-mcp search "Veloswim"'},
-            },
-            "status": "proposed",
-        }
-    ]
-    state: dict[str, object] = {
-        "correlation_id": "corr-pdca-terminal-mcp-block",
-        "task_state": task_state,
-    }
-
-    state = _apply(state, validate_step_node(state, tool_registry=tool_registry))
-    next_state = state["task_state"]
-    assert isinstance(next_state, dict)
-    err = next_state.get("last_validation_error")
-    assert isinstance(err, dict)
-    assert err.get("reason") == "policy_violation:mcp_binaries_require_mcp_call"
 
 
 def test_pdca_execute_maps_typeerror_to_structured_tool_failure() -> None:
@@ -657,13 +599,16 @@ def test_pdca_execute_maps_typeerror_to_structured_tool_failure() -> None:
     assert isinstance(fact, dict)
     result = fact.get("result")
     assert isinstance(result, dict)
-    assert result.get("status") == "failed"
-    error = result.get("error")
+    assert result.get("exception") is not None
+    error = result.get("exception")
     assert isinstance(error, dict)
-    assert error.get("code") == "invalid_tool_arguments"
+    assert error.get("code") == "tool_execution_exception"
+    details = error.get("details")
+    assert isinstance(details, dict)
+    assert details.get("exception_type") == "TypeError"
 
 
-def test_pdca_parse_failure_degrades_to_failed() -> None:
+def test_pdca_parse_failure_remains_judge_routed_and_does_not_hard_fail() -> None:
     tool_registry = build_default_tool_registry()
     next_step = build_next_step_node(tool_registry=tool_registry)
     llm = _QueuedLlm(["not-json output"])
@@ -678,20 +623,32 @@ def test_pdca_parse_failure_degrades_to_failed() -> None:
     }
 
     state = _apply(state, next_step(state))
+    state = _apply(state, execute_step_node(state, tool_registry=tool_registry))
+    state = _apply(state, check_node(state, tool_registry=tool_registry))
+    next_state = state["task_state"]
+    assert isinstance(next_state, dict)
+    assert next_state.get("status") == "running"
+    assert int(next_state.get("planner_error_streak") or 0) == 1
+    assert route_after_act({"task_state": next_state, "correlation_id": "corr-pdca-parse-fail"}) == "next_step_node"
+    # Repeated invalid planner outputs remain judge-routed (no deterministic hard-stop).
+    state = _apply(state, next_step(state))
+    state = _apply(state, execute_step_node(state, tool_registry=tool_registry))
+    state = _apply(state, check_node(state, tool_registry=tool_registry))
+    state = _apply(state, next_step(state))
+    state = _apply(state, execute_step_node(state, tool_registry=tool_registry))
+    state = _apply(state, check_node(state, tool_registry=tool_registry))
     next_state = state["task_state"]
     assert isinstance(next_state, dict)
     assert next_state.get("status") == "failed"
     assert next_state.get("next_user_question") is None
     last_error = next_state.get("last_validation_error")
     assert isinstance(last_error, dict)
-    assert last_error.get("reason") == "next_step_parse_failed"
-    assert int(last_error.get("attempts") or 0) == 2
-    assert route_after_next_step({"correlation_id": "corr-pdca-parse-fail", "task_state": next_state}) == "respond_node"
+    assert last_error.get("reason") == "judge_output_invalid"
     trace = next_state.get("trace")
     assert isinstance(trace, dict)
     recent = trace.get("recent")
     assert isinstance(recent, list)
-    assert any(isinstance(event, dict) and event.get("type") == "parse_failed" for event in recent)
+    assert any(isinstance(event, dict) and event.get("type") == "planner_retry" for event in recent)
 
 
 def test_pdca_next_step_llm_exception_bubbles() -> None:
@@ -732,6 +689,11 @@ def test_pdca_parse_failure_retry_can_recover_with_valid_json() -> None:
     }
 
     state = _apply(state, next_step(state))
+    raw_candidate = state["task_state"].get("pending_plan_raw") if isinstance(state.get("task_state"), dict) else None
+    assert raw_candidate == "not-json output"
+    state = _apply(state, execute_step_node(state, tool_registry=tool_registry))
+    state = _apply(state, check_node(state, tool_registry=tool_registry))
+    state = _apply(state, next_step(state))
     next_state = state["task_state"]
     assert isinstance(next_state, dict)
     assert next_state.get("status") != "failed"
@@ -743,10 +705,7 @@ def test_pdca_parse_failure_retry_can_recover_with_valid_json() -> None:
     assert steps
     first = steps[0]
     assert isinstance(first, dict)
-    proposal = first.get("proposal")
-    assert isinstance(proposal, dict)
-    assert proposal.get("kind") == "call_tool"
-    assert proposal.get("tool_name") == "job_list"
+    assert "proposal_raw" in first
 
 
 def test_pdca_next_step_uses_complete_with_tools_when_available() -> None:
@@ -785,57 +744,17 @@ def test_pdca_next_step_uses_complete_with_tools_when_available() -> None:
     assert steps
     first = steps[0]
     assert isinstance(first, dict)
-    proposal = first.get("proposal")
-    assert isinstance(proposal, dict)
-    assert proposal.get("kind") == "call_tool"
-    assert proposal.get("tool_name") == "job_list"
-    assert proposal.get("args") == {"limit": 10}
+    assert first.get("raw_source") == "complete_with_tools"
+    raw = next_state.get("pending_plan_raw")
+    assert isinstance(raw, dict)
+    tool_call = raw.get("tool_call")
+    assert isinstance(tool_call, dict)
+    assert tool_call.get("kind") == "call_tool"
+    assert tool_call.get("tool_name") == "job_list"
     assert llm.complete_with_tools_calls == 1
     assert llm.complete_calls == 0
 
 
-def test_pdca_maps_ask_question_tool_call_to_ask_user_proposal() -> None:
-    tool_registry = build_default_tool_registry()
-    next_step = build_next_step_node(tool_registry=tool_registry)
-    llm = _ToolCallLlm(
-        {
-            "content": "",
-            "tool_calls": [
-                {
-                    "id": "call-ask-1",
-                    "name": "askQuestion",
-                    "arguments": {"question": "Which company should I prioritize first?"},
-                }
-            ],
-            "assistant_message": {"role": "assistant", "content": ""},
-        }
-    )
-
-    task_state = build_default_task_state()
-    task_state["acceptance_criteria"] = ["done when requested outcome is produced"]
-    task_state["goal"] = "find linkedin contacts"
-    state: dict[str, object] = {
-        "correlation_id": "corr-pdca-ask-question-tool-bridge",
-        "_llm_client": llm,
-        "task_state": task_state,
-    }
-
-    state = _apply(state, next_step(state))
-    next_state = state["task_state"]
-    assert isinstance(next_state, dict)
-    plan = next_state.get("plan")
-    assert isinstance(plan, dict)
-    steps = plan.get("steps")
-    assert isinstance(steps, list)
-    assert steps
-    first = steps[0]
-    assert isinstance(first, dict)
-    proposal = first.get("proposal")
-    assert isinstance(proposal, dict)
-    assert proposal.get("kind") == "ask_user"
-    assert proposal.get("question") == "Which company should I prioritize first?"
-    assert llm.complete_with_tools_calls == 1
-    assert llm.complete_calls == 0
 
 
 def test_pdca_next_step_falls_back_to_text_when_tool_call_payload_is_empty() -> None:
@@ -862,12 +781,104 @@ def test_pdca_next_step_falls_back_to_text_when_tool_call_payload_is_empty() -> 
     assert steps
     first = steps[0]
     assert isinstance(first, dict)
-    proposal = first.get("proposal")
-    assert isinstance(proposal, dict)
-    assert proposal.get("kind") == "call_tool"
-    assert proposal.get("tool_name") == "job_list"
+    assert first.get("raw_source") == "complete_with_tools"
     assert llm.complete_with_tools_calls == 1
-    assert llm.complete_calls >= 1
+    assert llm.complete_calls == 0
+
+
+def test_pdca_next_step_requires_complete_with_tools_capability() -> None:
+    tool_registry = build_default_tool_registry()
+    next_step = build_next_step_node(tool_registry=tool_registry)
+    llm = _SessionAwareTaskLlm()
+
+    task_state = build_default_task_state()
+    task_state["acceptance_criteria"] = ["done when requested outcome is produced"]
+    task_state["goal"] = "do something"
+    state: dict[str, object] = {
+        "correlation_id": "corr-pdca-tools-required",
+        "_llm_client": llm,
+        "task_state": task_state,
+    }
+
+    state = _apply(state, next_step(state))
+    next_state = state["task_state"]
+    assert isinstance(next_state, dict)
+    plan = next_state.get("plan")
+    assert isinstance(plan, dict)
+    steps = plan.get("steps")
+    assert isinstance(steps, list)
+    assert steps
+    first = steps[0]
+    assert isinstance(first, dict)
+    assert first.get("raw_source") == "complete_with_tools_unavailable"
+    raw = next_state.get("pending_plan_raw")
+    assert isinstance(raw, dict)
+    error = raw.get("error")
+    assert isinstance(error, dict)
+    assert error.get("code") == "planner_capability_missing"
+
+
+def test_pdca_next_step_accepts_tool_call_without_planner_intent() -> None:
+    tool_registry = build_default_tool_registry()
+    next_step = build_next_step_node(tool_registry=tool_registry)
+    llm = _ToolCallLlm(
+        {
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "call-1",
+                    "name": "job_list",
+                    "arguments": {"limit": 5},
+                }
+            ],
+            "assistant_message": {"role": "assistant", "content": ""},
+        }
+    )
+    task_state = build_default_task_state()
+    task_state["goal"] = "list jobs"
+    task_state["status"] = "running"
+    state: dict[str, object] = {
+        "correlation_id": "corr-pdca-no-planner-intent",
+        "_llm_client": llm,
+        "task_state": task_state,
+    }
+
+    updated = next_step(state)
+    next_state = updated.get("task_state")
+    assert isinstance(next_state, dict)
+    raw = next_state.get("pending_plan_raw")
+    assert isinstance(raw, dict)
+    tool_call = raw.get("tool_call")
+    assert isinstance(tool_call, dict)
+    assert tool_call.get("tool_name") == "job_list"
+
+
+def test_pdca_next_step_drops_malformed_planner_intent() -> None:
+    tool_registry = build_default_tool_registry()
+    next_step = build_next_step_node(tool_registry=tool_registry)
+    llm = _ToolCallLlm(
+        {
+            "tool_call": {"kind": "call_tool", "tool_name": "job_list", "args": {"limit": 3}},
+            "planner_intent": {"why": "not-a-string"},
+        }
+    )
+    task_state = build_default_task_state()
+    task_state["goal"] = "list jobs"
+    task_state["status"] = "running"
+    state: dict[str, object] = {
+        "correlation_id": "corr-pdca-malformed-planner-intent",
+        "_llm_client": llm,
+        "task_state": task_state,
+    }
+
+    updated = next_step(state)
+    next_state = updated.get("task_state")
+    assert isinstance(next_state, dict)
+    raw = next_state.get("pending_plan_raw")
+    assert isinstance(raw, dict)
+    tool_call = raw.get("tool_call")
+    assert isinstance(tool_call, dict)
+    assert tool_call.get("tool_name") == "job_list"
 
 
 def test_pdca_tool_call_schema_includes_context_tools_when_runtime_registered() -> None:
@@ -892,16 +903,16 @@ def test_pdca_tool_call_schema_includes_context_tools_when_runtime_registered() 
     steps = plan.get("steps")
     assert isinstance(steps, list)
     assert steps
-    proposal = steps[0].get("proposal") if isinstance(steps[0], dict) else None
-    assert isinstance(proposal, dict)
-    assert proposal.get("tool_name") == "send_voice_note"
+    first = steps[0]
+    assert isinstance(first, dict)
+    assert first.get("raw_source") == "complete_with_tools"
     assert llm.complete_with_tools_calls == 1
     assert "get_user_details" in llm.tool_names
     assert "get_my_settings" in llm.tool_names
 
 
 def test_pdca_parse_failure_respects_configured_max_attempts(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("ALPHONSE_TASK_MODE_NEXT_STEP_MAX_ATTEMPTS", "1")
+    monkeypatch.setenv("ALPHONSE_TASK_MODE_PLANNER_RETRY_BUDGET", "0")
     tool_registry = build_default_tool_registry()
     next_step = build_next_step_node(tool_registry=tool_registry)
     llm = _QueuedLlm(["not-json output", '{"kind":"call_tool","tool_name":"job_list","args":{"limit":10}}'])
@@ -916,12 +927,13 @@ def test_pdca_parse_failure_respects_configured_max_attempts(monkeypatch: pytest
     }
 
     state = _apply(state, next_step(state))
+    state = _apply(state, execute_step_node(state, tool_registry=tool_registry))
+    state = _apply(state, check_node(state, tool_registry=tool_registry))
     next_state = state["task_state"]
     assert isinstance(next_state, dict)
-    assert next_state.get("status") == "failed"
+    assert next_state.get("status") == "running"
     last_error = next_state.get("last_validation_error")
-    assert isinstance(last_error, dict)
-    assert int(last_error.get("attempts") or 0) == 1
+    assert not isinstance(last_error, dict)
 
 
 def test_pdca_derives_acceptance_criteria_from_next_step_proposal() -> None:
@@ -947,8 +959,7 @@ def test_pdca_derives_acceptance_criteria_from_next_step_proposal() -> None:
     assert isinstance(next_state, dict)
     criteria = next_state.get("acceptance_criteria")
     assert isinstance(criteria, list)
-    assert criteria
-    assert "number of scheduled jobs" in str(criteria[0]).lower()
+    assert criteria == []
     assert not isinstance(updated.get("pending_interaction"), dict)
 
 
@@ -1022,9 +1033,9 @@ def test_pdca_next_step_prompt_includes_failure_diagnostics_for_remediation() ->
     task_state["facts"] = {
         "step_1": {
             "tool": "ssh_terminal",
-            "result": {
+            "output": {
                 "status": "failed",
-                "error": {
+                "exception": {
                     "code": "paramiko_not_installed",
                     "message": "paramiko_not_installed",
                     "details": {"stderr_preview": "ModuleNotFoundError: No module named 'paramiko'"},
@@ -1080,9 +1091,8 @@ def test_pdca_next_step_prompt_includes_mcp_live_tools_menu() -> None:
     task_state["facts"] = {
         "step_1": {
             "tool": "mcp_call",
-            "result": {
-                "status": "ok",
-                "result": {
+            "output": {
+                "output": {
                     "tools": [
                         {
                             "name": "navigate",
@@ -1116,68 +1126,12 @@ def test_pdca_next_step_prompt_includes_mcp_live_tools_menu() -> None:
 
     _ = next_step(state)
     prompt = llm.last_user_prompt
-    assert "## MCP Live Tools" in prompt
+    assert "## MCP Capabilities" in prompt
     assert "profile `chrome`" in prompt
     assert "`navigate`" in prompt
     assert "required_args: url" in prompt
 
 
-def test_pdca_validation_rejects_unknown_mcp_profile(tmp_path: Path, monkeypatch) -> None:
-    profiles_dir = _write_mcp_profile(tmp_path)
-    monkeypatch.setenv("ALPHONSE_MCP_PROFILES_DIR", str(profiles_dir))
-    tool_registry = build_default_tool_registry()
-    task_state = build_default_task_state()
-    task_state["acceptance_criteria"] = ["done when requested outcome is produced"]
-    task_state["goal"] = "search web via mcp"
-    task_state["plan"]["current_step_id"] = "step_1"
-    task_state["plan"]["steps"] = [
-        {
-            "step_id": "step_1",
-            "proposal": {
-                "kind": "call_tool",
-                "tool_name": "mcp_call",
-                "args": {"profile": "unknown", "operation": "web_search", "arguments": {"query": "Veloswim"}},
-            },
-            "status": "proposed",
-        }
-    ]
-    state: dict[str, object] = {"correlation_id": "corr-pdca-bad-mcp-profile", "task_state": task_state}
-
-    state = _apply(state, validate_step_node(state, tool_registry=tool_registry))
-    next_state = state["task_state"]
-    assert isinstance(next_state, dict)
-    err = next_state.get("last_validation_error")
-    assert isinstance(err, dict)
-    assert str(err.get("reason") or "").startswith("unknown_mcp_profile:")
-
-
-def test_pdca_validation_rejects_unknown_mcp_operation(tmp_path: Path, monkeypatch) -> None:
-    profiles_dir = _write_mcp_profile(tmp_path)
-    monkeypatch.setenv("ALPHONSE_MCP_PROFILES_DIR", str(profiles_dir))
-    tool_registry = build_default_tool_registry()
-    task_state = build_default_task_state()
-    task_state["acceptance_criteria"] = ["done when requested outcome is produced"]
-    task_state["goal"] = "search web via mcp"
-    task_state["plan"]["current_step_id"] = "step_1"
-    task_state["plan"]["steps"] = [
-        {
-            "step_id": "step_1",
-            "proposal": {
-                "kind": "call_tool",
-                "tool_name": "mcp_call",
-                "args": {"profile": "chrome", "operation": "wrong_op", "arguments": {"query": "Veloswim"}},
-            },
-            "status": "proposed",
-        }
-    ]
-    state: dict[str, object] = {"correlation_id": "corr-pdca-bad-mcp-operation", "task_state": task_state}
-
-    state = _apply(state, validate_step_node(state, tool_registry=tool_registry))
-    next_state = state["task_state"]
-    assert isinstance(next_state, dict)
-    err = next_state.get("last_validation_error")
-    assert isinstance(err, dict)
-    assert str(err.get("reason") or "").startswith("unknown_mcp_operation:")
 
 
 def test_pdca_validation_allows_unknown_mcp_operation_for_native_profile(tmp_path: Path, monkeypatch) -> None:
@@ -1221,7 +1175,7 @@ def test_pdca_validation_allows_unknown_mcp_operation_for_native_profile(tmp_pat
     assert next_state.get("last_validation_error") is None
 
 
-def test_route_after_next_step_uses_mcp_handler_for_mcp_call() -> None:
+def test_route_after_next_step_routes_to_execute_step_node() -> None:
     task_state = build_default_task_state()
     task_state["plan"]["current_step_id"] = "step_1"
     task_state["plan"]["steps"] = [
@@ -1244,42 +1198,9 @@ def test_route_after_next_step_uses_mcp_handler_for_mcp_call() -> None:
         "task_state": task_state,
     }
 
-    assert route_after_next_step(state) == "mcp_handler_node"
+    assert route_after_next_step(state) == "execute_step_node"
 
 
-def test_pdca_can_answer_last_tool_question_from_recent_conversation_block() -> None:
-    tool_registry = build_default_tool_registry()
-    next_step = build_next_step_node(tool_registry=tool_registry)
-    llm = _SessionAwareTaskLlm()
-
-    task_state = build_default_task_state()
-    task_state["acceptance_criteria"] = ["done when requested outcome is produced"]
-    task_state["goal"] = "what was the last tool you used?"
-    state: dict[str, object] = {
-        "correlation_id": "corr-pdca-last-tool-from-session-state",
-        "_llm_client": llm,
-        "channel_type": "telegram",
-        "channel_target": "8553589429",
-        "locale": "en-US",
-        "task_state": task_state,
-        "recent_conversation_block": (
-            "## RECENT CONVERSATION (last 10 turns)\n"
-            "- last_action: Played local audio output."
-        ),
-    }
-
-    state = _apply(state, next_step(state))
-    state = _apply(state, validate_step_node(state, tool_registry=tool_registry))
-    state = _apply(state, execute_step_node(state, tool_registry=tool_registry))
-    state = _apply(state, update_state_node(state))
-    state = _apply(state, act_node(state))
-
-    next_state = state["task_state"]
-    assert isinstance(next_state, dict)
-    assert next_state.get("status") == "done"
-    outcome = next_state.get("outcome")
-    assert isinstance(outcome, dict)
-    assert outcome.get("final_text") == "The last tool you used was local_audio_output.speak."
 
 
 def test_execute_step_handles_structured_tool_failure() -> None:
@@ -1316,13 +1237,62 @@ def test_execute_step_handles_structured_tool_failure() -> None:
     assert isinstance(entry, dict)
     result = entry.get("result")
     assert isinstance(result, dict)
-    assert result.get("status") == "failed"
-    error = result.get("error")
+    assert result.get("exception") is not None
+    error = result.get("exception")
     assert isinstance(error, dict)
     assert error.get("code") == "asset_not_found"
 
 
-def test_execute_step_derives_task_completed_outcome_from_domotics_execute_confirmed() -> None:
+def test_execute_step_passes_mcp_call_payload_through_without_do_normalization() -> None:
+    registry = ToolRegistry()
+    mcp_tool = _CaptureMcpCallTool()
+    registry.register("mcp_call", mcp_tool)
+    task_state = build_default_task_state()
+    task_state["goal"] = "Find veloswim"
+    task_state["plan"] = {
+        "version": 1,
+        "steps": [
+            {
+                "step_id": "step_1",
+                "proposal": {
+                    "kind": "call_tool",
+                    "tool_name": "mcp_call",
+                    "args": {
+                        "args": {
+                            "profile": "chrome",
+                            "operation": "web_search",
+                            "query": "Veloswim",
+                        }
+                    },
+                },
+                "status": "validated",
+            }
+        ],
+        "current_step_id": "step_1",
+    }
+    state: dict[str, object] = {"correlation_id": "corr-pdca-mcp-normalize-in-do", "task_state": task_state}
+
+    updated = execute_step_node(state, tool_registry=registry)
+    next_state = updated["task_state"]
+    assert isinstance(next_state, dict)
+    assert len(mcp_tool.calls) == 1
+    call = mcp_tool.calls[0]
+    assert call["profile"] is None
+    assert call["operation"] is None
+    arguments = call["arguments"]
+    assert isinstance(arguments, dict)
+    assert arguments == {}
+    extra = call["extra"]
+    assert isinstance(extra, dict)
+    nested = extra.get("args")
+    assert isinstance(nested, dict)
+    assert nested.get("profile") == "chrome"
+    assert nested.get("operation") == "web_search"
+    assert nested.get("query") == "Veloswim"
+    assert next_state.get("mcp_context") is None
+
+
+def test_execute_step_records_evidence_for_domotics_execute_confirmed() -> None:
     registry = ToolRegistry()
     registry.register("domotics.execute", _DomoticsExecuteConfirmedTool())
     task_state = build_default_task_state()
@@ -1352,186 +1322,21 @@ def test_execute_step_derives_task_completed_outcome_from_domotics_execute_confi
 
     state = _apply(state, execute_step_node(state, tool_registry=registry))
     state = _apply(state, update_state_node(state))
-    state = _apply(state, progress_critic_node(state))
+    state = _apply(state, act_node(state))
 
     next_state = state["task_state"]
     assert isinstance(next_state, dict)
-    assert next_state.get("status") == "done"
-    outcome = next_state.get("outcome")
-    assert isinstance(outcome, dict)
-    assert outcome.get("kind") == "task_completed"
-
-
-def test_act_node_stops_after_repeated_same_tool_failures() -> None:
-    task_state = build_default_task_state()
-    task_state["acceptance_criteria"] = ["done when requested outcome is produced"]
-    task_state["status"] = "running"
-    task_state["plan"] = {
-        "version": 1,
-        "steps": [
-            {
-                "step_id": "step_1",
-                "proposal": {"kind": "call_tool", "tool_name": "terminal_sync", "args": {"command": "node -v"}},
-                "status": "failed",
-            },
-            {
-                "step_id": "step_2",
-                "proposal": {"kind": "call_tool", "tool_name": "terminal_sync", "args": {"command": "node -v"}},
-                "status": "failed",
-            },
-        ],
-        "current_step_id": "step_2",
-    }
-    state: dict[str, object] = {
-        "correlation_id": "corr-pdca-repeated-tool-failure",
-        "task_state": task_state,
-    }
-
-    updated = act_node(state)
-    next_state = updated["task_state"]
-    assert isinstance(next_state, dict)
-    assert next_state.get("status") == "waiting_user"
-    question = str(next_state.get("next_user_question") or "")
-    assert "same failed action" in question
-    eval_payload = next_state.get("execution_eval")
-    assert isinstance(eval_payload, dict)
-    assert eval_payload.get("reason") == "repeated_identical_failure"
-    route_state = {"task_state": next_state, "correlation_id": "corr-pdca-repeated-tool-failure"}
-    assert route_after_act(route_state) == "respond_node"
-
-
-def test_act_node_allows_evolving_failures_under_budget() -> None:
-    task_state = build_default_task_state()
-    task_state["acceptance_criteria"] = ["done when requested outcome is produced"]
-    task_state["status"] = "running"
-    task_state["plan"] = {
-        "version": 1,
-        "steps": [
-            {
-                "step_id": "step_1",
-                "proposal": {"kind": "call_tool", "tool_name": "terminal_sync", "args": {"command": "node -v"}},
-                "status": "failed",
-            },
-            {
-                "step_id": "step_2",
-                "proposal": {"kind": "call_tool", "tool_name": "terminal_sync", "args": {"command": "npm -v"}},
-                "status": "failed",
-            },
-        ],
-        "current_step_id": "step_2",
-    }
-    state: dict[str, object] = {
-        "correlation_id": "corr-pdca-evolving-failures",
-        "task_state": task_state,
-    }
-
-    updated = act_node(state)
-    next_state = updated["task_state"]
-    assert isinstance(next_state, dict)
     assert next_state.get("status") == "running"
-    eval_payload = next_state.get("execution_eval")
-    assert isinstance(eval_payload, dict)
-    assert eval_payload.get("reason") == "continue_learning"
-
-
-def test_act_node_pauses_after_failure_budget_exhausted() -> None:
-    steps = []
-    for idx in range(1, 11):
-        steps.append(
-            {
-                "step_id": f"step_{idx}",
-                "proposal": {
-                    "kind": "call_tool",
-                    "tool_name": "terminal_sync",
-                    "args": {"command": f"tool-{idx} --version"},
-                },
-                "status": "failed",
-            }
-        )
-    task_state = build_default_task_state()
-    task_state["acceptance_criteria"] = ["done when requested outcome is produced"]
-    task_state["status"] = "running"
-    task_state["plan"] = {
-        "version": 1,
-        "steps": steps,
-        "current_step_id": "step_10",
-    }
-    state: dict[str, object] = {
-        "correlation_id": "corr-pdca-failure-budget",
-        "task_state": task_state,
-    }
-
-    updated = act_node(state)
-    next_state = updated["task_state"]
-    assert isinstance(next_state, dict)
-    assert next_state.get("status") == "waiting_user"
-    eval_payload = next_state.get("execution_eval")
-    assert isinstance(eval_payload, dict)
-    assert eval_payload.get("reason") == "failure_budget_exhausted"
-    question = str(next_state.get("next_user_question") or "")
-    assert "paused the plan" in question
-
-
-def test_act_node_pauses_on_non_retryable_failure() -> None:
-    task_state = build_default_task_state()
-    task_state["acceptance_criteria"] = ["done when requested outcome is produced"]
-    task_state["status"] = "running"
-    task_state["plan"] = {
-        "version": 1,
-        "steps": [
-            {
-                "step_id": "step_1",
-                "proposal": {"kind": "call_tool", "tool_name": "domotics.execute", "args": {"domain": "light"}},
-                "status": "failed",
-                "failure_retryable": False,
-                "failure_error_code": "entity_unavailable",
-            }
-        ],
-        "current_step_id": "step_1",
-    }
-    state: dict[str, object] = {
-        "correlation_id": "corr-pdca-non-retryable",
-        "task_state": task_state,
-    }
-
-    updated = act_node(state)
-    next_state = updated["task_state"]
-    assert isinstance(next_state, dict)
-    assert next_state.get("status") == "waiting_user"
-    eval_payload = next_state.get("execution_eval")
-    assert isinstance(eval_payload, dict)
-    assert eval_payload.get("reason") == "non_retryable_failure"
-    question = str(next_state.get("next_user_question") or "")
-    assert "non-retryable" in question
-
-
-def test_execute_finish_persists_final_text_outcome() -> None:
-    task_state = build_default_task_state()
-    task_state["acceptance_criteria"] = ["done when requested outcome is produced"]
-    task_state["plan"] = {
-        "version": 1,
-        "steps": [
-            {
-                "step_id": "step_1",
-                "proposal": {"kind": "finish", "final_text": "I'm online and operational."},
-                "status": "validated",
-            }
-        ],
-        "current_step_id": "step_1",
-    }
-    state: dict[str, object] = {
-        "correlation_id": "corr-pdca-finish-outcome",
-        "task_state": task_state,
-    }
-
-    updated = execute_step_node(state, tool_registry=build_default_tool_registry())
-    next_state = updated["task_state"]
-    assert isinstance(next_state, dict)
-    assert next_state.get("status") == "done"
     outcome = next_state.get("outcome")
-    assert isinstance(outcome, dict)
-    assert outcome.get("kind") == "task_completed"
-    assert outcome.get("final_text") == "I'm online and operational."
+    assert outcome is None
+    facts = next_state.get("facts")
+    assert isinstance(facts, dict)
+    entry = facts.get("step_1")
+    assert isinstance(entry, dict)
+    assert str(entry.get("tool") or "") == "domotics.execute"
+    result = entry.get("result")
+    assert isinstance(result, dict)
+    assert result.get("exception") is None
 
 
 def test_respond_finalize_done_ignores_stale_pending_interaction() -> None:
@@ -1600,184 +1405,260 @@ def test_respond_finalize_waiting_user_with_pending_renders_question() -> None:
     assert transitions and transitions[-1] == "waiting_user"
 
 
-def test_next_step_emits_wip_update_on_proposal(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_respond_finalize_failed_suppresses_apology_after_public_send() -> None:
+    transitions: list[str] = []
+    emitted: list[dict[str, object]] = []
+
+    class _FakeLog:
+        def emit(self, **kwargs: object) -> None:
+            emitted.append(dict(kwargs))
+
+    original_log = respond_module._LOG
+    respond_module._LOG = _FakeLog()
+    state: dict[str, object] = {
+        "correlation_id": "corr-pdca-failed-suppress-apology",
+        "channel_type": "telegram",
+        "channel_target": "8553589429",
+        "locale": "es-MX",
+        "_llm_client": _QueuedLlm(["Perdón, no pude completarlo."]),
+        "task_state": {
+            "status": "failed",
+            "facts": {
+                "step_3": {
+                    "step_id": "step_3",
+                    "tool": "send_message",
+                    "output": {"visibility": "public"},
+                    "exception": None,
+                    "internal": False,
+                }
+            },
+        },
+    }
+
+    try:
+        rendered = respond_finalize_node(
+            state,
+            emit_transition_event=lambda _state, phase, _payload=None: transitions.append(phase),
+        )
+    finally:
+        respond_module._LOG = original_log
+    assert str(rendered.get("response_text") or "").strip() == ""
+    assert rendered.get("utterance") is None
+    assert transitions and transitions[-1] == "failed"
+    assert any(str(item.get("event") or "") == "pdca.failure.user_reply_suppressed" for item in emitted)
+
+
+def test_respond_finalize_failed_emits_dispatched_event() -> None:
+    transitions: list[str] = []
+    emitted: list[dict[str, object]] = []
+
+    class _FakeLog:
+        def emit(self, **kwargs: object) -> None:
+            emitted.append(dict(kwargs))
+
+    original_log = respond_module._LOG
+    respond_module._LOG = _FakeLog()
+    state: dict[str, object] = {
+        "correlation_id": "corr-pdca-failed-dispatched",
+        "channel_type": "telegram",
+        "channel_target": "8553589429",
+        "locale": "en-US",
+        "_llm_client": _QueuedLlm(["I’m sorry, I could not complete this request."]),
+        "task_state": {
+            "status": "failed",
+            "last_validation_error": {
+                "reason": "engine_unavailable",
+                "message": "Inference backend unreachable.",
+                "retry_exhausted": True,
+            },
+            "facts": {
+                "step_1": {
+                    "step_id": "step_1",
+                    "tool": "local_audio_output_render",
+                    "output": None,
+                    "exception": {"message": "render_failed"},
+                    "internal": False,
+                }
+            },
+        },
+    }
+    try:
+        rendered = respond_finalize_node(
+            state,
+            emit_transition_event=lambda _state, phase, _payload=None: transitions.append(phase),
+        )
+    finally:
+        respond_module._LOG = original_log
+    assert str(rendered.get("response_text") or "").strip()
+    assert transitions and transitions[-1] == "failed"
+    dispatched = next(
+        (item for item in emitted if str(item.get("event") or "") == "pdca.failure.user_reply_dispatched"),
+        None,
+    )
+    assert isinstance(dispatched, dict)
+    payload = dispatched.get("payload")
+    assert isinstance(payload, dict)
+    assert payload.get("failure_code") == "engine_unavailable"
+    assert payload.get("retry_exhausted") is True
+
+
+def test_execute_step_emits_presence_progress_from_planner_intent(monkeypatch: pytest.MonkeyPatch) -> None:
     emitted: list[dict[str, object] | None] = []
 
-    def _capture_transition(_state: dict[str, object], phase: str, detail: dict[str, object] | None = None) -> None:
-        if phase == "wip_update":
+    def _capture_transition(
+        _state: dict[str, object],
+        *,
+        event_family: str,
+        phase: str,
+        detail: dict[str, object] | None = None,
+    ) -> None:
+        if phase == "thinking" and event_family == "presence.progress" and isinstance(detail, dict):
             emitted.append(detail)
 
-    monkeypatch.setattr(plan_module, "emit_transition_event", _capture_transition)
+    monkeypatch.setattr(execute_step_module, "emit_presence_transition_event", _capture_transition)
+    tool_registry = ToolRegistry()
 
-    tool_registry = build_default_tool_registry()
-    next_step = build_next_step_node(tool_registry=tool_registry)
-    llm = _QueuedLlm(['{"kind":"call_tool","tool_name":"local_audio_output_render","args":{"text":"hello"}}'])
+    class _FakeTool:
+        def execute(self, **kwargs: object) -> dict[str, object]:
+            _ = kwargs
+            return {"output": {"ok": True}, "exception": None, "metadata": {}}
+
+    tool_registry.register("local_audio_output_render", _FakeTool())
     task_state = build_default_task_state()
     task_state["status"] = "running"
-    task_state["goal"] = "Send an English voice note"
+    task_state["cycle_index"] = 2
+    task_state["plan"]["current_step_id"] = "step_1"
+    task_state["plan"]["steps"] = [{"step_id": "step_1", "status": "proposed"}]
+    task_state["pending_plan_raw"] = {
+        "tool_call": {"kind": "call_tool", "tool_name": "local_audio_output_render", "args": {"text": "hello"}},
+        "planner_intent": "Preparing audio output for delivery.",
+    }
     state: dict[str, object] = {
-        "correlation_id": "corr-next-step-wip-proposal",
+        "correlation_id": "corr-do-wip-proposal",
+        "task_state": task_state,
+    }
+
+    updated = execute_step_node(state, tool_registry=tool_registry)
+    assert isinstance(updated.get("task_state"), dict)
+    assert len(emitted) == 1
+    detail = emitted[0]
+    assert isinstance(detail, dict)
+    assert detail.get("cycle") == 3
+    assert detail.get("tool") == "local_audio_output_render"
+    text = str(detail.get("text") or "")
+    assert text == "Preparing audio output for delivery."
+
+
+def test_next_step_system_prompt_includes_simple_conversation_send_message_rule() -> None:
+    prompt = NEXT_STEP_SYSTEM_PROMPT
+    assert "Simple Conversation Strategy" in prompt
+    assert 'tool_call.tool_name = "send_message"' in prompt
+    assert "Never return direct free-text as planner output" in prompt
+    assert "Produce exactly one canonical executable `tool_call`" in prompt
+    assert "Never use placeholder tokens for recipients" in prompt
+
+
+def test_execute_step_accepts_canonical_send_message_from_planner_for_simple_conversation() -> None:
+    tool_registry = ToolRegistry()
+    captured: list[dict[str, object]] = []
+
+    class _SendMessageTool:
+        def execute(self, **kwargs: object) -> dict[str, object]:
+            captured.append(dict(kwargs))
+            return {
+                "output": {"message_id": "m-1", "delivery": "sent"},
+                "exception": None,
+                "metadata": {"tool": "send_message"},
+            }
+
+    tool_registry.register("send_message", _SendMessageTool())
+    task_state = build_default_task_state()
+    task_state["status"] = "running"
+    task_state["plan"]["current_step_id"] = "step_1"
+    task_state["plan"]["steps"] = [{"step_id": "step_1", "status": "proposed"}]
+    task_state["pending_plan_raw"] = {
+        "tool_call": {
+            "kind": "call_tool",
+            "tool_name": "send_message",
+            "args": {"To": "8553589429", "Message": "Yo! Great to hear from you.", "Channel": "telegram"},
+        },
+        "planner_intent": "Responding to a simple greeting without complex execution.",
+    }
+    state: dict[str, object] = {
+        "correlation_id": "corr-do-simple-conversation-send-message",
+        "task_state": task_state,
+    }
+
+    updated = execute_step_node(state, tool_registry=tool_registry)
+    next_state = updated.get("task_state")
+    assert isinstance(next_state, dict)
+    assert len(captured) == 1
+    assert captured[0].get("To") == "8553589429"
+    assert captured[0].get("Channel") == "telegram"
+    facts = next_state.get("facts")
+    assert isinstance(facts, dict)
+    fact = facts.get("step_1")
+    assert isinstance(fact, dict)
+    assert fact.get("tool") == "send_message"
+
+
+def test_next_step_prompt_exposes_delivery_context_to_planner() -> None:
+    tool_registry = build_default_tool_registry()
+    next_step = build_next_step_node(tool_registry=tool_registry)
+    llm = _PromptCaptureLlm('{"tool_call":{"kind":"call_tool","tool_name":"job_list","args":{"limit":1}}}')
+    task_state = build_default_task_state()
+    task_state["goal"] = "send a message"
+    task_state["channel_type"] = "telegram"
+    task_state["channel_target"] = "8553589429"
+    task_state["message_id"] = "m-123"
+    state: dict[str, object] = {
+        "correlation_id": "corr-next-step-delivery-context",
+        "_llm_client": llm,
+        "task_state": task_state,
+    }
+
+    _ = next_step(state)
+    prompt = llm.last_user_prompt
+    assert '"delivery_context"' in prompt
+    assert '"channel_type": "telegram"' in prompt
+    assert '"channel_target": "8553589429"' in prompt
+    assert '"message_id": "m-123"' in prompt
+
+
+def test_next_step_repairs_placeholder_recipient_before_execute_step() -> None:
+    tool_registry = build_default_tool_registry()
+    next_step = build_next_step_node(tool_registry=tool_registry)
+    llm = _QueuedLlm(
+        [
+            '{"tool_call":{"kind":"call_tool","tool_name":"send_message","args":{"To":"current_channel_target","Message":"Here is the answer.","Channel":"telegram"}}}',
+            '{"tool_call":{"kind":"call_tool","tool_name":"send_message","args":{"To":"8553589429","Message":"Here is the answer.","Channel":"telegram"}}}',
+        ]
+    )
+    task_state = build_default_task_state()
+    task_state["goal"] = "answer user and send result"
+    task_state["channel_type"] = "telegram"
+    task_state["channel_target"] = "8553589429"
+    state: dict[str, object] = {
+        "correlation_id": "corr-next-step-placeholder-repair",
         "_llm_client": llm,
         "task_state": task_state,
     }
 
     updated = next_step(state)
-    assert isinstance(updated.get("task_state"), dict)
-    assert len(emitted) == 1
-    detail = emitted[0]
-    assert isinstance(detail, dict)
-    assert detail.get("cycle") == 1
-    assert detail.get("tool") == "local_audio_output_render"
-    text = str(detail.get("text") or "")
-    assert text.startswith("Work in progress.")
-    assert "Why this step:" in text
-    assert "Current action: `local_audio_output_render`." in text
-
-
-def test_progress_critic_emits_wip_update_every_five_cycles_when_step_proposed(monkeypatch) -> None:
-    emitted: list[dict[str, object] | None] = []
-
-    def _capture_transition(_state: dict[str, object], phase: str, detail: dict[str, object] | None = None) -> None:
-        if phase == "wip_update":
-            emitted.append(detail)
-
-    monkeypatch.setattr(progress_critic_node_module, "emit_transition_event", _capture_transition)
-
-    task_state = build_default_task_state()
-    task_state["status"] = "running"
-    task_state["cycle_index"] = 5
-    task_state["goal"] = "Check package delivery"
-    task_state["plan"]["current_step_id"] = "step_1"
-    task_state["plan"]["steps"] = [
-        {
-            "step_id": "step_1",
-            "proposal": {"kind": "call_tool", "tool_name": "get_time", "args": {}},
-            "status": "proposed",
-        }
-    ]
-    state: dict[str, object] = {
-        "correlation_id": "corr-wip-emit-5",
-        "task_state": task_state,
-    }
-
-    updated = progress_critic_node(state)
     next_state = updated.get("task_state")
     assert isinstance(next_state, dict)
-    assert len(emitted) == 1
-    detail = emitted[0]
-    assert isinstance(detail, dict)
-    assert detail.get("cycle") == 5
-    text = str(detail.get("text") or "")
-    assert text.startswith("Work in progress.")
-    assert "Why this step:" in text
-    assert "Current action: `get_time`." in text
-
-
-def test_progress_critic_wip_text_explains_mcp_purpose_when_step_proposed(monkeypatch: pytest.MonkeyPatch) -> None:
-    emitted: list[dict[str, object] | None] = []
-
-    def _capture_transition(_state: dict[str, object], phase: str, detail: dict[str, object] | None = None) -> None:
-        if phase == "wip_update":
-            emitted.append(detail)
-
-    monkeypatch.setattr(progress_critic_node_module, "emit_transition_event", _capture_transition)
-
-    task_state = build_default_task_state()
-    task_state["status"] = "running"
-    task_state["cycle_index"] = 5
-    task_state["goal"] = "find contact leads on LinkedIn"
-    task_state["plan"]["current_step_id"] = "step_1"
-    task_state["plan"]["steps"] = [
-        {
-            "step_id": "step_1",
-            "proposal": {
-                "kind": "call_tool",
-                "tool_name": "mcp_call",
-                "args": {"profile": "chrome", "operation": "new_page", "arguments": {}},
-            },
-            "status": "proposed",
-        }
-    ]
-    state: dict[str, object] = {
-        "correlation_id": "corr-wip-mcp-purpose",
-        "task_state": task_state,
-    }
-
-    progress_critic_node(state)
-    assert emitted
-    detail = emitted[-1]
-    assert isinstance(detail, dict)
-    text = str(detail.get("text") or "")
-    assert "opening a browser page" in text
-    assert "Current action: `mcp_call`." in text
-
-
-def test_wip_update_sanitizes_raw_telegram_goal_payload() -> None:
-    raw_goal = """## RAW MESSAGE
-
-- channel: telegram
-- correlation_id: 808f632f-a0d4-4a4f-adc3-166019fcca24
-
-## RAW JSON
-```json
-{
-  "update_id": 31223897,
-  "message": {"message_id": 3389}
-}
-```"""
-    task_state = build_default_task_state()
-    task_state["goal"] = raw_goal
-    detail = progress_critic_node_module.build_wip_update_detail(
-        task_state=task_state,
-        cycle=2,
-        current_step={
-            "proposal": {"kind": "call_tool", "tool_name": "vision_extract", "args": {}},
-            "status": "proposed",
-        },
-    )
-    text = str(detail.get("text") or "")
-    assert "## RAW MESSAGE" not in text
-    assert "## RAW JSON" not in text
-    assert "update_id" not in text
-    assert "correlation_id" not in text
-    assert "the current task" in text
-    assert "Current action: `vision_extract`." in text
-
-
-def test_wip_update_compacts_and_truncates_goal_text() -> None:
-    long_goal = "Summarize this receipt total " + ("with details " * 60)
-    task_state = build_default_task_state()
-    task_state["goal"] = long_goal
-    detail = progress_critic_node_module.build_wip_update_detail(
-        task_state=task_state,
-        cycle=3,
-        current_step={
-            "proposal": {"kind": "call_tool", "tool_name": "vision_extract", "args": {}},
-            "status": "proposed",
-        },
-    )
-    text = str(detail.get("text") or "")
-    assert "\n" not in text
-    assert "Current action: `vision_extract`." in text
-    assert len(text) < 420
-
-
-def test_progress_critic_accepts_structured_task_completed_outcome() -> None:
-    task_state = build_default_task_state()
-    task_state["status"] = "running"
-    task_state["acceptance_criteria"] = ["done when the user gets a concrete answer"]
-    task_state["cycle_index"] = 3
-    task_state["outcome"] = {
-        "kind": "task_completed",
-        "final_text": "Should I continue with another attempt?",
-    }
-    state: dict[str, object] = {
-        "correlation_id": "corr-progress-question-not-done",
-        "task_state": task_state,
-    }
-
-    updated = progress_critic_node(state)
-    next_state = updated.get("task_state")
-    assert isinstance(next_state, dict)
-    assert next_state.get("status") == "done"
-    assert route_after_progress_critic(updated) == "respond_node"
+    raw = next_state.get("pending_plan_raw")
+    assert isinstance(raw, dict)
+    tool_call = raw.get("tool_call")
+    assert isinstance(tool_call, dict)
+    assert tool_call.get("tool_name") == "send_message"
+    args = tool_call.get("args")
+    assert isinstance(args, dict)
+    assert args.get("To") == "8553589429"
+    plan = next_state.get("plan")
+    assert isinstance(plan, dict)
+    steps = plan.get("steps")
+    assert isinstance(steps, list) and steps
+    first = steps[0]
+    assert isinstance(first, dict)
+    assert str(first.get("raw_source") or "").endswith(".repair")

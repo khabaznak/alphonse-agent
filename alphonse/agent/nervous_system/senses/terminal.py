@@ -6,6 +6,7 @@ import threading
 from datetime import datetime, timezone
 from pathlib import Path
 
+from alphonse.agent.actions.conscious_message_handler import build_incoming_message_envelope
 from alphonse.agent.observability.log_manager import get_component_logger
 from alphonse.agent.nervous_system.paths import resolve_nervous_system_db_path
 from alphonse.agent.nervous_system.senses.base import Sense, SignalSpec
@@ -71,7 +72,17 @@ class TerminalSense(Sense):
                 self._bus.emit(
                     Signal(
                         type="terminal.command_updated",
-                        payload=row,
+                        payload=build_incoming_message_envelope(
+                            message_id=str(row.get("command_id") or row.get("updated_at") or "terminal"),
+                            channel_type="terminal",
+                            channel_target=str(row.get("session_id") or "terminal"),
+                            provider="terminal",
+                            text=_terminal_update_text(row),
+                            occurred_at=str(row.get("updated_at") or _now_iso()),
+                            correlation_id=str(row.get("command_id") or ""),
+                            actor_external_user_id=str(row.get("requested_by") or "").strip() or None,
+                            metadata={"terminal_update": row},
+                        ),
                         source="terminal",
                         correlation_id=row.get("command_id"),
                     )
@@ -129,3 +140,14 @@ def _parse_float(raw: str | None, default: float) -> float:
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _terminal_update_text(row: dict[str, object]) -> str:
+    command = str(row.get("command") or "").strip()
+    status = str(row.get("status") or "").strip() or "updated"
+    command_id = str(row.get("command_id") or "").strip()
+    if command:
+        return f"Terminal command {status}: {command}"
+    if command_id:
+        return f"Terminal command {status}: {command_id}"
+    return f"Terminal command {status}"

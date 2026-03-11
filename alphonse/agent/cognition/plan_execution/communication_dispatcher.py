@@ -26,6 +26,9 @@ class CommunicationDispatcher:
         plan_id = str(getattr(plan, "plan_id", "") or "")
         step = str(getattr(plan, "tool", "") or "unknown")
         payload_dict = getattr(plan, "payload", {}) if hasattr(plan, "payload") else {}
+        outbound_intent = _derive_outbound_intent(payload_dict)
+        internal_progress = _as_bool(payload_dict.get("internal_progress")) if isinstance(payload_dict, dict) else False
+        visibility = str(payload_dict.get("visibility") or "").strip().lower() if isinstance(payload_dict, dict) else ""
         if channel in {"telegram", "api"} and not target:
             self._logger.warning(
                 "executor dispatch skipped plan_id=%s channel=%s reason=missing_target",
@@ -33,15 +36,34 @@ class CommunicationDispatcher:
                 channel,
             )
             return
+        if outbound_intent == "internal_progress":
+            self._logger.info(
+                "executor dispatch suppressed plan_id=%s step=%s channel=%s target=%s outbound_intent=%s internal_progress=%s visibility=%s",
+                plan_id,
+                step,
+                channel,
+                target or "none",
+                outbound_intent,
+                internal_progress,
+                visibility or "public",
+            )
+            return
         self._logger.info(
-            "executor dispatch plan_id=%s step=%s channel=%s target=%s locale=%s",
+            "executor dispatch plan_id=%s step=%s channel=%s target=%s locale=%s outbound_intent=%s internal_progress=%s visibility=%s",
             plan_id,
             step,
             channel,
             target or "none",
             payload_dict.get("locale") if isinstance(payload_dict, dict) else None,
+            outbound_intent,
+            internal_progress,
+            visibility or "public",
         )
         payload = _message_payload(message, channel, target, exec_context)
+        payload["outbound_intent"] = outbound_intent
+        payload["internal_progress"] = internal_progress
+        if visibility:
+            payload["visibility"] = visibility
         if isinstance(payload_dict, dict) and payload_dict.get("locale"):
             payload["locale"] = payload_dict.get("locale")
         if isinstance(payload_dict, dict):
@@ -100,3 +122,22 @@ def _message_payload(
     if target:
         payload["target"] = target
     return payload
+
+
+def _derive_outbound_intent(payload: dict[str, Any] | Any) -> str:
+    if not isinstance(payload, dict):
+        return "mission_public"
+    configured = str(payload.get("outbound_intent") or "").strip().lower()
+    if configured in {"wip_transition", "internal_progress", "mission_public"}:
+        return configured
+    if _as_bool(payload.get("internal_progress")):
+        return "internal_progress"
+    if str(payload.get("visibility") or "").strip().lower() == "internal":
+        return "internal_progress"
+    return "mission_public"
+
+
+def _as_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}

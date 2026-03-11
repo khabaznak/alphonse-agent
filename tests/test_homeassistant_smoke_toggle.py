@@ -17,18 +17,17 @@ class _FakeRegistry:
 
     def get(self, key: str):
         if key == "domotics.query":
-            return _FakeTool(lambda **kwargs: {"status": "ok", "result": {"query": kwargs}, "error": None, "metadata": {}})
+            return _FakeTool(lambda **kwargs: {"output": {"query": kwargs}, "exception": None, "metadata": {}})
         if key == "domotics.subscribe":
             return _FakeTool(
                 lambda **kwargs: {
-                    "status": "ok",
-                    "result": {"event_count": 2, "events": [{"entity_id": "input_boolean.alphonse_test_toggle"}]},
-                    "error": None,
+                    "output": {"event_count": 2, "events": [{"entity_id": "input_boolean.alphonse_test_toggle"}]},
+                    "exception": None,
                     "metadata": {"subscribe_args": kwargs},
                 }
             )
         if key == "domotics.execute":
-            return _FakeTool(lambda **kwargs: {"status": "ok", "result": {"execute": kwargs}, "error": None, "metadata": {}})
+            return _FakeTool(lambda **kwargs: {"output": {"execute": kwargs}, "exception": None, "metadata": {}})
         return None
 
 
@@ -40,8 +39,8 @@ def test_run_toggle_smoke_uses_domotics_tools(monkeypatch) -> None:
 
     result = run_toggle_smoke(entity_id="input_boolean.alphonse_test_toggle", duration_seconds=0.5)
 
-    assert result["status"] == "ok"
-    payload = result["result"] or {}
+    assert result["exception"] is None
+    payload = result["output"] or {}
     assert payload.get("entity_id") == "input_boolean.alphonse_test_toggle"
-    assert (payload.get("execute_on") or {}).get("status") == "ok"
-    assert (payload.get("execute_off") or {}).get("status") == "ok"
+    assert (payload.get("execute_on") or {}).get("exception") is None
+    assert (payload.get("execute_off") or {}).get("exception") is None

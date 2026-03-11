@@ -78,6 +78,26 @@ def test_pdca_queue_runner_noop_when_disabled(tmp_path: Path, monkeypatch: pytes
     assert bus.get(timeout=0.05) is None
 
 
+def test_pdca_queue_runner_enabled_by_default(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    db_path = tmp_path / "nerve-db"
+    monkeypatch.setenv("NERVE_DB_PATH", str(db_path))
+    monkeypatch.delenv("ALPHONSE_PDCA_SLICING_ENABLED", raising=False)
+    apply_schema(db_path)
+    bus = Bus()
+    runner = PdcaQueueRunner(bus=bus, enabled=None)
+    assert runner.enabled is True
+
+
+def test_pdca_queue_runner_accepts_enabled_literal(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    db_path = tmp_path / "nerve-db"
+    monkeypatch.setenv("NERVE_DB_PATH", str(db_path))
+    monkeypatch.setenv("ALPHONSE_PDCA_SLICING_ENABLED", "enabled")
+    apply_schema(db_path)
+    bus = Bus()
+    runner = PdcaQueueRunner(bus=bus, enabled=None)
+    assert runner.enabled is True
+
+
 def test_pdca_queue_runner_avoids_double_dispatch_under_contention(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

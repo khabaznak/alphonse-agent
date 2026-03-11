@@ -36,8 +36,6 @@ from alphonse.agent.tools.telegram_files import TelegramGetFileMetaTool
 from alphonse.agent.tools.telegram_files import TranscribeTelegramAudioTool
 from alphonse.agent.tools.telegram_files import VisionAnalyzeImageTool
 from alphonse.agent.tools.telegram_files import VisionExtractTool
-from alphonse.agent.tools.terminal_async_tools import TerminalCommandStatusTool
-from alphonse.agent.tools.terminal_async_tools import TerminalCommandSubmitTool
 from alphonse.agent.tools.user_contact_tools import UserRegisterFromContactTool
 from alphonse.agent.tools.user_contact_tools import UserRemoveFromContactTool
 from alphonse.agent.tools.user_contact_tools import UserSearchTool
@@ -82,8 +80,6 @@ def build_default_tool_registry() -> ToolRegistry:
     vision_extract = VisionExtractTool()
     terminal_sync = TerminalExecuteTool()
     mcp_call = McpCallTool()
-    terminal_async = TerminalCommandSubmitTool()
-    terminal_async_command_status = TerminalCommandStatusTool()
     ssh_terminal = SshTerminalTool()
     job_store = JobStore()
     job_runner = JobRunner(
@@ -133,8 +129,6 @@ def build_default_tool_registry() -> ToolRegistry:
     registry.register("transcribeTelegramAudio", transcribe_audio)
     registry.register("terminal_sync", terminal_sync)
     registry.register("mcp_call", mcp_call)
-    registry.register("terminal_async", terminal_async)
-    registry.register("terminal_async_command_status", terminal_async_command_status)
     registry.register("ssh_terminal", ssh_terminal)
     registry.register("job_create", job_create)
     registry.register("job_list", job_list)

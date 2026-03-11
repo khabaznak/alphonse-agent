@@ -1,15 +1,12 @@
 from __future__ import annotations
 
-from pathlib import Path
-
+from alphonse.agent.cognition.prompt_templates_runtime import PROMPT_SEEDS_DIR
 from alphonse.agent.cognition.prompt_templates_runtime import render_prompt_template
 from alphonse.agent.cognition.template_loader import load_template_or_fallback
 
-_TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
-
 
 def _load_template(filename: str) -> str:
-    path = _TEMPLATES_DIR / filename
+    path = PROMPT_SEEDS_DIR / filename
     return load_template_or_fallback(path)
 
 

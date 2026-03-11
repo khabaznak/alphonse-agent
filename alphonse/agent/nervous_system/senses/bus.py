@@ -8,6 +8,7 @@ to block waiting for the next signal. No persistence, no handlers, no ack.
 import json
 import uuid
 import sqlite3
+from functools import lru_cache
 from pathlib import Path
 from queue import Queue, Empty
 from typing import Optional
@@ -43,6 +44,7 @@ class Bus:
 
     def emit(self, signal: Signal) -> None:
         """Enqueue a signal."""
+        _validate_signal_contract(signal)
         self._q.put(signal)
         _persist_signal(signal)
 
@@ -87,3 +89,33 @@ def _persist_signal(signal: Signal) -> None:
             conn.commit()
     except Exception:
         return
+
+
+@lru_cache(maxsize=1)
+def _allowed_signal_keys_by_source() -> dict[str, set[str]]:
+    from alphonse.agent.nervous_system.senses.registry import all_signal_specs
+    from alphonse.agent.nervous_system.senses.registry import all_senses
+
+    sense_keys = {cls.key for cls in all_senses()}
+    allowed: dict[str, set[str]] = {key: set() for key in sense_keys}
+    for spec in all_signal_specs():
+        src = str(spec.source or "").strip()
+        key = str(spec.key or "").strip()
+        if src in allowed and key:
+            allowed[src].add(key)
+    return allowed
+
+
+def _validate_signal_contract(signal: Signal) -> None:
+    source = str(signal.source or "").strip()
+    if not source:
+        return
+    allowed_map = _allowed_signal_keys_by_source()
+    allowed = allowed_map.get(source)
+    if not allowed:
+        return
+    if str(signal.type or "").strip() in allowed:
+        return
+    raise ValueError(
+        f"invalid_signal_type_for_source: source={source} type={signal.type}"
+    )

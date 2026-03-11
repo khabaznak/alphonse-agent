@@ -37,3 +37,15 @@ def emit_transition_event(
             sink(event)
         except Exception:
             return
+
+
+def emit_presence_transition_event(
+    state: dict[str, Any],
+    *,
+    event_family: str,
+    phase: str,
+    detail: dict[str, Any] | None = None,
+) -> None:
+    merged_detail = dict(detail) if isinstance(detail, dict) else {}
+    merged_detail["presence_event_family"] = str(event_family or "").strip()
+    emit_transition_event(state, str(phase or "").strip(), merged_detail)

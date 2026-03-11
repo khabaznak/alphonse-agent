@@ -31,9 +31,8 @@ class ToolExecutionEvent:
 
 
 class ToolResult(TypedDict):
-    status: str
-    result: Any
-    error: dict[str, Any] | None
+    output: Any
+    exception: Any | None
     metadata: dict[str, Any]
 
 
@@ -48,29 +47,13 @@ class ToolContractError(Exception):
 def ensure_tool_result(*, tool_key: str, value: Any) -> ToolResult:
     if not isinstance(value, dict):
         raise ToolContractError(f"{tool_key}: result must be an object")
-    if set(value.keys()) != {"status", "result", "error", "metadata"}:
-        raise ToolContractError(f"{tool_key}: result keys must be status,result,error,metadata")
-    status = str(value.get("status") or "").strip().lower()
-    if status not in {"ok", "failed"}:
-        raise ToolContractError(f"{tool_key}: status must be ok|failed")
-    error = value.get("error")
-    if status == "ok":
-        if error is not None:
-            raise ToolContractError(f"{tool_key}: error must be null when status=ok")
-    else:
-        if not isinstance(error, dict):
-            raise ToolContractError(f"{tool_key}: error must be an object when status=failed")
-        code = str(error.get("code") or "").strip()
-        message = str(error.get("message") or "").strip()
-        if not code or not message:
-            raise ToolContractError(f"{tool_key}: failed error requires code/message")
     metadata = value.get("metadata")
     if not isinstance(metadata, dict):
         raise ToolContractError(f"{tool_key}: metadata must be an object")
-    out: ToolResult = {
-        "status": status,
-        "result": value.get("result"),
-        "error": error if isinstance(error, dict) else None,
+    if "output" not in value or "exception" not in value:
+        raise ToolContractError(f"{tool_key}: result keys must include output,exception,metadata")
+    return {
+        "output": value.get("output"),
+        "exception": value.get("exception"),
         "metadata": dict(metadata),
     }
-    return out

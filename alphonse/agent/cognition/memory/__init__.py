@@ -8,6 +8,8 @@ from alphonse.agent.cognition.memory.service import list_active_missions
 from alphonse.agent.cognition.memory.service import mission_step_update
 from alphonse.agent.cognition.memory.service import mission_upsert
 from alphonse.agent.cognition.memory.service import put_artifact
+from alphonse.agent.cognition.memory.service import record_after_tool_call
+from alphonse.agent.cognition.memory.service import record_plan_step_completion
 from alphonse.agent.cognition.memory.service import search_episodes
 from alphonse.agent.cognition.memory.service import upsert_workspace_pointer
 
@@ -19,6 +21,8 @@ __all__ = [
     "upsert_workspace_pointer",
     "mission_upsert",
     "mission_step_update",
+    "record_after_tool_call",
+    "record_plan_step_completion",
     "search_episodes",
     "get_mission",
     "list_active_missions",

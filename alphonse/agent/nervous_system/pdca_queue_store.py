@@ -448,6 +448,40 @@ def has_pdca_event(
     return row is not None
 
 
+def describe_pdca_runtime_flush_counts(*, include_signal_queue: bool = True) -> dict[str, int]:
+    with _connect() as conn:
+        return _runtime_table_counts(conn=conn, include_signal_queue=include_signal_queue)
+
+
+def flush_signal_queue(*, conn: sqlite3.Connection | None = None) -> int:
+    if conn is not None:
+        cur = conn.execute("DELETE FROM signal_queue")
+        return int(cur.rowcount or 0)
+    with _connect() as own_conn:
+        cur = own_conn.execute("DELETE FROM signal_queue")
+        own_conn.commit()
+        return int(cur.rowcount or 0)
+
+
+def flush_pdca_runtime_state(*, include_signal_queue: bool = True) -> dict[str, int]:
+    with _connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        counts = _runtime_table_counts(conn=conn, include_signal_queue=include_signal_queue)
+        conn.execute("DELETE FROM pdca_events")
+        conn.execute("DELETE FROM pdca_checkpoints")
+        conn.execute("DELETE FROM pdca_tasks")
+        signal_deleted = flush_signal_queue(conn=conn) if include_signal_queue else 0
+        conn.commit()
+    out = {
+        "pdca_events": int(counts.get("pdca_events") or 0),
+        "pdca_checkpoints": int(counts.get("pdca_checkpoints") or 0),
+        "pdca_tasks": int(counts.get("pdca_tasks") or 0),
+    }
+    if include_signal_queue:
+        out["signal_queue"] = int(signal_deleted)
+    return out
+
+
 def get_pdca_queue_metrics(
     *,
     now: str | None = None,
@@ -639,6 +673,17 @@ def _connect() -> sqlite3.Connection:
     conn = sqlite3.connect(path)
     conn.row_factory = sqlite3.Row
     return conn
+
+
+def _runtime_table_counts(*, conn: sqlite3.Connection, include_signal_queue: bool) -> dict[str, int]:
+    counts = {
+        "pdca_events": int(conn.execute("SELECT COUNT(*) FROM pdca_events").fetchone()[0] or 0),
+        "pdca_checkpoints": int(conn.execute("SELECT COUNT(*) FROM pdca_checkpoints").fetchone()[0] or 0),
+        "pdca_tasks": int(conn.execute("SELECT COUNT(*) FROM pdca_tasks").fetchone()[0] or 0),
+    }
+    if include_signal_queue:
+        counts["signal_queue"] = int(conn.execute("SELECT COUNT(*) FROM signal_queue").fetchone()[0] or 0)
+    return counts
 
 
 def _row_to_task(row: sqlite3.Row | tuple) -> dict[str, Any]:

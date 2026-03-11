@@ -12,10 +12,13 @@ from alphonse.agent.nervous_system.pdca_queue_store import (
     release_pdca_task_lease,
     upsert_pdca_task,
 )
-from alphonse.agent.nervous_system.senses.bus import Bus, Signal
+from alphonse.agent.nervous_system.senses.bus import Bus
 from alphonse.agent.observability.log_manager import get_component_logger
+from alphonse.agent.observability.log_manager import get_log_manager
+from alphonse.agent.services.pdca_slice_executor import PdcaSliceExecutor
 
 logger = get_component_logger("services.pdca_queue_runner")
+_LOG = get_log_manager()
 
 
 class PdcaQueueRunner:
@@ -65,12 +68,19 @@ class PdcaQueueRunner:
         self._stop_event = threading.Event()
         self._last_owner_id: str | None = None
         self._last_starvation_warning_at: datetime | None = None
+        self._executor = PdcaSliceExecutor(bus=bus)
 
     @property
     def enabled(self) -> bool:
         return self._enabled
 
     def start(self) -> None:
+        _LOG.emit(
+            event="pdca.slicing.mode",
+            component="services.pdca_queue_runner",
+            status="enabled" if self._enabled else "disabled",
+            payload={"worker_id": self._worker_id},
+        )
         if not self._enabled:
             return
         if self._thread and self._thread.is_alive():
@@ -112,7 +122,7 @@ class PdcaQueueRunner:
             if not acquired:
                 continue
             try:
-                emitted = self._emit_slice_requested(task=task, now_dt=now_dt)
+                emitted = self._dispatch_slice(task=task, now_dt=now_dt)
                 if emitted:
                     self._last_owner_id = str(task.get("owner_id") or "").strip() or None
                     return 1
@@ -128,27 +138,13 @@ class PdcaQueueRunner:
                 logger.warning("PDCA queue runner iteration failed: %s", exc)
             self._stop_event.wait(self._poll_seconds)
 
-    def _emit_slice_requested(self, *, task: dict[str, Any], now_dt: datetime) -> bool:
+    def _dispatch_slice(self, *, task: dict[str, Any], now_dt: datetime) -> bool:
         task_id = str(task.get("task_id") or "").strip()
         owner_id = str(task.get("owner_id") or "").strip()
         conversation_key = str(task.get("conversation_key") or "").strip()
         if not task_id or not owner_id or not conversation_key:
             return False
         correlation_id = f"pdca.slice.requested:{task_id}:{int(now_dt.timestamp())}"
-        self._bus.emit(
-            Signal(
-                type="pdca.slice.requested",
-                payload={
-                    "task_id": task_id,
-                    "owner_id": owner_id,
-                    "conversation_key": conversation_key,
-                    "session_id": task.get("session_id"),
-                    "correlation_id": correlation_id,
-                },
-                source="pdca_queue_runner",
-                correlation_id=correlation_id,
-            )
-        )
         append_pdca_event(
             task_id=task_id,
             event_type="slice.requested",
@@ -175,8 +171,14 @@ class PdcaQueueRunner:
                 "created_at": task.get("created_at"),
             }
         )
+        self._executor.execute_task(
+            task_id=task_id,
+            correlation_id=correlation_id,
+            signal_type="pdca.slice.requested",
+            source="pdca_queue_runner",
+        )
         logger.info(
-            "PDCA queue runner emitted slice request task_id=%s owner_id=%s conversation_key=%s",
+            "PDCA queue runner dispatched slice task_id=%s owner_id=%s conversation_key=%s",
             task_id,
             owner_id,
             conversation_key,
@@ -255,8 +257,12 @@ class PdcaQueueRunner:
 def _is_enabled(value: bool | None) -> bool:
     if isinstance(value, bool):
         return value
-    raw = str(os.getenv("ALPHONSE_PDCA_SLICING_ENABLED", "false")).strip().lower()
-    return raw in {"1", "true", "yes", "on"}
+    raw = str(os.getenv("ALPHONSE_PDCA_SLICING_ENABLED", "true")).strip().lower()
+    return raw in {"1", "true", "yes", "on", "enabled"}
+
+
+def is_pdca_slicing_enabled() -> bool:
+    return _is_enabled(None)
 
 
 def _as_float(value: float | None, *, env_name: str, default: float, minimum: float) -> float:

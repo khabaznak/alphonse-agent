@@ -7,10 +7,6 @@ from alphonse.agent.tools.local_audio_output import (
 from alphonse.agent.tools.scheduler_tool import SchedulerTool
 from alphonse.agent.tools.stt_transcribe import SttTranscribeTool
 from alphonse.agent.tools.terminal_execute_tool import TerminalExecuteTool
-from alphonse.agent.tools.terminal_async_tools import (
-    TerminalCommandStatusTool,
-    TerminalCommandSubmitTool,
-)
 from alphonse.agent.tools.terminal import TerminalTool, TerminalExecutionResult
 from alphonse.agent.tools.domotics_tools import (
     DomoticsExecuteTool,
@@ -28,8 +24,6 @@ __all__ = [
     "SchedulerTool",
     "SttTranscribeTool",
     "TerminalExecuteTool",
-    "TerminalCommandSubmitTool",
-    "TerminalCommandStatusTool",
     "TerminalTool",
     "TerminalExecutionResult",
     "DomoticsQueryTool",

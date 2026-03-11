@@ -17,6 +17,7 @@ from urllib import request
 
 from dotenv import load_dotenv
 
+from alphonse.agent.actions.conscious_message_handler import build_incoming_message_envelope
 from alphonse.agent.cognition.intentions.intent_pipeline import (
     build_default_pipeline_with_bus,
 )
@@ -26,6 +27,10 @@ from alphonse.agent.nervous_system.migrate import apply_schema
 from alphonse.agent.nervous_system.paths import resolve_nervous_system_db_path
 from alphonse.agent.nervous_system.paths import resolve_observability_db_path
 from alphonse.agent.services.job_store import JobStore
+from alphonse.agent.nervous_system.pdca_queue_store import (
+    describe_pdca_runtime_flush_counts,
+    flush_pdca_runtime_state,
+)
 from alphonse.agent.nervous_system.senses.bus import Bus, Signal
 from alphonse.agent.nervous_system.senses.timer import TimerSense
 from alphonse.agent.nervous_system.seed import apply_seed
@@ -179,6 +184,17 @@ def build_parser() -> argparse.ArgumentParser:
     agent_sub.add_parser("stop", help="Stop managed agent process")
     agent_sub.add_parser("restart", help="Restart managed agent process")
     agent_sub.add_parser("status", help="Show managed agent status")
+    agent_flush = agent_sub.add_parser("flush", help="Clear PDCA runtime queue/checkpoints/events and signal queue")
+    agent_flush.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Show rows that would be deleted without mutating state",
+    )
+    agent_flush.add_argument(
+        "--force",
+        action="store_true",
+        help="Allow flush even if a running agent process is detected",
+    )
 
     gaps_parser = sub.add_parser("gaps", help="Inspect capability gaps")
     gaps_sub = gaps_parser.add_subparsers(dest="gaps_command", required=True)
@@ -562,23 +578,32 @@ def _command_say(args: argparse.Namespace, db_path: Path) -> None:
     pipeline = build_default_pipeline_with_bus(bus)
     correlation_id = args.correlation_id or str(uuid.uuid4())
     channel = str(args.channel).strip() or "cli"
-    signal_type = (
-        f"{channel}.message_received"
-        if channel in {"telegram", "cli", "api"}
-        else "cli.message_received"
+    signal_type = {
+        "telegram": "sense.telegram.message.user.received",
+        "cli": "sense.cli.message.user.received",
+        "api": "sense.api.message.user.received",
+    }.get(channel, "sense.cli.message.user.received")
+    occurred_at = datetime.now(timezone.utc).isoformat()
+    payload = build_incoming_message_envelope(
+        message_id=str(args.chat_id or correlation_id),
+        channel_type=channel,
+        channel_target=str(args.chat_id or channel),
+        provider=channel,
+        text=args.text,
+        occurred_at=occurred_at,
+        correlation_id=correlation_id,
+        actor_external_user_id=str(args.chat_id or "").strip() or None,
+        actor_person_id=args.person_id,
+        metadata={"source": "cli.say"},
     )
-    payload = {
-        "text": args.text,
-        "chat_id": args.chat_id,
-        "origin": channel,
-        "timestamp": time.time(),
-    }
     if args.planning_mode:
         payload["planning_mode"] = args.planning_mode
     if args.autonomy_level is not None:
         payload["autonomy_level"] = args.autonomy_level
     if args.person_id:
-        payload["person_id"] = args.person_id
+        actor = payload.get("actor") if isinstance(payload.get("actor"), dict) else {}
+        actor["person_id"] = args.person_id
+        payload["actor"] = actor
     signal = Signal(
         type=signal_type,
         payload=payload,
@@ -586,7 +611,7 @@ def _command_say(args: argparse.Namespace, db_path: Path) -> None:
         correlation_id=correlation_id,
     )
     pipeline.handle(
-        "handle_incoming_message",
+        "handle_conscious_message",
         {
             "signal": signal,
             "state": None,
@@ -962,6 +987,9 @@ def _command_routing(args: argparse.Namespace) -> None:
 
 
 def _command_agent(args: argparse.Namespace, *, supervisor: "AgentSupervisor | None") -> None:
+    if args.agent_command == "flush":
+        _command_agent_flush(args)
+        return
     if supervisor is None:
         print("Agent management is available in the REPL session only.")
         return
@@ -977,6 +1005,52 @@ def _command_agent(args: argparse.Namespace, *, supervisor: "AgentSupervisor | N
     if args.agent_command == "status":
         supervisor.status()
         return
+
+
+def _command_agent_flush(args: argparse.Namespace) -> None:
+    dry_run = bool(getattr(args, "dry_run", False))
+    force = bool(getattr(args, "force", False))
+    if not force and _runtime_appears_active():
+        print("Refusing to flush while agent runtime appears active. Re-run with --force.")
+        return
+    if dry_run:
+        counts = describe_pdca_runtime_flush_counts(include_signal_queue=True)
+        _print_agent_flush_result(counts=counts, dry_run=True)
+        return
+    counts = flush_pdca_runtime_state(include_signal_queue=True)
+    _print_agent_flush_result(counts=counts, dry_run=False)
+
+
+def _runtime_appears_active() -> bool:
+    try:
+        completed = subprocess.run(
+            ["ps", "-ax", "-o", "command="],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except Exception:
+        return False
+    if int(completed.returncode or 1) != 0:
+        return False
+    for raw in str(completed.stdout or "").splitlines():
+        line = str(raw or "").strip()
+        if not line:
+            continue
+        if "alphonse.agent.main" not in line:
+            continue
+        return True
+    return False
+
+
+def _print_agent_flush_result(*, counts: dict[str, int], dry_run: bool) -> None:
+    action = "Dry run" if dry_run else "Completed"
+    now_iso = datetime.now(timezone.utc).isoformat()
+    print(f"Agent flush {action.lower()} at {now_iso}")
+    print("Rows:")
+    for key in ("pdca_events", "pdca_checkpoints", "pdca_tasks", "signal_queue"):
+        value = int(counts.get(key) or 0)
+        print(f"- {key}: {value}")
 
 
 class AgentSupervisor:

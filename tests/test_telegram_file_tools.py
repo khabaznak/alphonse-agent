@@ -43,15 +43,15 @@ def test_telegram_get_file_meta_and_download(monkeypatch, tmp_path: Path) -> Non
 
     meta_tool = telegram_files.TelegramGetFileMetaTool()
     meta = meta_tool.execute(file_id="f-1")
-    assert meta["status"] == "ok"
-    meta_payload = meta.get("result")
+    assert meta["exception"] is None
+    meta_payload = meta.get("output")
     assert isinstance(meta_payload, dict)
     assert meta_payload.get("file_path") == "voice/file.ogg"
 
     dl_tool = telegram_files.TelegramDownloadFileTool()
     dl = dl_tool.execute(file_id="f-1")
-    assert dl["status"] == "ok"
-    dl_payload = dl.get("result")
+    assert dl["exception"] is None
+    dl_payload = dl.get("output")
     assert isinstance(dl_payload, dict)
     assert dl_payload.get("sandbox_alias") == "telegram_files"
     rel = str(dl_payload.get("relative_path") or "")
@@ -78,8 +78,8 @@ def test_transcribe_and_analyze_with_ollama(monkeypatch, tmp_path: Path) -> None
     apply_schema(db_path)
 
     transcribe = telegram_files.TranscribeTelegramAudioTool().execute(file_id="f-audio")
-    assert transcribe["status"] == "failed"
-    transcribe_error = transcribe.get("error")
+    assert transcribe["exception"] is not None
+    transcribe_error = transcribe.get("exception")
     assert isinstance(transcribe_error, dict)
     assert transcribe_error.get("code") == "whisper_cli_not_found"
     transcribe_details = transcribe_error.get("details")
@@ -109,8 +109,8 @@ def test_vision_analyze_and_extract_success(monkeypatch, tmp_path: Path) -> None
         sandbox_alias="telegram_files",
         relative_path="users/u1/images/sample.bin",
     )
-    assert analyze["status"] == "ok"
-    analyze_payload = analyze.get("result")
+    assert analyze["exception"] is None
+    analyze_payload = analyze.get("output")
     assert isinstance(analyze_payload, dict)
     assert analyze_payload.get("analysis") == "Detected a handwritten note and one receipt."
 
@@ -118,8 +118,8 @@ def test_vision_analyze_and_extract_success(monkeypatch, tmp_path: Path) -> None
         sandbox_alias="telegram_files",
         relative_path="users/u1/images/sample.bin",
     )
-    assert extract["status"] == "ok"
-    extract_payload = extract.get("result")
+    assert extract["exception"] is None
+    extract_payload = extract.get("output")
     assert isinstance(extract_payload, dict)
     assert isinstance(extract_payload.get("text"), str)
     blocks = extract_payload.get("blocks")
@@ -145,8 +145,8 @@ def test_vision_analyze_image_http_failure(monkeypatch, tmp_path: Path) -> None:
         sandbox_alias="telegram_files",
         relative_path="users/u1/images/sample.bin",
     )
-    assert result["status"] == "failed"
-    error = result.get("error")
+    assert result["exception"] is not None
+    error = result.get("exception")
     assert isinstance(error, dict)
     assert error.get("code") == "vision_http_500"
     assert "vision_http_500" in str(error.get("message") or "")
@@ -173,8 +173,8 @@ def test_vision_extract_http_failure(monkeypatch, tmp_path: Path) -> None:
         sandbox_alias="telegram_files",
         relative_path="users/u1/images/sample.bin",
     )
-    assert result["status"] == "failed"
-    error = result.get("error")
+    assert result["exception"] is not None
+    error = result.get("exception")
     assert isinstance(error, dict)
     assert error.get("code") == "vision_http_500"
     assert "vision_http_500" in str(error.get("message") or "")

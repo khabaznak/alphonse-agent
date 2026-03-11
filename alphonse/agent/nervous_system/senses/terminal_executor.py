@@ -3,7 +3,9 @@ from __future__ import annotations
 import os
 import threading
 from dataclasses import dataclass
+from datetime import datetime, timezone
 
+from alphonse.agent.actions.conscious_message_handler import build_incoming_message_envelope
 from alphonse.agent.observability.log_manager import get_component_logger
 from alphonse.agent.nervous_system.terminal_tools import (
     get_terminal_command,
@@ -148,11 +150,23 @@ class TerminalExecutorSense(Sense):
                 self._bus.emit(
                     Signal(
                         type="terminal.command_executed",
-                        payload={
-                            "command_id": command_id,
-                            "session_id": session["session_id"],
-                            "status": result.status,
-                        },
+                        payload=build_incoming_message_envelope(
+                            message_id=str(command_id),
+                            channel_type="terminal",
+                            channel_target=str(session["session_id"]),
+                            provider="terminal_executor",
+                            text=f"Terminal command executed with status {result.status}",
+                            occurred_at=datetime.now(timezone.utc).isoformat(),
+                            correlation_id=str(command_id),
+                            actor_external_user_id=str(command.get("requested_by") or "").strip() or None,
+                            metadata={
+                                "terminal_execution": {
+                                    "command_id": command_id,
+                                    "session_id": session["session_id"],
+                                    "status": result.status,
+                                }
+                            },
+                        ),
                         source="terminal_executor",
                         correlation_id=command_id,
                     )

@@ -130,15 +130,16 @@ def test_api_sense_emits_normalized_payload(monkeypatch) -> None:
 
     sense = ApiSense()
     bus = FakeBus()
-    signal = build_api_signal("api.message_received", {"text": "hi", "channel": "webui"}, None)
+    signal = build_api_signal("sense.api.message.user.received", {"text": "hi", "channel": "webui"}, None)
     sense.emit(bus, signal)
 
     assert len(bus.emitted) == 1
     emitted = bus.emitted[0]
     payload = getattr(emitted, "payload", {})
-    assert payload["text"] == "ok"
-    assert payload["channel"] == "webui"
-    assert payload["target"] == "webui"
-    assert payload["user_id"] == "u1"
-    assert payload["user_name"] == "User"
+    assert payload["schema_version"] == "1.0"
+    assert payload["content"]["text"] == "ok"
+    assert payload["channel"]["type"] == "webui"
+    assert payload["channel"]["target"] == "webui"
+    assert payload["actor"]["external_user_id"] == "u1"
+    assert payload["actor"]["display_name"] == "User"
     assert payload["correlation_id"] == "cid"

@@ -5,9 +5,11 @@ from typing import Any, Callable
 
 from alphonse.agent.cortex.nodes.capability_gap import has_capability_gap_plan
 from alphonse.agent.cortex.nodes.telemetry import emit_brain_state
+from alphonse.agent.observability.log_manager import get_log_manager
 from alphonse.agent.rendering.stage import render_stage
 from alphonse.agent.rendering.types import TextDeliverable
 
+_LOG = get_log_manager()
 
 def respond_node_impl(
     state: dict[str, Any],
@@ -114,6 +116,17 @@ def respond_finalize_node(
         emit_transition_event(state, "waiting_user")
         return _return({})
     if isinstance(task_state, dict):
+        if task_status == "failed" and _has_public_mission_send_success(task_state):
+            _LOG.emit(
+                event="pdca.failure.user_reply_suppressed",
+                component="cortex.nodes.respond",
+                correlation_id=str(state.get("correlation_id") or "").strip() or None,
+                channel=str(state.get("channel_type") or "").strip() or None,
+                user_id=str(state.get("actor_person_id") or "").strip() or None,
+                payload={"reason": "mission_public_send_already_succeeded"},
+            )
+            emit_transition_event(state, "failed")
+            return _return({})
         utterance = build_utterance_from_state(state)
         if isinstance(utterance, dict):
             emit_brain_state(
@@ -140,6 +153,23 @@ def respond_finalize_node(
                 )
                 if isinstance(rendered_text, str) and rendered_text.strip():
                     if task_status == "failed":
+                        _LOG.emit(
+                            event="pdca.failure.user_reply_dispatched",
+                            component="cortex.nodes.respond",
+                            correlation_id=str(state.get("correlation_id") or "").strip() or None,
+                            channel=str(state.get("channel_type") or "").strip() or None,
+                            user_id=str(state.get("actor_person_id") or "").strip() or None,
+                            payload={
+                                "failure_code": str(
+                                    ((task_state.get("last_validation_error") or {}) if isinstance(task_state.get("last_validation_error"), dict) else {}).get("reason")
+                                    or "mission_failed"
+                                ),
+                                "retry_exhausted": bool(
+                                    ((task_state.get("last_validation_error") or {}) if isinstance(task_state.get("last_validation_error"), dict) else {}).get("retry_exhausted")
+                                ),
+                            },
+                        )
+                    if task_status == "failed":
                         emit_transition_event(state, "failed")
                     elif task_status == "waiting_user":
                         emit_transition_event(state, "waiting_user")
@@ -153,6 +183,17 @@ def respond_finalize_node(
                 stage="rendering_stage.failed",
                 error_type=result.error or "render_failed",
             )
+            if task_status == "failed":
+                _LOG.emit(
+                    level="warning",
+                    event="pdca.failure.user_reply_dispatch_failed",
+                    component="cortex.nodes.respond",
+                    correlation_id=str(state.get("correlation_id") or "").strip() or None,
+                    channel=str(state.get("channel_type") or "").strip() or None,
+                    user_id=str(state.get("actor_person_id") or "").strip() or None,
+                    error_code=str(result.error or "render_failed"),
+                    payload={"reason": "render_failed"},
+                )
             emit_transition_event(state, "failed", {"reason": "render_failed"})
             return _return({"utterance": utterance, "render_error": result.error})
     if state.get("response_text"):
@@ -198,6 +239,8 @@ def build_utterance_from_state(state: dict[str, Any]) -> dict[str, Any] | None:
         }
         return utterance
     if status == "failed":
+        if _has_public_mission_send_success(task_state):
+            return None
         reason = task_state.get("last_validation_error")
         utterance["type"] = "task_failed"
         utterance["content"] = {
@@ -244,3 +287,43 @@ def build_utterance_from_state(state: dict[str, Any]) -> dict[str, Any] | None:
         utterance["content"] = {}
         return utterance
     return None
+
+
+def _has_public_mission_send_success(task_state: dict[str, Any]) -> bool:
+    facts = task_state.get("facts")
+    if not isinstance(facts, dict):
+        return False
+    for fact in facts.values():
+        if not isinstance(fact, dict):
+            continue
+        tool = str(fact.get("tool_name") or fact.get("tool") or "").strip()
+        if tool not in {"send_message", "sendMessage"}:
+            continue
+        if bool(fact.get("internal")):
+            continue
+        exception_payload = fact.get("exception")
+        if exception_payload is None and isinstance(fact.get("result"), dict):
+            exception_payload = fact["result"].get("exception")
+        has_exception = False
+        if isinstance(exception_payload, str):
+            has_exception = bool(exception_payload.strip())
+        elif isinstance(exception_payload, dict):
+            has_exception = bool(exception_payload)
+        elif exception_payload is not None:
+            has_exception = True
+        if has_exception:
+            continue
+        result_payload = fact.get("output")
+        if not isinstance(result_payload, dict):
+            result_payload = fact.get("result_payload")
+        if not isinstance(result_payload, dict) and isinstance(fact.get("result"), dict):
+            nested = fact.get("result")
+            result_payload = nested.get("output") if isinstance(nested.get("output"), dict) else None
+        visibility = (
+            str(result_payload.get("visibility") or "").strip().lower()
+            if isinstance(result_payload, dict)
+            else ""
+        )
+        if visibility in {"", "public"}:
+            return True
+    return False

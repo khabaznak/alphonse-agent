@@ -35,9 +35,10 @@ def test_conscious_reminder_dispatch_prefers_message_text_over_internal_prompt()
     action.execute({"signal": signal, "ctx": bus, "state": None, "outcome": None})
     assert bus.events
     emitted = bus.events[-1]
-    assert emitted.type == "api.message_received"
+    assert emitted.type == "timed_signal.conscious_payload"
     payload = emitted.payload if isinstance(emitted.payload, dict) else {}
-    assert str(payload.get("text") or "") == "Hi alex"
+    content = payload.get("content") if isinstance(payload.get("content"), dict) else {}
+    assert str(content.get("text") or "") == "Hi alex"
 
 
 def test_timer_fired_runs_jobs_reconcile_without_dispatch(monkeypatch) -> None:
@@ -73,4 +74,80 @@ def test_timer_fired_runs_jobs_reconcile_without_dispatch(monkeypatch) -> None:
     result = action.execute({"signal": signal, "ctx": bus, "state": None, "outcome": None})
     assert result.intention_key == "NOOP"
     assert calls == [True]
+    assert bus.events == []
+
+
+def test_timer_fired_ensures_weekly_memory_maintenance_signal(monkeypatch) -> None:
+    action = HandleTimedSignalsAction()
+    bus = _FakeBus()
+    calls: list[str] = []
+
+    class _FakeReconciler:
+        def reconcile(self, **_: object) -> dict[str, int]:
+            return {
+                "scanned": 0,
+                "updated": 0,
+                "stale_removed": 0,
+                "executed": 0,
+                "advanced_without_run": 0,
+                "failed": 0,
+                "overdue_active_jobs": 0,
+                "due_pending_timed_signals": 0,
+            }
+
+    monkeypatch.setattr(
+        "alphonse.agent.actions.handle_timed_signals.ScheduledJobsReconciler",
+        lambda: _FakeReconciler(),
+    )
+    monkeypatch.setattr(
+        "alphonse.agent.actions.handle_timed_signals._ensure_weekly_memory_maintenance_signal",
+        lambda: calls.append("ensured"),
+    )
+
+    signal = Signal(
+        type="timer.fired",
+        payload={"kind": "jobs_reconcile"},
+        source="timer",
+        correlation_id="corr-reconcile-2",
+    )
+    _ = action.execute({"signal": signal, "ctx": bus, "state": None, "outcome": None})
+    assert calls == ["ensured"]
+
+
+def test_memory_maintenance_timed_signal_runs_maintenance(monkeypatch) -> None:
+    action = HandleTimedSignalsAction()
+    bus = _FakeBus()
+    calls: list[str] = []
+
+    class _FakeMemoryService:
+        def run_maintenance(self, **_: object) -> dict[str, int]:
+            calls.append("maintenance")
+            return {
+                "users_scanned": 1,
+                "summaries_written": 1,
+                "deleted_daily": 0,
+                "deleted_weekly": 0,
+            }
+
+    monkeypatch.setattr(
+        "alphonse.agent.actions.handle_timed_signals.MemoryService",
+        lambda: _FakeMemoryService(),
+    )
+    monkeypatch.setattr(
+        "alphonse.agent.actions.handle_timed_signals._reschedule_weekly_memory_maintenance",
+        lambda **_: calls.append("rescheduled"),
+    )
+
+    signal = Signal(
+        type="timed_signal.fired",
+        payload={
+            "timed_signal_id": "runtime.memory.weekly.maintenance",
+            "payload": {"kind": "memory_maintenance"},
+        },
+        source="timer",
+        correlation_id="corr-memory-weekly-1",
+    )
+    result = action.execute({"signal": signal, "ctx": bus, "state": None, "outcome": None})
+    assert result.intention_key == "NOOP"
+    assert calls == ["maintenance", "rescheduled"]
     assert bus.events == []
