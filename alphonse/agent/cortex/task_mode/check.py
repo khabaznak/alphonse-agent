@@ -15,6 +15,7 @@ from alphonse.agent.cortex.task_mode.task_state_helpers import correlation_id
 from alphonse.agent.cortex.task_mode.task_state_helpers import normalize_acceptance_criteria_records
 from alphonse.agent.cortex.task_mode.task_state_helpers import task_state_with_defaults
 from alphonse.agent.cortex.transitions import emit_transition_event
+from alphonse.agent.nervous_system.pdca_queue_store import append_pdca_event
 from alphonse.agent.session.day_state import render_recent_conversation_block
 
 _JUDGE_INVALID_BUDGET_DEFAULT = 2
@@ -503,6 +504,13 @@ def _finalize_check_cycle(
         route=check_route,
         cycle=cycle,
     )
+    _append_check_criteria_snapshot_event(
+        state=state,
+        task_state=task_state,
+        verdict=verdict,
+        correlation_id=corr,
+        cycle=cycle,
+    )
     logger.info(
         "task_mode check correlation_id=%s cycle=%s verdict=%s route=%s",
         corr,
@@ -711,6 +719,71 @@ def _mission_failed_verdict(
         "failure_class": failure_class[:120],
         "retry_exhausted": bool(retry_exhausted),
     }
+
+
+def _append_check_criteria_snapshot_event(
+    *,
+    state: dict[str, Any],
+    task_state: dict[str, Any],
+    verdict: dict[str, Any],
+    correlation_id: str | None,
+    cycle: int,
+) -> None:
+    task_id = _resolve_task_id(state=state, task_state=task_state, correlation_id=correlation_id)
+    if not task_id:
+        return
+    criteria = normalize_acceptance_criteria_records(task_state.get("acceptance_criteria"))
+    facts = task_state.get("facts")
+    fact_refs: list[str] = []
+    if isinstance(facts, dict):
+        for key, entry in list(facts.items())[-12:]:
+            if isinstance(entry, dict) and bool(entry.get("internal")):
+                continue
+            rendered = str(key).strip()
+            if rendered:
+                fact_refs.append(f"fact:{rendered[:80]}")
+    payload = {
+        "case_type": str(verdict.get("case_type") or "").strip()[:40],
+        "cycle": int(cycle),
+        "acceptance_criteria": [
+            {
+                "id": str(item.get("id") or "").strip()[:40],
+                "text": str(item.get("text") or "").strip()[:180],
+                "status": str(item.get("status") or "pending").strip()[:24],
+            }
+            for item in criteria[:12]
+        ],
+        "fact_refs": fact_refs[:12],
+        "verdict": {
+            "kind": str(verdict.get("kind") or "").strip()[:32],
+            "confidence": float(verdict.get("confidence") or 0.0),
+        },
+    }
+    reason = str(verdict.get("reason") or "").strip()
+    if reason:
+        payload["verdict"]["reason"] = reason[:220]
+    try:
+        append_pdca_event(
+            task_id=task_id,
+            event_type="check.criteria_snapshot",
+            payload=payload,
+            correlation_id=correlation_id,
+        )
+    except Exception:
+        return
+
+
+def _resolve_task_id(*, state: dict[str, Any], task_state: dict[str, Any], correlation_id: str | None) -> str:
+    for candidate in (task_state.get("task_id"), state.get("task_id"), state.get("pdca_task_id")):
+        rendered = str(candidate or "").strip()
+        if rendered:
+            return rendered
+    corr = str(correlation_id or state.get("correlation_id") or "").strip()
+    if corr.startswith("pdca.slice.requested:"):
+        parts = corr.split(":")
+        if len(parts) >= 3:
+            return str(parts[1]).strip()
+    return ""
 
 
 def _judge_invalid_budget() -> int:

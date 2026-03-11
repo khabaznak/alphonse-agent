@@ -144,6 +144,11 @@ class HandlePdcaSliceRequestAction(Action):
             correlation_id=correlation_id,
         )
         invoke_state = dict(base_state)
+        invoke_state.setdefault("task_id", task_id)
+        invoke_state.setdefault("pdca_task_id", task_id)
+        task_state_for_id = invoke_state.get("task_state")
+        if isinstance(task_state_for_id, dict):
+            task_state_for_id.setdefault("task_id", task_id)
         _emit_context_continuity_gap_if_any(
             task=task,
             invoke_state=invoke_state,

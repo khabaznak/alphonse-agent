@@ -7,6 +7,9 @@ import alphonse.agent.cortex.task_mode.check as check_module
 from alphonse.agent.cortex.task_mode.pdca import check_node
 from alphonse.agent.cortex.task_mode.pdca import route_after_act
 from alphonse.agent.cortex.task_mode.state import build_default_task_state
+from alphonse.agent.nervous_system.migrate import apply_schema
+from alphonse.agent.nervous_system.pdca_queue_store import list_pdca_events
+from alphonse.agent.nervous_system.pdca_queue_store import upsert_pdca_task
 from alphonse.agent.tools.registry import build_default_tool_registry
 
 
@@ -239,3 +242,53 @@ def test_check_template_failure_mission_fails_with_admin_message(monkeypatch) ->
 def test_route_after_act_prefers_judge_verdict_kind() -> None:
     assert route_after_act({"task_state": {"judge_verdict": {"kind": "plan"}}}) == "next_step_node"
     assert route_after_act({"task_state": {"judge_verdict": {"kind": "mission_success"}}}) == "respond_node"
+
+
+def test_check_node_persists_criteria_snapshot_pdca_event(tmp_path, monkeypatch) -> None:
+    db_path = tmp_path / "nerve-db"
+    monkeypatch.setenv("NERVE_DB_PATH", str(db_path))
+    apply_schema(db_path)
+    task_id = upsert_pdca_task(
+        {
+            "owner_id": "u1",
+            "conversation_key": "telegram:8553589429",
+            "status": "running",
+        }
+    )
+    tool_registry = build_default_tool_registry()
+    llm = _QueuedLlm(
+        [
+            '{"kind":"plan","case_type":"execution_review","reason":"continue","confidence":0.82,'
+            '"criteria_updates":[{"op":"mark_satisfied","criterion_id":"ac_1","evidence_refs":["fact:step_1"]}],'
+            '"evidence_refs":["fact:step_1"],"failure_class":null}'
+        ]
+    )
+    task_state = build_default_task_state()
+    task_state["check_provenance"] = "do"
+    task_state["task_id"] = task_id
+    task_state["acceptance_criteria"] = [
+        {"id": "ac_1", "text": "Send user confirmation", "status": "pending", "evidence_refs": [], "created_by_case": "new_request"},
+        {"id": "ac_2", "text": "Persist task evidence", "status": "pending", "evidence_refs": [], "created_by_case": "new_request"},
+    ]
+    task_state["facts"] = {
+        "step_1": {"tool_name": "send_message", "output": {"message_id": "m-1"}, "exception": None},
+        "step_2": {"tool_name": "planner_output", "internal": True},
+    }
+    state = {"task_id": task_id, "correlation_id": "corr-check-snapshot", "_llm_client": llm, "task_state": task_state}
+    _ = check_node(state, tool_registry=tool_registry)
+    events = list_pdca_events(task_id=task_id, limit=30)
+    snapshots = [item for item in events if item.get("event_type") == "check.criteria_snapshot"]
+    assert snapshots
+    payload = snapshots[-1].get("payload") or {}
+    assert payload.get("case_type") == "execution_review"
+    assert payload.get("cycle") == 0
+    criteria = payload.get("acceptance_criteria")
+    assert isinstance(criteria, list)
+    assert criteria and criteria[0].get("id") == "ac_1"
+    refs = payload.get("fact_refs")
+    assert isinstance(refs, list)
+    assert "fact:step_1" in refs
+    assert "fact:step_2" not in refs
+    verdict = payload.get("verdict")
+    assert isinstance(verdict, dict)
+    assert verdict.get("kind") == "plan"
