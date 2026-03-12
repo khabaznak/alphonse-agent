@@ -16,6 +16,8 @@ from alphonse.agent.services.pdca_ingress import enqueue_pdca_slice
 from alphonse.agent.services.pdca_queue_runner import is_pdca_slicing_enabled
 from alphonse.agent.services.session_identity_resolution import resolve_session_timezone
 from alphonse.agent.services.session_identity_resolution import resolve_session_user_id
+from alphonse.agent.session.day_state import build_next_session_state
+from alphonse.agent.session.day_state import commit_session_state
 from alphonse.agent.session.day_state import resolve_day_session
 
 logger = get_component_logger("actions.handle_conscious_message")
@@ -111,6 +113,12 @@ class HandleConsciousMessageAction(Action):
             channel=incoming.channel_type,
             timezone_name=resolve_session_timezone(incoming),
         )
+        _write_through_user_message(
+            day_session=day_session,
+            channel=incoming.channel_type,
+            user_text=str(payload.get("text") or "").strip(),
+            correlation_id=str(correlation_id),
+        )
 
         task_id = enqueue_pdca_slice(
             context=context,
@@ -151,4 +159,36 @@ class HandleConsciousMessageAction(Action):
             intention_key="NOOP",
             payload={"task_id": task_id},
             urgency=None,
+        )
+
+
+def _write_through_user_message(
+    *,
+    day_session: dict[str, object],
+    channel: str,
+    user_text: str,
+    correlation_id: str,
+) -> None:
+    text = str(user_text or "").strip()
+    if not text or not isinstance(day_session, dict):
+        return
+    try:
+        updated = build_next_session_state(
+            previous=day_session,
+            channel=str(channel or "").strip() or "api",
+            user_message=text,
+            assistant_message="",
+            ability_state=None,
+            task_state=None,
+            planning_context=None,
+            pending_interaction=None,
+        )
+        commit_session_state(updated)
+    except Exception:
+        _LOG.emit(
+            level="warning",
+            event="pdca.input.history_append_failed",
+            component="actions.handle_conscious_message",
+            correlation_id=correlation_id or None,
+            payload={"channel": str(channel or "").strip() or None},
         )

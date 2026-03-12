@@ -500,6 +500,46 @@ JOIN signals sig ON sig.key = 'pdca.resume_requested'
 JOIN states s2 ON s2.key = 'rehydrating_slice'
 WHERE s1.key IN ('idle', 'waiting_user');
 
+-- PDCA slice/resume signals must execute the slice handler while rehydrating.
+UPDATE transitions
+SET action_key = 'handle_pdca_slice_request'
+WHERE signal_id IN (
+  SELECT id
+  FROM signals
+  WHERE key IN ('pdca.slice.requested', 'pdca.resume_requested')
+)
+  AND state_id IN (
+    SELECT id
+    FROM states
+    WHERE key IN ('idle', 'waiting_user')
+  );
+
+INSERT OR IGNORE INTO transitions (
+  state_id,
+  signal_id,
+  next_state_id,
+  priority,
+  is_enabled,
+  guard_key,
+  action_key,
+  match_any_state,
+  notes
+)
+SELECT
+  s1.id,
+  sig.id,
+  s2.id,
+  5,
+  1,
+  NULL,
+  'handle_pdca_slice_request',
+  0,
+  'rehydration may accept repeated pdca slice request signals'
+FROM states s1
+JOIN signals sig ON sig.key = 'pdca.slice.requested'
+JOIN states s2 ON s2.key = 'rehydrating_slice'
+WHERE s1.key = 'rehydrating_slice';
+
 INSERT OR IGNORE INTO transitions (
   state_id,
   signal_id,

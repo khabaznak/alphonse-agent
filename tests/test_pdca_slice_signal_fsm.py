@@ -27,7 +27,7 @@ def test_fsm_has_transition_for_pdca_slice_requested(
     fsm = DDFSM(DDFSMConfig(db_path=str(db_path)))
     outcome = fsm.lookup_outcome(state_id=idle_state_id, signal_key="pdca.slice.requested")
     assert outcome.matched is True
-    assert outcome.action_key is None
+    assert outcome.action_key == "handle_pdca_slice_request"
     assert outcome.next_state_key == "rehydrating_slice"
 
 
@@ -49,6 +49,7 @@ def test_fsm_pdca_lifecycle_transitions_exist(
 
     fsm = DDFSM(DDFSMConfig(db_path=str(db_path)))
 
+    assert fsm.lookup_outcome(state_ids["rehydrating_slice"], "pdca.slice.requested").action_key == "handle_pdca_slice_request"
     assert fsm.lookup_outcome(state_ids["rehydrating_slice"], "action.succeeded").next_state_key == "executing"
     assert fsm.lookup_outcome(state_ids["executing"], "pdca.slice.persisted").next_state_key == "persisting_slice"
     assert fsm.lookup_outcome(state_ids["executing"], "pdca.waiting_user").next_state_key == "waiting_user"

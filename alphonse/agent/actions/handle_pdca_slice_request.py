@@ -19,6 +19,7 @@ from alphonse.agent.nervous_system.pdca_queue_store import (
     load_pdca_checkpoint,
     save_pdca_checkpoint,
     upsert_pdca_task,
+    update_pdca_task_metadata,
     update_pdca_task_status,
 )
 from alphonse.agent.nervous_system.senses.bus import Signal as BusSignal
@@ -88,7 +89,24 @@ class HandlePdcaSliceRequestAction(Action):
         _inject_session_memory_context(base_state=base_state, task=task)
         _stamp_check_provenance_for_slice(base_state=base_state, signal=signal, checkpoint=checkpoint)
         incoming = _resolve_incoming_context(task=task, correlation_id=correlation_id)
-        text = _resolve_slice_text(task=task, checkpoint=checkpoint, payload=payload)
+        consumed_inputs = _consume_buffered_inputs(task_id=task_id, correlation_id=correlation_id)
+        if consumed_inputs:
+            _mark_slice_resume(base_state=base_state)
+            _LOG.emit(
+                event="pdca.slice.resume_with_input",
+                component="actions.handle_pdca_slice_request",
+                correlation_id=correlation_id,
+                payload={
+                    "task_id": task_id,
+                    "input_count": len(consumed_inputs),
+                },
+            )
+        text = _resolve_slice_text(
+            task=task,
+            checkpoint=checkpoint,
+            payload=payload,
+            buffered_inputs=consumed_inputs,
+        )
         if not text:
             update_pdca_task_status(task_id=task_id, status="waiting_user")
             append_pdca_event(
@@ -157,6 +175,7 @@ class HandlePdcaSliceRequestAction(Action):
         invoke_state["_bus"] = context.get("ctx")
         if incoming is not None:
             invoke_state["_transition_sink"] = lambda event: emit_channel_transition_event(incoming, event)
+        slice_started_at = datetime.now(timezone.utc)
         try:
             result = _CORTEX_GRAPH.invoke(invoke_state, text, llm_client=llm_client)
         except Exception as exc:
@@ -192,7 +211,25 @@ class HandlePdcaSliceRequestAction(Action):
             return ActionResult(intention_key="NOOP", payload={}, urgency=None)
 
         cognition_state = result.cognition_state if isinstance(result.cognition_state, dict) else {}
-        merged_state = _merge_state(base=base_state, cognition_state=cognition_state, reply_text=str(result.reply_text or ""))
+        should_preempt = _should_preempt_after_step(
+            task_id=task_id,
+            slice_started_at=slice_started_at,
+        )
+        if should_preempt:
+            append_pdca_event(
+                task_id=task_id,
+                event_type="pdca.slice.preempt_after_step",
+                payload={"reason": "fresh_user_input_buffered"},
+                correlation_id=correlation_id,
+            )
+            _LOG.emit(
+                event="pdca.slice.preempt_after_step",
+                component="actions.handle_pdca_slice_request",
+                correlation_id=correlation_id,
+                payload={"task_id": task_id},
+            )
+        effective_reply_text = "" if should_preempt else str(result.reply_text or "")
+        merged_state = _merge_state(base=base_state, cognition_state=cognition_state, reply_text=effective_reply_text)
         _ = save_pdca_checkpoint(
             task_id=task_id,
             state=merged_state,
@@ -205,12 +242,12 @@ class HandlePdcaSliceRequestAction(Action):
         _update_day_session_memory(
             task=task,
             user_message=text,
-            reply_text=str(result.reply_text or ""),
+            reply_text=effective_reply_text,
             cognition_state=cognition_state,
             merged_state=merged_state,
         )
 
-        next_status = _next_status(cognition_state=cognition_state, reply_text=str(result.reply_text or ""))
+        next_status = "queued" if should_preempt else _next_status(cognition_state=cognition_state, reply_text=effective_reply_text)
         if next_status == "waiting_user":
             _emit_presence_lifecycle_event(
                 incoming=incoming,
@@ -232,12 +269,12 @@ class HandlePdcaSliceRequestAction(Action):
                 phase="failed",
                 correlation_id=correlation_id,
             )
-        _upsert_task_after_slice(task=task, status=next_status, request_text=text, reply_text=str(result.reply_text or ""))
+        _upsert_task_after_slice(task=task, status=next_status, request_text=text, reply_text=effective_reply_text)
         append_pdca_event(
             task_id=task_id,
             event_type=f"slice.completed.{next_status}",
             payload={
-                "reply_text": str(result.reply_text or "").strip(),
+                "reply_text": effective_reply_text.strip(),
                 "has_task_state": isinstance(cognition_state.get("task_state"), dict),
             },
             correlation_id=correlation_id,
@@ -270,7 +307,10 @@ def _base_state(
     conversation_key = str(task.get("conversation_key") or "").strip()
     loaded = load_state(conversation_key) if conversation_key else None
     if isinstance(loaded, dict):
-        sanitized, removed_keys = _sanitize_loaded_state_for_new_task(loaded)
+        sanitized, removed_keys = _sanitize_loaded_state_for_new_task(
+            loaded,
+            preserve_pending_interaction=_should_preserve_pending_interaction(task=task),
+        )
         _overlay_ingress_context(base=sanitized, seeded=seeded)
         if removed_keys:
             _LOG.emit(
@@ -356,10 +396,20 @@ def _update_day_session_memory(
         return
 
 
-def _resolve_slice_text(*, task: dict[str, Any], checkpoint: dict[str, Any] | None, payload: dict[str, Any]) -> str:
+def _resolve_slice_text(
+    *,
+    task: dict[str, Any],
+    checkpoint: dict[str, Any] | None,
+    payload: dict[str, Any],
+    buffered_inputs: list[str] | None = None,
+) -> str:
     direct = str(payload.get("text") or "").strip()
     if direct:
         return direct
+    if isinstance(buffered_inputs, list):
+        merged = [str(item or "").strip() for item in buffered_inputs if str(item or "").strip()]
+        if merged:
+            return "\n".join(merged)
     metadata = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
     for key in ("pending_user_text", "user_text", "last_user_message"):
         value = str(metadata.get(key) or "").strip()
@@ -373,7 +423,11 @@ def _resolve_slice_text(*, task: dict[str, Any], checkpoint: dict[str, Any] | No
     return ""
 
 
-def _sanitize_loaded_state_for_new_task(loaded: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
+def _sanitize_loaded_state_for_new_task(
+    loaded: dict[str, Any],
+    *,
+    preserve_pending_interaction: bool = False,
+) -> tuple[dict[str, Any], list[str]]:
     sanitized = dict(loaded)
     removed_keys: list[str] = []
     for key in (
@@ -384,10 +438,79 @@ def _sanitize_loaded_state_for_new_task(loaded: dict[str, Any]) -> tuple[dict[st
         "utterance",
         "render_error",
     ):
+        if key == "pending_interaction" and preserve_pending_interaction:
+            continue
         if key in sanitized:
             removed_keys.append(key)
             sanitized.pop(key, None)
     return sanitized, removed_keys
+
+
+def _should_preserve_pending_interaction(*, task: dict[str, Any]) -> bool:
+    status = str(task.get("status") or "").strip().lower()
+    if status in {"waiting_user", "running", "paused"}:
+        return True
+    metadata = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
+    return bool(str(metadata.get("last_user_message") or "").strip())
+
+
+def _mark_slice_resume(*, base_state: dict[str, Any]) -> None:
+    task_state = base_state.get("task_state")
+    if not isinstance(task_state, dict):
+        task_state = {}
+        base_state["task_state"] = task_state
+    task_state["check_provenance"] = "slice_resume"
+
+
+def _consume_buffered_inputs(*, task_id: str, correlation_id: str | None) -> list[str]:
+    latest = get_pdca_task(task_id)
+    if not isinstance(latest, dict):
+        return []
+    metadata = dict(latest.get("metadata") or {}) if isinstance(latest.get("metadata"), dict) else {}
+    raw_inputs = metadata.get("inputs")
+    inputs = [dict(item) for item in raw_inputs if isinstance(item, dict)] if isinstance(raw_inputs, list) else []
+    if not inputs:
+        return []
+    next_unconsumed = _as_optional_int(metadata.get("next_unconsumed_index")) or 0
+    next_unconsumed = max(0, min(next_unconsumed, len(inputs)))
+    consumed: list[str] = []
+    now = datetime.now(timezone.utc).isoformat()
+    for idx in range(next_unconsumed, len(inputs)):
+        record = inputs[idx]
+        text = str(record.get("text") or "").strip()
+        if not text:
+            continue
+        consumed.append(text)
+        record["consumed_at"] = now
+    if not consumed:
+        return []
+    metadata["inputs"] = inputs
+    metadata["next_unconsumed_index"] = len(inputs)
+    metadata["input_dirty"] = False
+    metadata["last_user_message"] = consumed[-1]
+    metadata["pending_user_text"] = consumed[-1]
+    metadata["last_input_dequeued_at"] = now
+    update_pdca_task_metadata(task_id=task_id, metadata=metadata)
+    _LOG.emit(
+        event="pdca.input.dequeued",
+        component="actions.handle_pdca_slice_request",
+        correlation_id=correlation_id,
+        payload={"task_id": task_id, "count": len(consumed)},
+    )
+    return consumed
+
+
+def _should_preempt_after_step(*, task_id: str, slice_started_at: datetime) -> bool:
+    latest = get_pdca_task(task_id)
+    if not isinstance(latest, dict):
+        return False
+    metadata = latest.get("metadata") if isinstance(latest.get("metadata"), dict) else {}
+    if not bool(metadata.get("input_dirty")):
+        return False
+    enqueued_at = _parse_utc(metadata.get("last_enqueued_at"))
+    if enqueued_at is None:
+        return True
+    return enqueued_at >= slice_started_at
 
 
 def _overlay_ingress_context(*, base: dict[str, Any], seeded: dict[str, Any]) -> None:

@@ -12,10 +12,9 @@ from alphonse.agent.nervous_system.pdca_queue_store import (
     release_pdca_task_lease,
     upsert_pdca_task,
 )
-from alphonse.agent.nervous_system.senses.bus import Bus
+from alphonse.agent.nervous_system.senses.bus import Bus, Signal
 from alphonse.agent.observability.log_manager import get_component_logger
 from alphonse.agent.observability.log_manager import get_log_manager
-from alphonse.agent.services.pdca_slice_executor import PdcaSliceExecutor
 
 logger = get_component_logger("services.pdca_queue_runner")
 _LOG = get_log_manager()
@@ -68,7 +67,6 @@ class PdcaQueueRunner:
         self._stop_event = threading.Event()
         self._last_owner_id: str | None = None
         self._last_starvation_warning_at: datetime | None = None
-        self._executor = PdcaSliceExecutor(bus=bus)
 
     @property
     def enabled(self) -> bool:
@@ -171,11 +169,18 @@ class PdcaQueueRunner:
                 "created_at": task.get("created_at"),
             }
         )
-        self._executor.execute_task(
-            task_id=task_id,
-            correlation_id=correlation_id,
-            signal_type="pdca.slice.requested",
-            source="pdca_queue_runner",
+        self._bus.emit(
+            Signal(
+                type="pdca.slice.requested",
+                payload={
+                    "task_id": task_id,
+                    "owner_id": owner_id,
+                    "conversation_key": conversation_key,
+                    "correlation_id": correlation_id,
+                },
+                source="pdca_queue_runner",
+                correlation_id=correlation_id,
+            )
         )
         logger.info(
             "PDCA queue runner dispatched slice task_id=%s owner_id=%s conversation_key=%s",

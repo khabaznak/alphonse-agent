@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -129,6 +130,153 @@ def test_handle_pdca_slice_request_executes_and_persists_checkpoint(
     }
     assert "presence.phase_changed" in families
     assert "presence.progress" in families
+
+
+def test_handle_pdca_slice_request_dequeues_buffered_inputs_and_resumes_check(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db_path = tmp_path / "nerve-db"
+    monkeypatch.setenv("NERVE_DB_PATH", str(db_path))
+    monkeypatch.setenv("ALPHONSE_PDCA_QUEUE_DISPATCH_COOLDOWN_SECONDS", "10")
+    apply_schema(db_path)
+
+    task_id = upsert_pdca_task(
+        {
+            "owner_id": "owner-1",
+            "conversation_key": "chat-buffered",
+            "status": "queued",
+            "metadata": {
+                "pending_user_text": "fallback text",
+                "last_user_message": "fallback text",
+                "next_unconsumed_index": 0,
+                "input_dirty": False,
+                "inputs": [
+                    {
+                        "message_id": "m-1",
+                        "correlation_id": "cid-1",
+                        "text": "first buffered",
+                        "channel": "telegram",
+                        "received_at": "2026-03-12T05:00:00+00:00",
+                        "consumed_at": None,
+                        "sequence": 1,
+                    },
+                    {
+                        "message_id": "m-2",
+                        "correlation_id": "cid-2",
+                        "text": "second buffered",
+                        "channel": "telegram",
+                        "received_at": "2026-03-12T05:01:00+00:00",
+                        "consumed_at": None,
+                        "sequence": 2,
+                    },
+                ],
+            },
+        }
+    )
+
+    class _FakeResult:
+        reply_text = ""
+        plans = []
+        cognition_state = {"task_state": {"status": "queued", "cycle_index": 1}}
+        meta = {}
+
+    class _FakeGraph:
+        def invoke(self, state, text, *, llm_client=None):  # noqa: ANN001
+            _ = llm_client
+            assert text == "first buffered\nsecond buffered"
+            task_state = state.get("task_state")
+            assert isinstance(task_state, dict)
+            assert task_state.get("check_provenance") == "slice_resume"
+            return _FakeResult()
+
+    monkeypatch.setattr(hpsr, "_CORTEX_GRAPH", _FakeGraph())
+    monkeypatch.setattr(hpsr, "build_llm_client", lambda: None)
+
+    action = HandlePdcaSliceRequestAction()
+    signal = Signal(
+        type="pdca.slice.requested",
+        payload={"task_id": task_id, "correlation_id": "cid-buffered"},
+        source="pdca_queue_runner",
+    )
+    _ = action.execute({"signal": signal, "ctx": None})
+
+    task = get_pdca_task(task_id)
+    assert isinstance(task, dict)
+    metadata = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
+    assert int(metadata.get("next_unconsumed_index") or 0) == 2
+    assert bool(metadata.get("input_dirty")) is False
+    inputs = metadata.get("inputs")
+    assert isinstance(inputs, list)
+    assert all(str(item.get("consumed_at") or "").strip() for item in inputs if isinstance(item, dict))
+
+
+def test_handle_pdca_slice_request_preempts_when_new_input_arrives_mid_slice(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db_path = tmp_path / "nerve-db"
+    monkeypatch.setenv("NERVE_DB_PATH", str(db_path))
+    monkeypatch.setenv("ALPHONSE_PDCA_QUEUE_DISPATCH_COOLDOWN_SECONDS", "10")
+    apply_schema(db_path)
+
+    task_id = upsert_pdca_task(
+        {
+            "owner_id": "owner-1",
+            "conversation_key": "chat-preempt",
+            "status": "queued",
+            "metadata": {"pending_user_text": "initial"},
+        }
+    )
+
+    class _FakeResult:
+        reply_text = "stale reply should be suppressed"
+        plans = []
+        cognition_state = {"task_state": {"status": "running", "cycle_index": 1}}
+        meta = {}
+
+    class _FakeGraph:
+        def invoke(self, state, text, *, llm_client=None):  # noqa: ANN001
+            _ = (state, text, llm_client)
+            task = get_pdca_task(task_id)
+            assert isinstance(task, dict)
+            metadata = dict(task.get("metadata") or {})
+            metadata["input_dirty"] = True
+            metadata["last_enqueued_at"] = datetime.now(timezone.utc).isoformat()
+            metadata["inputs"] = [
+                {
+                    "message_id": "m-new",
+                    "correlation_id": "cid-new",
+                    "text": "fresh message",
+                    "channel": "telegram",
+                    "received_at": datetime.now(timezone.utc).isoformat(),
+                    "consumed_at": None,
+                    "sequence": 1,
+                }
+            ]
+            metadata["next_unconsumed_index"] = 0
+            update_pdca_task_metadata(task_id=task_id, metadata=metadata)
+            return _FakeResult()
+
+    monkeypatch.setattr(hpsr, "_CORTEX_GRAPH", _FakeGraph())
+    monkeypatch.setattr(hpsr, "build_llm_client", lambda: None)
+
+    action = HandlePdcaSliceRequestAction()
+    signal = Signal(
+        type="pdca.slice.requested",
+        payload={"task_id": task_id, "correlation_id": "cid-preempt"},
+        source="pdca_queue_runner",
+    )
+    _ = action.execute({"signal": signal, "ctx": None})
+
+    task = get_pdca_task(task_id)
+    assert isinstance(task, dict)
+    assert task["status"] == "queued"
+    events = list_pdca_events(task_id=task_id, limit=50)
+    assert any(item["event_type"] == "pdca.slice.preempt_after_step" for item in events)
+    completed = [item for item in events if item["event_type"] == "slice.completed.queued"]
+    assert completed
+    assert str(completed[-1]["payload"].get("reply_text") or "") == ""
 
 
 def test_handle_pdca_slice_request_injects_session_snapshot_for_plan_and_check(

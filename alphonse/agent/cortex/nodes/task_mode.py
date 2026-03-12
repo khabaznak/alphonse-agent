@@ -7,6 +7,9 @@ from alphonse.agent.cognition.pending_interaction import PendingInteraction
 from alphonse.agent.cognition.pending_interaction import PendingInteractionType
 from alphonse.agent.cognition.pending_interaction import try_consume
 from alphonse.agent.cortex.task_mode.state import build_default_task_state
+from alphonse.agent.observability.log_manager import get_log_manager
+
+_LOG = get_log_manager()
 
 
 def task_mode_entry_node(state: dict[str, Any]) -> dict[str, Any]:
@@ -30,13 +33,31 @@ def task_mode_entry_node(state: dict[str, Any]) -> dict[str, Any]:
         and isinstance(pending.context, dict)
         and str(pending.context.get("source") or "") == "task_mode.acceptance_criteria"
     ):
-        resolution = try_consume(str(state.get("last_user_message") or ""), pending)
+        user_text = str(state.get("last_user_message") or "")
+        resolution = try_consume(user_text, pending)
         criteria_text = str((resolution.result or {}).get("acceptance_criteria") or "").strip()
         if resolution.consumed and criteria_text:
+            _LOG.emit(
+                event="pdca.pending_interaction.consumed",
+                component="cortex.nodes.task_mode",
+                correlation_id=str(state.get("correlation_id") or "").strip() or None,
+                channel=str(state.get("channel_type") or "").strip() or None,
+                user_id=str(state.get("actor_person_id") or "").strip() or None,
+                payload={"key": str(pending.key), "type": str(pending.type.value)},
+            )
             merged["acceptance_criteria"] = _normalize_acceptance_criteria(criteria_text)
             merged["status"] = "running"
             merged["next_user_question"] = None
             return {"task_state": merged, "pending_interaction": None}
+        if user_text.strip():
+            _LOG.emit(
+                event="pdca.pending_interaction.missed",
+                component="cortex.nodes.task_mode",
+                correlation_id=str(state.get("correlation_id") or "").strip() or None,
+                channel=str(state.get("channel_type") or "").strip() or None,
+                user_id=str(state.get("actor_person_id") or "").strip() or None,
+                payload={"key": str(pending.key), "type": str(pending.type.value)},
+            )
     return {"task_state": merged}
 
 

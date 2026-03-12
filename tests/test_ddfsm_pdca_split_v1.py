@@ -15,6 +15,7 @@ def test_intent_pipeline_registry_is_deterministic_only() -> None:
     assert keys == {
         "handle_conscious_message",
         "handle_pdca_failure_notice",
+        "handle_pdca_slice_request",
         "handle_timed_dispatch",
         "shutdown",
     }
