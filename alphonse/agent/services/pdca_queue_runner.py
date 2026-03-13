@@ -6,11 +6,8 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from alphonse.agent.nervous_system.pdca_queue_store import (
-    acquire_pdca_task_lease,
     append_pdca_event,
     list_runnable_pdca_tasks,
-    release_pdca_task_lease,
-    upsert_pdca_task,
 )
 from alphonse.agent.nervous_system.senses.bus import Bus, Signal
 from alphonse.agent.observability.log_manager import get_component_logger
@@ -18,6 +15,42 @@ from alphonse.agent.observability.log_manager import get_log_manager
 
 logger = get_component_logger("services.pdca_queue_runner")
 _LOG = get_log_manager()
+
+
+def emit_pdca_dispatch_kick(
+    *,
+    bus: Bus | None,
+    task_id: str,
+    reason: str,
+    correlation_id: str | None = None,
+    source: str = "pdca_dispatcher",
+    owner_id: str | None = None,
+    conversation_key: str | None = None,
+) -> str | None:
+    task_key = str(task_id or "").strip()
+    if not task_key or bus is None or not hasattr(bus, "emit"):
+        return None
+    now = datetime.now(timezone.utc)
+    corr = str(correlation_id or "").strip() or f"pdca.dispatch.kick:{task_key}:{int(now.timestamp() * 1000)}"
+    payload: dict[str, Any] = {
+        "task_id": task_key,
+        "reason": str(reason or "").strip() or "unspecified",
+        "requested_at": now.isoformat(),
+        "correlation_id": corr,
+    }
+    if str(owner_id or "").strip():
+        payload["owner_id"] = str(owner_id or "").strip()
+    if str(conversation_key or "").strip():
+        payload["conversation_key"] = str(conversation_key or "").strip()
+    bus.emit(
+        Signal(
+            type="pdca.dispatch.kick",
+            payload=payload,
+            source=source,
+            correlation_id=corr,
+        )
+    )
+    return corr
 
 
 class PdcaQueueRunner:
@@ -35,7 +68,12 @@ class PdcaQueueRunner:
         enabled: bool | None = None,
     ) -> None:
         self._bus = bus
-        self._poll_seconds = _as_float(poll_seconds, env_name="ALPHONSE_PDCA_QUEUE_POLL_SECONDS", default=5.0, minimum=0.2)
+        self._poll_seconds = _as_float(
+            poll_seconds,
+            env_name="ALPHONSE_PDCA_DISPATCH_WATCHDOG_SECONDS",
+            default=30.0,
+            minimum=1.0,
+        )
         self._lease_seconds = _as_int(lease_seconds, env_name="ALPHONSE_PDCA_QUEUE_LEASE_SECONDS", default=30, minimum=1)
         self._dispatch_cooldown_seconds = _as_int(
             dispatch_cooldown_seconds,
@@ -61,7 +99,7 @@ class PdcaQueueRunner:
             default=60,
             minimum=1,
         )
-        self._worker_id = str(worker_id or os.getenv("ALPHONSE_PDCA_QUEUE_WORKER_ID") or "pdca-queue-runner").strip()
+        self._worker_id = str(worker_id or os.getenv("ALPHONSE_PDCA_QUEUE_WORKER_ID") or "pdca-dispatch-watchdog").strip()
         self._enabled = _is_enabled(enabled)
         self._thread: threading.Thread | None = None
         self._stop_event = threading.Event()
@@ -87,18 +125,16 @@ class PdcaQueueRunner:
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
         logger.info(
-            "PDCA queue runner started worker_id=%s poll_seconds=%.2f lease_seconds=%s cooldown_seconds=%s",
+            "PDCA dispatch watchdog started worker_id=%s watchdog_seconds=%.2f",
             self._worker_id,
             self._poll_seconds,
-            self._lease_seconds,
-            self._dispatch_cooldown_seconds,
         )
 
     def stop(self) -> None:
         self._stop_event.set()
         if self._thread and self._thread.is_alive():
             self._thread.join(timeout=5)
-        logger.info("PDCA queue runner stopped worker_id=%s", self._worker_id)
+        logger.info("PDCA dispatch watchdog stopped worker_id=%s", self._worker_id)
 
     def run_once(self, *, now: str | None = None) -> int:
         if not self._enabled:
@@ -107,88 +143,38 @@ class PdcaQueueRunner:
         now_text = now_dt.isoformat()
         candidates = self._fair_order_candidates(list_runnable_pdca_tasks(now=now_text, limit=20))
         self._emit_queue_health(candidates=candidates, now_dt=now_dt)
+        emitted_count = 0
         for task in candidates:
             task_id = str(task.get("task_id") or "").strip()
             if not task_id:
                 continue
-            acquired = acquire_pdca_task_lease(
+            correlation_id = emit_pdca_dispatch_kick(
+                bus=self._bus,
                 task_id=task_id,
-                worker_id=self._worker_id,
-                lease_seconds=self._lease_seconds,
-                now=now_text,
+                reason="watchdog_recovery",
+                source="pdca_dispatch_watchdog",
+                owner_id=str(task.get("owner_id") or "").strip() or None,
+                conversation_key=str(task.get("conversation_key") or "").strip() or None,
             )
-            if not acquired:
+            if not correlation_id:
                 continue
-            try:
-                emitted = self._dispatch_slice(task=task, now_dt=now_dt)
-                if emitted:
-                    self._last_owner_id = str(task.get("owner_id") or "").strip() or None
-                    return 1
-            finally:
-                release_pdca_task_lease(task_id=task_id, worker_id=self._worker_id)
-        return 0
+            append_pdca_event(
+                task_id=task_id,
+                event_type="pdca.dispatch.watchdog_rekick",
+                payload={"worker_id": self._worker_id},
+                correlation_id=correlation_id,
+            )
+            self._last_owner_id = str(task.get("owner_id") or "").strip() or None
+            emitted_count += 1
+        return emitted_count
 
     def _run(self) -> None:
         while not self._stop_event.is_set():
             try:
                 _ = self.run_once()
             except Exception as exc:
-                logger.warning("PDCA queue runner iteration failed: %s", exc)
+                logger.warning("PDCA dispatch watchdog iteration failed: %s", exc)
             self._stop_event.wait(self._poll_seconds)
-
-    def _dispatch_slice(self, *, task: dict[str, Any], now_dt: datetime) -> bool:
-        task_id = str(task.get("task_id") or "").strip()
-        owner_id = str(task.get("owner_id") or "").strip()
-        conversation_key = str(task.get("conversation_key") or "").strip()
-        if not task_id or not owner_id or not conversation_key:
-            return False
-        correlation_id = f"pdca.slice.requested:{task_id}:{int(now_dt.timestamp())}"
-        append_pdca_event(
-            task_id=task_id,
-            event_type="slice.requested",
-            payload={"worker_id": self._worker_id, "scheduled_for": now_dt.isoformat()},
-            correlation_id=correlation_id,
-        )
-        next_run = now_dt + timedelta(seconds=self._dispatch_cooldown_seconds)
-        upsert_pdca_task(
-            {
-                "task_id": task_id,
-                "owner_id": owner_id,
-                "conversation_key": conversation_key,
-                "session_id": task.get("session_id"),
-                "status": "running",
-                "priority": task.get("priority", 100),
-                "next_run_at": next_run.isoformat(),
-                "slice_cycles": task.get("slice_cycles", 5),
-                "max_cycles": task.get("max_cycles"),
-                "max_runtime_seconds": task.get("max_runtime_seconds"),
-                "token_budget_remaining": task.get("token_budget_remaining"),
-                "failure_streak": task.get("failure_streak", 0),
-                "last_error": task.get("last_error"),
-                "metadata": task.get("metadata") if isinstance(task.get("metadata"), dict) else {},
-                "created_at": task.get("created_at"),
-            }
-        )
-        self._bus.emit(
-            Signal(
-                type="pdca.slice.requested",
-                payload={
-                    "task_id": task_id,
-                    "owner_id": owner_id,
-                    "conversation_key": conversation_key,
-                    "correlation_id": correlation_id,
-                },
-                source="pdca_queue_runner",
-                correlation_id=correlation_id,
-            )
-        )
-        logger.info(
-            "PDCA queue runner dispatched slice task_id=%s owner_id=%s conversation_key=%s",
-            task_id,
-            owner_id,
-            conversation_key,
-        )
-        return True
 
     def _fair_order_candidates(self, candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if not candidates:

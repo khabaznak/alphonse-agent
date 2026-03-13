@@ -400,6 +400,36 @@ def test_handle_pdca_slice_request_without_task_id_is_noop() -> None:
     assert result.intention_key == "NOOP"
 
 
+def test_handle_pdca_slice_request_ignores_terminal_task(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db_path = tmp_path / "nerve-db"
+    monkeypatch.setenv("NERVE_DB_PATH", str(db_path))
+    apply_schema(db_path)
+
+    task_id = upsert_pdca_task(
+        {
+            "owner_id": "owner-terminal",
+            "conversation_key": "chat-terminal",
+            "status": "done",
+            "metadata": {"pending_user_text": "ignored"},
+        }
+    )
+
+    action = HandlePdcaSliceRequestAction()
+    signal = Signal(
+        type="pdca.slice.requested",
+        payload={"task_id": task_id, "correlation_id": "cid-terminal"},
+        source="pdca_dispatcher",
+    )
+    result = action.execute({"signal": signal, "ctx": None})
+    assert result.intention_key == "NOOP"
+
+    events = list_pdca_events(task_id=task_id, limit=20)
+    assert any(item["event_type"] == "slice.request.terminal_ignored" for item in events)
+
+
 def test_handle_pdca_slice_request_ignores_duplicate_signal_correlation(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

@@ -25,6 +25,7 @@ from alphonse.agent.nervous_system.pdca_queue_store import (
 from alphonse.agent.nervous_system.senses.bus import Signal as BusSignal
 from alphonse.agent.observability.log_manager import get_component_logger
 from alphonse.agent.observability.log_manager import get_log_manager
+from alphonse.agent.services.pdca_queue_runner import emit_pdca_dispatch_kick
 from alphonse.agent.services.session_identity_resolution import resolve_assistant_session_message
 from alphonse.agent.session.day_state import build_next_session_state
 from alphonse.agent.session.day_state import commit_session_state
@@ -35,6 +36,7 @@ from alphonse.config import settings
 logger = get_component_logger("actions.handle_pdca_slice_request")
 _LOG = get_log_manager()
 _CORTEX_GRAPH = CortexGraph()
+_TERMINAL_TASK_STATUSES = {"done", "failed", "cancelled"}
 
 
 class HandlePdcaSliceRequestAction(Action):
@@ -54,6 +56,21 @@ class HandlePdcaSliceRequestAction(Action):
         task = get_pdca_task(task_id)
         if not isinstance(task, dict):
             logger.warning("HandlePdcaSliceRequestAction skipped reason=task_not_found task_id=%s", task_id)
+            return ActionResult(intention_key="NOOP", payload={}, urgency=None)
+        status = str(task.get("status") or "").strip().lower()
+        if status in _TERMINAL_TASK_STATUSES:
+            append_pdca_event(
+                task_id=task_id,
+                event_type="slice.request.terminal_ignored",
+                payload={"status": status},
+                correlation_id=correlation_id,
+            )
+            _LOG.emit(
+                event="pdca.slice.ignored_terminal_task",
+                component="actions.handle_pdca_slice_request",
+                correlation_id=correlation_id,
+                payload={"task_id": task_id, "status": status},
+            )
             return ActionResult(intention_key="NOOP", payload={}, urgency=None)
         if correlation_id and has_pdca_event(
             task_id=task_id,
@@ -92,6 +109,7 @@ class HandlePdcaSliceRequestAction(Action):
         consumed_inputs = _consume_buffered_inputs(task_id=task_id, correlation_id=correlation_id)
         if consumed_inputs:
             _mark_slice_resume(base_state=base_state)
+            _inject_steering_facts(base_state=base_state, consumed_inputs=consumed_inputs)
             _LOG.emit(
                 event="pdca.slice.resume_with_input",
                 component="actions.handle_pdca_slice_request",
@@ -270,6 +288,8 @@ class HandlePdcaSliceRequestAction(Action):
                 correlation_id=correlation_id,
             )
         _upsert_task_after_slice(task=task, status=next_status, request_text=text, reply_text=effective_reply_text)
+        if next_status == "queued":
+            _emit_dispatch_kick_signal(context=context, task_id=task_id, correlation_id=correlation_id, reason="slice_completed_queued")
         append_pdca_event(
             task_id=task_id,
             event_type=f"slice.completed.{next_status}",
@@ -401,13 +421,13 @@ def _resolve_slice_text(
     task: dict[str, Any],
     checkpoint: dict[str, Any] | None,
     payload: dict[str, Any],
-    buffered_inputs: list[str] | None = None,
+    buffered_inputs: list[dict[str, Any]] | None = None,
 ) -> str:
     direct = str(payload.get("text") or "").strip()
     if direct:
         return direct
     if isinstance(buffered_inputs, list):
-        merged = [str(item or "").strip() for item in buffered_inputs if str(item or "").strip()]
+        merged = [str(item.get("text") or "").strip() for item in buffered_inputs if isinstance(item, dict)]
         if merged:
             return "\n".join(merged)
     metadata = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
@@ -462,7 +482,7 @@ def _mark_slice_resume(*, base_state: dict[str, Any]) -> None:
     task_state["check_provenance"] = "slice_resume"
 
 
-def _consume_buffered_inputs(*, task_id: str, correlation_id: str | None) -> list[str]:
+def _consume_buffered_inputs(*, task_id: str, correlation_id: str | None) -> list[dict[str, Any]]:
     latest = get_pdca_task(task_id)
     if not isinstance(latest, dict):
         return []
@@ -473,22 +493,32 @@ def _consume_buffered_inputs(*, task_id: str, correlation_id: str | None) -> lis
         return []
     next_unconsumed = _as_optional_int(metadata.get("next_unconsumed_index")) or 0
     next_unconsumed = max(0, min(next_unconsumed, len(inputs)))
-    consumed: list[str] = []
+    consumed: list[dict[str, Any]] = []
     now = datetime.now(timezone.utc).isoformat()
     for idx in range(next_unconsumed, len(inputs)):
         record = inputs[idx]
         text = str(record.get("text") or "").strip()
         if not text:
             continue
-        consumed.append(text)
+        consumed.append(
+            {
+                "text": text,
+                "actor_id": str(record.get("actor_id") or "").strip() or None,
+                "message_id": str(record.get("message_id") or "").strip() or None,
+                "correlation_id": str(record.get("correlation_id") or "").strip() or None,
+                "channel": str(record.get("channel") or "").strip() or None,
+                "received_at": str(record.get("received_at") or "").strip() or None,
+                "consumed_at": now,
+            }
+        )
         record["consumed_at"] = now
     if not consumed:
         return []
     metadata["inputs"] = inputs
     metadata["next_unconsumed_index"] = len(inputs)
     metadata["input_dirty"] = False
-    metadata["last_user_message"] = consumed[-1]
-    metadata["pending_user_text"] = consumed[-1]
+    metadata["last_user_message"] = str(consumed[-1].get("text") or "").strip()
+    metadata["pending_user_text"] = str(consumed[-1].get("text") or "").strip()
     metadata["last_input_dequeued_at"] = now
     update_pdca_task_metadata(task_id=task_id, metadata=metadata)
     _LOG.emit(
@@ -498,6 +528,40 @@ def _consume_buffered_inputs(*, task_id: str, correlation_id: str | None) -> lis
         payload={"task_id": task_id, "count": len(consumed)},
     )
     return consumed
+
+
+def _inject_steering_facts(*, base_state: dict[str, Any], consumed_inputs: list[dict[str, Any]]) -> None:
+    if not consumed_inputs:
+        return
+    task_state = base_state.get("task_state")
+    if not isinstance(task_state, dict):
+        task_state = {}
+        base_state["task_state"] = task_state
+    facts = task_state.get("facts")
+    fact_bucket = dict(facts) if isinstance(facts, dict) else {}
+    max_suffix = 0
+    for key in fact_bucket.keys():
+        rendered = str(key or "").strip()
+        if not rendered.startswith("user_reply_"):
+            continue
+        suffix = rendered.split("user_reply_", 1)[1]
+        try:
+            max_suffix = max(max_suffix, int(suffix))
+        except ValueError:
+            continue
+    for index, item in enumerate(consumed_inputs, start=1):
+        text = str(item.get("text") or "").strip()
+        if not text:
+            continue
+        fact_bucket[f"user_reply_{max_suffix + index}"] = {
+            "source": "user_reply",
+            "text": text,
+            "actor_id": str(item.get("actor_id") or "").strip() or None,
+            "message_id": str(item.get("message_id") or "").strip() or None,
+            "received_at": str(item.get("received_at") or "").strip() or None,
+            "consumed_at": str(item.get("consumed_at") or "").strip() or None,
+        }
+    task_state["facts"] = fact_bucket
 
 
 def _should_preempt_after_step(*, task_id: str, slice_started_at: datetime) -> bool:
@@ -771,6 +835,31 @@ def _dispatch_cooldown_seconds() -> int:
     except ValueError:
         parsed = 30
     return max(parsed, 1)
+
+
+def _emit_dispatch_kick_signal(
+    *,
+    context: dict[str, Any],
+    task_id: str,
+    correlation_id: str | None,
+    reason: str,
+) -> None:
+    bus = context.get("ctx")
+    emitted = emit_pdca_dispatch_kick(
+        bus=bus if hasattr(bus, "emit") else None,
+        task_id=task_id,
+        reason=reason,
+        correlation_id=correlation_id,
+        source="handle_pdca_slice_request",
+    )
+    if not emitted:
+        return
+    _LOG.emit(
+        event="pdca.dispatch.kick_emitted",
+        component="actions.handle_pdca_slice_request",
+        correlation_id=correlation_id,
+        payload={"task_id": task_id, "reason": reason},
+    )
 
 
 def _classify_failure_code(exc: Exception) -> str:

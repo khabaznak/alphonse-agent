@@ -40,6 +40,7 @@ VALUES
   ('terminal.command_updated', 'Terminal Command Updated', 'terminal', 'Terminal command updated', 1),
   ('terminal.command_executed', 'Terminal Command Executed', 'terminal_executor', 'Terminal command executed', 1),
   ('pdca.slice.requested', 'PDCA Slice Requested', 'pdca_queue_runner', 'Queue runner requested a PDCA execution slice', 1),
+  ('pdca.dispatch.kick', 'PDCA Dispatch Kick', 'pdca_dispatcher', 'Dispatch gate should evaluate and emit slice request if eligible', 1),
   ('pdca.resume_requested', 'PDCA Resume Requested', 'pdca_queue_runner', 'Resume previously persisted PDCA slice', 1),
   ('pdca.user_steering_received', 'PDCA User Steering Received', 'handle_conscious_message', 'User steering signal for active PDCA task', 1),
   ('pdca.task_cancel_requested', 'PDCA Task Cancel Requested', 'handle_conscious_message', 'User requested task cancellation', 1),
@@ -473,6 +474,31 @@ FROM states s1
 JOIN signals sig ON sig.key = 'pdca.slice.requested'
 JOIN states s2 ON s2.key = 'rehydrating_slice'
 WHERE s1.key = 'idle';
+
+INSERT OR IGNORE INTO transitions (
+  state_id,
+  signal_id,
+  next_state_id,
+  priority,
+  is_enabled,
+  guard_key,
+  action_key,
+  match_any_state,
+  notes
+)
+SELECT
+  s1.id,
+  sig.id,
+  s2.id,
+  25,
+  1,
+  NULL,
+  'handle_pdca_dispatch_kick',
+  1,
+  'dispatch kick evaluates gate and emits pdca.slice.requested when eligible'
+FROM states s1
+JOIN signals sig ON sig.key = 'pdca.dispatch.kick'
+JOIN states s2 ON s2.key = 'idle';
 
 INSERT OR IGNORE INTO transitions (
   state_id,
