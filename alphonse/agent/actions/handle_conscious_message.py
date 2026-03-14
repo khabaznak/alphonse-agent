@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+from typing import Any
 
 from alphonse.agent.actions.base import Action
 from alphonse.agent.actions.conscious_message_context_adapter import (
@@ -19,6 +20,7 @@ from alphonse.agent.services.session_identity_resolution import resolve_session_
 from alphonse.agent.session.day_state import build_next_session_state
 from alphonse.agent.session.day_state import commit_session_state
 from alphonse.agent.session.day_state import resolve_day_session
+from alphonse.agent.tools.telegram_files import TranscribeTelegramAudioTool
 
 logger = get_component_logger("actions.handle_conscious_message")
 _LOG = get_log_manager()
@@ -36,6 +38,12 @@ class HandleConsciousMessageAction(Action):
         envelope = IncomingMessageEnvelope.from_payload(raw_payload)
         correlation_id = envelope.correlation_id or getattr(signal, "correlation_id", None) or str(uuid.uuid4())
         payload = envelope.runtime_payload()
+        payload = _enrich_multimodal_payload(
+            payload=payload,
+            envelope=envelope,
+            correlation_id=str(correlation_id),
+            incoming_channel=str((envelope.channel or {}).get("type") or "").strip() or "telegram",
+        )
         missing_actor_fields = [
             key
             for key in ("external_user_id", "display_name", "person_id")
@@ -117,6 +125,7 @@ class HandleConsciousMessageAction(Action):
             day_session=day_session,
             channel=incoming.channel_type,
             user_text=str(payload.get("text") or "").strip(),
+            payload=payload,
             correlation_id=str(correlation_id),
         )
 
@@ -167,9 +176,12 @@ def _write_through_user_message(
     day_session: dict[str, object],
     channel: str,
     user_text: str,
+    payload: dict[str, Any] | None = None,
     correlation_id: str,
 ) -> None:
     text = str(user_text or "").strip()
+    if not text and isinstance(payload, dict):
+        text = _render_attachment_summary(payload)
     if not text or not isinstance(day_session, dict):
         return
     try:
@@ -192,3 +204,86 @@ def _write_through_user_message(
             correlation_id=correlation_id or None,
             payload={"channel": str(channel or "").strip() or None},
         )
+
+
+def _enrich_multimodal_payload(
+    *,
+    payload: dict[str, Any],
+    envelope: IncomingMessageEnvelope,
+    correlation_id: str,
+    incoming_channel: str,
+) -> dict[str, Any]:
+    content = payload.get("content") if isinstance(payload.get("content"), dict) else {}
+    attachments_raw = content.get("attachments") if isinstance(content.get("attachments"), list) else []
+    attachments = [dict(item) for item in attachments_raw if isinstance(item, dict)]
+    if not attachments:
+        return payload
+    text = str(payload.get("text") or "").strip()
+    if text:
+        return payload
+    transcript = _transcribe_audio_attachments(
+        attachments=attachments,
+        locale_hint=str((envelope.context or {}).get("locale") or "").strip() or None,
+        correlation_id=correlation_id,
+        channel=incoming_channel,
+    )
+    if transcript:
+        payload["text"] = transcript
+        content["text"] = transcript
+    payload["content"] = content
+    return payload
+
+
+def _transcribe_audio_attachments(
+    *,
+    attachments: list[dict[str, Any]],
+    locale_hint: str | None,
+    correlation_id: str,
+    channel: str,
+) -> str:
+    lines: list[str] = []
+    tool = TranscribeTelegramAudioTool()
+    for item in attachments:
+        kind = str(item.get("kind") or "").strip().lower()
+        provider = str(item.get("provider") or "").strip().lower()
+        file_id = str(item.get("file_id") or "").strip()
+        if kind not in {"voice", "audio"} or provider != "telegram" or not file_id:
+            continue
+        result = tool.execute(file_id=file_id, language=locale_hint)
+        exception = result.get("exception") if isinstance(result, dict) else None
+        if isinstance(exception, dict):
+            _LOG.emit(
+                level="warning",
+                event="incoming_message.audio_transcription_failed",
+                component="actions.handle_conscious_message",
+                correlation_id=correlation_id or None,
+                channel=str(channel or "").strip() or None,
+                error_code=str(exception.get("code") or "transcribe_failed"),
+                payload={
+                    "file_id": file_id,
+                    "kind": kind,
+                },
+            )
+            continue
+        output = result.get("output") if isinstance(result, dict) else None
+        transcript_text = str((output or {}).get("text") or "").strip() if isinstance(output, dict) else ""
+        if transcript_text:
+            lines.append(transcript_text)
+    return "\n".join(lines).strip()
+
+
+def _render_attachment_summary(payload: dict[str, Any]) -> str:
+    content = payload.get("content") if isinstance(payload.get("content"), dict) else {}
+    attachments = content.get("attachments") if isinstance(content.get("attachments"), list) else []
+    if not isinstance(attachments, list) or not attachments:
+        return ""
+    counts: dict[str, int] = {}
+    for item in attachments:
+        if not isinstance(item, dict):
+            continue
+        kind = str(item.get("kind") or "attachment").strip().lower() or "attachment"
+        counts[kind] = int(counts.get(kind) or 0) + 1
+    if not counts:
+        return ""
+    parts = [f"{value} {key}" for key, value in sorted(counts.items())]
+    return f"[attachments: {', '.join(parts)}]"

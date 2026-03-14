@@ -31,16 +31,83 @@ def _normalize_inputs(metadata: dict[str, Any]) -> list[dict[str, Any]]:
             "message_id": str(item.get("message_id") or "").strip(),
             "correlation_id": str(item.get("correlation_id") or "").strip(),
             "text": str(item.get("text") or "").strip(),
+            "steering_text": str(item.get("steering_text") or item.get("text") or "").strip(),
             "channel": str(item.get("channel") or "").strip(),
             "actor_id": str(item.get("actor_id") or "").strip() or None,
+            "attachments": _normalize_attachments(item.get("attachments")),
             "received_at": str(item.get("received_at") or "").strip(),
             "consumed_at": str(item.get("consumed_at") or "").strip() or None,
             "sequence": int(item.get("sequence") or 0),
         }
-        if not record["text"]:
+        if not record["steering_text"] and not record["attachments"]:
             continue
         out.append(record)
     return out
+
+
+def _normalize_attachments(raw: Any) -> list[dict[str, Any]]:
+    if not isinstance(raw, list):
+        return []
+    out: list[dict[str, Any]] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        kind = str(item.get("kind") or "").strip().lower()
+        provider = str(item.get("provider") or "").strip().lower()
+        file_id = str(item.get("file_id") or "").strip() or None
+        if not kind:
+            continue
+        out.append(
+            {
+                "kind": kind,
+                "provider": provider or None,
+                "file_id": file_id,
+                "url": str(item.get("url") or "").strip() or None,
+                "mime_type": str(item.get("mime_type") or "").strip() or None,
+                "size_bytes": int(item.get("size_bytes") or 0) or None,
+                "duration_seconds": int(item.get("duration_seconds") or 0) or None,
+                "width": int(item.get("width") or 0) or None,
+                "height": int(item.get("height") or 0) or None,
+                "caption": str(item.get("caption") or "").strip() or None,
+                "provider_event_ref": item.get("provider_event_ref") if isinstance(item.get("provider_event_ref"), dict) else None,
+            }
+        )
+    return out
+
+
+def _extract_payload_attachments(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    content = payload.get("content") if isinstance(payload.get("content"), dict) else {}
+    attachments = content.get("attachments") if isinstance(content.get("attachments"), list) else []
+    return _normalize_attachments(attachments)
+
+
+def _attachments_summary(attachments: list[dict[str, Any]]) -> str:
+    if not attachments:
+        return ""
+    counts: dict[str, int] = {}
+    for item in attachments:
+        kind = str(item.get("kind") or "attachment").strip().lower() or "attachment"
+        counts[kind] = int(counts.get(kind) or 0) + 1
+    parts = [f"{value} {kind}" for kind, value in sorted(counts.items())]
+    return f"[attachments: {', '.join(parts)}]"
+
+
+def _resolve_steering_text(*, user_text: str, attachments: list[dict[str, Any]]) -> str:
+    direct = str(user_text or "").strip()
+    if direct:
+        return direct
+    return _attachments_summary(attachments)
+
+
+def _attachment_fingerprint(attachments: list[dict[str, Any]]) -> str:
+    return ",".join(
+        sorted(
+            [
+                f"{str(item.get('kind') or '').strip()}:{str(item.get('file_id') or item.get('url') or '').strip()}"
+                for item in attachments
+            ]
+        )
+    )
 
 
 def _append_input_record(
@@ -49,15 +116,19 @@ def _append_input_record(
     incoming: IncomingContext,
     correlation_id: str,
     user_text: str,
+    steering_text: str,
+    attachments: list[dict[str, Any]],
     actor_id: str | None,
     now: str,
 ) -> tuple[dict[str, Any], int]:
     inputs = _normalize_inputs(metadata)
     message_id = str(incoming.message_id or "").strip()
     cid = str(correlation_id or "").strip()
-    dedupe_id = f"{message_id}|{cid}|{user_text}"
+    attachment_fp = _attachment_fingerprint(attachments)
+    dedupe_id = f"{message_id}|{cid}|{steering_text}|{attachment_fp}"
     seen = {
-        f"{str(item.get('message_id') or '').strip()}|{str(item.get('correlation_id') or '').strip()}|{str(item.get('text') or '').strip()}"
+        f"{str(item.get('message_id') or '').strip()}|{str(item.get('correlation_id') or '').strip()}|"
+        f"{str(item.get('steering_text') or item.get('text') or '').strip()}|{_attachment_fingerprint(_normalize_attachments(item.get('attachments')))}"
         for item in inputs
     }
     if dedupe_id not in seen:
@@ -67,8 +138,10 @@ def _append_input_record(
                 "message_id": message_id,
                 "correlation_id": cid,
                 "text": user_text,
+                "steering_text": steering_text,
                 "channel": str(incoming.channel_type or "").strip(),
                 "actor_id": str(actor_id or "").strip() or None,
+                "attachments": attachments,
                 "received_at": now,
                 "consumed_at": None,
                 "sequence": max_seq + 1,
@@ -208,6 +281,8 @@ def enqueue_pdca_slice(
 ) -> str:
     now = now_iso()
     user_text = str(payload.get("text") or "").strip()
+    attachments = _extract_payload_attachments(payload)
+    steering_text = _resolve_steering_text(user_text=user_text, attachments=attachments)
     existing = get_latest_pdca_task_for_conversation(
         conversation_key=session_key,
         statuses=["waiting_user", "queued", "running", "paused"],
@@ -239,10 +314,11 @@ def enqueue_pdca_slice(
                 task_id=task_id,
                 event_type="incoming.user_message.rejected",
                 payload={
-                    "text": user_text,
+                    "text": steering_text,
                     "channel": incoming.channel_type,
                     "actor_id": actor_id,
                     "reason": reason,
+                    "attachment_count": len(attachments),
                 },
                 correlation_id=correlation_id,
             )
@@ -259,11 +335,13 @@ def enqueue_pdca_slice(
             incoming=incoming,
             correlation_id=correlation_id,
             user_text=user_text,
+            steering_text=steering_text,
+            attachments=attachments,
             actor_id=actor_id,
             now=now,
         )
-        metadata["pending_user_text"] = user_text
-        metadata["last_user_message"] = user_text
+        metadata["pending_user_text"] = steering_text
+        metadata["last_user_message"] = steering_text
         metadata["last_user_channel"] = incoming.channel_type
         metadata["last_user_target"] = incoming.address
         metadata["last_user_message_id"] = incoming.message_id
@@ -285,10 +363,11 @@ def enqueue_pdca_slice(
             task_id=task_id,
             event_type="incoming.user_message",
             payload={
-                "text": user_text,
+                "text": steering_text,
                 "channel": incoming.channel_type,
                 "buffered_count": buffered_count,
                 "input_dirty": bool(metadata.get("input_dirty")),
+                "attachment_count": len(attachments),
             },
             correlation_id=correlation_id,
         )
@@ -311,8 +390,8 @@ def enqueue_pdca_slice(
         "target_actor_id": None,
         "target_wait_timeout_at": None,
         "steering_decision_log": [],
-        "pending_user_text": user_text,
-        "last_user_message": user_text,
+        "pending_user_text": steering_text,
+        "last_user_message": steering_text,
         "last_user_channel": incoming.channel_type,
         "last_user_target": incoming.address,
         "last_user_message_id": incoming.message_id,
@@ -324,8 +403,10 @@ def enqueue_pdca_slice(
                 "message_id": str(incoming.message_id or "").strip(),
                 "correlation_id": str(correlation_id or "").strip(),
                 "text": user_text,
+                "steering_text": steering_text,
                 "channel": str(incoming.channel_type or "").strip(),
                 "actor_id": _resolve_actor_id(incoming=incoming, payload=payload, session_user_id=session_user_id),
+                "attachments": attachments,
                 "received_at": now,
                 "consumed_at": None,
                 "sequence": 1,

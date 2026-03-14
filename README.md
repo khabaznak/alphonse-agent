@@ -172,6 +172,84 @@ Example tool-call payload:
 }
 ```
 
+### Qwen TTS Backend Setup
+
+Use this when you want Alphonse local audio tools to run with Qwen3-TTS instead of macOS `say`.
+
+1. Activate the same virtualenv used to run Alphonse:
+
+```bash
+cd "/Users/alex/Code Projects/atrium-server"
+source .venv/bin/activate
+```
+
+2. Install dependencies into that env:
+
+```bash
+pip install -U qwen-tts soundfile transformers torchaudio
+```
+
+3. Configure `alphonse/agent/.env`:
+
+```bash
+ALPHONSE_TTS_BACKEND=qwen
+ALPHONSE_QWEN_TTS_MODEL=Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice
+ALPHONSE_QWEN_TTS_DEVICE_MAP=auto
+ALPHONSE_QWEN_TTS_DTYPE=float16
+ALPHONSE_QWEN_TTS_SPEAKER=Ryan
+ALPHONSE_QWEN_TTS_LANGUAGE=Auto
+# optional style/tone guidance:
+ALPHONSE_QWEN_TTS_INSTRUCT=
+```
+
+4. Smoke test the backend:
+
+```bash
+python -c "import qwen_tts, soundfile, transformers, torchaudio; print('qwen-tts deps ok')"
+```
+
+```bash
+python - <<'PY'
+from alphonse.agent.tools.local_audio_output import LocalAudioOutputRenderTool
+print(LocalAudioOutputRenderTool().execute(text="Hola, soy Alphonse.", format="m4a"))
+PY
+```
+
+```bash
+python - <<'PY'
+from alphonse.agent.tools.local_audio_output import LocalAudioOutputSpeakTool
+print(LocalAudioOutputSpeakTool().execute(text="Hello, this is Alphonse.", blocking=True))
+PY
+```
+
+If dependencies/model are missing, the tool returns deterministic code `qwen_backend_unavailable`.
+
+Fallback for continuity:
+
+```bash
+ALPHONSE_TTS_BACKEND=say
+```
+
+#### High-Quality Stability Ladder (macOS arm64)
+
+Run tier validation locally and keep the highest tier that passes repeatability and latency budgets.
+
+Tier profiles:
+
+- `stable`: `0.6B + cpu + float32`
+- `balanced`: `1.7B + auto + float16`
+- `strict`: `balanced` + voice instruction style
+
+Run 10 sequential calls with a 10s p95 budget:
+
+```bash
+python -m alphonse.tools.qwen_tts_stability_check --tier stable --runs 10 --blocking --p95-budget-seconds 10
+python -m alphonse.tools.qwen_tts_stability_check --tier balanced --runs 10 --blocking --p95-budget-seconds 10
+python -m alphonse.tools.qwen_tts_stability_check --tier strict --runs 10 --blocking --p95-budget-seconds 10
+```
+
+Exit code `0` means pass, `1` means fail. The command prints JSON with `median_seconds`, `p95_seconds`, and failure details.
+
 ### SSH Terminal Tool (`ssh_terminal`)
 
 Run remote SSH commands through Paramiko using the `ssh_terminal` tool.

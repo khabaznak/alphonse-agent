@@ -211,6 +211,77 @@ def test_handle_pdca_slice_request_dequeues_buffered_inputs_and_resumes_check(
     assert all(str(item.get("consumed_at") or "").strip() for item in inputs if isinstance(item, dict))
 
 
+def test_handle_pdca_slice_request_accepts_attachment_only_buffered_inputs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db_path = tmp_path / "nerve-db"
+    monkeypatch.setenv("NERVE_DB_PATH", str(db_path))
+    apply_schema(db_path)
+
+    task_id = upsert_pdca_task(
+        {
+            "owner_id": "owner-1",
+            "conversation_key": "chat-attachment-only",
+            "status": "queued",
+            "metadata": {
+                "pending_user_text": "",
+                "last_user_message": "",
+                "next_unconsumed_index": 0,
+                "input_dirty": False,
+                "inputs": [
+                    {
+                        "message_id": "m-a1",
+                        "correlation_id": "cid-a1",
+                        "text": "",
+                        "steering_text": "[attachments: 1 voice]",
+                        "attachments": [{"kind": "voice", "provider": "telegram", "file_id": "voice-1"}],
+                        "channel": "telegram",
+                        "received_at": "2026-03-12T05:00:00+00:00",
+                        "consumed_at": None,
+                        "sequence": 1,
+                    }
+                ],
+            },
+        }
+    )
+
+    class _FakeResult:
+        reply_text = ""
+        plans = []
+        cognition_state = {"task_state": {"status": "queued", "cycle_index": 1}}
+        meta = {}
+
+    class _FakeGraph:
+        def invoke(self, state, text, *, llm_client=None):  # noqa: ANN001
+            _ = llm_client
+            assert text == "[attachments: 1 voice]"
+            task_state = state.get("task_state")
+            assert isinstance(task_state, dict)
+            facts = task_state.get("facts")
+            assert isinstance(facts, dict)
+            user_reply = facts.get("user_reply_1")
+            assert isinstance(user_reply, dict)
+            assert isinstance(user_reply.get("attachments"), list)
+            return _FakeResult()
+
+    monkeypatch.setattr(hpsr, "_CORTEX_GRAPH", _FakeGraph())
+    monkeypatch.setattr(hpsr, "build_llm_client", lambda: None)
+
+    action = HandlePdcaSliceRequestAction()
+    signal = Signal(
+        type="pdca.slice.requested",
+        payload={"task_id": task_id, "correlation_id": "cid-attachment-only"},
+        source="pdca_queue_runner",
+    )
+    _ = action.execute({"signal": signal, "ctx": None})
+
+    task = get_pdca_task(task_id)
+    assert isinstance(task, dict)
+    metadata = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
+    assert int(metadata.get("next_unconsumed_index") or 0) == 1
+
+
 def test_handle_pdca_slice_request_preempts_when_new_input_arrives_mid_slice(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

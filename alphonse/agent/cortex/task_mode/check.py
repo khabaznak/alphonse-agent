@@ -47,6 +47,27 @@ def check_node_impl(
     corr = correlation_id(state)
     task_state["acceptance_criteria"] = normalize_acceptance_criteria_records(task_state.get("acceptance_criteria"))
     cycle = int(task_state.get("cycle_index") or 0)
+    consumed_inputs = _consume_steering_inputs_for_check(state=state)
+    if consumed_inputs:
+        _apply_check_consumed_inputs(state=state, task_state=task_state, consumed_inputs=consumed_inputs)
+        log_task_event(
+            logger=logger,
+            state=state,
+            task_state=task_state,
+            node="check_node",
+            event="pdca.check.input_consumed",
+            cycle=cycle,
+            consumed_count=len(consumed_inputs),
+            consumed_message_ids=[
+                str(item.get("message_id") or "").strip()
+                for item in consumed_inputs
+                if str(item.get("message_id") or "").strip()
+            ][:20],
+            consumed_attachment_count=sum(
+                len(item.get("attachments")) if isinstance(item.get("attachments"), list) else 0
+                for item in consumed_inputs
+            ),
+        )
 
     case_type = select_case_deterministically(task_state)
     if case_type is None:
@@ -602,6 +623,82 @@ def _render_fact_evidence_blocks(task_state: dict[str, Any]) -> str:
         lines.append(f"  output: {_compact_json(output)}")
         lines.append(f"  exception: {_compact_json(exception)}")
     return "\n".join(lines) if lines else "- (none)"
+
+
+def _consume_steering_inputs_for_check(*, state: dict[str, Any]) -> list[dict[str, Any]]:
+    consumer = state.get("_consume_task_inputs")
+    if not callable(consumer):
+        return []
+    try:
+        raw = consumer()
+    except Exception:
+        return []
+    if not isinstance(raw, list):
+        return []
+    consumed: list[dict[str, Any]] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        text = str(item.get("text") or "").strip()
+        steering_text = str(item.get("steering_text") or text).strip()
+        attachments = item.get("attachments")
+        normalized_attachments = [dict(att) for att in attachments if isinstance(att, dict)] if isinstance(attachments, list) else []
+        if not steering_text and not normalized_attachments:
+            continue
+        consumed.append(
+            {
+                "text": text,
+                "steering_text": steering_text,
+                "attachments": normalized_attachments,
+                "actor_id": str(item.get("actor_id") or "").strip() or None,
+                "message_id": str(item.get("message_id") or "").strip() or None,
+                "received_at": str(item.get("received_at") or "").strip() or None,
+                "consumed_at": str(item.get("consumed_at") or "").strip() or None,
+            }
+        )
+    return consumed
+
+
+def _apply_check_consumed_inputs(
+    *,
+    state: dict[str, Any],
+    task_state: dict[str, Any],
+    consumed_inputs: list[dict[str, Any]],
+) -> None:
+    if not consumed_inputs:
+        return
+    task_state["check_provenance"] = "slice_resume"
+    latest_text = str(consumed_inputs[-1].get("steering_text") or consumed_inputs[-1].get("text") or "").strip()
+    if latest_text:
+        state["last_user_message"] = latest_text
+    facts = task_state.get("facts")
+    fact_bucket = dict(facts) if isinstance(facts, dict) else {}
+    max_suffix = 0
+    for key in fact_bucket:
+        rendered = str(key or "").strip()
+        if not rendered.startswith("user_reply_"):
+            continue
+        suffix = rendered.split("user_reply_", 1)[1]
+        try:
+            max_suffix = max(max_suffix, int(suffix))
+        except ValueError:
+            continue
+    for index, item in enumerate(consumed_inputs, start=1):
+        text = str(item.get("steering_text") or item.get("text") or "").strip()
+        attachments = item.get("attachments")
+        normalized_attachments = [dict(att) for att in attachments if isinstance(att, dict)] if isinstance(attachments, list) else []
+        if not text and not normalized_attachments:
+            continue
+        fact_bucket[f"user_reply_{max_suffix + index}"] = {
+            "source": "user_reply",
+            "text": text,
+            "attachments": normalized_attachments,
+            "actor_id": str(item.get("actor_id") or "").strip() or None,
+            "message_id": str(item.get("message_id") or "").strip() or None,
+            "received_at": str(item.get("received_at") or "").strip() or None,
+            "consumed_at": str(item.get("consumed_at") or "").strip() or None,
+        }
+    task_state["facts"] = fact_bucket
 
 
 def _latest_failure_signature(task_state: dict[str, Any]) -> str:

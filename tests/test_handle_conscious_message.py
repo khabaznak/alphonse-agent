@@ -231,3 +231,113 @@ def test_handle_conscious_message_writes_through_user_message_to_day_session(mon
     assert build_kwargs.get("user_message") == "This should be in history immediately"
     assert build_kwargs.get("assistant_message") == ""
     assert "committed" in captured
+
+
+def test_handle_conscious_message_attachment_only_writes_history_summary(monkeypatch) -> None:
+    action = HandleConsciousMessageAction()
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        "alphonse.agent.actions.handle_conscious_message.resolve_session_user_id",
+        lambda **_: "u-1",
+    )
+    monkeypatch.setattr(
+        "alphonse.agent.actions.handle_conscious_message.resolve_session_timezone",
+        lambda *_: "UTC",
+    )
+    monkeypatch.setattr(
+        "alphonse.agent.actions.handle_conscious_message.resolve_day_session",
+        lambda **_: {"session_id": "u-1|2026-03-12", "user_id": "u-1", "date": "2026-03-12"},
+    )
+    monkeypatch.setattr(
+        "alphonse.agent.actions.handle_conscious_message.build_next_session_state",
+        lambda **kwargs: captured.update({"build": kwargs}) or {"session_id": "u-1|2026-03-12", "user_id": "u-1", "date": "2026-03-12"},
+    )
+    monkeypatch.setattr(
+        "alphonse.agent.actions.handle_conscious_message.commit_session_state",
+        lambda state: captured.update({"committed": state}),
+    )
+    monkeypatch.setattr(
+        "alphonse.agent.actions.handle_conscious_message.enqueue_pdca_slice",
+        lambda **_: "task-attachment-only",
+    )
+    monkeypatch.setattr(
+        "alphonse.agent.actions.handle_conscious_message.is_pdca_slicing_enabled",
+        lambda: True,
+    )
+    monkeypatch.setattr(
+        "alphonse.agent.actions.handle_conscious_message.emit_presence_phase_changed",
+        lambda **_: None,
+    )
+
+    envelope = build_incoming_message_envelope(
+        message_id="m-attach-only",
+        channel_type="telegram",
+        channel_target="123",
+        provider="telegram",
+        text="",
+        attachments=[{"kind": "photo", "provider": "telegram", "file_id": "photo-1"}],
+        correlation_id="cid-attach-only",
+    )
+    _ = action.execute({"signal": Signal(type="sense.telegram.message.user.received", payload=envelope), "ctx": Bus()})
+    build_kwargs = captured.get("build")
+    assert isinstance(build_kwargs, dict)
+    assert str(build_kwargs.get("user_message") or "").startswith("[attachments:")
+
+
+def test_handle_conscious_message_transcribes_telegram_voice_when_text_empty(monkeypatch) -> None:
+    action = HandleConsciousMessageAction()
+    captured: dict[str, object] = {}
+
+    class _FakeTranscribeTool:
+        def execute(self, *, file_id: str, language: str | None = None, sandbox_alias: str = "telegram") -> dict[str, object]:
+            _ = (language, sandbox_alias)
+            return {
+                "output": {"text": f"transcript for {file_id}"},
+                "exception": None,
+                "metadata": {"tool": "transcribe_telegram_audio"},
+            }
+
+    monkeypatch.setattr(
+        "alphonse.agent.actions.handle_conscious_message.TranscribeTelegramAudioTool",
+        _FakeTranscribeTool,
+    )
+    monkeypatch.setattr(
+        "alphonse.agent.actions.handle_conscious_message.resolve_session_user_id",
+        lambda **_: "u-1",
+    )
+    monkeypatch.setattr(
+        "alphonse.agent.actions.handle_conscious_message.resolve_session_timezone",
+        lambda *_: "UTC",
+    )
+    monkeypatch.setattr(
+        "alphonse.agent.actions.handle_conscious_message.resolve_day_session",
+        lambda **_: {"session_id": "s-1"},
+    )
+    monkeypatch.setattr(
+        "alphonse.agent.actions.handle_conscious_message.enqueue_pdca_slice",
+        lambda **kwargs: captured.update(kwargs) or "task-transcribed",
+    )
+    monkeypatch.setattr(
+        "alphonse.agent.actions.handle_conscious_message.is_pdca_slicing_enabled",
+        lambda: True,
+    )
+    monkeypatch.setattr(
+        "alphonse.agent.actions.handle_conscious_message.emit_presence_phase_changed",
+        lambda **_: None,
+    )
+
+    envelope = build_incoming_message_envelope(
+        message_id="m-voice-only",
+        channel_type="telegram",
+        channel_target="123",
+        provider="telegram",
+        text="",
+        attachments=[{"kind": "voice", "provider": "telegram", "file_id": "voice-1"}],
+        correlation_id="cid-voice-only",
+    )
+    result = action.execute({"signal": Signal(type="sense.telegram.message.user.received", payload=envelope), "ctx": Bus()})
+    assert result.payload.get("task_id") == "task-transcribed"
+    enqueued_payload = captured.get("payload")
+    assert isinstance(enqueued_payload, dict)
+    assert str(enqueued_payload.get("text") or "") == "transcript for voice-1"

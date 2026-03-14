@@ -33,6 +33,8 @@ class TelegramSenseAdapter(SenseAdapter):
         correlation_id = _as_optional_str(payload.get("correlation_id"))
 
         metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
+        attachments = payload.get("attachments")
+        normalized_attachments = [dict(item) for item in attachments if isinstance(item, dict)] if isinstance(attachments, list) else []
         metadata = {
             "message_id": payload.get("message_id") or metadata.get("message_id"),
             "update_id": payload.get("update_id") or metadata.get("update_id"),
@@ -42,6 +44,7 @@ class TelegramSenseAdapter(SenseAdapter):
             "chat_type": payload.get("chat_type") or metadata.get("chat_type"),
             "content_type": payload.get("content_type") or metadata.get("content_type"),
             "contact": payload.get("contact") if isinstance(payload.get("contact"), dict) else metadata.get("contact"),
+            "attachments": normalized_attachments,
             "raw": payload,
         }
 

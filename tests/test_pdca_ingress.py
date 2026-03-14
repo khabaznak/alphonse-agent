@@ -233,3 +233,48 @@ def test_enqueue_pdca_slice_targeted_scope_honors_timeout_fallback(tmp_path: Pat
     log = metadata.get("steering_decision_log")
     assert isinstance(log, list) and log
     assert str(log[-1].get("reason") or "") == "target_timeout_fallback"
+
+
+def test_enqueue_pdca_slice_accepts_attachment_only_input(tmp_path: Path, monkeypatch) -> None:
+    db_path = tmp_path / "nerve-db"
+    monkeypatch.setenv("NERVE_DB_PATH", str(db_path))
+    apply_schema(db_path)
+
+    task_id = upsert_pdca_task(
+        {
+            "task_id": "task-attachment-only",
+            "owner_id": "u-1",
+            "conversation_key": "telegram:8553589429",
+            "status": "running",
+            "metadata": {
+                "inputs": [],
+                "next_unconsumed_index": 0,
+                "input_dirty": False,
+            },
+        }
+    )
+
+    returned = enqueue_pdca_slice(
+        context={},
+        incoming=_incoming(message_id="m-a1"),
+        state={"timezone": "UTC"},
+        session_key="telegram:8553589429",
+        session_user_id="u-1",
+        day_session={"session_id": "u-1|2026-03-12", "user_id": "u-1", "date": "2026-03-12"},
+        payload={
+            "text": "",
+            "content": {"attachments": [{"kind": "voice", "provider": "telegram", "file_id": "voice-1"}]},
+        },
+        correlation_id="cid-a1",
+    )
+    assert returned == task_id
+
+    task = get_pdca_task(task_id)
+    assert isinstance(task, dict)
+    metadata = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
+    assert str(metadata.get("pending_user_text") or "").startswith("[attachments:")
+    inputs = metadata.get("inputs")
+    assert isinstance(inputs, list)
+    assert len(inputs) == 1
+    assert isinstance(inputs[0].get("attachments"), list)
+    assert str(inputs[0].get("steering_text") or "").startswith("[attachments:")

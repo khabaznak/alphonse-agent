@@ -132,6 +132,9 @@ class TelegramSense(Sense):
             _snippet(str(payload.get("text") or "")),
         )
         normalized = self._sense_adapter.normalize(payload)
+        normalized_meta = normalized.metadata if isinstance(normalized.metadata, dict) else {}
+        attachments = normalized_meta.get("attachments")
+        normalized_attachments = [dict(item) for item in attachments if isinstance(item, dict)] if isinstance(attachments, list) else []
         self._bus.emit(
             Signal(
                 type="sense.telegram.message.user.received",
@@ -145,8 +148,9 @@ class TelegramSense(Sense):
                     correlation_id=normalized.correlation_id,
                     actor_external_user_id=normalized.user_id,
                     actor_display_name=normalized.user_name,
+                    attachments=normalized_attachments,
                     metadata={
-                        "normalized_metadata": normalized.metadata,
+                        "normalized_metadata": normalized_meta,
                         "provider_event": payload.get("provider_event")
                         if isinstance(payload.get("provider_event"), dict)
                         else None,

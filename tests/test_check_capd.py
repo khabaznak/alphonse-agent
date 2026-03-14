@@ -239,6 +239,44 @@ def test_check_template_failure_mission_fails_with_admin_message(monkeypatch) ->
     assert any(str(item.get("event") or "") == "judge.prompt_template.failed" for item in emitted)
 
 
+def test_check_consumes_runtime_buffered_inputs_before_judge_prompt() -> None:
+    tool_registry = build_default_tool_registry()
+    llm = _PromptCaptureLlm(
+        '{"kind":"plan","case_type":"execution_review","reason":"continue","confidence":0.8,"criteria_updates":[],"evidence_refs":[],"failure_class":null}'
+    )
+    task_state = build_default_task_state()
+    task_state["check_provenance"] = "do"
+    state = {
+        "correlation_id": "corr-check-consume-input",
+        "_llm_client": llm,
+        "last_user_message": "old message",
+        "task_state": task_state,
+        "_consume_task_inputs": lambda: [
+            {
+                "text": "",
+                "steering_text": "new steering text from queue",
+                "message_id": "m-1",
+                "attachments": [{"kind": "voice", "provider": "telegram"}],
+            }
+        ],
+    }
+
+    out = check_node(state, tool_registry=tool_registry)
+    prompt = llm.last_user_prompt
+    assert "new steering text from queue" in prompt
+    assert "old message" not in prompt
+    next_state = out.get("task_state")
+    assert isinstance(next_state, dict)
+    facts = next_state.get("facts")
+    assert isinstance(facts, dict)
+    user_reply = facts.get("user_reply_1")
+    assert isinstance(user_reply, dict)
+    assert user_reply.get("message_id") == "m-1"
+    attachments = user_reply.get("attachments")
+    assert isinstance(attachments, list)
+    assert attachments and attachments[0].get("kind") == "voice"
+
+
 def test_route_after_act_prefers_judge_verdict_kind() -> None:
     assert route_after_act({"task_state": {"judge_verdict": {"kind": "plan"}}}) == "next_step_node"
     assert route_after_act({"task_state": {"judge_verdict": {"kind": "mission_success"}}}) == "respond_node"

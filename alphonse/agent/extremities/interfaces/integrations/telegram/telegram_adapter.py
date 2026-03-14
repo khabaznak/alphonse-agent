@@ -91,6 +91,7 @@ class TelegramAdapter(IntegrationAdapter):
         action_type = action.get("type")
         if action_type == "send_audio":
             payload = action.get("payload") or {}
+            correlation_id = str(payload.get("correlation_id") or "").strip() or None
             chat_id = payload.get("chat_id")
             file_path = str(payload.get("file_path") or "").strip()
             caption = payload.get("caption")
@@ -103,11 +104,13 @@ class TelegramAdapter(IntegrationAdapter):
                 chat_id,
                 file_path,
                 as_voice,
+                extra={"correlation_id": correlation_id},
             )
             self._send_audio_http(chat_id=chat_id, file_path=file_path, caption=caption, as_voice=as_voice)
             return
         if action_type == "set_message_reaction":
             payload = action.get("payload") or {}
+            correlation_id = str(payload.get("correlation_id") or "").strip() or None
             chat_id = payload.get("chat_id")
             message_id = payload.get("message_id")
             emoji = str(payload.get("emoji") or "").strip()
@@ -131,6 +134,7 @@ class TelegramAdapter(IntegrationAdapter):
                 chat_id,
                 message_id,
                 emoji,
+                extra={"correlation_id": correlation_id},
             )
             self._set_message_reaction_http(
                 chat_id=chat_id_int,
@@ -140,6 +144,7 @@ class TelegramAdapter(IntegrationAdapter):
             return
         if action_type == "send_chat_action":
             payload = action.get("payload") or {}
+            correlation_id = str(payload.get("correlation_id") or "").strip() or None
             chat_id = payload.get("chat_id")
             chat_action = payload.get("action") or "typing"
             if chat_id is None:
@@ -149,6 +154,7 @@ class TelegramAdapter(IntegrationAdapter):
                 "TelegramAdapter sending chat_action=%s to %s",
                 chat_action,
                 chat_id,
+                extra={"correlation_id": correlation_id},
             )
             self._send_chat_action_http(chat_id, str(chat_action))
             return
@@ -157,13 +163,14 @@ class TelegramAdapter(IntegrationAdapter):
             return
 
         payload = action.get("payload") or {}
+        correlation_id = str(payload.get("correlation_id") or "").strip() or None
         chat_id = payload.get("chat_id")
         text = payload.get("text")
         if chat_id is None or text is None:
             logger.warning("TelegramAdapter missing chat_id/text in action payload")
             return
 
-        logger.info("TelegramAdapter sending message to %s", chat_id)
+        logger.info("TelegramAdapter sending message to %s", chat_id, extra={"correlation_id": correlation_id})
 
         self._send_message_http(chat_id, text)
 
@@ -279,13 +286,10 @@ class TelegramAdapter(IntegrationAdapter):
         message = update.get("message")
         if not isinstance(message, dict):
             return
-        text = message.get("text") or ""
+        text = str(message.get("text") or message.get("caption") or "").strip()
         contact_payload = message.get("contact") if isinstance(message.get("contact"), dict) else None
-        content_type = "text"
-        if contact_payload and str(text).strip():
-            content_type = "text+contact"
-        elif contact_payload:
-            content_type = "contact"
+        attachments = _extract_telegram_attachments(message)
+        content_type = _resolve_content_type(text=text, contact_payload=contact_payload, attachments=attachments)
         chat = message.get("chat") if isinstance(message.get("chat"), dict) else {}
         chat_type = str(chat.get("type") or "private")
         chat_id = message.get("chat_id") or chat.get("id")
@@ -393,6 +397,7 @@ class TelegramAdapter(IntegrationAdapter):
                 "reply_to_message_id": reply_to.get("message_id") if isinstance(reply_to, dict) else None,
                 "message_id": message.get("message_id"),
                 "update_id": update_id,
+                "attachments": attachments,
                 "provider_event": update,
             },
             source="telegram",
@@ -672,6 +677,155 @@ def _to_int(value: Any) -> int | None:
         return int(str(value))
     except (TypeError, ValueError):
         return None
+
+
+def _resolve_content_type(*, text: str, contact_payload: dict[str, Any] | None, attachments: list[dict[str, Any]]) -> str:
+    has_text = bool(str(text or "").strip())
+    has_contact = isinstance(contact_payload, dict)
+    has_media = bool(attachments)
+    if has_contact and has_text:
+        return "text+contact"
+    if has_contact:
+        return "contact"
+    if has_media and has_text:
+        return "text+media"
+    if has_media:
+        return "media"
+    return "text"
+
+
+def _extract_telegram_attachments(message: dict[str, Any]) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    if not isinstance(message, dict):
+        return out
+    message_id = _to_int(message.get("message_id"))
+
+    def _add(item: dict[str, Any]) -> None:
+        if not isinstance(item, dict):
+            return
+        kind = str(item.get("kind") or "").strip().lower()
+        file_id = str(item.get("file_id") or "").strip()
+        if not kind or not file_id:
+            return
+        record: dict[str, Any] = {
+            "kind": kind,
+            "provider": "telegram",
+            "file_id": file_id,
+            "mime_type": str(item.get("mime_type") or "").strip() or None,
+            "size_bytes": _to_int(item.get("size_bytes")),
+            "duration_seconds": _to_int(item.get("duration_seconds")),
+            "width": _to_int(item.get("width")),
+            "height": _to_int(item.get("height")),
+            "caption": str(message.get("caption") or "").strip() or None,
+            "provider_event_ref": {
+                "message_id": message_id,
+                "field": str(item.get("field") or "").strip() or None,
+            },
+        }
+        out.append(record)
+
+    voice = message.get("voice") if isinstance(message.get("voice"), dict) else None
+    if voice:
+        _add(
+            {
+                "kind": "voice",
+                "field": "voice",
+                "file_id": voice.get("file_id"),
+                "mime_type": voice.get("mime_type") or "audio/ogg",
+                "size_bytes": voice.get("file_size"),
+                "duration_seconds": voice.get("duration"),
+            }
+        )
+    audio = message.get("audio") if isinstance(message.get("audio"), dict) else None
+    if audio:
+        _add(
+            {
+                "kind": "audio",
+                "field": "audio",
+                "file_id": audio.get("file_id"),
+                "mime_type": audio.get("mime_type"),
+                "size_bytes": audio.get("file_size"),
+                "duration_seconds": audio.get("duration"),
+            }
+        )
+    video = message.get("video") if isinstance(message.get("video"), dict) else None
+    if video:
+        _add(
+            {
+                "kind": "video",
+                "field": "video",
+                "file_id": video.get("file_id"),
+                "mime_type": video.get("mime_type"),
+                "size_bytes": video.get("file_size"),
+                "duration_seconds": video.get("duration"),
+                "width": video.get("width"),
+                "height": video.get("height"),
+            }
+        )
+    animation = message.get("animation") if isinstance(message.get("animation"), dict) else None
+    if animation:
+        _add(
+            {
+                "kind": "animation",
+                "field": "animation",
+                "file_id": animation.get("file_id"),
+                "mime_type": animation.get("mime_type"),
+                "size_bytes": animation.get("file_size"),
+                "duration_seconds": animation.get("duration"),
+                "width": animation.get("width"),
+                "height": animation.get("height"),
+            }
+        )
+    document = message.get("document") if isinstance(message.get("document"), dict) else None
+    if document:
+        _add(
+            {
+                "kind": "document",
+                "field": "document",
+                "file_id": document.get("file_id"),
+                "mime_type": document.get("mime_type"),
+                "size_bytes": document.get("file_size"),
+            }
+        )
+    sticker = message.get("sticker") if isinstance(message.get("sticker"), dict) else None
+    if sticker:
+        _add(
+            {
+                "kind": "sticker",
+                "field": "sticker",
+                "file_id": sticker.get("file_id"),
+                "mime_type": sticker.get("mime_type"),
+                "size_bytes": sticker.get("file_size"),
+                "width": sticker.get("width"),
+                "height": sticker.get("height"),
+            }
+        )
+    photo_items = message.get("photo") if isinstance(message.get("photo"), list) else []
+    if photo_items:
+        largest = None
+        for candidate in photo_items:
+            if not isinstance(candidate, dict):
+                continue
+            if largest is None:
+                largest = candidate
+                continue
+            area = (_to_int(candidate.get("width")) or 0) * (_to_int(candidate.get("height")) or 0)
+            largest_area = (_to_int(largest.get("width")) or 0) * (_to_int(largest.get("height")) or 0)
+            if area >= largest_area:
+                largest = candidate
+        if isinstance(largest, dict):
+            _add(
+                {
+                    "kind": "photo",
+                    "field": "photo",
+                    "file_id": largest.get("file_id"),
+                    "mime_type": "image/jpeg",
+                    "size_bytes": largest.get("file_size"),
+                    "width": largest.get("width"),
+                    "height": largest.get("height"),
+                }
+            )
+    return out
 
 
 def _telegram_audio_endpoint(*, as_voice: bool, file_path: str) -> tuple[str, str]:

@@ -182,6 +182,10 @@ class HandlePdcaSliceRequestAction(Action):
         invoke_state = dict(base_state)
         invoke_state.setdefault("task_id", task_id)
         invoke_state.setdefault("pdca_task_id", task_id)
+        invoke_state["_consume_task_inputs"] = lambda: _consume_buffered_inputs(
+            task_id=task_id,
+            correlation_id=correlation_id,
+        )
         task_state_for_id = invoke_state.get("task_state")
         if isinstance(task_state_for_id, dict):
             task_state_for_id.setdefault("task_id", task_id)
@@ -427,7 +431,12 @@ def _resolve_slice_text(
     if direct:
         return direct
     if isinstance(buffered_inputs, list):
-        merged = [str(item.get("text") or "").strip() for item in buffered_inputs if isinstance(item, dict)]
+        merged = [
+            str(item.get("steering_text") or item.get("text") or "").strip()
+            for item in buffered_inputs
+            if isinstance(item, dict)
+        ]
+        merged = [item for item in merged if item]
         if merged:
             return "\n".join(merged)
     metadata = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
@@ -498,15 +507,20 @@ def _consume_buffered_inputs(*, task_id: str, correlation_id: str | None) -> lis
     for idx in range(next_unconsumed, len(inputs)):
         record = inputs[idx]
         text = str(record.get("text") or "").strip()
-        if not text:
+        steering_text = str(record.get("steering_text") or text).strip()
+        attachments = record.get("attachments")
+        normalized_attachments = [dict(item) for item in attachments if isinstance(item, dict)] if isinstance(attachments, list) else []
+        if not steering_text and not normalized_attachments:
             continue
         consumed.append(
             {
                 "text": text,
+                "steering_text": steering_text,
                 "actor_id": str(record.get("actor_id") or "").strip() or None,
                 "message_id": str(record.get("message_id") or "").strip() or None,
                 "correlation_id": str(record.get("correlation_id") or "").strip() or None,
                 "channel": str(record.get("channel") or "").strip() or None,
+                "attachments": normalized_attachments,
                 "received_at": str(record.get("received_at") or "").strip() or None,
                 "consumed_at": now,
             }
@@ -517,8 +531,8 @@ def _consume_buffered_inputs(*, task_id: str, correlation_id: str | None) -> lis
     metadata["inputs"] = inputs
     metadata["next_unconsumed_index"] = len(inputs)
     metadata["input_dirty"] = False
-    metadata["last_user_message"] = str(consumed[-1].get("text") or "").strip()
-    metadata["pending_user_text"] = str(consumed[-1].get("text") or "").strip()
+    metadata["last_user_message"] = str(consumed[-1].get("steering_text") or consumed[-1].get("text") or "").strip()
+    metadata["pending_user_text"] = str(consumed[-1].get("steering_text") or consumed[-1].get("text") or "").strip()
     metadata["last_input_dequeued_at"] = now
     update_pdca_task_metadata(task_id=task_id, metadata=metadata)
     _LOG.emit(
@@ -550,12 +564,15 @@ def _inject_steering_facts(*, base_state: dict[str, Any], consumed_inputs: list[
         except ValueError:
             continue
     for index, item in enumerate(consumed_inputs, start=1):
-        text = str(item.get("text") or "").strip()
-        if not text:
+        text = str(item.get("steering_text") or item.get("text") or "").strip()
+        attachments = item.get("attachments")
+        normalized_attachments = [dict(att) for att in attachments if isinstance(att, dict)] if isinstance(attachments, list) else []
+        if not text and not normalized_attachments:
             continue
         fact_bucket[f"user_reply_{max_suffix + index}"] = {
             "source": "user_reply",
             "text": text,
+            "attachments": normalized_attachments,
             "actor_id": str(item.get("actor_id") or "").strip() or None,
             "message_id": str(item.get("message_id") or "").strip() or None,
             "received_at": str(item.get("received_at") or "").strip() or None,
