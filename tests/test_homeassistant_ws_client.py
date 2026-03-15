@@ -47,3 +47,25 @@ def test_handle_message_dispatches_subscription_event(monkeypatch) -> None:
 
     assert len(received) == 1
     assert received[0]["event_type"] == "state_changed"
+
+
+def test_resubscribe_failure_emits_health_event(monkeypatch) -> None:
+    monkeypatch.setattr("alphonse.integrations.homeassistant.ws_client.websocket", object())
+    client = HomeAssistantWsClient(_config())
+    events: list[dict] = []
+    client.set_health_callback(lambda payload: events.append(payload))
+    client._subscriptions["sub-1"] = _Subscription(
+        local_id="sub-1",
+        event_type="state_changed",
+        callback=lambda _event: None,
+        ha_subscription_id=None,
+    )
+    monkeypatch.setattr(
+        client,
+        "_register_subscription",
+        lambda _local_id: (_ for _ in ()).throw(RuntimeError("WS request timeout id=3")),
+    )
+
+    client._resubscribe_all()
+
+    assert any(event.get("status") == "resubscribe_failed" for event in events)

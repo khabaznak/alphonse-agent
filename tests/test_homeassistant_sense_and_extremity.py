@@ -19,6 +19,7 @@ from alphonse.integrations.homeassistant.config import HomeAssistantConfig
 class StubFacade:
     executed: list = None
     callback: object | None = None
+    health_callback: object | None = None
 
     def __post_init__(self) -> None:
         if self.executed is None:
@@ -28,6 +29,13 @@ class StubFacade:
         _ = spec
         self.callback = on_event
         return SubscriptionHandle(subscription_id="sub-1", unsubscribe=lambda: None)
+
+    @property
+    def adapter(self):
+        return self
+
+    def set_ws_health_callback(self, callback):
+        self.health_callback = callback
 
     def execute(self, action_request):
         self.executed.append(action_request)
@@ -93,6 +101,38 @@ def test_homeassistant_sense_emits_state_changed(monkeypatch) -> None:
     assert signal is not None
     assert signal.type == "homeassistant.state_changed"
     assert signal.payload["entity_id"] == "light.kitchen"
+
+
+def test_homeassistant_sense_emits_connection_status(monkeypatch) -> None:
+    facade = StubFacade()
+    monkeypatch.setattr(
+        "alphonse.agent.nervous_system.senses.homeassistant.load_homeassistant_config",
+        lambda: HomeAssistantConfig(base_url="http://ha.local:8123", token="token"),
+    )
+    monkeypatch.setattr(
+        "alphonse.agent.nervous_system.senses.homeassistant.get_domotics_facade",
+        lambda: facade,
+    )
+
+    bus = Bus()
+    sense = HomeAssistantSense()
+    sense.start(bus)
+
+    assert callable(facade.health_callback)
+    facade.health_callback(
+        {
+            "status": "resubscribe_failed",
+            "detail": "WS request timeout id=3",
+            "local_id": "sub-123",
+            "ws_url": "ws://ha.local:8123/api/websocket",
+        }
+    )
+
+    signal = bus.get(timeout=0.1)
+    assert signal is not None
+    assert signal.type == "homeassistant.connection_status"
+    assert signal.payload["status"] == "resubscribe_failed"
+    assert signal.payload["local_id"] == "sub-123"
 
 
 def test_homeassistant_extremity_executes_action(monkeypatch) -> None:

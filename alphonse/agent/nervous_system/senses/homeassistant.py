@@ -19,13 +19,19 @@ class HomeAssistantSense(Sense):
             key="homeassistant.state_changed",
             name="Home Assistant State Changed",
             description="Home Assistant state_changed normalized event",
-        )
+        ),
+        SignalSpec(
+            key="homeassistant.connection_status",
+            name="Home Assistant Connection Status",
+            description="Home Assistant websocket status and recovery events",
+        ),
     ]
 
     def __init__(self) -> None:
         self._bus: Bus | None = None
         self._running = False
         self._subscription: SubscriptionHandle | None = None
+        self._facade = None
 
     def start(self, bus: Bus) -> None:
         if self._running:
@@ -50,6 +56,8 @@ class HomeAssistantSense(Sense):
             return
 
         self._bus = bus
+        self._facade = facade
+        self._bind_ws_health_callback(facade)
         self._subscription = facade.subscribe(SubscribeSpec(event_type="state_changed"), self._on_event)
         self._running = True
         logger.info(
@@ -67,6 +75,8 @@ class HomeAssistantSense(Sense):
                 self._subscription.unsubscribe()
             except Exception:
                 pass
+        self._unbind_ws_health_callback()
+        self._facade = None
         self._subscription = None
         self._running = False
         logger.info("HomeAssistantSense stopped")
@@ -90,5 +100,36 @@ class HomeAssistantSense(Sense):
                 },
                 source="homeassistant",
                 correlation_id=event.entity_id,
+            )
+        )
+
+    def _bind_ws_health_callback(self, facade) -> None:
+        adapter = getattr(facade, "adapter", None)
+        set_health_cb = getattr(adapter, "set_ws_health_callback", None)
+        if callable(set_health_cb):
+            set_health_cb(self._on_health_event)
+
+    def _unbind_ws_health_callback(self) -> None:
+        facade = self._facade
+        adapter = getattr(facade, "adapter", None) if facade is not None else None
+        set_health_cb = getattr(adapter, "set_ws_health_callback", None)
+        if callable(set_health_cb):
+            set_health_cb(None)
+
+    def _on_health_event(self, payload: dict) -> None:
+        if not self._bus:
+            return
+        status = str(payload.get("status") or "").strip()
+        self._bus.emit(
+            Signal(
+                type="homeassistant.connection_status",
+                payload={
+                    "status": status,
+                    "detail": payload.get("detail"),
+                    "local_id": payload.get("local_id"),
+                    "ws_url": payload.get("ws_url"),
+                },
+                source="homeassistant",
+                correlation_id=f"homeassistant.ws.{status or 'unknown'}",
             )
         )

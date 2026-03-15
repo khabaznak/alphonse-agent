@@ -157,6 +157,9 @@ class HomeAssistantAdapter:
 
         return SubscriptionHandle(subscription_id=sub_id, unsubscribe=_unsubscribe)
 
+    def set_ws_health_callback(self, callback: Callable[[dict[str, Any]], None] | None) -> None:
+        self._ws.set_health_callback(callback)
+
     def stop(self) -> None:
         self._ws.stop()
 

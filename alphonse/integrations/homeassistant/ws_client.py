@@ -55,6 +55,7 @@ class HomeAssistantWsClient:
         self._pending_requests: dict[int, _PendingRequest] = {}
         self._subscriptions: dict[str, _Subscription] = {}
         self._subscriptions_by_ha_id: dict[int, str] = {}
+        self._health_callback: Callable[[dict[str, Any]], None] | None = None
 
     def connect(self) -> None:
         if self._thread and self._thread.is_alive():
@@ -79,6 +80,11 @@ class HomeAssistantWsClient:
             self._subscriptions_by_ha_id.clear()
             for subscription in self._subscriptions.values():
                 subscription.ha_subscription_id = None
+        self._emit_health_event(status="disconnected", detail="ws_stopped")
+
+    def set_health_callback(self, callback: Callable[[dict[str, Any]], None] | None) -> None:
+        with self._state_lock:
+            self._health_callback = callback
 
     def subscribe_events(
         self,
@@ -168,6 +174,7 @@ class HomeAssistantWsClient:
             logger.warning("HomeAssistant WS auth failed payload=%s", second)
             self._mark_disconnected()
             return False
+        self._emit_health_event(status="connected", detail="auth_ok")
         return True
 
     def _resubscribe_all(self) -> None:
@@ -180,6 +187,11 @@ class HomeAssistantWsClient:
             try:
                 self._register_subscription(local_id)
             except Exception as exc:
+                self._emit_health_event(
+                    status="resubscribe_failed",
+                    detail=str(exc),
+                    local_id=local_id,
+                )
                 logger.warning("HomeAssistant WS resubscribe failed local_id=%s error=%s", local_id, exc)
 
     def _register_subscription(self, local_id: str) -> None:
@@ -277,6 +289,7 @@ class HomeAssistantWsClient:
             self._subscriptions_by_ha_id.clear()
             for sub in self._subscriptions.values():
                 sub.ha_subscription_id = None
+        self._emit_health_event(status="disconnected", detail="ws_disconnected")
 
     def _close_ws(self) -> None:
         with self._state_lock:
@@ -288,6 +301,28 @@ class HomeAssistantWsClient:
             ws.close()
         except Exception:
             return
+
+    def _emit_health_event(
+        self,
+        *,
+        status: str,
+        detail: str | None = None,
+        local_id: str | None = None,
+    ) -> None:
+        with self._state_lock:
+            callback = self._health_callback
+        if callback is None:
+            return
+        payload = {
+            "status": str(status),
+            "detail": str(detail) if detail is not None else None,
+            "local_id": str(local_id) if local_id is not None else None,
+            "ws_url": self._ws_url,
+        }
+        try:
+            callback(payload)
+        except Exception as exc:
+            logger.warning("HomeAssistant WS health callback failed error=%s", exc)
 
 
 def _build_ws_url(base_url: str) -> str:
