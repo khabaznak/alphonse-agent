@@ -199,6 +199,33 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_preferences_principal_key
   ON preferences (principal_id, key);
 
 ----------------------------------------------------------------------
+-- 2.6.2.0) VOICE PROFILES
+----------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS voice_profiles (
+  profile_id          TEXT PRIMARY KEY,
+  name                TEXT NOT NULL COLLATE NOCASE UNIQUE,
+  source_sample_path  TEXT NOT NULL,
+  backend             TEXT NOT NULL DEFAULT 'qwen',
+  speaker_hint        TEXT,
+  instruct            TEXT,
+  is_default          INTEGER NOT NULL DEFAULT 0,
+  status              TEXT NOT NULL DEFAULT 'pending',
+  last_error          TEXT,
+  created_at          TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at          TEXT NOT NULL DEFAULT (datetime('now')),
+  CHECK (is_default IN (0,1)),
+  CHECK (status IN ('pending', 'ready', 'error')),
+  CHECK (backend IN ('qwen'))
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_voice_profiles_updated
+  ON voice_profiles (updated_at DESC);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_voice_profiles_single_default
+  ON voice_profiles (is_default)
+  WHERE is_default = 1;
+
+----------------------------------------------------------------------
 -- 2.6.2.1) PROMPT TEMPLATES
 ----------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS prompt_templates (

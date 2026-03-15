@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 from datetime import datetime, timezone
+import inspect
 import os
 from pathlib import Path
 import shutil
@@ -10,14 +11,30 @@ import platform
 import subprocess
 import threading
 from typing import Any
+from dataclasses import dataclass
 
 from alphonse.agent.nervous_system.sandbox_dirs import (
     PRIMARY_WORKDIR_ALIASES,
     default_sandbox_root,
     get_sandbox_alias,
 )
+from alphonse.agent.nervous_system.voice_profiles import (
+    get_default_voice_profile,
+    resolve_voice_profile,
+)
 
 logger = get_component_logger("tools.local_audio_output")
+
+
+@dataclass
+class _VoiceSelection:
+    requested_voice: str
+    speaker: str
+    instruct: str | None = None
+    sample_path: str | None = None
+    profile_id: str | None = None
+    profile_name: str | None = None
+    is_profile: bool = False
 
 
 class _TTSBackend:
@@ -343,15 +360,16 @@ class _QwenBackend(_TTSBackend):
             )
 
         language = str(os.getenv("ALPHONSE_QWEN_TTS_LANGUAGE") or "Auto").strip() or "Auto"
-        speaker = _resolve_qwen_speaker(voice)
-        instruct = str(os.getenv("ALPHONSE_QWEN_TTS_INSTRUCT") or "").strip() or None
+        selection = _resolve_voice_selection(voice)
 
         try:
-            wavs, sample_rate = model.generate_custom_voice(
+            wavs, sample_rate = _generate_qwen_custom_voice(
+                model=model,
                 text=spoken_text,
                 language=language,
-                speaker=speaker,
-                instruct=instruct,
+                speaker=selection.speaker,
+                instruct=selection.instruct,
+                sample_path=selection.sample_path,
             )
         except Exception as exc:
             return _failed(
@@ -387,6 +405,9 @@ class _QwenBackend(_TTSBackend):
         payload = dict(conversion.get("output") or {})
         payload["retention"] = cleanup
         payload["backend"] = "qwen"
+        if selection.is_profile:
+            payload["voice_profile_id"] = selection.profile_id
+            payload["voice_profile_name"] = selection.profile_name
         return _ok(payload, tool="local_audio_output_render")
 
     def _ensure_deps(self) -> str | None:
@@ -442,7 +463,21 @@ class LocalAudioOutputSpeakTool:
         volume: float | None = None,
     ) -> dict[str, Any]:
         backend = _resolve_tts_backend()
-        return backend.speak(text=text, voice=voice, blocking=blocking, volume=volume)
+        result = backend.speak(text=text, voice=voice, blocking=blocking, volume=volume)
+        if not isinstance(backend, _QwenBackend):
+            return result
+        if not isinstance(result.get("exception"), dict):
+            return result
+        fallback_voice = _resolve_say_fallback_voice(requested_voice=voice)
+        code = str((result.get("exception") or {}).get("code") or "unknown")
+        logger.warning(
+            "local_audio_output_qwen_fallback tool=speak code=%s fallback_backend=say requested_voice=%s fallback_voice=%s",
+            code,
+            str(voice or "default"),
+            fallback_voice,
+        )
+        fallback = _SayBackend().speak(text=text, voice=fallback_voice, blocking=blocking, volume=volume)
+        return _with_fallback_metadata(fallback, code=code)
 
 
 class LocalAudioOutputRenderTool:
@@ -458,13 +493,33 @@ class LocalAudioOutputRenderTool:
         format: str = "m4a",
     ) -> dict[str, Any]:
         backend = _resolve_tts_backend()
-        return backend.render(
+        result = backend.render(
             text=text,
             voice=voice,
             output_dir=output_dir,
             filename_prefix=filename_prefix,
             format=format,
         )
+        if not isinstance(backend, _QwenBackend):
+            return result
+        if not isinstance(result.get("exception"), dict):
+            return result
+        fallback_voice = _resolve_say_fallback_voice(requested_voice=voice)
+        code = str((result.get("exception") or {}).get("code") or "unknown")
+        logger.warning(
+            "local_audio_output_qwen_fallback tool=render code=%s fallback_backend=say requested_voice=%s fallback_voice=%s",
+            code,
+            str(voice or "default"),
+            fallback_voice,
+        )
+        fallback = _SayBackend().render(
+            text=text,
+            voice=fallback_voice,
+            output_dir=output_dir,
+            filename_prefix=filename_prefix,
+            format=format,
+        )
+        return _with_fallback_metadata(fallback, code=code)
 
 
 def _resolve_tts_backend() -> _TTSBackend:
@@ -474,11 +529,124 @@ def _resolve_tts_backend() -> _TTSBackend:
     return _SayBackend()
 
 
+def _resolve_voice_selection(voice: str) -> _VoiceSelection:
+    requested = str(voice or "default").strip() or "default"
+    if requested.lower() != "default":
+        profile = resolve_voice_profile(requested)
+        if isinstance(profile, dict):
+            return _selection_from_profile(profile, requested_voice=requested)
+        return _VoiceSelection(
+            requested_voice=requested,
+            speaker=requested,
+            instruct=str(os.getenv("ALPHONSE_QWEN_TTS_INSTRUCT") or "").strip() or None,
+        )
+    profile = get_default_voice_profile()
+    if isinstance(profile, dict):
+        return _selection_from_profile(profile, requested_voice="default")
+    return _VoiceSelection(
+        requested_voice="default",
+        speaker=_resolve_qwen_speaker("default"),
+        instruct=str(os.getenv("ALPHONSE_QWEN_TTS_INSTRUCT") or "").strip() or None,
+    )
+
+
+def _selection_from_profile(profile: dict[str, Any], *, requested_voice: str) -> _VoiceSelection:
+    speaker_hint = str(profile.get("speaker_hint") or "").strip()
+    profile_name = str(profile.get("name") or "").strip()
+    return _VoiceSelection(
+        requested_voice=requested_voice,
+        speaker=speaker_hint or profile_name or _resolve_qwen_speaker("default"),
+        instruct=str(profile.get("instruct") or "").strip() or None,
+        sample_path=str(profile.get("source_sample_path") or "").strip() or None,
+        profile_id=str(profile.get("profile_id") or "").strip() or None,
+        profile_name=profile_name or None,
+        is_profile=True,
+    )
+
+
 def _resolve_qwen_speaker(voice: str) -> str:
     requested = str(voice or "").strip()
     if requested and requested.lower() != "default":
         return requested
     return str(os.getenv("ALPHONSE_QWEN_TTS_SPEAKER") or "Ryan").strip() or "Ryan"
+
+
+def _resolve_say_fallback_voice(*, requested_voice: str) -> str:
+    requested = str(requested_voice or "default").strip() or "default"
+    if requested.lower() != "default":
+        if resolve_voice_profile(requested) is None:
+            return requested
+    return str(os.getenv("ALPHONSE_SAY_VOICE") or "default").strip() or "default"
+
+
+def _with_fallback_metadata(result: dict[str, Any], *, code: str) -> dict[str, Any]:
+    if not isinstance(result, dict):
+        return result
+    output = result.get("output")
+    if isinstance(output, dict):
+        payload = dict(output)
+        payload["fallback_from"] = "qwen"
+        payload["fallback_reason_code"] = code
+        result["output"] = payload
+    return result
+
+
+def _generate_qwen_custom_voice(
+    *,
+    model: Any,
+    text: str,
+    language: str,
+    speaker: str,
+    instruct: str | None,
+    sample_path: str | None,
+) -> tuple[Any, Any]:
+    kwargs: dict[str, Any] = {
+        "text": text,
+        "language": language,
+        "speaker": speaker,
+        "instruct": instruct,
+    }
+    sample = str(sample_path or "").strip()
+    if sample:
+        sample_file = Path(sample).expanduser().resolve()
+        if sample_file.exists() and sample_file.is_file():
+            target_key = _resolve_qwen_sample_argument(model)
+            if target_key:
+                kwargs[target_key] = str(sample_file)
+            else:
+                logger.info(
+                    "local_audio_output_qwen sample_ignored reason=unsupported_param profile_sample_path=%s",
+                    str(sample_file),
+                )
+    return model.generate_custom_voice(**kwargs)
+
+
+def _resolve_qwen_sample_argument(model: Any) -> str | None:
+    fn = getattr(model, "generate_custom_voice", None)
+    if fn is None:
+        return None
+    try:
+        sig = inspect.signature(fn)
+    except Exception:
+        return None
+    names = {name for name in sig.parameters}
+    candidates = (
+        "reference_audio_path",
+        "reference_audio",
+        "prompt_audio_path",
+        "voice_sample_path",
+        "sample_path",
+        "audio_prompt_path",
+    )
+    for key in candidates:
+        if key in names:
+            return key
+    accepts_kwargs = any(
+        parameter.kind == inspect.Parameter.VAR_KEYWORD for parameter in sig.parameters.values()
+    )
+    if accepts_kwargs:
+        return "reference_audio_path"
+    return None
 
 
 def _first_wav(wavs: Any) -> Any | None:

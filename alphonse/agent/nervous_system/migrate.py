@@ -27,6 +27,7 @@ def apply_schema(db_path: Path) -> None:
         _ensure_principals_constraints(conn)
         _ensure_users_table(conn)
         _ensure_services_registry(conn)
+        _ensure_voice_profiles_table(conn)
         _ensure_prompt_template_columns(conn)
         _ensure_prompt_artifacts_table(conn)
         _ensure_sandbox_directories(conn)
@@ -296,6 +297,38 @@ def _ensure_prompt_template_columns(conn: sqlite3.Connection) -> None:
             conn.execute(f"ALTER TABLE prompt_templates ADD COLUMN {name} {definition}")
         except sqlite3.OperationalError:
             continue
+
+
+def _ensure_voice_profiles_table(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS voice_profiles (
+          profile_id          TEXT PRIMARY KEY,
+          name                TEXT NOT NULL COLLATE NOCASE UNIQUE,
+          source_sample_path  TEXT NOT NULL,
+          backend             TEXT NOT NULL DEFAULT 'qwen',
+          speaker_hint        TEXT,
+          instruct            TEXT,
+          is_default          INTEGER NOT NULL DEFAULT 0,
+          status              TEXT NOT NULL DEFAULT 'pending',
+          last_error          TEXT,
+          created_at          TEXT NOT NULL DEFAULT (datetime('now')),
+          updated_at          TEXT NOT NULL DEFAULT (datetime('now')),
+          CHECK (is_default IN (0,1)),
+          CHECK (status IN ('pending', 'ready', 'error')),
+          CHECK (backend IN ('qwen'))
+        ) STRICT
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_voice_profiles_updated ON voice_profiles (updated_at DESC)"
+    )
+    conn.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_voice_profiles_single_default
+        ON voice_profiles (is_default) WHERE is_default = 1
+        """
+    )
 
 
 def _ensure_prompt_artifacts_table(conn: sqlite3.Connection) -> None:

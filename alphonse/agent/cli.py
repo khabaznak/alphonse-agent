@@ -99,6 +99,18 @@ from alphonse.agent.nervous_system.sandbox_dirs import (
     list_sandbox_aliases,
     remove_sandbox_alias,
 )
+from alphonse.agent.nervous_system.voice_profiles import (
+    create_voice_profile,
+    delete_voice_profile,
+    get_default_voice_profile,
+    list_voice_profiles,
+    purge_voice_profile_sample,
+    resolve_voice_profile,
+    set_default_voice_profile,
+    set_voice_profile_status,
+    store_voice_profile_sample,
+)
+from alphonse.agent.tools.local_audio_output import LocalAudioOutputRenderTool
 from alphonse.agent.core.settings_store import init_db as init_settings_db
 
 
@@ -271,6 +283,39 @@ def build_parser() -> argparse.ArgumentParser:
     lan_token.add_argument("--device-name", default=None, help="Optional device name")
 
     repl_parser = sub.add_parser("repl", help="Start interactive CLI session")
+
+    voice_parser = sub.add_parser("voice", help="Voice profile enrollment and defaults")
+    voice_sub = voice_parser.add_subparsers(dest="voice_command", required=True)
+    voice_enroll = voice_sub.add_parser("enroll", help="Enroll a reusable voice profile")
+    voice_enroll.add_argument("--name", required=True, help="Unique profile name")
+    voice_enroll.add_argument("--sample", required=True, help="Path to source voice sample file")
+    voice_enroll.add_argument("--speaker", default=None, help="Optional Qwen speaker hint")
+    voice_enroll.add_argument("--instruct", default=None, help="Optional Qwen style instruction")
+    voice_enroll.add_argument(
+        "--set-default",
+        action="store_true",
+        help="Set this profile as the household default after successful validation",
+    )
+
+    voice_list = voice_sub.add_parser("list", help="List enrolled voice profiles")
+    voice_list.add_argument("--limit", type=int, default=100)
+
+    voice_set_default = voice_sub.add_parser("set-default", help="Set default voice profile")
+    voice_set_default.add_argument("--profile", required=True, help="Profile id or name")
+
+    voice_sub.add_parser("show-default", help="Show default voice profile")
+
+    voice_delete = voice_sub.add_parser("delete", help="Delete a voice profile")
+    voice_delete.add_argument("--profile", required=True, help="Profile id or name")
+    voice_delete.add_argument(
+        "--purge-sample",
+        action="store_true",
+        help="Delete retained source sample file for the profile",
+    )
+
+    voice_test = voice_sub.add_parser("test", help="Synthesize test audio using a profile")
+    voice_test.add_argument("--profile", required=True, help="Profile id or name")
+    voice_test.add_argument("--text", required=True, help="Text to synthesize")
 
     abilities_parser = sub.add_parser("abilities", help="Abilities CRUD")
     abilities_sub = abilities_parser.add_subparsers(
@@ -666,6 +711,9 @@ def _dispatch_command(
         return
     if args.command == "users":
         _command_users(args)
+        return
+    if args.command == "voice":
+        _command_voice(args)
         return
     if args.command == "locations":
         _command_locations(args)
@@ -1478,6 +1526,148 @@ def _command_users(args: argparse.Namespace) -> None:
                 f"{admin} {active} onboarded={row.get('onboarded_at')}"
             )
         return
+
+
+def _command_voice(args: argparse.Namespace) -> None:
+    if args.voice_command == "list":
+        rows = list_voice_profiles(limit=args.limit)
+        if not rows:
+            print("No voice profiles found.")
+            return
+        for row in rows:
+            marker = "default" if bool(row.get("is_default")) else "profile"
+            print(
+                f"- {row.get('profile_id')} name={row.get('name')} "
+                f"status={row.get('status')} backend={row.get('backend')} {marker}"
+            )
+        return
+
+    if args.voice_command == "show-default":
+        item = get_default_voice_profile()
+        if not item:
+            print("No default voice profile configured.")
+            return
+        print(json.dumps(item, indent=2, ensure_ascii=True))
+        return
+
+    if args.voice_command == "set-default":
+        item = resolve_voice_profile(args.profile)
+        if not item:
+            print("Voice profile not found.")
+            return
+        if str(item.get("status") or "") != "ready":
+            print("Cannot set default: profile is not ready.")
+            return
+        if set_default_voice_profile(str(item.get("profile_id") or "")):
+            print(f"Default voice profile set: {item.get('name')} ({item.get('profile_id')})")
+        else:
+            print("Failed to set default voice profile.")
+        return
+
+    if args.voice_command == "enroll":
+        _command_voice_enroll(args)
+        return
+
+    if args.voice_command == "delete":
+        item = resolve_voice_profile(args.profile)
+        if not item:
+            print("Voice profile not found.")
+            return
+        deleted = delete_voice_profile(str(item.get("profile_id") or ""))
+        if not deleted:
+            print("Voice profile not found.")
+            return
+        purged = False
+        if bool(args.purge_sample):
+            purged = purge_voice_profile_sample(str(item.get("source_sample_path") or ""))
+        print(
+            f"Deleted voice profile: {item.get('name')} ({item.get('profile_id')}) "
+            f"purged_sample={str(purged).lower()}"
+        )
+        return
+
+    if args.voice_command == "test":
+        item = resolve_voice_profile(args.profile)
+        if not item:
+            print("Voice profile not found.")
+            return
+        tool = LocalAudioOutputRenderTool()
+        result = tool.execute(
+            text=str(args.text or "").strip(),
+            voice=str(item.get("name") or "default"),
+            format="m4a",
+        )
+        print(json.dumps(result, indent=2, ensure_ascii=True))
+        return
+
+
+def _command_voice_enroll(args: argparse.Namespace) -> None:
+    profile_id = str(uuid.uuid4())
+    try:
+        sample_path = store_voice_profile_sample(profile_id=profile_id, sample_path=args.sample)
+    except FileNotFoundError as exc:
+        print(str(exc))
+        return
+    except Exception as exc:
+        print(f"failed_to_store_sample:{exc}")
+        return
+
+    try:
+        create_voice_profile(
+            {
+                "profile_id": profile_id,
+                "name": str(args.name or "").strip(),
+                "source_sample_path": sample_path,
+                "backend": "qwen",
+                "speaker_hint": args.speaker,
+                "instruct": args.instruct,
+                "is_default": False,
+                "status": "pending",
+            }
+        )
+    except Exception as exc:
+        purge_voice_profile_sample(sample_path)
+        print(f"failed_to_create_voice_profile:{exc}")
+        return
+
+    result = _validate_enrolled_voice_profile(str(args.name or "").strip())
+    exc = result.get("exception") if isinstance(result, dict) else None
+    if isinstance(exc, dict):
+        message = str(exc.get("code") or "validation_failed")
+        details = str(exc.get("message") or "").strip()
+        if details:
+            message = f"{message}: {details}"
+        set_voice_profile_status(profile_id, status="error", last_error=message)
+        print(
+            f"Voice profile enrolled with errors: {args.name} ({profile_id}) "
+            f"status=error reason={message}"
+        )
+        return
+
+    set_voice_profile_status(profile_id, status="ready", last_error=None)
+    if bool(args.set_default):
+        set_default_voice_profile(profile_id)
+    print(
+        f"Voice profile enrolled: {args.name} ({profile_id}) "
+        f"status=ready default={str(bool(args.set_default)).lower()}"
+    )
+
+
+def _validate_enrolled_voice_profile(profile_name: str) -> dict[str, object]:
+    previous_backend = str(os.getenv("ALPHONSE_TTS_BACKEND") or "").strip()
+    os.environ["ALPHONSE_TTS_BACKEND"] = "qwen"
+    tool = LocalAudioOutputRenderTool()
+    try:
+        return tool.execute(
+            text="Hola Alex, soy Alphonse y estoy listo para ayudarte.",
+            voice=profile_name,
+            format="m4a",
+        )
+    finally:
+        if previous_backend:
+            os.environ["ALPHONSE_TTS_BACKEND"] = previous_backend
+        else:
+            os.environ.pop("ALPHONSE_TTS_BACKEND", None)
 
 
 def _command_locations(args: argparse.Namespace) -> None:

@@ -11,12 +11,23 @@ from alphonse.agent.tools.local_audio_output import LocalAudioOutputSpeakTool
 def test_qwen_backend_render_reports_missing_dependencies(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("ALPHONSE_TTS_BACKEND", "qwen")
     monkeypatch.setattr(lao._QwenBackend, "_ensure_deps", lambda self: "deps missing")
+    monkeypatch.setattr(
+        lao._SayBackend,
+        "render",
+        lambda self, *, text, voice, output_dir, filename_prefix, format: lao._ok(
+            {"file_path": str(tmp_path / "fallback.m4a"), "format": "m4a", "mime_type": "audio/mp4", "backend": "say"},
+            tool="local_audio_output_render",
+        ),
+    )
 
     tool = LocalAudioOutputRenderTool()
     result = tool.execute(text="Hola Alex", output_dir=str(tmp_path), format="m4a")
 
-    assert result["exception"] is not None
-    assert str((result.get("exception") or {}).get("code") or "") == "qwen_backend_unavailable"
+    assert result["exception"] is None
+    payload = result.get("output") or {}
+    assert payload.get("backend") == "say"
+    assert payload.get("fallback_from") == "qwen"
+    assert payload.get("fallback_reason_code") == "qwen_backend_unavailable"
 
 
 def test_qwen_backend_speak_uses_player_on_non_macos(monkeypatch, tmp_path: Path) -> None:
@@ -50,4 +61,3 @@ def test_qwen_backend_speak_uses_player_on_non_macos(monkeypatch, tmp_path: Path
     assert payload.get("backend") == "qwen"
     assert payload.get("player") == "fake-player"
     assert calls and calls[0][0] == "fake-player"
-
