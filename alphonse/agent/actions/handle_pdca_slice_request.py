@@ -325,7 +325,16 @@ def _base_state(
     correlation_id: str | None,
 ) -> dict[str, Any]:
     if isinstance(checkpoint, dict) and isinstance(checkpoint.get("state"), dict):
-        return dict(checkpoint.get("state") or {})
+        out = dict(checkpoint.get("state") or {})
+        _ensure_state_correlation_id(
+            base=out,
+            task=task,
+            seeded=(task.get("metadata") or {}).get("state")
+            if isinstance(task.get("metadata"), dict)
+            else {},
+            incoming_correlation_id=correlation_id,
+        )
+        return out
     metadata = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
     seeded = metadata.get("state") if isinstance(metadata.get("state"), dict) else {}
     conversation_key = str(task.get("conversation_key") or "").strip()
@@ -336,6 +345,12 @@ def _base_state(
             preserve_pending_interaction=_should_preserve_pending_interaction(task=task),
         )
         _overlay_ingress_context(base=sanitized, seeded=seeded)
+        _ensure_state_correlation_id(
+            base=sanitized,
+            task=task,
+            seeded=seeded,
+            incoming_correlation_id=correlation_id,
+        )
         if removed_keys:
             _LOG.emit(
                 event="pdca.slice.base_state.sanitized",
@@ -351,7 +366,12 @@ def _base_state(
     out = dict(seeded)
     out.setdefault("conversation_key", conversation_key)
     out.setdefault("chat_id", conversation_key)
-    out.setdefault("correlation_id", f"pdca:{task.get('task_id')}")
+    _ensure_state_correlation_id(
+        base=out,
+        task=task,
+        seeded=seeded,
+        incoming_correlation_id=correlation_id,
+    )
     return out
 
 
@@ -607,6 +627,7 @@ def _overlay_ingress_context(*, base: dict[str, Any], seeded: dict[str, Any]) ->
         "tone",
         "address_style",
         "timezone",
+        "correlation_id",
     ):
         if str(base.get(key) or "").strip():
             continue
@@ -617,6 +638,34 @@ def _overlay_ingress_context(*, base: dict[str, Any], seeded: dict[str, Any]) ->
         if not rendered:
             continue
         base[key] = value
+
+
+def _ensure_state_correlation_id(
+    *,
+    base: dict[str, Any],
+    task: dict[str, Any],
+    seeded: dict[str, Any] | None,
+    incoming_correlation_id: str | None,
+) -> None:
+    current = str(base.get("correlation_id") or "").strip()
+    if current:
+        return
+    incoming = str(incoming_correlation_id or "").strip()
+    if incoming:
+        base["correlation_id"] = incoming
+        return
+    seeded_map = seeded if isinstance(seeded, dict) else {}
+    seeded_corr = str(seeded_map.get("correlation_id") or "").strip()
+    if seeded_corr:
+        base["correlation_id"] = seeded_corr
+        return
+    metadata = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
+    enqueued_corr = str(metadata.get("last_enqueue_correlation_id") or "").strip()
+    if enqueued_corr:
+        base["correlation_id"] = enqueued_corr
+        return
+    task_id = str(task.get("task_id") or "").strip()
+    base["correlation_id"] = f"pdca:{task_id}" if task_id else "pdca:unknown"
 
 
 def _merge_state(*, base: dict[str, Any], cognition_state: dict[str, Any], reply_text: str) -> dict[str, Any]:

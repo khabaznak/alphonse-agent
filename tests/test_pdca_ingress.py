@@ -278,3 +278,26 @@ def test_enqueue_pdca_slice_accepts_attachment_only_input(tmp_path: Path, monkey
     assert len(inputs) == 1
     assert isinstance(inputs[0].get("attachments"), list)
     assert str(inputs[0].get("steering_text") or "").startswith("[attachments:")
+
+
+def test_enqueue_pdca_slice_persists_correlation_in_metadata_state(tmp_path: Path, monkeypatch) -> None:
+    db_path = tmp_path / "nerve-db"
+    monkeypatch.setenv("NERVE_DB_PATH", str(db_path))
+    apply_schema(db_path)
+
+    task_id = enqueue_pdca_slice(
+        context={},
+        incoming=_incoming(message_id="m-corr-state"),
+        state={"timezone": "UTC"},
+        session_key="telegram:8553589429",
+        session_user_id="u-1",
+        day_session={"session_id": "u-1|2026-03-12", "user_id": "u-1", "date": "2026-03-12"},
+        payload={"text": "create task with correlation"},
+        correlation_id="cid-corr-state",
+    )
+
+    task = get_pdca_task(task_id)
+    assert isinstance(task, dict)
+    metadata = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
+    state = metadata.get("state") if isinstance(metadata.get("state"), dict) else {}
+    assert str(state.get("correlation_id") or "") == "cid-corr-state"

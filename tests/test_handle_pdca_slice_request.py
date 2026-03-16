@@ -1000,3 +1000,34 @@ def test_resolve_incoming_context_includes_message_id() -> None:
     incoming = hpsr._resolve_incoming_context(task=task, correlation_id="cid-msgid-1")
     assert incoming is not None
     assert incoming.message_id == "321"
+
+
+def test_base_state_hydrates_correlation_id_for_loaded_session_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db_path = tmp_path / "nerve-db"
+    monkeypatch.setenv("NERVE_DB_PATH", str(db_path))
+    apply_schema(db_path)
+
+    task_id = upsert_pdca_task(
+        {
+            "owner_id": "owner-1",
+            "conversation_key": "telegram:8553589429",
+            "status": "queued",
+            "metadata": {
+                "last_enqueue_correlation_id": "cid-last-enqueue",
+                "state": {
+                    "conversation_key": "telegram:8553589429",
+                    "channel_type": "telegram",
+                    "channel_target": "8553589429",
+                },
+            },
+        }
+    )
+    task = get_pdca_task(task_id)
+    assert isinstance(task, dict)
+    save_state("telegram:8553589429", {"conversation_key": "telegram:8553589429"})
+
+    base = hpsr._base_state(task=task, checkpoint=None, correlation_id="cid-signal-123")
+    assert str(base.get("correlation_id") or "") == "cid-signal-123"

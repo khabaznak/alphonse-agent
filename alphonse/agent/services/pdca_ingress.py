@@ -347,6 +347,11 @@ def enqueue_pdca_slice(
         metadata["last_user_message_id"] = incoming.message_id
         metadata["last_enqueue_correlation_id"] = correlation_id
         metadata["last_enqueued_at"] = now
+        state_snapshot = metadata.get("state") if isinstance(metadata.get("state"), dict) else {}
+        if state_snapshot:
+            state_snapshot = dict(state_snapshot)
+            state_snapshot["correlation_id"] = str(correlation_id or "").strip() or state_snapshot.get("correlation_id")
+            metadata["state"] = state_snapshot
         status = str(existing.get("status") or "").strip().lower()
         if status == "running":
             metadata["input_dirty"] = True
@@ -415,6 +420,7 @@ def enqueue_pdca_slice(
         "state": {
             "conversation_key": session_key,
             "chat_id": session_key,
+            "correlation_id": str(correlation_id or "").strip() or None,
             "channel_type": incoming.channel_type,
             "channel_target": incoming.address,
             "actor_person_id": incoming.person_id,
