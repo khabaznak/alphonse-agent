@@ -4,9 +4,7 @@ import json
 from typing import Any, Callable
 
 from alphonse.agent.cognition.tool_schemas import llm_tool_schemas
-from alphonse.agent.cortex.llm_output.json_parse import parse_json_object
 from alphonse.agent.cortex.task_mode.prompt_templates import NEXT_STEP_SYSTEM_PROMPT
-from alphonse.agent.cortex.task_mode.prompt_templates import NEXT_STEP_REPAIR_USER_TEMPLATE
 from alphonse.agent.cortex.task_mode.prompt_templates import NEXT_STEP_USER_TEMPLATE
 from alphonse.agent.cortex.task_mode.prompt_templates import render_pdca_prompt
 from alphonse.agent.session.day_state import render_recent_conversation_block
@@ -53,34 +51,7 @@ def build_next_step_node_impl(
         user_prompt=user_prompt,
         tool_registry=tool_registry,
     )
-
-    candidate_dict = _extract_candidate_dict(raw_candidate)
-    validation_error = _validate_candidate(candidate_dict=candidate_dict, tool_registry=tool_registry)
-    if isinstance(validation_error, dict) and bool(validation_error.get("retryable_repair")):
-        repair_prompt = _build_repair_prompt(
-            original_user_prompt=user_prompt,
-            validation_error=validation_error,
-        )
-        repaired_raw, repaired_source = _request_raw_candidate(
-            llm_client=llm_client,
-            system_prompt=NEXT_STEP_SYSTEM_PROMPT,
-            user_prompt=repair_prompt,
-            tool_registry=tool_registry,
-        )
-        repaired_candidate = _extract_candidate_dict(repaired_raw)
-        repaired_validation_error = _validate_candidate(
-            candidate_dict=repaired_candidate,
-            tool_registry=tool_registry,
-        )
-        if repaired_validation_error is None:
-            raw_candidate = repaired_raw
-            candidate_dict = repaired_candidate
-            source = f"{repaired_source}.repair"
-        else:
-            task_state["planner_error_last"] = dict(repaired_validation_error)
-    else:
-        task_state.pop("planner_error_last", None)
-    task_state["pending_plan_raw"] = {"tool_call": candidate_dict} if isinstance(candidate_dict, dict) else raw_candidate
+    task_state["pending_plan_raw"] = raw_candidate
 
     step_id = next_step_id(task_state)
     step_entry = {
@@ -134,37 +105,6 @@ def route_after_next_step_impl(
         correlation_id(state),
     )
     return "execute_step_node"
-
-
-def _extract_candidate_dict(raw: Any) -> dict[str, Any] | None:
-    if isinstance(raw, dict):
-        tool_call = raw.get("tool_call")
-        if isinstance(tool_call, dict):
-            return _extract_candidate_dict(tool_call)
-        tool_calls = raw.get("tool_calls")
-        if isinstance(tool_calls, list):
-            for call in tool_calls:
-                if not isinstance(call, dict):
-                    continue
-                name = str(call.get("name") or "").strip()
-                if not name:
-                    continue
-                args = call.get("arguments") if isinstance(call.get("arguments"), dict) else {}
-                return {"kind": "call_tool", "tool_name": name, "args": dict(args)}
-        kind = str(raw.get("kind") or "").strip()
-        tool_name = str(raw.get("tool_name") or "").strip()
-        args = raw.get("args")
-        if kind == "call_tool" and tool_name and isinstance(args, dict):
-            return {"kind": "call_tool", "tool_name": tool_name, "args": dict(args)}
-        content = raw.get("content")
-        if isinstance(content, str) and content.strip():
-            parsed = parse_json_object(content)
-            return _extract_candidate_dict(parsed)
-        return None
-    if isinstance(raw, str) and raw.strip():
-        parsed = parse_json_object(raw)
-        return _extract_candidate_dict(parsed)
-    return None
 
 
 def _request_raw_candidate(
@@ -262,59 +202,6 @@ def _first_non_empty(*values: Any) -> str | None:
         if rendered:
             return rendered
     return None
-
-
-def _build_repair_prompt(*, original_user_prompt: str, validation_error: dict[str, Any]) -> str:
-    errors = validation_error.get("errors")
-    lines: list[str] = []
-    if isinstance(errors, list):
-        for item in errors:
-            text = str(item or "").strip()
-            if text:
-                lines.append(f"- {text}")
-    if not lines:
-        lines.append("- Candidate tool call failed validation.")
-    return render_pdca_prompt(
-        NEXT_STEP_REPAIR_USER_TEMPLATE,
-        {
-            "ORIGINAL_USER_PROMPT": str(original_user_prompt or "").strip(),
-            "PARSE_ERROR_TYPE": str(validation_error.get("code") or "planner_candidate_invalid"),
-            "VALIDATION_ERRORS_LINES": "\n".join(lines),
-        },
-    )
-
-
-def _validate_candidate(*, candidate_dict: dict[str, Any] | None, tool_registry: Any) -> dict[str, Any] | None:
-    if not isinstance(candidate_dict, dict):
-        return None
-    tool_name = str(candidate_dict.get("tool_name") or "").strip()
-    args = candidate_dict.get("args") if isinstance(candidate_dict.get("args"), dict) else {}
-    _ = tool_registry
-    errors: list[str] = []
-    if not tool_name:
-        return None
-    if tool_name in {"send_message", "send_voice_note"}:
-        target = str(args.get("To") or "").strip()
-        if _is_placeholder_target(target):
-            errors.append("Message recipient 'To' must be a concrete channel target; placeholders are not allowed.")
-    if errors:
-        return {"code": "planner_candidate_invalid", "errors": errors, "retryable_repair": True}
-    return None
-
-
-def _is_placeholder_target(value: str) -> bool:
-    rendered = str(value or "").strip().lower()
-    if not rendered:
-        return True
-    return rendered in {
-        "current_channel_target",
-        "current_target",
-        "channel_target",
-        "current_channel",
-        "target",
-        "recipient",
-        "current_user",
-    }
 
 
 def _latest_failure_diagnostics(task_state: dict[str, Any]) -> dict[str, Any]:

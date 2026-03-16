@@ -27,10 +27,10 @@ from alphonse.agent.tools.scheduler_tool import SchedulerToolError
 
 
 class _QueuedLlm:
-    def __init__(self, responses: list[str]) -> None:
+    def __init__(self, responses: list[object]) -> None:
         self._responses = list(responses)
 
-    def complete(self, system_prompt: str, user_prompt: str) -> str:
+    def complete(self, system_prompt: str, user_prompt: str) -> object:
         _ = system_prompt
         _ = user_prompt
         if not self._responses:
@@ -43,7 +43,7 @@ class _QueuedLlm:
         messages: list[dict[str, object]],
         tools: list[dict[str, object]],
         tool_choice: str = "auto",
-    ) -> str:
+    ) -> object:
         _ = messages
         _ = tools
         _ = tool_choice
@@ -406,8 +406,18 @@ def test_reminder_request_calls_create_reminder_within_two_cycles() -> None:
     next_step = build_next_step_node(tool_registry=tool_registry)
     llm = _QueuedLlm(
         [
-            '{"kind":"call_tool","tool_name":"getTime","args":{}}',
-            '{"kind":"call_tool","tool_name":"createReminder","args":{"ForWhom":"8553589429","Time":"2026-02-14T12:01:00+00:00","Message":"Ir por un cafecito"}}',
+            {"tool_call": {"kind": "call_tool", "tool_name": "getTime", "args": {}}},
+            {
+                "tool_call": {
+                    "kind": "call_tool",
+                    "tool_name": "createReminder",
+                    "args": {
+                        "ForWhom": "8553589429",
+                        "Time": "2026-02-14T12:01:00+00:00",
+                        "Message": "Ir por un cafecito",
+                    },
+                }
+            },
             "Listo, te lo recuerdo en breve.",
         ]
     )
@@ -444,7 +454,7 @@ def test_reminder_request_calls_create_reminder_within_two_cycles() -> None:
 def test_gettime_does_not_terminate_without_reminder_evidence() -> None:
     tool_registry = _build_fake_registry()
     next_step = build_next_step_node(tool_registry=tool_registry)
-    llm = _QueuedLlm(['{"kind":"call_tool","tool_name":"getTime","args":{}}'])
+    llm = _QueuedLlm(['{"tool_call":{"kind":"call_tool","tool_name":"getTime","args":{}}}'])
 
     task_state = build_default_task_state()
     task_state["acceptance_criteria"] = ["done when requested outcome is produced"]
@@ -747,10 +757,10 @@ def test_pdca_next_step_uses_complete_with_tools_when_available() -> None:
     assert first.get("raw_source") == "complete_with_tools"
     raw = next_state.get("pending_plan_raw")
     assert isinstance(raw, dict)
-    tool_call = raw.get("tool_call")
-    assert isinstance(tool_call, dict)
-    assert tool_call.get("kind") == "call_tool"
-    assert tool_call.get("tool_name") == "job_list"
+    tool_calls = raw.get("tool_calls")
+    assert isinstance(tool_calls, list) and tool_calls
+    assert isinstance(tool_calls[0], dict)
+    assert str(tool_calls[0].get("name") or "") == "job_list"
     assert llm.complete_with_tools_calls == 1
     assert llm.complete_calls == 0
 
@@ -848,9 +858,10 @@ def test_pdca_next_step_accepts_tool_call_without_planner_intent() -> None:
     assert isinstance(next_state, dict)
     raw = next_state.get("pending_plan_raw")
     assert isinstance(raw, dict)
-    tool_call = raw.get("tool_call")
-    assert isinstance(tool_call, dict)
-    assert tool_call.get("tool_name") == "job_list"
+    tool_calls = raw.get("tool_calls")
+    assert isinstance(tool_calls, list) and tool_calls
+    assert isinstance(tool_calls[0], dict)
+    assert str(tool_calls[0].get("name") or "") == "job_list"
 
 
 def test_pdca_next_step_drops_malformed_planner_intent() -> None:
@@ -1625,14 +1636,21 @@ def test_next_step_prompt_exposes_delivery_context_to_planner() -> None:
     assert '"message_id": "m-123"' in prompt
 
 
-def test_next_step_repairs_placeholder_recipient_before_execute_step() -> None:
+def test_next_step_single_swoop_keeps_raw_candidate_without_internal_repair() -> None:
     tool_registry = build_default_tool_registry()
     next_step = build_next_step_node(tool_registry=tool_registry)
-    llm = _QueuedLlm(
-        [
-            '{"tool_call":{"kind":"call_tool","tool_name":"send_message","args":{"To":"current_channel_target","Message":"Here is the answer.","Channel":"telegram"}}}',
-            '{"tool_call":{"kind":"call_tool","tool_name":"send_message","args":{"To":"8553589429","Message":"Here is the answer.","Channel":"telegram"}}}',
-        ]
+    llm = _ToolCallLlm(
+        {
+            "tool_call": {
+                "kind": "call_tool",
+                "tool_name": "send_message",
+                "args": {
+                    "To": "current_channel_target",
+                    "Message": "Here is the answer.",
+                    "Channel": "telegram",
+                },
+            }
+        }
     )
     task_state = build_default_task_state()
     task_state["goal"] = "answer user and send result"
@@ -1654,11 +1672,39 @@ def test_next_step_repairs_placeholder_recipient_before_execute_step() -> None:
     assert tool_call.get("tool_name") == "send_message"
     args = tool_call.get("args")
     assert isinstance(args, dict)
-    assert args.get("To") == "8553589429"
+    assert args.get("To") == "current_channel_target"
     plan = next_state.get("plan")
     assert isinstance(plan, dict)
     steps = plan.get("steps")
     assert isinstance(steps, list) and steps
     first = steps[0]
     assert isinstance(first, dict)
-    assert str(first.get("raw_source") or "").endswith(".repair")
+    assert str(first.get("raw_source") or "") == "complete_with_tools"
+
+
+def test_non_canonical_top_level_planner_output_fails_in_do_node() -> None:
+    tool_registry = _build_fake_registry()
+    next_step = build_next_step_node(tool_registry=tool_registry)
+    llm = _QueuedLlm(['{"kind":"call_tool","tool_name":"getTime","args":{}}'])
+
+    task_state = build_default_task_state()
+    task_state["acceptance_criteria"] = ["done when requested outcome is produced"]
+    task_state["goal"] = "Recuérdame algo más tarde"
+    state: dict[str, object] = {
+        "correlation_id": "corr-pdca-non-canonical-top-level",
+        "_llm_client": llm,
+        "task_state": task_state,
+    }
+
+    state = _run_cycle(state, next_step=next_step, tool_registry=tool_registry)
+    next_state = state["task_state"]
+    assert isinstance(next_state, dict)
+    facts = next_state.get("facts")
+    assert isinstance(facts, dict)
+    assert any(
+        isinstance(item, dict)
+        and str(item.get("tool") or "") == "planner_output"
+        and isinstance(item.get("exception"), dict)
+        and str((item.get("exception") or {}).get("code") or "") == "invalid_planner_output"
+        for item in facts.values()
+    )
