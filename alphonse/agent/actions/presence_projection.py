@@ -11,6 +11,7 @@ from alphonse.agent.observability.log_manager import get_log_manager
 
 logger = get_component_logger("actions.presence_projection")
 _LOG = get_log_manager()
+_INTENT_UPDATE_DEDUPE: dict[tuple[str, str, str], str] = {}
 
 
 def emit_presence_phase_changed(*, incoming: IncomingContext, phase: str, correlation_id: str) -> None:
@@ -88,6 +89,7 @@ def project_presence_event(*, incoming: IncomingContext, presence_event: dict[st
     emoji = reaction_for_phase(phase)
     send_chat_action = getattr(adapter, "send_chat_action", None)
     set_reaction = getattr(adapter, "set_reaction", None)
+    send_intent_update = getattr(adapter, "send_intent_update", None)
     sent_action = False
     sent_reaction = False
     dropped_capabilities: list[str] = []
@@ -145,5 +147,110 @@ def project_presence_event(*, incoming: IncomingContext, presence_event: dict[st
             "sent_chat_action": sent_action,
             "sent_reaction": sent_reaction,
             "dropped_capabilities": dropped_capabilities,
+        },
+    )
+    _project_intent_update(
+        incoming=incoming,
+        presence_event=presence_event,
+        send_intent_update=send_intent_update,
+    )
+
+
+def _project_intent_update(
+    *,
+    incoming: IncomingContext,
+    presence_event: dict[str, object],
+    send_intent_update: object,
+) -> None:
+    correlation_id = str(presence_event.get("correlation_id") or incoming.correlation_id or "").strip() or None
+    channel = str(incoming.channel_type or "").strip() or None
+    tool_name = str(presence_event.get("tool_name") or "").strip()
+    event_family = str(presence_event.get("event_family") or "").strip().lower()
+    phase = str(presence_event.get("phase") or "").strip().lower()
+    hint = str(presence_event.get("hint") or "").strip()
+    if event_family != "presence.progress" or phase != "thinking":
+        return _emit_intent_skip(
+            reason="non_progress_event",
+            incoming=incoming,
+            correlation_id=correlation_id,
+            tool_name=tool_name,
+        )
+    if not hint:
+        return _emit_intent_skip(
+            reason="missing_hint",
+            incoming=incoming,
+            correlation_id=correlation_id,
+            tool_name=tool_name,
+        )
+    if str(incoming.channel_type or "").strip().lower() != "telegram":
+        return _emit_intent_skip(
+            reason="channel_unsupported",
+            incoming=incoming,
+            correlation_id=correlation_id,
+            tool_name=tool_name,
+        )
+    if not tool_name:
+        return _emit_intent_skip(
+            reason="missing_tool",
+            incoming=incoming,
+            correlation_id=correlation_id,
+            tool_name=tool_name,
+        )
+    if not callable(send_intent_update):
+        return _emit_intent_skip(
+            reason="adapter_missing",
+            incoming=incoming,
+            correlation_id=correlation_id,
+            tool_name=tool_name,
+        )
+    dedupe_key = (
+        str(incoming.channel_type or "").strip(),
+        str(incoming.address or "").strip(),
+        str(correlation_id or ""),
+    )
+    previous_tool = _INTENT_UPDATE_DEDUPE.get(dedupe_key)
+    if previous_tool == tool_name:
+        return _emit_intent_skip(
+            reason="same_tool",
+            incoming=incoming,
+            correlation_id=correlation_id,
+            tool_name=tool_name,
+        )
+    send_intent_update(
+        channel_target=incoming.address,
+        text=hint[:160],
+        correlation_id=correlation_id,
+    )
+    _INTENT_UPDATE_DEDUPE[dedupe_key] = tool_name
+    _LOG.emit(
+        event="presence.intent_update.sent",
+        component="actions.presence_projection",
+        correlation_id=correlation_id,
+        channel=channel,
+        user_id=incoming.person_id,
+        payload={
+            "tool_name": tool_name,
+            "channel_target": str(incoming.address or "").strip() or None,
+        },
+    )
+
+
+def _emit_intent_skip(
+    *,
+    reason: str,
+    incoming: IncomingContext,
+    correlation_id: str | None,
+    tool_name: str,
+) -> None:
+    _LOG.emit(
+        event="presence.intent_update.skipped",
+        component="actions.presence_projection",
+        correlation_id=correlation_id,
+        channel=incoming.channel_type,
+        user_id=incoming.person_id,
+        status="skipped",
+        payload={
+            "reason": str(reason or "unknown"),
+            "tool_name": tool_name or None,
         },
     )

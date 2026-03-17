@@ -252,10 +252,16 @@ class HandlePdcaSliceRequestAction(Action):
             )
         effective_reply_text = "" if should_preempt else str(result.reply_text or "")
         merged_state = _merge_state(base=base_state, cognition_state=cognition_state, reply_text=effective_reply_text)
+        sanitized_task_state = _sanitize_task_state_for_persistence(
+            cognition_state.get("task_state") if isinstance(cognition_state.get("task_state"), dict) else {}
+        )
+        merged_state = _sanitize_state_for_persistence(merged_state)
+        if isinstance(merged_state, dict):
+            merged_state["task_state"] = sanitized_task_state
         _ = save_pdca_checkpoint(
             task_id=task_id,
             state=merged_state,
-            task_state=cognition_state.get("task_state") if isinstance(cognition_state.get("task_state"), dict) else {},
+            task_state=sanitized_task_state,
             expected_version=int(checkpoint.get("version") or 0) if isinstance(checkpoint, dict) else 0,
         )
         conversation_key = str(task.get("conversation_key") or "").strip()
@@ -422,7 +428,7 @@ def _update_day_session_memory(
             ability_state=cognition_state.get("ability_state")
             if isinstance(cognition_state.get("ability_state"), dict)
             else None,
-            task_state=cognition_state.get("task_state")
+            task_state=_sanitize_task_state_for_persistence(cognition_state.get("task_state"))
             if isinstance(cognition_state.get("task_state"), dict)
             else None,
             planning_context=cognition_state.get("planning_context")
@@ -690,6 +696,80 @@ def _merge_state(*, base: dict[str, Any], cognition_state: dict[str, Any], reply
     merged["response_text"] = str(reply_text or "").strip() or None
     merged["last_updated_at"] = datetime.now(timezone.utc).isoformat()
     return merged
+
+
+def _sanitize_task_state_for_persistence(task_state: dict[str, Any]) -> dict[str, Any]:
+    sanitized = dict(task_state) if isinstance(task_state, dict) else {}
+    sanitized["pending_plan_raw"] = None
+    plan = sanitized.get("plan")
+    if isinstance(plan, dict):
+        next_plan = dict(plan)
+        raw_steps = next_plan.get("steps")
+        if isinstance(raw_steps, list):
+            next_steps: list[dict[str, Any]] = []
+            for raw_step in raw_steps:
+                if not isinstance(raw_step, dict):
+                    continue
+                step = dict(raw_step)
+                step.pop("proposal_raw", None)
+                next_steps.append(step)
+            next_plan["steps"] = next_steps
+        sanitized["plan"] = next_plan
+    facts = sanitized.get("facts")
+    if isinstance(facts, dict):
+        next_facts: dict[str, Any] = {}
+        for key, raw_fact in facts.items():
+            if not isinstance(raw_fact, dict):
+                next_facts[str(key)] = raw_fact
+                continue
+            fact = dict(raw_fact)
+            exception = fact.get("exception")
+            if isinstance(exception, dict):
+                next_exception = dict(exception)
+                details = next_exception.get("details")
+                if isinstance(details, dict):
+                    next_details = dict(details)
+                    next_details.pop("raw_output_preview", None)
+                    next_exception["details"] = next_details
+                fact["exception"] = next_exception
+            result = fact.get("result")
+            if isinstance(result, dict):
+                next_result = dict(result)
+                nested_exception = next_result.get("exception")
+                if isinstance(nested_exception, dict):
+                    next_nested_exception = dict(nested_exception)
+                    nested_details = next_nested_exception.get("details")
+                    if isinstance(nested_details, dict):
+                        next_nested_details = dict(nested_details)
+                        next_nested_details.pop("raw_output_preview", None)
+                        next_nested_exception["details"] = next_nested_details
+                    next_result["exception"] = next_nested_exception
+                fact["result"] = next_result
+            next_facts[str(key)] = fact
+        sanitized["facts"] = next_facts
+    return sanitized
+
+
+def _sanitize_state_for_persistence(state: dict[str, Any]) -> dict[str, Any]:
+    sanitized = dict(state) if isinstance(state, dict) else {}
+    events = sanitized.get("events")
+    if isinstance(events, list):
+        next_events: list[Any] = []
+        for raw_event in events:
+            if not isinstance(raw_event, dict):
+                continue
+            event = dict(raw_event)
+            detail = event.get("detail")
+            if isinstance(detail, dict):
+                next_detail = dict(detail)
+                if str(next_detail.get("presence_event_family") or "").strip().lower() == "presence.progress":
+                    next_detail.pop("text", None)
+                    next_detail.pop("planner_intent", None)
+                    next_detail.pop("hint", None)
+                event["detail"] = next_detail
+            next_events.append(event)
+        sanitized["events"] = next_events
+    return sanitized
 
 
 def _next_status(*, cognition_state: dict[str, Any], reply_text: str) -> str:

@@ -42,6 +42,15 @@ class ExtremityAdapter(Protocol):
     ) -> None:
         ...
 
+    def send_intent_update(
+        self,
+        *,
+        channel_target: str | None,
+        text: str,
+        correlation_id: str | None = None,
+    ) -> None:
+        ...
+
 
 @dataclass
 class AdapterRegistry:

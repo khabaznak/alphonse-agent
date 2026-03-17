@@ -73,17 +73,19 @@ class OpenCodeClient:
             mode = "session"
 
         if mode == "session":
-            return self._complete_with_tools_via_session_api(
+            raw = self._complete_with_tools_via_session_api(
                 messages=messages,
                 tools=tools,
                 tool_choice=tool_choice,
             )
+            return _normalize_complete_with_tools_result(raw)
 
-        return self._complete_with_tools_via_chat_completions(
+        raw = self._complete_with_tools_via_chat_completions(
             messages=messages,
             tools=tools,
             tool_choice=tool_choice,
         )
+        return _normalize_complete_with_tools_result(raw)
 
     def _complete_with_tools_via_chat_completions(
         self,
@@ -455,6 +457,32 @@ def _extract_tool_call_payload(body: Any) -> tuple[str, list[dict[str, Any]], di
                             "arguments": args,
                         }
                     )
+    if not tool_calls and content:
+        parsed = _try_parse_json_object(content)
+        if isinstance(parsed, dict):
+            maybe_calls = parsed.get("tool_calls")
+            maybe_call = parsed.get("tool_call")
+            maybe_content = parsed.get("content")
+            normalized_from_json = False
+            if isinstance(maybe_calls, list):
+                tool_calls, assistant_tool_calls = _normalize_raw_tool_calls(maybe_calls)
+                normalized_from_json = bool(tool_calls)
+            elif isinstance(maybe_call, dict):
+                canonical = _coerce_canonical_tool_call(maybe_call)
+                if isinstance(canonical, dict):
+                    tool_calls = [
+                        {
+                            "id": "call-0",
+                            "name": str(canonical.get("tool_name") or ""),
+                            "arguments": dict(canonical.get("args") or {}),
+                        }
+                    ]
+                    assistant_tool_calls = _assistant_tool_calls_from_tool_calls(tool_calls)
+                    normalized_from_json = True
+            if isinstance(maybe_content, str):
+                content = maybe_content.strip()
+            elif normalized_from_json:
+                content = ""
 
     assistant_message: dict[str, Any] = {"role": "assistant", "content": content}
     if assistant_tool_calls:
@@ -590,29 +618,28 @@ def _extract_session_tool_payload(body: Any) -> tuple[str, list[dict[str, Any]],
         parsed = _try_parse_json_object(content)
         if isinstance(parsed, dict):
             maybe_calls = parsed.get("tool_calls")
+            maybe_call = parsed.get("tool_call")
             maybe_content = parsed.get("content")
+            normalized_from_json = False
             if isinstance(maybe_calls, list):
-                for idx, call in enumerate(maybe_calls):
-                    if not isinstance(call, dict):
-                        continue
-                    name = str(call.get("name") or "").strip()
-                    if not name:
-                        continue
-                    call_id = str(call.get("id") or f"call-{idx}").strip()
-                    args = call.get("arguments") if isinstance(call.get("arguments"), dict) else {}
-                    tool_calls.append({"id": call_id, "name": name, "arguments": args})
-                    assistant_tool_calls.append(
+                tool_calls, assistant_tool_calls = _normalize_raw_tool_calls(maybe_calls)
+                normalized_from_json = bool(tool_calls)
+            elif isinstance(maybe_call, dict):
+                canonical = _coerce_canonical_tool_call(maybe_call)
+                if isinstance(canonical, dict):
+                    tool_calls = [
                         {
-                            "id": call_id,
-                            "type": "function",
-                            "function": {
-                                "name": name,
-                                "arguments": json.dumps(args, ensure_ascii=False),
-                            },
+                            "id": "call-0",
+                            "name": str(canonical.get("tool_name") or ""),
+                            "arguments": dict(canonical.get("args") or {}),
                         }
-                    )
+                    ]
+                    assistant_tool_calls = _assistant_tool_calls_from_tool_calls(tool_calls)
+                    normalized_from_json = True
             if isinstance(maybe_content, str):
                 content = maybe_content.strip()
+            elif normalized_from_json:
+                content = ""
 
     assistant_message: dict[str, Any] = {"role": "assistant", "content": content}
     if assistant_tool_calls:
@@ -645,3 +672,143 @@ def _try_parse_json_object(text: str) -> dict[str, Any] | None:
         if isinstance(parsed, dict):
             return parsed
     return None
+
+
+def _normalize_complete_with_tools_result(raw: Any) -> dict[str, Any]:
+    source = raw if isinstance(raw, dict) else {}
+    content = source.get("content")
+    content_text = content if isinstance(content, str) else ""
+    tool_calls, _assistant_tool_calls = _normalize_raw_tool_calls(source.get("tool_calls"))
+
+    planner_intent = _normalize_planner_intent(source.get("planner_intent"))
+    canonical = _coerce_canonical_tool_call(source.get("tool_call"))
+
+    parsed_content = _try_parse_json_object(content_text) if content_text else None
+    if not isinstance(canonical, dict) and isinstance(parsed_content, dict):
+        canonical = _coerce_canonical_tool_call(parsed_content.get("tool_call"))
+        if not planner_intent:
+            planner_intent = _normalize_planner_intent(parsed_content.get("planner_intent"))
+        if not tool_calls:
+            content_calls, _ = _normalize_raw_tool_calls(parsed_content.get("tool_calls"))
+            if content_calls:
+                tool_calls = content_calls
+
+    if not isinstance(canonical, dict):
+        canonical = _canonical_from_tool_calls(tool_calls)
+
+    out: dict[str, Any] = {}
+    if content_text:
+        out["content"] = content_text
+    if isinstance(canonical, dict):
+        out["tool_call"] = canonical
+    if planner_intent:
+        out["planner_intent"] = planner_intent
+    return out
+
+
+def _normalize_raw_tool_calls(raw: Any) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    out: list[dict[str, Any]] = []
+    assistant_calls: list[dict[str, Any]] = []
+    if not isinstance(raw, list):
+        return out, assistant_calls
+    for idx, item in enumerate(raw):
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or "").strip()
+        if not name:
+            function = item.get("function")
+            if isinstance(function, dict):
+                name = str(function.get("name") or "").strip()
+        if not name:
+            continue
+        call_id = str(item.get("id") or f"call-{idx}").strip()
+        arguments_raw = item.get("arguments")
+        if arguments_raw is None:
+            function = item.get("function")
+            if isinstance(function, dict):
+                arguments_raw = function.get("arguments")
+        args = _coerce_arguments_dict(arguments_raw)
+        if not isinstance(args, dict):
+            continue
+        out.append({"id": call_id, "name": name, "arguments": args})
+        assistant_calls.append(
+            {
+                "id": call_id,
+                "type": "function",
+                "function": {
+                    "name": name,
+                    "arguments": arguments_raw if isinstance(arguments_raw, str) else json.dumps(args, ensure_ascii=False),
+                },
+            }
+        )
+    return out, assistant_calls
+
+
+def _assistant_tool_calls_from_tool_calls(tool_calls: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for item in tool_calls:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or "").strip()
+        if not name:
+            continue
+        call_id = str(item.get("id") or "").strip()
+        args = item.get("arguments") if isinstance(item.get("arguments"), dict) else {}
+        out.append(
+            {
+                "id": call_id,
+                "type": "function",
+                "function": {
+                    "name": name,
+                    "arguments": json.dumps(args, ensure_ascii=False),
+                },
+            }
+        )
+    return out
+
+
+def _coerce_canonical_tool_call(raw: Any) -> dict[str, Any] | None:
+    if not isinstance(raw, dict):
+        return None
+    if str(raw.get("kind") or "").strip() != "call_tool":
+        return None
+    tool_name = str(raw.get("tool_name") or "").strip()
+    args = raw.get("args")
+    if not tool_name or not isinstance(args, dict):
+        return None
+    return {"kind": "call_tool", "tool_name": tool_name, "args": dict(args)}
+
+
+def _canonical_from_tool_calls(tool_calls: list[dict[str, Any]]) -> dict[str, Any] | None:
+    for item in tool_calls:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or "").strip()
+        args = item.get("arguments")
+        if name and isinstance(args, dict):
+            return {"kind": "call_tool", "tool_name": name, "args": dict(args)}
+    return None
+
+
+def _coerce_arguments_dict(raw: Any) -> dict[str, Any] | None:
+    if isinstance(raw, dict):
+        return dict(raw)
+    if raw is None:
+        return {}
+    if isinstance(raw, str):
+        text = raw.strip()
+        if not text:
+            return {}
+        try:
+            parsed = json.loads(text)
+        except ValueError:
+            return None
+        return dict(parsed) if isinstance(parsed, dict) else None
+    return None
+
+
+def _normalize_planner_intent(raw: Any) -> str:
+    if not isinstance(raw, str):
+        return ""
+    text = raw.strip()
+    return text[:160] if text else ""

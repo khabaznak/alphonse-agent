@@ -81,7 +81,40 @@ def test_handle_pdca_slice_request_executes_and_persists_checkpoint(
     class _FakeResult:
         reply_text = ""
         plans = []
-        cognition_state = {"task_state": {"status": "running", "cycle_index": 1}}
+        cognition_state = {
+            "task_state": {
+                "status": "running",
+                "cycle_index": 1,
+                "pending_plan_raw": {
+                    "tool_call": {"kind": "call_tool", "tool_name": "job_list", "args": {"limit": 3}},
+                    "planner_intent": "Thinking about the best next tool.",
+                },
+                "plan": {
+                    "version": 1,
+                    "current_step_id": "step_1",
+                    "steps": [
+                        {
+                            "step_id": "step_1",
+                            "status": "proposed",
+                            "proposal_raw": {
+                                "tool_call": {"kind": "call_tool", "tool_name": "job_list", "args": {"limit": 3}},
+                                "planner_intent": "Thinking about the best next tool.",
+                            },
+                            "raw_source": "complete_with_tools",
+                        }
+                    ],
+                },
+                "facts": {
+                    "step_1": {
+                        "tool": "planner_output",
+                        "exception": {
+                            "code": "invalid_planner_output",
+                            "details": {"raw_output_preview": "{bad planner payload}"},
+                        },
+                    }
+                },
+            }
+        }
         meta = {}
 
     class _FakeGraph:
@@ -119,6 +152,34 @@ def test_handle_pdca_slice_request_executes_and_persists_checkpoint(
     assert checkpoint is not None
     assert checkpoint["version"] >= 1
     assert checkpoint["task_state"]["status"] == "running"
+    assert checkpoint["task_state"]["pending_plan_raw"] is None
+    checkpoint_plan = checkpoint["task_state"].get("plan")
+    assert isinstance(checkpoint_plan, dict)
+    checkpoint_steps = checkpoint_plan.get("steps")
+    assert isinstance(checkpoint_steps, list) and checkpoint_steps
+    first_step = checkpoint_steps[0]
+    assert isinstance(first_step, dict)
+    assert "proposal_raw" not in first_step
+    checkpoint_facts = checkpoint["task_state"].get("facts")
+    assert isinstance(checkpoint_facts, dict)
+    planner_fact = checkpoint_facts.get("step_1")
+    assert isinstance(planner_fact, dict)
+    planner_exception = planner_fact.get("exception")
+    assert isinstance(planner_exception, dict)
+    planner_details = planner_exception.get("details")
+    assert isinstance(planner_details, dict)
+    assert "raw_output_preview" not in planner_details
+    state_events = checkpoint["state"].get("events")
+    if isinstance(state_events, list):
+        for event in state_events:
+            if not isinstance(event, dict):
+                continue
+            detail = event.get("detail")
+            if not isinstance(detail, dict):
+                continue
+            if str(detail.get("presence_event_family") or "") != "presence.progress":
+                continue
+            assert "text" not in detail
     assert "_transition_sink" not in checkpoint["state"]
 
     events = list_pdca_events(task_id=task_id, limit=20)

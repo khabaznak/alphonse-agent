@@ -155,11 +155,13 @@ def _proposal_from_pending_plan_raw(
             "step_id": str((current or {}).get("step_id") or ""),
             "tool_call": None,
         }
-    preview = str(raw)[:280] if raw is not None else ""
+        task_state["pending_plan_raw"] = None
+    elif raw is not None:
+        task_state["pending_plan_raw"] = None
     return None, {
         "code": "invalid_planner_output",
         "raw_error": "pending_plan_raw_non_canonical",
-        "details": {"raw_output_preview": preview},
+        "details": {},
     }, ""
 
 
@@ -188,6 +190,7 @@ def _emit_planner_intent_progress(
     proposal: dict[str, Any],
     planner_intent: str,
 ) -> None:
+    hint = str(planner_intent or "").strip()
     emit_presence_transition_event(
         state,
         event_family="presence.progress",
@@ -196,7 +199,7 @@ def _emit_planner_intent_progress(
             "cycle": int(task_state.get("cycle_index") or 0) + 1,
             "tool": str(proposal.get("tool_name") or ""),
             "intention": "planning_next_step",
-            "text": planner_intent or "Estoy analizando el siguiente paso para avanzar la tarea.",
+            "text": hint[:160] if hint else "",
         },
     )
 

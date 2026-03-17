@@ -178,6 +178,31 @@ class TelegramExtremityAdapter(ExtremityAdapter):
         )
         self._reaction_cache[cache_key] = emoji_value
 
+    def send_intent_update(
+        self,
+        *,
+        channel_target: str | None,
+        text: str,
+        correlation_id: str | None = None,
+    ) -> None:
+        if not self._adapter or not channel_target:
+            return
+        chat_id = str(channel_target).strip()
+        text_value = str(text or "").strip()
+        if not chat_id or not text_value:
+            return
+        self._adapter.handle_action(
+            {
+                "type": "send_message",
+                "payload": {
+                    "chat_id": chat_id,
+                    "text": text_value[:160],
+                    "correlation_id": correlation_id,
+                },
+                "target_integration_id": "telegram",
+            }
+        )
+
 def _as_optional_str(value: object | None) -> str | None:
     if value is None:
         return None

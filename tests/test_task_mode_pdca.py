@@ -1699,6 +1699,7 @@ def test_non_canonical_top_level_planner_output_fails_in_do_node() -> None:
     state = _run_cycle(state, next_step=next_step, tool_registry=tool_registry)
     next_state = state["task_state"]
     assert isinstance(next_state, dict)
+    assert next_state.get("pending_plan_raw") is None
     facts = next_state.get("facts")
     assert isinstance(facts, dict)
     assert any(
@@ -1706,5 +1707,42 @@ def test_non_canonical_top_level_planner_output_fails_in_do_node() -> None:
         and str(item.get("tool") or "") == "planner_output"
         and isinstance(item.get("exception"), dict)
         and str((item.get("exception") or {}).get("code") or "") == "invalid_planner_output"
+        for item in facts.values()
+    )
+    planner_errors = [
+        item for item in facts.values() if isinstance(item, dict) and str(item.get("tool") or "") == "planner_output"
+    ]
+    assert planner_errors
+    first_error = planner_errors[0].get("exception")
+    assert isinstance(first_error, dict)
+    details = first_error.get("details")
+    assert isinstance(details, dict)
+    assert "raw_output_preview" not in details
+
+
+def test_provider_native_tool_calls_still_fail_in_do_when_not_canonical() -> None:
+    tool_registry = _build_fake_registry()
+    task_state = build_default_task_state()
+    task_state["status"] = "running"
+    task_state["plan"]["current_step_id"] = "step_1"
+    task_state["plan"]["steps"] = [{"step_id": "step_1", "status": "proposed"}]
+    task_state["pending_plan_raw"] = {
+        "tool_calls": [{"id": "call-1", "name": "getTime", "arguments": {}}],
+    }
+    state: dict[str, object] = {
+        "correlation_id": "corr-do-native-tool-calls-strict",
+        "task_state": task_state,
+    }
+
+    state = _apply(state, execute_step_node(state, tool_registry=tool_registry))
+    next_state = state.get("task_state")
+    assert isinstance(next_state, dict)
+    facts = next_state.get("facts")
+    assert isinstance(facts, dict)
+    assert any(
+        isinstance(item, dict)
+        and str(item.get("tool") or "") == "planner_output"
+        and isinstance(item.get("exception"), dict)
+        and str((item.get("exception") or {}).get("raw_error") or "") == "pending_plan_raw_non_canonical"
         for item in facts.values()
     )
