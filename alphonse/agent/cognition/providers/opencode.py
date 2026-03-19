@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import os
 import json
-from typing import Any
+from typing import Any, cast
 
 import requests
+from alphonse.agent.cognition.providers.contracts import CanonicalCompleteWithToolsResult
+from alphonse.agent.cognition.providers.contracts import CanonicalToolCall
+from alphonse.agent.cognition.providers.contracts import require_canonical_single_tool_call_result
 
 
 class OpenCodeClient:
@@ -67,25 +70,15 @@ class OpenCodeClient:
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]],
         tool_choice: str = "auto",
-    ) -> dict[str, Any]:
-        mode = str(os.getenv("OPENCODE_TOOL_CALL_MODE", "session")).strip().lower()
-        if mode not in {"session", "chat"}:
-            mode = "session"
-
-        if mode == "session":
-            raw = self._complete_with_tools_via_session_api(
-                messages=messages,
-                tools=tools,
-                tool_choice=tool_choice,
-            )
-            return _normalize_complete_with_tools_result(raw)
-
+    ) -> CanonicalCompleteWithToolsResult:
+        # Tool-calling is chat-only so the model receives native system/user markdown messages.
+        # OPENCODE_TOOL_CALL_MODE is intentionally ignored for complete_with_tools.
         raw = self._complete_with_tools_via_chat_completions(
             messages=messages,
             tools=tools,
             tool_choice=tool_choice,
         )
-        return _normalize_complete_with_tools_result(raw)
+        return _canonical_single_tool_call_result_or_raise(raw)
 
     def _complete_with_tools_via_chat_completions(
         self,
@@ -126,7 +119,7 @@ class OpenCodeClient:
                 tool_timeout = max(5.0, float(tool_timeout_raw))
             except ValueError:
                 tool_timeout = self.timeout
-        rendered = _render_tool_call_markdown_prompt(
+        rendered = _render_session_transport_payload_text(
             messages=messages,
             tools=tools,
             tool_choice=tool_choice,
@@ -490,76 +483,22 @@ def _extract_tool_call_payload(body: Any) -> tuple[str, list[dict[str, Any]], di
     return content, tool_calls, assistant_message
 
 
-def _render_tool_call_markdown_prompt(
+def _render_session_transport_payload_text(
     *,
     messages: list[dict[str, Any]],
     tools: list[dict[str, Any]],
     tool_choice: str,
 ) -> str:
-    lines: list[str] = []
-    lines.append("# Tool Call Task")
-    lines.append("")
-    lines.append("You are in a tool-calling loop.")
-    lines.append("Return ONLY valid JSON.")
-    lines.append("")
-    lines.append("## Output JSON Contract")
-    lines.append('{"content":"string","tool_calls":[{"id":"optional","name":"toolName","arguments":{}}]}')
-    lines.append("")
-    lines.append("Rules:")
-    lines.append("- Use `tool_calls` when a tool is needed next.")
-    lines.append("- Use empty `tool_calls` when you can answer directly.")
-    lines.append("- `arguments` must be an object.")
-    lines.append("- No markdown, no prose outside JSON.")
-    lines.append("")
-    lines.append(f"## Tool Choice")
-    lines.append(f"- {tool_choice}")
-    lines.append("")
-    lines.append("## Tools")
-    if not tools:
-        lines.append("- (none)")
-    else:
-        for tool in tools:
-            fn = tool.get("function") if isinstance(tool, dict) else None
-            if not isinstance(fn, dict):
-                continue
-            name = str(fn.get("name") or "").strip()
-            if not name:
-                continue
-            description = str(fn.get("description") or "").strip()
-            parameters = fn.get("parameters")
-            lines.append(f"- `{name}`")
-            if description:
-                lines.append(f"  - {description}")
-            if isinstance(parameters, dict):
-                lines.append("  - parameters schema:")
-                lines.append("```json")
-                lines.append(json.dumps(parameters, ensure_ascii=False))
-                lines.append("```")
-    lines.append("")
-    lines.append("## Conversation")
-    if not messages:
-        lines.append("- (empty)")
-    else:
-        for message in messages:
-            role = str(message.get("role") or "unknown")
-            content = str(message.get("content") or "").strip()
-            lines.append(f"### {role}")
-            if content:
-                lines.append(content)
-            tool_calls = message.get("tool_calls")
-            if isinstance(tool_calls, list) and tool_calls:
-                lines.append("tool_calls:")
-                lines.append("```json")
-                lines.append(json.dumps(tool_calls, ensure_ascii=False))
-                lines.append("```")
-            tool_call_id = message.get("tool_call_id")
-            if isinstance(tool_call_id, str) and tool_call_id.strip():
-                lines.append(f"tool_call_id: `{tool_call_id}`")
-            tool_name = message.get("tool_name")
-            if isinstance(tool_name, str) and tool_name.strip():
-                lines.append(f"tool_name: `{tool_name}`")
-            lines.append("")
-    return "\n".join(lines).strip()
+    envelope = {
+        "transport": {
+            "mode": "session_tool_call",
+            "version": 1,
+        },
+        "tool_choice": str(tool_choice or "auto").strip() or "auto",
+        "tools": list(tools) if isinstance(tools, list) else [],
+        "messages": list(messages) if isinstance(messages, list) else [],
+    }
+    return json.dumps(envelope, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
 def _model_for_session_payload(model_ref: str) -> dict[str, str] | None:
@@ -674,7 +613,7 @@ def _try_parse_json_object(text: str) -> dict[str, Any] | None:
     return None
 
 
-def _normalize_complete_with_tools_result(raw: Any) -> dict[str, Any]:
+def _normalize_complete_with_tools_result(raw: Any) -> CanonicalCompleteWithToolsResult:
     source = raw if isinstance(raw, dict) else {}
     content = source.get("content")
     content_text = content if isinstance(content, str) else ""
@@ -696,14 +635,27 @@ def _normalize_complete_with_tools_result(raw: Any) -> dict[str, Any]:
     if not isinstance(canonical, dict):
         canonical = _canonical_from_tool_calls(tool_calls)
 
-    out: dict[str, Any] = {}
+    out: CanonicalCompleteWithToolsResult = {}
     if content_text:
         out["content"] = content_text
     if isinstance(canonical, dict):
-        out["tool_call"] = canonical
+        out["tool_call"] = cast(CanonicalToolCall, canonical)
     if planner_intent:
         out["planner_intent"] = planner_intent
     return out
+
+
+def _canonical_single_tool_call_result_or_raise(raw: Any) -> CanonicalCompleteWithToolsResult:
+    normalized = _normalize_complete_with_tools_result(raw)
+    return require_canonical_single_tool_call_result(
+        normalized,
+        error_prefix="opencode_complete_with_tools_non_canonical",
+    )
+
+
+def _normalize_complete_with_tools_result_or_raise(raw: Any) -> CanonicalCompleteWithToolsResult:
+    # Backward-compatible alias kept while callers migrate to canonical_single_tool_call naming.
+    return _canonical_single_tool_call_result_or_raise(raw)
 
 
 def _normalize_raw_tool_calls(raw: Any) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
