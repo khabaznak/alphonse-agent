@@ -165,6 +165,55 @@ def get_latest_pdca_task_for_conversation(
     return _row_to_task(row) if row else None
 
 
+def get_latest_pdca_task_for_owner(
+    *,
+    owner_id: str,
+    statuses: list[str] | None = None,
+) -> dict[str, Any] | None:
+    owner = str(owner_id or "").strip()
+    if not owner:
+        return None
+    status_values = [str(item or "").strip().lower() for item in (statuses or list(_ACTIVE_TASK_STATUSES))]
+    status_values = [item for item in status_values if item in _ALL_TASK_STATUSES]
+    if not status_values:
+        status_values = list(_ACTIVE_TASK_STATUSES)
+    placeholders = ",".join("?" for _ in status_values)
+    query = (
+        """
+            SELECT
+              task_id,
+              owner_id,
+              conversation_key,
+              session_id,
+              status,
+              priority,
+              next_run_at,
+              lease_until,
+              worker_id,
+              slice_cycles,
+              max_cycles,
+              max_runtime_seconds,
+              token_budget_remaining,
+              failure_streak,
+              last_error,
+              metadata_json,
+              created_at,
+              updated_at
+            FROM pdca_tasks
+            WHERE owner_id = ?
+              AND status IN ("""
+        + placeholders
+        + """)
+            ORDER BY updated_at DESC
+            LIMIT 1
+        """
+    )
+    params: list[Any] = [owner, *status_values]
+    with _connect() as conn:
+        row = conn.execute(query, tuple(params)).fetchone()
+    return _row_to_task(row) if row else None
+
+
 def list_runnable_pdca_tasks(*, now: str | None = None, limit: int = 20) -> list[dict[str, Any]]:
     now_text = str(now or _now_iso()).strip()
     safe_limit = _as_int(limit, default=20, minimum=1)

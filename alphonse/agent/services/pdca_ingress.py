@@ -7,6 +7,7 @@ from alphonse.agent.actions.session_context import IncomingContext
 from alphonse.agent.nervous_system.pdca_queue_store import (
     append_pdca_event,
     get_latest_pdca_task_for_conversation,
+    get_latest_pdca_task_for_owner,
     update_pdca_task_metadata,
     update_pdca_task_status,
     upsert_pdca_task,
@@ -283,10 +284,12 @@ def enqueue_pdca_slice(
     user_text = str(payload.get("text") or "").strip()
     attachments = _extract_payload_attachments(payload)
     steering_text = _resolve_steering_text(user_text=user_text, attachments=attachments)
-    existing = get_latest_pdca_task_for_conversation(
-        conversation_key=session_key,
-        statuses=["waiting_user", "queued", "running", "paused"],
-    )
+    existing = get_latest_pdca_task_for_owner(owner_id=session_user_id, statuses=["running"])
+    if not isinstance(existing, dict):
+        existing = get_latest_pdca_task_for_conversation(
+            conversation_key=session_key,
+            statuses=["waiting_user", "queued", "running", "paused"],
+        )
     if isinstance(existing, dict):
         task_id = str(existing.get("task_id") or "").strip()
         owner_id = str(existing.get("owner_id") or "").strip()
