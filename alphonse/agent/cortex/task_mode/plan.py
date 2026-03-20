@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from typing import Any, Callable
 
+from alphonse.agent.cognition.providers.contracts import require_tool_calling_provider
 from alphonse.agent.cognition.tool_schemas import llm_tool_schemas
 from alphonse.agent.cortex.task_mode.prompt_templates import NEXT_STEP_SYSTEM_PROMPT
 from alphonse.agent.cortex.task_mode.prompt_templates import NEXT_STEP_USER_TEMPLATE
@@ -114,27 +115,31 @@ def _request_raw_candidate(
     user_prompt: str,
     tool_registry: Any,
 ) -> tuple[Any, str]:
-    complete_with_tools = getattr(llm_client, "complete_with_tools", None)
-    if callable(complete_with_tools):
+    try:
+        tool_client = require_tool_calling_provider(
+            llm_client,
+            source="task_mode.plan._request_raw_candidate",
+        )
+    except Exception as exc:
         return (
-            complete_with_tools(
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ],
-                tools=llm_tool_schemas(tool_registry),
-                tool_choice="auto",
-            ),
-            "complete_with_tools",
+            {
+                "error": {
+                    "code": "planner_capability_missing",
+                    "message": f"LLM client contract invalid for task_mode planning: {exc}",
+                }
+            },
+            "complete_with_tools_unavailable",
         )
     return (
-        {
-            "error": {
-                "code": "planner_capability_missing",
-                "message": "LLM client must implement complete_with_tools for task_mode planning.",
-            }
-        },
-        "complete_with_tools_unavailable",
+        tool_client.complete_with_tools(
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            tools=llm_tool_schemas(tool_registry),
+            tool_choice="auto",
+        ),
+        "complete_with_tools",
     )
 
 

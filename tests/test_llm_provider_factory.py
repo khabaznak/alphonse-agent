@@ -6,6 +6,7 @@ from alphonse.agent.cognition.providers.factory import build_llm_client
 from alphonse.agent.cognition.providers.llamafarm import LlamaFarmClient
 from alphonse.agent.cognition.providers.ollama import OllamaClient
 from alphonse.agent.cognition.providers.opencode import OpenCodeClient
+import alphonse.agent.cognition.providers.factory as factory_module
 
 
 @pytest.mark.parametrize("provider", ["ollama", "OLLAMA", "unknown"])
@@ -36,3 +37,13 @@ def test_build_llm_client_supports_llamafarm(
     monkeypatch.setenv("ALPHONSE_LLM_PROVIDER", provider)
     client = build_llm_client()
     assert isinstance(client, LlamaFarmClient)
+
+
+def test_build_llm_client_rejects_provider_without_complete_contract(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ALPHONSE_LLM_PROVIDER", "unknown")
+    monkeypatch.setattr(factory_module, "_build_ollama_client", lambda: object())
+    with pytest.raises(ValueError) as exc:
+        build_llm_client()
+    assert "provider_contract_error:text_completion_missing" in str(exc.value)

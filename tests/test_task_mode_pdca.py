@@ -153,6 +153,10 @@ class _ToolListCaptureLlm:
         self.complete_with_tools_calls = 0
         self.tool_names: list[str] = []
 
+    def complete(self, system_prompt: str, user_prompt: str) -> str:
+        _ = (system_prompt, user_prompt)
+        raise RuntimeError("complete should not be used when complete_with_tools is available")
+
     def complete_with_tools(
         self,
         *,
@@ -826,6 +830,8 @@ def test_pdca_next_step_requires_complete_with_tools_capability() -> None:
     error = raw.get("error")
     assert isinstance(error, dict)
     assert error.get("code") == "planner_capability_missing"
+    message = str(error.get("message") or "")
+    assert "provider_contract_error:tool_calling_missing" in message
 
 
 def test_pdca_next_step_accepts_tool_call_without_planner_intent() -> None:

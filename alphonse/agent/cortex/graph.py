@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import os
-from typing import Any, Protocol, TypedDict
+from typing import Any, TypedDict
 
 from langgraph.graph import END, StateGraph
 
+from alphonse.agent.cognition.providers.contracts import TextCompletionProvider
+from alphonse.agent.cognition.providers.contracts import require_text_completion_provider
 from alphonse.agent.cognition.plans import CortexPlan, CortexResult
 from alphonse.agent.cortex.nodes import build_apology_node
 from alphonse.agent.cortex.nodes import task_mode_entry_node
@@ -14,11 +16,6 @@ from alphonse.agent.cortex.task_mode.graph import wire_task_mode_pdca
 from alphonse.agent.cortex.transitions import emit_transition_event
 from alphonse.agent.cortex.utils import build_cognition_state, build_meta
 from alphonse.agent.tools.registry import ToolRegistry, build_default_tool_registry
-
-class LLMClient(Protocol):
-    def complete(self, *, system_prompt: str, user_prompt: str) -> str:
-        ...
-
 
 class CortexState(TypedDict, total=False):
     chat_id: str
@@ -96,12 +93,18 @@ class CortexGraph:
         state: dict[str, Any],
         text: str,
         *,
-        llm_client: LLMClient | None = None,
+        llm_client: TextCompletionProvider | None = None,
     ) -> CortexResult:
+        validated_llm_client: TextCompletionProvider | None = None
+        if llm_client is not None:
+            validated_llm_client = require_text_completion_provider(
+                llm_client,
+                source="cortex.graph.invoke",
+            )
         runner = self.build().compile()
         recursion_limit = _resolve_recursion_limit()
         result_state = runner.invoke(
-            {**state, "last_user_message": text, "_llm_client": llm_client},
+            {**state, "last_user_message": text, "_llm_client": validated_llm_client},
             config={"recursion_limit": recursion_limit},
         )
         plans = [
@@ -116,7 +119,7 @@ class CortexGraph:
         )
 
     @staticmethod
-    def _llm_client_from_state(state: dict[str, Any]) -> LLMClient | None:
+    def _llm_client_from_state(state: dict[str, Any]) -> TextCompletionProvider | None:
         client = state.get("_llm_client")
         return client if client is not None else None
 

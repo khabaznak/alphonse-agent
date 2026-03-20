@@ -3,21 +3,26 @@ from __future__ import annotations
 import os
 from typing import Any
 
+from alphonse.agent.cognition.providers.contracts import TextCompletionProvider
+from alphonse.agent.cognition.providers.contracts import require_text_completion_provider
 from alphonse.agent.cognition.providers.llamafarm import LlamaFarmClient
 from alphonse.agent.cognition.providers.ollama import OllamaClient
 from alphonse.agent.cognition.providers.opencode import OpenCodeClient
 from alphonse.agent.cognition.providers.openai import OpenAIClient
 
 
-def build_llm_client() -> Any:
+def build_llm_client() -> TextCompletionProvider:
     provider = str(os.getenv("ALPHONSE_LLM_PROVIDER", "ollama")).strip().lower()
+    client: Any
     if provider == "openai":
-        return _build_openai_client()
-    if provider == "opencode":
-        return _build_opencode_client()
-    if provider in {"llamafarm", "llama_farm"}:
-        return _build_llamafarm_client()
-    return _build_ollama_client()
+        client = _build_openai_client()
+    elif provider == "opencode":
+        client = _build_opencode_client()
+    elif provider in {"llamafarm", "llama_farm"}:
+        client = _build_llamafarm_client()
+    else:
+        client = _build_ollama_client()
+    return require_text_completion_provider(client, source=f"providers.factory:{provider or 'default'}")
 
 
 def _build_ollama_client() -> OllamaClient:
@@ -53,12 +58,10 @@ def _build_opencode_client() -> OpenCodeClient:
         "openai/gpt-5.1-codex",
     )
     timeout_seconds = _parse_float(os.getenv("OPENCODE_TIMEOUT_SECONDS"), default=60.0)
-    chat_path = os.getenv("OPENCODE_CHAT_COMPLETIONS_PATH", "/v1/chat/completions")
     return OpenCodeClient(
         base_url=base_url,
         model=model,
         timeout=timeout_seconds,
-        chat_path=chat_path,
         api_key_env=os.getenv("OPENCODE_API_KEY_ENV", "OPENCODE_API_KEY"),
         username_env=os.getenv("OPENCODE_USERNAME_ENV", "OPENCODE_SERVER_USERNAME"),
         password_env=os.getenv("OPENCODE_PASSWORD_ENV", "OPENCODE_SERVER_PASSWORD"),

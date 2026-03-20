@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Literal, TypedDict
+from typing import Any, Literal, Protocol, TypedDict, runtime_checkable
 
 
 class CanonicalToolCall(TypedDict):
@@ -13,6 +13,45 @@ class CanonicalCompleteWithToolsResult(TypedDict, total=False):
     content: str
     tool_call: CanonicalToolCall
     planner_intent: str
+
+
+@runtime_checkable
+class TextCompletionProvider(Protocol):
+    def complete(self, system_prompt: str, user_prompt: str) -> str:
+        ...
+
+
+@runtime_checkable
+class ToolCallingProvider(TextCompletionProvider, Protocol):
+    def complete_with_tools(
+        self,
+        *,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+        tool_choice: str = "auto",
+    ) -> CanonicalCompleteWithToolsResult:
+        ...
+
+
+def require_text_completion_provider(obj: Any, *, source: str) -> TextCompletionProvider:
+    candidate = obj
+    complete = getattr(candidate, "complete", None)
+    if not callable(complete):
+        raise ValueError(
+            f"provider_contract_error:text_completion_missing source={source} required=complete(system_prompt,user_prompt)"
+        )
+    return candidate
+
+
+def require_tool_calling_provider(obj: Any, *, source: str) -> ToolCallingProvider:
+    candidate = require_text_completion_provider(obj, source=source)
+    complete_with_tools = getattr(candidate, "complete_with_tools", None)
+    if not callable(complete_with_tools):
+        raise ValueError(
+            "provider_contract_error:tool_calling_missing "
+            f"source={source} required=complete_with_tools(messages,tools,tool_choice)"
+        )
+    return candidate
 
 
 def require_canonical_single_tool_call_result(
