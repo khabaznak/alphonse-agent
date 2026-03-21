@@ -19,7 +19,6 @@ from alphonse.agent.nervous_system.pdca_queue_store import (
     load_pdca_checkpoint,
     save_pdca_checkpoint,
     upsert_pdca_task,
-    update_pdca_task_metadata,
     update_pdca_task_status,
 )
 from alphonse.agent.nervous_system.senses.bus import Signal as BusSignal
@@ -106,24 +105,10 @@ class HandlePdcaSliceRequestAction(Action):
         _inject_session_memory_context(base_state=base_state, task=task)
         _stamp_check_provenance_for_slice(base_state=base_state, signal=signal, checkpoint=checkpoint)
         incoming = _resolve_incoming_context(task=task, correlation_id=correlation_id)
-        consumed_inputs = _consume_buffered_inputs(task_id=task_id, correlation_id=correlation_id)
-        if consumed_inputs:
-            _mark_slice_resume(base_state=base_state)
-            _inject_steering_facts(base_state=base_state, consumed_inputs=consumed_inputs)
-            _LOG.emit(
-                event="pdca.slice.resume_with_input",
-                component="actions.handle_pdca_slice_request",
-                correlation_id=correlation_id,
-                payload={
-                    "task_id": task_id,
-                    "input_count": len(consumed_inputs),
-                },
-            )
         text = _resolve_slice_text(
             task=task,
             checkpoint=checkpoint,
             payload=payload,
-            buffered_inputs=consumed_inputs,
         )
         if not text:
             update_pdca_task_status(task_id=task_id, status="waiting_user")
@@ -182,10 +167,6 @@ class HandlePdcaSliceRequestAction(Action):
         invoke_state = dict(base_state)
         invoke_state.setdefault("task_id", task_id)
         invoke_state.setdefault("pdca_task_id", task_id)
-        invoke_state["_consume_task_inputs"] = lambda: _consume_buffered_inputs(
-            task_id=task_id,
-            correlation_id=correlation_id,
-        )
         task_state_for_id = invoke_state.get("task_state")
         if isinstance(task_state_for_id, dict):
             task_state_for_id.setdefault("task_id", task_id)
@@ -451,20 +432,10 @@ def _resolve_slice_text(
     task: dict[str, Any],
     checkpoint: dict[str, Any] | None,
     payload: dict[str, Any],
-    buffered_inputs: list[dict[str, Any]] | None = None,
 ) -> str:
     direct = str(payload.get("text") or "").strip()
     if direct:
         return direct
-    if isinstance(buffered_inputs, list):
-        merged = [
-            str(item.get("steering_text") or item.get("text") or "").strip()
-            for item in buffered_inputs
-            if isinstance(item, dict)
-        ]
-        merged = [item for item in merged if item]
-        if merged:
-            return "\n".join(merged)
     metadata = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
     for key in ("pending_user_text", "user_text", "last_user_message"):
         value = str(metadata.get(key) or "").strip()
@@ -507,104 +478,6 @@ def _should_preserve_pending_interaction(*, task: dict[str, Any]) -> bool:
         return True
     metadata = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
     return bool(str(metadata.get("last_user_message") or "").strip())
-
-
-def _mark_slice_resume(*, base_state: dict[str, Any]) -> None:
-    task_state = base_state.get("task_state")
-    if not isinstance(task_state, dict):
-        task_state = {}
-        base_state["task_state"] = task_state
-    task_state["check_provenance"] = "slice_resume"
-
-
-def _consume_buffered_inputs(*, task_id: str, correlation_id: str | None) -> list[dict[str, Any]]:
-    latest = get_pdca_task(task_id)
-    if not isinstance(latest, dict):
-        return []
-    metadata = dict(latest.get("metadata") or {}) if isinstance(latest.get("metadata"), dict) else {}
-    raw_inputs = metadata.get("inputs")
-    inputs = [dict(item) for item in raw_inputs if isinstance(item, dict)] if isinstance(raw_inputs, list) else []
-    if not inputs:
-        return []
-    next_unconsumed = _as_optional_int(metadata.get("next_unconsumed_index")) or 0
-    next_unconsumed = max(0, min(next_unconsumed, len(inputs)))
-    consumed: list[dict[str, Any]] = []
-    now = datetime.now(timezone.utc).isoformat()
-    for idx in range(next_unconsumed, len(inputs)):
-        record = inputs[idx]
-        text = str(record.get("text") or "").strip()
-        steering_text = str(record.get("steering_text") or text).strip()
-        attachments = record.get("attachments")
-        normalized_attachments = [dict(item) for item in attachments if isinstance(item, dict)] if isinstance(attachments, list) else []
-        if not steering_text and not normalized_attachments:
-            continue
-        consumed.append(
-            {
-                "text": text,
-                "steering_text": steering_text,
-                "actor_id": str(record.get("actor_id") or "").strip() or None,
-                "message_id": str(record.get("message_id") or "").strip() or None,
-                "correlation_id": str(record.get("correlation_id") or "").strip() or None,
-                "channel": str(record.get("channel") or "").strip() or None,
-                "attachments": normalized_attachments,
-                "received_at": str(record.get("received_at") or "").strip() or None,
-                "consumed_at": now,
-            }
-        )
-        record["consumed_at"] = now
-    if not consumed:
-        return []
-    metadata["inputs"] = inputs
-    metadata["next_unconsumed_index"] = len(inputs)
-    metadata["input_dirty"] = False
-    metadata["last_user_message"] = str(consumed[-1].get("steering_text") or consumed[-1].get("text") or "").strip()
-    metadata["pending_user_text"] = str(consumed[-1].get("steering_text") or consumed[-1].get("text") or "").strip()
-    metadata["last_input_dequeued_at"] = now
-    update_pdca_task_metadata(task_id=task_id, metadata=metadata)
-    _LOG.emit(
-        event="pdca.input.dequeued",
-        component="actions.handle_pdca_slice_request",
-        correlation_id=correlation_id,
-        payload={"task_id": task_id, "count": len(consumed)},
-    )
-    return consumed
-
-
-def _inject_steering_facts(*, base_state: dict[str, Any], consumed_inputs: list[dict[str, Any]]) -> None:
-    if not consumed_inputs:
-        return
-    task_state = base_state.get("task_state")
-    if not isinstance(task_state, dict):
-        task_state = {}
-        base_state["task_state"] = task_state
-    facts = task_state.get("facts")
-    fact_bucket = dict(facts) if isinstance(facts, dict) else {}
-    max_suffix = 0
-    for key in fact_bucket.keys():
-        rendered = str(key or "").strip()
-        if not rendered.startswith("user_reply_"):
-            continue
-        suffix = rendered.split("user_reply_", 1)[1]
-        try:
-            max_suffix = max(max_suffix, int(suffix))
-        except ValueError:
-            continue
-    for index, item in enumerate(consumed_inputs, start=1):
-        text = str(item.get("steering_text") or item.get("text") or "").strip()
-        attachments = item.get("attachments")
-        normalized_attachments = [dict(att) for att in attachments if isinstance(att, dict)] if isinstance(attachments, list) else []
-        if not text and not normalized_attachments:
-            continue
-        fact_bucket[f"user_reply_{max_suffix + index}"] = {
-            "source": "user_reply",
-            "text": text,
-            "attachments": normalized_attachments,
-            "actor_id": str(item.get("actor_id") or "").strip() or None,
-            "message_id": str(item.get("message_id") or "").strip() or None,
-            "received_at": str(item.get("received_at") or "").strip() or None,
-            "consumed_at": str(item.get("consumed_at") or "").strip() or None,
-        }
-    task_state["facts"] = fact_bucket
 
 
 def _should_preempt_after_step(*, task_id: str, slice_started_at: datetime) -> bool:

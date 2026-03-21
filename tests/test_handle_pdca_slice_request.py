@@ -193,7 +193,7 @@ def test_handle_pdca_slice_request_executes_and_persists_checkpoint(
     assert "presence.progress" in families
 
 
-def test_handle_pdca_slice_request_dequeues_buffered_inputs_and_resumes_check(
+def test_handle_pdca_slice_request_does_not_dequeue_buffered_inputs_before_graph(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -245,10 +245,8 @@ def test_handle_pdca_slice_request_dequeues_buffered_inputs_and_resumes_check(
     class _FakeGraph:
         def invoke(self, state, text, *, llm_client=None):  # noqa: ANN001
             _ = llm_client
-            assert text == "first buffered\nsecond buffered"
-            task_state = state.get("task_state")
-            assert isinstance(task_state, dict)
-            assert task_state.get("check_provenance") == "slice_resume"
+            _ = state
+            assert text == "fallback text"
             return _FakeResult()
 
     monkeypatch.setattr(hpsr, "_CORTEX_GRAPH", _FakeGraph())
@@ -265,11 +263,11 @@ def test_handle_pdca_slice_request_dequeues_buffered_inputs_and_resumes_check(
     task = get_pdca_task(task_id)
     assert isinstance(task, dict)
     metadata = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
-    assert int(metadata.get("next_unconsumed_index") or 0) == 2
+    assert int(metadata.get("next_unconsumed_index") or 0) == 0
     assert bool(metadata.get("input_dirty")) is False
     inputs = metadata.get("inputs")
     assert isinstance(inputs, list)
-    assert all(str(item.get("consumed_at") or "").strip() for item in inputs if isinstance(item, dict))
+    assert all(not str(item.get("consumed_at") or "").strip() for item in inputs if isinstance(item, dict))
 
 
 def test_handle_pdca_slice_request_accepts_attachment_only_buffered_inputs(
@@ -286,8 +284,8 @@ def test_handle_pdca_slice_request_accepts_attachment_only_buffered_inputs(
             "conversation_key": "chat-attachment-only",
             "status": "queued",
             "metadata": {
-                "pending_user_text": "",
-                "last_user_message": "",
+                "pending_user_text": "[attachments: 1 voice]",
+                "last_user_message": "[attachments: 1 voice]",
                 "next_unconsumed_index": 0,
                 "input_dirty": False,
                 "inputs": [
@@ -295,7 +293,6 @@ def test_handle_pdca_slice_request_accepts_attachment_only_buffered_inputs(
                         "message_id": "m-a1",
                         "correlation_id": "cid-a1",
                         "text": "",
-                        "steering_text": "[attachments: 1 voice]",
                         "attachments": [{"kind": "voice", "provider": "telegram", "file_id": "voice-1"}],
                         "channel": "telegram",
                         "received_at": "2026-03-12T05:00:00+00:00",
@@ -317,13 +314,7 @@ def test_handle_pdca_slice_request_accepts_attachment_only_buffered_inputs(
         def invoke(self, state, text, *, llm_client=None):  # noqa: ANN001
             _ = llm_client
             assert text == "[attachments: 1 voice]"
-            task_state = state.get("task_state")
-            assert isinstance(task_state, dict)
-            facts = task_state.get("facts")
-            assert isinstance(facts, dict)
-            user_reply = facts.get("user_reply_1")
-            assert isinstance(user_reply, dict)
-            assert isinstance(user_reply.get("attachments"), list)
+            _ = state
             return _FakeResult()
 
     monkeypatch.setattr(hpsr, "_CORTEX_GRAPH", _FakeGraph())
@@ -340,7 +331,7 @@ def test_handle_pdca_slice_request_accepts_attachment_only_buffered_inputs(
     task = get_pdca_task(task_id)
     assert isinstance(task, dict)
     metadata = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
-    assert int(metadata.get("next_unconsumed_index") or 0) == 1
+    assert int(metadata.get("next_unconsumed_index") or 0) == 0
 
 
 def test_handle_pdca_slice_request_preempts_when_new_input_arrives_mid_slice(

@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-from datetime import datetime, timedelta, timezone
-
 from alphonse.agent.actions.session_context import IncomingContext
 from alphonse.agent.nervous_system.migrate import apply_schema
 from alphonse.agent.nervous_system.pdca_queue_store import get_pdca_task
@@ -109,19 +107,21 @@ def test_enqueue_pdca_slice_dedupes_same_message_id_and_correlation(tmp_path: Pa
     assert len(inputs) == 1
 
 
-def test_enqueue_pdca_slice_owner_only_rejects_non_owner_actor(tmp_path: Path, monkeypatch) -> None:
+def test_enqueue_pdca_slice_ignores_legacy_steering_policy_and_enqueues_message(tmp_path: Path, monkeypatch) -> None:
     db_path = tmp_path / "nerve-db"
     monkeypatch.setenv("NERVE_DB_PATH", str(db_path))
     apply_schema(db_path)
 
     task_id = upsert_pdca_task(
         {
-            "task_id": "task-owner-only",
+            "task_id": "task-policy-ignored",
             "owner_id": "owner-1",
             "conversation_key": "telegram:8553589429",
             "status": "running",
             "metadata": {
                 "steering_scope": "owner_only",
+                "allowed_actor_ids": ["owner-1"],
+                "target_actor_id": "owner-1",
                 "inputs": [],
                 "next_unconsumed_index": 0,
                 "input_dirty": False,
@@ -131,13 +131,13 @@ def test_enqueue_pdca_slice_owner_only_rejects_non_owner_actor(tmp_path: Path, m
 
     returned = enqueue_pdca_slice(
         context={},
-        incoming=_incoming(message_id="m-owner-only"),
+        incoming=_incoming(message_id="m-policy"),
         state={"timezone": "UTC"},
         session_key="telegram:8553589429",
         session_user_id="not-owner",
         day_session={"session_id": "owner-1|2026-03-12", "user_id": "owner-1", "date": "2026-03-12"},
-        payload={"text": "ignored"},
-        correlation_id="cid-owner-only",
+        payload={"text": "must still enqueue"},
+        correlation_id="cid-policy",
     )
     assert returned == task_id
 
@@ -146,93 +146,8 @@ def test_enqueue_pdca_slice_owner_only_rejects_non_owner_actor(tmp_path: Path, m
     metadata = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
     inputs = metadata.get("inputs")
     assert isinstance(inputs, list)
-    assert len(inputs) == 0
-    log = metadata.get("steering_decision_log")
-    assert isinstance(log, list) and log
-    assert str(log[-1].get("decision") or "") == "rejected"
-    assert str(log[-1].get("reason") or "") == "owner_only_scope"
-
-
-def test_enqueue_pdca_slice_targeted_scope_honors_timeout_fallback(tmp_path: Path, monkeypatch) -> None:
-    db_path = tmp_path / "nerve-db"
-    monkeypatch.setenv("NERVE_DB_PATH", str(db_path))
-    apply_schema(db_path)
-
-    future = (datetime.now(timezone.utc) + timedelta(minutes=5)).isoformat()
-    past = (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()
-
-    task_id = upsert_pdca_task(
-        {
-            "task_id": "task-targeted",
-            "owner_id": "owner-1",
-            "conversation_key": "telegram:8553589429",
-            "status": "running",
-            "metadata": {
-                "steering_scope": "targeted",
-                "target_actor_id": "wife-1",
-                "target_wait_timeout_at": future,
-                "inputs": [],
-                "next_unconsumed_index": 0,
-                "input_dirty": False,
-            },
-        }
-    )
-
-    _ = enqueue_pdca_slice(
-        context={},
-        incoming=_incoming(message_id="m-targeted-reject"),
-        state={"timezone": "UTC"},
-        session_key="telegram:8553589429",
-        session_user_id="not-wife",
-        day_session={"session_id": "owner-1|2026-03-12", "user_id": "owner-1", "date": "2026-03-12"},
-        payload={"text": "too early"},
-        correlation_id="cid-targeted-reject",
-    )
-
-    task = get_pdca_task(task_id)
-    assert isinstance(task, dict)
-    metadata = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
-    inputs = metadata.get("inputs")
-    assert isinstance(inputs, list)
-    assert len(inputs) == 0
-    log = metadata.get("steering_decision_log")
-    assert isinstance(log, list) and log
-    assert str(log[-1].get("reason") or "") == "target_waiting_for_actor"
-
-    _ = upsert_pdca_task(
-        {
-            "task_id": task_id,
-            "owner_id": "owner-1",
-            "conversation_key": "telegram:8553589429",
-            "status": "running",
-            "metadata": {
-                **metadata,
-                "target_wait_timeout_at": past,
-            },
-        }
-    )
-
-    _ = enqueue_pdca_slice(
-        context={},
-        incoming=_incoming(message_id="m-targeted-fallback"),
-        state={"timezone": "UTC"},
-        session_key="telegram:8553589429",
-        session_user_id="not-wife",
-        day_session={"session_id": "owner-1|2026-03-12", "user_id": "owner-1", "date": "2026-03-12"},
-        payload={"text": "after timeout"},
-        correlation_id="cid-targeted-fallback",
-    )
-
-    task = get_pdca_task(task_id)
-    assert isinstance(task, dict)
-    metadata = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
-    inputs = metadata.get("inputs")
-    assert isinstance(inputs, list)
     assert len(inputs) == 1
-    assert str(inputs[0].get("text") or "") == "after timeout"
-    log = metadata.get("steering_decision_log")
-    assert isinstance(log, list) and log
-    assert str(log[-1].get("reason") or "") == "target_timeout_fallback"
+    assert str(inputs[0].get("text") or "") == "must still enqueue"
 
 
 def test_enqueue_pdca_slice_accepts_attachment_only_input(tmp_path: Path, monkeypatch) -> None:
@@ -272,12 +187,12 @@ def test_enqueue_pdca_slice_accepts_attachment_only_input(tmp_path: Path, monkey
     task = get_pdca_task(task_id)
     assert isinstance(task, dict)
     metadata = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
-    assert str(metadata.get("pending_user_text") or "").startswith("[attachments:")
+    assert str(metadata.get("pending_user_text") or "") == ""
     inputs = metadata.get("inputs")
     assert isinstance(inputs, list)
     assert len(inputs) == 1
+    assert str(inputs[0].get("text") or "") == ""
     assert isinstance(inputs[0].get("attachments"), list)
-    assert str(inputs[0].get("steering_text") or "").startswith("[attachments:")
 
 
 def test_enqueue_pdca_slice_persists_correlation_in_metadata_state(tmp_path: Path, monkeypatch) -> None:
@@ -301,6 +216,8 @@ def test_enqueue_pdca_slice_persists_correlation_in_metadata_state(tmp_path: Pat
     metadata = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
     state = metadata.get("state") if isinstance(metadata.get("state"), dict) else {}
     assert str(state.get("correlation_id") or "") == "cid-corr-state"
+    assert str(metadata.get("initial_message_id") or "") == "m-corr-state"
+    assert str(metadata.get("initial_correlation_id") or "") == "cid-corr-state"
 
 
 def test_enqueue_pdca_slice_routes_to_running_owner_task_before_conversation_latest(

@@ -16,6 +16,7 @@ from alphonse.agent.cortex.task_mode.task_state_helpers import normalize_accepta
 from alphonse.agent.cortex.task_mode.task_state_helpers import task_state_with_defaults
 from alphonse.agent.cortex.transitions import emit_transition_event
 from alphonse.agent.nervous_system.pdca_queue_store import append_pdca_event
+from alphonse.agent.services.pdca_task_inputs import consume_task_inputs_for_check
 from alphonse.agent.session.day_state import render_recent_conversation_block
 
 _JUDGE_INVALID_BUDGET_DEFAULT = 2
@@ -47,9 +48,16 @@ def check_node_impl(
     corr = correlation_id(state)
     task_state["acceptance_criteria"] = normalize_acceptance_criteria_records(task_state.get("acceptance_criteria"))
     cycle = int(task_state.get("cycle_index") or 0)
-    consumed_inputs = _consume_steering_inputs_for_check(state=state)
+    task_state["steering_consumed_in_check"] = False
+    consumed_inputs = _consume_steering_inputs_for_check(
+        state=state,
+        task_state=task_state,
+        correlation_id=corr,
+    )
     if consumed_inputs:
         _apply_check_consumed_inputs(state=state, task_state=task_state, consumed_inputs=consumed_inputs)
+        task_state["steering_consumed_in_check"] = True
+        task_state["acceptance_criteria"] = []
         log_task_event(
             logger=logger,
             state=state,
@@ -67,6 +75,26 @@ def check_node_impl(
                 len(item.get("attachments")) if isinstance(item.get("attachments"), list) else 0
                 for item in consumed_inputs
             ),
+        )
+        log_task_event(
+            logger=logger,
+            state=state,
+            task_state=task_state,
+            node="check_node",
+            event="pdca.check.replan_forced_by_steering",
+            cycle=cycle,
+            accepted_criteria_reset=True,
+            consumed_count=len(consumed_inputs),
+        )
+        verdict = _forced_replan_verdict_for_steering(task_state=task_state)
+        return _finalize_check_cycle(
+            state=state,
+            task_state=task_state,
+            verdict=verdict,
+            logger=logger,
+            log_task_event=log_task_event,
+            corr=corr,
+            cycle=cycle,
         )
 
     case_type = select_case_deterministically(task_state)
@@ -625,12 +653,17 @@ def _render_fact_evidence_blocks(task_state: dict[str, Any]) -> str:
     return "\n".join(lines) if lines else "- (none)"
 
 
-def _consume_steering_inputs_for_check(*, state: dict[str, Any]) -> list[dict[str, Any]]:
-    consumer = state.get("_consume_task_inputs")
-    if not callable(consumer):
+def _consume_steering_inputs_for_check(
+    *,
+    state: dict[str, Any],
+    task_state: dict[str, Any],
+    correlation_id: str | None,
+) -> list[dict[str, Any]]:
+    task_id = _resolve_task_id_for_check(state=state, task_state=task_state)
+    if not task_id:
         return []
     try:
-        raw = consumer()
+        raw = consume_task_inputs_for_check(task_id=task_id, correlation_id=correlation_id)
     except Exception:
         return []
     if not isinstance(raw, list):
@@ -640,15 +673,13 @@ def _consume_steering_inputs_for_check(*, state: dict[str, Any]) -> list[dict[st
         if not isinstance(item, dict):
             continue
         text = str(item.get("text") or "").strip()
-        steering_text = str(item.get("steering_text") or text).strip()
         attachments = item.get("attachments")
         normalized_attachments = [dict(att) for att in attachments if isinstance(att, dict)] if isinstance(attachments, list) else []
-        if not steering_text and not normalized_attachments:
+        if not text and not normalized_attachments:
             continue
         consumed.append(
             {
                 "text": text,
-                "steering_text": steering_text,
                 "attachments": normalized_attachments,
                 "actor_id": str(item.get("actor_id") or "").strip() or None,
                 "message_id": str(item.get("message_id") or "").strip() or None,
@@ -657,6 +688,32 @@ def _consume_steering_inputs_for_check(*, state: dict[str, Any]) -> list[dict[st
             }
         )
     return consumed
+
+
+def _resolve_task_id_for_check(*, state: dict[str, Any], task_state: dict[str, Any]) -> str:
+    for value in (
+        task_state.get("task_id"),
+        task_state.get("pdca_task_id"),
+        state.get("task_id"),
+        state.get("pdca_task_id"),
+    ):
+        rendered = str(value or "").strip()
+        if rendered:
+            return rendered
+    return ""
+
+
+def _forced_replan_verdict_for_steering(*, task_state: dict[str, Any]) -> dict[str, Any]:
+    case_type = select_case_deterministically(task_state) or "task_resumption"
+    return {
+        "kind": "plan",
+        "case_type": case_type,
+        "reason": "New steering input consumed at check boundary; acceptance criteria reset before replanning.",
+        "confidence": 1.0,
+        "criteria_updates": [],
+        "evidence_refs": [],
+        "failure_class": None,
+    }
 
 
 def _apply_check_consumed_inputs(
@@ -668,7 +725,7 @@ def _apply_check_consumed_inputs(
     if not consumed_inputs:
         return
     task_state["check_provenance"] = "slice_resume"
-    latest_text = str(consumed_inputs[-1].get("steering_text") or consumed_inputs[-1].get("text") or "").strip()
+    latest_text = str(consumed_inputs[-1].get("text") or "").strip()
     if latest_text:
         state["last_user_message"] = latest_text
     facts = task_state.get("facts")
@@ -684,7 +741,7 @@ def _apply_check_consumed_inputs(
         except ValueError:
             continue
     for index, item in enumerate(consumed_inputs, start=1):
-        text = str(item.get("steering_text") or item.get("text") or "").strip()
+        text = str(item.get("text") or "").strip()
         attachments = item.get("attachments")
         normalized_attachments = [dict(att) for att in attachments if isinstance(att, dict)] if isinstance(attachments, list) else []
         if not text and not normalized_attachments:

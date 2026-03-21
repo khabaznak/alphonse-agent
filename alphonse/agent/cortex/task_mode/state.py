@@ -35,6 +35,7 @@ class TaskState(TypedDict, total=False):
     check_provenance: str | None
     judge_verdict: JudgeVerdict | None
     judge_invalid_streak: int
+    steering_consumed_in_check: bool
 
 
 def build_default_task_state() -> TaskState:
@@ -74,4 +75,5 @@ def build_default_task_state() -> TaskState:
         "check_provenance": "entry",
         "judge_verdict": None,
         "judge_invalid_streak": 0,
+        "steering_consumed_in_check": False,
     }

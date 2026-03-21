@@ -34,6 +34,7 @@ def task_state_with_defaults(state: dict[str, Any]) -> dict[str, Any]:
     task_state.setdefault("check_provenance", "entry")
     task_state.setdefault("judge_verdict", None)
     task_state.setdefault("judge_invalid_streak", 0)
+    task_state.setdefault("steering_consumed_in_check", False)
     return task_state
 
 
