@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+from concurrent.futures import Future
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from math import ceil
 from typing import Any
@@ -18,6 +20,7 @@ from alphonse.agent.nervous_system.pdca_queue_store import (
     has_pdca_event,
     load_pdca_checkpoint,
     save_pdca_checkpoint,
+    update_pdca_task_metadata,
     upsert_pdca_task,
     update_pdca_task_status,
 )
@@ -36,6 +39,13 @@ logger = get_component_logger("actions.handle_pdca_slice_request")
 _LOG = get_log_manager()
 _CORTEX_GRAPH = CortexGraph()
 _TERMINAL_TASK_STATUSES = {"done", "failed", "cancelled"}
+_SLICE_INVOKE_EXECUTOR = ThreadPoolExecutor(max_workers=max(int(os.getenv("ALPHONSE_PDCA_SLICE_INVOKE_WORKERS", "2") or "2"), 1))
+_INFLIGHT_STALE_SECONDS = max(int(os.getenv("ALPHONSE_PDCA_INVOKE_INFLIGHT_STALE_SECONDS", "300") or "300"), 30)
+_INFLIGHT_METADATA_KEYS = (
+    "invoke_inflight",
+    "invoke_inflight_started_at",
+    "invoke_inflight_correlation_id",
+)
 
 
 class HandlePdcaSliceRequestAction(Action):
@@ -88,6 +98,29 @@ class HandlePdcaSliceRequestAction(Action):
                 correlation_id,
             )
             return ActionResult(intention_key="NOOP", payload={}, urgency=None)
+
+        inflight_state = _read_inflight_state(task=task)
+        if inflight_state["active"] and not inflight_state["stale"]:
+            append_pdca_event(
+                task_id=task_id,
+                event_type="slice.request.inflight_ignored",
+                payload={"started_at": inflight_state["started_at"]},
+                correlation_id=correlation_id,
+            )
+            logger.info(
+                "HandlePdcaSliceRequestAction inflight ignored task_id=%s correlation_id=%s",
+                task_id,
+                correlation_id,
+            )
+            return ActionResult(intention_key="NOOP", payload={}, urgency=None)
+        if inflight_state["active"] and inflight_state["stale"]:
+            _clear_inflight_metadata(task_id=task_id)
+            append_pdca_event(
+                task_id=task_id,
+                event_type="slice.request.inflight_stale_cleared",
+                payload={"previous_started_at": inflight_state["started_at"]},
+                correlation_id=correlation_id,
+            )
 
         updated = update_pdca_task_status(task_id=task_id, status="running")
         append_pdca_event(
@@ -153,11 +186,6 @@ class HandlePdcaSliceRequestAction(Action):
             )
             return ActionResult(intention_key="NOOP", payload={}, urgency=None)
 
-        try:
-            llm_client = build_llm_client()
-        except Exception:
-            llm_client = None
-
         _emit_presence_lifecycle_event(
             incoming=incoming,
             event_family="presence.phase_changed",
@@ -175,7 +203,111 @@ class HandlePdcaSliceRequestAction(Action):
             invoke_state=invoke_state,
             correlation_id=correlation_id,
         )
-        invoke_state["_bus"] = context.get("ctx")
+        _mark_inflight_metadata(task_id=task_id, correlation_id=correlation_id)
+        scheduled = _schedule_slice_invoke(
+            task_id=task_id,
+            correlation_id=correlation_id,
+            task=task,
+            checkpoint=checkpoint,
+            base_state=base_state,
+            invoke_state=invoke_state,
+            incoming=incoming,
+            text=text,
+            bus=context.get("ctx"),
+        )
+        if not scheduled:
+            _clear_inflight_metadata(task_id=task_id)
+            _finalize_failure(
+                task=task,
+                correlation_id=correlation_id,
+                error="slice_invoke_schedule_failed",
+            )
+            _emit_presence_lifecycle_event(
+                incoming=incoming,
+                event_family="presence.failed",
+                phase="failed",
+                correlation_id=correlation_id,
+            )
+            _emit_slice_signal(
+                context=context,
+                event_type="pdca.failed",
+                task_id=task_id,
+                correlation_id=correlation_id,
+            )
+            return ActionResult(intention_key="NOOP", payload={}, urgency=None)
+        append_pdca_event(
+            task_id=task_id,
+            event_type="slice.request.invoke_scheduled",
+            payload={"mode": "background"},
+            correlation_id=correlation_id,
+        )
+        return ActionResult(intention_key="NOOP", payload={}, urgency=None)
+
+
+def _schedule_slice_invoke(
+    *,
+    task_id: str,
+    correlation_id: str | None,
+    task: dict[str, Any],
+    checkpoint: dict[str, Any] | None,
+    base_state: dict[str, Any],
+    invoke_state: dict[str, Any],
+    incoming: IncomingContext | None,
+    text: str,
+    bus: Any,
+) -> bool:
+    try:
+        future = _SLICE_INVOKE_EXECUTOR.submit(
+            _run_slice_invoke_job,
+            task_id=task_id,
+            correlation_id=correlation_id,
+            task=task,
+            checkpoint=checkpoint,
+            base_state=base_state,
+            invoke_state=invoke_state,
+            incoming=incoming,
+            text=text,
+            bus=bus,
+        )
+    except Exception:
+        logger.exception("failed to schedule pdca slice invoke task_id=%s", task_id)
+        return False
+    future.add_done_callback(
+        lambda done: _log_slice_worker_failure(task_id=task_id, correlation_id=correlation_id, future=done)
+    )
+    return True
+
+
+def _log_slice_worker_failure(*, task_id: str, correlation_id: str | None, future: Future[None]) -> None:
+    try:
+        _ = future.result()
+    except Exception:
+        logger.exception(
+            "pdca slice worker crashed task_id=%s correlation_id=%s",
+            task_id,
+            correlation_id,
+        )
+
+
+def _run_slice_invoke_job(
+    *,
+    task_id: str,
+    correlation_id: str | None,
+    task: dict[str, Any],
+    checkpoint: dict[str, Any] | None,
+    base_state: dict[str, Any],
+    invoke_state: dict[str, Any],
+    incoming: IncomingContext | None,
+    text: str,
+    bus: Any,
+) -> None:
+    context = {"ctx": bus}
+    try:
+        try:
+            llm_client = build_llm_client()
+        except Exception:
+            llm_client = None
+        invoke_state["_bus"] = bus
         if incoming is not None:
             invoke_state["_transition_sink"] = lambda event: emit_channel_transition_event(incoming, event)
         slice_started_at = datetime.now(timezone.utc)
@@ -211,7 +343,7 @@ class HandlePdcaSliceRequestAction(Action):
                     "user_notice_required": user_notice_required,
                 },
             )
-            return ActionResult(intention_key="NOOP", payload={}, urgency=None)
+            return
 
         cognition_state = result.cognition_state if isinstance(result.cognition_state, dict) else {}
         should_preempt = _should_preempt_after_step(
@@ -302,7 +434,48 @@ class HandlePdcaSliceRequestAction(Action):
             next_status,
             correlation_id,
         )
-        return ActionResult(intention_key="NOOP", payload={}, urgency=None)
+    finally:
+        _clear_inflight_metadata(task_id=task_id)
+
+
+def _read_inflight_state(*, task: dict[str, Any]) -> dict[str, Any]:
+    metadata = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
+    inflight = bool(metadata.get("invoke_inflight"))
+    started_text = str(metadata.get("invoke_inflight_started_at") or "").strip()
+    started_dt = _parse_utc(started_text)
+    stale = False
+    if inflight and started_dt is not None:
+        stale = (datetime.now(timezone.utc) - started_dt) > timedelta(seconds=_INFLIGHT_STALE_SECONDS)
+    return {
+        "active": inflight,
+        "stale": stale,
+        "started_at": started_text or None,
+    }
+
+
+def _mark_inflight_metadata(*, task_id: str, correlation_id: str | None) -> None:
+    task = get_pdca_task(task_id)
+    if not isinstance(task, dict):
+        return
+    metadata = dict(task.get("metadata") or {})
+    metadata["invoke_inflight"] = True
+    metadata["invoke_inflight_started_at"] = datetime.now(timezone.utc).isoformat()
+    metadata["invoke_inflight_correlation_id"] = correlation_id
+    update_pdca_task_metadata(task_id=task_id, metadata=metadata)
+
+
+def _clear_inflight_metadata(*, task_id: str) -> None:
+    task = get_pdca_task(task_id)
+    if not isinstance(task, dict):
+        return
+    metadata = dict(task.get("metadata") or {})
+    changed = False
+    for key in _INFLIGHT_METADATA_KEYS:
+        if key in metadata:
+            metadata.pop(key, None)
+            changed = True
+    if changed:
+        update_pdca_task_metadata(task_id=task_id, metadata=metadata)
 
 
 def _base_state(
