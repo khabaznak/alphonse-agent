@@ -21,6 +21,15 @@ from alphonse.agent.nervous_system.senses.bus import Signal
 from alphonse.agent.nervous_system.senses.bus import Bus
 
 
+@pytest.fixture(autouse=True)
+def _run_scheduled_pdca_slice_inline(monkeypatch: pytest.MonkeyPatch) -> None:
+    def _inline_schedule(**kwargs):  # noqa: ANN003
+        hpsr._run_slice_invoke_job(**kwargs)
+        return True
+
+    monkeypatch.setattr(hpsr, "_schedule_slice_invoke", _inline_schedule)
+
+
 def test_handle_pdca_slice_request_without_text_moves_to_waiting_user(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -605,6 +614,49 @@ def test_handle_pdca_slice_request_ignores_duplicate_signal_correlation(
     ignored = [e for e in events if e["event_type"] == "slice.request.duplicate_ignored" and e["correlation_id"] == "dup-cid"]
     assert len(received) == 1
     assert len(ignored) == 1
+
+
+def test_handle_pdca_slice_request_ignores_active_inflight_invoke(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db_path = tmp_path / "nerve-db"
+    monkeypatch.setenv("NERVE_DB_PATH", str(db_path))
+    apply_schema(db_path)
+
+    now_text = datetime.now(timezone.utc).isoformat()
+    task_id = upsert_pdca_task(
+        {
+            "owner_id": "owner-1",
+            "conversation_key": "chat-inflight",
+            "status": "running",
+            "metadata": {
+                "pending_user_text": "Execute this",
+                "invoke_inflight": True,
+                "invoke_inflight_started_at": now_text,
+                "invoke_inflight_correlation_id": "cid-active",
+            },
+        }
+    )
+
+    class _FakeGraph:
+        def invoke(self, state, text, *, llm_client=None):  # noqa: ANN001
+            _ = (state, text, llm_client)
+            raise AssertionError("invoke should not run while inflight is active")
+
+    monkeypatch.setattr(hpsr, "_CORTEX_GRAPH", _FakeGraph())
+    monkeypatch.setattr(hpsr, "build_llm_client", lambda: None)
+
+    action = HandlePdcaSliceRequestAction()
+    signal = Signal(
+        type="pdca.slice.requested",
+        payload={"task_id": task_id, "correlation_id": "cid-inflight"},
+        source="pdca_queue_runner",
+    )
+    _ = action.execute({"signal": signal, "ctx": None})
+
+    events = list_pdca_events(task_id=task_id, limit=20)
+    assert any(item["event_type"] == "slice.request.inflight_ignored" for item in events)
 
 
 def test_handle_pdca_slice_request_blocks_when_max_cycles_reached(
