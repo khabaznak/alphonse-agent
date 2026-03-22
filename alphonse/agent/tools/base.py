@@ -4,6 +4,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Protocol, TypedDict
 
+from alphonse.agent.tools.spec import ToolSpec
+
 
 class ToolExecutionState(str, Enum):
     PLANNED = "planned"
@@ -57,3 +59,13 @@ def ensure_tool_result(*, tool_key: str, value: Any) -> ToolResult:
         "exception": value.get("exception"),
         "metadata": dict(metadata),
     }
+
+
+@dataclass(frozen=True)
+class ToolDefinition:
+    spec: ToolSpec
+    executor: ToolProtocol
+
+    def invoke(self, args: dict[str, Any]) -> ToolResult:
+        raw = self.executor.execute(**dict(args or {}))
+        return ensure_tool_result(tool_key=self.spec.canonical_name, value=raw)

@@ -151,15 +151,17 @@ class JobRunner:
             args = dict(job.payload.get("args") or {})
             if not tool_key:
                 raise ValueError("missing_tool_key")
-            tool = self._tool_registry.get(tool_key) if hasattr(self._tool_registry, "get") else None
-            if tool is None or not callable(getattr(tool, "execute", None)):
+            definition = self._tool_registry.get(tool_key) if hasattr(self._tool_registry, "get") else None
+            if definition is None:
                 raise ValueError("tool_not_found")
-            execute = getattr(tool, "execute")
+            execute = getattr(definition.executor, "execute", None)
+            if not callable(execute):
+                raise ValueError("tool_not_found")
             signature = inspect.signature(execute)
             state = {"actor_person_id": user_id, "incoming_user_id": user_id, "channel_target": user_id}
             if "state" in signature.parameters:
-                return execute(**args, state=state)
-            return execute(**args)
+                args = {**args, "state": state}
+            return definition.invoke(args)
         raise ValueError("unsupported_unconscious_payload")
 
     def _apply_retry(self, *, user_id: str, job: JobSpec, now: datetime) -> bool:

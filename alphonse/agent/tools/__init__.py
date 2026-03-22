@@ -13,6 +13,7 @@ from alphonse.agent.tools.domotics_tools import (
     DomoticsQueryTool,
     DomoticsSubscribeTool,
 )
+from alphonse.agent.tools.base import ToolDefinition
 from alphonse.agent.tools.registry import ToolRegistry, build_default_tool_registry
 
 __all__ = [
@@ -29,6 +30,7 @@ __all__ = [
     "DomoticsQueryTool",
     "DomoticsExecuteTool",
     "DomoticsSubscribeTool",
+    "ToolDefinition",
     "ToolRegistry",
     "build_default_tool_registry",
 ]

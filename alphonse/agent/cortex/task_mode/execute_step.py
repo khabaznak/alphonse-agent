@@ -303,10 +303,10 @@ def _execute_tool_call(
     tool_name: str,
     args: dict[str, Any],
 ) -> Any:
-    tool = tool_registry.get(tool_name) if hasattr(tool_registry, "get") else None
-    if tool is None:
+    definition = tool_registry.get(tool_name) if hasattr(tool_registry, "get") else None
+    if definition is None:
         raise RuntimeError(f"tool_not_found:{tool_name}")
-    execute = getattr(tool, "execute", None)
+    execute = getattr(definition.executor, "execute", None)
     if not callable(execute):
         raise RuntimeError(f"tool_not_executable:{tool_name}")
     try:
@@ -316,9 +316,8 @@ def _execute_tool_call(
             p.kind == inspect.Parameter.VAR_KEYWORD for p in signature.parameters.values()
         )
         if accepts_state:
-            raw_result = execute(**call_args, state=state)
-        else:
-            raw_result = execute(**call_args)
+            call_args["state"] = state
+        raw_result = definition.invoke(call_args)
     except Exception as exc:
         as_payload = getattr(exc, "as_payload", None)
         if callable(as_payload):
@@ -334,8 +333,8 @@ def _execute_tool_call(
         return {
             "output": None,
             "exception": _coerce_error(error_payload),
-            "metadata": {"tool": tool_name},
-        }
+                "metadata": {"tool": tool_name},
+            }
     return _coerce_tool_result(tool_name=tool_name, raw_result=raw_result)
 
 

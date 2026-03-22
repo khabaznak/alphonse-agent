@@ -5,6 +5,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from alphonse.agent.nervous_system.migrate import apply_schema
+from alphonse.agent.tools.base import ToolDefinition
+from alphonse.agent.tools.spec import ToolSpec
 from alphonse.agent.services.job_models import JobSpec
 from alphonse.agent.services.job_runner import JobRunner, route_job
 from alphonse.agent.services.job_store import JobStore, compute_next_run_at
@@ -26,7 +28,14 @@ class _FakeRegistry:
                 registry.called = True
                 return {"output": {"echo": value}, "exception": None, "metadata": {"tool": "dummy_tool"}}
 
-        return _Tool()
+        spec = ToolSpec(
+            canonical_name="dummy_tool",
+            summary="dummy summary",
+            description="dummy description",
+            input_schema={"type": "object", "properties": {}, "required": [], "additionalProperties": False},
+            output_schema={"type": "object", "additionalProperties": True},
+        )
+        return ToolDefinition(spec=spec, executor=_Tool())
 
 
 def test_rrule_next_run_basic() -> None:

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from alphonse.agent.tools.base import ToolDefinition
+from alphonse.agent.tools.spec import ToolSpec
 from alphonse.integrations.homeassistant.smoke_toggle import run_toggle_smoke
 
 
@@ -17,18 +19,38 @@ class _FakeRegistry:
 
     def get(self, key: str):
         if key == "domotics.query":
-            return _FakeTool(lambda **kwargs: {"output": {"query": kwargs}, "exception": None, "metadata": {}})
+            return _definition(
+                key,
+                _FakeTool(lambda **kwargs: {"output": {"query": kwargs}, "exception": None, "metadata": {}}),
+            )
         if key == "domotics.subscribe":
-            return _FakeTool(
-                lambda **kwargs: {
-                    "output": {"event_count": 2, "events": [{"entity_id": "input_boolean.alphonse_test_toggle"}]},
-                    "exception": None,
-                    "metadata": {"subscribe_args": kwargs},
-                }
+            return _definition(
+                key,
+                _FakeTool(
+                    lambda **kwargs: {
+                        "output": {"event_count": 2, "events": [{"entity_id": "input_boolean.alphonse_test_toggle"}]},
+                        "exception": None,
+                        "metadata": {"subscribe_args": kwargs},
+                    }
+                ),
             )
         if key == "domotics.execute":
-            return _FakeTool(lambda **kwargs: {"output": {"execute": kwargs}, "exception": None, "metadata": {}})
+            return _definition(
+                key,
+                _FakeTool(lambda **kwargs: {"output": {"execute": kwargs}, "exception": None, "metadata": {}}),
+            )
         return None
+
+
+def _definition(key: str, executor: object) -> ToolDefinition:
+    spec = ToolSpec(
+        canonical_name=key,
+        summary=f"{key} summary",
+        description=f"{key} description",
+        input_schema={"type": "object", "properties": {}, "required": [], "additionalProperties": False},
+        output_schema={"type": "object", "additionalProperties": True},
+    )
+    return ToolDefinition(spec=spec, executor=executor)  # type: ignore[arg-type]
 
 
 def test_run_toggle_smoke_uses_domotics_tools(monkeypatch) -> None:

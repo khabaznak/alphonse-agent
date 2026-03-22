@@ -13,7 +13,6 @@ from alphonse.agent.cognition.plan_execution.communication_dispatcher import Com
 from alphonse.agent.cognition.plans import CortexPlan
 from alphonse.agent.observability.log_manager import get_component_logger
 from alphonse.agent.tools.registry import ToolRegistry, build_default_tool_registry
-from alphonse.agent.tools.base import ensure_tool_result
 from alphonse.agent.services.communication_service import CommunicationRequest, CommunicationService
 
 logger = get_component_logger("cognition.plan_executor")
@@ -48,11 +47,10 @@ class ToolMap:
         tool_call_output: Callable[[Any], None],
     ) -> None:
         try:
-            tool = self._registry.get(tool_key)
-            if tool is None:
+            definition = self._registry.get(tool_key)
+            if definition is None:
                 raise RuntimeError(f"tool_not_found:{tool_key}")
-            raw = tool.execute(**dict(params or {}))
-            result = ensure_tool_result(tool_key=tool_key, value=raw)
+            result = definition.invoke(dict(params or {}))
             tool_call_output(result)
         except Exception as exc:
             execution_exception_handler(exc)

@@ -43,42 +43,48 @@ def run_toggle_smoke(*, entity_id: str, duration_seconds: float = 10.0) -> dict[
             "metadata": {"tool": "domotics.smoke_toggle"},
         }
 
-    before = query_tool.execute(kind="state", entity_id=entity_id)
+    before = query_tool.invoke({"kind": "state", "entity_id": entity_id})
 
     subscribe_result: dict[str, Any] = {}
 
     def _run_subscribe() -> None:
         nonlocal subscribe_result
-        subscribe_result = subscribe_tool.execute(
-            event_type="state_changed",
-            duration_seconds=duration_seconds,
-            max_events=200,
+        subscribe_result = subscribe_tool.invoke(
+            {
+                "event_type": "state_changed",
+                "duration_seconds": duration_seconds,
+                "max_events": 200,
+            }
         )
 
     sub_thread = threading.Thread(target=_run_subscribe, daemon=True)
     sub_thread.start()
 
     time.sleep(1.0)
-    turned_on = execute_tool.execute(
-        domain="input_boolean",
-        service="turn_on",
-        target={"entity_id": entity_id},
-        readback=True,
-        readback_entity_id=entity_id,
-        expected_state="on",
+    turned_on = execute_tool.invoke(
+        {
+            "domain": "input_boolean",
+            "service": "turn_on",
+            "target": {"entity_id": entity_id},
+            "readback": True,
+            "readback_entity_id": entity_id,
+            "expected_state": "on",
+        }
     )
     time.sleep(1.0)
-    turned_off = execute_tool.execute(
-        domain="input_boolean",
-        service="turn_off",
-        target={"entity_id": entity_id},
-        readback=True,
-        readback_entity_id=entity_id,
-        expected_state="off",
+    turned_off = execute_tool.invoke(
+        {
+            "domain": "input_boolean",
+            "service": "turn_off",
+            "target": {"entity_id": entity_id},
+            "readback": True,
+            "readback_entity_id": entity_id,
+            "expected_state": "off",
+        }
     )
 
     sub_thread.join(timeout=max(1.0, duration_seconds + 2.0))
-    after = query_tool.execute(kind="state", entity_id=entity_id)
+    after = query_tool.invoke({"kind": "state", "entity_id": entity_id})
 
     return {
         "output": {

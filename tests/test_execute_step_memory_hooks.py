@@ -4,7 +4,9 @@ from typing import Any
 
 import alphonse.agent.cortex.task_mode.execute_step as execute_step_module
 from alphonse.agent.cortex.task_mode.execute_step import execute_step_node_impl
+from alphonse.agent.tools.base import ToolDefinition
 from alphonse.agent.tools.registry import ToolRegistry
+from alphonse.agent.tools.spec import ToolSpec
 
 
 class _EchoTool:
@@ -39,6 +41,17 @@ class _AskQuestionTool:
         }
 
 
+def _register_tool(registry: ToolRegistry, key: str, executor: object) -> None:
+    spec = ToolSpec(
+        canonical_name=key,
+        summary=f"{key} summary",
+        description=f"{key} description",
+        input_schema={"type": "object", "properties": {}, "required": [], "additionalProperties": False},
+        output_schema={"type": "object", "additionalProperties": True},
+    )
+    registry.register(ToolDefinition(spec=spec, executor=executor))  # type: ignore[arg-type]
+
+
 def _task_state_with_defaults(state: dict[str, Any]) -> dict[str, Any]:
     task_state = state.get("task_state")
     assert isinstance(task_state, dict)
@@ -65,7 +78,7 @@ def test_execute_step_emits_memory_hooks_after_tool_call(monkeypatch) -> None:
     monkeypatch.setattr(execute_step_module, "record_plan_step_completion", lambda **_: calls.append("plan_step_completed"))
 
     registry = ToolRegistry()
-    registry.register("echo_tool", _EchoTool())
+    _register_tool(registry, "echo_tool", _EchoTool())
     state: dict[str, Any] = {
         "correlation_id": "corr-memory-hook-1",
         "incoming_user_id": "alex",
@@ -111,7 +124,7 @@ def test_execute_ask_question_tool_emits_plan_step_completion_memory(monkeypatch
     monkeypatch.setattr(execute_step_module, "record_plan_step_completion", lambda **_: calls.append("plan_step_completed"))
 
     registry = ToolRegistry()
-    registry.register("askQuestion", _AskQuestionTool())
+    _register_tool(registry, "askQuestion", _AskQuestionTool())
 
     state: dict[str, Any] = {
         "correlation_id": "corr-memory-hook-2",
@@ -156,7 +169,7 @@ def test_send_message_call_writes_facts_and_memory(monkeypatch) -> None:
     monkeypatch.setattr(execute_step_module, "record_plan_step_completion", lambda **_: calls.append("plan_step_completed"))
 
     registry = ToolRegistry()
-    registry.register("send_message", _InternalMessageTool())
+    _register_tool(registry, "send_message", _InternalMessageTool())
     state: dict[str, Any] = {
         "correlation_id": "corr-memory-hook-internal",
         "incoming_user_id": "alex",

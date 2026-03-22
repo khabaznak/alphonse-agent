@@ -21,9 +21,11 @@ from alphonse.agent.cortex.task_mode.pdca import update_state_node
 from alphonse.agent.cortex.task_mode.pdca import validate_step_node
 from alphonse.agent.cortex.task_mode.prompt_templates import NEXT_STEP_SYSTEM_PROMPT
 from alphonse.agent.cortex.task_mode.state import build_default_task_state
+from alphonse.agent.tools.base import ToolDefinition
 from alphonse.agent.tools.registry import ToolRegistry
 from alphonse.agent.tools.registry import build_default_tool_registry
 from alphonse.agent.tools.scheduler_tool import SchedulerToolError
+from alphonse.agent.tools.spec import ToolSpec
 
 
 class _QueuedLlm:
@@ -343,16 +345,27 @@ class _CaptureMcpCallTool:
         }
 
 
+def _register_tool(registry: ToolRegistry, key: str, executor: object) -> None:
+    spec = ToolSpec(
+        canonical_name=key,
+        summary=f"{key} summary",
+        description=f"{key} description",
+        input_schema={"type": "object", "properties": {}, "required": [], "additionalProperties": False},
+        output_schema={"type": "object", "additionalProperties": True},
+    )
+    registry.register(ToolDefinition(spec=spec, executor=executor))  # type: ignore[arg-type]
+
+
 def _build_fake_registry() -> ToolRegistry:
     registry = ToolRegistry()
-    registry.register("getTime", _FakeClock())
-    registry.register("createReminder", _FakeReminder())
+    _register_tool(registry, "getTime", _FakeClock())
+    _register_tool(registry, "createReminder", _FakeReminder())
     return registry
 
 
 def _build_erroring_reminder_registry() -> ToolRegistry:
     registry = ToolRegistry()
-    registry.register("createReminder", _ErroringReminder())
+    _register_tool(registry, "createReminder", _ErroringReminder())
     return registry
 
 
@@ -528,7 +541,7 @@ def test_pdca_create_reminder_structured_failure_keeps_running() -> None:
 def test_pdca_create_reminder_missing_fields_stays_failed() -> None:
     reminder = _RecoverableReminder()
     tool_registry = ToolRegistry()
-    tool_registry.register("createReminder", reminder)
+    _register_tool(tool_registry, "createReminder", reminder)
     task_state = build_default_task_state()
     task_state["acceptance_criteria"] = ["done when requested outcome is produced"]
     task_state["goal"] = "set a reminder for me in 1 min"
@@ -582,7 +595,7 @@ def test_pdca_create_reminder_missing_fields_stays_failed() -> None:
 
 def test_pdca_execute_maps_typeerror_to_structured_tool_failure() -> None:
     tool_registry = ToolRegistry()
-    tool_registry.register("echo_tool", _ArgStrictTool())
+    _register_tool(tool_registry, "echo_tool", _ArgStrictTool())
     task_state = build_default_task_state()
     task_state["acceptance_criteria"] = ["done when requested outcome is produced"]
     task_state["goal"] = "run strict tool"
@@ -1222,7 +1235,7 @@ def test_route_after_next_step_routes_to_execute_step_node() -> None:
 
 def test_execute_step_handles_structured_tool_failure() -> None:
     registry = ToolRegistry()
-    registry.register("stt_transcribe", _FailingTool())
+    _register_tool(registry, "stt_transcribe", _FailingTool())
     task_state = build_default_task_state()
     task_state["acceptance_criteria"] = ["done when requested outcome is produced"]
     task_state["plan"] = {
@@ -1263,7 +1276,7 @@ def test_execute_step_handles_structured_tool_failure() -> None:
 def test_execute_step_passes_mcp_call_payload_through_without_do_normalization() -> None:
     registry = ToolRegistry()
     mcp_tool = _CaptureMcpCallTool()
-    registry.register("mcp_call", mcp_tool)
+    _register_tool(registry, "mcp_call", mcp_tool)
     task_state = build_default_task_state()
     task_state["goal"] = "Find veloswim"
     task_state["plan"] = {
@@ -1311,7 +1324,7 @@ def test_execute_step_passes_mcp_call_payload_through_without_do_normalization()
 
 def test_execute_step_records_evidence_for_domotics_execute_confirmed() -> None:
     registry = ToolRegistry()
-    registry.register("domotics.execute", _DomoticsExecuteConfirmedTool())
+    _register_tool(registry, "domotics.execute", _DomoticsExecuteConfirmedTool())
     task_state = build_default_task_state()
     task_state["acceptance_criteria"] = ["done when requested outcome is produced"]
     task_state["plan"] = {
@@ -1540,7 +1553,7 @@ def test_execute_step_emits_presence_progress_from_planner_intent(monkeypatch: p
             _ = kwargs
             return {"output": {"ok": True}, "exception": None, "metadata": {}}
 
-    tool_registry.register("local_audio_output_render", _FakeTool())
+    _register_tool(tool_registry, "local_audio_output_render", _FakeTool())
     task_state = build_default_task_state()
     task_state["status"] = "running"
     task_state["cycle_index"] = 2
@@ -1588,7 +1601,7 @@ def test_execute_step_accepts_canonical_send_message_from_planner_for_simple_con
                 "metadata": {"tool": "send_message"},
             }
 
-    tool_registry.register("send_message", _SendMessageTool())
+    _register_tool(tool_registry, "send_message", _SendMessageTool())
     task_state = build_default_task_state()
     task_state["status"] = "running"
     task_state["plan"]["current_step_id"] = "step_1"

@@ -49,6 +49,8 @@ class LocationSense(Sense):
     ) -> str:
         tool_registry = build_default_tool_registry()
         geocoder = tool_registry.get("geocoder")
+        if geocoder is not None and hasattr(geocoder, "executor"):
+            geocoder = getattr(geocoder, "executor")
         lat = None
         lng = None
         if geocoder is not None:
