@@ -555,7 +555,12 @@ def record_after_tool_call(
     result: dict[str, Any],
     correlation_id: str | None,
 ) -> None:
-    if str(tool_name or "").strip() in {"search_episodes", "get_mission", "list_active_missions", "get_workspace_pointer"}:
+    if str(tool_name or "").strip() in {
+        "memory.search_episodes",
+        "memory.get_mission",
+        "memory.list_active_missions",
+        "memory.get_workspace",
+    }:
         return
     user_id = _memory_user_id(state)
     mission_id = _memory_mission_id(task_state=task_state, correlation_id=correlation_id)

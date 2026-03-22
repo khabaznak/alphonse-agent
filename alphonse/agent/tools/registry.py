@@ -133,10 +133,10 @@ def _build_runtime_executors(*, job_store: JobStore, job_runner: JobRunner) -> l
     clock = ClockTool()
     get_my_settings = GetMySettingsTool()
     get_user_details = GetUserDetailsTool()
-    search_episodes = SearchEpisodesTool()
-    get_mission = GetMissionTool()
-    list_active_missions = ListActiveMissionsTool()
-    get_workspace_pointer = GetWorkspacePointerTool()
+    memory_search_episodes = SearchEpisodesTool()
+    memory_get_mission = GetMissionTool()
+    memory_list_active_missions = ListActiveMissionsTool()
+    memory_get_workspace = GetWorkspacePointerTool()
     scheduler = SchedulerTool()
     send_message = SendMessageTool()
     send_voice_note = SendVoiceNoteTool(_send_message_tool=send_message)
@@ -168,10 +168,10 @@ def _build_runtime_executors(*, job_store: JobStore, job_runner: JobRunner) -> l
         scheduler,
         get_my_settings,
         get_user_details,
-        search_episodes,
-        get_mission,
-        list_active_missions,
-        get_workspace_pointer,
+        memory_search_episodes,
+        memory_get_mission,
+        memory_list_active_missions,
+        memory_get_workspace,
         send_message,
         send_voice_note,
         local_audio_output,
@@ -585,7 +585,7 @@ def _default_specs() -> list[ToolSpec]:
             examples=[{}],
         ),
         ToolSpec(
-            canonical_name="search_episodes",
+            canonical_name="memory.search_episodes",
             summary="Search episodic memory entries for the current user with optional mission and time filters.",
             description="Search episodic memory entries for the current user with optional mission and time filters.",
             when_to_use="Use when retrieving past user events/tasks by keyword or time range.",
@@ -607,7 +607,7 @@ def _default_specs() -> list[ToolSpec]:
             examples=[{"query": "medicine", "limit": 10}],
         ),
         ToolSpec(
-            canonical_name="get_mission",
+            canonical_name="memory.get_mission",
             summary="Get mission details from memory by mission_id.",
             description="Get mission details from memory by mission_id.",
             when_to_use="Use when a mission identifier is known and mission context is needed.",
@@ -625,7 +625,7 @@ def _default_specs() -> list[ToolSpec]:
             examples=[{"mission_id": "mission_123"}],
         ),
         ToolSpec(
-            canonical_name="list_active_missions",
+            canonical_name="memory.list_active_missions",
             summary="List active missions from memory for the current user.",
             description="List active missions from memory for the current user.",
             when_to_use="Use for a quick view of currently active user missions.",
@@ -640,7 +640,7 @@ def _default_specs() -> list[ToolSpec]:
             examples=[{}],
         ),
         ToolSpec(
-            canonical_name="get_workspace_pointer",
+            canonical_name="memory.get_workspace",
             summary="Get a workspace pointer by key from memory for the current user.",
             description="Get a workspace pointer by key from memory for the current user.",
             when_to_use="Use when a named workspace pointer must be resolved before action.",

@@ -31,7 +31,7 @@ def _parse_dt(value: str | None) -> datetime | None:
 
 
 class SearchEpisodesTool:
-    canonical_name: str = "search_episodes"
+    canonical_name: str = "memory.search_episodes"
     capability: str = "memory"
 
     def execute(
@@ -61,12 +61,12 @@ class SearchEpisodesTool:
         return {
             "output": {"user_id": uid, "hits": rows, "count": len(rows)},
             "exception": None,
-            "metadata": {"tool": "search_episodes"},
+            "metadata": {"tool": "memory.search_episodes"},
         }
 
 
 class GetMissionTool:
-    canonical_name: str = "get_mission"
+    canonical_name: str = "memory.get_mission"
     capability: str = "memory"
 
     def execute(
@@ -83,12 +83,12 @@ class GetMissionTool:
         return {
             "output": {"user_id": uid, "mission": mission},
             "exception": None,
-            "metadata": {"tool": "get_mission"},
+            "metadata": {"tool": "memory.get_mission"},
         }
 
 
 class ListActiveMissionsTool:
-    canonical_name: str = "list_active_missions"
+    canonical_name: str = "memory.list_active_missions"
     capability: str = "memory"
 
     def execute(
@@ -104,12 +104,12 @@ class ListActiveMissionsTool:
         return {
             "output": {"user_id": uid, "missions": rows, "count": len(rows)},
             "exception": None,
-            "metadata": {"tool": "list_active_missions"},
+            "metadata": {"tool": "memory.list_active_missions"},
         }
 
 
 class GetWorkspacePointerTool:
-    canonical_name: str = "get_workspace_pointer"
+    canonical_name: str = "memory.get_workspace"
     capability: str = "memory"
 
     def execute(
@@ -126,5 +126,5 @@ class GetWorkspacePointerTool:
         return {
             "output": {"user_id": uid, "key": str(key or ""), "value": value},
             "exception": None,
-            "metadata": {"tool": "get_workspace_pointer"},
+            "metadata": {"tool": "memory.get_workspace"},
         }

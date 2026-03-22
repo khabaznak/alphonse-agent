@@ -47,10 +47,10 @@ def test_memory_read_tools_roundtrip(tmp_path: Path, monkeypatch) -> None:
 def test_memory_tools_surface_is_read_only() -> None:
     registry = build_default_tool_registry()
     keys = set(registry.keys())
-    assert "search_episodes" in keys
-    assert "get_mission" in keys
-    assert "list_active_missions" in keys
-    assert "get_workspace_pointer" in keys
+    assert "memory.search_episodes" in keys
+    assert "memory.get_mission" in keys
+    assert "memory.list_active_missions" in keys
+    assert "memory.get_workspace" in keys
     assert "append_episode" not in keys
     assert "mission_upsert" not in keys
     assert "put_artifact" not in keys
