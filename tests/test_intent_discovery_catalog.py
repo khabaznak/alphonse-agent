@@ -48,8 +48,6 @@ def test_available_ability_catalog_has_minimal_tools_only() -> None:
         "job_run_now",
         "terminal_sync",
         "mcp_call",
-        "terminal_async",
-        "terminal_async_command_status",
         "local_audio_output_speak",
         "stt_transcribe",
         "get_my_settings",

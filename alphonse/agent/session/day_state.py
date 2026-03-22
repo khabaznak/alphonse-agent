@@ -361,8 +361,6 @@ def _last_action_summary(
         return "Transcribed an audio asset."
     if tool in {
         "terminal_sync",
-        "terminal_async",
-        "terminal_async_command_status",
         "terminal_execute",
         "terminal_command_submit",
         "terminal_command_status",
