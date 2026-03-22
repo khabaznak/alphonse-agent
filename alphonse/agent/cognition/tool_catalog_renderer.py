@@ -84,15 +84,21 @@ def build_render_context(specs: list[ToolSpec]) -> list[dict[str, Any]]:
             groups[group] = {"group": group, **_group_metadata(group), "tools": []}
         groups[group]["tools"].append(
             {
-                "key": spec.key,
+                "key": spec.canonical_name,
                 "description": spec.description.strip(),
                 "when_to_use": spec.when_to_use.strip(),
+                "when_not_to_use": spec.when_not_to_use.strip(),
                 "returns": spec.returns.strip(),
+                "failure_modes": list(spec.failure_modes or []),
+                "fallback_guidance": spec.fallback_guidance.strip(),
                 "domain_tags": spec.domain_tags,
+                "aliases": list(spec.aliases or []),
                 "safety_level": spec.safety_level.value,
                 "requires_confirmation": spec.requires_confirmation,
                 "input_schema_pretty": pretty_json(spec.input_schema),
+                "output_schema_pretty": pretty_json(spec.output_schema),
                 "examples": spec.examples,
+                "deprecated": bool(spec.deprecated),
             }
         )
     ordered = sorted(groups.values(), key=lambda item: str(item.get("title") or ""))
