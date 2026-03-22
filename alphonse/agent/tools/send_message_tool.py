@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, ClassVar
 import uuid
 import re
 from pathlib import Path
@@ -16,6 +16,8 @@ logger = get_component_logger("tools.send_message_tool")
 
 @dataclass(frozen=True)
 class SendMessageTool:
+    canonical_name: ClassVar[str] = "send_message"
+    capability: ClassVar[str] = "communication"
     _communication: CommunicationService | None = None
 
     def __post_init__(self) -> None:
@@ -123,6 +125,8 @@ class SendMessageTool:
 
 @dataclass(frozen=True)
 class SendVoiceNoteTool:
+    canonical_name: ClassVar[str] = "send_voice_note"
+    capability: ClassVar[str] = "communication"
     _send_message_tool: SendMessageTool | None = None
 
     def __post_init__(self) -> None:

@@ -106,6 +106,9 @@ def normalize_mcp_call_invocation(raw: dict[str, Any]) -> tuple[dict[str, Any], 
 
 
 class McpCallTool:
+    canonical_name: str = "mcp_call"
+    capability: str = "mcp"
+
     def __init__(self, connector: McpConnector | None = None) -> None:
         self._connector = connector or McpConnector()
 

@@ -13,6 +13,9 @@ from alphonse.agent.nervous_system.assets import resolve_asset_path
 
 
 class SttTranscribeTool:
+    canonical_name: str = "stt_transcribe"
+    capability: str = "communication"
+
     def __init__(self, *, model: str | None = None) -> None:
         self._model = str(model or os.getenv("ALPHONSE_STT_MODEL") or "base").strip() or "base"
 

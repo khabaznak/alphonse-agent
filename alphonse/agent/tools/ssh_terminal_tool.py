@@ -7,6 +7,9 @@ from typing import Any
 
 
 class SshTerminalTool:
+    canonical_name: str = "ssh_terminal"
+    capability: str = "terminal_ops"
+
     def execute(
         self,
         *,

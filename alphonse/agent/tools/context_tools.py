@@ -6,6 +6,9 @@ from alphonse.config import settings
 
 
 class GetMySettingsTool:
+    canonical_name: str = "get_my_settings"
+    capability: str = "context"
+
     def execute(self, *, state: dict[str, Any] | None = None, **_: Any) -> dict[str, Any]:
         payload = dict(state or {})
         return {
@@ -23,6 +26,9 @@ class GetMySettingsTool:
 
 
 class GetUserDetailsTool:
+    canonical_name: str = "get_user_details"
+    capability: str = "context"
+
     def execute(self, *, state: dict[str, Any] | None = None, **_: Any) -> dict[str, Any]:
         payload = dict(state or {})
         return {

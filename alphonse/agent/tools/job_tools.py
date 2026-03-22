@@ -25,6 +25,9 @@ class JobToolContext:
 
 
 class JobCreateTool:
+    canonical_name: str = "job_create"
+    capability: str = "jobs"
+
     def __init__(self, store: JobStore) -> None:
         self._store = store
 
@@ -113,6 +116,9 @@ class JobCreateTool:
 
 
 class JobListTool:
+    canonical_name: str = "job_list"
+    capability: str = "jobs"
+
     def __init__(self, store: JobStore) -> None:
         self._store = store
 
@@ -145,6 +151,9 @@ class JobListTool:
 
 
 class JobPauseTool:
+    canonical_name: str = "job_pause"
+    capability: str = "jobs"
+
     def __init__(self, store: JobStore) -> None:
         self._store = store
 
@@ -165,6 +174,9 @@ class JobPauseTool:
 
 
 class JobResumeTool:
+    canonical_name: str = "job_resume"
+    capability: str = "jobs"
+
     def __init__(self, store: JobStore) -> None:
         self._store = store
 
@@ -185,6 +197,9 @@ class JobResumeTool:
 
 
 class JobDeleteTool:
+    canonical_name: str = "job_delete"
+    capability: str = "jobs"
+
     def __init__(self, store: JobStore) -> None:
         self._store = store
 
@@ -205,6 +220,9 @@ class JobDeleteTool:
 
 
 class JobRunNowTool:
+    canonical_name: str = "job_run_now"
+    capability: str = "jobs"
+
     def __init__(self, runner: JobRunner) -> None:
         self._runner = runner
 

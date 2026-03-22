@@ -16,6 +16,8 @@ from alphonse.agent.tools.spec import ToolSpec
 @dataclass
 class _EchoExecutor:
     value: str = "ok"
+    canonical_name: str = "echo_tool"
+    capability: str = "test"
 
     def execute(self, **kwargs: Any) -> dict[str, Any]:
         _ = kwargs
@@ -72,6 +74,81 @@ def test_build_default_tool_registry_fails_when_required_spec_missing(monkeypatc
     filtered = [spec for spec in real_specs if spec.canonical_name != "get_time"]
     monkeypatch.setattr(runtime_registry, "_default_specs", lambda: filtered)
     with pytest.raises(ValueError, match="tool_spec_missing:get_time"):
+        runtime_registry.build_default_tool_registry()
+
+
+def test_build_default_tool_registry_fails_when_executor_missing_canonical_name(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _MissingCanonical:
+        capability = "test"
+
+        def execute(self, **kwargs: Any) -> dict[str, Any]:
+            _ = kwargs
+            return {"output": {}, "exception": None, "metadata": {"tool": "x"}}
+
+    monkeypatch.setattr(runtime_registry, "_build_runtime_executors", lambda **_: [_MissingCanonical()])  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="tool_executor_missing_canonical_name"):
+        runtime_registry.build_default_tool_registry()
+
+
+def test_build_default_tool_registry_fails_when_executor_missing_capability(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _MissingCapability:
+        canonical_name = "get_time"
+
+        def execute(self, **kwargs: Any) -> dict[str, Any]:
+            _ = kwargs
+            return {"output": {}, "exception": None, "metadata": {"tool": "x"}}
+
+    monkeypatch.setattr(runtime_registry, "_build_runtime_executors", lambda **_: [_MissingCapability()])  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="tool_executor_missing_capability:get_time"):
+        runtime_registry.build_default_tool_registry()
+
+
+def test_build_default_tool_registry_fails_when_duplicate_executor_canonical_name(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _ExecA:
+        canonical_name = "get_time"
+        capability = "context"
+
+        def execute(self, **kwargs: Any) -> dict[str, Any]:
+            _ = kwargs
+            return {"output": {}, "exception": None, "metadata": {"tool": "a"}}
+
+    class _ExecB:
+        canonical_name = "get_time"
+        capability = "context"
+
+        def execute(self, **kwargs: Any) -> dict[str, Any]:
+            _ = kwargs
+            return {"output": {}, "exception": None, "metadata": {"tool": "b"}}
+
+    monkeypatch.setattr(runtime_registry, "_build_runtime_executors", lambda **_: [_ExecA(), _ExecB()])  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="tool_executor_duplicate_canonical_name:get_time"):
+        runtime_registry.build_default_tool_registry()
+
+
+def test_build_default_tool_registry_fails_when_executor_spec_mismatch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _Exec:
+        canonical_name = "get_time"
+        capability = "context"
+
+        def execute(self, **kwargs: Any) -> dict[str, Any]:
+            _ = kwargs
+            return {"output": {}, "exception": None, "metadata": {"tool": "x"}}
+
+    monkeypatch.setattr(runtime_registry, "_build_runtime_executors", lambda **_: [_Exec()])  # type: ignore[arg-type]
+    monkeypatch.setattr(
+        runtime_registry,
+        "_require_spec",
+        lambda spec_by_name, canonical_name: _spec("wrong_name"),
+    )
+    with pytest.raises(ValueError, match="tool_executor_spec_mismatch:get_time:wrong_name"):
         runtime_registry.build_default_tool_registry()
 
 

@@ -31,6 +31,9 @@ def _parse_dt(value: str | None) -> datetime | None:
 
 
 class SearchEpisodesTool:
+    canonical_name: str = "search_episodes"
+    capability: str = "memory"
+
     def execute(
         self,
         *,
@@ -63,6 +66,9 @@ class SearchEpisodesTool:
 
 
 class GetMissionTool:
+    canonical_name: str = "get_mission"
+    capability: str = "memory"
+
     def execute(
         self,
         *,
@@ -82,6 +88,9 @@ class GetMissionTool:
 
 
 class ListActiveMissionsTool:
+    canonical_name: str = "list_active_missions"
+    capability: str = "memory"
+
     def execute(
         self,
         *,
@@ -100,6 +109,9 @@ class ListActiveMissionsTool:
 
 
 class GetWorkspacePointerTool:
+    canonical_name: str = "get_workspace_pointer"
+    capability: str = "memory"
+
     def execute(
         self,
         *,

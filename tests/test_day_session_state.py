@@ -44,11 +44,11 @@ def test_session_state_persists_rev_and_working_set(tmp_path: Path) -> None:
     updated = build_next_session_state(
         previous=state,
         channel="webui",
-        user_message="Please run getTime again",
+        user_message="Please run get_time again",
         assistant_message="It is 11:00 now.",
-        ability_state={"kind": "tool_calls", "steps": [{"idx": 0, "tool": "getTime", "status": "executed"}]},
+        ability_state={"kind": "tool_calls", "steps": [{"idx": 0, "tool": "get_time", "status": "executed"}]},
         task_state=None,
-        planning_context={"facts": {"tool_results": [{"step": 0, "tool": "getTime", "time": "2026-02-15T11:00:00"}]}},
+        planning_context={"facts": {"tool_results": [{"step": 0, "tool": "get_time", "time": "2026-02-15T11:00:00"}]}},
         pending_interaction=None,
     )
     commit_session_state(updated, root_dir=tmp_path)
@@ -62,7 +62,7 @@ def test_session_state_persists_rev_and_working_set(tmp_path: Path) -> None:
     )
 
     assert reloaded["rev"] == 1
-    assert any("Please run getTime again" in item for item in reloaded["working_set"])
+    assert any("Please run get_time again" in item for item in reloaded["working_set"])
     assert "webui" in reloaded["channels_seen"]
     assert "telegram" in reloaded["channels_seen"]
 
@@ -76,7 +76,7 @@ def test_session_prompt_block_is_bounded() -> None:
         "channels_seen": ["webui", "telegram", "cli", "api", "x", "y", "z"],
         "working_set": [f"working-{idx}" for idx in range(20)],
         "open_loops": [f"loop-{idx}" for idx in range(20)],
-        "last_action": {"tool": "getTime", "summary": "Fetched current time.", "ts": "2026-02-15T11:00:00Z"},
+        "last_action": {"tool": "get_time", "summary": "Fetched current time.", "ts": "2026-02-15T11:00:00Z"},
     }
     block = render_session_prompt_block(state)
     assert block.count("\n") + 1 <= 30
@@ -122,7 +122,7 @@ def test_session_last_action_can_come_from_task_state_steps() -> None:
                 {
                     "step_id": "step_1",
                     "status": "executed",
-                    "proposal": {"kind": "call_tool", "tool_name": "getTime", "args": {}},
+                    "proposal": {"kind": "call_tool", "tool_name": "get_time", "args": {}},
                 },
                 {
                     "step_id": "step_2",

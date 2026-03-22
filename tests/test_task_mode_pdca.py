@@ -218,7 +218,7 @@ class _FakeClock:
                 "timezone": "UTC",
             },
             "exception": None,
-            "metadata": {"tool": "getTime"},
+            "metadata": {"tool": "get_time"},
         }
 
 
@@ -358,7 +358,7 @@ def _register_tool(registry: ToolRegistry, key: str, executor: object) -> None:
 
 def _build_fake_registry() -> ToolRegistry:
     registry = ToolRegistry()
-    _register_tool(registry, "getTime", _FakeClock())
+    _register_tool(registry, "get_time", _FakeClock())
     _register_tool(registry, "createReminder", _FakeReminder())
     return registry
 
@@ -423,7 +423,7 @@ def test_reminder_request_calls_create_reminder_within_two_cycles() -> None:
     next_step = build_next_step_node(tool_registry=tool_registry)
     llm = _QueuedLlm(
         [
-            {"tool_call": {"kind": "call_tool", "tool_name": "getTime", "args": {}}},
+            {"tool_call": {"kind": "call_tool", "tool_name": "get_time", "args": {}}},
             {
                 "tool_call": {
                     "kind": "call_tool",
@@ -471,7 +471,7 @@ def test_reminder_request_calls_create_reminder_within_two_cycles() -> None:
 def test_gettime_does_not_terminate_without_reminder_evidence() -> None:
     tool_registry = _build_fake_registry()
     next_step = build_next_step_node(tool_registry=tool_registry)
-    llm = _QueuedLlm(['{"tool_call":{"kind":"call_tool","tool_name":"getTime","args":{}}}'])
+    llm = _QueuedLlm(['{"tool_call":{"kind":"call_tool","tool_name":"get_time","args":{}}}'])
 
     task_state = build_default_task_state()
     task_state["acceptance_criteria"] = ["done when requested outcome is produced"]
@@ -1017,7 +1017,7 @@ def test_pdca_does_not_force_acceptance_criteria_on_first_turn() -> None:
 def test_pdca_next_step_prompt_includes_recent_conversation_sentinel() -> None:
     tool_registry = build_default_tool_registry()
     next_step = build_next_step_node(tool_registry=tool_registry)
-    llm = _PromptCaptureLlm('{"kind":"call_tool","tool_name":"getTime","args":{}}')
+    llm = _PromptCaptureLlm('{"kind":"call_tool","tool_name":"get_time","args":{}}')
 
     task_state = build_default_task_state()
     task_state["acceptance_criteria"] = ["done when requested outcome is produced"]
@@ -1093,7 +1093,7 @@ def test_pdca_next_step_prompt_includes_mcp_capabilities(tmp_path: Path, monkeyp
     monkeypatch.setenv("ALPHONSE_MCP_PROFILES_DIR", str(profiles_dir))
     tool_registry = build_default_tool_registry()
     next_step = build_next_step_node(tool_registry=tool_registry)
-    llm = _PromptCaptureLlm('{"kind":"call_tool","tool_name":"getTime","args":{}}')
+    llm = _PromptCaptureLlm('{"kind":"call_tool","tool_name":"get_time","args":{}}')
     task_state = build_default_task_state()
     task_state["acceptance_criteria"] = ["done when requested outcome is produced"]
     task_state["goal"] = "search web"
@@ -1114,7 +1114,7 @@ def test_pdca_next_step_prompt_includes_mcp_capabilities(tmp_path: Path, monkeyp
 def test_pdca_next_step_prompt_includes_mcp_live_tools_menu() -> None:
     tool_registry = build_default_tool_registry()
     next_step = build_next_step_node(tool_registry=tool_registry)
-    llm = _PromptCaptureLlm('{"kind":"call_tool","tool_name":"getTime","args":{}}')
+    llm = _PromptCaptureLlm('{"kind":"call_tool","tool_name":"get_time","args":{}}')
     task_state = build_default_task_state()
     task_state["acceptance_criteria"] = ["done when requested outcome is produced"]
     task_state["goal"] = "search web"
@@ -1704,7 +1704,7 @@ def test_next_step_single_swoop_keeps_raw_candidate_without_internal_repair() ->
 def test_non_canonical_top_level_planner_output_fails_in_do_node() -> None:
     tool_registry = _build_fake_registry()
     next_step = build_next_step_node(tool_registry=tool_registry)
-    llm = _QueuedLlm(['{"kind":"call_tool","tool_name":"getTime","args":{}}'])
+    llm = _QueuedLlm(['{"kind":"call_tool","tool_name":"get_time","args":{}}'])
 
     task_state = build_default_task_state()
     task_state["acceptance_criteria"] = ["done when requested outcome is produced"]
@@ -1746,7 +1746,7 @@ def test_provider_native_tool_calls_still_fail_in_do_when_not_canonical() -> Non
     task_state["plan"]["current_step_id"] = "step_1"
     task_state["plan"]["steps"] = [{"step_id": "step_1", "status": "proposed"}]
     task_state["pending_plan_raw"] = {
-        "tool_calls": [{"id": "call-1", "name": "getTime", "arguments": {}}],
+        "tool_calls": [{"id": "call-1", "name": "get_time", "arguments": {}}],
     }
     state: dict[str, object] = {
         "correlation_id": "corr-do-native-tool-calls-strict",

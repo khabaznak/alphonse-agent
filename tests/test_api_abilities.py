@@ -24,7 +24,7 @@ def test_ability_crud_flow(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> N
         json={
             "intent_name": "demo.echo",
             "kind": "tool_call_then_response",
-            "tools": ["clock"],
+            "tools": ["get_time"],
             "enabled": True,
             "source": "user",
             "spec": {

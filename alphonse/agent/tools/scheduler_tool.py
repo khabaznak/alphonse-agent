@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone as dt_timezone
 from alphonse.agent.observability.log_manager import get_component_logger
 import re
-from typing import Any
+from typing import Any, ClassVar
 from zoneinfo import ZoneInfo
 
 from alphonse.agent.nervous_system.prompt_artifacts import create_prompt_artifact
@@ -44,6 +44,8 @@ class SchedulerToolError(Exception):
 
 @dataclass(frozen=True)
 class SchedulerTool:
+    canonical_name: ClassVar[str] = "create_reminder"
+    capability: ClassVar[str] = "planning"
     llm_client: Any | None = None
     scheduler: SchedulerService | None = None
 

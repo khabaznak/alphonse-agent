@@ -21,7 +21,7 @@ class _ToolProvider(_TextOnlyProvider):
         tool_choice: str = "auto",
     ) -> dict[str, object]:
         _ = (messages, tools, tool_choice)
-        return {"tool_call": {"kind": "call_tool", "tool_name": "getTime", "args": {}}}
+        return {"tool_call": {"kind": "call_tool", "tool_name": "get_time", "args": {}}}
 
 
 def test_require_text_completion_provider_accepts_valid_provider() -> None:
@@ -49,7 +49,7 @@ def test_require_tool_calling_provider_rejects_missing_complete_with_tools() -> 
 def test_require_canonical_single_tool_call_result_rejects_malformed_tool_call() -> None:
     with pytest.raises(ValueError) as exc:
         require_canonical_single_tool_call_result(
-            {"tool_call": {"kind": "call_tool", "tool_name": "getTime", "args": "bad"}},
+            {"tool_call": {"kind": "call_tool", "tool_name": "get_time", "args": "bad"}},
             error_prefix="contract_test",
         )
     assert "contract_test: invalid tool_call.args" in str(exc.value)

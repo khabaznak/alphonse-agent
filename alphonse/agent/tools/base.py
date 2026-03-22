@@ -39,6 +39,9 @@ class ToolResult(TypedDict):
 
 
 class ToolProtocol(Protocol):
+    canonical_name: str
+    capability: str
+
     def execute(self, **kwargs: Any) -> ToolResult: ...
 
 

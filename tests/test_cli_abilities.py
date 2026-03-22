@@ -47,7 +47,7 @@ def test_cli_abilities_crud_flow(
             abilities_command="update",
             intent_name="demo.echo",
             kind="tool_call_then_response",
-            tools=["clock"],
+            tools=["get_time"],
             spec_json='{"responses":{"default":"ok"}}',
             spec_file=None,
             source=None,

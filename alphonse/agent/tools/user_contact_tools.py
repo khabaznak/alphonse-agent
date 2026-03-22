@@ -14,6 +14,9 @@ logger = get_component_logger("tools.user_contact_tools")
 
 
 class UserRegisterFromContactTool:
+    canonical_name: str = "user_register_from_contact"
+    capability: str = "users"
+
     def execute(
         self,
         *,
@@ -112,6 +115,9 @@ class UserRegisterFromContactTool:
 
 
 class UserRemoveFromContactTool:
+    canonical_name: str = "user_remove_from_contact"
+    capability: str = "users"
+
     def execute(
         self,
         *,
@@ -172,6 +178,9 @@ class UserRemoveFromContactTool:
 
 
 class UserSearchTool:
+    canonical_name: str = "user_search"
+    capability: str = "users"
+
     def execute(
         self,
         *,

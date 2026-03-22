@@ -56,6 +56,9 @@ class _TelegramFileClient:
 
 
 class TelegramGetFileMetaTool:
+    canonical_name: str = "telegram_get_file_meta"
+    capability: str = "vision_files"
+
     def __init__(self, *, bot_token: str | None = None) -> None:
         self._bot_token = str(bot_token or os.getenv("TELEGRAM_BOT_TOKEN") or "").strip()
 
@@ -75,6 +78,9 @@ class TelegramGetFileMetaTool:
 
 
 class TelegramDownloadFileTool:
+    canonical_name: str = "telegram_download_file"
+    capability: str = "vision_files"
+
     def __init__(self, *, bot_token: str | None = None) -> None:
         self._bot_token = str(bot_token or os.getenv("TELEGRAM_BOT_TOKEN") or "").strip()
 
@@ -99,6 +105,9 @@ class TelegramDownloadFileTool:
 
 
 class TranscribeTelegramAudioTool:
+    canonical_name: str = "transcribe_telegram_audio"
+    capability: str = "vision_files"
+
     def __init__(self, *, bot_token: str | None = None) -> None:
         self._bot_token = str(bot_token or os.getenv("TELEGRAM_BOT_TOKEN") or "").strip()
         self._model = str(os.getenv("ALPHONSE_STT_MODEL") or "base").strip() or "base"
@@ -188,6 +197,9 @@ class TranscribeTelegramAudioTool:
 
 
 class VisionAnalyzeImageTool:
+    canonical_name: str = "vision_analyze_image"
+    capability: str = "vision_files"
+
     def __init__(self) -> None:
         self._ollama_base_url = str(os.getenv("OLLAMA_BASE_URL") or "http://localhost:11434").strip()
         self._model = _resolve_vision_model(
@@ -251,6 +263,9 @@ class VisionAnalyzeImageTool:
 
 
 class VisionExtractTool:
+    canonical_name: str = "vision_extract"
+    capability: str = "vision_files"
+
     def __init__(self) -> None:
         self._ollama_base_url = str(os.getenv("OLLAMA_BASE_URL") or "http://localhost:11434").strip()
         self._model = _resolve_vision_model(

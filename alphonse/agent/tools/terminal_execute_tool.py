@@ -10,6 +10,9 @@ from alphonse.config import settings
 
 
 class TerminalExecuteTool:
+    canonical_name: str = "terminal_sync"
+    capability: str = "terminal_ops"
+
     def __init__(self, terminal: TerminalTool | None = None) -> None:
         self._terminal = terminal or TerminalTool()
 

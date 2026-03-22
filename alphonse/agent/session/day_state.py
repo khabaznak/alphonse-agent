@@ -351,7 +351,7 @@ def _last_action_summary(
             continue
         if step_idx is not None and item.get("step") == step_idx:
             fact = item
-    if tool in {"get_time", "getTime"}:
+    if tool in {"get_time"}:
         if isinstance(fact, dict) and fact.get("time"):
             return "Fetched current time."
         return "Fetched current time."
@@ -375,7 +375,7 @@ def _last_action_summary(
             result = facts[step_id].get("result")
             if tool in {"local_audio_output_speak", "local_audio_output.speak"}:
                 return "Played local audio output."
-            if tool in {"get_time", "getTime"}:
+            if tool in {"get_time"}:
                 return "Fetched current time."
             if tool in {"create_reminder", "createReminder"}:
                 return "Created a reminder."

@@ -453,6 +453,8 @@ class _QwenBackend(_TTSBackend):
 
 class LocalAudioOutputSpeakTool:
     """Speak text out loud on the local machine using selected TTS backend."""
+    canonical_name: str = "local_audio_output_speak"
+    capability: str = "communication"
 
     def execute(
         self,
@@ -482,6 +484,8 @@ class LocalAudioOutputSpeakTool:
 
 class LocalAudioOutputRenderTool:
     """Render text-to-speech to an audio file for downstream integrations."""
+    canonical_name: str = "local_audio_output_render"
+    capability: str = "communication"
 
     def execute(
         self,

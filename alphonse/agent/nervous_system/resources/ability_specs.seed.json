@@ -237,9 +237,9 @@
   {
     "intent_name": "time.current",
     "kind": "tool_call_then_response",
-    "tools": ["clock"],
+    "tools": ["get_time"],
     "tool_call": {
-      "tool": "clock",
+      "tool": "get_time",
       "method": "current_time",
       "args": {
         "timezone_name": "{timezone}"

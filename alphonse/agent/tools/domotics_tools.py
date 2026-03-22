@@ -14,6 +14,9 @@ from alphonse.integrations.domotics import (
 
 
 class DomoticsQueryTool:
+    canonical_name: str = "domotics.query"
+    capability: str = "domotics"
+
     def execute(
         self,
         *,
@@ -48,6 +51,9 @@ class DomoticsQueryTool:
 
 
 class DomoticsExecuteTool:
+    canonical_name: str = "domotics.execute"
+    capability: str = "domotics"
+
     def execute(
         self,
         *,
@@ -94,6 +100,9 @@ class DomoticsExecuteTool:
 
 
 class DomoticsSubscribeTool:
+    canonical_name: str = "domotics.subscribe"
+    capability: str = "domotics"
+
     def execute(
         self,
         *,

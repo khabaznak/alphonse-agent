@@ -15,7 +15,7 @@ def test_extract_session_tool_payload_reads_native_tool_parts() -> None:
             {
                 "type": "tool",
                 "callID": "call-1",
-                "tool": "getTime",
+                "tool": "get_time",
                 "state": {"status": "pending", "input": {}},
             }
         ]
@@ -24,7 +24,7 @@ def test_extract_session_tool_payload_reads_native_tool_parts() -> None:
     assert content == ""
     assert tool_call == {
         "kind": "call_tool",
-        "tool_name": "getTime",
+        "tool_name": "get_time",
         "args": {},
     }
 
@@ -60,10 +60,10 @@ def test_extract_canonical_from_text_content_reads_tool_call_and_intent() -> Non
 
 def test_try_parse_json_object_recovers_from_wrapped_text() -> None:
     parsed = _try_parse_json_object(
-        'Response:\n{"tool_call":{"kind":"call_tool","tool_name":"getTime","args":{}},"planner_intent":"Check time."}\nDone.'
+        'Response:\n{"tool_call":{"kind":"call_tool","tool_name":"get_time","args":{}},"planner_intent":"Check time."}\nDone.'
     )
     assert isinstance(parsed, dict)
-    assert parsed.get("tool_call", {}).get("tool_name") == "getTime"
+    assert parsed.get("tool_call", {}).get("tool_name") == "get_time"
 
 
 def test_extract_session_tool_payload_uses_first_tool_only() -> None:
@@ -101,7 +101,7 @@ def test_complete_with_tools_always_uses_session_mode(monkeypatch) -> None:
         called["session"] += 1
         return {
             "content": "",
-            "tool_call": {"kind": "call_tool", "tool_name": "getTime", "args": {}},
+            "tool_call": {"kind": "call_tool", "tool_name": "get_time", "args": {}},
         }
 
     monkeypatch.setattr(client, "_complete_with_tools_via_session_api", _session)
@@ -118,7 +118,7 @@ def test_complete_with_tools_ignores_tool_call_mode_env_and_uses_session(monkeyp
         called["session"] += 1
         return {
             "content": "",
-            "tool_call": {"kind": "call_tool", "tool_name": "getTime", "args": {}},
+            "tool_call": {"kind": "call_tool", "tool_name": "get_time", "args": {}},
         }
 
     monkeypatch.setenv("OPENCODE_TOOL_CALL_MODE", "session")
@@ -158,7 +158,7 @@ def test_complete_with_tools_preserves_valid_planner_intent(monkeypatch) -> None
         _ = kwargs
         return {
             "content": "",
-            "tool_call": {"kind": "call_tool", "tool_name": "getTime", "args": {}},
+            "tool_call": {"kind": "call_tool", "tool_name": "get_time", "args": {}},
             "planner_intent": "Checking local system time now.",
         }
 
@@ -170,7 +170,7 @@ def test_complete_with_tools_preserves_valid_planner_intent(monkeypatch) -> None
 def test_render_session_transport_payload_text_is_pure_json_envelope() -> None:
     rendered = _render_session_transport_payload_text(
         messages=[{"role": "system", "content": "You are planner."}, {"role": "user", "content": "Do it."}],
-        tools=[{"type": "function", "function": {"name": "getTime", "parameters": {"type": "object"}}}],
+        tools=[{"type": "function", "function": {"name": "get_time", "parameters": {"type": "object"}}}],
         tool_choice="auto",
     )
     assert rendered.startswith("{") and rendered.endswith("}")

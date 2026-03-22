@@ -95,8 +95,17 @@ def build_default_tool_registry() -> ToolRegistry:
         tick_seconds=45,
     )
     runtime_tools = _build_runtime_executors(job_store=job_store, job_runner=job_runner)
-    for canonical_name, executor in runtime_tools:
+    seen_canonical: set[str] = set()
+    for executor in runtime_tools:
+        canonical_name, _ = _executor_identity(executor)
+        if canonical_name in seen_canonical:
+            raise ValueError(f"tool_executor_duplicate_canonical_name:{canonical_name}")
+        seen_canonical.add(canonical_name)
         spec = _require_spec(spec_by_name, canonical_name)
+        if str(spec.canonical_name or "").strip() != canonical_name:
+            raise ValueError(
+                f"tool_executor_spec_mismatch:{canonical_name}:{str(spec.canonical_name or '').strip()}"
+            )
         registry.register(ToolDefinition(spec=spec, executor=executor))
     job_runner.set_tool_registry(registry)
     return registry
@@ -120,7 +129,7 @@ def _require_spec(spec_by_name: dict[str, ToolSpec], canonical_name: str) -> Too
     return spec
 
 
-def _build_runtime_executors(*, job_store: JobStore, job_runner: JobRunner) -> list[tuple[str, ToolProtocol]]:
+def _build_runtime_executors(*, job_store: JobStore, job_runner: JobRunner) -> list[ToolProtocol]:
     clock = ClockTool()
     get_my_settings = GetMySettingsTool()
     get_user_details = GetUserDetailsTool()
@@ -155,40 +164,50 @@ def _build_runtime_executors(*, job_store: JobStore, job_runner: JobRunner) -> l
     domotics_execute = DomoticsExecuteTool()
     domotics_subscribe = DomoticsSubscribeTool()
     return [
-        ("get_time", clock),
-        ("create_reminder", scheduler),
-        ("get_my_settings", get_my_settings),
-        ("get_user_details", get_user_details),
-        ("search_episodes", search_episodes),
-        ("get_mission", get_mission),
-        ("list_active_missions", list_active_missions),
-        ("get_workspace_pointer", get_workspace_pointer),
-        ("send_message", send_message),
-        ("send_voice_note", send_voice_note),
-        ("local_audio_output_speak", local_audio_output),
-        ("local_audio_output_render", local_audio_render),
-        ("stt_transcribe", stt_transcribe),
-        ("telegram_get_file_meta", telegram_get_file),
-        ("telegram_download_file", telegram_download_file),
-        ("transcribe_telegram_audio", transcribe_audio),
-        ("vision_analyze_image", vision_analyze_image),
-        ("vision_extract", vision_extract),
-        ("terminal_sync", terminal_sync),
-        ("mcp_call", mcp_call),
-        ("ssh_terminal", ssh_terminal),
-        ("job_create", job_create),
-        ("job_list", job_list),
-        ("job_pause", job_pause),
-        ("job_resume", job_resume),
-        ("job_delete", job_delete),
-        ("job_run_now", job_run_now),
-        ("user_register_from_contact", user_register_from_contact),
-        ("user_remove_from_contact", user_remove_from_contact),
-        ("user_search", user_search),
-        ("domotics.query", domotics_query),
-        ("domotics.execute", domotics_execute),
-        ("domotics.subscribe", domotics_subscribe),
+        clock,
+        scheduler,
+        get_my_settings,
+        get_user_details,
+        search_episodes,
+        get_mission,
+        list_active_missions,
+        get_workspace_pointer,
+        send_message,
+        send_voice_note,
+        local_audio_output,
+        local_audio_render,
+        stt_transcribe,
+        telegram_get_file,
+        telegram_download_file,
+        transcribe_audio,
+        vision_analyze_image,
+        vision_extract,
+        terminal_sync,
+        mcp_call,
+        ssh_terminal,
+        job_create,
+        job_list,
+        job_pause,
+        job_resume,
+        job_delete,
+        job_run_now,
+        user_register_from_contact,
+        user_remove_from_contact,
+        user_search,
+        domotics_query,
+        domotics_execute,
+        domotics_subscribe,
     ]
+
+
+def _executor_identity(executor: ToolProtocol) -> tuple[str, str]:
+    canonical = str(getattr(executor, "canonical_name", "") or "").strip()
+    capability = str(getattr(executor, "capability", "") or "").strip()
+    if not canonical:
+        raise ValueError(f"tool_executor_missing_canonical_name:{type(executor).__name__}")
+    if not capability:
+        raise ValueError(f"tool_executor_missing_capability:{canonical}")
+    return canonical, capability
 
 
 def planner_visible_tool_definitions(tool_registry: Any) -> list[ToolDefinition]:
@@ -294,7 +313,6 @@ def _default_specs() -> list[ToolSpec]:
             input_schema=_object_schema(properties={}, required=[]),
             output_schema=_permissive_output_schema(),
             domain_tags=["time", "planning"],
-            aliases=["clock", "getTime"],
             safety_level=SafetyLevel.LOW,
             examples=[{}],
         ),
@@ -394,7 +412,7 @@ def _default_specs() -> list[ToolSpec]:
             domain_tags=["audio", "output"],
             aliases=["local_audio_output.speak"],
             safety_level=SafetyLevel.LOW,
-            examples=[{"text": "Hola, te escucho.", "voice": "Jorge"}],
+            examples=[{"text": "Hola, te escucho.", "voice": "Ryan"}],
         ),
         ToolSpec(
             canonical_name="local_audio_output_render",
