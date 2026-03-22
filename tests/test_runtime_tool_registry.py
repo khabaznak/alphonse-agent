@@ -48,10 +48,13 @@ def test_registry_registers_tool_definition_only() -> None:
 
 def test_registry_alias_lookup_returns_same_definition() -> None:
     registry = ToolRegistry()
-    definition = ToolDefinition(spec=_spec("send_message", aliases=["sendMessage"]), executor=_EchoExecutor())
+    definition = ToolDefinition(
+        spec=_spec("communication.send_message", aliases=["communication.send_message_alias"]),
+        executor=_EchoExecutor(),
+    )
     registry.register(definition)
-    assert registry.get("send_message") is definition
-    assert registry.get("sendMessage") is definition
+    assert registry.get("communication.send_message") is definition
+    assert registry.get("communication.send_message_alias") is definition
 
 
 def test_registry_rejects_duplicate_alias_collision() -> None:
@@ -169,19 +172,19 @@ def test_planner_schemas_exclude_hidden_tools() -> None:
 def test_planner_schemas_use_canonical_name_once_for_aliases() -> None:
     registry = ToolRegistry()
     spec = ToolSpec(
-        canonical_name="send_message",
+        canonical_name="communication.send_message",
         summary="send message summary",
         description="send message description",
         input_schema={"type": "object", "properties": {"To": {"type": "string"}}, "required": ["To"], "additionalProperties": False},
         output_schema={"type": "object", "additionalProperties": True},
-        aliases=["sendMessage", "send_message_alias"],
+        aliases=["communication.send_message_alias", "send_message_alias"],
     )
     registry.register(ToolDefinition(spec=spec, executor=_EchoExecutor()))
     names = planner_canonical_tool_names(registry)
-    assert names == ["send_message"]
+    assert names == ["communication.send_message"]
     schemas = planner_tool_schemas(registry)
     assert len(schemas) == 1
     fn = schemas[0]["function"]
-    assert fn["name"] == "send_message"
+    assert fn["name"] == "communication.send_message"
     assert fn["description"] == "send message summary"
     assert fn["parameters"] == spec.input_schema

@@ -11,7 +11,7 @@ def test_available_abilities_renders_full_markdown_catalog() -> None:
     rendered = format_available_abilities()
     assert rendered.startswith("# Available Tools")
     assert "### `get_time`" in rendered
-    assert "### `send_message`" in rendered
+    assert "### `communication.send_message`" in rendered
     assert "### `get_time`" in rendered
 
 

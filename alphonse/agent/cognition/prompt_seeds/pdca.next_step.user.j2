@@ -29,10 +29,10 @@ Return ONLY one JSON object with this shape (no markdown, no extra text):
 Rules:
 - `tool_call.kind` must be `call_tool`.
 - `tool_call.tool_name` and `tool_call.args` are required.
-- For `send_message` and `send_voice_note`, `tool_call.args.To` must be a concrete target value.
+- For `communication.send_message` and `communication.send_voice_note`, `tool_call.args.To` must be a concrete target value.
 - Do not use placeholder recipient strings like `current_channel_target`, `channel_target`, `target`, or `recipient`.
 - `planner_intent` is optional, plain language, max 160 chars when present.
-- `planner_intent` is internal progress metadata; do not emit `send_message` only to expose it.
+- `planner_intent` is internal progress metadata; do not emit `communication.send_message` only to expose it.
 - Do not return acceptance criteria in this output.
 - If `tool_call.tool_name` is `mcp_call`, args MUST be:
   - `{"profile":"<profile_key>","operation":"<operation_key>","arguments":{...}}`

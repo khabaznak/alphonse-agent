@@ -99,7 +99,7 @@ def evaluate_success_from_evidence(task_state: dict[str, Any]) -> dict[str, Any]
                 "outcome_kind": "task_completed",
                 "confidence": 0.93,
                 "missing_evidence": [],
-                "supporting_facts": ["send_message produced output with no exception"],
+                "supporting_facts": ["communication.send_message produced output with no exception"],
                 "final_response_hint": "Listo, el mensaje fue enviado correctamente.",
             }
 
@@ -114,7 +114,7 @@ def evaluate_success_from_evidence(task_state: dict[str, Any]) -> dict[str, Any]
             "final_response_hint": "",
         }
 
-    if latest_tool and latest_tool not in {"send_message", "sendMessage"}:
+    if latest_tool and latest_tool not in {"communication.send_message"}:
         exception = _fact_exception_payload(latest)
         if _has_exception_payload(exception):
             return {
@@ -219,7 +219,7 @@ def _has_reminder_evidence(fact_entries: list[dict[str, Any]]) -> bool:
 def _has_message_delivery_evidence(fact_entries: list[dict[str, Any]]) -> bool:
     for entry in reversed(fact_entries):
         tool = str(entry.get("tool_name") or entry.get("tool") or "").strip()
-        if tool not in {"send_message", "sendMessage"}:
+        if tool not in {"communication.send_message"}:
             continue
         output = entry.get("output")
         if output is None and isinstance(entry.get("result"), dict):

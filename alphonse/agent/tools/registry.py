@@ -137,14 +137,14 @@ def _build_runtime_executors(*, job_store: JobStore, job_runner: JobRunner) -> l
     memory_get_mission = GetMissionTool()
     memory_list_active_missions = ListActiveMissionsTool()
     memory_get_workspace = GetWorkspacePointerTool()
+    communication_send_message = SendMessageTool()
+    communication_send_voice_note = SendVoiceNoteTool(_send_message_tool=communication_send_message)
+    communication_get_attachment_meta = TelegramGetFileMetaTool()
+    communication_get_attachment = TelegramDownloadFileTool()
     scheduler = SchedulerTool()
-    send_message = SendMessageTool()
-    send_voice_note = SendVoiceNoteTool(_send_message_tool=send_message)
     local_audio_output = LocalAudioOutputSpeakTool()
     local_audio_render = LocalAudioOutputRenderTool()
     stt_transcribe = SttTranscribeTool()
-    telegram_get_file = TelegramGetFileMetaTool()
-    telegram_download_file = TelegramDownloadFileTool()
     transcribe_audio = TranscribeTelegramAudioTool()
     vision_analyze_image = VisionAnalyzeImageTool()
     vision_extract = VisionExtractTool()
@@ -165,26 +165,26 @@ def _build_runtime_executors(*, job_store: JobStore, job_runner: JobRunner) -> l
     domotics_subscribe = DomoticsSubscribeTool()
     return [
         context_clock,
-        scheduler,
         context_get_my_settings,
         context_get_user_details,
         memory_search_episodes,
         memory_get_mission,
         memory_list_active_missions,
         memory_get_workspace,
-        send_message,
-        send_voice_note,
+        communication_send_message,
+        communication_send_voice_note,
+        communication_get_attachment_meta,
+        communication_get_attachment,
         local_audio_output,
         local_audio_render,
         stt_transcribe,
-        telegram_get_file,
-        telegram_download_file,
         transcribe_audio,
         vision_analyze_image,
         vision_extract,
         terminal_sync,
         mcp_call,
         ssh_terminal,
+        scheduler,
         job_create,
         job_list,
         job_pause,
@@ -337,7 +337,7 @@ def _default_specs() -> list[ToolSpec]:
             examples=[{"ForWhom": "me", "Time": "tomorrow 8am", "Message": "take medicine"}],
         ),
         ToolSpec(
-            canonical_name="send_message",
+            canonical_name="communication.send_message",
             summary="Send a message to a recipient through a communication channel (for example Telegram).",
             description="Send a message to a recipient through a communication channel (for example Telegram).",
             when_to_use="Use when the user asks Alphonse to deliver a direct message to someone.",
@@ -357,15 +357,14 @@ def _default_specs() -> list[ToolSpec]:
             ),
             output_schema=_permissive_output_schema(),
             domain_tags=["communication", "messaging", "delivery"],
-            aliases=["sendMessage"],
             safety_level=SafetyLevel.MEDIUM,
             examples=[{"To": "Gabriela", "Message": "Hola Gaby, Alex llegará para cenar.", "Channel": "telegram"}],
         ),
         ToolSpec(
-            canonical_name="send_voice_note",
+            canonical_name="communication.send_voice_note",
             summary="Send a Telegram-style voice note to a recipient.",
             description="Send a Telegram-style voice note to a recipient.",
-            when_to_use="Prefer this over send_message when you must deliver a true voice note bubble in Telegram.",
+            when_to_use="Prefer this over communication.send_message when you must deliver a true voice note bubble in Telegram.",
             returns="delivery_status",
             input_schema=_object_schema(
                 properties={
@@ -381,7 +380,6 @@ def _default_specs() -> list[ToolSpec]:
             ),
             output_schema=_permissive_output_schema(),
             domain_tags=["communication", "messaging", "delivery", "audio"],
-            aliases=["sendVoiceNote"],
             safety_level=SafetyLevel.MEDIUM,
             examples=[
                 {
@@ -455,26 +453,25 @@ def _default_specs() -> list[ToolSpec]:
             examples=[{"asset_id": "asset_123", "language_hint": "es-MX"}],
         ),
         ToolSpec(
-            canonical_name="telegram_get_file_meta",
-            summary="Resolve Telegram file metadata from a file_id.",
-            description="Resolve Telegram file metadata from a file_id.",
-            when_to_use="Use when telegram file metadata is required before download/transcription.",
+            canonical_name="communication.get_attachment_meta",
+            summary="Resolve attachment metadata from a provider file_id.",
+            description="Resolve attachment metadata from a provider file_id.",
+            when_to_use="Use when attachment metadata is required before download/transcription.",
             returns="telegram_file_meta",
             input_schema=_object_schema(
                 properties={"file_id": {"type": "string"}},
                 required=["file_id"],
             ),
             output_schema=_permissive_output_schema(),
-            domain_tags=["telegram", "files"],
-            aliases=["telegramGetFileMeta"],
+            domain_tags=["communication", "attachments", "files"],
             safety_level=SafetyLevel.MEDIUM,
             examples=[{"file_id": "AgACAgQAAx..."}],
         ),
         ToolSpec(
-            canonical_name="telegram_download_file",
-            summary="Download a Telegram file by file_id and return local path details.",
-            description="Download a Telegram file by file_id and return local path details.",
-            when_to_use="Use when a telegram file must be downloaded for downstream processing.",
+            canonical_name="communication.get_attachment",
+            summary="Download an attachment by provider file_id and return local path details.",
+            description="Download an attachment by provider file_id and return local path details.",
+            when_to_use="Use when an attachment must be downloaded for downstream processing.",
             returns="download_path_details",
             input_schema=_object_schema(
                 properties={
@@ -485,8 +482,7 @@ def _default_specs() -> list[ToolSpec]:
                 required=["file_id"],
             ),
             output_schema=_permissive_output_schema(),
-            domain_tags=["telegram", "files"],
-            aliases=["telegramDownloadFile"],
+            domain_tags=["communication", "attachments", "files"],
             safety_level=SafetyLevel.HIGH,
             examples=[{"file_id": "AgACAgQAAx...", "sandbox_alias": "telegram"}],
         ),

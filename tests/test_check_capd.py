@@ -164,7 +164,7 @@ def test_check_judge_prompt_renders_from_template_with_diagnostic_context() -> N
     task_state["check_provenance"] = "do"
     task_state["facts"] = {
         "step_1": {
-            "tool_name": "send_message",
+            "tool_name": "communication.send_message",
             "params": {"To": "current_channel_target"},
             "output": None,
             "exception": {"code": "unresolved_recipient", "message": "recipient could not be resolved"},
@@ -284,7 +284,7 @@ def test_check_consumes_task_inputs_resets_criteria_and_forces_replan(tmp_path, 
         {"id": "ac_1", "text": "Old criterion", "status": "pending", "evidence_refs": [], "created_by_case": "new_request"}
     ]
     task_state["facts"] = {
-        "step_1": {"tool_name": "send_message", "output": {"message_id": "m-existing"}, "exception": None}
+        "step_1": {"tool_name": "communication.send_message", "output": {"message_id": "m-existing"}, "exception": None}
     }
     state = {
         "correlation_id": "corr-check-consume-input",
@@ -414,7 +414,7 @@ def test_check_node_persists_criteria_snapshot_pdca_event(tmp_path, monkeypatch)
         {"id": "ac_2", "text": "Persist task evidence", "status": "pending", "evidence_refs": [], "created_by_case": "new_request"},
     ]
     task_state["facts"] = {
-        "step_1": {"tool_name": "send_message", "output": {"message_id": "m-1"}, "exception": None},
+        "step_1": {"tool_name": "communication.send_message", "output": {"message_id": "m-1"}, "exception": None},
         "step_2": {"tool_name": "planner_output", "internal": True},
     }
     state = {"task_id": task_id, "correlation_id": "corr-check-snapshot", "_llm_client": llm, "task_state": task_state}

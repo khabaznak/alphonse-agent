@@ -26,7 +26,7 @@ class _InternalMessageTool:
         return {
             "output": {"sent": True, "message": message},
             "exception": None,
-            "metadata": {"tool": "send_message"},
+            "metadata": {"tool": "communication.send_message"},
         }
 
 
@@ -169,7 +169,7 @@ def test_send_message_call_writes_facts_and_memory(monkeypatch) -> None:
     monkeypatch.setattr(execute_step_module, "record_plan_step_completion", lambda **_: calls.append("plan_step_completed"))
 
     registry = ToolRegistry()
-    _register_tool(registry, "send_message", _InternalMessageTool())
+    _register_tool(registry, "communication.send_message", _InternalMessageTool())
     state: dict[str, Any] = {
         "correlation_id": "corr-memory-hook-internal",
         "incoming_user_id": "alex",
@@ -184,7 +184,7 @@ def test_send_message_call_writes_facts_and_memory(monkeypatch) -> None:
                         "status": "proposed",
                         "proposal": {
                             "kind": "call_tool",
-                            "tool_name": "send_message",
+                            "tool_name": "communication.send_message",
                             "args": {
                                 "message": "Estoy avanzando",
                                 "recipient": "8553589429",
@@ -213,6 +213,6 @@ def test_send_message_call_writes_facts_and_memory(monkeypatch) -> None:
     assert isinstance(facts, dict)
     fact = facts.get("step_9")
     assert isinstance(fact, dict)
-    assert fact.get("tool") == "send_message"
+    assert fact.get("tool") == "communication.send_message"
     assert "after_tool_call" in calls
     assert "plan_step_completed" in calls

@@ -16,7 +16,7 @@ logger = get_component_logger("tools.send_message_tool")
 
 @dataclass(frozen=True)
 class SendMessageTool:
-    canonical_name: ClassVar[str] = "send_message"
+    canonical_name: ClassVar[str] = "communication.send_message"
     capability: ClassVar[str] = "communication"
     _communication: CommunicationService | None = None
 
@@ -80,7 +80,7 @@ class SendMessageTool:
         )
         plan = SimpleNamespace(
             plan_id=f"tool-send-message:{correlation_id}",
-            tool="send_message",
+            tool="communication.send_message",
             payload={
                 **({"locale": locale} if locale else {}),
                 **({"internal_progress": True} if internal_progress else {}),
@@ -119,13 +119,13 @@ class SendMessageTool:
                 "outbound_intent": outbound_intent or "mission_public",
             },
             "exception": None,
-            "metadata": {"tool": "send_message"},
+            "metadata": {"tool": "communication.send_message"},
         }
 
 
 @dataclass(frozen=True)
 class SendVoiceNoteTool:
-    canonical_name: ClassVar[str] = "send_voice_note"
+    canonical_name: ClassVar[str] = "communication.send_voice_note"
     capability: ClassVar[str] = "communication"
     _send_message_tool: SendMessageTool | None = None
 
@@ -296,13 +296,13 @@ def _failed(*, code: str, message: str) -> dict[str, Any]:
             "retryable": False,
             "details": {},
         },
-        "metadata": {"tool": "send_message"},
+        "metadata": {"tool": "communication.send_message"},
     }
 
 
 def _map_send_error(exc: Exception) -> dict[str, Any]:
     rendered = str(exc or "").strip()
-    code = rendered.lower() or "send_message_failed"
+    code = rendered.lower() or "communication.send_message_failed"
     if code == "unresolved_recipient":
         return _failed(code="unresolved_recipient", message="recipient could not be resolved")
     if code == "missing_target":
@@ -313,4 +313,4 @@ def _map_send_error(exc: Exception) -> dict[str, Any]:
         missing_path = rendered.split(":", 1)[1] if ":" in rendered else ""
         message = f"audio file not found: {missing_path}" if missing_path else "audio file not found"
         return _failed(code="audio_file_not_found", message=message)
-    return _failed(code="send_message_failed", message=rendered or type(exc).__name__)
+    return _failed(code="communication.send_message_failed", message=rendered or type(exc).__name__)

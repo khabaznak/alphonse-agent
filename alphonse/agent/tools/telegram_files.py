@@ -56,18 +56,18 @@ class _TelegramFileClient:
 
 
 class TelegramGetFileMetaTool:
-    canonical_name: str = "telegram_get_file_meta"
-    capability: str = "vision_files"
+    canonical_name: str = "communication.get_attachment_meta"
+    capability: str = "communication"
 
     def __init__(self, *, bot_token: str | None = None) -> None:
         self._bot_token = str(bot_token or os.getenv("TELEGRAM_BOT_TOKEN") or "").strip()
 
     def execute(self, *, file_id: str) -> dict[str, Any]:
         if not self._bot_token:
-            return _failed("telegram_get_file_meta", "telegram_bot_token_missing")
+            return _failed("communication.get_attachment_meta", "telegram_bot_token_missing")
         meta = _TelegramFileClient(self._bot_token).get_file(file_id=file_id)
         return _ok(
-            "telegram_get_file_meta",
+            "communication.get_attachment_meta",
             {
                 "file_id": file_id,
                 "file_path": meta.get("file_path"),
@@ -78,8 +78,8 @@ class TelegramGetFileMetaTool:
 
 
 class TelegramDownloadFileTool:
-    canonical_name: str = "telegram_download_file"
-    capability: str = "vision_files"
+    canonical_name: str = "communication.get_attachment"
+    capability: str = "communication"
 
     def __init__(self, *, bot_token: str | None = None) -> None:
         self._bot_token = str(bot_token or os.getenv("TELEGRAM_BOT_TOKEN") or "").strip()
@@ -92,7 +92,7 @@ class TelegramDownloadFileTool:
         relative_path: str | None = None,
     ) -> dict[str, Any]:
         if not self._bot_token:
-            return _failed("telegram_download_file", "telegram_bot_token_missing")
+            return _failed("communication.get_attachment", "telegram_bot_token_missing")
         try:
             result = _TelegramFileClient(self._bot_token).download_file(
                 file_id=file_id,
@@ -100,8 +100,8 @@ class TelegramDownloadFileTool:
                 relative_path=relative_path,
             )
         except Exception as exc:
-            return _failed("telegram_download_file", str(exc) or "download_failed")
-        return _ok("telegram_download_file", result)
+            return _failed("communication.get_attachment", str(exc) or "download_failed")
+        return _ok("communication.get_attachment", result)
 
 
 class TranscribeTelegramAudioTool:

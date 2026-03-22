@@ -54,7 +54,7 @@ def test_memory_write_retry_exhausted_escalates_to_admin(monkeypatch) -> None:
         state={"correlation_id": "corr-memory-retry-2", "_bus": bus, "incoming_user_id": "alex"},
         task_state={"goal": "test", "status": "running"},
         current={"step_id": "step_1"},
-        tool_name="send_message",
+        tool_name="communication.send_message",
         args={"To": "8553589429", "Message": "hello"},
         result={"output": {"ok": True}, "exception": None, "metadata": {}},
         correlation_id="corr-memory-retry-2",

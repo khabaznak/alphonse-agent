@@ -37,7 +37,7 @@ def test_dispatch_step_message_suppresses_internal_progress_delivery(monkeypatch
         message="Estoy avanzando",
         context={},
         exec_context=SimpleNamespace(channel_type="telegram", channel_target="8553589429", correlation_id="cid-1"),
-        plan=SimpleNamespace(plan_id="p1", tool="send_message", payload={"internal_progress": True}),
+        plan=SimpleNamespace(plan_id="p1", tool="communication.send_message", payload={"internal_progress": True}),
     )
 
     assert coordinator.calls == []
@@ -56,7 +56,7 @@ def test_dispatch_step_message_suppresses_internal_visibility_delivery(monkeypat
         message="nota interna",
         context={},
         exec_context=SimpleNamespace(channel_type="telegram", channel_target="8553589429", correlation_id="cid-2"),
-        plan=SimpleNamespace(plan_id="p2", tool="send_message", payload={"visibility": "internal"}),
+        plan=SimpleNamespace(plan_id="p2", tool="communication.send_message", payload={"visibility": "internal"}),
     )
 
     assert coordinator.calls == []
@@ -75,7 +75,7 @@ def test_dispatch_step_message_delivers_public_mission(monkeypatch) -> None:
         message="Hola Alex",
         context={},
         exec_context=SimpleNamespace(channel_type="telegram", channel_target="8553589429", correlation_id="cid-3"),
-        plan=SimpleNamespace(plan_id="p3", tool="send_message", payload={}),
+        plan=SimpleNamespace(plan_id="p3", tool="communication.send_message", payload={}),
     )
 
     assert len(coordinator.calls) == 1

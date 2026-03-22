@@ -183,7 +183,7 @@ class _ToolListCaptureLlm:
             "tool_calls": [
                 {
                     "id": "call-voice-1",
-                    "name": "send_voice_note",
+                    "name": "communication.send_voice_note",
                     "arguments": {"To": "me", "AudioFilePath": "/tmp/test.ogg"},
                 }
             ],
@@ -1456,7 +1456,7 @@ def test_respond_finalize_failed_suppresses_apology_after_public_send() -> None:
             "facts": {
                 "step_3": {
                     "step_id": "step_3",
-                    "tool": "send_message",
+                    "tool": "communication.send_message",
                     "output": {"visibility": "public"},
                     "exception": None,
                     "internal": False,
@@ -1582,7 +1582,7 @@ def test_execute_step_emits_presence_progress_from_planner_intent(monkeypatch: p
 def test_next_step_system_prompt_includes_simple_conversation_send_message_rule() -> None:
     prompt = NEXT_STEP_SYSTEM_PROMPT
     assert "Simple Conversation Strategy" in prompt
-    assert 'tool_call.tool_name = "send_message"' in prompt
+    assert 'tool_call.tool_name = "communication.send_message"' in prompt
     assert "Never return direct free-text as planner output" in prompt
     assert "Produce exactly one canonical executable `tool_call`" in prompt
     assert "Never use placeholder tokens for recipients" in prompt
@@ -1598,10 +1598,10 @@ def test_execute_step_accepts_canonical_send_message_from_planner_for_simple_con
             return {
                 "output": {"message_id": "m-1", "delivery": "sent"},
                 "exception": None,
-                "metadata": {"tool": "send_message"},
+                "metadata": {"tool": "communication.send_message"},
             }
 
-    _register_tool(tool_registry, "send_message", _SendMessageTool())
+    _register_tool(tool_registry, "communication.send_message", _SendMessageTool())
     task_state = build_default_task_state()
     task_state["status"] = "running"
     task_state["plan"]["current_step_id"] = "step_1"
@@ -1609,7 +1609,7 @@ def test_execute_step_accepts_canonical_send_message_from_planner_for_simple_con
     task_state["pending_plan_raw"] = {
         "tool_call": {
             "kind": "call_tool",
-            "tool_name": "send_message",
+            "tool_name": "communication.send_message",
             "args": {"To": "8553589429", "Message": "Yo! Great to hear from you.", "Channel": "telegram"},
         },
         "planner_intent": "Responding to a simple greeting without complex execution.",
@@ -1629,7 +1629,7 @@ def test_execute_step_accepts_canonical_send_message_from_planner_for_simple_con
     assert isinstance(facts, dict)
     fact = facts.get("step_1")
     assert isinstance(fact, dict)
-    assert fact.get("tool") == "send_message"
+    assert fact.get("tool") == "communication.send_message"
 
 
 def test_next_step_prompt_exposes_delivery_context_to_planner() -> None:
@@ -1662,7 +1662,7 @@ def test_next_step_single_swoop_keeps_raw_candidate_without_internal_repair() ->
         {
             "tool_call": {
                 "kind": "call_tool",
-                "tool_name": "send_message",
+                "tool_name": "communication.send_message",
                 "args": {
                     "To": "current_channel_target",
                     "Message": "Here is the answer.",
@@ -1688,7 +1688,7 @@ def test_next_step_single_swoop_keeps_raw_candidate_without_internal_repair() ->
     assert isinstance(raw, dict)
     tool_call = raw.get("tool_call")
     assert isinstance(tool_call, dict)
-    assert tool_call.get("tool_name") == "send_message"
+    assert tool_call.get("tool_name") == "communication.send_message"
     args = tool_call.get("args")
     assert isinstance(args, dict)
     assert args.get("To") == "current_channel_target"

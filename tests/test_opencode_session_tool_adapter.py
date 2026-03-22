@@ -45,13 +45,13 @@ def test_extract_session_tool_payload_reads_text_content() -> None:
 
 def test_extract_canonical_from_text_content_reads_tool_call_and_intent() -> None:
     content = (
-        '{"tool_call":{"kind":"call_tool","tool_name":"send_message","args":{"To":"855","Message":"hi"}},'
+        '{"tool_call":{"kind":"call_tool","tool_name":"communication.send_message","args":{"To":"855","Message":"hi"}},'
         '"planner_intent":"Send a hello.","content":""}'
     )
     tool_call, planner_intent, parsed_content = _extract_canonical_from_text_content(content)
     assert tool_call == {
         "kind": "call_tool",
-        "tool_name": "send_message",
+        "tool_name": "communication.send_message",
         "args": {"To": "855", "Message": "hi"},
     }
     assert planner_intent == "Send a hello."
@@ -136,7 +136,7 @@ def test_complete_with_tools_session_returns_canonical_only(monkeypatch) -> None
             "content": "",
             "tool_call": {
                 "kind": "call_tool",
-                "tool_name": "send_message",
+                "tool_name": "communication.send_message",
                 "args": {"To": "x", "Message": "hi"},
             },
         }
@@ -145,7 +145,7 @@ def test_complete_with_tools_session_returns_canonical_only(monkeypatch) -> None
     result = client.complete_with_tools(messages=[], tools=[])
     assert result.get("tool_call") == {
         "kind": "call_tool",
-        "tool_name": "send_message",
+        "tool_name": "communication.send_message",
         "args": {"To": "x", "Message": "hi"},
     }
     assert "planner_intent" not in result

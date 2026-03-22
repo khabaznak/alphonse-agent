@@ -24,22 +24,22 @@ class _FakeCommunication:
 
 def test_send_message_exposed_in_planner_surface() -> None:
     registry = build_default_tool_registry()
-    assert "send_message" in set(planner_canonical_tool_names(registry))
+    assert "communication.send_message" in set(planner_canonical_tool_names(registry))
 
 
 def test_send_message_registered_in_runtime_registry() -> None:
     registry = build_default_tool_registry()
-    assert registry.get("sendMessage") is not None
+    assert registry.get("communication.send_message") is not None
 
 
 def test_send_voice_note_exposed_in_planner_surface() -> None:
     registry = build_default_tool_registry()
-    assert "send_voice_note" in set(planner_canonical_tool_names(registry))
+    assert "communication.send_voice_note" in set(planner_canonical_tool_names(registry))
 
 
 def test_send_voice_note_registered_in_runtime_registry() -> None:
     registry = build_default_tool_registry()
-    assert registry.get("sendVoiceNote") is not None
+    assert registry.get("communication.send_voice_note") is not None
 
 
 def test_send_message_tool_executes_delivery() -> None:

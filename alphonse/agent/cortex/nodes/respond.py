@@ -297,7 +297,7 @@ def _has_public_mission_send_success(task_state: dict[str, Any]) -> bool:
         if not isinstance(fact, dict):
             continue
         tool = str(fact.get("tool_name") or fact.get("tool") or "").strip()
-        if tool not in {"send_message", "sendMessage"}:
+        if tool not in {"communication.send_message"}:
             continue
         if bool(fact.get("internal")):
             continue

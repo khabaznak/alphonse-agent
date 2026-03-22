@@ -46,7 +46,7 @@ def test_send_raises_when_recipient_ref_unresolved() -> None:
             request=request,
             context={},
             exec_context=SimpleNamespace(channel_type="telegram", channel_target="8553589429", correlation_id="cid-1"),
-            plan=SimpleNamespace(plan_id="p1", tool="sendMessage", payload={}),
+            plan=SimpleNamespace(plan_id="p1", tool="communication.send_message", payload={}),
         )
     assert dispatcher.called is False
 
@@ -67,7 +67,7 @@ def test_send_uses_origin_target_when_no_recipient_ref() -> None:
         request=request,
         context={},
         exec_context=SimpleNamespace(channel_type="telegram", channel_target="8553589429", correlation_id="cid-2"),
-        plan=SimpleNamespace(plan_id="p2", tool="sendMessage", payload={}),
+        plan=SimpleNamespace(plan_id="p2", tool="communication.send_message", payload={}),
     )
     assert dispatcher.called is True
     assert str((dispatcher.payload or {}).get("target") or "") == "8553589429"

@@ -134,8 +134,8 @@ def test_presence_progress_intent_update_dedupes_same_tool(monkeypatch: pytest.M
         "correlation_id": "cid-intent-1",
         "ts": "2026-03-16T20:00:00+00:00",
         "phase": "thinking",
-        "hint": "Calling send_message now.",
-        "tool_name": "send_message",
+        "hint": "Calling communication.send_message now.",
+        "tool_name": "communication.send_message",
     }
     projection.project_presence_event(incoming=_incoming(), presence_event=event)
     projection.project_presence_event(incoming=_incoming(), presence_event=event)
