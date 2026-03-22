@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from alphonse.agent.tools.registry import build_default_tool_registry
-from alphonse.agent.tools.registry2 import build_planner_tool_registry
+from alphonse.agent.tools.registry import planner_canonical_tool_names
 from alphonse.agent.tools.send_message_tool import SendMessageTool
 from alphonse.agent.tools.send_message_tool import SendVoiceNoteTool
 
@@ -22,9 +22,9 @@ class _FakeCommunication:
         self.plan = plan
 
 
-def test_send_message_exposed_in_registry2() -> None:
-    registry = build_planner_tool_registry()
-    assert registry.get("send_message") is not None
+def test_send_message_exposed_in_planner_surface() -> None:
+    registry = build_default_tool_registry()
+    assert "send_message" in set(planner_canonical_tool_names(registry))
 
 
 def test_send_message_registered_in_runtime_registry() -> None:
@@ -32,9 +32,9 @@ def test_send_message_registered_in_runtime_registry() -> None:
     assert registry.get("sendMessage") is not None
 
 
-def test_send_voice_note_exposed_in_registry2() -> None:
-    registry = build_planner_tool_registry()
-    assert registry.get("send_voice_note") is not None
+def test_send_voice_note_exposed_in_planner_surface() -> None:
+    registry = build_default_tool_registry()
+    assert "send_voice_note" in set(planner_canonical_tool_names(registry))
 
 
 def test_send_voice_note_registered_in_runtime_registry() -> None:

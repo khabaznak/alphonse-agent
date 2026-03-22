@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from alphonse.agent.cognition.tool_schemas import canonical_tool_names
-from alphonse.agent.cognition.tool_schemas import llm_tool_schemas
 from alphonse.agent.tools.registry import build_default_tool_registry
+from alphonse.agent.tools.registry import planner_canonical_tool_names
+from alphonse.agent.tools.registry import planner_tool_schemas
 
 
 def format_available_abilities() -> str:
@@ -30,7 +30,7 @@ def format_available_ability_catalog() -> str:
 
 def planner_tool_catalog_data() -> dict[str, Any]:
     registry = build_default_tool_registry()
-    schemas = llm_tool_schemas(registry)
+    schemas = planner_tool_schemas(registry)
     tools: list[dict[str, Any]] = []
     for schema in schemas:
         fn = schema.get("function") if isinstance(schema, dict) else None
@@ -64,4 +64,4 @@ def planner_tool_catalog_data() -> dict[str, Any]:
 
 
 def planner_tool_names() -> list[str]:
-    return canonical_tool_names(build_default_tool_registry())
+    return planner_canonical_tool_names(build_default_tool_registry())

@@ -7,6 +7,8 @@ import pytest
 
 import alphonse.agent.tools.registry as runtime_registry
 from alphonse.agent.tools.base import ToolDefinition
+from alphonse.agent.tools.registry import planner_canonical_tool_names
+from alphonse.agent.tools.registry import planner_tool_schemas
 from alphonse.agent.tools.registry import ToolRegistry
 from alphonse.agent.tools.spec import ToolSpec
 
@@ -66,13 +68,43 @@ def test_tool_definition_invoke_normalizes_execute_result() -> None:
 
 
 def test_build_default_tool_registry_fails_when_required_spec_missing(monkeypatch: pytest.MonkeyPatch) -> None:
-    real_specs = runtime_registry.build_planner_tool_registry().specs()
+    real_specs = runtime_registry._default_specs()
     filtered = [spec for spec in real_specs if spec.canonical_name != "get_time"]
-
-    class _FakePlannerRegistry:
-        def specs(self) -> list[ToolSpec]:
-            return filtered
-
-    monkeypatch.setattr(runtime_registry, "build_planner_tool_registry", lambda: _FakePlannerRegistry())
+    monkeypatch.setattr(runtime_registry, "_default_specs", lambda: filtered)
     with pytest.raises(ValueError, match="tool_spec_missing:get_time"):
         runtime_registry.build_default_tool_registry()
+
+
+def test_planner_schemas_exclude_hidden_tools() -> None:
+    registry = ToolRegistry()
+    hidden = ToolSpec(
+        canonical_name="hidden_tool",
+        summary="hidden summary",
+        description="hidden description",
+        input_schema={"type": "object", "properties": {}, "required": [], "additionalProperties": False},
+        output_schema={"type": "object", "additionalProperties": True},
+        visible_to_agent=False,
+    )
+    registry.register(ToolDefinition(spec=hidden, executor=_EchoExecutor()))
+    assert planner_tool_schemas(registry) == []
+
+
+def test_planner_schemas_use_canonical_name_once_for_aliases() -> None:
+    registry = ToolRegistry()
+    spec = ToolSpec(
+        canonical_name="send_message",
+        summary="send message summary",
+        description="send message description",
+        input_schema={"type": "object", "properties": {"To": {"type": "string"}}, "required": ["To"], "additionalProperties": False},
+        output_schema={"type": "object", "additionalProperties": True},
+        aliases=["sendMessage", "send_message_alias"],
+    )
+    registry.register(ToolDefinition(spec=spec, executor=_EchoExecutor()))
+    names = planner_canonical_tool_names(registry)
+    assert names == ["send_message"]
+    schemas = planner_tool_schemas(registry)
+    assert len(schemas) == 1
+    fn = schemas[0]["function"]
+    assert fn["name"] == "send_message"
+    assert fn["description"] == "send message summary"
+    assert fn["parameters"] == spec.input_schema

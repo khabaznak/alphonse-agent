@@ -4,13 +4,13 @@ import json
 from typing import Any, Callable
 
 from alphonse.agent.cognition.providers.contracts import require_tool_calling_provider
-from alphonse.agent.cognition.tool_schemas import llm_tool_schemas
 from alphonse.agent.cortex.task_mode.prompt_templates import NEXT_STEP_SYSTEM_PROMPT
 from alphonse.agent.cortex.task_mode.prompt_templates import NEXT_STEP_USER_TEMPLATE
 from alphonse.agent.cortex.task_mode.prompt_templates import render_pdca_prompt
 from alphonse.agent.session.day_state import render_recent_conversation_block
 from alphonse.agent.tools.mcp.loader import default_profiles_dir
 from alphonse.agent.tools.mcp.registry import McpProfileRegistry
+from alphonse.agent.tools.registry import planner_tool_schemas
 
 def build_next_step_node_impl(
     state: dict[str, Any],
@@ -136,7 +136,7 @@ def _request_raw_candidate(
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
             ],
-            tools=llm_tool_schemas(tool_registry),
+            tools=planner_tool_schemas(tool_registry),
             tool_choice="auto",
         ),
         "complete_with_tools",

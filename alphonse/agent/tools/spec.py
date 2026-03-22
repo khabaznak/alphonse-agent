@@ -29,7 +29,4 @@ class ToolSpec:
     failure_modes: list[str] = field(default_factory=list)
     fallback_guidance: str = ""
     examples: list[dict[str, Any]] = field(default_factory=list)
-    expose_in_catalog: bool = True
-    expose_in_schemas: bool = True
     visible_to_agent: bool = True
-    deprecated: bool = False

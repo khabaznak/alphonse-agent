@@ -7,7 +7,8 @@ from typing import Any
 from jinja2 import Environment, FileSystemLoader
 
 from alphonse.agent.cognition.prompt_templates_runtime import PROMPT_SEEDS_DIR
-from alphonse.agent.tools.registry2 import ToolRegistry
+from alphonse.agent.tools.registry import ToolRegistry
+from alphonse.agent.tools.registry import planner_visible_tool_definitions
 from alphonse.agent.tools.spec import ToolSpec
 
 
@@ -98,7 +99,6 @@ def build_render_context(specs: list[ToolSpec]) -> list[dict[str, Any]]:
                 "input_schema_pretty": pretty_json(spec.input_schema),
                 "output_schema_pretty": pretty_json(spec.output_schema),
                 "examples": spec.examples,
-                "deprecated": bool(spec.deprecated),
             }
         )
     ordered = sorted(groups.values(), key=lambda item: str(item.get("title") or ""))
@@ -113,6 +113,6 @@ def render_tool_catalog(registry: ToolRegistry, template_dir: str | Path | None 
     resolved_template_dir = Path(template_dir) if template_dir is not None else PROMPT_SEEDS_DIR
     env = Environment(loader=FileSystemLoader(str(resolved_template_dir)), autoescape=False)
     template = env.get_template("planning.tools.md.j2")
-    specs = registry.specs_for_catalog()
+    specs = [definition.spec for definition in planner_visible_tool_definitions(registry)]
     groups_context = build_render_context(specs)
     return str(template.render(groups=groups_context)).strip()
