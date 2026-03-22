@@ -130,9 +130,9 @@ def _require_spec(spec_by_name: dict[str, ToolSpec], canonical_name: str) -> Too
 
 
 def _build_runtime_executors(*, job_store: JobStore, job_runner: JobRunner) -> list[ToolProtocol]:
-    clock = ClockTool()
-    get_my_settings = GetMySettingsTool()
-    get_user_details = GetUserDetailsTool()
+    context_clock = ClockTool()
+    context_get_my_settings = GetMySettingsTool()
+    context_get_user_details = GetUserDetailsTool()
     memory_search_episodes = SearchEpisodesTool()
     memory_get_mission = GetMissionTool()
     memory_list_active_missions = ListActiveMissionsTool()
@@ -164,10 +164,10 @@ def _build_runtime_executors(*, job_store: JobStore, job_runner: JobRunner) -> l
     domotics_execute = DomoticsExecuteTool()
     domotics_subscribe = DomoticsSubscribeTool()
     return [
-        clock,
+        context_clock,
         scheduler,
-        get_my_settings,
-        get_user_details,
+        context_get_my_settings,
+        context_get_user_details,
         memory_search_episodes,
         memory_get_mission,
         memory_list_active_missions,
