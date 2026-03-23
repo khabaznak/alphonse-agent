@@ -192,7 +192,7 @@ def _latest_user_search_rows(state: dict[str, Any]) -> list[dict[str, Any]]:
         if not isinstance(entry, dict):
             continue
         tool_name = str(entry.get("tool_name") or entry.get("tool") or "").strip()
-        if tool_name != "user_search":
+        if tool_name != "users.search":
             continue
         payload: dict[str, Any] | None = None
 

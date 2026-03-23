@@ -28,13 +28,13 @@ def _seed_user(display_name: str, telegram_id: str) -> str:
 
 def test_user_search_tool_registered() -> None:
     runtime = build_default_tool_registry()
-    assert runtime.get("user_search") is not None
+    assert runtime.get("users.search") is not None
     schema_names = {
         str(item.get("function", {}).get("name") or "")
         for item in planner_tool_schemas(runtime)
         if isinstance(item, dict)
     }
-    assert "user_search" in schema_names
+    assert "users.search" in schema_names
 
 
 def test_user_search_returns_matches_with_telegram_ids(monkeypatch, tmp_path) -> None:

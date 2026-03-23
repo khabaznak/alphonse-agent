@@ -94,7 +94,7 @@ def test_send_message_tool_maps_first_contact_from_user_search() -> None:
         "task_state": {
             "facts": {
                 "step_1": {
-                    "tool": "user_search",
+                    "tool": "users.search",
                     "output": {
                         "output": {
                             "users": [
@@ -130,7 +130,7 @@ def test_send_message_tool_maps_partial_name_from_user_search() -> None:
         "task_state": {
             "facts": {
                 "step_1": {
-                    "tool": "user_search",
+                    "tool": "users.search",
                     "output": {
                         "output": {
                             "users": [

@@ -155,9 +155,9 @@ def _build_runtime_executors(*, job_store: JobStore, job_runner: JobRunner) -> l
     job_resume = JobResumeTool(job_store)
     job_delete = JobDeleteTool(job_store)
     job_run_now = JobRunNowTool(job_runner)
-    user_register_from_contact = UserRegisterFromContactTool()
-    user_remove_from_contact = UserRemoveFromContactTool()
-    user_search = UserSearchTool()
+    users_register_from_contact = UserRegisterFromContactTool()
+    users_remove_from_contact = UserRemoveFromContactTool()
+    users_search = UserSearchTool()
     domotics_query = DomoticsQueryTool()
     domotics_execute = DomoticsExecuteTool()
     domotics_subscribe = DomoticsSubscribeTool()
@@ -188,9 +188,9 @@ def _build_runtime_executors(*, job_store: JobStore, job_runner: JobRunner) -> l
         job_resume,
         job_delete,
         job_run_now,
-        user_register_from_contact,
-        user_remove_from_contact,
-        user_search,
+        users_register_from_contact,
+        users_remove_from_contact,
+        users_search,
         domotics_query,
         domotics_execute,
         domotics_subscribe,
@@ -829,7 +829,7 @@ def _default_specs() -> list[ToolSpec]:
             examples=[{"job_id": "job_abc123"}, {"job_name": "Weekly chores digest"}],
         ),
         ToolSpec(
-            canonical_name="user_register_from_contact",
+            canonical_name="users.register_from_contact",
             summary="Register or update a user from a shared Telegram contact with strict admin authorization.",
             description="Register or update a user from a shared Telegram contact with strict admin authorization.",
             when_to_use="Use when an admin asks to add/register a person and shares their contact.",
@@ -853,7 +853,7 @@ def _default_specs() -> list[ToolSpec]:
             examples=[{"display_name": "Maria Perez", "role": "family", "relationship": "sister"}],
         ),
         ToolSpec(
-            canonical_name="user_remove_from_contact",
+            canonical_name="users.remove_from_contact",
             summary="Deactivate a registered user from a shared Telegram contact with strict admin authorization.",
             description="Deactivate a registered user from a shared Telegram contact with strict admin authorization.",
             when_to_use="Use when an admin asks to remove a person and shares their contact.",
@@ -871,7 +871,7 @@ def _default_specs() -> list[ToolSpec]:
             examples=[{"contact_user_id": "8553589429"}],
         ),
         ToolSpec(
-            canonical_name="user_search",
+            canonical_name="users.search",
             summary="Search registered users by partial display name and include channel resolver identifiers.",
             description="Search registered users by partial display name and include channel resolver identifiers.",
             when_to_use="Use before sending messages when recipient identity is uncertain and needs read-only lookup.",

@@ -14,7 +14,7 @@ logger = get_component_logger("tools.user_contact_tools")
 
 
 class UserRegisterFromContactTool:
-    canonical_name: str = "user_register_from_contact"
+    canonical_name: str = "users.register_from_contact"
     capability: str = "users"
 
     def execute(
@@ -35,7 +35,7 @@ class UserRegisterFromContactTool:
             return _failed(
                 code="permission_denied",
                 message="You do not have permission to add users.",
-                metadata={"tool": "user_register_from_contact"},
+                metadata={"tool": "users.register_from_contact"},
             )
 
         contact = _resolve_contact(
@@ -49,7 +49,7 @@ class UserRegisterFromContactTool:
             return _failed(
                 code="missing_contact_user_id",
                 message="Contact must include Telegram user_id.",
-                metadata={"tool": "user_register_from_contact"},
+                metadata={"tool": "users.register_from_contact"},
             )
 
         name = _resolve_display_name(
@@ -61,7 +61,7 @@ class UserRegisterFromContactTool:
             return _failed(
                 code="missing_display_name",
                 message="A display name is required to register the user.",
-                metadata={"tool": "user_register_from_contact"},
+                metadata={"tool": "users.register_from_contact"},
             )
         telegram_user_id = str(contact.get("user_id")).strip()
 
@@ -110,12 +110,12 @@ class UserRegisterFromContactTool:
                 "telegram_user_id": telegram_user_id,
                 "scheduled_intro_signal_id": signal_id,
             },
-            metadata={"tool": "user_register_from_contact"},
+            metadata={"tool": "users.register_from_contact"},
         )
 
 
 class UserRemoveFromContactTool:
-    canonical_name: str = "user_remove_from_contact"
+    canonical_name: str = "users.remove_from_contact"
     capability: str = "users"
 
     def execute(
@@ -130,7 +130,7 @@ class UserRemoveFromContactTool:
             return _failed(
                 code="permission_denied",
                 message="You do not have permission to remove users.",
-                metadata={"tool": "user_remove_from_contact"},
+                metadata={"tool": "users.remove_from_contact"},
             )
 
         contact = _resolve_contact(
@@ -145,14 +145,14 @@ class UserRemoveFromContactTool:
             return _failed(
                 code="missing_contact_user_id",
                 message="Contact must include Telegram user_id.",
-                metadata={"tool": "user_remove_from_contact"},
+                metadata={"tool": "users.remove_from_contact"},
             )
         user_id = resolvers.resolve_internal_user_by_telegram_id(telegram_user_id)
         if not user_id:
             return _failed(
                 code="user_not_found",
                 message="No registered user found for that contact.",
-                metadata={"tool": "user_remove_from_contact"},
+                metadata={"tool": "users.remove_from_contact"},
             )
         updated = users_store.patch_user(
             user_id,
@@ -173,12 +173,12 @@ class UserRemoveFromContactTool:
                 "deactivated": True,
                 "display_name": (updated or {}).get("display_name"),
             },
-            metadata={"tool": "user_remove_from_contact"},
+            metadata={"tool": "users.remove_from_contact"},
         )
 
 
 class UserSearchTool:
-    canonical_name: str = "user_search"
+    canonical_name: str = "users.search"
     capability: str = "users"
 
     def execute(
@@ -196,7 +196,7 @@ class UserSearchTool:
             return _failed(
                 code="missing_query",
                 message="query is required",
-                metadata={"tool": "user_search"},
+                metadata={"tool": "users.search"},
             )
         rows = _search_user_records(
             query=rendered_query,
@@ -209,7 +209,7 @@ class UserSearchTool:
                 "count": len(rows),
                 "users": rows,
             },
-            metadata={"tool": "user_search"},
+            metadata={"tool": "users.search"},
         )
 
 
