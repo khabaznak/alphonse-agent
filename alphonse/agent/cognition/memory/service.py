@@ -17,6 +17,7 @@ from alphonse.agent.actions.conscious_message_handler import build_incoming_mess
 from alphonse.agent.cognition.memory.paths import resolve_memory_root
 from alphonse.agent.cognition.memory.paths import sanitize_segment
 from alphonse.agent.cognition.memory.paths import user_root
+from alphonse.agent.nervous_system import operational_facts as operational_facts_store
 from alphonse.agent.nervous_system import users as users_store
 from alphonse.agent.nervous_system.senses.bus import Signal as BusSignal
 from alphonse.agent.nervous_system.user_service_resolvers import resolve_telegram_chat_id_for_user
@@ -255,6 +256,81 @@ class MemoryService:
         if not isinstance(payload, dict):
             return None
         return payload.get(str(key))
+
+    def upsert_operational_fact(
+        self,
+        *,
+        created_by: str,
+        key: str,
+        title: str,
+        fact_type: str,
+        summary: str | None = None,
+        content_json: Any = None,
+        tags: list[str] | None = None,
+        source: str | None = None,
+        stability: str | None = None,
+        importance: str | None = None,
+        status: str | None = None,
+        scope: str = "private",
+        last_verified_at: str | None = None,
+        confidence: float | None = None,
+    ) -> dict[str, Any]:
+        return operational_facts_store.upsert_operational_fact(
+            created_by=created_by,
+            key=key,
+            title=title,
+            fact_type=fact_type,
+            summary=summary,
+            content_json=content_json,
+            tags=tags,
+            source=source,
+            stability=stability,
+            importance=importance,
+            status=status,
+            scope=scope,
+            last_verified_at=last_verified_at,
+            confidence=confidence,
+        )
+
+    def search_operational_facts(
+        self,
+        *,
+        created_by: str,
+        query: str | None = None,
+        fact_type: str | None = None,
+        status: str | None = None,
+        tags: list[str] | None = None,
+        stability: str | None = None,
+        importance: str | None = None,
+        scope: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
+        return operational_facts_store.search_operational_facts(
+            created_by=created_by,
+            query=query,
+            fact_type=fact_type,
+            status=status,
+            tags=tags,
+            stability=stability,
+            importance=importance,
+            scope=scope,
+            limit=limit,
+            offset=offset,
+        )
+
+    def remove_operational_fact(
+        self,
+        *,
+        created_by: str,
+        fact_id: str | None = None,
+        key: str | None = None,
+    ) -> bool:
+        return operational_facts_store.remove_operational_fact(
+            created_by=created_by,
+            fact_id=fact_id,
+            key=key,
+        )
 
     def generate_weekly_summary(
         self,
@@ -545,6 +621,77 @@ def get_workspace_pointer(user_id: str, key: str) -> Any:
     return MemoryService().get_workspace_pointer(user_id, key)
 
 
+def upsert_operational_fact(
+    *,
+    created_by: str,
+    key: str,
+    title: str,
+    fact_type: str,
+    summary: str | None = None,
+    content_json: Any = None,
+    tags: list[str] | None = None,
+    source: str | None = None,
+    stability: str | None = None,
+    importance: str | None = None,
+    status: str | None = None,
+    scope: str = "private",
+    last_verified_at: str | None = None,
+    confidence: float | None = None,
+) -> dict[str, Any]:
+    return MemoryService().upsert_operational_fact(
+        created_by=created_by,
+        key=key,
+        title=title,
+        fact_type=fact_type,
+        summary=summary,
+        content_json=content_json,
+        tags=tags,
+        source=source,
+        stability=stability,
+        importance=importance,
+        status=status,
+        scope=scope,
+        last_verified_at=last_verified_at,
+        confidence=confidence,
+    )
+
+
+def search_operational_facts(
+    *,
+    created_by: str,
+    query: str | None = None,
+    fact_type: str | None = None,
+    status: str | None = None,
+    tags: list[str] | None = None,
+    stability: str | None = None,
+    importance: str | None = None,
+    scope: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> list[dict[str, Any]]:
+    return MemoryService().search_operational_facts(
+        created_by=created_by,
+        query=query,
+        fact_type=fact_type,
+        status=status,
+        tags=tags,
+        stability=stability,
+        importance=importance,
+        scope=scope,
+        limit=limit,
+        offset=offset,
+    )
+
+
+def remove_operational_fact(
+    *,
+    created_by: str,
+    fact_id: str | None = None,
+    key: str | None = None,
+) -> bool:
+    return MemoryService().remove_operational_fact(created_by=created_by, fact_id=fact_id, key=key)
+
+
 def record_after_tool_call(
     *,
     state: dict[str, Any],
@@ -560,6 +707,9 @@ def record_after_tool_call(
         "memory.get_mission",
         "memory.list_active_missions",
         "memory.get_workspace",
+        "memory.upsert_operational_fact",
+        "memory.search_operational_facts",
+        "memory.remove_operational_fact",
     }:
         return
     user_id = _memory_user_id(state)

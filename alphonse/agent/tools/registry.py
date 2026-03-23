@@ -21,9 +21,12 @@ from alphonse.agent.tools.job_tools import JobRunNowTool
 from alphonse.agent.tools.local_audio_output import LocalAudioOutputSpeakTool
 from alphonse.agent.tools.local_audio_output import LocalAudioOutputRenderTool
 from alphonse.agent.tools.memory_tools import GetMissionTool
+from alphonse.agent.tools.memory_tools import RemoveOperationalFactTool
 from alphonse.agent.tools.memory_tools import GetWorkspacePointerTool
 from alphonse.agent.tools.memory_tools import ListActiveMissionsTool
 from alphonse.agent.tools.memory_tools import SearchEpisodesTool
+from alphonse.agent.tools.memory_tools import SearchOperationalFactsTool
+from alphonse.agent.tools.memory_tools import UpsertOperationalFactTool
 from alphonse.agent.tools.mcp_call_tool import McpCallTool
 from alphonse.agent.tools.scheduler_tool import SchedulerTool
 from alphonse.agent.tools.send_message_tool import SendMessageTool
@@ -136,6 +139,9 @@ def _build_runtime_executors(*, job_store: JobStore, job_runner: JobRunner) -> l
     memory_get_mission = GetMissionTool()
     memory_list_active_missions = ListActiveMissionsTool()
     memory_get_workspace = GetWorkspacePointerTool()
+    memory_upsert_operational_fact = UpsertOperationalFactTool()
+    memory_search_operational_facts = SearchOperationalFactsTool()
+    memory_remove_operational_fact = RemoveOperationalFactTool()
     communication_send_message = SendMessageTool()
     communication_send_voice_note = SendVoiceNoteTool(_send_message_tool=communication_send_message)
     communication_get_attachment_meta = TelegramGetFileMetaTool()
@@ -169,6 +175,9 @@ def _build_runtime_executors(*, job_store: JobStore, job_runner: JobRunner) -> l
         memory_get_mission,
         memory_list_active_missions,
         memory_get_workspace,
+        memory_upsert_operational_fact,
+        memory_search_operational_facts,
+        memory_remove_operational_fact,
         communication_send_message,
         communication_send_voice_note,
         communication_get_attachment_meta,
@@ -630,6 +639,119 @@ def _default_specs() -> list[ToolSpec]:
             domain_tags=["memory", "workspace"],
             safety_level=SafetyLevel.LOW,
             examples=[{"key": "shopping_list"}],
+        ),
+        ToolSpec(
+            canonical_name="memory.upsert_operational_fact",
+            summary="Create or update an operational fact by globally unique key.",
+            description="Create or update an operational fact by globally unique key.",
+            when_to_use="Use to persist stable operational knowledge (assets, procedures, workflow rules, locations, integrations, and user operational preferences).",
+            returns="stored operational fact payload",
+            input_schema=_object_schema(
+                properties={
+                    "key": {"type": "string"},
+                    "title": {"type": "string"},
+                    "fact_type": {
+                        "type": "string",
+                        "enum": [
+                            "system_asset",
+                            "procedure",
+                            "workflow_rule",
+                            "location",
+                            "integration_note",
+                            "user_operational_preference",
+                        ],
+                    },
+                    "summary": {"type": "string"},
+                    "content_json": {"type": "object"},
+                    "tags": {"type": "array", "items": {"type": "string"}},
+                    "source": {"type": "string"},
+                    "stability": {"type": "string"},
+                    "importance": {"type": "string"},
+                    "status": {"type": "string"},
+                    "scope": {"type": "string", "enum": ["private", "global"]},
+                    "last_verified_at": {"type": "string"},
+                    "confidence": {"type": "number", "minimum": 0.0, "maximum": 1.0},
+                    "created_by": {"type": "string"},
+                    "user_id": {"type": "string"},
+                },
+                required=["key", "title", "fact_type"],
+            ),
+            output_schema=_permissive_output_schema(),
+            domain_tags=["memory", "operational_facts", "knowledge"],
+            safety_level=SafetyLevel.MEDIUM,
+            examples=[
+                {
+                    "key": "ops.hr.sop.weekly_payroll",
+                    "title": "Weekly payroll SOP",
+                    "fact_type": "procedure",
+                    "summary": "Payroll closes every Friday at 16:00 local time.",
+                    "scope": "private",
+                }
+            ],
+        ),
+        ToolSpec(
+            canonical_name="memory.search_operational_facts",
+            summary="Search operational facts visible to the current caller (own private + global).",
+            description="Search operational facts visible to the current caller (own private + global).",
+            when_to_use="Use to retrieve operational knowledge by query text, tags, type, status, and scope filters.",
+            returns="paged operational facts list sorted by updated_at DESC",
+            input_schema=_object_schema(
+                properties={
+                    "query": {"type": "string"},
+                    "fact_type": {
+                        "type": "string",
+                        "enum": [
+                            "system_asset",
+                            "procedure",
+                            "workflow_rule",
+                            "location",
+                            "integration_note",
+                            "user_operational_preference",
+                        ],
+                    },
+                    "status": {"type": "string"},
+                    "tags": {"type": "array", "items": {"type": "string"}},
+                    "stability": {"type": "string"},
+                    "importance": {"type": "string"},
+                    "scope": {"type": "string", "enum": ["private", "global"]},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 200},
+                    "offset": {"type": "integer", "minimum": 0},
+                    "created_by": {"type": "string"},
+                    "user_id": {"type": "string"},
+                },
+                required=[],
+            ),
+            output_schema=_permissive_output_schema(),
+            domain_tags=["memory", "operational_facts", "search"],
+            safety_level=SafetyLevel.LOW,
+            examples=[
+                {
+                    "query": "payroll",
+                    "fact_type": "procedure",
+                    "tags": ["finance", "weekly"],
+                    "limit": 10,
+                }
+            ],
+        ),
+        ToolSpec(
+            canonical_name="memory.remove_operational_fact",
+            summary="Hard-delete one operational fact by id or key for the current owner.",
+            description="Hard-delete one operational fact by id or key for the current owner.",
+            when_to_use="Use when an obsolete or incorrect fact must be physically removed.",
+            returns="deleted indicator",
+            input_schema=_object_schema(
+                properties={
+                    "fact_id": {"type": "string"},
+                    "key": {"type": "string"},
+                    "created_by": {"type": "string"},
+                    "user_id": {"type": "string"},
+                },
+                required=[],
+            ),
+            output_schema=_permissive_output_schema(),
+            domain_tags=["memory", "operational_facts", "delete"],
+            safety_level=SafetyLevel.HIGH,
+            examples=[{"key": "ops.hr.sop.weekly_payroll"}],
         ),
         ToolSpec(
             canonical_name="domotics.query",

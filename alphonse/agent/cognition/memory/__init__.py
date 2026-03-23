@@ -8,9 +8,12 @@ from alphonse.agent.cognition.memory.service import list_active_missions
 from alphonse.agent.cognition.memory.service import mission_step_update
 from alphonse.agent.cognition.memory.service import mission_upsert
 from alphonse.agent.cognition.memory.service import put_artifact
+from alphonse.agent.cognition.memory.service import remove_operational_fact
 from alphonse.agent.cognition.memory.service import record_after_tool_call
 from alphonse.agent.cognition.memory.service import record_plan_step_completion
+from alphonse.agent.cognition.memory.service import search_operational_facts
 from alphonse.agent.cognition.memory.service import search_episodes
+from alphonse.agent.cognition.memory.service import upsert_operational_fact
 from alphonse.agent.cognition.memory.service import upsert_workspace_pointer
 
 __all__ = [
@@ -24,6 +27,9 @@ __all__ = [
     "record_after_tool_call",
     "record_plan_step_completion",
     "search_episodes",
+    "upsert_operational_fact",
+    "search_operational_facts",
+    "remove_operational_fact",
     "get_mission",
     "list_active_missions",
     "get_workspace_pointer",

@@ -30,6 +30,7 @@ def apply_schema(db_path: Path) -> None:
         _ensure_voice_profiles_table(conn)
         _ensure_prompt_template_columns(conn)
         _ensure_prompt_artifacts_table(conn)
+        _ensure_operational_facts_table(conn)
         _ensure_sandbox_directories(conn)
         _ensure_telegram_chat_access_table(conn)
         _ensure_telegram_invite_columns(conn)
@@ -345,6 +346,54 @@ def _ensure_prompt_artifacts_table(conn: sqlite3.Connection) -> None:
           updated_at        TEXT NOT NULL DEFAULT (datetime('now'))
         ) STRICT
         """
+    )
+
+
+def _ensure_operational_facts_table(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS operational_facts (
+          id               TEXT PRIMARY KEY,
+          key              TEXT NOT NULL,
+          title            TEXT NOT NULL,
+          fact_type        TEXT NOT NULL,
+          summary          TEXT,
+          content_json     TEXT,
+          tags             TEXT,
+          source           TEXT,
+          stability        TEXT,
+          importance       TEXT,
+          status           TEXT,
+          scope            TEXT NOT NULL DEFAULT 'private',
+          created_by       TEXT NOT NULL,
+          created_at       TEXT NOT NULL DEFAULT (datetime('now')),
+          updated_at       TEXT NOT NULL DEFAULT (datetime('now')),
+          last_verified_at TEXT,
+          confidence       REAL,
+          CHECK (fact_type IN (
+            'system_asset',
+            'procedure',
+            'workflow_rule',
+            'location',
+            'integration_note',
+            'user_operational_preference'
+          )),
+          CHECK (scope IN ('private', 'global')),
+          CHECK (confidence IS NULL OR (confidence >= 0.0 AND confidence <= 1.0))
+        ) STRICT
+        """
+    )
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_operational_facts_key_unique ON operational_facts (key)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_operational_facts_created_by_scope ON operational_facts (created_by, scope)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_operational_facts_type_status_updated ON operational_facts (fact_type, status, updated_at DESC)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_operational_facts_updated_at ON operational_facts (updated_at DESC)"
     )
 
 

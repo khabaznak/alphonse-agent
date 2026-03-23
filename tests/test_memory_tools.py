@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from alphonse.agent.nervous_system.migrate import apply_schema
 from alphonse.agent.cognition.memory import MemoryService
 from alphonse.agent.tools.registry import build_default_tool_registry
+from alphonse.agent.tools.registry import planner_tool_schemas
 from alphonse.agent.tools.memory_tools import GetMissionTool
 from alphonse.agent.tools.memory_tools import GetWorkspacePointerTool
 from alphonse.agent.tools.memory_tools import ListActiveMissionsTool
@@ -51,6 +53,89 @@ def test_memory_tools_surface_is_read_only() -> None:
     assert "memory.get_mission" in keys
     assert "memory.list_active_missions" in keys
     assert "memory.get_workspace" in keys
+    assert "memory.upsert_operational_fact" in keys
+    assert "memory.search_operational_facts" in keys
+    assert "memory.remove_operational_fact" in keys
     assert "append_episode" not in keys
     assert "mission_upsert" not in keys
     assert "put_artifact" not in keys
+
+
+def test_operational_fact_tools_execute_end_to_end(monkeypatch, tmp_path: Path) -> None:
+    db_path = tmp_path / "nerve-db"
+    monkeypatch.setenv("NERVE_DB_PATH", str(db_path))
+    apply_schema(db_path)
+    registry = build_default_tool_registry()
+
+    upsert = registry.get("memory.upsert_operational_fact")
+    assert upsert is not None
+    created = upsert.invoke(
+        {
+            "state": {"incoming_user_id": "user_a"},
+            "key": "ops.payroll.cutoff",
+            "title": "Payroll cutoff",
+            "fact_type": "procedure",
+            "summary": "Close payroll at 16:00 every Friday.",
+            "scope": "private",
+            "tags": ["finance", "weekly"],
+        }
+    )
+    assert created["exception"] is None
+    created_fact = created["output"]["fact"]
+    assert created_fact["key"] == "ops.payroll.cutoff"
+    assert created_fact["created_by"] == "user_a"
+    assert created_fact["scope"] == "private"
+
+    search = registry.get("memory.search_operational_facts")
+    assert search is not None
+    own_search = search.invoke(
+        {
+            "state": {"incoming_user_id": "user_a"},
+            "query": "payroll",
+        }
+    )
+    assert own_search["exception"] is None
+    assert own_search["output"]["count"] == 1
+
+    other_search = search.invoke(
+        {
+            "state": {"incoming_user_id": "user_b"},
+            "query": "payroll",
+        }
+    )
+    assert other_search["exception"] is None
+    assert other_search["output"]["count"] == 0
+
+    remove = registry.get("memory.remove_operational_fact")
+    assert remove is not None
+    denied_delete = remove.invoke(
+        {
+            "state": {"incoming_user_id": "user_b"},
+            "key": "ops.payroll.cutoff",
+        }
+    )
+    assert denied_delete["exception"] is None
+    assert denied_delete["output"]["deleted"] is False
+
+    allowed_delete = remove.invoke(
+        {
+            "state": {"incoming_user_id": "user_a"},
+            "key": "ops.payroll.cutoff",
+        }
+    )
+    assert allowed_delete["exception"] is None
+    assert allowed_delete["output"]["deleted"] is True
+
+
+def test_operational_fact_tools_are_exposed_in_planner_schemas() -> None:
+    registry = build_default_tool_registry()
+    schemas = {
+        str(item.get("function", {}).get("name") or ""): item.get("function", {})
+        for item in planner_tool_schemas(registry)
+        if isinstance(item, dict)
+    }
+    assert "memory.upsert_operational_fact" in schemas
+    assert "memory.search_operational_facts" in schemas
+    assert "memory.remove_operational_fact" in schemas
+    upsert_params = dict(schemas["memory.upsert_operational_fact"].get("parameters") or {})
+    assert upsert_params.get("required") == ["key", "title", "fact_type"]
