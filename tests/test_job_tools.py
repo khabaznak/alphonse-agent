@@ -145,4 +145,51 @@ def test_job_run_now_routes_prompt_jobs_to_bus_when_present(tmp_path: Path) -> N
     assert emitted.correlation_id == "corr-1"
     payload = emitted.payload or {}
     channel = payload.get("channel") if isinstance(payload.get("channel"), dict) else {}
+    content = payload.get("content") if isinstance(payload.get("content"), dict) else {}
     assert str(channel.get("target") or "") == "8553589429"
+    assert str(content.get("text") or "") == "Send Alex the current USD to MXN exchange rate over Telegram"
+    assert "Create scheduled job" not in str(content.get("text") or "")
+
+
+def test_job_create_rejects_prompt_payload_without_execution_text(tmp_path: Path) -> None:
+    store = JobStore(root=tmp_path / "data" / "jobs")
+    create = JobCreateTool(store)
+    created = create.execute(
+        user_id="u1",
+        name="Daily stoic voice note",
+        description="send stoic quote",
+        schedule={
+            "type": "rrule",
+            "dtstart": (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat(),
+            "rrule": "FREQ=DAILY;BYHOUR=5;BYMINUTE=30",
+        },
+        payload_type="prompt_to_brain",
+        payload={},
+        timezone="UTC",
+        safety_level="low",
+    )
+    assert created["exception"] is not None
+    assert str((created.get("exception") or {}).get("code") or "") == "missing_prompt_text"
+
+
+def test_job_create_normalizes_prompt_text_from_message_key(tmp_path: Path) -> None:
+    store = JobStore(root=tmp_path / "data" / "jobs")
+    create = JobCreateTool(store)
+    created = create.execute(
+        user_id="u1",
+        name="Daily stoic voice note",
+        description="send stoic quote",
+        schedule={
+            "type": "rrule",
+            "dtstart": (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat(),
+            "rrule": "FREQ=DAILY;BYHOUR=5;BYMINUTE=30",
+        },
+        payload_type="prompt_to_brain",
+        payload={"message": "Send a voice note containing a stoic quote"},
+        timezone="UTC",
+        safety_level="low",
+    )
+    assert created["exception"] is None
+    job = store.get_job(user_id="u1", job_id=str(created["output"]["job_id"]))
+    assert str(job.payload.get("prompt_text") or "") == "Send a voice note containing a stoic quote"
+    assert str(job.payload.get("message") or "") == "Send a voice note containing a stoic quote"

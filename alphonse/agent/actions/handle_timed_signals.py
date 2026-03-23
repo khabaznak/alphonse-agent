@@ -333,13 +333,15 @@ def _emit_brain_payload_to_bus(
     correlation_id = _correlation_id(signal_payload, signal)
     nested = brain_payload.get("payload") if isinstance(brain_payload, dict) else {}
     nested_payload = nested if isinstance(nested, dict) else {}
-    text = str(
-        nested_payload.get("text")
-        or nested_payload.get("prompt_text")
-        or nested_payload.get("agent_internal_prompt")
-        or nested_payload.get("source_instruction")
-        or "You just remembered something important."
-    ).strip() or "You just remembered something important."
+    payload_type = str((brain_payload or {}).get("payload_type") or "").strip().lower()
+    text = _extract_job_execution_prompt(nested_payload)
+    if not text and payload_type != "prompt_to_brain":
+        text = str(
+            nested_payload.get("agent_internal_prompt")
+            or nested_payload.get("source_instruction")
+            or "You just remembered something important."
+        ).strip()
+    text = text or "You just remembered something important."
     metadata = {
         "timed_signal": signal_payload,
         "source": "job_trigger" if signal_payload else "jobs_reconcile",
@@ -364,3 +366,12 @@ def _emit_brain_payload_to_bus(
             correlation_id=correlation_id,
         )
     )
+
+
+def _extract_job_execution_prompt(payload: dict[str, Any] | None) -> str:
+    rows = payload if isinstance(payload, dict) else {}
+    for key in ("prompt_text", "text", "message", "prompt"):
+        value = str(rows.get(key) or "").strip()
+        if value:
+            return value
+    return ""

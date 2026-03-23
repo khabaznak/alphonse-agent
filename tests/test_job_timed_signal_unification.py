@@ -91,10 +91,11 @@ def test_timer_fired_job_trigger_emits_conscious_message_event(tmp_path: Path, m
     action.execute({"signal": signal, "ctx": bus, "state": None, "outcome": None})
     assert bus.events
     emitted = bus.events[-1]
-    assert emitted.type == "sense.api.message.user.received"
+    assert emitted.type == "timed_signal.conscious_payload"
     payload = emitted.payload or {}
     actor = payload.get("actor") if isinstance(payload.get("actor"), dict) else {}
     content = payload.get("content") if isinstance(payload.get("content"), dict) else {}
     assert str(actor.get("external_user_id") or "") == "u1"
     text = str(content.get("text") or "")
-    assert text
+    assert text == "Share USD to MXN update"
+    assert "Create scheduled job" not in text

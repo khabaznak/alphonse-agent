@@ -52,6 +52,18 @@ class JobCreateTool:
     ) -> dict[str, Any]:
         resolved_user = _resolve_user_id(user_id=user_id, state=state, ctx=ctx)
         try:
+            normalized_payload_type = _normalize_payload_type(payload_type)
+            payload_with_prompt = dict(payload or {})
+            execution_prompt = ""
+            if normalized_payload_type == "prompt_to_brain":
+                execution_prompt = _extract_execution_prompt(payload_with_prompt)
+                if not execution_prompt:
+                    return _failed(
+                        code="missing_prompt_text",
+                        message="prompt_to_brain jobs require payload text (text/prompt_text/message/prompt).",
+                        metadata={"tool": "jobs.create"},
+                    )
+                payload_with_prompt.setdefault("prompt_text", execution_prompt)
             state_payload = state if isinstance(state, dict) else {}
             origin_channel = str(state_payload.get("channel_type") or "").strip().lower()
             channel_target = str(
@@ -65,8 +77,9 @@ class JobCreateTool:
                 name=name,
                 description=description,
                 schedule=schedule,
-                payload_type=payload_type,
-                payload=payload,
+                payload_type=normalized_payload_type,
+                payload=payload_with_prompt,
+                execution_prompt=execution_prompt,
             )
             llm_client = state.get("_llm_client") if isinstance(state, dict) else None
             internal_prompt = _you_just_remembered_paraphrase(
@@ -80,7 +93,6 @@ class JobCreateTool:
                 language=None,
                 artifact_kind="job",
             )
-            payload_with_prompt = dict(payload or {})
             payload_with_prompt.setdefault("source_instruction", source_instruction)
             payload_with_prompt.setdefault("agent_internal_prompt", internal_prompt)
             payload_with_prompt.setdefault("prompt_artifact_id", artifact_id)
@@ -96,7 +108,7 @@ class JobCreateTool:
                     "name": name,
                     "description": description,
                     "schedule": schedule,
-                    "payload_type": payload_type,
+                    "payload_type": normalized_payload_type,
                     "payload": payload_with_prompt,
                     "timezone": timezone,
                     "domain_tags": domain_tags or [],
@@ -299,14 +311,16 @@ def _brain_event_sink_from_state(
     def _sink(payload: dict[str, Any]) -> None:
         inner = payload.get("payload")
         inner_payload = inner if isinstance(inner, dict) else {}
-        text = str(
-            inner_payload.get("text")
-            or inner_payload.get("prompt_text")
-            or inner_payload.get("agent_internal_prompt")
-            or inner_payload.get("source_instruction")
-            or payload.get("message")
-            or "You just remembered something important."
-        ).strip() or "You just remembered something important."
+        payload_type = _normalize_payload_type(str(payload.get("payload_type") or ""))
+        text = _extract_execution_prompt(inner_payload)
+        if not text and payload_type != "prompt_to_brain":
+            text = str(
+                inner_payload.get("agent_internal_prompt")
+                or inner_payload.get("source_instruction")
+                or payload.get("message")
+                or "You just remembered something important."
+            ).strip()
+        text = text or "You just remembered something important."
         from alphonse.agent.nervous_system.senses.bus import Signal
 
         bus.emit(
@@ -363,14 +377,23 @@ def _build_job_source_instruction(
     schedule: dict[str, Any],
     payload_type: str,
     payload: dict[str, Any],
+    execution_prompt: str = "",
 ) -> str:
     rrule = str((schedule or {}).get("rrule") or "").strip()
     dtstart = str((schedule or {}).get("dtstart") or "").strip()
+    normalized_payload_type = _normalize_payload_type(payload_type)
+    if normalized_payload_type == "prompt_to_brain" and execution_prompt:
+        return (
+            f"Scheduled job '{str(name or '').strip()}' should execute this prompt at runtime: "
+            f"{execution_prompt}. "
+            f"Schedule dtstart={dtstart}, rrule={rrule}. "
+            f"Description: {str(description or '').strip()}."
+        ).strip()
     return (
-        f"Create scheduled job '{str(name or '').strip()}'. "
+        f"Scheduled job '{str(name or '').strip()}'. "
         f"Description: {str(description or '').strip()}. "
         f"Schedule dtstart={dtstart}, rrule={rrule}. "
-        f"Payload type={str(payload_type or '').strip()}. "
+        f"Payload type={normalized_payload_type}. "
         f"Payload={payload}."
     ).strip()
 
@@ -404,4 +427,20 @@ def _resolve_job_id_by_name(*, store: JobStore, user_id: str, requested_name: st
     for job in rows:
         if str(job.name or "").strip().lower() == expected:
             return str(job.job_id or "").strip()
+    return ""
+
+
+def _normalize_payload_type(value: str | None) -> str:
+    rendered = str(value or "").strip().lower()
+    if rendered == "prompt":
+        return "prompt_to_brain"
+    return rendered
+
+
+def _extract_execution_prompt(payload: dict[str, Any] | None) -> str:
+    rows = payload if isinstance(payload, dict) else {}
+    for key in ("prompt_text", "text", "message", "prompt"):
+        value = str(rows.get(key) or "").strip()
+        if value:
+            return value
     return ""

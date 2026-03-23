@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import types
+
 from alphonse.agent.actions.handle_timed_signals import HandleTimedSignalsAction
+from alphonse.agent.actions.handle_timed_signals import _emit_brain_payload_to_bus
 from alphonse.agent.nervous_system.senses.bus import Bus
 from alphonse.agent.nervous_system.senses.bus import Signal
 
@@ -177,3 +180,30 @@ def test_memory_maintenance_timed_signal_runs_maintenance(monkeypatch) -> None:
     assert result.intention_key == "NOOP"
     assert calls == ["maintenance", "rescheduled"]
     assert bus.events == []
+
+
+def test_job_trigger_bus_prompt_uses_payload_text_not_setup_metadata() -> None:
+    bus = _FakeBus()
+    _emit_brain_payload_to_bus(
+        bus=bus,
+        signal_payload={"target": "u1", "origin": "telegram"},
+        inner={},
+        user_id="u1",
+        signal=types.SimpleNamespace(correlation_id="corr-job-trigger"),
+        brain_payload={
+            "payload_type": "prompt_to_brain",
+            "job_id": "job_123",
+            "payload": {
+                "prompt_text": "Send voice note containing a stoic quote",
+                "agent_internal_prompt": "Create scheduled job daily...",
+                "source_instruction": "Create scheduled job daily...",
+            },
+        },
+    )
+    assert bus.events
+    emitted = bus.events[-1]
+    payload = emitted.payload if isinstance(emitted.payload, dict) else {}
+    content = payload.get("content") if isinstance(payload.get("content"), dict) else {}
+    text = str(content.get("text") or "")
+    assert text == "Send voice note containing a stoic quote"
+    assert "Create scheduled job" not in text
