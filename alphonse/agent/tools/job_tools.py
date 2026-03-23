@@ -25,7 +25,7 @@ class JobToolContext:
 
 
 class JobCreateTool:
-    canonical_name: str = "job_create"
+    canonical_name: str = "jobs.create"
     capability: str = "jobs"
 
     def __init__(self, store: JobStore) -> None:
@@ -109,14 +109,14 @@ class JobCreateTool:
             )
             return _ok(
                 result={"job_id": job.job_id, "next_run_at": job.next_run_at},
-                metadata={"tool": "job_create"},
+                metadata={"tool": "jobs.create"},
             )
         except Exception as exc:
-            return _failed(code=_err_code(exc), message=str(exc), metadata={"tool": "job_create"})
+            return _failed(code=_err_code(exc), message=str(exc), metadata={"tool": "jobs.create"})
 
 
 class JobListTool:
-    canonical_name: str = "job_list"
+    canonical_name: str = "jobs.list"
     capability: str = "jobs"
 
     def __init__(self, store: JobStore) -> None:
@@ -145,13 +145,13 @@ class JobListTool:
                 }
                 for job in jobs
             ]
-            return _ok(result={"jobs": rows}, metadata={"tool": "job_list"})
+            return _ok(result={"jobs": rows}, metadata={"tool": "jobs.list"})
         except Exception as exc:
-            return _failed(code=_err_code(exc), message=str(exc), metadata={"tool": "job_list"})
+            return _failed(code=_err_code(exc), message=str(exc), metadata={"tool": "jobs.list"})
 
 
 class JobPauseTool:
-    canonical_name: str = "job_pause"
+    canonical_name: str = "jobs.pause"
     capability: str = "jobs"
 
     def __init__(self, store: JobStore) -> None:
@@ -168,13 +168,13 @@ class JobPauseTool:
         resolved_user = _resolve_user_id(user_id=user_id, state=state, ctx=ctx)
         try:
             job = self._store.pause_job(user_id=resolved_user, job_id=job_id)
-            return _ok(result={"job_id": job.job_id, "enabled": job.enabled, "next_run_at": job.next_run_at}, metadata={"tool": "job_pause"})
+            return _ok(result={"job_id": job.job_id, "enabled": job.enabled, "next_run_at": job.next_run_at}, metadata={"tool": "jobs.pause"})
         except Exception as exc:
-            return _failed(code=_err_code(exc), message=str(exc), metadata={"tool": "job_pause"})
+            return _failed(code=_err_code(exc), message=str(exc), metadata={"tool": "jobs.pause"})
 
 
 class JobResumeTool:
-    canonical_name: str = "job_resume"
+    canonical_name: str = "jobs.resume"
     capability: str = "jobs"
 
     def __init__(self, store: JobStore) -> None:
@@ -191,13 +191,13 @@ class JobResumeTool:
         resolved_user = _resolve_user_id(user_id=user_id, state=state, ctx=ctx)
         try:
             job = self._store.resume_job(user_id=resolved_user, job_id=job_id)
-            return _ok(result={"job_id": job.job_id, "enabled": job.enabled, "next_run_at": job.next_run_at}, metadata={"tool": "job_resume"})
+            return _ok(result={"job_id": job.job_id, "enabled": job.enabled, "next_run_at": job.next_run_at}, metadata={"tool": "jobs.resume"})
         except Exception as exc:
-            return _failed(code=_err_code(exc), message=str(exc), metadata={"tool": "job_resume"})
+            return _failed(code=_err_code(exc), message=str(exc), metadata={"tool": "jobs.resume"})
 
 
 class JobDeleteTool:
-    canonical_name: str = "job_delete"
+    canonical_name: str = "jobs.delete"
     capability: str = "jobs"
 
     def __init__(self, store: JobStore) -> None:
@@ -214,13 +214,13 @@ class JobDeleteTool:
         resolved_user = _resolve_user_id(user_id=user_id, state=state, ctx=ctx)
         try:
             deleted = self._store.delete_job(user_id=resolved_user, job_id=job_id)
-            return _ok(result={"job_id": str(job_id), "deleted": bool(deleted)}, metadata={"tool": "job_delete"})
+            return _ok(result={"job_id": str(job_id), "deleted": bool(deleted)}, metadata={"tool": "jobs.delete"})
         except Exception as exc:
-            return _failed(code=_err_code(exc), message=str(exc), metadata={"tool": "job_delete"})
+            return _failed(code=_err_code(exc), message=str(exc), metadata={"tool": "jobs.delete"})
 
 
 class JobRunNowTool:
-    canonical_name: str = "job_run_now"
+    canonical_name: str = "jobs.run_now"
     capability: str = "jobs"
 
     def __init__(self, runner: JobRunner) -> None:
@@ -250,7 +250,7 @@ class JobRunNowTool:
                 return _failed(
                     code="missing_job_id",
                     message="job_id is required",
-                    metadata={"tool": "job_run_now"},
+                    metadata={"tool": "jobs.run_now"},
                 )
             outcome = self._runner.run_job_now(
                 user_id=resolved_user,
@@ -262,10 +262,10 @@ class JobRunNowTool:
                     "execution_id": outcome.get("execution_id"),
                     "status": outcome.get("status"),
                 },
-                metadata={"tool": "job_run_now"},
+                metadata={"tool": "jobs.run_now"},
             )
         except Exception as exc:
-            return _failed(code=_err_code(exc), message=str(exc), metadata={"tool": "job_run_now"})
+            return _failed(code=_err_code(exc), message=str(exc), metadata={"tool": "jobs.run_now"})
 
 
 def _resolve_user_id(*, user_id: str | None, state: dict[str, Any] | None, ctx: JobToolContext | None) -> str:

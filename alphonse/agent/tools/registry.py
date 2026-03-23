@@ -149,12 +149,12 @@ def _build_runtime_executors(*, job_store: JobStore, job_runner: JobRunner) -> l
     execution_call_mcp = McpCallTool()
     execution_run_ssh = SshTerminalTool()
     scheduler = SchedulerTool()
-    job_create = JobCreateTool(job_store)
-    job_list = JobListTool(job_store)
-    job_pause = JobPauseTool(job_store)
-    job_resume = JobResumeTool(job_store)
-    job_delete = JobDeleteTool(job_store)
-    job_run_now = JobRunNowTool(job_runner)
+    jobs_create = JobCreateTool(job_store)
+    jobs_list = JobListTool(job_store)
+    jobs_pause = JobPauseTool(job_store)
+    jobs_resume = JobResumeTool(job_store)
+    jobs_delete = JobDeleteTool(job_store)
+    jobs_run_now = JobRunNowTool(job_runner)
     users_register_from_contact = UserRegisterFromContactTool()
     users_remove_from_contact = UserRemoveFromContactTool()
     users_search = UserSearchTool()
@@ -182,12 +182,12 @@ def _build_runtime_executors(*, job_store: JobStore, job_runner: JobRunner) -> l
         execution_call_mcp,
         execution_run_ssh,
         scheduler,
-        job_create,
-        job_list,
-        job_pause,
-        job_resume,
-        job_delete,
-        job_run_now,
+        jobs_create,
+        jobs_list,
+        jobs_pause,
+        jobs_resume,
+        jobs_delete,
+        jobs_run_now,
         users_register_from_contact,
         users_remove_from_contact,
         users_search,
@@ -696,7 +696,7 @@ def _default_specs() -> list[ToolSpec]:
             examples=[{"event_type": "state_changed", "duration_seconds": 10}],
         ),
         ToolSpec(
-            canonical_name="job_create",
+            canonical_name="jobs.create",
             summary="Create a scheduled job with RRULE timing, payload routing, safety, and retry policy.",
             description="Create a scheduled job with RRULE timing, payload routing, safety, and retry policy.",
             when_to_use="Use when the user asks for recurring automations or scheduled background actions.",
@@ -745,7 +745,7 @@ def _default_specs() -> list[ToolSpec]:
             ],
         ),
         ToolSpec(
-            canonical_name="job_list",
+            canonical_name="jobs.list",
             summary="List scheduled jobs with filtering by enabled state and domain tag.",
             description="List scheduled jobs with filtering by enabled state and domain tag.",
             when_to_use="Use to review configured jobs before editing/running/deleting.",
@@ -764,7 +764,7 @@ def _default_specs() -> list[ToolSpec]:
             examples=[{"enabled": True, "limit": 20}],
         ),
         ToolSpec(
-            canonical_name="job_pause",
+            canonical_name="jobs.pause",
             summary="Pause a scheduled job so it no longer auto-triggers.",
             description="Pause a scheduled job so it no longer auto-triggers.",
             when_to_use="Use when the user wants to temporarily disable an automation.",
@@ -779,7 +779,7 @@ def _default_specs() -> list[ToolSpec]:
             examples=[{"job_id": "job_abc123"}],
         ),
         ToolSpec(
-            canonical_name="job_resume",
+            canonical_name="jobs.resume",
             summary="Resume a paused job and recompute next run time.",
             description="Resume a paused job and recompute next run time.",
             when_to_use="Use when the user wants an automation active again.",
@@ -794,7 +794,7 @@ def _default_specs() -> list[ToolSpec]:
             examples=[{"job_id": "job_abc123"}],
         ),
         ToolSpec(
-            canonical_name="job_delete",
+            canonical_name="jobs.delete",
             summary="Delete a job definition permanently.",
             description="Delete a job definition permanently.",
             when_to_use="Use when the user asks to remove an automation.",
@@ -810,7 +810,7 @@ def _default_specs() -> list[ToolSpec]:
             examples=[{"job_id": "job_abc123"}],
         ),
         ToolSpec(
-            canonical_name="job_run_now",
+            canonical_name="jobs.run_now",
             summary="Trigger immediate execution of a job regardless of schedule.",
             description="Trigger immediate execution of a job regardless of schedule.",
             when_to_use="Use to test or manually force a scheduled job.",

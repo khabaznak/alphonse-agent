@@ -111,7 +111,7 @@ def test_execution_review_marks_criteria_and_reaches_success() -> None:
             "created_by_case": "new_request",
         }
     ]
-    task_state["facts"] = {"step_1": {"tool": "job_list", "status": "ok", "result_payload": {"count": 2}}}
+    task_state["facts"] = {"step_1": {"tool": "jobs.list", "status": "ok", "result_payload": {"count": 2}}}
     state = {"correlation_id": "corr-exec-success", "_llm_client": llm, "task_state": task_state}
 
     out = check_node(state, tool_registry=tool_registry)

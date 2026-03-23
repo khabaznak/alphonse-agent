@@ -23,7 +23,7 @@ def _decide_with(llm: object) -> dict[str, object]:
         tone="friendly",
         address_style="neutral",
         channel_type="telegram",
-        available_tool_names=["job_list"],
+        available_tool_names=["jobs.list"],
         recent_conversation_block="## RECENT CONVERSATION (last 10 turns)\n- (none)",
         goal="",
         status="running",

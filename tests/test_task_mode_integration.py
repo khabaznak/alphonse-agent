@@ -87,7 +87,7 @@ def test_acceptance_criteria_pending_context_uses_clean_goal_text() -> None:
     tool_registry = build_default_tool_registry()
     next_step = build_next_step_node(tool_registry=tool_registry)
     llm = _FakeLlm(
-        '{"kind":"call_tool","tool_name":"job_list","args":{"limit":10},'
+        '{"kind":"call_tool","tool_name":"jobs.list","args":{"limit":10},'
         '"acceptance_criteria":["Return the scheduled jobs list."]}'
     )
     state = {

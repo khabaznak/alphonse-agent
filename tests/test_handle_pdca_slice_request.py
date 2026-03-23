@@ -95,7 +95,7 @@ def test_handle_pdca_slice_request_executes_and_persists_checkpoint(
                 "status": "running",
                 "cycle_index": 1,
                 "pending_plan_raw": {
-                    "tool_call": {"kind": "call_tool", "tool_name": "job_list", "args": {"limit": 3}},
+                    "tool_call": {"kind": "call_tool", "tool_name": "jobs.list", "args": {"limit": 3}},
                     "planner_intent": "Thinking about the best next tool.",
                 },
                 "plan": {
@@ -106,7 +106,7 @@ def test_handle_pdca_slice_request_executes_and_persists_checkpoint(
                             "step_id": "step_1",
                             "status": "proposed",
                             "proposal_raw": {
-                                "tool_call": {"kind": "call_tool", "tool_name": "job_list", "args": {"limit": 3}},
+                                "tool_call": {"kind": "call_tool", "tool_name": "jobs.list", "args": {"limit": 3}},
                                 "planner_intent": "Thinking about the best next tool.",
                             },
                             "raw_source": "complete_with_tools",

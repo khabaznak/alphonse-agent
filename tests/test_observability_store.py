@@ -25,7 +25,7 @@ def test_write_task_event_persists_and_rollup(tmp_path: Path, monkeypatch) -> No
             "node": "update_state_node",
             "cycle": 1,
             "status": "running",
-            "tool": "job_create",
+            "tool": "jobs.create",
         }
     )
 

@@ -702,7 +702,7 @@ def test_pdca_parse_failure_retry_can_recover_with_valid_json() -> None:
     llm = _QueuedLlm(
         [
             "not-json output",
-            '{"kind":"call_tool","tool_name":"job_list","args":{"limit":10}}',
+            '{"kind":"call_tool","tool_name":"jobs.list","args":{"limit":10}}',
         ]
     )
 
@@ -744,7 +744,7 @@ def test_pdca_next_step_uses_complete_with_tools_when_available() -> None:
             "tool_calls": [
                 {
                     "id": "call-1",
-                    "name": "job_list",
+                    "name": "jobs.list",
                     "arguments": {"limit": 10},
                 }
             ],
@@ -777,7 +777,7 @@ def test_pdca_next_step_uses_complete_with_tools_when_available() -> None:
     tool_calls = raw.get("tool_calls")
     assert isinstance(tool_calls, list) and tool_calls
     assert isinstance(tool_calls[0], dict)
-    assert str(tool_calls[0].get("name") or "") == "job_list"
+    assert str(tool_calls[0].get("name") or "") == "jobs.list"
     assert llm.complete_with_tools_calls == 1
     assert llm.complete_calls == 0
 
@@ -787,7 +787,7 @@ def test_pdca_next_step_uses_complete_with_tools_when_available() -> None:
 def test_pdca_next_step_falls_back_to_text_when_tool_call_payload_is_empty() -> None:
     tool_registry = build_default_tool_registry()
     next_step = build_next_step_node(tool_registry=tool_registry)
-    llm = _BrokenToolCallLlm('{"kind":"call_tool","tool_name":"job_list","args":{"limit":10}}')
+    llm = _BrokenToolCallLlm('{"kind":"call_tool","tool_name":"jobs.list","args":{"limit":10}}')
 
     task_state = build_default_task_state()
     task_state["acceptance_criteria"] = ["done when requested outcome is produced"]
@@ -856,7 +856,7 @@ def test_pdca_next_step_accepts_tool_call_without_planner_intent() -> None:
             "tool_calls": [
                 {
                     "id": "call-1",
-                    "name": "job_list",
+                    "name": "jobs.list",
                     "arguments": {"limit": 5},
                 }
             ],
@@ -880,7 +880,7 @@ def test_pdca_next_step_accepts_tool_call_without_planner_intent() -> None:
     tool_calls = raw.get("tool_calls")
     assert isinstance(tool_calls, list) and tool_calls
     assert isinstance(tool_calls[0], dict)
-    assert str(tool_calls[0].get("name") or "") == "job_list"
+    assert str(tool_calls[0].get("name") or "") == "jobs.list"
 
 
 def test_pdca_next_step_drops_malformed_planner_intent() -> None:
@@ -888,7 +888,7 @@ def test_pdca_next_step_drops_malformed_planner_intent() -> None:
     next_step = build_next_step_node(tool_registry=tool_registry)
     llm = _ToolCallLlm(
         {
-            "tool_call": {"kind": "call_tool", "tool_name": "job_list", "args": {"limit": 3}},
+            "tool_call": {"kind": "call_tool", "tool_name": "jobs.list", "args": {"limit": 3}},
             "planner_intent": {"why": "not-a-string"},
         }
     )
@@ -908,7 +908,7 @@ def test_pdca_next_step_drops_malformed_planner_intent() -> None:
     assert isinstance(raw, dict)
     tool_call = raw.get("tool_call")
     assert isinstance(tool_call, dict)
-    assert tool_call.get("tool_name") == "job_list"
+    assert tool_call.get("tool_name") == "jobs.list"
 
 
 def test_pdca_tool_call_schema_includes_context_tools_when_runtime_registered() -> None:
@@ -945,7 +945,7 @@ def test_pdca_parse_failure_respects_configured_max_attempts(monkeypatch: pytest
     monkeypatch.setenv("ALPHONSE_TASK_MODE_PLANNER_RETRY_BUDGET", "0")
     tool_registry = build_default_tool_registry()
     next_step = build_next_step_node(tool_registry=tool_registry)
-    llm = _QueuedLlm(["not-json output", '{"kind":"call_tool","tool_name":"job_list","args":{"limit":10}}'])
+    llm = _QueuedLlm(["not-json output", '{"kind":"call_tool","tool_name":"jobs.list","args":{"limit":10}}'])
 
     task_state = build_default_task_state()
     task_state["acceptance_criteria"] = ["done when requested outcome is produced"]
@@ -971,7 +971,7 @@ def test_pdca_derives_acceptance_criteria_from_next_step_proposal() -> None:
     next_step = build_next_step_node(tool_registry=tool_registry)
     llm = _QueuedLlm(
         [
-            '{"kind":"call_tool","tool_name":"job_list","args":{"limit":10},'
+            '{"kind":"call_tool","tool_name":"jobs.list","args":{"limit":10},'
             '"acceptance_criteria":["Return the number of scheduled jobs."]}'
         ]
     )
@@ -996,7 +996,7 @@ def test_pdca_derives_acceptance_criteria_from_next_step_proposal() -> None:
 def test_pdca_does_not_force_acceptance_criteria_on_first_turn() -> None:
     tool_registry = build_default_tool_registry()
     next_step = build_next_step_node(tool_registry=tool_registry)
-    llm = _QueuedLlm(['{"kind":"call_tool","tool_name":"job_list","args":{"limit":10}}'])
+    llm = _QueuedLlm(['{"kind":"call_tool","tool_name":"jobs.list","args":{"limit":10}}'])
     task_state = build_default_task_state()
     task_state["goal"] = "how many jobs do we have scheduled?"
     task_state["acceptance_criteria"] = []
@@ -1635,7 +1635,7 @@ def test_execute_step_accepts_canonical_send_message_from_planner_for_simple_con
 def test_next_step_prompt_exposes_delivery_context_to_planner() -> None:
     tool_registry = build_default_tool_registry()
     next_step = build_next_step_node(tool_registry=tool_registry)
-    llm = _PromptCaptureLlm('{"tool_call":{"kind":"call_tool","tool_name":"job_list","args":{"limit":1}}}')
+    llm = _PromptCaptureLlm('{"tool_call":{"kind":"call_tool","tool_name":"jobs.list","args":{"limit":1}}}')
     task_state = build_default_task_state()
     task_state["goal"] = "send a message"
     task_state["channel_type"] = "telegram"

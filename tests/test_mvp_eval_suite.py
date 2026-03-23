@@ -141,7 +141,7 @@ class _EvalLlm:
                 '"planner_intent":"I am creating the reminder requested by the user."}'
             )
         return (
-            '{"tool_call":{"kind":"call_tool","tool_name":"job_list","args":{"limit":10}},'
+            '{"tool_call":{"kind":"call_tool","tool_name":"jobs.list","args":{"limit":10}},'
             '"planner_intent":"I am gathering concrete evidence to satisfy the request."}'
         )
 

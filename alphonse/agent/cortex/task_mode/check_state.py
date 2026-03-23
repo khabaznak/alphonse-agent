@@ -73,7 +73,7 @@ def evaluate_success_from_evidence(task_state: dict[str, Any]) -> dict[str, Any]
                 "outcome_kind": "task_completed",
                 "confidence": 0.98,
                 "missing_evidence": [],
-                "supporting_facts": [f"job_list count={count}"],
+                "supporting_facts": [f"jobs.list count={count}"],
                 "final_response_hint": f"Tenemos {count} jobs programados actualmente.",
             }
 
@@ -168,7 +168,7 @@ def _looks_like_message_task(*, goal: str, criteria: list[str]) -> bool:
 
 def _extract_jobs_count(fact_entries: list[dict[str, Any]]) -> int | None:
     for entry in reversed(fact_entries):
-        if str(entry.get("tool_name") or entry.get("tool") or "").strip() != "job_list":
+        if str(entry.get("tool_name") or entry.get("tool") or "").strip() != "jobs.list":
             continue
         payload = entry.get("output")
         if not isinstance(payload, dict):
