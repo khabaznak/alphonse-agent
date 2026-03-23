@@ -302,7 +302,7 @@ def test_mcp_call_routes_unknown_operation_to_native_connector(
         return {
             "output": {"tools": ["navigate"]},
             "exception": None,
-            "metadata": {"tool": "mcp_call", "mcp_native": True},
+            "metadata": {"tool": "execution.call_mcp", "mcp_native": True},
         }
 
     monkeypatch.setattr(connector, "_execute_native", _fake_native)

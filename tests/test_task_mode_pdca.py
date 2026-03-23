@@ -341,7 +341,7 @@ class _CaptureMcpCallTool:
         return {
             "output": {"profile": profile, "operation": operation, "arguments": dict(arguments or {})},
             "exception": None,
-            "metadata": {"tool": "mcp_call"},
+            "metadata": {"tool": "execution.call_mcp"},
         }
 
 
@@ -1042,7 +1042,7 @@ def test_pdca_next_step_prompt_includes_recent_conversation_sentinel() -> None:
 def test_pdca_next_step_prompt_includes_failure_diagnostics_for_remediation() -> None:
     tool_registry = build_default_tool_registry()
     next_step = build_next_step_node(tool_registry=tool_registry)
-    llm = _PromptCaptureLlm('{"kind":"call_tool","tool_name":"terminal_sync","args":{"command":"echo ok"}}')
+    llm = _PromptCaptureLlm('{"kind":"call_tool","tool_name":"execution.run_terminal","args":{"command":"echo ok"}}')
 
     task_state = build_default_task_state()
     task_state["acceptance_criteria"] = ["done when requested outcome is produced"]
@@ -1056,13 +1056,13 @@ def test_pdca_next_step_prompt_includes_failure_diagnostics_for_remediation() ->
     task_state["plan"]["steps"] = [
         {
             "step_id": "step_1",
-            "proposal": {"kind": "call_tool", "tool_name": "ssh_terminal", "args": {"host": "192.168.68.127"}},
+            "proposal": {"kind": "call_tool", "tool_name": "execution.run_ssh", "args": {"host": "192.168.68.127"}},
             "status": "failed",
         }
     ]
     task_state["facts"] = {
         "step_1": {
-            "tool": "ssh_terminal",
+            "tool": "execution.run_ssh",
             "output": {
                 "status": "failed",
                 "exception": {
@@ -1120,7 +1120,7 @@ def test_pdca_next_step_prompt_includes_mcp_live_tools_menu() -> None:
     task_state["goal"] = "search web"
     task_state["facts"] = {
         "step_1": {
-            "tool": "mcp_call",
+            "tool": "execution.call_mcp",
             "output": {
                 "output": {
                     "tools": [
@@ -1191,7 +1191,7 @@ def test_pdca_validation_allows_unknown_mcp_operation_for_native_profile(tmp_pat
             "step_id": "step_1",
             "proposal": {
                 "kind": "call_tool",
-                "tool_name": "mcp_call",
+                "tool_name": "execution.call_mcp",
                 "args": {"profile": "chrome", "operation": "web_search", "arguments": {"query": "Veloswim"}},
             },
             "status": "proposed",
@@ -1213,7 +1213,7 @@ def test_route_after_next_step_routes_to_execute_step_node() -> None:
             "step_id": "step_1",
             "proposal": {
                 "kind": "call_tool",
-                "tool_name": "mcp_call",
+                "tool_name": "execution.call_mcp",
                 "args": {
                     "profile": "chrome",
                     "operation": "web_search",
@@ -1276,7 +1276,7 @@ def test_execute_step_handles_structured_tool_failure() -> None:
 def test_execute_step_passes_mcp_call_payload_through_without_do_normalization() -> None:
     registry = ToolRegistry()
     mcp_tool = _CaptureMcpCallTool()
-    _register_tool(registry, "mcp_call", mcp_tool)
+    _register_tool(registry, "execution.call_mcp", mcp_tool)
     task_state = build_default_task_state()
     task_state["goal"] = "Find veloswim"
     task_state["plan"] = {
@@ -1286,7 +1286,7 @@ def test_execute_step_passes_mcp_call_payload_through_without_do_normalization()
                 "step_id": "step_1",
                 "proposal": {
                     "kind": "call_tool",
-                    "tool_name": "mcp_call",
+                    "tool_name": "execution.call_mcp",
                     "args": {
                         "args": {
                             "profile": "chrome",

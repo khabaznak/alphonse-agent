@@ -309,11 +309,11 @@ def test_telegram_send_intent_update_emits_message_action(monkeypatch) -> None:
     adapter = telegram_channel.TelegramExtremityAdapter()
     adapter.send_intent_update(
         channel_target="12345",
-        text="Running mcp_call to fetch tools.",
+        text="Running execution.call_mcp to fetch tools.",
         correlation_id="cid-intent",
     )
     assert len(captured) == 1
     assert captured[0]["type"] == "send_message"
     assert captured[0]["payload"]["chat_id"] == "12345"
-    assert captured[0]["payload"]["text"] == "Running mcp_call to fetch tools."
+    assert captured[0]["payload"]["text"] == "Running execution.call_mcp to fetch tools."
     assert captured[0]["payload"]["correlation_id"] == "cid-intent"

@@ -25,7 +25,7 @@ def mcp_handler_node_impl(
         return {"task_state": task_state}
     if str(proposal.get("kind") or "").strip() != "call_tool":
         return {"task_state": task_state}
-    if str(proposal.get("tool_name") or "").strip() != "mcp_call":
+    if str(proposal.get("tool_name") or "").strip() != "execution.call_mcp":
         return {"task_state": task_state}
 
     raw_args = proposal.get("args")

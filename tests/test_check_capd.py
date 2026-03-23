@@ -136,7 +136,7 @@ def test_repeated_failure_signature_is_advisory_and_does_not_force_mission_faile
     task_state["check_provenance"] = "do"
     task_state["facts"] = {
         "step_1": {
-            "tool_name": "terminal_sync",
+            "tool_name": "execution.run_terminal",
             "params": {},
             "output": None,
             "exception": {"message": "timeout", "code": "timeout"},

@@ -145,9 +145,9 @@ def _build_runtime_executors(*, job_store: JobStore, job_runner: JobRunner) -> l
     audio_transcribe = SttTranscribeTool()
     vision_analyze_image = VisionAnalyzeImageTool()
     vision_extract_text = VisionExtractTool()
-    terminal_sync = TerminalExecuteTool()
-    mcp_call = McpCallTool()
-    ssh_terminal = SshTerminalTool()
+    execution_run_terminal = TerminalExecuteTool()
+    execution_call_mcp = McpCallTool()
+    execution_run_ssh = SshTerminalTool()
     scheduler = SchedulerTool()
     job_create = JobCreateTool(job_store)
     job_list = JobListTool(job_store)
@@ -178,9 +178,9 @@ def _build_runtime_executors(*, job_store: JobStore, job_runner: JobRunner) -> l
         audio_transcribe,
         vision_analyze_image,
         vision_extract_text,
-        terminal_sync,
-        mcp_call,
-        ssh_terminal,
+        execution_run_terminal,
+        execution_call_mcp,
+        execution_run_ssh,
         scheduler,
         job_create,
         job_list,
@@ -890,7 +890,7 @@ def _default_specs() -> list[ToolSpec]:
             examples=[{"query": "Gab", "limit": 5, "active_only": True}],
         ),
         ToolSpec(
-            canonical_name="terminal_sync",
+            canonical_name="execution.run_terminal",
             summary="Execute terminal commands under global Alphonse execution mode and sandbox policy.",
             description="Execute terminal commands under global Alphonse execution mode and sandbox policy.",
             when_to_use="Use for constrained terminal-like operations when explicit tools are insufficient.",
@@ -910,7 +910,7 @@ def _default_specs() -> list[ToolSpec]:
             examples=[{"command": "ls -la", "cwd": ".", "timeout_seconds": 20}],
         ),
         ToolSpec(
-            canonical_name="mcp_call",
+            canonical_name="execution.call_mcp",
             summary="Execute a named operation via an MCP profile through a controlled connector and policy envelope.",
             description="Execute a named operation via an MCP profile through a controlled connector and policy envelope.",
             when_to_use="Use this for MCP-backed capabilities (for example Chrome MCP web search); do not call MCP binaries via terminal tools.",
@@ -940,7 +940,7 @@ def _default_specs() -> list[ToolSpec]:
             ],
         ),
         ToolSpec(
-            canonical_name="ssh_terminal",
+            canonical_name="execution.run_ssh",
             summary="Execute a command on a remote SSH host using Paramiko.",
             description="Execute a command on a remote SSH host using Paramiko.",
             when_to_use="Use for explicit remote SSH operations that require host/user credentials and command execution.",

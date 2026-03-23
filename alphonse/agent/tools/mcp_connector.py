@@ -33,7 +33,7 @@ class McpInvocationError(Exception):
                 "retryable": False,
                 "details": {},
             },
-            "metadata": {"tool": "mcp_call"},
+            "metadata": {"tool": "execution.call_mcp"},
         }
 
 
@@ -132,7 +132,7 @@ class McpConnector:
             timeout_seconds=timeout_seconds,
         )
         metadata = dict(outcome.get("metadata") or {}) if isinstance(outcome, dict) else {}
-        metadata["tool"] = "mcp_call"
+        metadata["tool"] = "execution.call_mcp"
         metadata["policy_envelope"] = {
             "execution_surface": "mcp",
             "profile": profile.key,
@@ -262,7 +262,7 @@ class McpConnector:
                 },
                 "exception": None,
                 "metadata": {
-                    "tool": "mcp_call",
+                    "tool": "execution.call_mcp",
                     "policy_envelope": {
                         "execution_surface": "mcp_native",
                         "profile": profile.key,
@@ -304,7 +304,7 @@ class McpConnector:
             "output": call_result,
             "exception": None,
             "metadata": {
-                "tool": "mcp_call",
+                "tool": "execution.call_mcp",
                 "policy_envelope": {
                     "execution_surface": "mcp_native",
                     "profile": profile.key,

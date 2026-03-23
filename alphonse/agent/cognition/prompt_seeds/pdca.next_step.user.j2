@@ -34,7 +34,7 @@ Rules:
 - `planner_intent` is optional, plain language, max 160 chars when present.
 - `planner_intent` is internal progress metadata; do not emit `communication.send_message` only to expose it.
 - Do not return acceptance criteria in this output.
-- If `tool_call.tool_name` is `mcp_call`, args MUST be:
+- If `tool_call.tool_name` is `execution.call_mcp`, args MUST be:
   - `{"profile":"<profile_key>","operation":"<operation_key>","arguments":{...}}`
   - Optional: add `"headless": false` for manual captcha handling in visible browser mode on native browser MCP profiles.
 - For native MCP profiles, use `operation: "list_tools"` before attempting task-specific tool names.

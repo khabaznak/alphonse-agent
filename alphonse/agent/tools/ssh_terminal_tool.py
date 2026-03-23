@@ -7,8 +7,8 @@ from typing import Any
 
 
 class SshTerminalTool:
-    canonical_name: str = "ssh_terminal"
-    capability: str = "terminal_ops"
+    canonical_name: str = "execution.run_ssh"
+    capability: str = "execution"
 
     def execute(
         self,
@@ -106,7 +106,7 @@ class SshTerminalTool:
                 pass
 
         metadata = {
-            "tool": "ssh_terminal",
+            "tool": "execution.run_ssh",
             "host": hostname,
             "port": port_value,
             "username": user,
@@ -238,5 +238,5 @@ def _failed(error_code: str, *, retryable: bool, **kwargs: Any) -> dict[str, Any
             "retryable": bool(retryable),
             "details": dict(kwargs),
         },
-        "metadata": {"tool": "ssh_terminal"},
+        "metadata": {"tool": "execution.run_ssh"},
     }

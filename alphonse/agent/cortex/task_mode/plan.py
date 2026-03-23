@@ -267,7 +267,7 @@ def _build_mcp_capability_menu() -> tuple[str, dict[str, Any]]:
         if supports_native:
             lines.append(
                 "  - native MCP enabled: use `operation: \"list_tools\"` first to discover live server tools, "
-                "then call `mcp_call` again with `operation` equal to the discovered tool name."
+                "then call `execution.call_mcp` again with `operation` equal to the discovered tool name."
             )
         for operation in sorted(profile.operations.values(), key=lambda item: item.key):
             operation_count += 1
@@ -292,7 +292,7 @@ def _build_mcp_live_tools_menu(task_state: dict[str, Any]) -> str:
         if not isinstance(fact, dict):
             continue
         tool_name = str(fact.get("tool_name") or fact.get("tool") or "").strip()
-        if tool_name != "mcp_call":
+        if tool_name != "execution.call_mcp":
             continue
 
         exception = fact.get("exception")
@@ -339,6 +339,6 @@ def _build_mcp_live_tools_menu(task_state: dict[str, Any]) -> str:
                 lines.append(f"  - `{name}` (required_args: {required_hint})")
         if len(lines) == 1:
             continue
-        lines.append("  - invoke with `mcp_call` using `operation` equal to the tool name above.")
+        lines.append("  - invoke with `execution.call_mcp` using `operation` equal to the tool name above.")
         return "\n".join(lines)
     return ""

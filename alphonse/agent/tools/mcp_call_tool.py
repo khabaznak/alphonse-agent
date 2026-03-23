@@ -106,8 +106,8 @@ def normalize_mcp_call_invocation(raw: dict[str, Any]) -> tuple[dict[str, Any], 
 
 
 class McpCallTool:
-    canonical_name: str = "mcp_call"
-    capability: str = "mcp"
+    canonical_name: str = "execution.call_mcp"
+    capability: str = "execution"
 
     def __init__(self, connector: McpConnector | None = None) -> None:
         self._connector = connector or McpConnector()
@@ -147,7 +147,7 @@ class McpCallTool:
         )
         if report.get("normalized"):
             logger.warning(
-                "mcp_call normalized invocation profile=%s operation=%s mapped=%s ignored=%s",
+                "execution.call_mcp normalized invocation profile=%s operation=%s mapped=%s ignored=%s",
                 profile_key,
                 operation_key,
                 list(report.get("mapped") or []),
@@ -158,14 +158,14 @@ class McpCallTool:
                 "output": None,
         "exception": {
                     "code": "invalid_tool_arguments",
-                    "message": "mcp_call requires `profile` and `operation` (with inputs under `arguments`).",
+                    "message": "execution.call_mcp requires `profile` and `operation` (with inputs under `arguments`).",
                     "retryable": False,
                     "details": {
                         "mapped": list(report.get("mapped") or []),
                         "ignored": list(report.get("ignored") or []),
                     },
                 },
-                "metadata": {"tool": "mcp_call"},
+                "metadata": {"tool": "execution.call_mcp"},
             }
 
         mode = settings.get_execution_mode()
@@ -177,7 +177,7 @@ class McpCallTool:
                     "code": "sandbox_roots_not_configured",
                     "message": "No enabled sandbox directories found. Configure sandbox dirs in nerve-db.",
                 },
-                "metadata": {"mode": mode, "tool": "mcp_call"},
+                "metadata": {"mode": mode, "tool": "execution.call_mcp"},
             }
         try:
             requested_timeout_seconds = normalized.get("timeout_seconds")
