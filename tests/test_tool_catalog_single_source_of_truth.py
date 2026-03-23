@@ -33,6 +33,6 @@ def test_catalog_tools_match_runtime_canonical_names() -> None:
 def test_vision_tools_surface_matches_expected_contract() -> None:
     registry = build_default_tool_registry()
     names = set(planner_canonical_tool_names(registry))
-    assert "vision_analyze_image" in names
-    assert "vision_extract" in names
+    assert "vision.analyze_image" in names
+    assert "vision.extract_text" in names
     assert "analyze_telegram_image" not in names

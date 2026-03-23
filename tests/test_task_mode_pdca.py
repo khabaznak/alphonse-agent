@@ -202,10 +202,10 @@ class _SessionAwareTaskLlm:
             if "last_action: Played local audio output." in user_prompt:
                 return (
                     '{"kind":"finish",'
-                    '"final_text":"The last tool you used was local_audio_output.speak."}'
+                    '"final_text":"The last tool you used was audio.speak_local."}'
                 )
             return '{"kind":"ask_user","question":"Can you clarify?"}'
-        return "The last tool you used was local_audio_output.speak."
+        return "The last tool you used was audio.speak_local."
 
 
 class _FakeClock:
@@ -290,7 +290,7 @@ class _FailingTool:
                 "retryable": False,
                 "details": {},
             },
-            "metadata": {"tool": "stt_transcribe"},
+            "metadata": {"tool": "audio.transcribe"},
         }
 
 
@@ -1235,7 +1235,7 @@ def test_route_after_next_step_routes_to_execute_step_node() -> None:
 
 def test_execute_step_handles_structured_tool_failure() -> None:
     registry = ToolRegistry()
-    _register_tool(registry, "stt_transcribe", _FailingTool())
+    _register_tool(registry, "audio.transcribe", _FailingTool())
     task_state = build_default_task_state()
     task_state["acceptance_criteria"] = ["done when requested outcome is produced"]
     task_state["plan"] = {
@@ -1243,7 +1243,7 @@ def test_execute_step_handles_structured_tool_failure() -> None:
         "steps": [
             {
                 "step_id": "step_1",
-                "proposal": {"kind": "call_tool", "tool_name": "stt_transcribe", "args": {"asset_id": "a1"}},
+                "proposal": {"kind": "call_tool", "tool_name": "audio.transcribe", "args": {"asset_id": "a1"}},
                 "status": "validated",
             }
         ],
@@ -1504,7 +1504,7 @@ def test_respond_finalize_failed_emits_dispatched_event() -> None:
             "facts": {
                 "step_1": {
                     "step_id": "step_1",
-                    "tool": "local_audio_output_render",
+                    "tool": "audio.render_local",
                     "output": None,
                     "exception": {"message": "render_failed"},
                     "internal": False,
@@ -1553,14 +1553,14 @@ def test_execute_step_emits_presence_progress_from_planner_intent(monkeypatch: p
             _ = kwargs
             return {"output": {"ok": True}, "exception": None, "metadata": {}}
 
-    _register_tool(tool_registry, "local_audio_output_render", _FakeTool())
+    _register_tool(tool_registry, "audio.render_local", _FakeTool())
     task_state = build_default_task_state()
     task_state["status"] = "running"
     task_state["cycle_index"] = 2
     task_state["plan"]["current_step_id"] = "step_1"
     task_state["plan"]["steps"] = [{"step_id": "step_1", "status": "proposed"}]
     task_state["pending_plan_raw"] = {
-        "tool_call": {"kind": "call_tool", "tool_name": "local_audio_output_render", "args": {"text": "hello"}},
+        "tool_call": {"kind": "call_tool", "tool_name": "audio.render_local", "args": {"text": "hello"}},
         "planner_intent": "Preparing audio output for delivery.",
     }
     state: dict[str, object] = {
@@ -1574,7 +1574,7 @@ def test_execute_step_emits_presence_progress_from_planner_intent(monkeypatch: p
     detail = emitted[0]
     assert isinstance(detail, dict)
     assert detail.get("cycle") == 3
-    assert detail.get("tool") == "local_audio_output_render"
+    assert detail.get("tool") == "audio.render_local"
     text = str(detail.get("text") or "")
     assert text == "Preparing audio output for delivery."
 

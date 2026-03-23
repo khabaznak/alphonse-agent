@@ -13,8 +13,8 @@ from alphonse.agent.nervous_system.assets import resolve_asset_path
 
 
 class SttTranscribeTool:
-    canonical_name: str = "stt_transcribe"
-    capability: str = "communication"
+    canonical_name: str = "audio.transcribe"
+    capability: str = "audio"
 
     def __init__(self, *, model: str | None = None) -> None:
         self._model = str(model or os.getenv("ALPHONSE_STT_MODEL") or "base").strip() or "base"
@@ -92,7 +92,7 @@ def _failed(error: str, *, retryable: bool, asset_id: str | None) -> dict[str, A
                 "asset_id": str(asset_id or "").strip() or None,
             },
         },
-        "metadata": {"tool": "stt_transcribe"},
+        "metadata": {"tool": "audio.transcribe"},
     }
 
 
@@ -100,7 +100,7 @@ def _ok(result: dict[str, Any]) -> dict[str, Any]:
     return {
         "output": result,
         "exception": None,
-        "metadata": {"tool": "stt_transcribe"},
+        "metadata": {"tool": "audio.transcribe"},
     }
 
 

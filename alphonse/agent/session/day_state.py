@@ -357,7 +357,7 @@ def _last_action_summary(
         return "Fetched current time."
     if tool in {"create_reminder", "createReminder"}:
         return "Created a reminder."
-    if tool == "stt_transcribe":
+    if tool == "audio.transcribe":
         return "Transcribed an audio asset."
     if tool in {
         "terminal_sync",
@@ -373,7 +373,7 @@ def _last_action_summary(
         step_id = str(step.get("step_id") or "").strip()
         if step_id and isinstance(facts.get(step_id), dict):
             result = facts[step_id].get("result")
-            if tool in {"local_audio_output_speak", "local_audio_output.speak"}:
+            if tool == "audio.speak_local":
                 return "Played local audio output."
             if tool in {"get_time"}:
                 return "Fetched current time."

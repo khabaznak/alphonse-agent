@@ -76,7 +76,7 @@ class _SayBackend(_TTSBackend):
         preview = spoken_text[:40] + ("..." if len(spoken_text) > 40 else "")
 
         logger.info(
-            "local_audio_output_speak invoke backend=say text_len=%s voice=%s blocking=%s preview=%s",
+            "audio.speak_local invoke backend=say text_len=%s voice=%s blocking=%s preview=%s",
             len(spoken_text),
             selected_voice,
             is_blocking,
@@ -88,7 +88,7 @@ class _SayBackend(_TTSBackend):
         if platform.system() != "Darwin":
             return _failed(
                 "local_audio_output_not_supported",
-                "local_audio_output_speak is currently supported only on macOS with the say backend.",
+                "audio.speak_local is currently supported only on macOS with the say backend.",
             )
 
         cmd = _build_say_command(text=spoken_text, voice=selected_voice)
@@ -103,12 +103,12 @@ class _SayBackend(_TTSBackend):
             if completed.returncode != 0:
                 stderr = str(completed.stderr or "").strip()
                 logger.error(
-                    "local_audio_output_speak failed backend=say returncode=%s stderr=%s",
+                    "audio.speak_local failed backend=say returncode=%s stderr=%s",
                     completed.returncode,
                     stderr,
                 )
                 return _failed("tts_command_failed", "tts command failed", details={"stderr": stderr})
-            logger.info("local_audio_output_speak success backend=say mode=blocking")
+            logger.info("audio.speak_local success backend=say mode=blocking")
             return _ok({"mode": "blocking", "backend": "say"})
 
         proc = subprocess.Popen(
@@ -123,7 +123,7 @@ class _SayBackend(_TTSBackend):
             daemon=True,
         )
         watcher.start()
-        logger.info("local_audio_output_speak success backend=say mode=non_blocking pid=%s", proc.pid)
+        logger.info("audio.speak_local success backend=say mode=non_blocking pid=%s", proc.pid)
         return _ok({"mode": "non_blocking", "pid": int(proc.pid), "backend": "say"})
 
     def render(
@@ -137,12 +137,12 @@ class _SayBackend(_TTSBackend):
     ) -> dict[str, Any]:
         spoken_text = str(text or "").strip()
         if not spoken_text:
-            return _failed("text_required", "text is required", tool="local_audio_output_render")
+            return _failed("text_required", "text is required", tool="audio.render_local")
         if platform.system() != "Darwin":
             return _failed(
                 "local_audio_output_not_supported",
-                "local_audio_output_render is currently supported only on macOS with the say backend.",
-                tool="local_audio_output_render",
+                "audio.render_local is currently supported only on macOS with the say backend.",
+                tool="audio.render_local",
             )
         selected_voice = str(voice or "default").strip() or "default"
         target_format = str(format or "m4a").strip().lower()
@@ -150,7 +150,7 @@ class _SayBackend(_TTSBackend):
             return _failed(
                 "unsupported_audio_format",
                 "Supported formats are: aiff, m4a, ogg",
-                tool="local_audio_output_render",
+                tool="audio.render_local",
             )
         root = _resolve_render_output_dir(output_dir)
         root.mkdir(parents=True, exist_ok=True)
@@ -171,7 +171,7 @@ class _SayBackend(_TTSBackend):
                 "tts_command_failed",
                 "tts command failed",
                 details={"stderr": stderr},
-                tool="local_audio_output_render",
+                tool="audio.render_local",
             )
         if target_format == "aiff":
             cleanup = _cleanup_rendered_audio(root=root, keep_path=source_path)
@@ -183,7 +183,7 @@ class _SayBackend(_TTSBackend):
                     "retention": cleanup,
                     "backend": "say",
                 },
-                tool="local_audio_output_render",
+                tool="audio.render_local",
             )
         if target_format == "m4a":
             target_path = source_path.with_suffix(".m4a")
@@ -208,7 +208,7 @@ class _SayBackend(_TTSBackend):
                     "audio_convert_failed",
                     "failed converting aiff to m4a",
                     details={"stderr": stderr},
-                    tool="local_audio_output_render",
+                    tool="audio.render_local",
                 )
             mime_type = "audio/mp4"
         else:
@@ -217,7 +217,7 @@ class _SayBackend(_TTSBackend):
                 return _failed(
                     "ffmpeg_not_installed",
                     "ffmpeg is required to convert audio to ogg/opus",
-                    tool="local_audio_output_render",
+                    tool="audio.render_local",
                 )
             target_path = source_path.with_suffix(".ogg")
             converted = subprocess.run(
@@ -243,7 +243,7 @@ class _SayBackend(_TTSBackend):
                     "audio_convert_failed",
                     "failed converting aiff to ogg",
                     details={"stderr": stderr},
-                    tool="local_audio_output_render",
+                    tool="audio.render_local",
                 )
             mime_type = "audio/ogg"
         try:
@@ -259,7 +259,7 @@ class _SayBackend(_TTSBackend):
                 "retention": cleanup,
                 "backend": "say",
             },
-            tool="local_audio_output_render",
+            tool="audio.render_local",
         )
 
 
@@ -331,19 +331,19 @@ class _QwenBackend(_TTSBackend):
     ) -> dict[str, Any]:
         spoken_text = str(text or "").strip()
         if not spoken_text:
-            return _failed("text_required", "text is required", tool="local_audio_output_render")
+            return _failed("text_required", "text is required", tool="audio.render_local")
 
         target_format = str(format or "m4a").strip().lower()
         if target_format not in {"aiff", "m4a", "ogg"}:
             return _failed(
                 "unsupported_audio_format",
                 "Supported formats are: aiff, m4a, ogg",
-                tool="local_audio_output_render",
+                tool="audio.render_local",
             )
 
         deps = self._ensure_deps()
         if deps is not None:
-            return _failed("qwen_backend_unavailable", deps, tool="local_audio_output_render")
+            return _failed("qwen_backend_unavailable", deps, tool="audio.render_local")
 
         root = _resolve_render_output_dir(output_dir)
         root.mkdir(parents=True, exist_ok=True)
@@ -356,7 +356,7 @@ class _QwenBackend(_TTSBackend):
             return _failed(
                 "qwen_model_load_failed",
                 "Unable to load Qwen TTS model. Verify model id and runtime dependencies.",
-                tool="local_audio_output_render",
+                tool="audio.render_local",
             )
 
         language = str(os.getenv("ALPHONSE_QWEN_TTS_LANGUAGE") or "Auto").strip() or "Auto"
@@ -376,7 +376,7 @@ class _QwenBackend(_TTSBackend):
                 "qwen_generate_failed",
                 "Qwen TTS synthesis failed",
                 details={"error": str(exc)},
-                tool="local_audio_output_render",
+                tool="audio.render_local",
             )
 
         wav = _first_wav(wavs)
@@ -384,7 +384,7 @@ class _QwenBackend(_TTSBackend):
             return _failed(
                 "qwen_generate_failed",
                 "Qwen TTS synthesis returned no audio frames",
-                tool="local_audio_output_render",
+                tool="audio.render_local",
             )
         try:
             self._soundfile.write(str(wav_path), wav, int(sample_rate))
@@ -393,7 +393,7 @@ class _QwenBackend(_TTSBackend):
                 "qwen_write_failed",
                 "Failed writing synthesized audio",
                 details={"error": str(exc)},
-                tool="local_audio_output_render",
+                tool="audio.render_local",
             )
 
         conversion = _convert_from_wav(source_path=wav_path, target_format=target_format)
@@ -408,7 +408,7 @@ class _QwenBackend(_TTSBackend):
         if selection.is_profile:
             payload["voice_profile_id"] = selection.profile_id
             payload["voice_profile_name"] = selection.profile_name
-        return _ok(payload, tool="local_audio_output_render")
+        return _ok(payload, tool="audio.render_local")
 
     def _ensure_deps(self) -> str | None:
         if self._soundfile is not None:
@@ -453,8 +453,8 @@ class _QwenBackend(_TTSBackend):
 
 class LocalAudioOutputSpeakTool:
     """Speak text out loud on the local machine using selected TTS backend."""
-    canonical_name: str = "local_audio_output_speak"
-    capability: str = "communication"
+    canonical_name: str = "audio.speak_local"
+    capability: str = "audio"
 
     def execute(
         self,
@@ -484,8 +484,8 @@ class LocalAudioOutputSpeakTool:
 
 class LocalAudioOutputRenderTool:
     """Render text-to-speech to an audio file for downstream integrations."""
-    canonical_name: str = "local_audio_output_render"
-    capability: str = "communication"
+    canonical_name: str = "audio.render_local"
+    capability: str = "audio"
 
     def execute(
         self,
@@ -680,7 +680,7 @@ def _convert_from_wav(*, source_path: Path, target_format: str) -> dict[str, Any
             return _failed(
                 "ffmpeg_not_installed",
                 "ffmpeg is required to convert audio to aiff for Qwen backend",
-                tool="local_audio_output_render",
+                tool="audio.render_local",
             )
         target_path = source_path.with_suffix(".aiff")
         converted = subprocess.run(
@@ -695,12 +695,12 @@ def _convert_from_wav(*, source_path: Path, target_format: str) -> dict[str, Any
                 "audio_convert_failed",
                 "failed converting wav to aiff",
                 details={"stderr": str(converted.stderr or "").strip()},
-                tool="local_audio_output_render",
+                tool="audio.render_local",
             )
         source_path.unlink(missing_ok=True)
         return _ok(
             {"file_path": str(target_path), "format": "aiff", "mime_type": "audio/aiff"},
-            tool="local_audio_output_render",
+            tool="audio.render_local",
         )
 
     if target_format == "m4a":
@@ -713,7 +713,7 @@ def _convert_from_wav(*, source_path: Path, target_format: str) -> dict[str, Any
                 return _failed(
                     "ffmpeg_not_installed",
                     "ffmpeg is required to convert audio to m4a on non-macOS",
-                    tool="local_audio_output_render",
+                    tool="audio.render_local",
                 )
             cmd = [ffmpeg_bin, "-y", "-i", str(source_path), "-c:a", "aac", str(target_path)]
         converted = subprocess.run(
@@ -728,12 +728,12 @@ def _convert_from_wav(*, source_path: Path, target_format: str) -> dict[str, Any
                 "audio_convert_failed",
                 "failed converting wav to m4a",
                 details={"stderr": str(converted.stderr or "").strip()},
-                tool="local_audio_output_render",
+                tool="audio.render_local",
             )
         source_path.unlink(missing_ok=True)
         return _ok(
             {"file_path": str(target_path), "format": "m4a", "mime_type": "audio/mp4"},
-            tool="local_audio_output_render",
+            tool="audio.render_local",
         )
 
     ffmpeg_bin = shutil.which("ffmpeg")
@@ -741,7 +741,7 @@ def _convert_from_wav(*, source_path: Path, target_format: str) -> dict[str, Any
         return _failed(
             "ffmpeg_not_installed",
             "ffmpeg is required to convert audio to ogg/opus",
-            tool="local_audio_output_render",
+            tool="audio.render_local",
         )
     target_path = source_path.with_suffix(".ogg")
     converted = subprocess.run(
@@ -756,12 +756,12 @@ def _convert_from_wav(*, source_path: Path, target_format: str) -> dict[str, Any
             "audio_convert_failed",
             "failed converting wav to ogg",
             details={"stderr": str(converted.stderr or "").strip()},
-            tool="local_audio_output_render",
+            tool="audio.render_local",
         )
     source_path.unlink(missing_ok=True)
     return _ok(
         {"file_path": str(target_path), "format": "ogg", "mime_type": "audio/ogg"},
-        tool="local_audio_output_render",
+        tool="audio.render_local",
     )
 
 
@@ -862,17 +862,17 @@ def _watch_say_process(proc: subprocess.Popen[str], preview: str) -> None:
             stderr = ""
     if return_code != 0:
         logger.error(
-            "local_audio_output_speak async_failed backend=say pid=%s returncode=%s stderr=%s preview=%s",
+            "audio.speak_local async_failed backend=say pid=%s returncode=%s stderr=%s preview=%s",
             proc.pid,
             return_code,
             stderr,
             preview,
         )
         return
-    logger.info("local_audio_output_speak async_done backend=say pid=%s preview=%s", proc.pid, preview)
+    logger.info("audio.speak_local async_done backend=say pid=%s preview=%s", proc.pid, preview)
 
 
-def _ok(result: dict[str, Any], *, tool: str = "local_audio_output_speak") -> dict[str, Any]:
+def _ok(result: dict[str, Any], *, tool: str = "audio.speak_local") -> dict[str, Any]:
     return {
         "output": result,
         "exception": None,
@@ -885,7 +885,7 @@ def _failed(
     message: str,
     details: dict[str, Any] | None = None,
     *,
-    tool: str = "local_audio_output_speak",
+    tool: str = "audio.speak_local",
 ) -> dict[str, Any]:
     return {
         "output": None,

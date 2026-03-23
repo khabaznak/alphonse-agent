@@ -16,7 +16,7 @@ def test_qwen_backend_render_reports_missing_dependencies(monkeypatch, tmp_path:
         "render",
         lambda self, *, text, voice, output_dir, filename_prefix, format: lao._ok(
             {"file_path": str(tmp_path / "fallback.m4a"), "format": "m4a", "mime_type": "audio/mp4", "backend": "say"},
-            tool="local_audio_output_render",
+            tool="audio.render_local",
         ),
     )
 

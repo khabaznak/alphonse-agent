@@ -197,8 +197,8 @@ class TranscribeTelegramAudioTool:
 
 
 class VisionAnalyzeImageTool:
-    canonical_name: str = "vision_analyze_image"
-    capability: str = "vision_files"
+    canonical_name: str = "vision.analyze_image"
+    capability: str = "vision"
 
     def __init__(self) -> None:
         self._ollama_base_url = str(os.getenv("OLLAMA_BASE_URL") or "http://localhost:11434").strip()
@@ -218,12 +218,12 @@ class VisionAnalyzeImageTool:
         alias = str(sandbox_alias or DEFAULT_SANDBOX_ALIAS).strip() or DEFAULT_SANDBOX_ALIAS
         rel = str(relative_path or "").strip()
         if not rel:
-            return _failed("vision_analyze_image", "image_path_missing")
+            return _failed("vision.analyze_image", "image_path_missing")
         local_path = resolve_sandbox_path(alias=alias, relative_path=rel)
         if not local_path.exists():
-            return _failed("vision_analyze_image", "image_not_found")
+            return _failed("vision.analyze_image", "image_not_found")
         if not local_path.is_file():
-            return _failed("vision_analyze_image", "image_not_a_file")
+            return _failed("vision.analyze_image", "image_not_a_file")
         try:
             image_bytes = local_path.read_bytes()
             image_b64 = base64.b64encode(image_bytes).decode("ascii")
@@ -246,11 +246,11 @@ class VisionAnalyzeImageTool:
                 timeout=self._timeout_seconds,
             )
             if resp.status_code >= 400:
-                return _failed_http("vision_analyze_image", resp)
+                return _failed_http("vision.analyze_image", resp)
             body = resp.json() if resp.content else {}
             text = _extract_message_content_text(body)
             return _ok(
-                "vision_analyze_image",
+                "vision.analyze_image",
                 {
                     "sandbox_alias": alias,
                     "relative_path": rel,
@@ -259,12 +259,12 @@ class VisionAnalyzeImageTool:
                 },
             )
         except Exception as exc:
-            return _failed("vision_analyze_image", str(exc) or "vision_failed")
+            return _failed("vision.analyze_image", str(exc) or "vision_failed")
 
 
 class VisionExtractTool:
-    canonical_name: str = "vision_extract"
-    capability: str = "vision_files"
+    canonical_name: str = "vision.extract_text"
+    capability: str = "vision"
 
     def __init__(self) -> None:
         self._ollama_base_url = str(os.getenv("OLLAMA_BASE_URL") or "http://localhost:11434").strip()
@@ -284,12 +284,12 @@ class VisionExtractTool:
         alias = str(sandbox_alias or DEFAULT_SANDBOX_ALIAS).strip() or DEFAULT_SANDBOX_ALIAS
         rel = str(relative_path or "").strip()
         if not rel:
-            return _failed("vision_extract", "image_path_missing")
+            return _failed("vision.extract_text", "image_path_missing")
         local_path = resolve_sandbox_path(alias=alias, relative_path=rel)
         if not local_path.exists():
-            return _failed("vision_extract", "image_not_found")
+            return _failed("vision.extract_text", "image_not_found")
         if not local_path.is_file():
-            return _failed("vision_extract", "image_not_a_file")
+            return _failed("vision.extract_text", "image_not_a_file")
         try:
             image_bytes = local_path.read_bytes()
             image_b64 = base64.b64encode(image_bytes).decode("ascii")
@@ -319,11 +319,11 @@ class VisionExtractTool:
                 timeout=self._timeout_seconds,
             )
             if resp.status_code >= 400:
-                return _failed_http("vision_extract", resp)
+                return _failed_http("vision.extract_text", resp)
             body = resp.json() if resp.content else {}
             text, blocks = _extract_ocr_text_and_blocks(body)
             return _ok(
-                "vision_extract",
+                "vision.extract_text",
                 {
                     "sandbox_alias": alias,
                     "relative_path": rel,
@@ -333,7 +333,7 @@ class VisionExtractTool:
                 },
             )
         except Exception as exc:
-            return _failed("vision_extract", str(exc) or "vision_failed")
+            return _failed("vision.extract_text", str(exc) or "vision_failed")
 
 
 def _read_whisper_output(output_dir: Path) -> dict[str, Any] | None:

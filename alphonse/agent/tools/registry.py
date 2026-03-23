@@ -33,7 +33,6 @@ from alphonse.agent.tools.stt_transcribe import SttTranscribeTool
 from alphonse.agent.tools.terminal_execute_tool import TerminalExecuteTool
 from alphonse.agent.tools.telegram_files import TelegramDownloadFileTool
 from alphonse.agent.tools.telegram_files import TelegramGetFileMetaTool
-from alphonse.agent.tools.telegram_files import TranscribeTelegramAudioTool
 from alphonse.agent.tools.telegram_files import VisionAnalyzeImageTool
 from alphonse.agent.tools.telegram_files import VisionExtractTool
 from alphonse.agent.tools.user_contact_tools import UserRegisterFromContactTool
@@ -141,16 +140,15 @@ def _build_runtime_executors(*, job_store: JobStore, job_runner: JobRunner) -> l
     communication_send_voice_note = SendVoiceNoteTool(_send_message_tool=communication_send_message)
     communication_get_attachment_meta = TelegramGetFileMetaTool()
     communication_get_attachment = TelegramDownloadFileTool()
-    scheduler = SchedulerTool()
-    local_audio_output = LocalAudioOutputSpeakTool()
-    local_audio_render = LocalAudioOutputRenderTool()
-    stt_transcribe = SttTranscribeTool()
-    transcribe_audio = TranscribeTelegramAudioTool()
+    audio_speak_local = LocalAudioOutputSpeakTool()
+    audio_render_local = LocalAudioOutputRenderTool()
+    audio_transcribe = SttTranscribeTool()
     vision_analyze_image = VisionAnalyzeImageTool()
-    vision_extract = VisionExtractTool()
+    vision_extract_text = VisionExtractTool()
     terminal_sync = TerminalExecuteTool()
     mcp_call = McpCallTool()
     ssh_terminal = SshTerminalTool()
+    scheduler = SchedulerTool()
     job_create = JobCreateTool(job_store)
     job_list = JobListTool(job_store)
     job_pause = JobPauseTool(job_store)
@@ -175,12 +173,11 @@ def _build_runtime_executors(*, job_store: JobStore, job_runner: JobRunner) -> l
         communication_send_voice_note,
         communication_get_attachment_meta,
         communication_get_attachment,
-        local_audio_output,
-        local_audio_render,
-        stt_transcribe,
-        transcribe_audio,
+        audio_speak_local,
+        audio_render_local,
+        audio_transcribe,
         vision_analyze_image,
-        vision_extract,
+        vision_extract_text,
         terminal_sync,
         mcp_call,
         ssh_terminal,
@@ -392,7 +389,7 @@ def _default_specs() -> list[ToolSpec]:
             ],
         ),
         ToolSpec(
-            canonical_name="local_audio_output_speak",
+            canonical_name="audio.speak_local",
             summary="Speak text out loud on the local computer using OS-native TTS.",
             description="Speak text out loud on the local computer using OS-native TTS.",
             when_to_use="Use for local spoken output when requested.",
@@ -408,12 +405,11 @@ def _default_specs() -> list[ToolSpec]:
             ),
             output_schema=_permissive_output_schema(),
             domain_tags=["audio", "output"],
-            aliases=["local_audio_output.speak"],
             safety_level=SafetyLevel.LOW,
             examples=[{"text": "Hola, te escucho.", "voice": "Ryan"}],
         ),
         ToolSpec(
-            canonical_name="local_audio_output_render",
+            canonical_name="audio.render_local",
             summary="Render text to an audio file on the local machine for downstream delivery integrations.",
             description="Render text to an audio file on the local machine for downstream delivery integrations.",
             when_to_use="Use when you need a reusable audio artifact (use format='ogg' for Telegram voice notes).",
@@ -430,15 +426,14 @@ def _default_specs() -> list[ToolSpec]:
             ),
             output_schema=_permissive_output_schema(),
             domain_tags=["audio", "output", "tts"],
-            aliases=["local_audio_output.render"],
             safety_level=SafetyLevel.LOW,
             examples=[{"text": "Hola Alex", "format": "ogg"}],
         ),
         ToolSpec(
-            canonical_name="stt_transcribe",
+            canonical_name="audio.transcribe",
             summary="Transcribe an audio asset by asset_id into text.",
             description="Transcribe an audio asset by asset_id into text.",
-            when_to_use="Use when the incoming message includes an audio asset and you need its transcript.",
+            when_to_use="Use when the incoming message includes an audio asset (including downloaded attachments) and you need its transcript.",
             returns="transcript text and optional segments",
             input_schema=_object_schema(
                 properties={
@@ -450,7 +445,10 @@ def _default_specs() -> list[ToolSpec]:
             output_schema=_permissive_output_schema(),
             domain_tags=["audio", "transcription"],
             safety_level=SafetyLevel.MEDIUM,
-            examples=[{"asset_id": "asset_123", "language_hint": "es-MX"}],
+            examples=[
+                {"asset_id": "asset_123", "language_hint": "es-MX"},
+                {"asset_id": "telegram_attachment_audio_001", "language_hint": "en"},
+            ],
         ),
         ToolSpec(
             canonical_name="communication.get_attachment_meta",
@@ -487,27 +485,7 @@ def _default_specs() -> list[ToolSpec]:
             examples=[{"file_id": "AgACAgQAAx...", "sandbox_alias": "telegram"}],
         ),
         ToolSpec(
-            canonical_name="transcribe_telegram_audio",
-            summary="Download Telegram audio by file_id and transcribe it to text.",
-            description="Download Telegram audio by file_id and transcribe it to text.",
-            when_to_use="Use when an inbound telegram audio message should be transcribed directly.",
-            returns="transcript text",
-            input_schema=_object_schema(
-                properties={
-                    "file_id": {"type": "string"},
-                    "language": {"type": "string"},
-                    "sandbox_alias": {"type": "string"},
-                },
-                required=["file_id"],
-            ),
-            output_schema=_permissive_output_schema(),
-            domain_tags=["telegram", "audio", "transcription"],
-            aliases=["transcribeTelegramAudio"],
-            safety_level=SafetyLevel.HIGH,
-            examples=[{"file_id": "CQACAgQAAx...", "language": "es"}],
-        ),
-        ToolSpec(
-            canonical_name="vision_analyze_image",
+            canonical_name="vision.analyze_image",
             summary="Analyze a sandboxed image using Alphonse's dedicated local vision model.",
             description="Analyze a sandboxed image using Alphonse's dedicated local vision model.",
             when_to_use="Use for semantic image understanding tasks like scene/object description and visual interpretation.",
@@ -532,7 +510,7 @@ def _default_specs() -> list[ToolSpec]:
             ],
         ),
         ToolSpec(
-            canonical_name="vision_extract",
+            canonical_name="vision.extract_text",
             summary="Extract visible text (OCR) from a sandboxed image using Alphonse's dedicated local vision model.",
             description="Extract visible text (OCR) from a sandboxed image using Alphonse's dedicated local vision model.",
             when_to_use="Use for OCR tasks over receipts, screenshots, notes, labels, and documents saved in sandbox.",

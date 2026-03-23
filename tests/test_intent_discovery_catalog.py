@@ -48,8 +48,8 @@ def test_available_ability_catalog_has_minimal_tools_only() -> None:
         "job_run_now",
         "terminal_sync",
         "mcp_call",
-        "local_audio_output_speak",
-        "stt_transcribe",
+        "audio.speak_local",
+        "audio.transcribe",
         "get_my_settings",
         "get_user_details",
     }

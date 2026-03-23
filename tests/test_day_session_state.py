@@ -129,7 +129,7 @@ def test_session_last_action_can_come_from_task_state_steps() -> None:
                     "status": "executed",
                     "proposal": {
                         "kind": "call_tool",
-                        "tool_name": "local_audio_output.speak",
+                        "tool_name": "audio.speak_local",
                         "args": {"text": "Son las 5:22 p. m."},
                     },
                 },
@@ -138,7 +138,7 @@ def test_session_last_action_can_come_from_task_state_steps() -> None:
         },
         "facts": {
             "step_2": {
-                "tool": "local_audio_output.speak",
+                "tool": "audio.speak_local",
                 "result": {"status": "ok"},
             }
         },
@@ -154,7 +154,7 @@ def test_session_last_action_can_come_from_task_state_steps() -> None:
         pending_interaction=None,
     )
     assert isinstance(updated.get("last_action"), dict)
-    assert updated["last_action"]["tool"] == "local_audio_output.speak"
+    assert updated["last_action"]["tool"] == "audio.speak_local"
 
 
 def test_recent_conversation_block_renders_last_twenty_turns() -> None:

@@ -82,7 +82,7 @@ def test_qwen_failure_falls_back_to_say_for_render(monkeypatch) -> None:
         "render",
         lambda self, *, text, voice, output_dir, filename_prefix, format: lao._ok(
             {"backend": "say", "file_path": "/tmp/fallback.m4a", "format": "m4a", "mime_type": "audio/mp4"},
-            tool="local_audio_output_render",
+            tool="audio.render_local",
         ),
     )
 

@@ -39,7 +39,7 @@ def extract_tts_transcript(plans: list[Any]) -> str:
         merged = dict(payload)
         merged.update(params)
         transcript = ""
-        if tool_name in {"local_audio_output.speak", "local_audio_output_speak"}:
+        if tool_name == "audio.speak_local":
             transcript = str(merged.get("text") or "").strip()
         elif tool_name == "sendvoicenote":
             transcript = str(merged.get("message") or merged.get("caption") or "").strip()
