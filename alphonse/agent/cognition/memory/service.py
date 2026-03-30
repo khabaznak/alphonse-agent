@@ -5,6 +5,7 @@ import hashlib
 import json
 import mimetypes
 import os
+import re
 import shutil
 import subprocess
 import time
@@ -32,6 +33,7 @@ _EPISODE_TS_FMT = "%Y-%m-%d %H:%M:%S %z"
 _LOG = get_log_manager()
 _RUNTIME_FAILURE_SIGNAL = "sense.runtime.message.user.received"
 _MEMORY_ESCALATION_DEDUPE: set[str] = set()
+_CLIENT_STORE_QUERY_RE = re.compile(r"\b(client|prospect|lead|crm)\b", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -201,6 +203,7 @@ class MemoryService:
             "--with-filename",
             "--color",
             "never",
+            "--fixed-strings",
             q,
             str(base_dir),
         ]
@@ -219,15 +222,24 @@ class MemoryService:
         mission_filter = str(mission_id or "").strip()
         normalized_range = _coerce_time_range(time_range)
         rows: list[dict[str, Any]] = []
+        file_cache: dict[str, list[str]] = {}
         for line in (proc.stdout or "").splitlines():
             parsed = _parse_rg_line(line)
             if not parsed:
                 continue
             file_path = Path(parsed["path"])
-            if mission_filter and not _file_contains_mission(file_path, mission_filter):
-                continue
             if normalized_range and not _file_in_time_range(file_path=file_path, time_range=normalized_range):
                 continue
+            if mission_filter:
+                cache_key = str(file_path)
+                lines = file_cache.get(cache_key)
+                if lines is None:
+                    lines = _read_lines(file_path)
+                    file_cache[cache_key] = lines
+                line_no = int(parsed.get("line") or 0)
+                entry_mission = _entry_mission_for_line(lines=lines, line_no=line_no)
+                if entry_mission != mission_filter:
+                    continue
             rows.append(parsed)
             if len(rows) >= max(1, int(limit)):
                 break
@@ -506,12 +518,15 @@ class MemoryService:
         mission_filter = str(mission_id or "").strip()
         normalized_range = _coerce_time_range(time_range)
         for file in sorted(base_dir.glob("*/*/*.md")):
-            if mission_filter and not _file_contains_mission(file, mission_filter):
-                continue
             if normalized_range and not _file_in_time_range(file_path=file, time_range=normalized_range):
                 continue
+            current_mission = ""
             for idx, text in enumerate(_read_lines(file), start=1):
+                if text.startswith("### "):
+                    current_mission = _extract_between(text, "| mission:", "| event:")
                 if needle in text.lower():
+                    if mission_filter and current_mission != mission_filter:
+                        continue
                     rows.append(
                         {
                             "path": str(file),
@@ -692,6 +707,98 @@ def remove_operational_fact(
     return MemoryService().remove_operational_fact(created_by=created_by, fact_id=fact_id, key=key)
 
 
+def resolve_memory_owner_id(*, state: dict[str, Any] | None = None, explicit: str | None = None) -> str:
+    explicit_value = str(explicit or "").strip()
+    if explicit_value:
+        return explicit_value
+    payload = dict(state or {})
+    stable_candidates = (
+        "session_user_id",
+        "owner_id",
+        "resolved_user_id",
+        "incoming_user_id",
+        "actor_person_id",
+    )
+    for key in stable_candidates:
+        value = str(payload.get(key) or "").strip()
+        if value:
+            return value
+    principal_candidates = (
+        "principal_id",
+        "owner_principal_id",
+        "conversation_principal_id",
+    )
+    for key in principal_candidates:
+        principal_id = str(payload.get(key) or "").strip()
+        if not principal_id:
+            continue
+        try:
+            user = users_store.get_user_by_principal_id(principal_id)
+        except Exception:
+            user = None
+        if isinstance(user, dict):
+            user_id = str(user.get("user_id") or "").strip()
+            if user_id:
+                return user_id
+    display_name = _display_name_from_state(payload)
+    if display_name:
+        try:
+            user = users_store.get_user_by_display_name(display_name)
+        except Exception:
+            user = None
+        if isinstance(user, dict):
+            user_id = str(user.get("user_id") or "").strip()
+            if user_id:
+                return user_id
+    fallback_candidates = (
+        "user_id",
+        "from_user",
+        "chat_id",
+        "channel_target",
+        "conversation_key",
+    )
+    for key in fallback_candidates:
+        value = str(payload.get(key) or "").strip()
+        if value:
+            return value
+    return "anonymous"
+
+
+def resolve_memory_owner_aliases(
+    *,
+    state: dict[str, Any] | None = None,
+    explicit: str | None = None,
+) -> list[str]:
+    payload = dict(state or {})
+    primary = resolve_memory_owner_id(state=payload, explicit=explicit)
+    aliases: list[str] = []
+    seen: set[str] = set()
+
+    def _add(value: str | None) -> None:
+        candidate = str(value or "").strip()
+        if not candidate or candidate in seen:
+            return
+        seen.add(candidate)
+        aliases.append(candidate)
+
+    _add(primary)
+    for key in (
+        "incoming_user_id",
+        "actor_person_id",
+        "session_user_id",
+        "owner_id",
+        "user_id",
+        "chat_id",
+        "channel_target",
+        "conversation_key",
+    ):
+        _add(str(payload.get(key) or "").strip() or None)
+    display_name = _display_name_from_state(payload)
+    if display_name:
+        _add(f"name:{display_name.lower()}")
+    return aliases or ["anonymous"]
+
+
 def record_after_tool_call(
     *,
     state: dict[str, Any],
@@ -712,7 +819,7 @@ def record_after_tool_call(
         "memory.remove_operational_fact",
     }:
         return
-    user_id = _memory_user_id(state)
+    user_id = resolve_memory_owner_id(state=state)
     mission_id = _memory_mission_id(task_state=task_state, correlation_id=correlation_id)
     artifacts = _memory_artifacts_from_result(
         mission_id=mission_id,
@@ -725,13 +832,26 @@ def record_after_tool_call(
         exception_text = str(exception_payload.get("message") or exception_payload.get("code") or "").strip()
     elif isinstance(exception_payload, str):
         exception_text = exception_payload.strip()
+    output_payload = (result or {}).get("output")
+    output_summary = _compact_result_summary(output_payload)
     payload = {
         "intent": str(task_state.get("goal") or "").strip() or "task execution",
         "action": f"{tool_name}({_safe_args_preview(args)})",
-        "result": "exception=" + (exception_text or "none"),
+        "result": "exception=" + (exception_text or "none") if exception_text else "status=ok",
         "step_id": str((current or {}).get("step_id") or "").strip() or None,
         "next": _memory_next_hint(task_state=task_state, current=current),
     }
+    if output_summary:
+        payload["output_summary"] = output_summary
+    _maybe_upsert_client_fact(
+        owner_id=user_id,
+        mission_id=mission_id,
+        task_state=task_state,
+        tool_name=tool_name,
+        exception_text=exception_text,
+        output_summary=output_summary,
+        output_payload=output_payload,
+    )
     _memory_append_episode(
         state=state,
         user_id=user_id,
@@ -750,7 +870,7 @@ def record_plan_step_completion(
     proposal: dict[str, Any],
     correlation_id: str | None,
 ) -> None:
-    user_id = _memory_user_id(state)
+    user_id = resolve_memory_owner_id(state=state)
     mission_id = _memory_mission_id(task_state=task_state, correlation_id=correlation_id)
     payload = {
         "intent": str(task_state.get("goal") or "").strip() or "task execution",
@@ -804,11 +924,7 @@ def _memory_hooks_enabled() -> bool:
 
 
 def _memory_user_id(state: dict[str, Any]) -> str:
-    for key in ("incoming_user_id", "actor_person_id", "channel_target", "chat_id", "conversation_key"):
-        value = str(state.get(key) or "").strip()
-        if value:
-            return value
-    return "anonymous"
+    return resolve_memory_owner_id(state=state)
 
 
 def _memory_mission_id(*, task_state: dict[str, Any], correlation_id: str | None) -> str:
@@ -1109,6 +1225,120 @@ def _redact_sensitive(value: Any) -> Any:
     return value
 
 
+def _compact_result_summary(value: Any) -> str:
+    if value is None:
+        return ""
+    redacted = _redact_sensitive(value)
+    try:
+        rendered = json.dumps(redacted, ensure_ascii=False, sort_keys=True)
+    except Exception:
+        rendered = str(redacted)
+    compact = " ".join(rendered.split())
+    return compact[:800]
+
+
+def _display_name_from_state(payload: dict[str, Any]) -> str | None:
+    candidates = (
+        payload.get("incoming_user_name"),
+        payload.get("user_name"),
+        payload.get("from_user_name"),
+        _nested_get(payload, "metadata", "user_name"),
+        _nested_get(payload, "metadata", "from_user_name"),
+        _nested_get(payload, "metadata", "raw", "user_name"),
+        _nested_get(payload, "metadata", "raw", "from_user_name"),
+    )
+    for value in candidates:
+        text = str(value or "").strip()
+        if text:
+            return text
+    return None
+
+
+def _nested_get(payload: dict[str, Any], *path: str) -> Any:
+    current: Any = payload
+    for key in path:
+        if not isinstance(current, dict):
+            return None
+        current = current.get(key)
+    return current
+
+
+def _maybe_upsert_client_fact(
+    *,
+    owner_id: str,
+    mission_id: str,
+    task_state: dict[str, Any],
+    tool_name: str,
+    exception_text: str,
+    output_summary: str,
+    output_payload: Any,
+) -> None:
+    if exception_text:
+        return
+    if str(tool_name or "").strip().startswith("memory."):
+        return
+    goal_text = str(task_state.get("goal") or "").strip()
+    if not _CLIENT_STORE_QUERY_RE.search(goal_text) and not _CLIENT_STORE_QUERY_RE.search(output_summary):
+        return
+    label = _client_label_from_output(output_payload=output_payload, fallback_text=output_summary)
+    if not label:
+        return
+    key = f"crm.client.{sanitize_segment(label.lower())}"
+    summary = output_summary[:240] if output_summary else f"Client info derived from {tool_name}"
+    content = {
+        "client_label": label,
+        "mission_id": mission_id,
+        "source_tool": tool_name,
+        "goal": goal_text,
+        "output_summary": output_summary,
+    }
+    try:
+        MemoryService().upsert_operational_fact(
+            created_by=owner_id,
+            key=key,
+            title=f"Client: {label}",
+            fact_type="integration_note",
+            summary=summary,
+            content_json=content,
+            tags=["crm", "client"],
+            source=tool_name,
+            stability="volatile",
+            importance="medium",
+            status="active",
+            scope="private",
+        )
+    except Exception:
+        return
+
+
+def _client_label_from_output(*, output_payload: Any, fallback_text: str) -> str:
+    if isinstance(output_payload, dict):
+        candidates = (
+            output_payload.get("client_name"),
+            output_payload.get("client"),
+            output_payload.get("company"),
+            output_payload.get("organization"),
+            output_payload.get("lead_name"),
+            output_payload.get("prospect_name"),
+        )
+        for candidate in candidates:
+            text = str(candidate or "").strip()
+            if text:
+                return text[:120]
+    if not fallback_text:
+        return ""
+    for pattern in (
+        r'"client_name"\s*:\s*"([^"]+)"',
+        r'"client"\s*:\s*"([^"]+)"',
+        r'"company"\s*:\s*"([^"]+)"',
+        r'"organization"\s*:\s*"([^"]+)"',
+    ):
+        match = re.search(pattern, fallback_text, flags=re.IGNORECASE)
+        if match:
+            return str(match.group(1)).strip()[:120]
+    return ""
+
+
 def _render_field(*, key: str, value: Any, indent: int) -> list[str]:
     pad = "  " * indent
     if isinstance(value, dict):
@@ -1197,6 +1427,18 @@ def _file_contains_mission(path: Path, mission_id: str) -> bool:
         return needle in path.read_text(encoding="utf-8")
     except Exception:
         return False
+
+
+def _entry_mission_for_line(*, lines: list[str], line_no: int) -> str:
+    if not lines:
+        return ""
+    index = min(max(1, int(line_no or 1)), len(lines)) - 1
+    for cursor in range(index, -1, -1):
+        text = str(lines[cursor] or "")
+        if not text.startswith("### "):
+            continue
+        return _extract_between(text, "| mission:", "| event:")
+    return ""
 
 
 def _date_from_episode_filename(filename: str) -> datetime.date | None:

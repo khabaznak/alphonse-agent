@@ -107,6 +107,48 @@ def test_search_episodes_with_query_mission_and_time_range(tmp_path: Path) -> No
     assert ranged_hits
 
 
+def test_search_episodes_mission_filter_is_entry_scoped(tmp_path: Path) -> None:
+    service = MemoryService(root_dir=tmp_path / "memory")
+    service.append_episode(
+        user_id="alex",
+        mission_id="m_a",
+        event_type="web_research",
+        payload={"result": "client-checkpoint"},
+    )
+    service.append_episode(
+        user_id="alex",
+        mission_id="m_b",
+        event_type="web_research",
+        payload={"result": "client-checkpoint"},
+    )
+    hits = service.search_episodes(user_id="alex", query="client-checkpoint", mission_id="m_a")
+    assert hits
+    for hit in hits:
+        path = Path(str(hit.get("path") or ""))
+        line_no = int(hit.get("line") or 0)
+        lines = path.read_text(encoding="utf-8").splitlines()
+        mission = ""
+        for idx in range(max(0, line_no - 1), -1, -1):
+            text = lines[idx]
+            if text.startswith("### "):
+                mission = text.split("| mission:", 1)[1].split("| event:", 1)[0].strip()
+                break
+        assert mission == "m_a"
+
+
+def test_search_episodes_treats_query_as_literal_string(tmp_path: Path) -> None:
+    service = MemoryService(root_dir=tmp_path / "memory")
+    needle = "ACME (North)+?"
+    service.append_episode(
+        user_id="alex",
+        mission_id="m_literal",
+        event_type="web_research",
+        payload={"result": needle},
+    )
+    hits = service.search_episodes(user_id="alex", query=needle, mission_id="m_literal")
+    assert hits
+
+
 def test_retention_prunes_old_daily_and_weekly_files(tmp_path: Path) -> None:
     service = MemoryService(root_dir=tmp_path / "memory")
     user = "alex"

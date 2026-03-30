@@ -9,6 +9,7 @@ from zoneinfo import ZoneInfo
 
 from alphonse.agent.nervous_system.prompt_artifacts import create_prompt_artifact
 from alphonse.agent.services.scheduler_service import SchedulerService
+from alphonse.agent.services.automation_tool_call_contract import build_canonical_tool_call_payload
 from alphonse.agent.cognition.prompt_templates_runtime import (
     SCHEDULER_NORMALIZE_TIME_SYSTEM_PROMPT,
     SCHEDULER_PARAPHRASE_SYSTEM_PROMPT,
@@ -131,25 +132,38 @@ class SchedulerTool:
             llm_client=self.llm_client,
             source_instruction=source_instruction,
         )
-        payload = {
-            "mind_layer": "conscious",
-            "message": message_text,
-            "message_text": message_text,
-            "message_mode": message_mode,
-            "reminder_text_raw": source_instruction,
-            "speaker": "alphonse",
-            "requested_by": delivery_target,
-            "origin_channel": resolved_origin_channel,
-            "created_at": datetime.now(dt_timezone.utc).isoformat(),
-            "trigger_at": trigger_time,
-            "fire_at": trigger_time,
-            "delivery_target": delivery_target,
-            "event_trigger": {
-                "type": "time",
-                "time": trigger_time,
-                "original_time_expression": trigger_expr,
+        payload = build_canonical_tool_call_payload(
+            tool_name="communication.send_message",
+            args={
+                "To": delivery_target,
+                "Message": message_text,
+                "Channel": resolved_origin_channel,
             },
-        }
+        )
+        payload.update(
+            {
+                "kind": "reminder_delivery",
+                "payload_type": "tool_call",
+                "mind_layer": "subconscious",
+                "dispatch_mode": "deterministic",
+                "message": message_text,
+                "message_text": message_text,
+                "message_mode": message_mode,
+                "reminder_text_raw": source_instruction,
+                "speaker": "alphonse",
+                "requested_by": delivery_target,
+                "origin_channel": resolved_origin_channel,
+                "created_at": datetime.now(dt_timezone.utc).isoformat(),
+                "trigger_at": trigger_time,
+                "fire_at": trigger_time,
+                "delivery_target": delivery_target,
+                "event_trigger": {
+                    "type": "time",
+                    "time": trigger_time,
+                    "original_time_expression": trigger_expr,
+                },
+            }
+        )
         internal_prompt = message_text
         artifact_id = create_prompt_artifact(
             user_id=str(delivery_target or "default"),

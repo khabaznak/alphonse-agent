@@ -1,22 +1,28 @@
 from __future__ import annotations
 
 from datetime import datetime
+import re
 from typing import Any
 
 from alphonse.agent.cognition.memory import MemoryService
 from alphonse.agent.cognition.memory import TimeRange
+from alphonse.agent.cognition.memory import resolve_memory_owner_aliases
+from alphonse.agent.cognition.memory import resolve_memory_owner_id
+
+
+_CLIENT_STORE_QUERY_RE = re.compile(r"\b(client|prospect|lead|crm)\b", re.IGNORECASE)
+_CLIENT_STORE_VERIFY_RE = re.compile(
+    r"\b(stored|save|saved|remember|remembered|recorded|write|wrote|crm)\b",
+    re.IGNORECASE,
+)
 
 
 def _state_user_id(state: dict[str, Any] | None, explicit: str | None = None) -> str:
-    candidate = str(explicit or "").strip()
-    if candidate:
-        return candidate
-    payload = dict(state or {})
-    for key in ("incoming_user_id", "actor_person_id", "channel_target", "chat_id", "conversation_key"):
-        value = str(payload.get(key) or "").strip()
-        if value:
-            return value
-    return "anonymous"
+    return resolve_memory_owner_id(state=state, explicit=explicit)
+
+
+def _state_user_aliases(state: dict[str, Any] | None, explicit: str | None = None) -> list[str]:
+    return resolve_memory_owner_aliases(state=state, explicit=explicit)
 
 
 def _parse_dt(value: str | None) -> datetime | None:
@@ -46,20 +52,65 @@ class SearchEpisodesTool:
         state: dict[str, Any] | None = None,
         **_: Any,
     ) -> dict[str, Any]:
-        uid = _state_user_id(state, user_id)
+        aliases = _state_user_aliases(state, user_id)
+        uid = aliases[0] if aliases else _state_user_id(state, user_id)
         service = MemoryService()
         time_range = None
         if str(start_time or "").strip() or str(end_time or "").strip():
             time_range = TimeRange(start=_parse_dt(start_time), end=_parse_dt(end_time))
-        rows = service.search_episodes(
-            uid,
-            str(query or ""),
-            mission_id=mission_id,
-            time_range=time_range,
-            limit=max(1, int(limit or 100)),
-        )
+        query_text = str(query or "")
+        normalized_limit = max(1, int(limit or 100))
+        crm_facts: list[dict[str, Any]] = []
+        crm_status: str | None = None
+        if _is_client_storage_query(query_text):
+            crm_facts = service.search_operational_facts(
+                created_by=uid,
+                query=query_text,
+                tags=["crm", "client"],
+                limit=min(25, normalized_limit),
+            )
+            if not crm_facts:
+                crm_facts = service.search_operational_facts(
+                    created_by=uid,
+                    query=None,
+                    tags=["crm", "client"],
+                    limit=min(25, normalized_limit),
+                )
+            crm_status = "found" if crm_facts else "not_stored_yet"
+        rows: list[dict[str, Any]] = []
+        seen: set[tuple[str, int]] = set()
+        for alias in aliases:
+            hits = service.search_episodes(
+                alias,
+                query_text,
+                mission_id=mission_id,
+                time_range=time_range,
+                limit=normalized_limit,
+            )
+            for hit in hits:
+                path = str(hit.get("path") or "")
+                line_no = int(hit.get("line") or 0)
+                key = (path, line_no)
+                if not path or line_no <= 0 or key in seen:
+                    continue
+                seen.add(key)
+                rows.append(hit)
+                if len(rows) >= normalized_limit:
+                    break
+            if len(rows) >= normalized_limit:
+                break
+        output_payload: dict[str, Any] = {
+            "user_id": uid,
+            "owner_aliases": aliases,
+            "hits": rows,
+            "count": len(rows),
+        }
+        if _is_client_storage_query(query_text):
+            output_payload["crm_facts"] = crm_facts
+            output_payload["crm_count"] = len(crm_facts)
+            output_payload["crm_status"] = crm_status
         return {
-            "output": {"user_id": uid, "hits": rows, "count": len(rows)},
+            "output": output_payload,
             "exception": None,
             "metadata": {"tool": "memory.search_episodes"},
         }
@@ -77,11 +128,16 @@ class GetMissionTool:
         state: dict[str, Any] | None = None,
         **_: Any,
     ) -> dict[str, Any]:
-        uid = _state_user_id(state, user_id)
+        aliases = _state_user_aliases(state, user_id)
+        uid = aliases[0] if aliases else _state_user_id(state, user_id)
         service = MemoryService()
-        mission = service.get_mission(uid, str(mission_id or ""))
+        mission = None
+        for alias in aliases:
+            mission = service.get_mission(alias, str(mission_id or ""))
+            if isinstance(mission, dict):
+                break
         return {
-            "output": {"user_id": uid, "mission": mission},
+            "output": {"user_id": uid, "owner_aliases": aliases, "mission": mission},
             "exception": None,
             "metadata": {"tool": "memory.get_mission"},
         }
@@ -98,11 +154,24 @@ class ListActiveMissionsTool:
         state: dict[str, Any] | None = None,
         **_: Any,
     ) -> dict[str, Any]:
-        uid = _state_user_id(state, user_id)
+        aliases = _state_user_aliases(state, user_id)
+        uid = aliases[0] if aliases else _state_user_id(state, user_id)
         service = MemoryService()
-        rows = service.list_active_missions(uid)
+        rows: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for alias in aliases:
+            current = service.list_active_missions(alias)
+            for mission in current:
+                if not isinstance(mission, dict):
+                    continue
+                mission_key = str(mission.get("mission_id") or "").strip()
+                if mission_key and mission_key in seen:
+                    continue
+                if mission_key:
+                    seen.add(mission_key)
+                rows.append(mission)
         return {
-            "output": {"user_id": uid, "missions": rows, "count": len(rows)},
+            "output": {"user_id": uid, "owner_aliases": aliases, "missions": rows, "count": len(rows)},
             "exception": None,
             "metadata": {"tool": "memory.list_active_missions"},
         }
@@ -120,11 +189,16 @@ class GetWorkspacePointerTool:
         state: dict[str, Any] | None = None,
         **_: Any,
     ) -> dict[str, Any]:
-        uid = _state_user_id(state, user_id)
+        aliases = _state_user_aliases(state, user_id)
+        uid = aliases[0] if aliases else _state_user_id(state, user_id)
         service = MemoryService()
-        value = service.get_workspace_pointer(uid, str(key or ""))
+        value = None
+        for alias in aliases:
+            value = service.get_workspace_pointer(alias, str(key or ""))
+            if value is not None:
+                break
         return {
-            "output": {"user_id": uid, "key": str(key or ""), "value": value},
+            "output": {"user_id": uid, "owner_aliases": aliases, "key": str(key or ""), "value": value},
             "exception": None,
             "metadata": {"tool": "memory.get_workspace"},
         }
@@ -201,22 +275,41 @@ class SearchOperationalFactsTool:
         state: dict[str, Any] | None = None,
         **_: Any,
     ) -> dict[str, Any]:
-        owner = _state_user_id(state, created_by or user_id)
+        aliases = _state_user_aliases(state, created_by or user_id)
+        owner = aliases[0] if aliases else _state_user_id(state, created_by or user_id)
         service = MemoryService()
-        rows = service.search_operational_facts(
-            created_by=owner,
-            query=query,
-            fact_type=fact_type,
-            status=status,
-            tags=tags,
-            stability=stability,
-            importance=importance,
-            scope=str(scope or "").strip().lower() or None,
-            limit=max(1, min(int(limit), 200)),
-            offset=max(0, int(offset)),
-        )
+        normalized_limit = max(1, min(int(limit), 200))
+        normalized_offset = max(0, int(offset))
+        rows: list[dict[str, Any]] = []
+        seen_ids: set[str] = set()
+        for alias in aliases:
+            current = service.search_operational_facts(
+                created_by=alias,
+                query=query,
+                fact_type=fact_type,
+                status=status,
+                tags=tags,
+                stability=stability,
+                importance=importance,
+                scope=str(scope or "").strip().lower() or None,
+                limit=normalized_limit,
+                offset=normalized_offset,
+            )
+            for item in current:
+                if not isinstance(item, dict):
+                    continue
+                item_id = str(item.get("fact_id") or item.get("key") or "").strip()
+                if item_id and item_id in seen_ids:
+                    continue
+                if item_id:
+                    seen_ids.add(item_id)
+                rows.append(item)
+                if len(rows) >= normalized_limit:
+                    break
+            if len(rows) >= normalized_limit:
+                break
         return {
-            "output": {"created_by": owner, "facts": rows, "count": len(rows), "limit": max(1, min(int(limit), 200)), "offset": max(0, int(offset))},
+            "output": {"created_by": owner, "owner_aliases": aliases, "facts": rows, "count": len(rows), "limit": normalized_limit, "offset": normalized_offset},
             "exception": None,
             "metadata": {"tool": "memory.search_operational_facts"},
         }
@@ -248,3 +341,10 @@ class RemoveOperationalFactTool:
             "exception": None,
             "metadata": {"tool": "memory.remove_operational_fact"},
         }
+
+
+def _is_client_storage_query(query: str) -> bool:
+    text = str(query or "").strip()
+    if not text:
+        return False
+    return bool(_CLIENT_STORE_QUERY_RE.search(text) and _CLIENT_STORE_VERIFY_RE.search(text))

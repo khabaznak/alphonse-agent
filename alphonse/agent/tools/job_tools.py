@@ -53,17 +53,22 @@ class JobCreateTool:
         resolved_user = _resolve_user_id(user_id=user_id, state=state, ctx=ctx)
         try:
             normalized_payload_type = _normalize_payload_type(payload_type)
+            if normalized_payload_type != "prompt_to_brain":
+                return _failed(
+                    code="jobs_conscious_only_payload_type",
+                    message="jobs.create only supports payload_type='prompt_to_brain'.",
+                    metadata={"tool": "jobs.create"},
+                )
             payload_with_prompt = dict(payload or {})
             execution_prompt = ""
-            if normalized_payload_type == "prompt_to_brain":
-                execution_prompt = _extract_execution_prompt(payload_with_prompt)
-                if not execution_prompt:
-                    return _failed(
-                        code="missing_prompt_text",
-                        message="prompt_to_brain jobs require payload text (text/prompt_text/message/prompt).",
-                        metadata={"tool": "jobs.create"},
-                    )
-                payload_with_prompt.setdefault("prompt_text", execution_prompt)
+            execution_prompt = _extract_execution_prompt(payload_with_prompt)
+            if not execution_prompt:
+                return _failed(
+                    code="missing_prompt_text",
+                    message="prompt_to_brain jobs require payload text (text/prompt_text/message/prompt).",
+                    metadata={"tool": "jobs.create"},
+                )
+            payload_with_prompt.setdefault("prompt_text", execution_prompt)
             state_payload = state if isinstance(state, dict) else {}
             origin_channel = str(state_payload.get("channel_type") or "").strip().lower()
             channel_target = str(
@@ -269,6 +274,17 @@ class JobRunNowTool:
                 job_id=resolved_job_id,
                 brain_event_sink=_brain_event_sink_from_state(state=state, fallback_user_id=resolved_user),
             )
+            status = str(outcome.get("status") or "").strip().lower()
+            if status == "error":
+                return _failed(
+                    code="job_run_failed",
+                    message="jobs.run_now could not enqueue the job payload to brain.",
+                    metadata={
+                        "tool": "jobs.run_now",
+                        "execution_id": outcome.get("execution_id"),
+                        "route": outcome.get("route"),
+                    },
+                )
             return _ok(
                 result={
                     "execution_id": outcome.get("execution_id"),
@@ -334,6 +350,7 @@ def _brain_event_sink_from_state(
                     text=text,
                     correlation_id=correlation_id,
                     actor_external_user_id=user_id,
+                    controls={"force_new_task": True, "input_mode": "job_trigger"},
                     metadata={
                         "source": "job_runner",
                         "job": payload,

@@ -192,12 +192,15 @@ def enqueue_pdca_slice(
     now = now_iso()
     user_text = str(payload.get("text") or "").strip()
     attachments = _extract_payload_attachments(payload)
-    existing = get_latest_pdca_task_for_owner(owner_id=session_user_id, statuses=["running"])
-    if not isinstance(existing, dict):
-        existing = get_latest_pdca_task_for_conversation(
-            conversation_key=session_key,
-            statuses=["waiting_user", "queued", "running", "paused"],
-        )
+    force_new_task = _force_new_task(payload=payload)
+    existing = None
+    if not force_new_task:
+        existing = get_latest_pdca_task_for_owner(owner_id=session_user_id, statuses=["running"])
+        if not isinstance(existing, dict):
+            existing = get_latest_pdca_task_for_conversation(
+                conversation_key=session_key,
+                statuses=["waiting_user", "queued", "running", "paused"],
+            )
     if isinstance(existing, dict):
         task_id = str(existing.get("task_id") or "").strip()
         metadata = dict(existing.get("metadata") or {}) if isinstance(existing.get("metadata"), dict) else {}
@@ -307,6 +310,13 @@ def enqueue_pdca_slice(
             "recent_conversation_block": render_recent_conversation_block(day_session),
         },
     }
+    source = _payload_source(payload=payload)
+    if source:
+        metadata["trigger_source"] = source
+    job_id = _payload_job_id(payload=payload)
+    if job_id:
+        metadata["trigger_job_id"] = job_id
+    metadata["force_new_task"] = bool(force_new_task)
     task_id = upsert_pdca_task(
         {
             "owner_id": session_user_id,
@@ -334,8 +344,35 @@ def enqueue_pdca_slice(
     return task_id
 
 
+def _force_new_task(*, payload: dict[str, Any]) -> bool:
+    controls = payload.get("controls") if isinstance(payload.get("controls"), dict) else {}
+    if _as_bool(controls.get("force_new_task")):
+        return True
+    source = _payload_source(payload=payload)
+    return source in {"job_runner", "job_trigger", "jobs_reconcile"}
+
+
+def _payload_source(*, payload: dict[str, Any]) -> str:
+    metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
+    rendered = str(metadata.get("source") or "").strip().lower()
+    return rendered
+
+
+def _payload_job_id(*, payload: dict[str, Any]) -> str:
+    metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
+    job = metadata.get("job") if isinstance(metadata.get("job"), dict) else {}
+    candidate = str(metadata.get("job_id") or job.get("job_id") or "").strip()
+    return candidate
+
+
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _as_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _emit_dispatch_kick(

@@ -274,3 +274,53 @@ def test_enqueue_pdca_slice_routes_to_running_owner_task_before_conversation_lat
     assert isinstance(running_inputs, list)
     assert len(running_inputs) == 1
     assert str(running_inputs[0].get("text") or "") == "steer running task"
+
+
+def test_enqueue_pdca_slice_force_new_task_skips_running_task(tmp_path: Path, monkeypatch) -> None:
+    db_path = tmp_path / "nerve-db"
+    monkeypatch.setenv("NERVE_DB_PATH", str(db_path))
+    apply_schema(db_path)
+
+    running_task = upsert_pdca_task(
+        {
+            "task_id": "task-running-owner-force-new",
+            "owner_id": "u-1",
+            "conversation_key": "telegram:old-thread",
+            "status": "running",
+            "metadata": {
+                "inputs": [],
+                "next_unconsumed_index": 0,
+                "input_dirty": False,
+            },
+        }
+    )
+
+    returned = enqueue_pdca_slice(
+        context={},
+        incoming=_incoming(message_id="m-force-new"),
+        state={"timezone": "UTC"},
+        session_key="telegram:8553589429",
+        session_user_id="u-1",
+        day_session={"session_id": "u-1|2026-03-12", "user_id": "u-1", "date": "2026-03-12"},
+        payload={
+            "text": "run job prompt in isolated task",
+            "controls": {"force_new_task": True},
+            "metadata": {"source": "job_runner", "job": {"job_id": "job_123"}},
+        },
+        correlation_id="cid-force-new",
+    )
+    assert returned != running_task
+
+    running = get_pdca_task(running_task)
+    assert isinstance(running, dict)
+    running_metadata = running.get("metadata") if isinstance(running.get("metadata"), dict) else {}
+    running_inputs = running_metadata.get("inputs")
+    assert isinstance(running_inputs, list)
+    assert len(running_inputs) == 0
+
+    created = get_pdca_task(returned)
+    assert isinstance(created, dict)
+    metadata = created.get("metadata") if isinstance(created.get("metadata"), dict) else {}
+    assert str(metadata.get("trigger_source") or "") == "job_runner"
+    assert str(metadata.get("trigger_job_id") or "") == "job_123"
+    assert bool(metadata.get("force_new_task")) is True

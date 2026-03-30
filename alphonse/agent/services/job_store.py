@@ -18,7 +18,7 @@ from alphonse.agent.nervous_system.paths import resolve_nervous_system_db_path
 from alphonse.agent.services.job_models import JobExecution, JobSpec
 
 logger = get_component_logger("services.job_store")
-VALID_PAYLOAD_TYPES = {"job_ability", "tool_call", "prompt_to_brain", "internal_event"}
+VALID_PAYLOAD_TYPES = {"prompt_to_brain"}
 
 
 class JobStore:
@@ -36,7 +36,11 @@ class JobStore:
 
     def create_job(self, *, user_id: str, payload: dict[str, Any]) -> JobSpec:
         now = _now_utc()
-        payload_type = _normalize_payload_type(str(payload.get("payload_type") or "internal_event"))
+        payload_type = _normalize_payload_type(str(payload.get("payload_type") or "prompt_to_brain"))
+        payload_data = _normalize_job_payload_for_type(
+            payload_type=payload_type,
+            payload=dict(payload.get("payload") or {}),
+        )
         job = JobSpec(
             job_id=_new_job_id(),
             name=str(payload.get("name") or "").strip(),
@@ -45,7 +49,7 @@ class JobStore:
             schedule=dict(payload.get("schedule") or {}),
             timezone=str(payload.get("timezone") or "UTC"),
             payload_type=payload_type,  # type: ignore[arg-type]
-            payload=dict(payload.get("payload") or {}),
+            payload=payload_data,
             domain_tags=[str(item).strip() for item in (payload.get("domain_tags") or []) if str(item).strip()],
             safety_level=str(payload.get("safety_level") or "low"),
             requires_confirmation=bool(payload.get("requires_confirmation", False)),
@@ -119,7 +123,11 @@ class JobStore:
         return JobSpec.from_dict(payload)
 
     def save_job(self, *, user_id: str, job: JobSpec) -> JobSpec:
-        job.payload_type = _normalize_payload_type(str(job.payload_type or "internal_event"))  # type: ignore[assignment]
+        job.payload_type = _normalize_payload_type(str(job.payload_type or "prompt_to_brain"))  # type: ignore[assignment]
+        job.payload = _normalize_job_payload_for_type(
+            payload_type=str(job.payload_type or ""),
+            payload=dict(job.payload or {}),
+        )
         if str(job.payload_type or "").strip() not in VALID_PAYLOAD_TYPES:
             raise ValueError("invalid_payload_type")
         _normalize_job_schedule(job=job, now=_now_utc())
@@ -152,25 +160,49 @@ class JobStore:
         user_ids = [str(user_id)] if user_id else self.list_user_ids()
         scanned = 0
         updated = 0
+        deleted = 0
+        deleted_ids: list[str] = []
         for uid in user_ids:
             data = self._read_jobs(uid)
             jobs_raw = data.get("jobs")
             if not isinstance(jobs_raw, dict):
                 continue
             user_changed = False
-            for job_id, payload in jobs_raw.items():
+            for job_id, payload in list(jobs_raw.items()):
                 if not isinstance(payload, dict):
                     continue
                 scanned += 1
                 spec = JobSpec.from_dict(payload)
+                changed = False
                 original_payload_type = str(spec.payload_type or "").strip()
                 normalized_payload_type = _normalize_payload_type(original_payload_type)
+                if normalized_payload_type not in VALID_PAYLOAD_TYPES:
+                    jobs_raw.pop(str(job_id), None)
+                    deleted += 1
+                    deleted_ids.append(f"{uid}:{job_id}")
+                    user_changed = True
+                    try:
+                        self._delete_scheduled_job_row(job_id=str(job_id))
+                        self._delete_job_timed_signal_row(job_id=str(job_id))
+                    except Exception:
+                        pass
+                    logger.warning(
+                        "JobStore deleted_non_conscious_job user_id=%s job_id=%s payload_type=%s",
+                        uid,
+                        str(job_id),
+                        normalized_payload_type,
+                    )
+                    continue
                 spec.payload_type = normalized_payload_type  # type: ignore[assignment]
-                changed = _normalize_job_schedule(job=spec, now=_now_utc())
-                if normalized_payload_type != original_payload_type:
+                normalized_payload = _normalize_job_payload_for_type(
+                    payload_type=normalized_payload_type,
+                    payload=dict(spec.payload or {}),
+                )
+                if normalized_payload != spec.payload:
+                    spec.payload = normalized_payload
                     changed = True
-                if str(spec.payload_type or "").strip() not in VALID_PAYLOAD_TYPES:
-                    spec.payload_type = "prompt_to_brain"  # type: ignore[assignment]
+                changed = _normalize_job_schedule(job=spec, now=_now_utc()) or changed
+                if normalized_payload_type != original_payload_type:
                     changed = True
                 if not spec.next_run_at and bool(spec.enabled):
                     spec.next_run_at = compute_next_run_at(
@@ -195,7 +227,40 @@ class JobStore:
                     )
             if user_changed:
                 self._write_jobs(uid, data)
-        return {"scanned": scanned, "updated": updated}
+        return {"scanned": scanned, "updated": updated, "deleted": deleted, "deleted_sample_count": len(deleted_ids[:10])}
+
+    def migration_report_tool_call_contract(
+        self,
+        *,
+        user_id: str | None = None,
+        sample_limit: int = 20,
+    ) -> dict[str, Any]:
+        user_ids = [str(user_id)] if user_id else self.list_user_ids()
+        scanned = 0
+        canonical = 0
+        non_canonical = 0
+        samples: list[str] = []
+        for uid in user_ids:
+            data = self._read_jobs(uid)
+            jobs_raw = data.get("jobs")
+            if not isinstance(jobs_raw, dict):
+                continue
+            for job_id, payload in jobs_raw.items():
+                if not isinstance(payload, dict):
+                    continue
+                spec = JobSpec.from_dict(payload)
+                if str(spec.payload_type or "").strip() in VALID_PAYLOAD_TYPES:
+                    continue
+                scanned += 1
+                non_canonical += 1
+                if len(samples) < max(1, int(sample_limit)):
+                    samples.append(f"{uid}:{job_id}")
+        return {
+            "scanned": scanned,
+            "canonical": canonical,
+            "non_canonical": non_canonical,
+            "sample_ids": samples,
+        }
 
     def pause_job(self, *, user_id: str, job_id: str) -> JobSpec:
         job = self.get_job(user_id=user_id, job_id=job_id)
@@ -510,7 +575,7 @@ def _normalize_payload_type(value: str) -> str:
     raw = str(value or "").strip()
     if raw == "prompt":
         return "prompt_to_brain"
-    return raw or "internal_event"
+    return raw or "prompt_to_brain"
 
 
 def _extract_job_prompt(payload: dict[str, Any]) -> str:
@@ -521,6 +586,21 @@ def _extract_job_prompt(payload: dict[str, Any]) -> str:
         if value:
             return value
     return ""
+
+
+def _normalize_job_payload_for_type(
+    *,
+    payload_type: str,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    normalized = dict(payload or {})
+    if str(payload_type or "").strip() not in VALID_PAYLOAD_TYPES:
+        raise ValueError("jobs_conscious_only_payload_type")
+    prompt_text = _extract_job_prompt(normalized)
+    if not prompt_text:
+        raise ValueError("missing_prompt_text")
+    normalized.setdefault("prompt_text", prompt_text)
+    return normalized
 
 
 def _job_timed_signal_id(job_id: str) -> str:
@@ -536,7 +616,7 @@ def _job_trigger_payload(*, job: JobSpec, user_id: str) -> dict[str, Any]:
         "job_name": str(job.name or "").strip(),
         "payload_type": str(job.payload_type or "").strip(),
         "payload": payload,
-        "mind_layer": "conscious" if str(job.payload_type or "").strip() in {"prompt_to_brain", "job_ability"} else "subconscious",
+        "mind_layer": "conscious",
     }
 
 

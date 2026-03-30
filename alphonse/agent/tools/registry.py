@@ -819,12 +819,13 @@ def _default_specs() -> list[ToolSpec]:
         ),
         ToolSpec(
             canonical_name="jobs.create",
-            summary="Create a scheduled job with RRULE timing, payload routing, safety, and retry policy.",
-            description="Create a scheduled job with RRULE timing, payload routing, safety, and retry policy.",
-            when_to_use="Use when the user asks for recurring automations or scheduled background actions.",
+            summary="Create a conscious scheduled job with RRULE timing and prompt payload.",
+            description="Create a conscious scheduled job with RRULE timing and prompt payload.",
+            when_to_use="Use when the user asks for recurring reminders/tasks that must execute through PDCA.",
             returns="job_id and next_run_at",
-            input_schema=_object_schema(
-                properties={
+            input_schema={
+                "type": "object",
+                "properties": {
                     "name": {"type": "string"},
                     "description": {"type": "string"},
                     "schedule": {
@@ -837,8 +838,13 @@ def _default_specs() -> list[ToolSpec]:
                         "required": ["type", "dtstart", "rrule"],
                         "additionalProperties": False,
                     },
-                    "payload_type": {"type": "string", "enum": ["job_ability", "tool_call", "prompt_to_brain", "internal_event"]},
-                    "payload": {"type": "object"},
+                    "payload_type": {"type": "string", "enum": ["prompt_to_brain"]},
+                    "payload": {
+                        "type": "object",
+                        "properties": {"prompt_text": {"type": "string"}},
+                        "required": ["prompt_text"],
+                        "additionalProperties": True,
+                    },
                     "timezone": {"type": "string"},
                     "domain_tags": {"type": "array", "items": {"type": "string"}},
                     "safety_level": {"type": "string"},
@@ -847,8 +853,9 @@ def _default_specs() -> list[ToolSpec]:
                     "idempotency": {"type": "object"},
                     "enabled": {"type": "boolean"},
                 },
-                required=["name", "description", "schedule", "payload_type", "payload"],
-            ),
+                "required": ["name", "description", "schedule", "payload_type", "payload"],
+                "additionalProperties": False,
+            },
             output_schema=_permissive_output_schema(),
             domain_tags=["automation", "jobs", "productivity"],
             safety_level=SafetyLevel.MEDIUM,
@@ -863,7 +870,7 @@ def _default_specs() -> list[ToolSpec]:
                     },
                     "payload_type": "prompt_to_brain",
                     "payload": {"prompt_text": "Prepare weekly chores digest for the family."},
-                }
+                },
             ],
         ),
         ToolSpec(

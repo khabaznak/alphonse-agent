@@ -30,6 +30,7 @@ class ScheduledJobsReconciler:
         return {
             "scanned": int(summary.get("scanned") or 0),
             "updated": int(summary.get("updated") or 0),
+            "deleted_non_conscious": int(summary.get("deleted") or 0),
             "stale_removed": stale_removed,
             "executed": int(catchup.get("executed") or 0),
             "advanced_without_run": int(catchup.get("advanced_without_run") or 0),

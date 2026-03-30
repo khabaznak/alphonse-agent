@@ -11,6 +11,8 @@ from alphonse.agent.cognition.memory.service import put_artifact
 from alphonse.agent.cognition.memory.service import remove_operational_fact
 from alphonse.agent.cognition.memory.service import record_after_tool_call
 from alphonse.agent.cognition.memory.service import record_plan_step_completion
+from alphonse.agent.cognition.memory.service import resolve_memory_owner_aliases
+from alphonse.agent.cognition.memory.service import resolve_memory_owner_id
 from alphonse.agent.cognition.memory.service import search_operational_facts
 from alphonse.agent.cognition.memory.service import search_episodes
 from alphonse.agent.cognition.memory.service import upsert_operational_fact
@@ -26,6 +28,8 @@ __all__ = [
     "mission_step_update",
     "record_after_tool_call",
     "record_plan_step_completion",
+    "resolve_memory_owner_id",
+    "resolve_memory_owner_aliases",
     "search_episodes",
     "upsert_operational_fact",
     "search_operational_facts",

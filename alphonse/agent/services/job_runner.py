@@ -1,14 +1,16 @@
 from __future__ import annotations
 
-import inspect
 import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
+from alphonse.agent.observability.log_manager import get_component_logger
 from alphonse.agent.services.job_models import JobExecution, JobSpec
 from alphonse.agent.services.job_store import JobStore, compute_next_run_at, compute_retry_time
+
+logger = get_component_logger("services.job_runner")
 
 
 @dataclass(frozen=True)
@@ -96,18 +98,19 @@ class JobRunner:
         output_summary = ""
         retried = False
         try:
+            _ensure_conscious_job(job)
             if route.route == "needs_confirmation":
                 status = "needs_confirmation"
                 output_summary = "blocked: confirmation required"
             elif route.route == "brain":
                 payload = _brain_payload(job=job, user_id=user_id, current=current)
                 sink = brain_event_sink if callable(brain_event_sink) else self._brain_event_sink
-                if callable(sink):
-                    sink(payload)
+                if not callable(sink):
+                    raise ValueError("missing_brain_sink")
+                sink(payload)
                 output_summary = "queued_to_brain"
             else:
-                output = self._execute_unconscious(job=job, user_id=user_id)
-                output_summary = _summarize_output(output)
+                raise ValueError("jobs_conscious_only_policy_violation")
         except Exception as exc:
             status = "error"
             error = {"type": type(exc).__name__, "message": str(exc)}
@@ -131,7 +134,21 @@ class JobRunner:
         self._job_store.append_execution(user_id=user_id, execution=execution)
         if status == "error":
             retried = self._apply_retry(user_id=user_id, job=job, now=current)
-        self._update_job_after_execution(user_id=user_id, job=job, now=current, success=(status != "error"), retried=retried)
+        try:
+            self._update_job_after_execution(user_id=user_id, job=job, now=current, success=(status != "error"), retried=retried)
+        except ValueError as exc:
+            if str(exc) == "jobs_conscious_only_payload_type":
+                logger.warning(
+                    "JobRunner purged_non_conscious_job_after_execution user_id=%s job_id=%s",
+                    user_id,
+                    job.job_id,
+                )
+                try:
+                    self._job_store.delete_job(user_id=user_id, job_id=job.job_id)
+                except Exception:
+                    pass
+            else:
+                raise
         return {"execution_id": execution.execution_id, "status": execution.status, "route": route.route}
 
     def _run_loop(self) -> None:
@@ -141,28 +158,6 @@ class JobRunner:
             except Exception:
                 pass
             self._stop.wait(self._tick_seconds)
-
-    def _execute_unconscious(self, *, job: JobSpec, user_id: str) -> Any:
-        if job.payload_type == "internal_event":
-            payload = dict(job.payload or {})
-            return {"event_name": payload.get("event_name"), "data": payload.get("data")}
-        if job.payload_type == "tool_call":
-            tool_key = str(job.payload.get("tool_key") or "").strip()
-            args = dict(job.payload.get("args") or {})
-            if not tool_key:
-                raise ValueError("missing_tool_key")
-            definition = self._tool_registry.get(tool_key) if hasattr(self._tool_registry, "get") else None
-            if definition is None:
-                raise ValueError("tool_not_found")
-            execute = getattr(definition.executor, "execute", None)
-            if not callable(execute):
-                raise ValueError("tool_not_found")
-            signature = inspect.signature(execute)
-            state = {"actor_person_id": user_id, "incoming_user_id": user_id, "channel_target": user_id}
-            if "state" in signature.parameters:
-                args = {**args, "state": state}
-            return definition.invoke(args)
-        raise ValueError("unsupported_unconscious_payload")
 
     def _apply_retry(self, *, user_id: str, job: JobSpec, now: datetime) -> bool:
         max_retries = int(job.retry_policy.get("max_retries") or 0)
@@ -217,16 +212,10 @@ class JobRunner:
         return False
 
 def route_job(*, job: JobSpec, auto_execute_high_risk: bool = False) -> JobRouteDecision:
-    safety = str(job.safety_level or "low").strip().lower()
-    if job.requires_confirmation:
-        return JobRouteDecision(route="needs_confirmation", reason="requires_confirmation")
-    if safety in {"critical", "high"} and not auto_execute_high_risk:
-        return JobRouteDecision(route="brain", reason="high_risk_requires_brain")
-    if job.payload_type in {"job_ability", "prompt_to_brain"}:
-        return JobRouteDecision(route="brain", reason="conscious_payload")
-    if job.payload_type in {"tool_call", "internal_event"}:
-        return JobRouteDecision(route="unconscious", reason="deterministic_payload")
-    return JobRouteDecision(route="brain", reason="unknown_payload")
+    _ = auto_execute_high_risk
+    if str(job.payload_type or "").strip() != "prompt_to_brain":
+        return JobRouteDecision(route="brain", reason="jobs_conscious_only_policy_violation")
+    return JobRouteDecision(route="brain", reason="jobs_conscious_only")
 
 
 def _brain_payload(*, job: JobSpec, user_id: str, current: datetime) -> dict[str, Any]:
@@ -242,10 +231,12 @@ def _brain_payload(*, job: JobSpec, user_id: str, current: datetime) -> dict[str
     }
 
 
-def _summarize_output(output: Any) -> str:
-    if isinstance(output, dict):
-        if output.get("exception") is not None:
-            return str(output.get("exception") or "tool_failed")
-        text = output.get("output")
-        return str(text)[:240]
-    return str(output)[:240]
+def _ensure_conscious_job(job: JobSpec) -> None:
+    payload_type = str(job.payload_type or "").strip()
+    if payload_type != "prompt_to_brain":
+        logger.warning(
+            "JobRunner policy_violation_non_conscious_job job_id=%s payload_type=%s",
+            str(job.job_id or ""),
+            payload_type,
+        )
+        raise ValueError("jobs_conscious_only_policy_violation")

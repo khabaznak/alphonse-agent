@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from alphonse.agent.cognition.memory import service as memory_service
+from alphonse.agent.cognition.memory import MemoryService
 from alphonse.agent.nervous_system.senses.bus import Signal
 
 
@@ -64,3 +66,26 @@ def test_memory_write_retry_exhausted_escalates_to_admin(monkeypatch) -> None:
     assert bus.events[-1].type == "sense.runtime.message.user.received"
     payload = bus.events[-1].payload if isinstance(bus.events[-1].payload, dict) else {}
     assert payload.get("schema_version") == "1.0"
+
+
+def test_record_after_tool_call_persists_output_summary_for_search(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("ALPHONSE_MEMORY_ROOT", str(tmp_path / "memory"))
+    memory_service.record_after_tool_call(
+        state={"correlation_id": "corr-memory-summary-1", "incoming_user_id": "alex"},
+        task_state={"goal": "research potential client", "status": "running", "task_id": "task_client_1"},
+        current={"step_id": "step_1"},
+        tool_name="execution.call_mcp",
+        args={"profile": "web", "operation": "search"},
+        result={
+            "output": {
+                "company": "Acme Logistics",
+                "hq": "Guadalajara",
+                "contact": "ops@acme.example",
+            },
+            "exception": None,
+            "metadata": {},
+        },
+        correlation_id="corr-memory-summary-1",
+    )
+    hits = MemoryService().search_episodes(user_id="alex", query="Acme Logistics")
+    assert hits

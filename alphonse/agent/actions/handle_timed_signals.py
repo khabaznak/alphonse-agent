@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import json
+import inspect
 import sqlite3
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -16,11 +17,17 @@ from alphonse.agent.observability.log_manager import get_component_logger
 from alphonse.agent.services.job_runner import JobRunner
 from alphonse.agent.services.scheduled_jobs_reconciler import ScheduledJobsReconciler
 from alphonse.agent.services.job_store import JobStore
+from alphonse.agent.services.automation_payload_migrations import migrate_timed_signal_tool_call_payloads
+from alphonse.agent.services.automation_tool_call_contract import (
+    extract_canonical_call,
+    is_canonical_tool_call,
+)
 
 
 logger = get_component_logger("actions.handle_timed_signals")
 _MEMORY_MAINTENANCE_SIGNAL_ID = "runtime.memory.weekly.maintenance"
 _MEMORY_MAINTENANCE_KIND = "memory_maintenance"
+_TIMED_TOOL_CALL_MIGRATION_DONE = False
 
 
 class HandleTimedSignalsAction(Action):
@@ -36,6 +43,8 @@ class HandleTimedSignalsAction(Action):
             return _run_memory_maintenance(payload=payload)
         if _is_job_trigger_payload(signal_payload=payload, inner=inner):
             return _execute_job_trigger(context=context, payload=payload, inner=inner, signal=signal)
+        if is_canonical_tool_call(inner):
+            return _execute_timed_tool_call(context=context, payload=payload, inner=inner, signal=signal)
         if _is_legacy_daily_report(payload=payload, inner=inner):
             logger.info("HandleTimedSignalsAction skipped legacy_daily_report timed_signal_id=%s", payload.get("timed_signal_id"))
             return ActionResult(intention_key="NOOP", payload={}, urgency=None)
@@ -93,8 +102,25 @@ class HandleTimedSignalsAction(Action):
 
 
 def _handle_timer_reconcile_tick(*, context: dict[str, Any]) -> ActionResult:
+    global _TIMED_TOOL_CALL_MIGRATION_DONE
     bus = context.get("ctx")
     signal = context.get("signal")
+    if not _TIMED_TOOL_CALL_MIGRATION_DONE:
+        dry_run_summary = migrate_timed_signal_tool_call_payloads(dry_run=True)
+        logger.info(
+            "HandleTimedSignalsAction timed_tool_call_migration_dry_run scanned=%s updated=%s invalid=%s",
+            int(dry_run_summary.get("scanned") or 0),
+            int(dry_run_summary.get("updated") or 0),
+            int(dry_run_summary.get("invalid") or 0),
+        )
+        apply_summary = migrate_timed_signal_tool_call_payloads(dry_run=False)
+        logger.info(
+            "HandleTimedSignalsAction timed_tool_call_migration_apply scanned=%s updated=%s invalid=%s",
+            int(apply_summary.get("scanned") or 0),
+            int(apply_summary.get("updated") or 0),
+            int(apply_summary.get("invalid") or 0),
+        )
+        _TIMED_TOOL_CALL_MIGRATION_DONE = True
 
     def _brain_sink(brain_payload: dict[str, Any]) -> None:
         _emit_brain_payload_to_bus(
@@ -110,9 +136,10 @@ def _handle_timer_reconcile_tick(*, context: dict[str, Any]) -> ActionResult:
         brain_event_sink=_brain_sink if hasattr(bus, "emit") else None
     )
     logger.info(
-        "HandleTimedSignalsAction jobs_reconciled scanned=%s updated=%s stale_removed=%s executed=%s advanced_without_run=%s failed=%s overdue_active=%s due_pending_signals=%s",
+        "HandleTimedSignalsAction jobs_reconciled scanned=%s updated=%s deleted_non_conscious=%s stale_removed=%s executed=%s advanced_without_run=%s failed=%s overdue_active=%s due_pending_signals=%s",
         int(summary.get("scanned") or 0),
         int(summary.get("updated") or 0),
+        int(summary.get("deleted_non_conscious") or 0),
         int(summary.get("stale_removed") or 0),
         int(summary.get("executed") or 0),
         int(summary.get("advanced_without_run") or 0),
@@ -312,6 +339,79 @@ def _execute_job_trigger(*, context: dict[str, Any], payload: dict[str, Any], in
     return ActionResult(intention_key="NOOP", payload={}, urgency=None)
 
 
+def _execute_timed_tool_call(
+    *,
+    context: dict[str, Any],
+    payload: dict[str, Any],
+    inner: dict[str, Any],
+    signal: object | None,
+) -> ActionResult:
+    _ = (context, signal)
+    try:
+        tool_name, args = extract_canonical_call(inner)
+    except ValueError as exc:
+        logger.warning(
+            "HandleTimedSignalsAction timed_tool_call invalid_payload timed_signal_id=%s code=%s",
+            payload.get("timed_signal_id"),
+            str(exc),
+        )
+        return ActionResult(intention_key="NOOP", payload={}, urgency=None)
+    try:
+        from alphonse.agent.tools.registry import build_default_tool_registry
+
+        registry = build_default_tool_registry()
+    except Exception as exc:
+        logger.warning(
+            "HandleTimedSignalsAction timed_tool_call registry_error timed_signal_id=%s error=%s",
+            payload.get("timed_signal_id"),
+            type(exc).__name__,
+        )
+        return ActionResult(intention_key="NOOP", payload={}, urgency=None)
+    definition = registry.get(tool_name)
+    if definition is None:
+        logger.warning(
+            "HandleTimedSignalsAction timed_tool_call tool_not_found timed_signal_id=%s tool_name=%s",
+            payload.get("timed_signal_id"),
+            tool_name,
+        )
+        return ActionResult(intention_key="NOOP", payload={}, urgency=None)
+    resolved_args = dict(args or {})
+    execute = getattr(definition.executor, "execute", None)
+    if callable(execute):
+        signature = inspect.signature(execute)
+        if "state" in signature.parameters:
+            target = str(
+                payload.get("target")
+                or inner.get("delivery_target")
+                or inner.get("requested_by")
+                or ""
+            ).strip()
+            state = {
+                "actor_person_id": target,
+                "incoming_user_id": target,
+                "channel_target": target,
+                "channel_type": str(payload.get("origin") or inner.get("origin_channel") or "api").strip() or "api",
+                "correlation_id": _correlation_id(payload, signal),
+            }
+            resolved_args = {**resolved_args, "state": state}
+    try:
+        definition.invoke(resolved_args)
+    except Exception as exc:
+        logger.warning(
+            "HandleTimedSignalsAction timed_tool_call failed timed_signal_id=%s tool_name=%s error=%s",
+            payload.get("timed_signal_id"),
+            tool_name,
+            type(exc).__name__,
+        )
+    else:
+        logger.info(
+            "HandleTimedSignalsAction timed_tool_call executed timed_signal_id=%s tool_name=%s",
+            payload.get("timed_signal_id"),
+            tool_name,
+        )
+    return ActionResult(intention_key="NOOP", payload={}, urgency=None)
+
+
 def _emit_brain_payload_to_bus(
     *,
     bus: Any,
@@ -360,6 +460,7 @@ def _emit_brain_payload_to_bus(
                 text=text,
                 correlation_id=correlation_id,
                 actor_external_user_id=user_id,
+                controls={"force_new_task": True, "input_mode": "job_trigger"},
                 metadata=metadata,
             ),
             source="timer",

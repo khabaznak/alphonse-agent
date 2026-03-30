@@ -42,6 +42,11 @@ def test_create_reminder_accepts_spanish_relative_time(monkeypatch) -> None:
     assert result["delivery_target"] == "yo"
     assert result["original_time_expression"] == "mañana a las 7:30am"
     assert "signal_type" not in captured
+    payload = captured.get("payload")
+    assert isinstance(payload, dict)
+    tool_call = payload.get("tool_call")
+    assert isinstance(tool_call, dict)
+    assert str(tool_call.get("tool_name") or "") == "communication.send_message"
 
 
 def test_create_reminder_raises_structured_error_on_missing_message() -> None:
@@ -108,3 +113,8 @@ def test_create_reminder_preserves_quoted_message_as_verbatim(monkeypatch) -> No
     assert payload.get("message_text") == "Hi alex"
     assert payload.get("message") == "Hi alex"
     assert payload.get("reminder_text_raw") == 'say "Hi alex"'
+    tool_call = payload.get("tool_call")
+    assert isinstance(tool_call, dict)
+    args = tool_call.get("args")
+    assert isinstance(args, dict)
+    assert str(args.get("Message") or "") == "Hi alex"

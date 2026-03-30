@@ -6,6 +6,8 @@ from alphonse.agent.actions.handle_timed_signals import HandleTimedSignalsAction
 from alphonse.agent.actions.handle_timed_signals import _emit_brain_payload_to_bus
 from alphonse.agent.nervous_system.senses.bus import Bus
 from alphonse.agent.nervous_system.senses.bus import Signal
+from alphonse.agent.tools.base import ToolDefinition
+from alphonse.agent.tools.spec import ToolSpec
 
 
 class _FakeBus:
@@ -207,3 +209,61 @@ def test_job_trigger_bus_prompt_uses_payload_text_not_setup_metadata() -> None:
     text = str(content.get("text") or "")
     assert text == "Send voice note containing a stoic quote"
     assert "Create scheduled job" not in text
+
+
+def test_timed_signal_executes_canonical_tool_call_payload(monkeypatch) -> None:
+    called: dict[str, object] = {}
+
+    class _FakeExecutor:
+        def execute(self, *, To: str, Message: str, Channel: str | None = None, state: dict | None = None):  # noqa: N803
+            called["To"] = To
+            called["Message"] = Message
+            called["Channel"] = Channel
+            called["state"] = state
+            return {"output": {"ok": True}, "exception": None}
+
+    class _FakeRegistry:
+        def get(self, key: str):
+            if key != "communication.send_message":
+                return None
+            spec = ToolSpec(
+                canonical_name="communication.send_message",
+                summary="fake",
+                description="fake",
+                input_schema={"type": "object", "properties": {}, "required": [], "additionalProperties": False},
+                output_schema={"type": "object", "additionalProperties": True},
+            )
+            return ToolDefinition(spec=spec, executor=_FakeExecutor())
+
+    monkeypatch.setattr(
+        "alphonse.agent.tools.registry.build_default_tool_registry",
+        lambda: _FakeRegistry(),
+    )
+    action = HandleTimedSignalsAction()
+    result = action.execute(
+        {
+            "signal": Signal(
+                type="timed_signal.fired",
+                payload={
+                    "timed_signal_id": "tsig_tool_1",
+                    "target": "8553589429",
+                    "origin": "telegram",
+                    "payload": {
+                        "tool_call": {
+                            "kind": "call_tool",
+                            "tool_name": "communication.send_message",
+                            "args": {"To": "8553589429", "Message": "hola", "Channel": "telegram"},
+                        }
+                    },
+                },
+                source="timer",
+                correlation_id="corr-tool-call",
+            ),
+            "ctx": _FakeBus(),
+            "state": None,
+            "outcome": None,
+        }
+    )
+    assert result.intention_key == "NOOP"
+    assert str(called.get("To") or "") == "8553589429"
+    assert str(called.get("Message") or "") == "hola"

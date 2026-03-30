@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from typing import Any, Literal
 
 
-PayloadType = Literal["job_ability", "tool_call", "prompt_to_brain", "internal_event"]
+PayloadType = Literal["prompt_to_brain"]
 IdempotencyStrategy = Literal["none", "by_window", "by_input_hash"]
 
 
@@ -41,7 +41,7 @@ class JobSpec:
             enabled=bool(payload.get("enabled", True)),
             schedule=dict(payload.get("schedule") or {}),
             timezone=str(payload.get("timezone") or "UTC"),
-            payload_type=str(payload.get("payload_type") or "internal_event"),  # type: ignore[arg-type]
+            payload_type=str(payload.get("payload_type") or "prompt_to_brain"),  # type: ignore[arg-type]
             payload=dict(payload.get("payload") or {}),
             domain_tags=[str(item) for item in (payload.get("domain_tags") or []) if str(item).strip()],
             safety_level=str(payload.get("safety_level") or "low"),

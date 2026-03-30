@@ -23,8 +23,8 @@ def test_reconciler_removes_stale_scheduled_jobs_rows(tmp_path: Path, monkeypatc
                 "dtstart": (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat(),
                 "rrule": "FREQ=DAILY;BYHOUR=7;BYMINUTE=0",
             },
-            "payload_type": "internal_event",
-            "payload": {"event_name": "ok"},
+            "payload_type": "prompt_to_brain",
+            "payload": {"prompt_text": "Run the real job prompt."},
             "timezone": "UTC",
         },
     )
@@ -67,14 +67,18 @@ def test_reconciler_executes_due_job_within_grace(tmp_path: Path, monkeypatch) -
                 "dtstart": (datetime.now(timezone.utc) - timedelta(minutes=3)).isoformat(),
                 "rrule": "FREQ=MINUTELY;INTERVAL=1",
             },
-            "payload_type": "internal_event",
-            "payload": {"event_name": "reconcile.run"},
+            "payload_type": "prompt_to_brain",
+            "payload": {"prompt_text": "Run reconcile check."},
             "timezone": "UTC",
         },
     )
     created.next_run_at = (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()
     store.save_job(user_id="u1", job=created)
-    summary = ScheduledJobsReconciler(store=store).reconcile()
+    events: list[dict[str, object]] = []
+    summary = ScheduledJobsReconciler(store=store).reconcile(
+        brain_event_sink=lambda payload: events.append(payload),
+    )
     assert int(summary.get("executed") or 0) >= 1
+    assert events
     executions = store.list_executions(user_id="u1", job_id=created.job_id, limit=5)
     assert executions
