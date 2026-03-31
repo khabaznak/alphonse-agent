@@ -2,6 +2,7 @@ from alphonse.agent.cognition.memory.paths import resolve_memory_root
 from alphonse.agent.cognition.memory.service import MemoryService
 from alphonse.agent.cognition.memory.service import TimeRange
 from alphonse.agent.cognition.memory.service import append_episode
+from alphonse.agent.cognition.memory.service import append_conversation_transcript
 from alphonse.agent.cognition.memory.service import get_mission
 from alphonse.agent.cognition.memory.service import get_workspace_pointer
 from alphonse.agent.cognition.memory.service import list_active_missions
@@ -22,6 +23,7 @@ __all__ = [
     "MemoryService",
     "TimeRange",
     "append_episode",
+    "append_conversation_transcript",
     "put_artifact",
     "upsert_workspace_pointer",
     "mission_upsert",

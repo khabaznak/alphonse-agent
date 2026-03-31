@@ -5,6 +5,7 @@ from pathlib import Path
 
 from alphonse.agent.cognition.memory import MemoryService
 from alphonse.agent.cognition.memory import TimeRange
+from alphonse.agent.cognition.memory import append_conversation_transcript
 
 
 def test_append_episode_writes_expected_markdown_shape(tmp_path: Path) -> None:
@@ -171,3 +172,83 @@ def test_retention_prunes_old_daily_and_weekly_files(tmp_path: Path) -> None:
     assert report["deleted_weekly"] >= 1
     assert not episodic_old.exists()
     assert not weekly_old.exists()
+
+
+def test_append_conversation_transcript_persists_full_text(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("ALPHONSE_MEMORY_ROOT", str(tmp_path / "memory"))
+    long_text = ("contact: +52 (33) 1234-5678\n" * 200).strip()
+    out = append_conversation_transcript(
+        user_id="alex",
+        session_id="alex|2026-03-30",
+        role="user",
+        text=long_text,
+        channel="telegram",
+        correlation_id="corr-full-text-1",
+    )
+    assert isinstance(out, dict)
+    path = Path(str((out or {}).get("path") or ""))
+    data = path.read_text(encoding="utf-8")
+    assert long_text in data
+
+
+def test_llm_period_summaries_daily_weekly_monthly(monkeypatch, tmp_path: Path) -> None:
+    class _FakeLLM:
+        def complete(self, system_prompt: str, user_prompt: str) -> str:
+            assert "Never invent data" in system_prompt
+            assert "Required sections" in user_prompt
+            return "## Overview\n- ok\n\n## Key Facts\n- fact"
+
+    monkeypatch.setattr("alphonse.agent.cognition.memory.service.build_llm_client", lambda: _FakeLLM())
+    service = MemoryService(root_dir=tmp_path / "memory")
+    service.append_episode(
+        user_id="alex",
+        mission_id="m1",
+        event_type="event",
+        payload={"result": "Acme contact +52 33 1111 1111"},
+    )
+    now = datetime.now().astimezone()
+    daily = service.generate_daily_summary(user_id="alex", reference=now)
+    weekly = service.generate_weekly_summary(user_id="alex", reference=now)
+    monthly = service.generate_monthly_summary(user_id="alex", reference=now)
+    assert daily is not None
+    assert weekly is not None
+    assert monthly is not None
+
+
+def test_period_summary_skips_when_llm_unavailable(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(
+        "alphonse.agent.cognition.memory.service.build_llm_client",
+        lambda: (_ for _ in ()).throw(RuntimeError("llm_down")),
+    )
+    service = MemoryService(root_dir=tmp_path / "memory")
+    service.append_episode(
+        user_id="alex",
+        mission_id="m1",
+        event_type="event",
+        payload={"result": "some content"},
+    )
+    result = service.generate_daily_summary(user_id="alex", reference=datetime.now().astimezone())
+    assert result is None
+
+
+def test_run_maintenance_writes_period_summaries_on_boundaries(monkeypatch, tmp_path: Path) -> None:
+    class _FakeLLM:
+        def complete(self, system_prompt: str, user_prompt: str) -> str:
+            return "## Overview\n- ok"
+
+    monkeypatch.setattr("alphonse.agent.cognition.memory.service.build_llm_client", lambda: _FakeLLM())
+    monkeypatch.setenv("ALPHONSE_MEMORY_DAILY_SUMMARY_ENABLED", "1")
+    monkeypatch.setenv("ALPHONSE_MEMORY_WEEKLY_SUMMARY_ENABLED", "1")
+    monkeypatch.setenv("ALPHONSE_MEMORY_MONTHLY_SUMMARY_ENABLED", "1")
+    service = MemoryService(root_dir=tmp_path / "memory")
+    day_file = tmp_path / "memory" / "alex" / "episodic" / "2026" / "05" / "2026-05-31.md"
+    day_file.parent.mkdir(parents=True, exist_ok=True)
+    day_file.write_text(
+        "### 2026-05-31 10:00:00 +0000 | mission: m1 | event: event\n- result: boundary data\n\n",
+        encoding="utf-8",
+    )
+    boundary = datetime.fromisoformat("2026-06-01T12:00:00+00:00")
+    report = service.run_maintenance(user_id="alex", now=boundary)
+    assert int(report.get("daily_summaries_written") or 0) >= 1
+    assert int(report.get("weekly_summaries_written") or 0) >= 1
+    assert int(report.get("monthly_summaries_written") or 0) >= 1

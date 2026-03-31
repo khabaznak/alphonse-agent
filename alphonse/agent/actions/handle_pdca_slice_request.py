@@ -11,6 +11,7 @@ from alphonse.agent.actions.base import Action
 from alphonse.agent.actions.models import ActionResult
 from alphonse.agent.actions.presence_projection import emit_channel_transition_event
 from alphonse.agent.actions.session_context import IncomingContext
+from alphonse.agent.cognition.memory import append_conversation_transcript
 from alphonse.agent.cognition.providers.factory import build_llm_client
 from alphonse.agent.cortex.graph import CortexGraph
 from alphonse.agent.cortex.state_store import load_state, save_state
@@ -593,6 +594,15 @@ def _update_day_session_memory(
             else None,
         )
         commit_session_state(updated)
+        if assistant_message:
+            append_conversation_transcript(
+                user_id=owner_id,
+                session_id=str(updated.get("session_id") or "").strip() or owner_id,
+                role="assistant",
+                text=assistant_message,
+                channel=channel,
+                correlation_id=str(merged_state.get("correlation_id") or "").strip() or None,
+            )
         merged_state["session_id"] = str(updated.get("session_id") or "").strip() or merged_state.get("session_id")
         merged_state["session_state"] = updated
         merged_state["recent_conversation_block"] = render_recent_conversation_block(updated)

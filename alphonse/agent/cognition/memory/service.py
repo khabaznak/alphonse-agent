@@ -18,6 +18,10 @@ from alphonse.agent.actions.conscious_message_handler import build_incoming_mess
 from alphonse.agent.cognition.memory.paths import resolve_memory_root
 from alphonse.agent.cognition.memory.paths import sanitize_segment
 from alphonse.agent.cognition.memory.paths import user_root
+from alphonse.agent.cognition.prompt_templates_runtime import MEMORY_SUMMARY_SYSTEM_PROMPT
+from alphonse.agent.cognition.prompt_templates_runtime import MEMORY_SUMMARY_USER_TEMPLATE
+from alphonse.agent.cognition.prompt_templates_runtime import render_prompt_template
+from alphonse.agent.cognition.providers.factory import build_llm_client
 from alphonse.agent.nervous_system import operational_facts as operational_facts_store
 from alphonse.agent.nervous_system import users as users_store
 from alphonse.agent.nervous_system.senses.bus import Signal as BusSignal
@@ -28,12 +32,14 @@ _DEFAULT_MAX_LINES = 20_000
 _DEFAULT_MAX_BYTES = 5 * 1024 * 1024
 _DEFAULT_DAILY_RETENTION_DAYS = 30
 _DEFAULT_WEEKLY_RETENTION_DAYS = 90
+_DEFAULT_DAILY_SUMMARY_RETENTION_DAYS = 30
+_DEFAULT_MONTHLY_SUMMARY_RETENTION_DAYS = 365
 _ISO_DATE_FMT = "%Y-%m-%d"
 _EPISODE_TS_FMT = "%Y-%m-%d %H:%M:%S %z"
 _LOG = get_log_manager()
 _RUNTIME_FAILURE_SIGNAL = "sense.runtime.message.user.received"
 _MEMORY_ESCALATION_DEDUPE: set[str] = set()
-_CLIENT_STORE_QUERY_RE = re.compile(r"\b(client|prospect|lead|crm)\b", re.IGNORECASE)
+
 
 
 @dataclass(frozen=True)
@@ -344,49 +350,184 @@ class MemoryService:
             key=key,
         )
 
+    def generate_daily_summary(
+        self,
+        user_id: str,
+        *,
+        reference: datetime | None = None,
+    ) -> dict[str, Any] | None:
+        if not _env_bool("ALPHONSE_MEMORY_DAILY_SUMMARY_ENABLED", True):
+            return None
+        now = (reference or datetime.now()).astimezone()
+        day = now.date()
+        summary_path = self._daily_summary_path(user_id=user_id, day=day)
+        if summary_path.exists():
+            return None
+        files = self._episodic_files_for_range(user_id=user_id, start=day, end=day)
+        return self._generate_period_summary(
+            user_id=user_id,
+            period_kind="daily",
+            start=day,
+            end=day,
+            files=files,
+            output_path=summary_path,
+        )
+
     def generate_weekly_summary(
         self,
         user_id: str,
         *,
         reference: datetime | None = None,
     ) -> dict[str, Any] | None:
+        if not _env_bool("ALPHONSE_MEMORY_WEEKLY_SUMMARY_ENABLED", True):
+            return None
         now = (reference or datetime.now()).astimezone()
         week_start = (now - timedelta(days=now.weekday())).date()
         week_end = week_start + timedelta(days=6)
-        files = self._episodic_files_for_range(
+        summary_path = self._weekly_summary_path(user_id=user_id, week_start=week_start)
+        if summary_path.exists():
+            return None
+        files = self._episodic_files_for_range(user_id=user_id, start=week_start, end=week_end)
+        return self._generate_period_summary(
             user_id=user_id,
+            period_kind="weekly",
             start=week_start,
             end=week_end,
+            files=files,
+            output_path=summary_path,
         )
+
+    def generate_monthly_summary(
+        self,
+        user_id: str,
+        *,
+        reference: datetime | None = None,
+    ) -> dict[str, Any] | None:
+        if not _env_bool("ALPHONSE_MEMORY_MONTHLY_SUMMARY_ENABLED", True):
+            return None
+        now = (reference or datetime.now()).astimezone()
+        month_start = now.date().replace(day=1)
+        next_month_start = (month_start + timedelta(days=32)).replace(day=1)
+        month_end = next_month_start - timedelta(days=1)
+        summary_path = self._monthly_summary_path(user_id=user_id, month_start=month_start)
+        if summary_path.exists():
+            return None
+        files = self._episodic_files_for_range(user_id=user_id, start=month_start, end=month_end)
+        return self._generate_period_summary(
+            user_id=user_id,
+            period_kind="monthly",
+            start=month_start,
+            end=month_end,
+            files=files,
+            output_path=summary_path,
+        )
+
+    def _generate_period_summary(
+        self,
+        *,
+        user_id: str,
+        period_kind: str,
+        start: datetime.date,
+        end: datetime.date,
+        files: list[Path],
+        output_path: Path,
+    ) -> dict[str, Any] | None:
         if not files:
             return None
-        mission_counts: dict[str, int] = {}
-        event_counts: dict[str, int] = {}
-        total_entries = 0
-        for file in files:
-            for line in _read_lines(file):
-                if not line.startswith("### "):
-                    continue
-                total_entries += 1
-                mission = _extract_between(line, "| mission:", "| event:")
-                event = _extract_after(line, "| event:")
-                if mission:
-                    mission_counts[mission] = mission_counts.get(mission, 0) + 1
-                if event:
-                    event_counts[event] = event_counts.get(event, 0) + 1
-        summary = self._weekly_summary_path(user_id=user_id, week_start=week_start)
-        summary.parent.mkdir(parents=True, exist_ok=True)
-        rendered = _render_weekly_summary_markdown(
+        stats = _collect_period_stats(files)
+        rendered = self._render_period_summary_with_llm(
             user_id=user_id,
-            week_start=week_start,
-            week_end=week_end,
-            total_entries=total_entries,
-            mission_counts=mission_counts,
-            event_counts=event_counts,
+            period_kind=period_kind,
+            start=start,
+            end=end,
             files=files,
+            total_entries=stats["entries"],
+            mission_counts=stats["mission_counts"],
+            event_counts=stats["event_counts"],
         )
-        summary.write_text(rendered, encoding="utf-8")
-        return {"path": str(summary), "entries": total_entries}
+        if not rendered:
+            _LOG.emit(
+                level="warning",
+                event="memory.summary.skipped.llm_unavailable",
+                component="cognition.memory.service",
+                user_id=user_id,
+                payload={
+                    "period_kind": period_kind,
+                    "start": start.isoformat(),
+                    "end": end.isoformat(),
+                    "source_files": len(files),
+                },
+            )
+            return None
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(rendered, encoding="utf-8")
+        return {"path": str(output_path), "entries": int(stats["entries"]), "period_kind": period_kind}
+
+    def _render_period_summary_with_llm(
+        self,
+        *,
+        user_id: str,
+        period_kind: str,
+        start: datetime.date,
+        end: datetime.date,
+        files: list[Path],
+        total_entries: int,
+        mission_counts: dict[str, int],
+        event_counts: dict[str, int],
+    ) -> str | None:
+        try:
+            llm_client = build_llm_client()
+        except Exception as exc:
+            _LOG.emit(
+                level="warning",
+                event="memory.summary.llm_client_unavailable",
+                component="cognition.memory.service",
+                user_id=user_id,
+                error_code=type(exc).__name__,
+                payload={"period_kind": period_kind},
+            )
+            return None
+        max_chars = max(10_000, _env_int("ALPHONSE_MEMORY_SUMMARY_SOURCE_MAX_CHARS", 120_000))
+        source_excerpt = _render_source_excerpt(files=files, max_chars=max_chars)
+        if not source_excerpt:
+            return None
+        system_prompt = MEMORY_SUMMARY_SYSTEM_PROMPT
+        user_prompt = render_prompt_template(
+            MEMORY_SUMMARY_USER_TEMPLATE,
+            {
+                "PERIOD_KIND": str(period_kind or "").strip(),
+                "USER_ID": str(user_id or "").strip(),
+                "START_DATE": start.isoformat(),
+                "END_DATE": end.isoformat(),
+                "TOTAL_ENTRIES": total_entries,
+                "MISSION_COUNTS_JSON": json.dumps(mission_counts, ensure_ascii=False, sort_keys=True),
+                "EVENT_COUNTS_JSON": json.dumps(event_counts, ensure_ascii=False, sort_keys=True),
+                "SOURCE_FILE_COUNT": len(files),
+                "SOURCE_EXCERPT": source_excerpt,
+            },
+        )
+        try:
+            response = llm_client.complete(system_prompt=system_prompt, user_prompt=user_prompt)
+        except Exception as exc:
+            _LOG.emit(
+                level="warning",
+                event="memory.summary.llm_inference_failed",
+                component="cognition.memory.service",
+                user_id=user_id,
+                error_code=type(exc).__name__,
+                payload={"period_kind": period_kind},
+            )
+            return None
+        text = str(response or "").strip()
+        if not text:
+            return None
+        header = (
+            f"# {period_kind.title()} Memory Summary: {start.isoformat()} to {end.isoformat()}\n\n"
+            f"- user_id: {user_id}\n"
+            f"- entries: {total_entries}\n"
+            f"- source_files: {len(files)}\n\n"
+        )
+        return header + text + "\n"
 
     def apply_retention(
         self,
@@ -398,8 +539,18 @@ class MemoryService:
         users = [user_id] if user_id else self._list_users()
         daily_days = _env_int("ALPHONSE_MEMORY_DAILY_RETENTION_DAYS", _DEFAULT_DAILY_RETENTION_DAYS)
         weekly_days = _env_int("ALPHONSE_MEMORY_WEEKLY_RETENTION_DAYS", _DEFAULT_WEEKLY_RETENTION_DAYS)
+        daily_summary_days = _env_int(
+            "ALPHONSE_MEMORY_DAILY_SUMMARY_RETENTION_DAYS",
+            _DEFAULT_DAILY_SUMMARY_RETENTION_DAYS,
+        )
+        monthly_summary_days = _env_int(
+            "ALPHONSE_MEMORY_MONTHLY_SUMMARY_RETENTION_DAYS",
+            _DEFAULT_MONTHLY_SUMMARY_RETENTION_DAYS,
+        )
         deleted_daily = 0
         deleted_weekly = 0
+        deleted_daily_summaries = 0
+        deleted_monthly_summaries = 0
         for uid in users:
             if daily_days > 0:
                 daily_cutoff = current.date() - timedelta(days=daily_days)
@@ -415,7 +566,26 @@ class MemoryService:
                     if week_start and week_start < weekly_cutoff:
                         file.unlink(missing_ok=True)
                         deleted_weekly += 1
-        return {"deleted_daily": deleted_daily, "deleted_weekly": deleted_weekly}
+            if daily_summary_days > 0:
+                daily_summary_cutoff = current.date() - timedelta(days=daily_summary_days)
+                for file in self._all_daily_summary_files(user_id=uid):
+                    summary_day = _day_from_daily_summary_filename(file.name)
+                    if summary_day and summary_day < daily_summary_cutoff:
+                        file.unlink(missing_ok=True)
+                        deleted_daily_summaries += 1
+            if monthly_summary_days > 0:
+                monthly_cutoff = current.date() - timedelta(days=monthly_summary_days)
+                for file in self._all_monthly_summary_files(user_id=uid):
+                    month_start = _month_start_from_summary_filename(file.name)
+                    if month_start and month_start < monthly_cutoff:
+                        file.unlink(missing_ok=True)
+                        deleted_monthly_summaries += 1
+        return {
+            "deleted_daily": deleted_daily,
+            "deleted_weekly": deleted_weekly,
+            "deleted_daily_summaries": deleted_daily_summaries,
+            "deleted_monthly_summaries": deleted_monthly_summaries,
+        }
 
     def run_maintenance(
         self,
@@ -427,15 +597,32 @@ class MemoryService:
         current = (now or datetime.now()).astimezone()
         users = [user_id] if user_id else self._list_users()
         summaries_written = 0
-        if generate_weekly and current.weekday() == 0:
-            for uid in users:
-                result = self.generate_weekly_summary(user_id=uid, reference=current - timedelta(days=1))
-                if result:
+        daily_written = 0
+        weekly_written = 0
+        monthly_written = 0
+        for uid in users:
+            daily_result = self.generate_daily_summary(user_id=uid, reference=current - timedelta(days=1))
+            if daily_result:
+                summaries_written += 1
+                daily_written += 1
+            if generate_weekly and current.weekday() == 0:
+                weekly_result = self.generate_weekly_summary(user_id=uid, reference=current - timedelta(days=1))
+                if weekly_result:
                     summaries_written += 1
+                    weekly_written += 1
+            if current.day == 1:
+                monthly_anchor = (current.replace(day=1) - timedelta(days=1))
+                monthly_result = self.generate_monthly_summary(user_id=uid, reference=monthly_anchor)
+                if monthly_result:
+                    summaries_written += 1
+                    monthly_written += 1
         retention = self.apply_retention(user_id=user_id, now=current)
         return {
             "users_scanned": len(users),
             "summaries_written": summaries_written,
+            "daily_summaries_written": daily_written,
+            "weekly_summaries_written": weekly_written,
+            "monthly_summaries_written": monthly_written,
             **retention,
         }
 
@@ -478,12 +665,34 @@ class MemoryService:
         path.mkdir(parents=True, exist_ok=True)
         return path / f"week_{week_start.isoformat()}_W{iso_week:02d}.md"
 
+    def _daily_summary_path(self, *, user_id: str, day: datetime.date) -> Path:
+        path = user_root(user_id=user_id, root=self._root) / "summaries" / "daily" / f"{day.year:04d}"
+        path.mkdir(parents=True, exist_ok=True)
+        return path / f"day_{day.isoformat()}.md"
+
+    def _monthly_summary_path(self, *, user_id: str, month_start: datetime.date) -> Path:
+        path = user_root(user_id=user_id, root=self._root) / "summaries" / "monthly" / f"{month_start.year:04d}"
+        path.mkdir(parents=True, exist_ok=True)
+        return path / f"month_{month_start.year:04d}-{month_start.month:02d}.md"
+
     def _all_episodic_files(self, *, user_id: str) -> list[Path]:
         root = self._user_episodic_root(user_id=user_id)
         return sorted(root.glob("*/*/*.md"))
 
     def _all_weekly_summary_files(self, *, user_id: str) -> list[Path]:
         root = user_root(user_id=user_id, root=self._root) / "summaries" / "weekly"
+        if not root.exists():
+            return []
+        return sorted(root.glob("*/*.md"))
+
+    def _all_daily_summary_files(self, *, user_id: str) -> list[Path]:
+        root = user_root(user_id=user_id, root=self._root) / "summaries" / "daily"
+        if not root.exists():
+            return []
+        return sorted(root.glob("*/*.md"))
+
+    def _all_monthly_summary_files(self, *, user_id: str) -> list[Path]:
+        root = user_root(user_id=user_id, root=self._root) / "summaries" / "monthly"
         if not root.exists():
             return []
         return sorted(root.glob("*/*.md"))
@@ -586,6 +795,36 @@ def append_episode(
     artifacts: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     return MemoryService().append_episode(user_id, mission_id, event_type, payload, artifacts=artifacts)
+
+
+def append_conversation_transcript(
+    *,
+    user_id: str,
+    session_id: str,
+    role: str,
+    text: str,
+    channel: str | None = None,
+    correlation_id: str | None = None,
+) -> dict[str, Any] | None:
+    content = str(text or "")
+    if not content:
+        return None
+    mission_id = f"session:{sanitize_segment(str(session_id or user_id).strip() or user_id)}"
+    payload: dict[str, Any] = {
+        "role": str(role or "unknown").strip() or "unknown",
+        "text": content,
+    }
+    if str(channel or "").strip():
+        payload["channel"] = str(channel or "").strip()
+    if str(correlation_id or "").strip():
+        payload["correlation_id"] = str(correlation_id or "").strip()
+    return append_episode(
+        user_id=user_id,
+        mission_id=mission_id,
+        event_type="conversation_message",
+        payload=payload,
+        artifacts=[],
+    )
 
 
 def put_artifact(
@@ -819,47 +1058,49 @@ def record_after_tool_call(
         "memory.remove_operational_fact",
     }:
         return
-    user_id = resolve_memory_owner_id(state=state)
-    mission_id = _memory_mission_id(task_state=task_state, correlation_id=correlation_id)
-    artifacts = _memory_artifacts_from_result(
-        mission_id=mission_id,
-        tool_name=tool_name,
-        result=result,
-    )
-    exception_payload = (result or {}).get("exception")
-    exception_text = ""
-    if isinstance(exception_payload, dict):
-        exception_text = str(exception_payload.get("message") or exception_payload.get("code") or "").strip()
-    elif isinstance(exception_payload, str):
-        exception_text = exception_payload.strip()
-    output_payload = (result or {}).get("output")
-    output_summary = _compact_result_summary(output_payload)
-    payload = {
-        "intent": str(task_state.get("goal") or "").strip() or "task execution",
-        "action": f"{tool_name}({_safe_args_preview(args)})",
-        "result": "exception=" + (exception_text or "none") if exception_text else "status=ok",
-        "step_id": str((current or {}).get("step_id") or "").strip() or None,
-        "next": _memory_next_hint(task_state=task_state, current=current),
-    }
-    if output_summary:
-        payload["output_summary"] = output_summary
-    _maybe_upsert_client_fact(
-        owner_id=user_id,
-        mission_id=mission_id,
-        task_state=task_state,
-        tool_name=tool_name,
-        exception_text=exception_text,
-        output_summary=output_summary,
-        output_payload=output_payload,
-    )
-    _memory_append_episode(
-        state=state,
-        user_id=user_id,
-        mission_id=mission_id,
-        event_type="after_tool_call",
-        payload=payload,
-        artifacts=artifacts,
-    )
+    try:
+        user_id = resolve_memory_owner_id(state=state)
+        mission_id = _memory_mission_id(task_state=task_state, correlation_id=correlation_id)
+        artifacts = _memory_artifacts_from_result(
+            mission_id=mission_id,
+            tool_name=tool_name,
+            result=result,
+        )
+        exception_payload = (result or {}).get("exception")
+        exception_text = ""
+        if isinstance(exception_payload, dict):
+            exception_text = str(exception_payload.get("message") or exception_payload.get("code") or "").strip()
+        elif isinstance(exception_payload, str):
+            exception_text = exception_payload.strip()
+        output_payload = (result or {}).get("output")
+        output_summary = _compact_result_summary(output_payload)
+        payload = {
+            "intent": str(task_state.get("goal") or "").strip() or "task execution",
+            "action": f"{tool_name}({_safe_args_preview(args)})",
+            "result": "exception=" + (exception_text or "none") if exception_text else "status=ok",
+            "step_id": str((current or {}).get("step_id") or "").strip() or None,
+            "next": _memory_next_hint(task_state=task_state, current=current),
+        }
+        if output_summary:
+            payload["output_summary"] = output_summary
+        _memory_append_episode(
+            state=state,
+            user_id=user_id,
+            mission_id=mission_id,
+            event_type="after_tool_call",
+            payload=payload,
+            artifacts=artifacts,
+        )
+    except Exception as exc:
+        _LOG.emit(
+            level="error",
+            event="memory.hook.record_after_tool_call_failed",
+            component="cognition.memory.service",
+            correlation_id=str(correlation_id or "").strip() or None,
+            user_id=resolve_memory_owner_id(state=state),
+            error_code=type(exc).__name__,
+            payload={"tool_name": str(tool_name or "").strip() or None},
+        )
 
 
 def record_plan_step_completion(
@@ -1263,82 +1504,6 @@ def _nested_get(payload: dict[str, Any], *path: str) -> Any:
     return current
 
 
-def _maybe_upsert_client_fact(
-    *,
-    owner_id: str,
-    mission_id: str,
-    task_state: dict[str, Any],
-    tool_name: str,
-    exception_text: str,
-    output_summary: str,
-    output_payload: Any,
-) -> None:
-    if exception_text:
-        return
-    if str(tool_name or "").strip().startswith("memory."):
-        return
-    goal_text = str(task_state.get("goal") or "").strip()
-    if not _CLIENT_STORE_QUERY_RE.search(goal_text) and not _CLIENT_STORE_QUERY_RE.search(output_summary):
-        return
-    label = _client_label_from_output(output_payload=output_payload, fallback_text=output_summary)
-    if not label:
-        return
-    key = f"crm.client.{sanitize_segment(label.lower())}"
-    summary = output_summary[:240] if output_summary else f"Client info derived from {tool_name}"
-    content = {
-        "client_label": label,
-        "mission_id": mission_id,
-        "source_tool": tool_name,
-        "goal": goal_text,
-        "output_summary": output_summary,
-    }
-    try:
-        MemoryService().upsert_operational_fact(
-            created_by=owner_id,
-            key=key,
-            title=f"Client: {label}",
-            fact_type="integration_note",
-            summary=summary,
-            content_json=content,
-            tags=["crm", "client"],
-            source=tool_name,
-            stability="volatile",
-            importance="medium",
-            status="active",
-            scope="private",
-        )
-    except Exception:
-        return
-
-
-def _client_label_from_output(*, output_payload: Any, fallback_text: str) -> str:
-    if isinstance(output_payload, dict):
-        candidates = (
-            output_payload.get("client_name"),
-            output_payload.get("client"),
-            output_payload.get("company"),
-            output_payload.get("organization"),
-            output_payload.get("lead_name"),
-            output_payload.get("prospect_name"),
-        )
-        for candidate in candidates:
-            text = str(candidate or "").strip()
-            if text:
-                return text[:120]
-    if not fallback_text:
-        return ""
-    for pattern in (
-        r'"client_name"\s*:\s*"([^"]+)"',
-        r'"client"\s*:\s*"([^"]+)"',
-        r'"company"\s*:\s*"([^"]+)"',
-        r'"organization"\s*:\s*"([^"]+)"',
-    ):
-        match = re.search(pattern, fallback_text, flags=re.IGNORECASE)
-        if match:
-            return str(match.group(1)).strip()[:120]
-    return ""
-
-
 def _render_field(*, key: str, value: Any, indent: int) -> list[str]:
     pad = "  " * indent
     if isinstance(value, dict):
@@ -1512,43 +1677,45 @@ def _extract_after(text: str, marker: str) -> str:
     return text[start + len(marker) :].strip()
 
 
-def _render_weekly_summary_markdown(
-    *,
-    user_id: str,
-    week_start: datetime.date,
-    week_end: datetime.date,
-    total_entries: int,
-    mission_counts: dict[str, int],
-    event_counts: dict[str, int],
-    files: list[Path],
-) -> str:
-    lines = [
-        f"# Weekly Memory Summary: {week_start.isoformat()} to {week_end.isoformat()}",
-        "",
-        f"- user_id: {user_id}",
-        f"- entries: {total_entries}",
-        f"- source_files: {len(files)}",
-        "",
-        "## Mission Counts",
-    ]
-    if mission_counts:
-        for mission, count in sorted(mission_counts.items(), key=lambda item: (-item[1], item[0])):
-            lines.append(f"- {mission}: {count}")
-    else:
-        lines.append("- (none)")
-    lines.extend(["", "## Event Counts"])
-    if event_counts:
-        for event, count in sorted(event_counts.items(), key=lambda item: (-item[1], item[0])):
-            lines.append(f"- {event}: {count}")
-    else:
-        lines.append("- (none)")
-    lines.extend(["", "## Source Files"])
+def _collect_period_stats(files: list[Path]) -> dict[str, Any]:
+    mission_counts: dict[str, int] = {}
+    event_counts: dict[str, int] = {}
+    entries = 0
     for file in files:
-        lines.append(f"- {file}")
-    if not files:
-        lines.append("- (none)")
-    lines.append("")
-    return "\n".join(lines)
+        for line in _read_lines(file):
+            if not line.startswith("### "):
+                continue
+            entries += 1
+            mission = _extract_between(line, "| mission:", "| event:")
+            event = _extract_after(line, "| event:")
+            if mission:
+                mission_counts[mission] = mission_counts.get(mission, 0) + 1
+            if event:
+                event_counts[event] = event_counts.get(event, 0) + 1
+    return {
+        "entries": entries,
+        "mission_counts": mission_counts,
+        "event_counts": event_counts,
+    }
+
+
+def _render_source_excerpt(*, files: list[Path], max_chars: int) -> str:
+    remaining = max(1, int(max_chars))
+    chunks: list[str] = []
+    for file in files:
+        if remaining <= 0:
+            break
+        try:
+            content = file.read_text(encoding="utf-8")
+        except Exception:
+            continue
+        if not content:
+            continue
+        if len(content) > remaining:
+            content = content[:remaining]
+        chunks.append(f"\n--- {file} ---\n{content}")
+        remaining -= len(content)
+    return "".join(chunks).strip()
 
 
 def _week_start_from_summary_filename(filename: str) -> datetime.date | None:
@@ -1565,6 +1732,29 @@ def _week_start_from_summary_filename(filename: str) -> datetime.date | None:
         return None
 
 
+def _day_from_daily_summary_filename(filename: str) -> datetime.date | None:
+    text = str(filename or "").strip()
+    if not text.startswith("day_"):
+        return None
+    date_text = text[4:14]
+    try:
+        return datetime.strptime(date_text, _ISO_DATE_FMT).date()
+    except ValueError:
+        return None
+
+
+def _month_start_from_summary_filename(filename: str) -> datetime.date | None:
+    text = str(filename or "").strip()
+    if not text.startswith("month_"):
+        return None
+    chunk = text[6:13]
+    try:
+        parsed = datetime.strptime(chunk, "%Y-%m")
+    except ValueError:
+        return None
+    return parsed.date().replace(day=1)
+
+
 def _env_int(name: str, default: int) -> int:
     raw = str(os.getenv(name) or "").strip()
     if not raw:
@@ -1573,3 +1763,14 @@ def _env_int(name: str, default: int) -> int:
         return int(raw)
     except ValueError:
         return default
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    raw = str(os.getenv(name) or "").strip().lower()
+    if not raw:
+        return bool(default)
+    if raw in {"1", "true", "yes", "on"}:
+        return True
+    if raw in {"0", "false", "no", "off"}:
+        return False
+    return bool(default)

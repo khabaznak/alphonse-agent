@@ -1,20 +1,12 @@
 from __future__ import annotations
 
 from datetime import datetime
-import re
 from typing import Any
 
 from alphonse.agent.cognition.memory import MemoryService
 from alphonse.agent.cognition.memory import TimeRange
 from alphonse.agent.cognition.memory import resolve_memory_owner_aliases
 from alphonse.agent.cognition.memory import resolve_memory_owner_id
-
-
-_CLIENT_STORE_QUERY_RE = re.compile(r"\b(client|prospect|lead|crm)\b", re.IGNORECASE)
-_CLIENT_STORE_VERIFY_RE = re.compile(
-    r"\b(stored|save|saved|remember|remembered|recorded|write|wrote|crm)\b",
-    re.IGNORECASE,
-)
 
 
 def _state_user_id(state: dict[str, Any] | None, explicit: str | None = None) -> str:
@@ -60,23 +52,6 @@ class SearchEpisodesTool:
             time_range = TimeRange(start=_parse_dt(start_time), end=_parse_dt(end_time))
         query_text = str(query or "")
         normalized_limit = max(1, int(limit or 100))
-        crm_facts: list[dict[str, Any]] = []
-        crm_status: str | None = None
-        if _is_client_storage_query(query_text):
-            crm_facts = service.search_operational_facts(
-                created_by=uid,
-                query=query_text,
-                tags=["crm", "client"],
-                limit=min(25, normalized_limit),
-            )
-            if not crm_facts:
-                crm_facts = service.search_operational_facts(
-                    created_by=uid,
-                    query=None,
-                    tags=["crm", "client"],
-                    limit=min(25, normalized_limit),
-                )
-            crm_status = "found" if crm_facts else "not_stored_yet"
         rows: list[dict[str, Any]] = []
         seen: set[tuple[str, int]] = set()
         for alias in aliases:
@@ -105,10 +80,6 @@ class SearchEpisodesTool:
             "hits": rows,
             "count": len(rows),
         }
-        if _is_client_storage_query(query_text):
-            output_payload["crm_facts"] = crm_facts
-            output_payload["crm_count"] = len(crm_facts)
-            output_payload["crm_status"] = crm_status
         return {
             "output": output_payload,
             "exception": None,
@@ -341,10 +312,3 @@ class RemoveOperationalFactTool:
             "exception": None,
             "metadata": {"tool": "memory.remove_operational_fact"},
         }
-
-
-def _is_client_storage_query(query: str) -> bool:
-    text = str(query or "").strip()
-    if not text:
-        return False
-    return bool(_CLIENT_STORE_QUERY_RE.search(text) and _CLIENT_STORE_VERIFY_RE.search(text))

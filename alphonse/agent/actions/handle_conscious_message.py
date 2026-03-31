@@ -11,6 +11,7 @@ from alphonse.agent.actions.conscious_message_handler import IncomingMessageEnve
 from alphonse.agent.actions.models import ActionResult
 from alphonse.agent.actions.presence_projection import emit_presence_phase_changed
 from alphonse.agent.actions.session_context import build_session_key
+from alphonse.agent.cognition.memory import append_conversation_transcript
 from alphonse.agent.observability.log_manager import get_component_logger
 from alphonse.agent.observability.log_manager import get_log_manager
 from alphonse.agent.services.pdca_ingress import enqueue_pdca_slice
@@ -185,6 +186,14 @@ def _write_through_user_message(
     if not text or not isinstance(day_session, dict):
         return
     try:
+        append_conversation_transcript(
+            user_id=str(day_session.get("user_id") or "").strip() or "anonymous",
+            session_id=str(day_session.get("session_id") or "").strip() or "unknown",
+            role="user",
+            text=text,
+            channel=str(channel or "").strip() or "api",
+            correlation_id=correlation_id,
+        )
         updated = build_next_session_state(
             previous=day_session,
             channel=str(channel or "").strip() or "api",

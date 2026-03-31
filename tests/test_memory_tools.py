@@ -197,39 +197,23 @@ def test_record_hook_and_tools_share_canonical_owner(monkeypatch, tmp_path: Path
     assert search_res["output"]["count"] >= 1
 
 
-def test_search_episodes_client_query_prefers_operational_facts(monkeypatch, tmp_path: Path) -> None:
+def test_search_episodes_output_is_domain_agnostic(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("ALPHONSE_MEMORY_ROOT", str(tmp_path / "memory"))
-    db_path = tmp_path / "nerve-db"
-    monkeypatch.setenv("NERVE_DB_PATH", str(db_path))
-    apply_schema(db_path)
-
-    registry = build_default_tool_registry()
-    upsert = registry.get("memory.upsert_operational_fact")
-    assert upsert is not None
-    created = upsert.invoke(
-        {
-            "state": {"incoming_user_id": "user_a"},
-            "key": "crm.client.acme_corp",
-            "title": "Client: Acme Corp",
-            "fact_type": "integration_note",
-            "summary": "Potential client discovered.",
-            "tags": ["crm", "client"],
-            "scope": "private",
-        }
+    service = MemoryService()
+    service.append_episode(
+        user_id="user_a",
+        mission_id="m_a",
+        event_type="web_research",
+        payload={"result": "Potential client discovered."},
     )
-    assert created["exception"] is None
-
     search_tool = SearchEpisodesTool()
     found = search_tool.execute(
-        query="Did we store client info for Acme Corp in CRM?",
+        query="Potential client discovered",
         state={"incoming_user_id": "user_a"},
     )
-    assert found["output"]["crm_status"] == "found"
-    assert int(found["output"]["crm_count"]) >= 1
-
-    missing = search_tool.execute(
-        query="Did we store client info for Unknown Co in CRM?",
-        state={"incoming_user_id": "user_b"},
-    )
-    assert missing["output"]["crm_status"] == "not_stored_yet"
-    assert int(missing["output"]["crm_count"]) == 0
+    output = found["output"]
+    assert found["exception"] is None
+    assert int(output["count"]) >= 1
+    assert "crm_status" not in output
+    assert "crm_count" not in output
+    assert "crm_facts" not in output

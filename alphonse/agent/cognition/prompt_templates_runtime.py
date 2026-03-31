@@ -100,6 +100,8 @@ JOBS_YOU_JUST_REMEMBERED_SYSTEM_PROMPT = _seed_text("jobs.you_just_remembered.sy
 RENDERER_UTTERANCE_SYSTEM_PROMPT = _seed_text("renderer.utterance.system.j2")
 CAPABILITY_GAP_REFLECTION_SYSTEM_PROMPT = _seed_text("capability_gap.reflection.system.j2")
 CAPABILITY_GAP_REFLECTION_USER_TEMPLATE = _seed_text("capability_gap.reflection.user.j2")
+MEMORY_SUMMARY_SYSTEM_PROMPT = _seed_text("memory.summary.system.j2")
+MEMORY_SUMMARY_USER_TEMPLATE = _seed_text("memory.summary.user.j2")
 
 
 def render_prompt_template(template: str, variables: Mapping[str, Any]) -> str:

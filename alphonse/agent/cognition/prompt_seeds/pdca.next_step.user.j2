@@ -31,8 +31,6 @@ Rules:
 - `tool_call.tool_name` and `tool_call.args` are required.
 - For `communication.send_message` and `communication.send_voice_note`, `tool_call.args.To` must be a concrete target value.
 - Do not use placeholder recipient strings like `current_channel_target`, `channel_target`, `target`, or `recipient`.
-- For "did we store/remember client info?" style questions, check `memory.search_operational_facts` first (CRM source of truth), then use `memory.search_episodes` only as fallback context.
-- If CRM search returns no facts, prefer an explicit "not stored yet" path over hallucinating stored client data.
 - `planner_intent` is optional, plain language, max 160 chars when present.
 - `planner_intent` is internal progress metadata; do not emit `communication.send_message` only to expose it.
 - Do not return acceptance criteria in this output.

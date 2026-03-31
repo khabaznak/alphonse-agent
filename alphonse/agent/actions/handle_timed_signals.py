@@ -284,10 +284,7 @@ def _reschedule_weekly_memory_maintenance(*, signal_id: str) -> None:
 
 def _next_weekly_trigger_at(now: datetime) -> datetime:
     base = now.astimezone(timezone.utc).replace(minute=5, second=0, microsecond=0, hour=0)
-    days_until_monday = (7 - base.weekday()) % 7
-    if days_until_monday == 0:
-        days_until_monday = 7
-    return base + timedelta(days=days_until_monday)
+    return base + timedelta(days=1)
 
 
 def _execute_job_trigger(*, context: dict[str, Any], payload: dict[str, Any], inner: dict[str, Any], signal: object | None) -> ActionResult:
