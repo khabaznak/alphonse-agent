@@ -164,8 +164,12 @@ def test_recent_conversation_block_renders_last_twenty_turns() -> None:
         "date": "2026-02-15",
         "rev": 1,
         "channels_seen": ["telegram"],
-        "recent_conversation": [
-            {"user": f"user-{idx}", "assistant": f"assistant-{idx}"}
+        "conversation_events": [
+            {"role": "user", "text": f"user-{idx}", "timestamp": f"2026-02-15T00:{idx:02d}:00Z"}
+            for idx in range(12)
+        ]
+        + [
+            {"role": "assistant", "text": f"assistant-{idx}", "timestamp": f"2026-02-15T01:{idx:02d}:00Z"}
             for idx in range(12)
         ],
         "working_set": [],
@@ -174,7 +178,104 @@ def test_recent_conversation_block_renders_last_twenty_turns() -> None:
     }
     block = render_recent_conversation_block(state)
     assert "## RECENT CONVERSATION (last 20 turns)" in block
-    assert "user-0" in block
+    assert "user-0" not in block
     assert "assistant-0" in block
+    assert "user-4" in block
     assert "user-11" in block
     assert "assistant-11" in block
+
+
+def test_day_state_migrates_legacy_recent_conversation_to_conversation_events() -> None:
+    state = {
+        "session_id": "u-legacy|2026-02-15",
+        "user_id": "u-legacy",
+        "date": "2026-02-15",
+        "rev": 0,
+        "channels_seen": ["telegram"],
+        "recent_conversation": [
+            {"user": "hello", "assistant": ""},
+            {"user": "second", "assistant": "reply"},
+        ],
+        "working_set": [],
+        "open_loops": [],
+        "last_action": None,
+    }
+    markdown = render_session_markdown(state)
+    assert "hello" in markdown
+    assert "second" in markdown
+    assert "reply" in markdown
+
+
+def test_day_state_persists_full_transcript_text_without_capping(tmp_path: Path) -> None:
+    now = datetime.fromisoformat("2026-02-15T11:00:00-06:00")
+    long_user = "U" * 400
+    long_assistant = "A" * 450
+    state = resolve_day_session(
+        user_id="person-full",
+        channel="telegram",
+        timezone_name="America/Mexico_City",
+        now=now,
+        root_dir=tmp_path,
+    )
+    updated = build_next_session_state(
+        previous=state,
+        channel="telegram",
+        user_message=long_user,
+        assistant_message=long_assistant,
+        ability_state=None,
+        task_state=None,
+        planning_context=None,
+        pending_interaction=None,
+    )
+    commit_session_state(updated, root_dir=tmp_path)
+    reloaded = resolve_day_session(
+        user_id="person-full",
+        channel="telegram",
+        timezone_name="America/Mexico_City",
+        now=now,
+        root_dir=tmp_path,
+    )
+    events = reloaded.get("conversation_events")
+    assert isinstance(events, list)
+    assert len(events) == 2
+    assert str(events[0].get("text") or "") == long_user
+    assert str(events[1].get("text") or "") == long_assistant
+
+
+def test_day_state_does_not_duplicate_user_when_assistant_is_appended_later() -> None:
+    state = {
+        "session_id": "u-dedupe|2026-02-15",
+        "user_id": "u-dedupe",
+        "date": "2026-02-15",
+        "rev": 0,
+        "channels_seen": ["telegram"],
+        "conversation_events": [],
+        "working_set": [],
+        "open_loops": [],
+        "last_action": None,
+    }
+    first = build_next_session_state(
+        previous=state,
+        channel="telegram",
+        user_message="hello",
+        assistant_message="",
+        ability_state=None,
+        task_state=None,
+        planning_context=None,
+        pending_interaction=None,
+    )
+    second = build_next_session_state(
+        previous=first,
+        channel="telegram",
+        user_message="",
+        assistant_message="done",
+        ability_state=None,
+        task_state=None,
+        planning_context=None,
+        pending_interaction=None,
+    )
+    events = second.get("conversation_events")
+    assert isinstance(events, list)
+    assert len(events) == 2
+    assert events[0].get("role") == "user"
+    assert events[1].get("role") == "assistant"

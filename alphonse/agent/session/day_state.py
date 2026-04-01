@@ -12,6 +12,7 @@ _MAX_OPEN_LOOPS = 6
 _MAX_CHANNELS = 6
 _MAX_RECENT_TURNS = 20
 _MAX_LINE_LENGTH = 256
+_MAX_CONVERSATION_EVENTS = 5_000
 _NAMED_SECRET_PATTERN = re.compile(r"(?i)\b(api[_-]?key|token|password|secret)\b\s*[:=]\s*\S+")
 _TOKEN_SECRET_PATTERN = re.compile(r"\bsk-[A-Za-z0-9]{10,}\b")
 _PATH_PATTERNS = (
@@ -55,7 +56,7 @@ def default_session_state(*, user_id: str, local_date: str) -> dict[str, Any]:
         "date": local_date,
         "rev": 0,
         "channels_seen": [],
-        "recent_conversation": [],
+        "conversation_events": [],
         "working_set": [],
         "open_loops": [],
         "last_action": None,
@@ -113,6 +114,8 @@ def build_next_session_state(
     planning_context: dict[str, Any] | None,
     pending_interaction: dict[str, Any] | None,
     assistant_visibility: str = "public",
+    user_event_meta: dict[str, Any] | None = None,
+    assistant_event_meta: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     state = _normalize_state(previous)
     last_action = _infer_last_action(
@@ -120,10 +123,12 @@ def build_next_session_state(
         task_state=task_state,
         planning_context=planning_context,
     )
-    user_line = _sanitize_line(user_message, max_len=100)
+    user_text = str(user_message or "")
+    user_line = _sanitize_line(user_text, max_len=100)
     visibility = str(assistant_visibility or "public").strip().lower() or "public"
+    assistant_text = str(assistant_message or "")
     assistant_line = (
-        _sanitize_line(assistant_message, max_len=100)
+        _sanitize_line(assistant_text, max_len=100)
         if visibility != "internal"
         else ""
     )
@@ -153,10 +158,13 @@ def build_next_session_state(
             open_loops.append("Waiting for user input.")
 
     state["channels_seen"] = _merge_channels(state.get("channels_seen"), channel)
-    state["recent_conversation"] = _append_recent_turn(
-        existing=state.get("recent_conversation"),
-        user_text=user_line,
-        assistant_text=assistant_line,
+    state["conversation_events"] = _append_conversation_events(
+        existing=state.get("conversation_events"),
+        channel=channel,
+        user_text=user_text,
+        assistant_text=assistant_text if visibility != "internal" else "",
+        user_event_meta=user_event_meta,
+        assistant_event_meta=assistant_event_meta,
     )
     state["working_set"] = working_set[:_MAX_WORKING_SET]
     state["open_loops"] = open_loops[:_MAX_OPEN_LOOPS]
@@ -167,20 +175,22 @@ def build_next_session_state(
 
 def render_recent_conversation_block(state: dict[str, Any], *, max_turns: int = _MAX_RECENT_TURNS) -> str:
     normalized = _normalize_state(state)
-    turns = normalized.get("recent_conversation") if isinstance(normalized.get("recent_conversation"), list) else []
+    events = normalized.get("conversation_events") if isinstance(normalized.get("conversation_events"), list) else []
     lines = [f"## RECENT CONVERSATION (last {max_turns} turns)"]
-    if not turns:
+    if not events:
         lines.append("- (none)")
         return "\n".join(lines)
-    for turn in turns[-max_turns:]:
-        if not isinstance(turn, dict):
+    for event in events[-max_turns:]:
+        if not isinstance(event, dict):
             continue
-        user_text = _sanitize_line(str(turn.get("user") or ""), max_len=120)
-        assistant_text = _sanitize_line(str(turn.get("assistant") or ""), max_len=120)
-        if user_text:
-            lines.append(f"- User: {user_text}")
-        if assistant_text:
-            lines.append(f"- Assistant: {assistant_text}")
+        role = str(event.get("role") or "").strip().lower()
+        text = _sanitize_line(str(event.get("text") or ""), max_len=120)
+        if not text:
+            continue
+        if role == "assistant":
+            lines.append(f"- Assistant: {text}")
+        else:
+            lines.append(f"- User: {text}")
     if len(lines) == 1:
         lines.append("- (none)")
     return "\n".join(lines)
@@ -231,15 +241,17 @@ def render_session_markdown(state: dict[str, Any]) -> str:
         "",
         "## Recent Conversation",
     ]
-    recent_turns = normalized.get("recent_conversation") if isinstance(normalized.get("recent_conversation"), list) else []
-    if recent_turns:
-        for turn in recent_turns:
-            if not isinstance(turn, dict):
+    conversation_events = normalized.get("conversation_events") if isinstance(normalized.get("conversation_events"), list) else []
+    if conversation_events:
+        for event in conversation_events:
+            if not isinstance(event, dict):
                 continue
-            if str(turn.get("user") or "").strip():
-                lines.append(f"- User: {turn.get('user')}")
-            if str(turn.get("assistant") or "").strip():
-                lines.append(f"- Assistant: {turn.get('assistant')}")
+            role = str(event.get("role") or "").strip().lower()
+            text = str(event.get("text") or "")
+            if not text.strip():
+                continue
+            label = "Assistant" if role == "assistant" else "User"
+            lines.append(f"- {label}: {text}")
     else:
         lines.append("- (none)")
     lines.extend([
@@ -415,7 +427,10 @@ def _normalize_state(state: dict[str, Any]) -> dict[str, Any]:
         "date": local_date,
         "rev": max(int(state.get("rev") or 0), 0),
         "channels_seen": _merge_channels(state.get("channels_seen"), None),
-        "recent_conversation": _normalize_recent_conversation(state.get("recent_conversation")),
+        "conversation_events": _normalize_conversation_events(
+            state.get("conversation_events"),
+            legacy_recent=state.get("recent_conversation"),
+        ),
         "working_set": _normalize_list(state.get("working_set"), limit=_MAX_WORKING_SET),
         "open_loops": _normalize_list(state.get("open_loops"), limit=_MAX_OPEN_LOOPS),
         "last_action": action_payload,
@@ -467,12 +482,108 @@ def _normalize_recent_conversation(value: Any) -> list[dict[str, str]]:
     return normalized
 
 
-def _append_recent_turn(*, existing: Any, user_text: str, assistant_text: str) -> list[dict[str, str]]:
-    turns = _normalize_recent_conversation(existing)
-    if not user_text and not assistant_text:
-        return turns
-    turns.append({"user": _sanitize_line(user_text, max_len=120), "assistant": _sanitize_line(assistant_text, max_len=120)})
-    return turns[-_MAX_RECENT_TURNS:]
+def _normalize_conversation_events(
+    value: Any,
+    *,
+    legacy_recent: Any = None,
+) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    if isinstance(value, list):
+        source = value
+    else:
+        source = _events_from_legacy_recent(legacy_recent)
+    for item in source:
+        if not isinstance(item, dict):
+            continue
+        role = str(item.get("role") or "").strip().lower()
+        if role not in {"user", "assistant"}:
+            continue
+        text = str(item.get("text") or "")
+        if not text.strip():
+            continue
+        out.append(
+            {
+                "role": role,
+                "text": text,
+                "timestamp": str(item.get("timestamp") or "").strip() or None,
+                "correlation_id": str(item.get("correlation_id") or "").strip() or None,
+                "message_id": str(item.get("message_id") or "").strip() or None,
+                "channel": str(item.get("channel") or "").strip() or None,
+                "attachments": [dict(att) for att in item.get("attachments") if isinstance(att, dict)]
+                if isinstance(item.get("attachments"), list)
+                else [],
+            }
+        )
+        if len(out) >= _MAX_CONVERSATION_EVENTS:
+            out = out[-_MAX_CONVERSATION_EVENTS:]
+    return out
+
+
+def _events_from_legacy_recent(value: Any) -> list[dict[str, Any]]:
+    events: list[dict[str, Any]] = []
+    for item in _normalize_recent_conversation(value):
+        user_text = str(item.get("user") or "")
+        assistant_text = str(item.get("assistant") or "")
+        if user_text:
+            events.append({"role": "user", "text": user_text})
+        if assistant_text:
+            events.append({"role": "assistant", "text": assistant_text})
+    return events
+
+
+def _append_conversation_events(
+    *,
+    existing: Any,
+    channel: str,
+    user_text: str,
+    assistant_text: str,
+    user_event_meta: dict[str, Any] | None,
+    assistant_event_meta: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    events = _normalize_conversation_events(existing)
+    now = datetime.now(timezone.utc).isoformat()
+    if str(user_text or "").strip():
+        events.append(
+            _conversation_event(
+                role="user",
+                text=str(user_text),
+                channel=channel,
+                timestamp=now,
+                meta=user_event_meta,
+            )
+        )
+    if str(assistant_text or "").strip():
+        events.append(
+            _conversation_event(
+                role="assistant",
+                text=str(assistant_text),
+                channel=channel,
+                timestamp=now,
+                meta=assistant_event_meta,
+            )
+        )
+    return events[-_MAX_CONVERSATION_EVENTS:]
+
+
+def _conversation_event(
+    *,
+    role: str,
+    text: str,
+    channel: str,
+    timestamp: str,
+    meta: dict[str, Any] | None,
+) -> dict[str, Any]:
+    payload = dict(meta) if isinstance(meta, dict) else {}
+    attachments = payload.get("attachments")
+    return {
+        "role": str(role or "").strip().lower(),
+        "text": str(text or ""),
+        "timestamp": str(payload.get("timestamp") or "").strip() or timestamp,
+        "correlation_id": str(payload.get("correlation_id") or "").strip() or None,
+        "message_id": str(payload.get("message_id") or "").strip() or None,
+        "channel": str(payload.get("channel") or "").strip() or str(channel or "").strip() or None,
+        "attachments": [dict(att) for att in attachments if isinstance(att, dict)] if isinstance(attachments, list) else [],
+    }
 
 
 def _sanitize_line(value: str, *, max_len: int = _MAX_LINE_LENGTH) -> str:

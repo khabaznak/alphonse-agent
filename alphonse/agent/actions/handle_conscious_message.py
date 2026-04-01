@@ -203,6 +203,16 @@ def _write_through_user_message(
             task_state=None,
             planning_context=None,
             pending_interaction=None,
+            user_event_meta={
+                "correlation_id": correlation_id,
+                "message_id": str((payload or {}).get("message_id") or "").strip() or None,
+                "channel": str(channel or "").strip() or "api",
+                "attachments": (
+                    (payload or {}).get("content", {}).get("attachments")
+                    if isinstance((payload or {}).get("content"), dict)
+                    else []
+                ),
+            },
         )
         commit_session_state(updated)
     except Exception:

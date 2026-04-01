@@ -578,7 +578,7 @@ def _update_day_session_memory(
         updated = build_next_session_state(
             previous=day_session,
             channel=channel,
-            user_message=str(user_message or ""),
+            user_message="",
             assistant_message=assistant_message,
             ability_state=cognition_state.get("ability_state")
             if isinstance(cognition_state.get("ability_state"), dict)
@@ -592,6 +592,10 @@ def _update_day_session_memory(
             pending_interaction=merged_state.get("pending_interaction")
             if isinstance(merged_state.get("pending_interaction"), dict)
             else None,
+            assistant_event_meta={
+                "correlation_id": str(merged_state.get("correlation_id") or "").strip() or None,
+                "channel": channel,
+            },
         )
         commit_session_state(updated)
         if assistant_message:

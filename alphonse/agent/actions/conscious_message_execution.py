@@ -137,6 +137,16 @@ class ConsciousMessageExecutionHandler:
                 task_state=None,
                 planning_context=None,
                 pending_interaction={"type": "pdca_slice", "key": task_id} if task_id else None,
+                user_event_meta={
+                    "correlation_id": correlation_id,
+                    "message_id": str(payload.get("message_id") or "").strip() or None,
+                    "channel": incoming.channel_type,
+                    "attachments": (
+                        payload.get("content", {}).get("attachments")
+                        if isinstance(payload.get("content"), dict)
+                        else []
+                    ),
+                },
             )
             self._deps.commit_session_state_fn(updated_day_session)
             self._deps.log_manager.emit(
