@@ -53,7 +53,8 @@ class IncomingMessageEnvelope:
         if not channel_target:
             raise ValueError("missing channel.target")
         text = str(content.get("text") or "").strip()
-        attachments = content.get("attachments") if isinstance(content.get("attachments"), list) else []
+        attachments_raw = content.get("attachments") if isinstance(content.get("attachments"), list) else []
+        attachments = [dict(item) for item in attachments_raw if isinstance(item, dict)]
         if not text and not attachments:
             raise ValueError("content.text is required unless attachments are present")
 
@@ -64,7 +65,7 @@ class IncomingMessageEnvelope:
             correlation_id=correlation_id,
             channel=dict(channel),
             actor=dict(actor),
-            content={"text": text, "attachments": list(attachments)},
+            content={"text": text, "attachments": attachments},
             context=dict(context),
             controls=dict(controls),
             metadata=dict(metadata),

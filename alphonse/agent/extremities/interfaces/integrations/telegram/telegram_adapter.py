@@ -825,6 +825,21 @@ def _extract_telegram_attachments(message: dict[str, Any]) -> list[dict[str, Any
                     "height": largest.get("height"),
                 }
             )
+    contact = message.get("contact") if isinstance(message.get("contact"), dict) else None
+    if contact:
+        contact_user_id = contact.get("user_id")
+        out.append(
+            {
+                "kind": "contact",
+                "provider": "telegram",
+                "contact": dict(contact),
+                "contact_user_id": str(contact_user_id).strip() if contact_user_id is not None else None,
+                "provider_event_ref": {
+                    "message_id": message_id,
+                    "field": "contact",
+                },
+            }
+        )
     return out
 
 

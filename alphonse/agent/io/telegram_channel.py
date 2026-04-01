@@ -33,8 +33,7 @@ class TelegramSenseAdapter(SenseAdapter):
         correlation_id = _as_optional_str(payload.get("correlation_id"))
 
         metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
-        attachments = payload.get("attachments")
-        normalized_attachments = [dict(item) for item in attachments if isinstance(item, dict)] if isinstance(attachments, list) else []
+        normalized_attachments = _normalize_inbound_attachments(payload)
         metadata = {
             "message_id": payload.get("message_id") or metadata.get("message_id"),
             "update_id": payload.get("update_id") or metadata.get("update_id"),
@@ -57,6 +56,7 @@ class TelegramSenseAdapter(SenseAdapter):
             timestamp=timestamp,
             correlation_id=correlation_id,
             metadata=metadata,
+            attachments=normalized_attachments,
         )
 
 
@@ -216,6 +216,29 @@ def _as_float(value: object | None, *, default: float) -> float:
         return float(value)
     except (TypeError, ValueError):
         return default
+
+
+def _normalize_inbound_attachments(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    attachments = payload.get("attachments")
+    normalized = [dict(item) for item in attachments if isinstance(item, dict)] if isinstance(attachments, list) else []
+    if normalized:
+        return normalized
+    contact_payload = payload.get("contact")
+    if not isinstance(contact_payload, dict):
+        return []
+    user_id = contact_payload.get("user_id")
+    return [
+        {
+            "kind": "contact",
+            "provider": "telegram",
+            "contact": dict(contact_payload),
+            "contact_user_id": str(user_id).strip() if user_id is not None else None,
+            "provider_event_ref": {
+                "message_id": _as_optional_str(payload.get("message_id")),
+                "field": "contact",
+            },
+        }
+    ]
 
 
 def _resolve_telegram_delivery_target(message: NormalizedOutboundMessage) -> str | None:

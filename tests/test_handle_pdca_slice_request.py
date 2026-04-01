@@ -64,6 +64,26 @@ def test_handle_pdca_slice_request_without_text_moves_to_waiting_user(
     assert any(item["event_type"] == "slice.request.signal_received" for item in events)
 
 
+def test_resolve_slice_text_uses_attachment_summary_when_text_missing() -> None:
+    rendered = hpsr._resolve_slice_text(
+        task={"metadata": {}},
+        checkpoint=None,
+        payload={
+            "text": "",
+            "content": {
+                "attachments": [
+                    {
+                        "kind": "contact",
+                        "provider": "telegram",
+                        "contact": {"first_name": "Maria", "last_name": "Perez"},
+                    }
+                ]
+            },
+        },
+    )
+    assert rendered == "[attachments: contact (Maria Perez)]"
+
+
 def test_handle_pdca_slice_request_executes_and_persists_checkpoint(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

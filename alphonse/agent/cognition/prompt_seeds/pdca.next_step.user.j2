@@ -29,6 +29,7 @@ Return ONLY one JSON object with this shape (no markdown, no extra text):
 Rules:
 - `tool_call.kind` must be `call_tool`.
 - `tool_call.tool_name` and `tool_call.args` are required.
+- Treat attachment data in `WORKING_STATE_VIEW_JSON` as usable input; do not request re-entry when contact attachment details are already present.
 - For `communication.send_message` and `communication.send_voice_note`, `tool_call.args.To` must be a concrete target value.
 - Do not use placeholder recipient strings like `current_channel_target`, `channel_target`, `target`, or `recipient`.
 - `planner_intent` is optional, plain language, max 160 chars when present.

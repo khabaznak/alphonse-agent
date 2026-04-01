@@ -50,6 +50,11 @@ def test_telegram_sense_adapter_normalizes() -> None:
             "timestamp": 10.0,
             "message_id": 7,
             "update_id": 9,
+            "contact": {
+                "user_id": 123,
+                "first_name": "Maria",
+                "last_name": "Perez",
+            },
         }
     )
     assert result.text == "hi"
@@ -57,6 +62,11 @@ def test_telegram_sense_adapter_normalizes() -> None:
     assert result.channel_target == "42"
     assert result.user_id == "u1"
     assert result.user_name == "User"
+    assert isinstance(result.attachments, list)
+    assert result.attachments
+    first = result.attachments[0]
+    assert str(first.get("kind") or "") == "contact"
+    assert str(first.get("contact_user_id") or "") == "123"
 
 
 def test_telegram_sense_adapter_normalizes_canonical_payload() -> None:
@@ -70,6 +80,7 @@ def test_telegram_sense_adapter_normalizes_canonical_payload() -> None:
             "user_name": "User",
             "timestamp": 10.0,
             "correlation_id": "cid-1",
+            "attachments": [{"kind": "voice", "provider": "telegram", "file_id": "voice-1"}],
             "metadata": {"message_id": 7, "update_id": 9},
         }
     )
@@ -77,6 +88,9 @@ def test_telegram_sense_adapter_normalizes_canonical_payload() -> None:
     assert result.user_id == "u1"
     assert result.user_name == "User"
     assert result.correlation_id == "cid-1"
+    assert isinstance(result.attachments, list)
+    assert result.attachments
+    assert str(result.attachments[0].get("kind") or "") == "voice"
     assert result.metadata["message_id"] == 7
     assert result.metadata["update_id"] == 9
 

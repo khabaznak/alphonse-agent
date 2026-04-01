@@ -84,6 +84,7 @@ class ApiSense(Sense):
             correlation_id=correlation_id,
             actor_external_user_id=normalized.user_id,
             actor_display_name=normalized.user_name,
+            attachments=[dict(item) for item in normalized.attachments if isinstance(item, dict)],
             controls=controls,
             metadata={
                 "normalized_metadata": normalized.metadata,

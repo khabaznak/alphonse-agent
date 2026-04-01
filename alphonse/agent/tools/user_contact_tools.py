@@ -282,6 +282,17 @@ def _contact_from_state(state: dict[str, Any] | None) -> dict[str, Any]:
     if not isinstance(raw, dict):
         return {}
 
+    content = raw.get("content") if isinstance(raw.get("content"), dict) else {}
+    attachments = content.get("attachments") if isinstance(content.get("attachments"), list) else []
+    for item in attachments:
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("kind") or "").strip().lower() != "contact":
+            continue
+        contact_payload = item.get("contact")
+        if isinstance(contact_payload, dict):
+            return dict(contact_payload)
+
     candidates: list[dict[str, Any]] = []
     provider = raw.get("provider_event")
     if isinstance(provider, dict):

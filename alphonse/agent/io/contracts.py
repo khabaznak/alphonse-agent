@@ -13,6 +13,7 @@ class NormalizedInboundMessage:
     user_name: str | None
     timestamp: float
     correlation_id: str | None
+    attachments: list[dict[str, Any]] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
 
 

@@ -187,3 +187,85 @@ def test_register_from_contact_admin_fallbacks_to_channel_target(tmp_path: Path,
 
     assert result["exception"] is None
     assert result["output"]["telegram_user_id"] == "222"
+
+
+def test_register_from_contact_reads_canonical_contact_attachment(tmp_path: Path, monkeypatch) -> None:
+    _prepare_db(tmp_path, monkeypatch)
+    users_store.upsert_user(
+        {
+            "user_id": "u-admin",
+            "display_name": "Admin",
+            "is_admin": True,
+            "is_active": True,
+        }
+    )
+    resolvers.upsert_service_resolver(
+        user_id="u-admin",
+        service_id=2,
+        service_user_id="111",
+        is_active=True,
+    )
+    tool = UserRegisterFromContactTool()
+    result = tool.execute(
+        state={
+            "incoming_user_id": "111",
+            "incoming_raw_message": {
+                "content": {
+                    "attachments": [
+                        {
+                            "kind": "contact",
+                            "provider": "telegram",
+                            "contact": {"user_id": 222, "first_name": "Maria", "last_name": "Perez"},
+                        }
+                    ]
+                }
+            },
+            "locale": "es-MX",
+            "timezone": "UTC",
+            "correlation_id": "cid-contact-tool",
+        }
+    )
+
+    assert result["exception"] is None
+    assert result["output"]["telegram_user_id"] == "222"
+
+
+def test_register_from_contact_missing_contact_user_id_fails(tmp_path: Path, monkeypatch) -> None:
+    _prepare_db(tmp_path, monkeypatch)
+    users_store.upsert_user(
+        {
+            "user_id": "u-admin",
+            "display_name": "Admin",
+            "is_admin": True,
+            "is_active": True,
+        }
+    )
+    resolvers.upsert_service_resolver(
+        user_id="u-admin",
+        service_id=2,
+        service_user_id="111",
+        is_active=True,
+    )
+    tool = UserRegisterFromContactTool()
+    result = tool.execute(
+        state={
+            "incoming_user_id": "111",
+            "incoming_raw_message": {
+                "content": {
+                    "attachments": [
+                        {
+                            "kind": "contact",
+                            "provider": "telegram",
+                            "contact": {"first_name": "No", "last_name": "Id"},
+                        }
+                    ]
+                }
+            },
+            "locale": "es-MX",
+            "timezone": "UTC",
+            "correlation_id": "cid-contact-tool",
+        }
+    )
+
+    assert result["exception"] is not None
+    assert result["exception"]["code"] == "missing_contact_user_id"

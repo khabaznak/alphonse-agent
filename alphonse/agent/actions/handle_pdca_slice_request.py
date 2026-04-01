@@ -619,6 +619,11 @@ def _resolve_slice_text(
     direct = str(payload.get("text") or "").strip()
     if direct:
         return direct
+    content = payload.get("content") if isinstance(payload.get("content"), dict) else {}
+    payload_attachments = content.get("attachments") if isinstance(content.get("attachments"), list) else []
+    payload_attachment_text = _render_attachment_summary(payload_attachments)
+    if payload_attachment_text:
+        return payload_attachment_text
     metadata = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
     for key in ("pending_user_text", "user_text", "last_user_message"):
         value = str(metadata.get(key) or "").strip()
@@ -630,6 +635,29 @@ def _resolve_slice_text(
         if value:
             return value
     return ""
+
+
+def _render_attachment_summary(attachments: list[Any]) -> str:
+    normalized = [dict(item) for item in attachments if isinstance(item, dict)]
+    if not normalized:
+        return ""
+    parts: list[str] = []
+    for item in normalized:
+        kind = str(item.get("kind") or "").strip().lower() or "file"
+        if kind == "contact":
+            contact = item.get("contact") if isinstance(item.get("contact"), dict) else {}
+            first = str(contact.get("first_name") or "").strip()
+            last = str(contact.get("last_name") or "").strip()
+            full_name = " ".join(value for value in (first, last) if value).strip()
+            if full_name:
+                parts.append(f"contact ({full_name})")
+                continue
+        file_id = str(item.get("file_id") or "").strip()
+        if file_id:
+            parts.append(f"{kind}({file_id})")
+            continue
+        parts.append(kind)
+    return f"[attachments: {', '.join(parts)}]"
 
 
 def _sanitize_loaded_state_for_new_task(

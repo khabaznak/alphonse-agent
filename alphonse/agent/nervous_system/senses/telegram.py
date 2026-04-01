@@ -133,8 +133,7 @@ class TelegramSense(Sense):
         )
         normalized = self._sense_adapter.normalize(payload)
         normalized_meta = normalized.metadata if isinstance(normalized.metadata, dict) else {}
-        attachments = normalized_meta.get("attachments")
-        normalized_attachments = [dict(item) for item in attachments if isinstance(item, dict)] if isinstance(attachments, list) else []
+        normalized_attachments = [dict(item) for item in normalized.attachments if isinstance(item, dict)]
         self._bus.emit(
             Signal(
                 type="sense.telegram.message.user.received",

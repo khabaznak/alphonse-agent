@@ -187,12 +187,77 @@ def test_enqueue_pdca_slice_accepts_attachment_only_input(tmp_path: Path, monkey
     task = get_pdca_task(task_id)
     assert isinstance(task, dict)
     metadata = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
-    assert str(metadata.get("pending_user_text") or "") == ""
+    assert str(metadata.get("pending_user_text") or "").startswith("[attachments:")
     inputs = metadata.get("inputs")
     assert isinstance(inputs, list)
     assert len(inputs) == 1
-    assert str(inputs[0].get("text") or "") == ""
+    assert str(inputs[0].get("text") or "").startswith("[attachments:")
     assert isinstance(inputs[0].get("attachments"), list)
+
+
+def test_enqueue_pdca_slice_preserves_contact_payload_and_extras(tmp_path: Path, monkeypatch) -> None:
+    db_path = tmp_path / "nerve-db"
+    monkeypatch.setenv("NERVE_DB_PATH", str(db_path))
+    apply_schema(db_path)
+
+    task_id = upsert_pdca_task(
+        {
+            "task_id": "task-contact-preserve",
+            "owner_id": "u-1",
+            "conversation_key": "telegram:8553589429",
+            "status": "running",
+            "metadata": {
+                "inputs": [],
+                "next_unconsumed_index": 0,
+                "input_dirty": False,
+            },
+        }
+    )
+
+    returned = enqueue_pdca_slice(
+        context={},
+        incoming=_incoming(message_id="m-contact-1"),
+        state={"timezone": "UTC"},
+        session_key="telegram:8553589429",
+        session_user_id="u-1",
+        day_session={"session_id": "u-1|2026-03-12", "user_id": "u-1", "date": "2026-03-12"},
+        payload={
+            "text": "",
+            "content": {
+                "attachments": [
+                    {
+                        "kind": "contact",
+                        "provider": "telegram",
+                        "contact": {"user_id": 8593816828, "first_name": "Gabriela", "last_name": "Villasana"},
+                        "contact_user_id": "8593816828",
+                        "labels": ["lead", "priority"],
+                        "meta": {"source": "telegram_card"},
+                    }
+                ]
+            },
+        },
+        correlation_id="cid-contact-1",
+    )
+    assert returned == task_id
+
+    task = get_pdca_task(task_id)
+    assert isinstance(task, dict)
+    metadata = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
+    inputs = metadata.get("inputs")
+    assert isinstance(inputs, list)
+    assert len(inputs) == 1
+    attachments = inputs[0].get("attachments")
+    assert isinstance(attachments, list)
+    assert len(attachments) == 1
+    first = attachments[0]
+    assert isinstance(first, dict)
+    assert str(first.get("kind") or "") == "contact"
+    assert str(first.get("contact_user_id") or "") == "8593816828"
+    contact = first.get("contact")
+    assert isinstance(contact, dict)
+    assert int(contact.get("user_id") or 0) == 8593816828
+    assert first.get("labels") == ["lead", "priority"]
+    assert first.get("meta") == {"source": "telegram_card"}
 
 
 def test_enqueue_pdca_slice_persists_correlation_in_metadata_state(tmp_path: Path, monkeypatch) -> None:
@@ -218,6 +283,67 @@ def test_enqueue_pdca_slice_persists_correlation_in_metadata_state(tmp_path: Pat
     assert str(state.get("correlation_id") or "") == "cid-corr-state"
     assert str(metadata.get("initial_message_id") or "") == "m-corr-state"
     assert str(metadata.get("initial_correlation_id") or "") == "cid-corr-state"
+
+
+def test_enqueue_pdca_slice_keeps_non_contact_media_behavior(tmp_path: Path, monkeypatch) -> None:
+    db_path = tmp_path / "nerve-db"
+    monkeypatch.setenv("NERVE_DB_PATH", str(db_path))
+    apply_schema(db_path)
+
+    task_id = upsert_pdca_task(
+        {
+            "task_id": "task-photo-preserve",
+            "owner_id": "u-1",
+            "conversation_key": "telegram:8553589429",
+            "status": "running",
+            "metadata": {
+                "inputs": [],
+                "next_unconsumed_index": 0,
+                "input_dirty": False,
+            },
+        }
+    )
+
+    _ = enqueue_pdca_slice(
+        context={},
+        incoming=_incoming(message_id="m-photo-1"),
+        state={"timezone": "UTC"},
+        session_key="telegram:8553589429",
+        session_user_id="u-1",
+        day_session={"session_id": "u-1|2026-03-12", "user_id": "u-1", "date": "2026-03-12"},
+        payload={
+            "text": "",
+            "content": {
+                "attachments": [
+                    {
+                        "kind": "photo",
+                        "provider": "telegram",
+                        "file_id": "photo-1",
+                        "mime_type": "image/jpeg",
+                        "size_bytes": 1234,
+                        "width": 200,
+                        "height": 100,
+                    }
+                ]
+            },
+        },
+        correlation_id="cid-photo-1",
+    )
+
+    task = get_pdca_task(task_id)
+    assert isinstance(task, dict)
+    metadata = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
+    inputs = metadata.get("inputs")
+    assert isinstance(inputs, list)
+    attachments = inputs[0].get("attachments")
+    assert isinstance(attachments, list)
+    first = attachments[0]
+    assert isinstance(first, dict)
+    assert str(first.get("kind") or "") == "photo"
+    assert str(first.get("file_id") or "") == "photo-1"
+    assert str(first.get("mime_type") or "") == "image/jpeg"
+    assert int(first.get("width") or 0) == 200
+    assert int(first.get("height") or 0) == 100
 
 
 def test_enqueue_pdca_slice_routes_to_running_owner_task_before_conversation_latest(

@@ -48,6 +48,21 @@ def _normalize_attachments(raw: Any) -> list[dict[str, Any]]:
     if not isinstance(raw, list):
         return []
     out: list[dict[str, Any]] = []
+    canonical_keys = {
+        "kind",
+        "provider",
+        "file_id",
+        "url",
+        "mime_type",
+        "size_bytes",
+        "duration_seconds",
+        "width",
+        "height",
+        "caption",
+        "provider_event_ref",
+        "contact",
+        "contact_user_id",
+    }
     for item in raw:
         if not isinstance(item, dict):
             continue
@@ -56,28 +71,84 @@ def _normalize_attachments(raw: Any) -> list[dict[str, Any]]:
         file_id = str(item.get("file_id") or "").strip() or None
         if not kind:
             continue
-        out.append(
-            {
-                "kind": kind,
-                "provider": provider or None,
-                "file_id": file_id,
-                "url": str(item.get("url") or "").strip() or None,
-                "mime_type": str(item.get("mime_type") or "").strip() or None,
-                "size_bytes": int(item.get("size_bytes") or 0) or None,
-                "duration_seconds": int(item.get("duration_seconds") or 0) or None,
-                "width": int(item.get("width") or 0) or None,
-                "height": int(item.get("height") or 0) or None,
-                "caption": str(item.get("caption") or "").strip() or None,
-                "provider_event_ref": item.get("provider_event_ref") if isinstance(item.get("provider_event_ref"), dict) else None,
-            }
-        )
+        normalized: dict[str, Any] = {
+            "kind": kind,
+            "provider": provider or None,
+            "file_id": file_id,
+            "url": str(item.get("url") or "").strip() or None,
+            "mime_type": str(item.get("mime_type") or "").strip() or None,
+            "size_bytes": int(item.get("size_bytes") or 0) or None,
+            "duration_seconds": int(item.get("duration_seconds") or 0) or None,
+            "width": int(item.get("width") or 0) or None,
+            "height": int(item.get("height") or 0) or None,
+            "caption": str(item.get("caption") or "").strip() or None,
+            "provider_event_ref": item.get("provider_event_ref") if isinstance(item.get("provider_event_ref"), dict) else None,
+            "contact": item.get("contact") if isinstance(item.get("contact"), dict) else None,
+            "contact_user_id": str(item.get("contact_user_id")).strip()
+            if item.get("contact_user_id") is not None
+            else None,
+        }
+        for key, value in item.items():
+            if key in canonical_keys:
+                continue
+            safe = _json_safe_copy(value)
+            if safe is not _JSON_UNSAFE:
+                normalized[key] = safe
+        out.append(normalized)
     return out
+
+
+_JSON_UNSAFE = object()
+
+
+def _json_safe_copy(value: Any) -> Any:
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    if isinstance(value, list):
+        copied: list[Any] = []
+        for item in value:
+            safe = _json_safe_copy(item)
+            if safe is _JSON_UNSAFE:
+                return _JSON_UNSAFE
+            copied.append(safe)
+        return copied
+    if isinstance(value, dict):
+        copied_dict: dict[str, Any] = {}
+        for key, item in value.items():
+            safe = _json_safe_copy(item)
+            if safe is _JSON_UNSAFE:
+                return _JSON_UNSAFE
+            copied_dict[str(key)] = safe
+        return copied_dict
+    return _JSON_UNSAFE
 
 
 def _extract_payload_attachments(payload: dict[str, Any]) -> list[dict[str, Any]]:
     content = payload.get("content") if isinstance(payload.get("content"), dict) else {}
     attachments = content.get("attachments") if isinstance(content.get("attachments"), list) else []
     return _normalize_attachments(attachments)
+
+
+def _render_attachment_summary(attachments: list[dict[str, Any]]) -> str:
+    if not attachments:
+        return ""
+    parts: list[str] = []
+    for item in attachments:
+        kind = str(item.get("kind") or "").strip().lower() or "file"
+        if kind == "contact":
+            contact = item.get("contact") if isinstance(item.get("contact"), dict) else {}
+            first = str(contact.get("first_name") or "").strip()
+            last = str(contact.get("last_name") or "").strip()
+            full_name = " ".join(value for value in (first, last) if value).strip()
+            if full_name:
+                parts.append(f"contact ({full_name})")
+                continue
+        file_id = str(item.get("file_id") or "").strip()
+        if file_id:
+            parts.append(f"{kind}({file_id})")
+            continue
+        parts.append(kind)
+    return f"[attachments: {', '.join(parts)}]"
 
 
 def _attachment_fingerprint(attachments: list[dict[str, Any]]) -> str:
@@ -190,8 +261,10 @@ def enqueue_pdca_slice(
     correlation_id: str,
 ) -> str:
     now = now_iso()
-    user_text = str(payload.get("text") or "").strip()
     attachments = _extract_payload_attachments(payload)
+    user_text = str(payload.get("text") or "").strip()
+    if not user_text:
+        user_text = _render_attachment_summary(attachments)
     force_new_task = _force_new_task(payload=payload)
     existing = None
     if not force_new_task:
