@@ -32,6 +32,7 @@ from alphonse.agent.nervous_system.pdca_queue_store import (
     flush_pdca_runtime_state,
 )
 from alphonse.agent.nervous_system.senses.bus import Bus, Signal
+from alphonse.agent.nervous_system.senses.cli import build_cli_user_message_signal
 from alphonse.agent.nervous_system.senses.timer import TimerSense
 from alphonse.agent.nervous_system.seed import apply_seed
 from alphonse.agent.nervous_system.capability_gaps import (
@@ -739,6 +740,8 @@ def _dispatch_command(
 
 def _command_repl(parser: argparse.ArgumentParser, db_path: Path) -> None:
     supervisor = AgentSupervisor()
+    repl_bus = Bus()
+    repl_pipeline = build_default_pipeline_with_bus(repl_bus)
     while True:
         try:
             raw = input("alphonse> ").strip()
@@ -751,6 +754,8 @@ def _command_repl(parser: argparse.ArgumentParser, db_path: Path) -> None:
         if raw in {"help", "?"}:
             parser.print_help()
             continue
+        if _handle_repl_message_command(raw, bus=repl_bus, pipeline=repl_pipeline):
+            continue
         try:
             args = parser.parse_args(shlex.split(raw))
         except SystemExit:
@@ -762,6 +767,35 @@ def _command_repl(parser: argparse.ArgumentParser, db_path: Path) -> None:
         _dispatch_command(args, db_path, parser, supervisor=supervisor)
     if supervisor.is_running():
         print("Managed agent is still running. Use 'agent stop' to stop it.")
+
+
+def _handle_repl_message_command(raw: str, *, bus: Bus | None, pipeline: object | None) -> bool:
+    parts = str(raw or "").split(maxsplit=1)
+    if not parts or parts[0] != "message":
+        return False
+    if len(parts) < 2 or not str(parts[1]).strip():
+        print("Usage: message <text>")
+        return True
+    if bus is None or pipeline is None or not hasattr(pipeline, "handle"):
+        print("Unable to queue message: REPL message bus is unavailable.")
+        return True
+    signal = build_cli_user_message_signal(
+        text=str(parts[1]).strip(),
+        user_name="Alex",
+        metadata={"source": "cli.repl.message"},
+    )
+    bus.emit(signal)
+    print(f"Queued {signal.type} corr={signal.correlation_id}")
+    pipeline.handle(
+        "handle_conscious_message",
+        {
+            "signal": signal,
+            "state": None,
+            "outcome": None,
+            "ctx": None,
+        },
+    )
+    return True
 
 
 def _command_run_scheduler(args: argparse.Namespace, db_path: Path) -> None:

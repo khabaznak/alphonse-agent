@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import threading
 import time
+import uuid
+from datetime import datetime, timezone
 
 from alphonse.agent.actions.conscious_message_handler import build_incoming_message_envelope
 from alphonse.agent.observability.log_manager import get_component_logger
@@ -10,6 +12,45 @@ from alphonse.agent.nervous_system.senses.bus import Bus, Signal
 from alphonse.agent.io import CliSenseAdapter
 
 logger = get_component_logger("senses.cli")
+
+
+def build_cli_user_message_signal(
+    *,
+    text: str,
+    correlation_id: str | None = None,
+    user_name: str = "Alex",
+    channel_target: str = "cli",
+    metadata: dict[str, object] | None = None,
+) -> Signal:
+    sense_adapter = CliSenseAdapter()
+    normalized = sense_adapter.normalize(
+        {
+            "text": str(text or "").strip(),
+            "origin": "cli",
+            "user_name": user_name,
+            "timestamp": time.time(),
+            "correlation_id": correlation_id or str(uuid.uuid4()),
+        }
+    )
+    occurred_at = datetime.fromtimestamp(float(normalized.timestamp), tz=timezone.utc).isoformat()
+    payload = build_incoming_message_envelope(
+        message_id=str(normalized.correlation_id or normalized.timestamp),
+        channel_type=normalized.channel_type,
+        channel_target=str(normalized.channel_target or channel_target),
+        provider="cli",
+        text=normalized.text,
+        occurred_at=occurred_at,
+        correlation_id=normalized.correlation_id,
+        actor_external_user_id=normalized.user_id,
+        actor_display_name=normalized.user_name,
+        metadata={"normalized_metadata": normalized.metadata, **dict(metadata or {})},
+    )
+    return Signal(
+        type="sense.cli.message.user.received",
+        payload=payload,
+        source="cli",
+        correlation_id=normalized.correlation_id,
+    )
 
 
 class CliSense(Sense):
@@ -53,30 +94,9 @@ class CliSense(Sense):
                 continue
             if not self._bus:
                 continue
-            normalized = self._sense_adapter.normalize(
-                {
-                    "text": text,
-                    "origin": "cli",
-                    "user_name": "Alex",
-                    "timestamp": time.time(),
-                }
+            signal = build_cli_user_message_signal(
+                text=text,
+                user_name="Alex",
+                metadata={"source": "cli.sense"},
             )
-            self._bus.emit(
-                Signal(
-                    type="sense.cli.message.user.received",
-                    payload=build_incoming_message_envelope(
-                        message_id=str(normalized.correlation_id or normalized.timestamp),
-                        channel_type=normalized.channel_type,
-                        channel_target=str(normalized.channel_target or "cli"),
-                        provider="cli",
-                        text=normalized.text,
-                        occurred_at=time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime(float(normalized.timestamp))),
-                        correlation_id=normalized.correlation_id,
-                        actor_external_user_id=normalized.user_id,
-                        actor_display_name=normalized.user_name,
-                        metadata={"normalized_metadata": normalized.metadata},
-                    ),
-                    source="cli",
-                    correlation_id=normalized.correlation_id,
-                )
-            )
+            self._bus.emit(signal)

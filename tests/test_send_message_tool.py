@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
+from alphonse.agent.nervous_system import users as users_store
+from alphonse.agent.nervous_system.migrate import apply_schema
 from alphonse.agent.tools.registry import build_default_tool_registry
 from alphonse.agent.tools.registry import planner_canonical_tool_names
 from alphonse.agent.tools.send_message_tool import SendMessageTool
@@ -155,6 +158,54 @@ def test_send_message_tool_maps_partial_name_from_user_search() -> None:
     assert fake.called is True
     assert str(fake.request.recipient_ref) == "u-1"
     assert str(fake.request.target or "") == ""
+
+
+def test_send_message_tool_prefers_user_id_when_contact_is_registered(tmp_path: Path, monkeypatch) -> None:
+    db_path = tmp_path / "nerve-db"
+    monkeypatch.setenv("NERVE_DB_PATH", str(db_path))
+    apply_schema(db_path)
+    users_store.upsert_user(
+        {
+            "user_id": "u-1",
+            "principal_id": "p-1",
+            "display_name": "Gabriela Perez",
+            "is_active": True,
+        }
+    )
+
+    fake = _FakeCommunication()
+    tool = SendMessageTool(_communication=fake)
+    state = {
+        "channel_type": "telegram",
+        "channel_target": "8553589429",
+        "task_state": {
+            "facts": {
+                "step_1": {
+                    "tool": "users.search",
+                    "output": {
+                        "output": {
+                            "users": [
+                                {
+                                    "user_id": "u-1",
+                                    "display_name": "Gabriela Perez",
+                                }
+                            ]
+                        },
+                    },
+                }
+            }
+        },
+    }
+    result = tool.execute(
+        state=state,
+        To="Gabriela",
+        Message="Hola Gaby",
+        Channel="telegram",
+    )
+    assert result["exception"] is None
+    assert fake.called is True
+    assert str(fake.request.user_id or "") == "u-1"
+    assert fake.request.recipient_ref is None
 
 
 def test_send_message_audio_requires_audio_file_path() -> None:

@@ -9,7 +9,9 @@ from pathlib import Path
 
 from alphonse.agent.cognition.plan_execution.communication_dispatcher import CommunicationDispatcher
 from alphonse.agent.cognition.narration.outbound_narration_orchestrator import build_default_coordinator
+from alphonse.agent.nervous_system import users as users_store
 from alphonse.agent.observability.log_manager import get_component_logger
+from alphonse.agent.services import communication_directory
 from alphonse.agent.services.communication_service import CommunicationRequest, CommunicationService
 
 logger = get_component_logger("tools.send_message_tool")
@@ -56,19 +58,26 @@ class SendMessageTool:
         to = _resolve_recipient_ref(to=to, state=state_payload)
         origin_channel = str(state_payload.get("channel_type") or state_payload.get("channel") or "api").strip()
         origin_target = str(state_payload.get("channel_target") or state_payload.get("target") or "").strip() or None
+        origin_service_id = communication_directory.resolve_service_id(origin_channel)
+        explicit_service_id = communication_directory.resolve_service_id(channel)
         correlation_id = (
             str(state_payload.get("correlation_id") or "").strip() or str(args.get("correlation_id") or "").strip() or str(uuid.uuid4())
         )
         locale = str(state_payload.get("locale") or "").strip() or None
+        resolved_user_id = _resolve_internal_user_id(to)
+        recipient_ref = None if resolved_user_id else to if not to.lstrip("-").isdigit() else None
 
         request = CommunicationRequest(
             message=message,
             correlation_id=correlation_id,
             origin_channel=origin_channel,
             origin_target=origin_target,
+            origin_service_id=origin_service_id,
             channel=channel,
+            service_id=explicit_service_id,
             target=to if to.lstrip("-").isdigit() else None,
-            recipient_ref=to if not to.lstrip("-").isdigit() else None,
+            recipient_ref=recipient_ref,
+            user_id=resolved_user_id,
             urgency=urgency,
             locale=locale,
         )
@@ -179,6 +188,17 @@ def _resolve_recipient_ref(*, to: str, state: dict[str, Any]) -> str:
     if by_name:
         return by_name
     return rendered
+
+
+def _resolve_internal_user_id(to: str) -> str | None:
+    rendered = str(to or "").strip()
+    if not rendered or rendered.lstrip("-").isdigit():
+        return None
+    user = users_store.get_user(rendered)
+    if not isinstance(user, dict):
+        return None
+    value = str(user.get("user_id") or "").strip()
+    return value or None
 
 
 def _latest_user_search_rows(state: dict[str, Any]) -> list[dict[str, Any]]:

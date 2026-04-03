@@ -29,7 +29,7 @@ class CommunicationDispatcher:
         outbound_intent = _derive_outbound_intent(payload_dict)
         internal_progress = _as_bool(payload_dict.get("internal_progress")) if isinstance(payload_dict, dict) else False
         visibility = str(payload_dict.get("visibility") or "").strip().lower() if isinstance(payload_dict, dict) else ""
-        if channel in {"telegram", "api"} and not target:
+        if not target:
             self._logger.warning(
                 "executor dispatch skipped plan_id=%s channel=%s reason=missing_target",
                 plan_id,
