@@ -6,11 +6,10 @@ from typing import Any, ClassVar
 import uuid
 from pathlib import Path
 
+from alphonse.agent import identity
 from alphonse.agent.cognition.plan_execution.communication_dispatcher import CommunicationDispatcher
 from alphonse.agent.cognition.narration.outbound_narration_orchestrator import build_default_coordinator
-from alphonse.agent.nervous_system import users as users_store
 from alphonse.agent.observability.log_manager import get_component_logger
-from alphonse.agent.services import communication_directory
 from alphonse.agent.services.communication_service import CommunicationRequest, CommunicationService
 
 logger = get_component_logger("tools.send_message_tool")
@@ -60,8 +59,8 @@ class SendMessageTool:
         state_payload = state if isinstance(state, dict) else {}
         origin_channel = str(state_payload.get("channel_type") or state_payload.get("channel") or "api").strip()
         origin_target = str(state_payload.get("channel_target") or state_payload.get("target") or "").strip() or None
-        origin_service_id = communication_directory.resolve_service_id(origin_channel)
-        explicit_service_id = communication_directory.resolve_service_id(channel)
+        origin_service_id = identity.resolve_service_id(origin_channel)
+        explicit_service_id = identity.resolve_service_id(channel)
         correlation_id = (
             str(state_payload.get("correlation_id") or "").strip() or str(args.get("correlation_id") or "").strip() or str(uuid.uuid4())
         )
@@ -183,7 +182,7 @@ def _get_recipient_from_args(args: dict[str, Any]) -> dict[str, str | None]:
         raise ValueError("missing_recipient")
     if rendered.lstrip("-").isdigit():
         return {"user_id": None, "target": rendered}
-    user = users_store.get_user(rendered)
+    user = identity.get_user(rendered)
     if isinstance(user, dict):
         user_id = str(user.get("user_id") or "").strip()
         if user_id:

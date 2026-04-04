@@ -5,6 +5,7 @@ from alphonse.agent.observability.log_manager import get_component_logger
 from datetime import datetime
 from typing import Any
 
+from alphonse.agent import identity
 from alphonse.agent.actions.models import ActionResult
 from alphonse.agent.cognition.narration.channel_resolver import resolve_channel
 from alphonse.agent.cognition.narration.models import ContextBundle, MessageDraft
@@ -16,7 +17,6 @@ from alphonse.agent.cognition.narration.policies import (
 )
 from alphonse.agent.cognition.skills.narration.renderer import render_message
 from alphonse.agent.cognition.skills.narration.skill import NarrationSkill
-from alphonse.agent.identity import store as identity_store
 from alphonse.agent.io import NormalizedOutboundMessage
 
 logger = get_component_logger("cognition.narration.outbound_narration_orchestrator")
@@ -131,24 +131,20 @@ def build_context_bundle(payload: dict[str, Any], context: dict) -> ContextBundl
 def _resolve_identity(payload: dict[str, Any]) -> dict[str, Any]:
     audience = payload.get("audience") or {}
     if isinstance(audience, dict) and audience.get("kind") == "person":
-        person = identity_store.get_person(str(audience.get("id")))
-        if person:
-            return {"person_id": person.get("person_id"), "defaults": {}}
+        user = identity.get_user(str(audience.get("id") or "").strip() or None)
+        if user:
+            return {"person_id": user.get("user_id"), "defaults": {}}
     channel_hint = payload.get("channel_hint")
     target = payload.get("target")
     if channel_hint and target:
-        person = identity_store.resolve_person_by_channel(str(channel_hint), str(target))
-        if person:
-            return {"person_id": person.get("person_id"), "defaults": {}}
+        service_id = identity.resolve_service_id(str(channel_hint))
+        user_id = identity.resolve_user_id(service_id=service_id, service_user_id=str(target))
+        if user_id:
+            return {"person_id": user_id, "defaults": {}}
     return {"defaults": {}}
 
 
 def _resolve_presence(payload: dict[str, Any]) -> dict[str, Any]:
-    audience = payload.get("audience") or {}
-    if isinstance(audience, dict) and audience.get("kind") == "person":
-        presence = identity_store.get_presence(str(audience.get("id")))
-        if presence:
-            return presence
     return {"in_meeting": False}
 
 

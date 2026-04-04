@@ -3,10 +3,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from alphonse.agent import identity
 from alphonse.agent.cognition.plan_execution.communication_dispatcher import CommunicationDispatcher
 from alphonse.agent.cognition.preferences.store import get_preference, get_principal_for_channel
-from alphonse.agent.nervous_system import users as users_store
-from alphonse.agent.services import communication_directory
 
 
 @dataclass(frozen=True)
@@ -59,12 +58,12 @@ class CommunicationService:
             return int(explicit_service_id)
         explicit_channel = str(request.channel or "").strip().lower()
         if explicit_channel:
-            resolved = communication_directory.resolve_service_id(explicit_channel)
+            resolved = identity.resolve_service_id(explicit_channel)
             if resolved is not None:
                 return resolved
         user_id = str(request.user_id or "").strip()
         if user_id:
-            preferred = communication_directory.get_preferred_service_id(user_id)
+            preferred = identity.get_preferred_service_id(user_id)
             if preferred is not None:
                 return preferred
         origin_service_id = request.origin_service_id
@@ -76,16 +75,16 @@ class CommunicationService:
         )
         if principal_id:
             value = get_preference(principal_id, "preferred_communication_channel")
-            preferred = communication_directory.resolve_service_id(str(value or "").strip())
+            preferred = identity.resolve_service_id(str(value or "").strip())
             if preferred is not None:
                 return preferred
         origin_channel = str(request.origin_channel or "").strip().lower()
         if origin_channel:
-            return communication_directory.resolve_service_id(origin_channel)
+            return identity.resolve_service_id(origin_channel)
         return None
 
     def _resolve_channel(self, request: CommunicationRequest, *, service_id: int | None) -> str:
-        resolved_key = communication_directory.resolve_service_key(service_id)
+        resolved_key = identity.resolve_service_key(service_id)
         if resolved_key:
             return resolved_key
         explicit = str(request.channel or "").strip().lower()
@@ -99,7 +98,7 @@ class CommunicationService:
             return explicit_target
         user_id = str(request.user_id or "").strip()
         if user_id and service_id is not None:
-            resolved = communication_directory.resolve_delivery_target(
+            resolved = identity.resolve_delivery_target(
                 user_id=user_id,
                 service_id=service_id,
             )

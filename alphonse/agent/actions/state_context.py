@@ -5,11 +5,11 @@ from datetime import datetime, timezone
 from typing import Any
 
 from alphonse.agent.actions.session_context import IncomingContext, as_optional_str, build_session_key
+from alphonse.agent.cognition.preferences import conversation_profile
 from alphonse.agent.cognition.preferences.store import (
     get_or_create_principal_for_channel,
     resolve_preference_with_precedence,
 )
-from alphonse.agent.identity import profile as identity_profile
 from alphonse.config import settings
 
 logger = get_component_logger("actions.state_context")
@@ -27,7 +27,7 @@ def ensure_conversation_locale(
     if channel_locale:
         stored_state["locale"] = channel_locale
         return
-    existing = identity_profile.get_locale(conversation_key)
+    existing = conversation_profile.get_locale(conversation_key)
     if existing:
         stored_state["locale"] = existing
         return
@@ -93,7 +93,7 @@ def build_cortex_state(
     if not state_locale:
         state_locale = resolve_channel_locale_context(incoming)
     if not state_locale:
-        state_locale = identity_profile.get_locale(session_key)
+        state_locale = conversation_profile.get_locale(session_key)
     if not state_locale:
         state_locale = effective_locale
 

@@ -1,29 +1,20 @@
 from __future__ import annotations
 
 from alphonse.agent.observability.log_manager import get_component_logger
-from typing import Any
 
 from alphonse.agent.cognition.preferences import store as pref_store
 
-logger = get_component_logger("identity.profile")
+logger = get_component_logger("cognition.preferences.conversation_profile")
 
 
 def set_display_name(conversation_key: str, name: str) -> None:
     pref_store.set_preference_for_conversation(conversation_key, "display_name", name)
-    logger.info(
-        "identity display_name set key=%s value=%s",
-        conversation_key,
-        name,
-    )
+    logger.info("conversation display_name set key=%s value=%s", conversation_key, name)
 
 
 def get_display_name(conversation_key: str) -> str | None:
     value = pref_store.get_preference_for_conversation(conversation_key, "display_name")
-    logger.info(
-        "identity display_name get key=%s value=%s",
-        conversation_key,
-        value,
-    )
+    logger.info("conversation display_name get key=%s value=%s", conversation_key, value)
     return value if isinstance(value, str) else None
 
 
@@ -34,8 +25,4 @@ def get_locale(conversation_key: str) -> str | None:
 
 def set_locale(conversation_key: str, locale: str) -> None:
     pref_store.set_preference_for_conversation(conversation_key, "locale", locale)
-    logger.info(
-        "identity locale set key=%s value=%s",
-        conversation_key,
-        locale,
-    )
+    logger.info("conversation locale set key=%s value=%s", conversation_key, locale)

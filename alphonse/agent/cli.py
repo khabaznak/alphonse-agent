@@ -64,7 +64,7 @@ from alphonse.agent.cognition.preferences.store import (
     get_or_create_scope_principal,
     get_principal_for_channel,
 )
-from alphonse.agent.nervous_system.users import list_users
+from alphonse.agent import identity
 from alphonse.agent.nervous_system.terminal_tools import (
     create_terminal_command,
     create_terminal_session,
@@ -1577,7 +1577,7 @@ def _command_onboarding(args: argparse.Namespace) -> None:
 
 def _command_users(args: argparse.Namespace) -> None:
     if args.users_command == "list":
-        rows = list_users(active_only=args.active_only, limit=args.limit)
+        rows = identity.list_users(active_only=args.active_only, limit=args.limit)
         if not rows:
             print("No users found.")
             return

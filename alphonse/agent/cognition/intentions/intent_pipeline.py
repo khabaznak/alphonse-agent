@@ -4,6 +4,7 @@ from dataclasses import dataclass
 import os
 import traceback
 
+from alphonse.agent import identity
 from alphonse.agent.actions.conscious_message_handler import build_incoming_message_envelope
 from alphonse.agent.actions.registry import ActionRegistry
 from alphonse.agent.actions.models import ActionResult
@@ -15,8 +16,7 @@ from alphonse.agent.actions.handle_timed_signals import HandleTimedSignalsAction
 from alphonse.agent.actions.shutdown import ShutdownAction
 from alphonse.agent.observability.log_manager import get_log_manager
 from alphonse.agent.nervous_system.senses.bus import Bus, Signal
-from alphonse.agent.nervous_system import users as users_store
-from alphonse.agent.nervous_system.user_service_resolvers import resolve_telegram_chat_id_for_user
+from alphonse.agent.nervous_system.services import TELEGRAM_SERVICE_ID
 from alphonse.agent.nervous_system.trace_store import write_trace
 from alphonse.agent.cognition.narration.outbound_narration_orchestrator import (
     build_default_coordinator,
@@ -244,20 +244,13 @@ def _should_emit_outcome(context: dict) -> bool:
 
 
 def _resolve_admin_telegram_target() -> str | None:
-    try:
-        users = users_store.list_users(active_only=True, limit=200)
-    except Exception:
+    admin = identity.get_active_admin_user()
+    if not isinstance(admin, dict):
         return None
-    for user in users:
-        if not isinstance(user, dict) or not bool(user.get("is_admin")):
-            continue
-        user_id = str(user.get("user_id") or "").strip()
-        if not user_id:
-            continue
-        resolved = resolve_telegram_chat_id_for_user(user_id)
-        if resolved:
-            return str(resolved).strip()
-    return None
+    return identity.resolve_service_user_id(
+        user_id=str(admin.get("user_id") or "").strip() or None,
+        service_id=TELEGRAM_SERVICE_ID,
+    )
 
 
 def _extract_correlation_id(context: dict) -> str | None:

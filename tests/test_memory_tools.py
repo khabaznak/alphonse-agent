@@ -5,6 +5,7 @@ from pathlib import Path
 from alphonse.agent.nervous_system.migrate import apply_schema
 from alphonse.agent.cognition.memory import MemoryService
 from alphonse.agent.cognition.memory import record_after_tool_call
+from alphonse.agent.nervous_system import users as users_store
 from alphonse.agent.tools.registry import build_default_tool_registry
 from alphonse.agent.tools.registry import planner_tool_schemas
 from alphonse.agent.tools.memory_tools import GetMissionTool
@@ -15,6 +16,10 @@ from alphonse.agent.tools.memory_tools import SearchEpisodesTool
 
 def test_memory_read_tools_roundtrip(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("ALPHONSE_MEMORY_ROOT", str(tmp_path / "memory"))
+    db_path = tmp_path / "nerve-db"
+    monkeypatch.setenv("NERVE_DB_PATH", str(db_path))
+    apply_schema(db_path)
+    users_store.upsert_user({"user_id": "alex", "display_name": "Alex", "is_active": True})
     service = MemoryService()
     service.mission_upsert("alex", "m1", status="active", title="Mission One")
     service.upsert_workspace_pointer("alex", "leads_db_path", "/tmp/leads.db")
@@ -66,6 +71,8 @@ def test_operational_fact_tools_execute_end_to_end(monkeypatch, tmp_path: Path) 
     db_path = tmp_path / "nerve-db"
     monkeypatch.setenv("NERVE_DB_PATH", str(db_path))
     apply_schema(db_path)
+    users_store.upsert_user({"user_id": "user_a", "display_name": "User A", "is_active": True})
+    users_store.upsert_user({"user_id": "user_b", "display_name": "User B", "is_active": True})
     registry = build_default_tool_registry()
 
     upsert = registry.get("memory.upsert_operational_fact")
@@ -142,8 +149,12 @@ def test_operational_fact_tools_are_exposed_in_planner_schemas() -> None:
     assert upsert_params.get("required") == ["key", "title", "fact_type"]
 
 
-def test_search_episodes_reads_legacy_alias_bucket(monkeypatch, tmp_path: Path) -> None:
+def test_search_episodes_does_not_read_legacy_alias_bucket(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("ALPHONSE_MEMORY_ROOT", str(tmp_path / "memory"))
+    db_path = tmp_path / "nerve-db"
+    monkeypatch.setenv("NERVE_DB_PATH", str(db_path))
+    apply_schema(db_path)
+    users_store.upsert_user({"user_id": "canonical_user", "display_name": "Canonical User", "is_active": True})
     service = MemoryService()
     service.append_episode(
         user_id="legacy_chat_42",
@@ -161,12 +172,15 @@ def test_search_episodes_reads_legacy_alias_bucket(monkeypatch, tmp_path: Path) 
     )
     assert result["exception"] is None
     output = result["output"]
-    assert output["count"] >= 1
-    assert "legacy_chat_42" in output.get("owner_aliases", [])
+    assert output["count"] == 0
 
 
 def test_record_hook_and_tools_share_canonical_owner(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("ALPHONSE_MEMORY_ROOT", str(tmp_path / "memory"))
+    db_path = tmp_path / "nerve-db"
+    monkeypatch.setenv("NERVE_DB_PATH", str(db_path))
+    apply_schema(db_path)
+    users_store.upsert_user({"user_id": "user_canon", "display_name": "Canon", "is_active": True})
     record_after_tool_call(
         state={
             "owner_id": "user_canon",
@@ -199,6 +213,10 @@ def test_record_hook_and_tools_share_canonical_owner(monkeypatch, tmp_path: Path
 
 def test_search_episodes_output_is_domain_agnostic(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("ALPHONSE_MEMORY_ROOT", str(tmp_path / "memory"))
+    db_path = tmp_path / "nerve-db"
+    monkeypatch.setenv("NERVE_DB_PATH", str(db_path))
+    apply_schema(db_path)
+    users_store.upsert_user({"user_id": "user_a", "display_name": "User A", "is_active": True})
     service = MemoryService()
     service.append_episode(
         user_id="user_a",
@@ -217,3 +235,13 @@ def test_search_episodes_output_is_domain_agnostic(monkeypatch, tmp_path: Path) 
     assert "crm_status" not in output
     assert "crm_count" not in output
     assert "crm_facts" not in output
+
+
+def test_memory_tools_fail_without_canonical_user(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("ALPHONSE_MEMORY_ROOT", str(tmp_path / "memory"))
+    db_path = tmp_path / "nerve-db"
+    monkeypatch.setenv("NERVE_DB_PATH", str(db_path))
+    apply_schema(db_path)
+    search_tool = SearchEpisodesTool()
+    result = search_tool.execute(query="anything", state={"incoming_user_id": "legacy_chat_42"})
+    assert str((result.get("exception") or {}).get("code") or "") == "missing_user_id"

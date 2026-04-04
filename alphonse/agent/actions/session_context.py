@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from alphonse.agent.identity import store as identity_store
+from alphonse.agent import identity
 
 
 @dataclass(frozen=True)
@@ -23,7 +23,12 @@ def build_incoming_context_from_normalized(
     channel_type = str(getattr(normalized, "channel_type", "") or "system")
     address = as_optional_str(getattr(normalized, "channel_target", None))
     metadata = getattr(normalized, "metadata", {}) or {}
-    person_id = _resolve_person_id_from_normalized(channel_type, address, metadata)
+    person_id = _resolve_person_id_from_normalized(
+        channel_type=channel_type,
+        address=address,
+        metadata=metadata,
+        raw_user_id=as_optional_str(getattr(normalized, "user_id", None)),
+    )
     update_id = metadata.get("update_id") if isinstance(metadata, dict) else None
     return IncomingContext(
         channel_type=channel_type,
@@ -50,15 +55,27 @@ def as_optional_str(value: object | None) -> str | None:
 
 
 def _resolve_person_id_from_normalized(
+    *,
     channel_type: str,
     address: str | None,
     metadata: dict[str, Any],
+    raw_user_id: str | None,
 ) -> str | None:
     person_id = metadata.get("person_id") if isinstance(metadata, dict) else None
-    if person_id:
-        return str(person_id)
-    if channel_type and address:
-        person = identity_store.resolve_person_by_channel(channel_type, address)
-        if person:
-            return str(person.get("person_id"))
+    direct = identity.get_user(str(person_id or "").strip() or None)
+    if direct:
+        return str(direct.get("user_id") or "")
+    service_id = identity.resolve_service_id(channel_type)
+    for candidate in (
+        raw_user_id,
+        metadata.get("user_id") if isinstance(metadata, dict) else None,
+        metadata.get("from_user") if isinstance(metadata, dict) else None,
+        metadata.get("service_user_id") if isinstance(metadata, dict) else None,
+    ):
+        mapped = identity.resolve_user_id(
+            service_id=service_id,
+            service_user_id=str(candidate or "").strip() or None,
+        )
+        if mapped:
+            return mapped
     return None

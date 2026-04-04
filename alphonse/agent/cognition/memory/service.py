@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from alphonse.agent.actions.conscious_message_handler import build_incoming_message_envelope
+from alphonse.agent import identity
 from alphonse.agent.cognition.memory.paths import resolve_memory_root
 from alphonse.agent.cognition.memory.paths import sanitize_segment
 from alphonse.agent.cognition.memory.paths import user_root
@@ -23,9 +24,8 @@ from alphonse.agent.cognition.prompt_templates_runtime import MEMORY_SUMMARY_USE
 from alphonse.agent.cognition.prompt_templates_runtime import render_prompt_template
 from alphonse.agent.cognition.providers.factory import build_llm_client
 from alphonse.agent.nervous_system import operational_facts as operational_facts_store
-from alphonse.agent.nervous_system import users as users_store
 from alphonse.agent.nervous_system.senses.bus import Signal as BusSignal
-from alphonse.agent.nervous_system.user_service_resolvers import resolve_telegram_chat_id_for_user
+from alphonse.agent.nervous_system.services import TELEGRAM_SERVICE_ID
 from alphonse.agent.observability.log_manager import get_log_manager
 
 _DEFAULT_MAX_LINES = 20_000
@@ -949,93 +949,19 @@ def remove_operational_fact(
 def resolve_memory_owner_id(*, state: dict[str, Any] | None = None, explicit: str | None = None) -> str:
     explicit_value = str(explicit or "").strip()
     if explicit_value:
-        return explicit_value
+        user = identity.get_user(explicit_value)
+        if user:
+            return str(user.get("user_id") or "")
+        raise ValueError("missing_user_id")
     payload = dict(state or {})
-    stable_candidates = (
-        "session_user_id",
-        "owner_id",
-        "resolved_user_id",
-        "incoming_user_id",
-        "actor_person_id",
-    )
-    for key in stable_candidates:
-        value = str(payload.get(key) or "").strip()
-        if value:
-            return value
-    principal_candidates = (
-        "principal_id",
-        "owner_principal_id",
-        "conversation_principal_id",
-    )
-    for key in principal_candidates:
-        principal_id = str(payload.get(key) or "").strip()
-        if not principal_id:
-            continue
-        try:
-            user = users_store.get_user_by_principal_id(principal_id)
-        except Exception:
-            user = None
-        if isinstance(user, dict):
-            user_id = str(user.get("user_id") or "").strip()
-            if user_id:
-                return user_id
-    display_name = _display_name_from_state(payload)
-    if display_name:
-        try:
-            user = users_store.get_user_by_display_name(display_name)
-        except Exception:
-            user = None
-        if isinstance(user, dict):
-            user_id = str(user.get("user_id") or "").strip()
-            if user_id:
-                return user_id
-    fallback_candidates = (
-        "user_id",
-        "from_user",
-        "chat_id",
-        "channel_target",
-        "conversation_key",
-    )
-    for key in fallback_candidates:
-        value = str(payload.get(key) or "").strip()
-        if value:
-            return value
-    return "anonymous"
-
-
-def resolve_memory_owner_aliases(
-    *,
-    state: dict[str, Any] | None = None,
-    explicit: str | None = None,
-) -> list[str]:
-    payload = dict(state or {})
-    primary = resolve_memory_owner_id(state=payload, explicit=explicit)
-    aliases: list[str] = []
-    seen: set[str] = set()
-
-    def _add(value: str | None) -> None:
-        candidate = str(value or "").strip()
-        if not candidate or candidate in seen:
-            return
-        seen.add(candidate)
-        aliases.append(candidate)
-
-    _add(primary)
-    for key in (
-        "incoming_user_id",
-        "actor_person_id",
-        "session_user_id",
-        "owner_id",
-        "user_id",
-        "chat_id",
-        "channel_target",
-        "conversation_key",
-    ):
-        _add(str(payload.get(key) or "").strip() or None)
-    display_name = _display_name_from_state(payload)
-    if display_name:
-        _add(f"name:{display_name.lower()}")
-    return aliases or ["anonymous"]
+    resolved = identity.resolve_current_actor_user_id(payload)
+    if resolved:
+        return resolved
+    for key in ("principal_id", "owner_principal_id", "conversation_principal_id"):
+        user = identity.get_user_by_principal_id(str(payload.get(key) or "").strip() or None)
+        if user:
+            return str(user.get("user_id") or "")
+    raise ValueError("missing_user_id")
 
 
 def record_after_tool_call(
@@ -1091,13 +1017,28 @@ def record_after_tool_call(
             payload=payload,
             artifacts=artifacts,
         )
+    except ValueError as exc:
+        if str(exc) != "missing_user_id":
+            raise
+        _LOG.emit(
+            level="info",
+            event="memory.hook.record_after_tool_call_skipped",
+            component="cognition.memory.service",
+            correlation_id=str(correlation_id or "").strip() or None,
+            payload={"reason": "missing_user_id", "tool_name": str(tool_name or "").strip() or None},
+        )
     except Exception as exc:
+        fallback_user_id = None
+        try:
+            fallback_user_id = resolve_memory_owner_id(state=state)
+        except ValueError:
+            fallback_user_id = None
         _LOG.emit(
             level="error",
             event="memory.hook.record_after_tool_call_failed",
             component="cognition.memory.service",
             correlation_id=str(correlation_id or "").strip() or None,
-            user_id=resolve_memory_owner_id(state=state),
+            user_id=fallback_user_id,
             error_code=type(exc).__name__,
             payload={"tool_name": str(tool_name or "").strip() or None},
         )
@@ -1111,7 +1052,19 @@ def record_plan_step_completion(
     proposal: dict[str, Any],
     correlation_id: str | None,
 ) -> None:
-    user_id = resolve_memory_owner_id(state=state)
+    try:
+        user_id = resolve_memory_owner_id(state=state)
+    except ValueError as exc:
+        if str(exc) != "missing_user_id":
+            raise
+        _LOG.emit(
+            level="info",
+            event="memory.hook.record_plan_step_completion_skipped",
+            component="cognition.memory.service",
+            correlation_id=str(correlation_id or "").strip() or None,
+            payload={"reason": "missing_user_id"},
+        )
+        return
     mission_id = _memory_mission_id(task_state=task_state, correlation_id=correlation_id)
     payload = {
         "intent": str(task_state.get("goal") or "").strip() or "task execution",
@@ -1332,20 +1285,13 @@ def _emit_memory_failure_escalation(
 
 
 def _resolve_admin_telegram_target() -> str | None:
-    try:
-        users = users_store.list_users(active_only=True, limit=200)
-    except Exception:
+    admin = identity.get_active_admin_user()
+    if not isinstance(admin, dict):
         return None
-    for user in users:
-        if not isinstance(user, dict) or not bool(user.get("is_admin")):
-            continue
-        user_id = str(user.get("user_id") or "").strip()
-        if not user_id:
-            continue
-        resolved = resolve_telegram_chat_id_for_user(user_id)
-        if resolved:
-            return str(resolved).strip()
-    return None
+    return identity.resolve_service_user_id(
+        user_id=str(admin.get("user_id") or "").strip() or None,
+        service_id=TELEGRAM_SERVICE_ID,
+    )
 
 
 def _env_float(key: str, default: float) -> float:
@@ -1476,23 +1422,6 @@ def _compact_result_summary(value: Any) -> str:
         rendered = str(redacted)
     compact = " ".join(rendered.split())
     return compact[:800]
-
-
-def _display_name_from_state(payload: dict[str, Any]) -> str | None:
-    candidates = (
-        payload.get("incoming_user_name"),
-        payload.get("user_name"),
-        payload.get("from_user_name"),
-        _nested_get(payload, "metadata", "user_name"),
-        _nested_get(payload, "metadata", "from_user_name"),
-        _nested_get(payload, "metadata", "raw", "user_name"),
-        _nested_get(payload, "metadata", "raw", "from_user_name"),
-    )
-    for value in candidates:
-        text = str(value or "").strip()
-        if text:
-            return text
-    return None
 
 
 def _nested_get(payload: dict[str, Any], *path: str) -> Any:

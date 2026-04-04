@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
+from alphonse.agent import identity
 from alphonse.agent.cognition.narration.models import (
     AudienceRef,
     ContextBundle,
@@ -11,7 +12,7 @@ from alphonse.agent.cognition.narration.models import (
     NarrationIntent,
     PresentationSpec,
 )
-from alphonse.agent.identity import store as identity_store
+from alphonse.agent.cognition.preferences.store import resolve_preference_with_precedence
 
 
 @dataclass
@@ -116,20 +117,70 @@ def _resolve_audience(context: ContextBundle) -> AudienceRef:
 
 
 def _resolve_prefs(context: ContextBundle, audience: AudienceRef) -> dict[str, Any]:
-    if audience.kind == "person":
-        prefs = identity_store.list_prefs_for_person(audience.id)
-        if prefs:
-            return prefs
-        groups = identity_store.list_person_groups(audience.id)
-        for group in groups:
-            prefs = identity_store.list_prefs_for_group(group["group_id"])
-            if prefs:
-                return prefs
-    if audience.kind == "group":
-        prefs = identity_store.list_prefs_for_group(audience.id)
-        if prefs:
-            return prefs
-    return context.identity.get("defaults", {})
+    defaults = dict(context.identity.get("defaults", {}))
+    if audience.kind != "person":
+        return defaults
+    user = identity.get_user(audience.id)
+    principal_id = str((user or {}).get("principal_id") or "").strip()
+    if not principal_id:
+        return defaults
+    return {
+        "language_preference": resolve_preference_with_precedence(
+            key="language_preference",
+            default=defaults.get("language_preference", "en"),
+            person_principal_id=principal_id,
+        ),
+        "tone": resolve_preference_with_precedence(
+            key="tone",
+            default=defaults.get("tone", "neutral"),
+            person_principal_id=principal_id,
+        ),
+        "formality": resolve_preference_with_precedence(
+            key="formality",
+            default=defaults.get("formality", "neutral"),
+            person_principal_id=principal_id,
+        ),
+        "emoji": resolve_preference_with_precedence(
+            key="emoji",
+            default=defaults.get("emoji", "none"),
+            person_principal_id=principal_id,
+        ),
+        "verbosity_cap": resolve_preference_with_precedence(
+            key="verbosity_cap",
+            default=defaults.get("verbosity_cap", "normal"),
+            person_principal_id=principal_id,
+        ),
+        "quiet_hours_start": resolve_preference_with_precedence(
+            key="quiet_hours_start",
+            default=defaults.get("quiet_hours_start"),
+            person_principal_id=principal_id,
+        ),
+        "quiet_hours_end": resolve_preference_with_precedence(
+            key="quiet_hours_end",
+            default=defaults.get("quiet_hours_end"),
+            person_principal_id=principal_id,
+        ),
+        "allow_telegram": resolve_preference_with_precedence(
+            key="allow_telegram",
+            default=defaults.get("allow_telegram", True),
+            person_principal_id=principal_id,
+        ),
+        "allow_web": resolve_preference_with_precedence(
+            key="allow_web",
+            default=defaults.get("allow_web", True),
+            person_principal_id=principal_id,
+        ),
+        "allow_cli": resolve_preference_with_precedence(
+            key="allow_cli",
+            default=defaults.get("allow_cli", True),
+            person_principal_id=principal_id,
+        ),
+        "allow_push": resolve_preference_with_precedence(
+            key="allow_push",
+            default=defaults.get("allow_push", True),
+            person_principal_id=principal_id,
+        ),
+    }
 
 
 def _in_quiet_hours(prefs: dict[str, Any], context: ContextBundle) -> bool:

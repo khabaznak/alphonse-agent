@@ -4,8 +4,7 @@ from datetime import datetime, timedelta, timezone
 from alphonse.agent.observability.log_manager import get_component_logger
 from typing import Any
 
-from alphonse.agent.nervous_system import users as users_store
-from alphonse.agent.nervous_system import user_service_resolvers as resolvers
+from alphonse.agent import identity
 from alphonse.agent.nervous_system.services import TELEGRAM_SERVICE_ID
 from alphonse.agent.tools.scheduler_tool import SchedulerTool
 from alphonse.agent.tools.scheduler_tool import SchedulerToolError
@@ -65,9 +64,12 @@ class UserRegisterFromContactTool:
             )
         telegram_user_id = str(contact.get("user_id")).strip()
 
-        existing_user_id = resolvers.resolve_internal_user_by_telegram_id(telegram_user_id)
+        existing_user_id = identity.resolve_user_id(
+            service_id=TELEGRAM_SERVICE_ID,
+            service_user_id=telegram_user_id,
+        )
         if existing_user_id:
-            merged = users_store.patch_user(
+            merged = identity.patch_user(
                 existing_user_id,
                 {
                     "display_name": name,
@@ -77,9 +79,9 @@ class UserRegisterFromContactTool:
                 },
             )
             user_id = existing_user_id
-            user_payload = merged or users_store.get_user(user_id) or {}
+            user_payload = merged or identity.get_user(user_id) or {}
         else:
-            user_id = users_store.upsert_user(
+            user_id = identity.upsert_user(
                 {
                     "display_name": name,
                     "role": role,
@@ -88,9 +90,9 @@ class UserRegisterFromContactTool:
                     "is_admin": False,
                 }
             )
-            user_payload = users_store.get_user(user_id) or {}
+            user_payload = identity.get_user(user_id) or {}
 
-        resolvers.upsert_service_resolver(
+        identity.upsert_service_user_id(
             user_id=user_id,
             service_id=TELEGRAM_SERVICE_ID,
             service_user_id=telegram_user_id,
@@ -147,20 +149,23 @@ class UserRemoveFromContactTool:
                 message="Contact must include Telegram user_id.",
                 metadata={"tool": "users.remove_from_contact"},
             )
-        user_id = resolvers.resolve_internal_user_by_telegram_id(telegram_user_id)
+        user_id = identity.resolve_user_id(
+            service_id=TELEGRAM_SERVICE_ID,
+            service_user_id=telegram_user_id,
+        )
         if not user_id:
             return _failed(
                 code="user_not_found",
                 message="No registered user found for that contact.",
                 metadata={"tool": "users.remove_from_contact"},
             )
-        updated = users_store.patch_user(
+        updated = identity.patch_user(
             user_id,
             {
                 "is_active": False,
             },
         )
-        resolvers.upsert_service_resolver(
+        identity.upsert_service_user_id(
             user_id=user_id,
             service_id=TELEGRAM_SERVICE_ID,
             service_user_id=telegram_user_id,
@@ -223,7 +228,7 @@ def _resolve_caller(state: dict[str, Any] | None) -> dict[str, Any] | None:
         logger.info("user_contact_tools resolve_caller missing caller identifiers")
         return None
     for candidate in candidate_ids:
-        direct = users_store.get_user(candidate)
+        direct = identity.get_user(candidate)
         if isinstance(direct, dict) and direct:
             logger.info(
                 "user_contact_tools resolve_caller direct user_id=%s is_admin=%s",
@@ -231,10 +236,13 @@ def _resolve_caller(state: dict[str, Any] | None) -> dict[str, Any] | None:
                 bool(direct.get("is_admin")),
             )
             return direct
-        internal_user_id = resolvers.resolve_internal_user_by_telegram_id(candidate)
+        internal_user_id = identity.resolve_user_id(
+            service_id=TELEGRAM_SERVICE_ID,
+            service_user_id=candidate,
+        )
         if not internal_user_id:
             continue
-        resolved = users_store.get_user(internal_user_id)
+        resolved = identity.get_user(internal_user_id)
         if isinstance(resolved, dict) and resolved:
             logger.info(
                 "user_contact_tools resolve_caller via_telegram candidate=%s user_id=%s is_admin=%s",
@@ -335,7 +343,7 @@ def _search_user_records(*, query: str, active_only: bool, limit: int) -> list[d
     rendered = str(query or "").strip().lower()
     if not rendered:
         return []
-    candidates = users_store.list_users(active_only=bool(active_only), limit=500)
+    candidates = identity.list_users(active_only=bool(active_only), limit=500)
     rows: list[dict[str, Any]] = []
     for user in candidates:
         if not isinstance(user, dict):
@@ -351,7 +359,7 @@ def _search_user_records(*, query: str, active_only: bool, limit: int) -> list[d
                 "role": user.get("role"),
                 "relationship": user.get("relationship"),
                 "is_active": bool(user.get("is_active", True)),
-                "telegram_user_id": resolvers.resolve_service_user_id(
+                "telegram_user_id": identity.resolve_service_user_id(
                     user_id=user_id,
                     service_id=TELEGRAM_SERVICE_ID,
                 ),

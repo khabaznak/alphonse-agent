@@ -5,8 +5,8 @@ import time
 import uuid
 from datetime import datetime, timezone
 
+from alphonse.agent import identity
 from alphonse.agent.actions.conscious_message_handler import build_incoming_message_envelope
-from alphonse.agent.nervous_system import users as users_store
 from alphonse.agent.nervous_system.seed import (
     BOOTSTRAP_ADMIN_DISPLAY_NAME,
     BOOTSTRAP_ADMIN_USER_ID,
@@ -130,7 +130,7 @@ def _resolve_cli_identity(
     person_id: str | None,
 ) -> dict[str, str | None]:
     try:
-        admin = users_store.get_active_admin_user()
+        admin = identity.get_active_admin_user()
     except Exception:
         admin = None
     resolved_person_id = str(person_id or "").strip() or None

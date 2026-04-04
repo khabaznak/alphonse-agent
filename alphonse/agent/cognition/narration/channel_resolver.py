@@ -1,10 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
 
+from alphonse.agent import identity
 from alphonse.agent.cognition.narration.models import AudienceRef, NarrationIntent
-from alphonse.agent.identity import store as identity_store
 
 
 @dataclass(frozen=True)
@@ -19,22 +18,13 @@ def resolve_channel(intent: NarrationIntent) -> ChannelResolution:
         return ChannelResolution(channel_type="silent", address=None, person_id=None)
 
     if intent.audience.kind == "person":
-        channels = identity_store.list_channels_for_person(intent.audience.id, intent.channel_type)
-        if channels:
-            channel = channels[0]
+        service_id = identity.resolve_service_id(intent.channel_type)
+        target = identity.resolve_delivery_target(user_id=intent.audience.id, service_id=service_id)
+        if target:
             return ChannelResolution(
-                channel_type=channel["channel_type"],
-                address=str(channel["address"]),
-                person_id=channel.get("person_id"),
+                channel_type=intent.channel_type,
+                address=target,
+                person_id=intent.audience.id,
             )
         return ChannelResolution(channel_type="silent", address=None, person_id=intent.audience.id)
-    if intent.audience.kind == "group":
-        channels = identity_store.list_channels_for_group(intent.audience.id, intent.channel_type)
-        if channels:
-            channel = channels[0]
-            return ChannelResolution(
-                channel_type=channel["channel_type"],
-                address=str(channel["address"]),
-                person_id=channel.get("person_id"),
-            )
     return ChannelResolution(channel_type="silent", address=None, person_id=None)

@@ -5,6 +5,8 @@ from typing import Any
 
 from alphonse.agent.cognition.memory import service as memory_service
 from alphonse.agent.cognition.memory import MemoryService
+from alphonse.agent.nervous_system import users as users_store
+from alphonse.agent.nervous_system.migrate import apply_schema
 from alphonse.agent.nervous_system.senses.bus import Signal
 
 
@@ -16,7 +18,11 @@ class _FakeBus:
         self.events.append(signal)
 
 
-def test_memory_write_retries_then_succeeds(monkeypatch) -> None:
+def test_memory_write_retries_then_succeeds(monkeypatch, tmp_path: Path) -> None:
+    db_path = tmp_path / "nerve-db-memory-retry-1"
+    monkeypatch.setenv("NERVE_DB_PATH", str(db_path))
+    apply_schema(db_path)
+    users_store.upsert_user({"user_id": "alex", "display_name": "Alex", "is_active": True})
     attempts: list[int] = []
 
     def _flaky_append_episode(**_: Any) -> dict[str, Any]:
@@ -30,7 +36,7 @@ def test_memory_write_retries_then_succeeds(monkeypatch) -> None:
     monkeypatch.setenv("ALPHONSE_MEMORY_WRITE_RETRY_BACKOFF_SECONDS", "0")
 
     memory_service.record_plan_step_completion(
-        state={"correlation_id": "corr-memory-retry-1"},
+        state={"correlation_id": "corr-memory-retry-1", "owner_id": "alex"},
         task_state={"goal": "test", "status": "running"},
         current={"step_id": "step_1", "status": "executed"},
         proposal={"kind": "call_tool"},
@@ -40,7 +46,11 @@ def test_memory_write_retries_then_succeeds(monkeypatch) -> None:
     assert len(attempts) == 3
 
 
-def test_memory_write_retry_exhausted_escalates_to_admin(monkeypatch) -> None:
+def test_memory_write_retry_exhausted_escalates_to_admin(monkeypatch, tmp_path: Path) -> None:
+    db_path = tmp_path / "nerve-db-memory-retry-2"
+    monkeypatch.setenv("NERVE_DB_PATH", str(db_path))
+    apply_schema(db_path)
+    users_store.upsert_user({"user_id": "alex", "display_name": "Alex", "is_active": True})
     bus = _FakeBus()
 
     def _always_fail(**_: Any) -> dict[str, Any]:
@@ -53,7 +63,7 @@ def test_memory_write_retry_exhausted_escalates_to_admin(monkeypatch) -> None:
     memory_service._MEMORY_ESCALATION_DEDUPE.clear()
 
     memory_service.record_after_tool_call(
-        state={"correlation_id": "corr-memory-retry-2", "_bus": bus, "incoming_user_id": "alex"},
+        state={"correlation_id": "corr-memory-retry-2", "_bus": bus, "owner_id": "alex", "incoming_user_id": "alex"},
         task_state={"goal": "test", "status": "running"},
         current={"step_id": "step_1"},
         tool_name="communication.send_message",
@@ -70,8 +80,12 @@ def test_memory_write_retry_exhausted_escalates_to_admin(monkeypatch) -> None:
 
 def test_record_after_tool_call_persists_output_summary_for_search(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("ALPHONSE_MEMORY_ROOT", str(tmp_path / "memory"))
+    db_path = tmp_path / "nerve-db"
+    monkeypatch.setenv("NERVE_DB_PATH", str(db_path))
+    apply_schema(db_path)
+    users_store.upsert_user({"user_id": "alex", "display_name": "Alex", "is_active": True})
     memory_service.record_after_tool_call(
-        state={"correlation_id": "corr-memory-summary-1", "incoming_user_id": "alex"},
+        state={"correlation_id": "corr-memory-summary-1", "owner_id": "alex", "incoming_user_id": "alex"},
         task_state={"goal": "research potential client", "status": "running", "task_id": "task_client_1"},
         current={"step_id": "step_1"},
         tool_name="execution.call_mcp",

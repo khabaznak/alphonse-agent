@@ -10,6 +10,7 @@ from fastapi import FastAPI, Body, File, Form, HTTPException, Header, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
+from alphonse.agent import identity
 from alphonse.agent.actions.conscious_message_handler import build_incoming_message_envelope
 from alphonse.agent.nervous_system.onboarding_profiles import (
     delete_onboarding_profile,
@@ -60,13 +61,6 @@ from alphonse.agent.nervous_system.terminal_tools import (
 from alphonse.agent.tools.terminal import TerminalTool
 from alphonse.agent.runtime import get_runtime
 from alphonse.agent.nervous_system.pdca_queue_store import get_pdca_queue_metrics
-from alphonse.agent.nervous_system.users import (
-    delete_user,
-    get_user,
-    list_users,
-    patch_user,
-    upsert_user,
-)
 from alphonse.agent.nervous_system.assets import register_uploaded_asset
 from alphonse.infrastructure.api_gateway import gateway
 from alphonse.infrastructure.web_event_hub import web_event_hub
@@ -637,7 +631,7 @@ def list_agent_users(
     x_alphonse_api_token: str | None = Header(default=None),
 ) -> dict[str, Any]:
     _assert_api_token(x_alphonse_api_token)
-    return {"items": list_users(active_only=active_only, limit=limit)}
+    return {"items": identity.list_users(active_only=active_only, limit=limit)}
 
 
 @app.get("/agent/users/{user_id}")
@@ -646,7 +640,7 @@ def get_agent_user(
     x_alphonse_api_token: str | None = Header(default=None),
 ) -> dict[str, Any]:
     _assert_api_token(x_alphonse_api_token)
-    item = get_user(user_id)
+    item = identity.get_user(user_id)
     if not item:
         raise HTTPException(status_code=404, detail="User not found")
     return {"item": item}
@@ -658,8 +652,8 @@ def create_agent_user(
     x_alphonse_api_token: str | None = Header(default=None),
 ) -> dict[str, Any]:
     _assert_api_token(x_alphonse_api_token)
-    user_id = upsert_user(payload.model_dump())
-    return {"item": get_user(user_id)}
+    user_id = identity.upsert_user(payload.model_dump())
+    return {"item": identity.get_user(user_id)}
 
 
 @app.patch("/agent/users/{user_id}")
@@ -669,7 +663,7 @@ def patch_agent_user(
     x_alphonse_api_token: str | None = Header(default=None),
 ) -> dict[str, Any]:
     _assert_api_token(x_alphonse_api_token)
-    item = patch_user(user_id, payload.model_dump(exclude_unset=True))
+    item = identity.patch_user(user_id, payload.model_dump(exclude_unset=True))
     if not item:
         raise HTTPException(status_code=404, detail="User not found")
     return {"item": item}
@@ -681,7 +675,7 @@ def delete_agent_user(
     x_alphonse_api_token: str | None = Header(default=None),
 ) -> dict[str, Any]:
     _assert_api_token(x_alphonse_api_token)
-    ok = delete_user(user_id)
+    ok = identity.delete_user(user_id)
     if not ok:
         raise HTTPException(status_code=404, detail="User not found")
     return {"deleted": True, "user_id": user_id}
