@@ -174,11 +174,6 @@ def _get_message_from_args(args: dict[str, Any]) -> str:
     message = str(args.get("Message") or args.get("message") or "").strip()
     if not message:
         raise ValueError("missing_message")
-    max_chars = _as_positive_int(args.get("MaxChars") if args.get("MaxChars") is not None else args.get("max_chars"))
-    if max_chars > 0:
-        message = _cap_message(message, limit=max_chars)
-    if not message:
-        raise ValueError("missing_message")
     return message
 
 
@@ -251,23 +246,6 @@ def _as_bool(value: Any) -> bool:
         return value
     rendered = str(value or "").strip().lower()
     return rendered in {"1", "true", "yes", "on"}
-
-
-def _as_positive_int(value: Any) -> int:
-    try:
-        parsed = int(value)
-    except (TypeError, ValueError):
-        return 0
-    return parsed if parsed > 0 else 0
-
-
-def _cap_message(message: str, *, limit: int) -> str:
-    compact = str(message or "").strip()
-    if len(compact) <= limit:
-        return compact
-    if limit <= 1:
-        return compact[:limit]
-    return compact[: limit - 1].rstrip() + "…"
 
 
 def _failed(*, code: str, message: str) -> dict[str, Any]:
