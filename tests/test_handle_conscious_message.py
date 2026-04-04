@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from alphonse.agent.actions.conscious_message_handler import build_incoming_message_envelope
 from alphonse.agent.actions.handle_conscious_message import HandleConsciousMessageAction
+from alphonse.agent.nervous_system.migrate import apply_schema
+from alphonse.agent.nervous_system.seed import apply_seed
 from alphonse.agent.nervous_system.senses.bus import Bus, Signal
+from alphonse.agent.nervous_system.senses.cli import build_cli_user_message_signal
 
 
 def test_handle_conscious_message_enqueues_pdca_slice(monkeypatch) -> None:
@@ -178,6 +181,57 @@ def test_handle_conscious_message_logs_missing_actor_context(monkeypatch) -> Non
     )
     _ = action.execute({"signal": Signal(type="sense.telegram.message.user.received", payload=envelope), "ctx": Bus()})
     assert any(str(item.get("event") or "") == "incoming_message.context_missing_fields" for item in emitted)
+
+
+def test_handle_conscious_message_cli_seeded_identity_has_no_missing_actor_context(monkeypatch, tmp_path) -> None:
+    db_path = tmp_path / "nerve-db"
+    monkeypatch.setenv("NERVE_DB_PATH", str(db_path))
+    apply_schema(db_path)
+    apply_seed(db_path)
+
+    action = HandleConsciousMessageAction()
+    emitted: list[dict[str, object]] = []
+
+    class _FakeLog:
+        def emit(self, **kwargs: object) -> None:
+            emitted.append(dict(kwargs))
+
+    monkeypatch.setattr(
+        "alphonse.agent.actions.handle_conscious_message.resolve_session_user_id",
+        lambda **_: "owner-1",
+    )
+    monkeypatch.setattr(
+        "alphonse.agent.actions.handle_conscious_message.resolve_session_timezone",
+        lambda *_: "UTC",
+    )
+    monkeypatch.setattr(
+        "alphonse.agent.actions.handle_conscious_message.resolve_day_session",
+        lambda **_: {"session_id": "owner-1|2026-03-12", "user_id": "owner-1", "date": "2026-03-12"},
+    )
+    monkeypatch.setattr(
+        "alphonse.agent.actions.handle_conscious_message.enqueue_pdca_slice",
+        lambda **_: "task-cli-ctx-1",
+    )
+    monkeypatch.setattr(
+        "alphonse.agent.actions.handle_conscious_message.is_pdca_slicing_enabled",
+        lambda: True,
+    )
+    monkeypatch.setattr(
+        "alphonse.agent.actions.handle_conscious_message.emit_presence_phase_changed",
+        lambda **_: None,
+    )
+    monkeypatch.setattr(
+        "alphonse.agent.actions.handle_conscious_message._LOG",
+        _FakeLog(),
+    )
+
+    signal = build_cli_user_message_signal(
+        text="Hi Alphonse!",
+        correlation_id="c-cli-1",
+        metadata={"source": "test.cli"},
+    )
+    _ = action.execute({"signal": signal, "ctx": Bus()})
+    assert not any(str(item.get("event") or "") == "incoming_message.context_missing_fields" for item in emitted)
 
 
 def test_handle_conscious_message_writes_through_user_message_to_day_session(monkeypatch) -> None:

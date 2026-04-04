@@ -1,6 +1,14 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from alphonse.agent.cli import _handle_repl_message_command
+from alphonse.agent.nervous_system.migrate import apply_schema
+from alphonse.agent.nervous_system.seed import (
+    BOOTSTRAP_ADMIN_USER_ID,
+    BOOTSTRAP_CLI_SERVICE_USER_ID,
+    apply_seed,
+)
 from alphonse.agent.nervous_system.senses.bus import Bus
 from alphonse.agent.nervous_system.senses.cli import build_cli_user_message_signal
 
@@ -29,6 +37,24 @@ def test_build_cli_user_message_signal_matches_envelope_contract() -> None:
     assert payload["channel"]["target"] == "cli"
     assert payload["content"]["text"] == "hello from repl"
     assert payload["metadata"]["source"] == "test"
+
+
+def test_build_cli_user_message_signal_includes_bootstrap_identity(tmp_path: Path, monkeypatch) -> None:
+    db_path = tmp_path / "nerve-db"
+    monkeypatch.setenv("NERVE_DB_PATH", str(db_path))
+    apply_schema(db_path)
+    apply_seed(db_path)
+
+    signal = build_cli_user_message_signal(
+        text="hello from repl",
+        correlation_id="corr-cli-identity",
+        metadata={"source": "test"},
+    )
+
+    actor = signal.payload["actor"]
+    assert actor["external_user_id"] == BOOTSTRAP_CLI_SERVICE_USER_ID
+    assert actor["person_id"] == BOOTSTRAP_ADMIN_USER_ID
+    assert actor["display_name"] == "Alex"
 
 
 def test_repl_message_command_emits_signal_and_invokes_pipeline(capsys) -> None:

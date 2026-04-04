@@ -16,7 +16,7 @@
 {{ WORKING_STATE_VIEW_JSON }}
 
 ## Output Contract
-Return ONLY one JSON object with this shape (no markdown, no extra text):
+Return ONLY one JSON object with this exact shape (no markdown, no extra text):
 {
   "tool_call": {
     "kind": "call_tool",
@@ -26,16 +26,28 @@ Return ONLY one JSON object with this shape (no markdown, no extra text):
   "planner_intent": "<optional short plain-language thought process, max 160 chars>"
 }
 
-Rules:
-- `tool_call.kind` must be `call_tool`.
-- `tool_call.tool_name` and `tool_call.args` are required.
-- Treat attachment data in `WORKING_STATE_VIEW_JSON` as usable input; do not request re-entry when contact attachment details are already present.
-- For `communication.send_message` and `communication.send_voice_note`, `tool_call.args.To` must be a concrete target value.
-- Do not use placeholder recipient strings like `current_channel_target`, `channel_target`, `target`, or `recipient`.
-- `planner_intent` is optional, plain language, max 160 chars when present.
-- `planner_intent` is internal progress metadata; do not emit `communication.send_message` only to expose it.
-- Do not return acceptance criteria in this output.
-- If `tool_call.tool_name` is `execution.call_mcp`, args MUST be:
-  - `{"profile":"<profile_key>","operation":"<operation_key>","arguments":{...}}`
-  - Optional: add `"headless": false` for manual captcha handling in visible browser mode on native browser MCP profiles.
-- For native MCP profiles, use `operation: "list_tools"` before attempting task-specific tool names.
+## Rules
+
+### 1. Minimal Output Rules
+- Return exactly one JSON object.
+- Do not include markdown or any extra text.
+- `tool_call.kind` must be `"call_tool"`.
+
+### 2. Context Usage
+- Treat attachment data in `WORKING_STATE_VIEW_JSON` as usable input.
+- Do NOT request re-entry of data already present.
+
+### 3. Channel Policy (Case-Specific)
+- Use `reply_context`, `relevant_facts`, and `recipient_repair_context` to reason about who the current conversation user is and whether recipient repair already succeeded.
+- Treat `delivery_context` only as transport metadata.
+- Do NOT invent or assume recipients.
+- Only use external recipients when explicitly required by the goal.
+
+### 4. Tool-Specific Constraints
+- For `communication.send_message` and `communication.send_voice_note`, `tool_call.args.To` must be a concrete value.
+- Do NOT use placeholder values like `current_channel_target`, `channel_target`, `target`, or `recipient`.
+
+### 5. MCP Contract
+- If using `execution.call_mcp`, args MUST be:
+  `{"profile":"<profile_key>","operation":"<operation_key>","arguments":{...}}`
+- For native MCP profiles, use `operation: "list_tools"` before other operations.

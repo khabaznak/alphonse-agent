@@ -208,6 +208,28 @@ def test_send_message_tool_prefers_user_id_when_contact_is_registered(tmp_path: 
     assert fake.request.recipient_ref is None
 
 
+def test_send_message_tool_uses_current_conversation_actor_for_cli_reply() -> None:
+    fake = _FakeCommunication()
+    tool = SendMessageTool(_communication=fake)
+    result = tool.execute(
+        state={
+            "channel_type": "cli",
+            "channel_target": "cli",
+            "actor_person_id": "owner-1",
+            "incoming_user_id": "cli-admin",
+            "incoming_user_name": "Alex",
+            "correlation_id": "cid-cli-reply",
+        },
+        To="Alex",
+        Message="Hello back",
+        Channel="cli",
+    )
+    assert result["exception"] is None
+    assert fake.called is True
+    assert str(fake.request.user_id or "") == "owner-1"
+    assert fake.request.recipient_ref is None
+
+
 def test_send_message_audio_requires_audio_file_path() -> None:
     tool = SendMessageTool(_communication=_FakeCommunication())
     result = tool.execute(

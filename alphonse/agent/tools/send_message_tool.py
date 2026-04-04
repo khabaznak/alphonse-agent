@@ -65,6 +65,8 @@ class SendMessageTool:
         )
         locale = str(state_payload.get("locale") or "").strip() or None
         resolved_user_id = _resolve_internal_user_id(to)
+        if resolved_user_id is None:
+            resolved_user_id = _resolve_current_conversation_user_id(to=to, state=state_payload)
         recipient_ref = None if resolved_user_id else to if not to.lstrip("-").isdigit() else None
 
         request = CommunicationRequest(
@@ -84,7 +86,7 @@ class SendMessageTool:
         exec_context = SimpleNamespace(
             channel_type=origin_channel,
             channel_target=origin_target,
-            actor_person_id=None,
+            actor_person_id=resolved_user_id or str(state_payload.get("actor_person_id") or "").strip() or None,
             correlation_id=correlation_id,
         )
         plan = SimpleNamespace(
@@ -199,6 +201,23 @@ def _resolve_internal_user_id(to: str) -> str | None:
         return None
     value = str(user.get("user_id") or "").strip()
     return value or None
+
+
+def _resolve_current_conversation_user_id(*, to: str, state: dict[str, Any]) -> str | None:
+    rendered = str(to or "").strip()
+    if not rendered or rendered.lstrip("-").isdigit():
+        return None
+    actor_person_id = str(state.get("actor_person_id") or "").strip()
+    if not actor_person_id:
+        return None
+    candidates = {
+        _normalize_text(actor_person_id),
+        _normalize_text(str(state.get("incoming_user_id") or "").strip()),
+        _normalize_text(str(state.get("incoming_user_name") or "").strip()),
+    }
+    if _normalize_text(rendered) in {value for value in candidates if value}:
+        return actor_person_id
+    return None
 
 
 def _latest_user_search_rows(state: dict[str, Any]) -> list[dict[str, Any]]:

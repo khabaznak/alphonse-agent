@@ -1586,6 +1586,8 @@ def test_next_step_system_prompt_includes_simple_conversation_send_message_rule(
     assert "Never return direct free-text as planner output" in prompt
     assert "Produce exactly one canonical executable `tool_call`" in prompt
     assert "Never use placeholder tokens for recipients" in prompt
+    assert "transport/context metadata, not recipient identity by themselves" in prompt
+    assert "tool_call.args.To` = concrete current channel target" not in prompt
 
 
 def test_execute_step_accepts_canonical_send_message_from_planner_for_simple_conversation() -> None:
@@ -1638,8 +1640,11 @@ def test_next_step_prompt_exposes_delivery_context_to_planner() -> None:
     llm = _PromptCaptureLlm('{"tool_call":{"kind":"call_tool","tool_name":"jobs.list","args":{"limit":1}}}')
     task_state = build_default_task_state()
     task_state["goal"] = "send a message"
+    task_state["actor_person_id"] = "owner-1"
+    task_state["incoming_user_id"] = "cli-admin"
     task_state["channel_type"] = "telegram"
     task_state["channel_target"] = "8553589429"
+    task_state["conversation_key"] = "telegram:8553589429"
     task_state["message_id"] = "m-123"
     state: dict[str, object] = {
         "correlation_id": "corr-next-step-delivery-context",
@@ -1650,9 +1655,104 @@ def test_next_step_prompt_exposes_delivery_context_to_planner() -> None:
     _ = next_step(state)
     prompt = llm.last_user_prompt
     assert '"delivery_context"' in prompt
+    assert '"reply_context"' in prompt
+    assert '"actor_person_id": "owner-1"' in prompt
+    assert '"incoming_user_id": "cli-admin"' in prompt
     assert '"channel_type": "telegram"' in prompt
     assert '"channel_target": "8553589429"' in prompt
+    assert '"conversation_key": "telegram:8553589429"' in prompt
     assert '"message_id": "m-123"' in prompt
+
+
+def test_next_step_prompt_surfaces_successful_lookup_after_unresolved_recipient() -> None:
+    tool_registry = build_default_tool_registry()
+    next_step = build_next_step_node(tool_registry=tool_registry)
+    llm = _PromptCaptureLlm('{"tool_call":{"kind":"call_tool","tool_name":"jobs.list","args":{"limit":1}}}')
+    task_state = build_default_task_state()
+    task_state["goal"] = "message Hi Alphonse!"
+    task_state["actor_person_id"] = "owner-1"
+    task_state["incoming_user_id"] = "cli-admin"
+    task_state["channel_type"] = "cli"
+    task_state["channel_target"] = "cli"
+    task_state["conversation_key"] = "cli:cli"
+    task_state["plan"]["current_step_id"] = "step_2"
+    task_state["plan"]["steps"] = [
+        {
+            "step_id": "step_1",
+            "status": "failed",
+            "proposal": {
+                "kind": "call_tool",
+                "tool_name": "communication.send_message",
+                "args": {"To": "cli", "Message": "Hi Alphonse!", "Channel": "cli"},
+            },
+        },
+        {
+            "step_id": "step_2",
+            "status": "executed",
+            "proposal": {
+                "kind": "call_tool",
+                "tool_name": "get_user_details",
+                "args": {},
+            },
+        },
+    ]
+    task_state["facts"] = {
+        "step_1": {
+            "step_id": "step_1",
+            "tool_name": "communication.send_message",
+            "params": {"To": "cli", "Message": "Hi Alphonse!", "Channel": "cli"},
+            "output": None,
+            "exception": {"code": "unresolved_recipient", "message": "recipient could not be resolved"},
+            "tool": "communication.send_message",
+            "args": {"To": "cli", "Message": "Hi Alphonse!", "Channel": "cli"},
+            "result": {
+                "output": None,
+                "exception": {"code": "unresolved_recipient", "message": "recipient could not be resolved"},
+            },
+            "internal": False,
+            "ts": "2026-04-04T01:49:22.322048+00:00",
+        },
+        "step_2": {
+            "step_id": "step_2",
+            "tool_name": "get_user_details",
+            "params": {},
+            "output": {
+                "actor_person_id": "owner-1",
+                "incoming_user_id": "cli-admin",
+                "channel_type": "cli",
+                "channel_target": "cli",
+            },
+            "exception": None,
+            "tool": "get_user_details",
+            "args": {},
+            "result": {
+                "output": {
+                    "actor_person_id": "owner-1",
+                    "incoming_user_id": "cli-admin",
+                    "channel_type": "cli",
+                    "channel_target": "cli",
+                },
+                "exception": None,
+            },
+            "internal": False,
+            "ts": "2026-04-04T01:49:25.322048+00:00",
+        },
+    }
+    state: dict[str, object] = {
+        "correlation_id": "corr-next-step-recipient-repair",
+        "_llm_client": llm,
+        "task_state": task_state,
+    }
+
+    _ = next_step(state)
+    prompt = llm.last_user_prompt
+    assert '"relevant_facts"' in prompt
+    assert '"step_1"' in prompt
+    assert '"step_2"' in prompt
+    assert '"recipient_repair_context"' in prompt
+    assert '"has_successful_lookup": true' in prompt
+    assert '"tool_name": "get_user_details"' in prompt
+    assert '"error_code": "unresolved_recipient"' in prompt
 
 
 def test_next_step_single_swoop_keeps_raw_candidate_without_internal_repair() -> None:

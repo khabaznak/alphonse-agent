@@ -263,6 +263,7 @@ def _ensure_services_registry(conn: sqlite3.Connection) -> None:
     # Temporary fixed registry ids by request:
     # - Web UI: service_id=1
     # - Telegram: service_id=2
+    # - CLI: service_id=3
     conn.execute(
         """
         INSERT INTO services (service_id, service_key, raw_user_key_field, name, description)
@@ -279,6 +280,18 @@ def _ensure_services_registry(conn: sqlite3.Connection) -> None:
         """
         INSERT INTO services (service_id, service_key, raw_user_key_field, name, description)
         VALUES (2, 'telegram', 'chat_id', 'Telegram', 'Telegram chat delivery')
+        ON CONFLICT(service_id) DO UPDATE SET
+          service_key = excluded.service_key,
+          raw_user_key_field = excluded.raw_user_key_field,
+          name = excluded.name,
+          description = excluded.description,
+          updated_at = datetime('now')
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO services (service_id, service_key, raw_user_key_field, name, description)
+        VALUES (3, 'cli', 'cli_user_id', 'CLI', 'Alphonse CLI bootstrap communication')
         ON CONFLICT(service_id) DO UPDATE SET
           service_key = excluded.service_key,
           raw_user_key_field = excluded.raw_user_key_field,

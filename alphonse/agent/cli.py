@@ -624,6 +624,37 @@ def _command_say(args: argparse.Namespace, db_path: Path) -> None:
     pipeline = build_default_pipeline_with_bus(bus)
     correlation_id = args.correlation_id or str(uuid.uuid4())
     channel = str(args.channel).strip() or "cli"
+    if channel == "cli":
+        signal = build_cli_user_message_signal(
+            text=args.text,
+            correlation_id=correlation_id,
+            user_name=None,
+            channel_target=str(args.chat_id or "cli"),
+            external_user_id=None,
+            person_id=args.person_id,
+            metadata={"source": "cli.say"},
+        )
+        payload = dict(signal.payload)
+        if args.planning_mode:
+            payload["planning_mode"] = args.planning_mode
+        if args.autonomy_level is not None:
+            payload["autonomy_level"] = args.autonomy_level
+        signal = Signal(
+            type=signal.type,
+            payload=payload,
+            source=signal.source,
+            correlation_id=signal.correlation_id,
+        )
+        pipeline.handle(
+            "handle_conscious_message",
+            {
+                "signal": signal,
+                "state": None,
+                "outcome": None,
+                "ctx": None,
+            },
+        )
+        return
     signal_type = {
         "telegram": "sense.telegram.message.user.received",
         "cli": "sense.cli.message.user.received",
@@ -781,7 +812,6 @@ def _handle_repl_message_command(raw: str, *, bus: Bus | None, pipeline: object 
         return True
     signal = build_cli_user_message_signal(
         text=str(parts[1]).strip(),
-        user_name="Alex",
         metadata={"source": "cli.repl.message"},
     )
     bus.emit(signal)

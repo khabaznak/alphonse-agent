@@ -17,6 +17,7 @@ class CliSenseAdapter(SenseAdapter):
 
     def normalize(self, payload: dict[str, Any]) -> NormalizedInboundMessage:
         text = str(payload.get("text", "")).strip()
+        user_id = _as_optional_str(payload.get("user_id"))
         user_name = _as_optional_str(payload.get("user_name"))
         timestamp = _as_float(payload.get("timestamp"), default=time.time())
         correlation_id = _as_optional_str(payload.get("correlation_id"))
@@ -25,7 +26,7 @@ class CliSenseAdapter(SenseAdapter):
             text=text,
             channel_type=self.channel_type,
             channel_target=_as_optional_str(payload.get("target")) or "cli",
-            user_id=None,
+            user_id=user_id,
             user_name=user_name,
             timestamp=timestamp,
             correlation_id=correlation_id,

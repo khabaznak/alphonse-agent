@@ -180,21 +180,30 @@ def _build_planner_user_prompt(*, state: dict[str, Any], task_state: dict[str, A
 
 
 def _build_working_state_view(*, state: dict[str, Any], task_state: dict[str, Any]) -> dict[str, Any]:
-    facts = task_state.get("facts")
-    relevant_facts = dict(facts) if isinstance(facts, dict) else {}
-    if len(relevant_facts) > 8:
-        keys = sorted(relevant_facts.keys())[-8:]
-        relevant_facts = {key: relevant_facts[key] for key in keys}
+    relevant_facts = _select_relevant_facts(task_state)
+    latest_failure = _latest_failure_diagnostics(task_state)
     return {
         "goal": str(task_state.get("goal") or "").strip(),
         "acceptance_criteria": task_state.get("acceptance_criteria") if isinstance(task_state.get("acceptance_criteria"), list) else [],
         "relevant_facts": relevant_facts,
+        "reply_context": {
+            "actor_person_id": _first_non_empty(task_state.get("actor_person_id"), state.get("actor_person_id")),
+            "incoming_user_id": _first_non_empty(task_state.get("incoming_user_id"), state.get("incoming_user_id")),
+            "channel_type": _first_non_empty(task_state.get("channel_type"), state.get("channel_type")),
+            "channel_target": _first_non_empty(task_state.get("channel_target"), state.get("channel_target")),
+            "conversation_key": _first_non_empty(task_state.get("conversation_key"), state.get("conversation_key")),
+        },
         "delivery_context": {
             "channel_type": _first_non_empty(task_state.get("channel_type"), state.get("channel_type")),
             "channel_target": _first_non_empty(task_state.get("channel_target"), state.get("channel_target")),
             "message_id": _first_non_empty(task_state.get("message_id"), state.get("message_id")),
         },
-        "latest_failure_diagnostics": _latest_failure_diagnostics(task_state),
+        "latest_failure_diagnostics": latest_failure,
+        "recipient_repair_context": _recipient_repair_context(
+            task_state=task_state,
+            relevant_facts=relevant_facts,
+            latest_failure=latest_failure,
+        ),
         "execution_eval": task_state.get("execution_eval") if isinstance(task_state.get("execution_eval"), dict) else {},
         "repair_attempts": int(task_state.get("repair_attempts") or 0),
         "pending_question": str(task_state.get("next_user_question") or "").strip() or None,
@@ -207,6 +216,27 @@ def _first_non_empty(*values: Any) -> str | None:
         if rendered:
             return rendered
     return None
+
+
+def _select_relevant_facts(task_state: dict[str, Any]) -> dict[str, Any]:
+    facts = task_state.get("facts")
+    if not isinstance(facts, dict):
+        return {}
+    plan = task_state.get("plan") if isinstance(task_state.get("plan"), dict) else {}
+    steps = plan.get("steps") if isinstance(plan.get("steps"), list) else []
+    ordered_keys: list[str] = []
+    for raw_step in steps:
+        if not isinstance(raw_step, dict):
+            continue
+        step_id = str(raw_step.get("step_id") or "").strip()
+        if step_id and step_id in facts and step_id not in ordered_keys:
+            ordered_keys.append(step_id)
+    for key in facts.keys():
+        rendered = str(key or "").strip()
+        if rendered and rendered not in ordered_keys:
+            ordered_keys.append(rendered)
+    selected = ordered_keys[-8:]
+    return {key: facts[key] for key in selected if key in facts}
 
 
 def _latest_failure_diagnostics(task_state: dict[str, Any]) -> dict[str, Any]:
@@ -239,6 +269,64 @@ def _latest_failure_diagnostics(task_state: dict[str, Any]) -> dict[str, Any]:
             "output_preview": str(output)[:280] if output is not None else "",
         }
     return {}
+
+
+def _recipient_repair_context(
+    *,
+    task_state: dict[str, Any],
+    relevant_facts: dict[str, Any],
+    latest_failure: dict[str, Any],
+) -> dict[str, Any]:
+    error_code = str(latest_failure.get("error_code") or "").strip().lower()
+    if error_code != "unresolved_recipient":
+        return {}
+    latest_lookup = _latest_successful_lookup_fact(task_state=task_state, relevant_facts=relevant_facts)
+    return {
+        "latest_failure_code": error_code,
+        "has_successful_lookup": bool(latest_lookup),
+        "latest_successful_lookup": latest_lookup,
+    }
+
+
+def _latest_successful_lookup_fact(
+    *,
+    task_state: dict[str, Any],
+    relevant_facts: dict[str, Any],
+) -> dict[str, Any] | None:
+    plan = task_state.get("plan") if isinstance(task_state.get("plan"), dict) else {}
+    steps = plan.get("steps") if isinstance(plan.get("steps"), list) else []
+    ordered_step_ids = [
+        str(raw_step.get("step_id") or "").strip()
+        for raw_step in steps
+        if isinstance(raw_step, dict) and str(raw_step.get("step_id") or "").strip()
+    ]
+    lookup_tools = {"get_user_details", "users.search"}
+    for step_id in reversed(ordered_step_ids):
+        fact = relevant_facts.get(step_id)
+        if not isinstance(fact, dict):
+            continue
+        tool_name = str(fact.get("tool_name") or fact.get("tool") or "").strip()
+        if tool_name not in lookup_tools:
+            continue
+        exception = fact.get("exception")
+        if not _fact_is_success(exception):
+            continue
+        return {
+            "step_id": step_id,
+            "tool_name": tool_name,
+            "output": fact.get("output"),
+        }
+    return None
+
+
+def _fact_is_success(exception: Any) -> bool:
+    if exception is None:
+        return True
+    if isinstance(exception, dict):
+        return not any(str(exception.get(key) or "").strip() for key in ("code", "message"))
+    if isinstance(exception, str):
+        return not exception.strip()
+    return False
 
 
 def _build_mcp_capability_menu() -> tuple[str, dict[str, Any]]:
