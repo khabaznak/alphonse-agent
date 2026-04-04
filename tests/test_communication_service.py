@@ -4,10 +4,7 @@ from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import Any
 
-import pytest
-
 from alphonse.agent.nervous_system import user_service_resolvers as resolvers
-from alphonse.agent.nervous_system import users as users_store
 from alphonse.agent.nervous_system.migrate import apply_schema
 from alphonse.agent.services.communication_service import CommunicationRequest, CommunicationService
 
@@ -32,29 +29,7 @@ class _FakeDispatcher:
         self.payload = {"channel": channel, "target": target, "message": message}
 
 
-def test_send_raises_when_recipient_ref_unresolved() -> None:
-    dispatcher = _FakeDispatcher()
-    service = CommunicationService(dispatcher=dispatcher)
-    request = CommunicationRequest(
-        message="hello",
-        correlation_id="cid-1",
-        origin_channel="telegram",
-        origin_target="8553589429",
-        channel="telegram",
-        target=None,
-        recipient_ref="this-name-does-not-exist",
-    )
-    with pytest.raises(ValueError, match="unresolved_recipient"):
-        service.send(
-            request=request,
-            context={},
-            exec_context=SimpleNamespace(channel_type="telegram", channel_target="8553589429", correlation_id="cid-1"),
-            plan=SimpleNamespace(plan_id="p1", tool="communication.send_message", payload={}),
-        )
-    assert dispatcher.called is False
-
-
-def test_send_uses_origin_target_when_no_recipient_ref() -> None:
+def test_send_uses_origin_target_when_no_explicit_target_or_user() -> None:
     dispatcher = _FakeDispatcher()
     service = CommunicationService(dispatcher=dispatcher)
     request = CommunicationRequest(
@@ -64,7 +39,6 @@ def test_send_uses_origin_target_when_no_recipient_ref() -> None:
         origin_target="8553589429",
         channel="telegram",
         target=None,
-        recipient_ref=None,
     )
     service.send(
         request=request,
@@ -80,6 +54,8 @@ def test_send_resolves_target_via_service_id_and_user_id(tmp_path, monkeypatch) 
     db_path = tmp_path / "nerve-db"
     monkeypatch.setenv("NERVE_DB_PATH", str(db_path))
     apply_schema(db_path)
+
+    from alphonse.agent.nervous_system import users as users_store
 
     users_store.upsert_user(
         {

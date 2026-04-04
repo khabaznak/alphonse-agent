@@ -19,7 +19,6 @@ class CommunicationRequest:
     channel: str | None = None
     service_id: int | None = None
     target: str | None = None
-    recipient_ref: str | None = None
     user_id: str | None = None
     urgency: str = "normal"
     locale: str | None = None
@@ -41,9 +40,6 @@ class CommunicationService:
         channel = self._resolve_channel(request, service_id=resolved_service_id)
         target = self._resolve_target(request, service_id=resolved_service_id)
         if not str(target or "").strip():
-            recipient_ref = str(request.recipient_ref or "").strip()
-            if recipient_ref:
-                raise ValueError("unresolved_recipient")
             raise ValueError("missing_target")
         if self._is_blocked_by_policy(request=request, target=target):
             return
@@ -109,32 +105,7 @@ class CommunicationService:
             )
             if resolved:
                 return resolved
-        ref = str(request.recipient_ref or "").strip()
-        if not ref:
-            return str(request.origin_target or "").strip() or None
-        if ref.lstrip("-").isdigit():
-            return ref
-        user = users_store.get_user_by_display_name(ref)
-        if isinstance(user, dict):
-            user_id = str(user.get("user_id") or "").strip()
-            if user_id and service_id is not None:
-                resolved = communication_directory.resolve_delivery_target(
-                    user_id=user_id,
-                    service_id=service_id,
-                )
-                if resolved:
-                    return resolved
-        if service_id is not None:
-            resolved = communication_directory.resolve_user_id(
-                service_id=service_id,
-                service_user_id=ref,
-            )
-            if resolved:
-                return communication_directory.resolve_delivery_target(
-                    user_id=resolved,
-                    service_id=service_id,
-                )
-        return None
+        return str(request.origin_target or "").strip() or None
 
     def _is_blocked_by_policy(self, *, request: CommunicationRequest, target: str | None) -> bool:
         if str(request.urgency or "").strip().lower() in {"urgent", "critical"}:

@@ -137,7 +137,6 @@ class PlanExecutor:
                 origin_target=str(exec_context.channel_target or ""),
                 channel=str(channel or "").strip() or None,
                 target=str(plan.target or "").strip() or None,
-                recipient_ref=str(params.get("recipient") or "").strip() or None,
                 urgency=str(params.get("urgency") or "normal"),
                 locale=str(params.get("locale") or "").strip() or None,
             )
