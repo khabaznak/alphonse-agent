@@ -34,8 +34,8 @@ HA_TOKEN=your-long-lived-token
 ## 3) Run smoke helper
 
 ```bash
-python -m alphonse.run_homeassistant_smoke --print-instructions
-python -m alphonse.run_homeassistant_smoke --entity-id input_boolean.alphonse_test_toggle --duration-seconds 10
+python -m alphonse.integrations.homeassistant.smoke_toggle --print-instructions
+python -m alphonse.integrations.homeassistant.smoke_toggle --entity-id input_boolean.alphonse_test_toggle --duration-seconds 10
 ```
 
 The command prints JSON with `before`, `subscribe`, `execute_on`, `execute_off`, and `after` payloads.
