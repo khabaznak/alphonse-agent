@@ -13,8 +13,6 @@ def _load_template(filename: str) -> str:
 NEXT_STEP_SYSTEM_PROMPT = _load_template("pdca.next_step.system.j2")
 NEXT_STEP_USER_TEMPLATE = _load_template("pdca.next_step.user.j2")
 NEXT_STEP_REPAIR_USER_TEMPLATE = _load_template("pdca.next_step.repair.user.j2")
-PROGRESS_CHECKIN_SYSTEM_PROMPT = _load_template("pdca.progress_checkin.system.j2")
-PROGRESS_CHECKIN_USER_TEMPLATE = _load_template("pdca.progress_checkin.user.j2")
 
 
 def render_pdca_prompt(template: str, variables: dict[str, object]) -> str:
