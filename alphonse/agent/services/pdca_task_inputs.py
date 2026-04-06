@@ -10,7 +10,7 @@ from alphonse.agent.observability.log_manager import get_log_manager
 _LOG = get_log_manager()
 
 
-def consume_task_inputs_for_check(*, task_id: str, correlation_id: str | None) -> list[dict[str, Any]]:
+def consume_task_inputs_for_check(*, task_id: str, correlation_id: str | None = None) -> list[dict[str, Any]]:
     latest = get_pdca_task(task_id)
     if not isinstance(latest, dict):
         return []

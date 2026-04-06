@@ -6,6 +6,7 @@ from alphonse.agent.cortex.task_mode.check import select_case_deterministically
 import alphonse.agent.cortex.task_mode.check as check_module
 from alphonse.agent.cortex.task_mode.pdca import check_node
 from alphonse.agent.cortex.task_mode.pdca import route_after_act
+from alphonse.agent.cortex.task_mode.task_record import TaskRecord
 from alphonse.agent.cortex.task_mode.state import build_default_task_state
 from alphonse.agent.nervous_system.migrate import apply_schema
 from alphonse.agent.nervous_system.pdca_queue_store import get_pdca_task
@@ -37,16 +38,16 @@ class _PromptCaptureLlm:
 
 
 def test_select_case_deterministic_mapping() -> None:
-    assert select_case_deterministically({"check_provenance": "entry"}) == "new_request"
-    assert select_case_deterministically({"check_provenance": "do"}) == "execution_review"
-    assert select_case_deterministically({"check_provenance": "slice_resume"}) == "task_resumption"
-    assert select_case_deterministically({"check_provenance": "unknown"}) is None
+    assert select_case_deterministically({"agent_metrics_budget": {"check_provenance": "entry"}}) == "new_request"
+    assert select_case_deterministically({"agent_metrics_budget": {"check_provenance": "do"}}) == "execution_review"
+    assert select_case_deterministically({"agent_metrics_budget": {"check_provenance": "slice_resume"}}) == "task_resumption"
+    assert select_case_deterministically({"agent_metrics_budget": {"check_provenance": "unknown"}}) is None
 
 
 def test_check_missing_provenance_fails_explicitly() -> None:
     tool_registry = build_default_tool_registry()
     task_state = build_default_task_state()
-    task_state["check_provenance"] = None
+    task_state["agent_metrics_budget"]["check_provenance"] = "unknown"
     state = {"correlation_id": "corr-missing-provenance", "task_state": task_state}
 
     out = check_node(state, tool_registry=tool_registry)
@@ -68,7 +69,7 @@ def test_entry_case_always_emits_plan_and_creates_baseline_criteria() -> None:
         ]
     )
     task_state = build_default_task_state()
-    task_state["check_provenance"] = "entry"
+    task_state["agent_metrics_budget"]["check_provenance"] = "entry"
     task_state["acceptance_criteria"] = []
     state = {
         "correlation_id": "corr-entry-plan",
@@ -101,7 +102,7 @@ def test_execution_review_marks_criteria_and_reaches_success() -> None:
         ]
     )
     task_state = build_default_task_state()
-    task_state["check_provenance"] = "do"
+    task_state["agent_metrics_budget"]["check_provenance"] = "do"
     task_state["acceptance_criteria"] = [
         {
             "id": "ac_1",
@@ -111,7 +112,9 @@ def test_execution_review_marks_criteria_and_reaches_success() -> None:
             "created_by_case": "new_request",
         }
     ]
-    task_state["facts"] = {"step_1": {"tool": "jobs.list", "status": "ok", "result_payload": {"count": 2}}}
+    task_state["tool_call_history"] = [
+        {"step_id": "step_1", "tool_name": "jobs.list", "output": {"count": 2}, "exception": None, "internal": False}
+    ]
     state = {"correlation_id": "corr-exec-success", "_llm_client": llm, "task_state": task_state}
 
     out = check_node(state, tool_registry=tool_registry)
@@ -133,15 +136,16 @@ def test_repeated_failure_signature_is_advisory_and_does_not_force_mission_faile
         ]
     )
     task_state = build_default_task_state()
-    task_state["check_provenance"] = "do"
-    task_state["facts"] = {
-        "step_1": {
+    task_state["agent_metrics_budget"]["check_provenance"] = "do"
+    task_state["tool_call_history"] = [
+        {
+            "step_id": "step_1",
             "tool_name": "execution.run_terminal",
             "params": {},
             "output": None,
             "exception": {"message": "timeout", "code": "timeout"},
         }
-    }
+    ]
     state = {"correlation_id": "corr-hard-stop", "_llm_client": llm, "task_state": task_state}
 
     first = check_node(state, tool_registry=tool_registry)
@@ -155,29 +159,30 @@ def test_repeated_failure_signature_is_advisory_and_does_not_force_mission_faile
     assert next_state.get("status") == "running"
 
 
-def test_check_judge_prompt_renders_from_template_with_diagnostic_context() -> None:
+def test_check_judge_prompt_renders_from_task_record_sections() -> None:
     tool_registry = build_default_tool_registry()
     llm = _PromptCaptureLlm(
         '{"kind":"plan","case_type":"execution_review","reason":"continue","confidence":0.8,"criteria_updates":[],"evidence_refs":[],"failure_class":null}'
     )
     task_state = build_default_task_state()
-    task_state["check_provenance"] = "do"
-    task_state["facts"] = {
-        "step_1": {
+    task_state["agent_metrics_budget"]["check_provenance"] = "do"
+    task_state["tool_call_history"] = [
+        {
+            "step_id": "step_1",
             "tool_name": "communication.send_message",
             "params": {"To": "current_channel_target"},
             "output": None,
             "exception": {"code": "unresolved_recipient", "message": "recipient could not be resolved"},
         }
-    }
+    ]
     state = {"correlation_id": "corr-check-template-prompt", "_llm_client": llm, "task_state": task_state}
 
     _ = check_node(state, tool_registry=tool_registry)
     prompt = llm.last_user_prompt
-    assert "# DIAGNOSTIC BUDGET CONTEXT (ADVISORY, NON-AUTHORITATIVE)" in prompt
-    assert "planner_invalid_streak" in prompt
-    assert "repeated_failure_signature_streak" in prompt
-    assert "zero_progress_streak" in prompt
+    assert "# FACTS" in prompt
+    assert "# TOOL CALL HISTORY" in prompt
+    assert "communication.send_message" in prompt
+    assert "unresolved_recipient" in prompt
     assert "If objective criteria are satisfied but delivery evidence is missing, return PLAN" in prompt
 
 
@@ -187,7 +192,7 @@ def test_check_judge_prompt_new_request_requires_objective_and_delivery_criteria
         '{"kind":"plan","case_type":"new_request","reason":"build criteria","confidence":0.8,"criteria_updates":[{"op":"append","text":"objective"},{"op":"append","text":"inform user"}],"evidence_refs":[],"failure_class":null}'
     )
     task_state = build_default_task_state()
-    task_state["check_provenance"] = "entry"
+    task_state["agent_metrics_budget"]["check_provenance"] = "entry"
     state = {
         "correlation_id": "corr-check-template-new-request",
         "_llm_client": llm,
@@ -208,7 +213,7 @@ def test_check_template_failure_mission_fails_with_admin_message(monkeypatch) ->
         ['{"kind":"plan","case_type":"execution_review","reason":"continue","confidence":0.5,"criteria_updates":[],"evidence_refs":[],"failure_class":null}']
     )
     task_state = build_default_task_state()
-    task_state["check_provenance"] = "do"
+    task_state["agent_metrics_budget"]["check_provenance"] = "do"
     state = {"correlation_id": "corr-check-template-fail", "_llm_client": llm, "task_state": task_state}
 
     def _boom(template: str, variables: dict[str, object]) -> str:
@@ -221,16 +226,15 @@ def test_check_template_failure_mission_fails_with_admin_message(monkeypatch) ->
     def _capture_log_task_event(**kwargs):
         emitted.append(dict(kwargs))
 
+    task_record = TaskRecord(task_id="task-check-template-fail", user_id="owner-1", goal="do the task")
+
     out = check_module.check_node_impl(
-        state=state,
-        tool_registry=tool_registry,
+        task_record=task_record,
+        llm_client=llm,
         logger=logging.getLogger("test.check"),
         log_task_event=_capture_log_task_event,
-        wip_emit_every_cycles=1,
     )
-    next_state = out.get("task_state")
-    assert isinstance(next_state, dict)
-    verdict = next_state.get("judge_verdict")
+    verdict = out.get("judge_result")
     assert isinstance(verdict, dict)
     assert verdict.get("kind") == "mission_failed"
     assert verdict.get("failure_class") == "judge_prompt_template_failed"
@@ -278,7 +282,7 @@ def test_check_consumes_task_inputs_resets_criteria_and_forces_replan(tmp_path, 
         '{"kind":"plan","case_type":"execution_review","reason":"continue","confidence":0.8,"criteria_updates":[],"evidence_refs":[],"failure_class":null}'
     )
     task_state = build_default_task_state()
-    task_state["check_provenance"] = "do"
+    task_state["agent_metrics_budget"]["check_provenance"] = "do"
     task_state["task_id"] = task_id
     task_state["acceptance_criteria"] = [
         {"id": "ac_1", "text": "Old criterion", "status": "pending", "evidence_refs": [], "created_by_case": "new_request"}
@@ -294,15 +298,15 @@ def test_check_consumes_task_inputs_resets_criteria_and_forces_replan(tmp_path, 
     }
 
     out = check_node(state, tool_registry=tool_registry)
-    assert llm.last_user_prompt == ""
+    assert "new steering text from queue" in llm.last_user_prompt
     next_state = out.get("task_state")
     assert isinstance(next_state, dict)
-    assert bool(next_state.get("steering_consumed_in_check")) is True
+    assert bool((next_state.get("agent_metrics_budget") or {}).get("steering_consumed_in_check")) is True
     assert next_state.get("acceptance_criteria") == []
     verdict = next_state.get("judge_verdict")
     assert isinstance(verdict, dict)
     assert verdict.get("kind") == "plan"
-    assert "acceptance criteria reset" in str(verdict.get("reason") or "")
+    assert str(verdict.get("reason") or "") == "continue"
     assert route_after_act({"task_state": next_state}) == "next_step_node"
     facts = next_state.get("facts")
     assert isinstance(facts, dict)
@@ -367,7 +371,7 @@ def test_check_does_not_consume_same_queue_message_twice(tmp_path, monkeypatch) 
         ['{"kind":"plan","case_type":"execution_review","reason":"continue","confidence":0.8,"criteria_updates":[],"evidence_refs":[],"failure_class":null}']
     )
     task_state = build_default_task_state()
-    task_state["check_provenance"] = "do"
+    task_state["agent_metrics_budget"]["check_provenance"] = "do"
     task_state["task_id"] = task_id
     state = {"correlation_id": "corr-check-repeat", "_llm_client": llm, "task_state": task_state}
 
@@ -407,16 +411,16 @@ def test_check_node_persists_criteria_snapshot_pdca_event(tmp_path, monkeypatch)
         ]
     )
     task_state = build_default_task_state()
-    task_state["check_provenance"] = "do"
+    task_state["agent_metrics_budget"]["check_provenance"] = "do"
     task_state["task_id"] = task_id
     task_state["acceptance_criteria"] = [
         {"id": "ac_1", "text": "Send user confirmation", "status": "pending", "evidence_refs": [], "created_by_case": "new_request"},
         {"id": "ac_2", "text": "Persist task evidence", "status": "pending", "evidence_refs": [], "created_by_case": "new_request"},
     ]
-    task_state["facts"] = {
-        "step_1": {"tool_name": "communication.send_message", "output": {"message_id": "m-1"}, "exception": None},
-        "step_2": {"tool_name": "planner_output", "internal": True},
-    }
+    task_state["tool_call_history"] = [
+        {"step_id": "step_1", "tool_name": "communication.send_message", "output": {"message_id": "m-1"}, "exception": None, "internal": False},
+        {"step_id": "step_2", "tool_name": "planner_output", "internal": True},
+    ]
     state = {"task_id": task_id, "correlation_id": "corr-check-snapshot", "_llm_client": llm, "task_state": task_state}
     _ = check_node(state, tool_registry=tool_registry)
     events = list_pdca_events(task_id=task_id, limit=30)

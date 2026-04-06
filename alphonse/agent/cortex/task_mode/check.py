@@ -1,18 +1,18 @@
 from __future__ import annotations
 
-import hashlib
 import json
-import os
 from typing import Any
 
-from alphonse.agent.cognition.prompt_templates_runtime import CHECK_JUDGE_USER_TEMPLATE
-from alphonse.agent.cognition.prompt_templates_runtime import CHECK_SYSTEM_PROMPT
+from alphonse.agent.cognition.prompt_templates_runtime import CHECK_JUDGE_SYSTEM_PROMPT_TEMPLATE
+from alphonse.agent.cognition.prompt_templates_runtime import CHECK_JUDGE_USER_PROMPT_TEMPLATE
 from alphonse.agent.cognition.prompt_templates_runtime import render_prompt_template
 from alphonse.agent.cognition.utterance_policy import render_utterance_policy_block
 from alphonse.agent.cortex.llm_output.json_parse import parse_json_object
+from alphonse.agent.cortex.task_mode.task_record import TaskRecord
 from alphonse.agent.cortex.task_mode.task_state_helpers import append_trace_event
 from alphonse.agent.cortex.task_mode.task_state_helpers import correlation_id
 from alphonse.agent.cortex.task_mode.task_state_helpers import normalize_acceptance_criteria_records
+from alphonse.agent.cortex.task_mode.task_state_helpers import task_metrics
 from alphonse.agent.cortex.task_mode.task_state_helpers import task_state_with_defaults
 from alphonse.agent.cortex.transitions import emit_transition_event
 from alphonse.agent.nervous_system.pdca_queue_store import append_pdca_event
@@ -20,13 +20,10 @@ from alphonse.agent.services.pdca_task_inputs import consume_task_inputs_for_che
 from alphonse.agent.session.day_state import render_recent_conversation_block
 
 _JUDGE_INVALID_BUDGET_DEFAULT = 2
-_ZERO_PROGRESS_BUDGET_DEFAULT = 2
-_REPEATED_FAILURE_BUDGET_DEFAULT = 2
-_PLANNER_INVALID_BUDGET_DEFAULT = 2
 
 _CASE_TYPES = {"new_request", "execution_review", "task_resumption"}
 _VERDICT_KINDS = {"conversation", "plan", "mission_success", "mission_failed"}
-
+_PDCA_PHASE_CHECK = "check"
 
 class JudgePromptTemplateError(RuntimeError):
     def __init__(self, *, template_id: str, message: str) -> None:
@@ -34,29 +31,343 @@ class JudgePromptTemplateError(RuntimeError):
         self.template_id = template_id
 
 
+def _prepare_check_context(state: dict[str, Any]) -> dict[str, Any]:
+    task_state = task_state_with_defaults(state)
+    metrics = task_metrics(task_state)
+    task_state["pdca_phase"] = _PDCA_PHASE_CHECK
+    task_state["acceptance_criteria"] = normalize_acceptance_criteria_records(task_state.get("acceptance_criteria"))
+    metrics["steering_consumed_in_check"] = False
+    return {
+        "task_state": task_state,
+        "correlation_id": correlation_id(state),
+        "cycle": int(task_state.get("cycle_index") or 0),
+    }
+
+
 def check_node_impl(
-    state: dict[str, Any],
+    task_record: TaskRecord,
     *,
-    tool_registry: Any,
+    llm_client: Any,
     logger: Any,
     log_task_event: Any,
-    wip_emit_every_cycles: int,
 ) -> dict[str, Any]:
-    _ = (tool_registry, wip_emit_every_cycles)
-    task_state = task_state_with_defaults(state)
-    task_state["pdca_phase"] = "check"
-    corr = correlation_id(state)
-    task_state["acceptance_criteria"] = normalize_acceptance_criteria_records(task_state.get("acceptance_criteria"))
-    cycle = int(task_state.get("cycle_index") or 0)
-    task_state["steering_consumed_in_check"] = False
-    consumed_inputs = _consume_steering_inputs_for_check(
-        state=state,
-        task_state=task_state,
-        correlation_id=corr,
+    case_type = _validate_case_type(_determine_case_type(task_record))
+    if case_type is None:
+        return _build_invalid_case_type_result(task_record=task_record)
+
+    consumed_inputs = _consume_task_inputs_for_task_record(task_record)
+    if consumed_inputs:
+        _append_consumed_inputs_to_task_record(task_record, consumed_inputs=consumed_inputs)
+        task_record.replan()
+
+    try:
+        judge_prompt = _get_judge_prompt_from_task_record(
+            task_record=task_record,
+            case_type=case_type,
+        )
+    except JudgePromptTemplateError as exc:
+        return _build_judge_prompt_failure_result(
+            task_record=task_record,
+            logger=logger,
+            log_task_event=log_task_event,
+            error=str(exc),
+        )
+    judge_result = _conduct_trial(
+        llm_client=llm_client,
+        judge_prompt=judge_prompt,
+        case_type=case_type,
+        task_record=task_record,
     )
+    verdict = _extract_verdict_kind(judge_result)
+    updated_task_record = _apply_check_updates(
+        task_record=task_record,
+        criteria_updates=judge_result.get("criteria_updates"),
+        case_type=case_type,
+    )
+    updated_task_record = _apply_terminal_result(task_record=updated_task_record, verdict=verdict, judge_result=judge_result)
+    result = _build_check_result(
+        task_record=updated_task_record,
+        verdict=verdict,
+        judge_result=judge_result,
+        case_type=case_type,
+        consumed_inputs=consumed_inputs,
+    )
+    _log_check_result(
+        task_record=updated_task_record,
+        verdict=verdict,
+        judge_result=judge_result,
+        logger=logger,
+        log_task_event=log_task_event,
+    )
+    return result
+
+
+def _determine_case_type(task_record: TaskRecord) -> str:
+    if task_record.get_acceptance_criteria_md() == "- (none)" and task_record.get_tool_call_history_md() == "- (none)":
+        return "new_request"
+    if task_record.get_tool_call_history_md() != "- (none)":
+        return "execution_review"
+    return "task_resumption"
+
+
+def _build_invalid_case_type_result(*, task_record: TaskRecord) -> dict[str, Any]:
+    judge_result = _mission_failed_judge_result(
+        case_type="execution_review",
+        reason="case_type is required and must be one of: new_request|execution_review|task_resumption.",
+        failure_class="invalid_case_type",
+    )
+    verdict = _extract_verdict_kind(judge_result)
+    failed_record = _apply_terminal_result(task_record=task_record, verdict=verdict, judge_result=judge_result)
+    return _build_check_result(task_record=failed_record, verdict=verdict, judge_result=judge_result, case_type="execution_review")
+
+
+def _get_judge_prompt_from_task_record(
+    *,
+    task_record: TaskRecord,
+    case_type: str,
+) -> str:
+    policy = render_utterance_policy_block(
+        locale=None,
+        tone=None,
+        address_style=None,
+        channel_type=None,
+    )
+    try:
+        return render_prompt_template(
+            CHECK_JUDGE_USER_PROMPT_TEMPLATE,
+            {
+                "POLICY_BLOCK": policy,
+                "CASE_TYPE": case_type,
+                "RECENT_CONVERSATION": task_record.recent_conversation_md,
+                "GOAL": task_record.goal,
+                "ACCEPTANCE_CRITERIA_BASELINE": task_record.get_acceptance_criteria_md(),
+                "FACTS_SECTION": task_record.get_facts_md(),
+                "PLAN_SECTION": task_record.get_plan_md(),
+                "MEMORY_FACTS_SECTION": task_record.get_memory_facts_md(),
+                "TOOL_CALL_HISTORY_SECTION": task_record.get_tool_call_history_md(),
+            },
+        )
+    except Exception as exc:
+        raise JudgePromptTemplateError(
+            template_id="pdca.check.judge.user.j2",
+            message=f"failed to render check judge template: {exc}",
+        ) from exc
+
+
+def _conduct_trial(
+    *,
+    llm_client: Any,
+    judge_prompt: str,
+    case_type: str,
+    task_record: TaskRecord,
+) -> dict[str, Any]:
+    if llm_client is None:
+        return _fallback_trial_judge_result(case_type=case_type, task_record=task_record)
+    try:
+        raw = _call_judge_llm(llm_client=llm_client, judge_prompt=judge_prompt)
+    except JudgePromptTemplateError:
+        raise
+    parsed = _parse_judge_verdict(raw=raw, case_type=case_type)
+    if isinstance(parsed, dict):
+        return parsed
+    return {
+        "kind": "plan",
+        "case_type": case_type,
+        "reason": "Judge output invalid; continue planning.",
+        "confidence": 0.0,
+        "criteria_updates": [],
+        "evidence_refs": [],
+        "failure_class": None,
+    }
+
+
+def _extract_verdict_kind(judge_result: dict[str, Any]) -> str:
+    return str(judge_result.get("kind") or "").strip().lower() or "plan"
+
+
+def _apply_check_updates(
+    *,
+    task_record: TaskRecord,
+    criteria_updates: Any,
+    case_type: str,
+) -> TaskRecord:
+    updated = task_record
+    if case_type == "new_request":
+        _apply_new_request_updates(updated, criteria_updates)
+    else:
+        _apply_non_entry_updates(updated, criteria_updates)
+    return updated
+
+
+def _apply_new_request_updates(task_record: TaskRecord, criteria_updates: Any) -> None:
+    if not str(task_record.goal or "").strip():
+        task_record.goal = "the user request"
+    _append_acceptance_criteria_updates(task_record, criteria_updates)
+
+
+def _apply_non_entry_updates(task_record: TaskRecord, criteria_updates: Any) -> None:
+    _append_acceptance_criteria_updates(task_record, criteria_updates)
+
+
+def _append_acceptance_criteria_updates(task_record: TaskRecord, updates: Any) -> None:
+    for update in updates if isinstance(updates, list) else []:
+        if not isinstance(update, dict):
+            continue
+        op = str(update.get("op") or "").strip().lower()
+        if op == "append":
+            text = str(update.get("text") or "").strip()
+            if text:
+                task_record.append_acceptance_criterion(text)
+        elif op == "mark_satisfied":
+            criterion_id = str(update.get("criterion_id") or "").strip()
+            if criterion_id:
+                task_record.append_acceptance_criterion(f"{criterion_id} marked satisfied")
+
+
+def _apply_terminal_result(*, task_record: TaskRecord, verdict: str, judge_result: dict[str, Any]) -> TaskRecord:
+    reason = str(judge_result.get("reason") or "").strip()
+    if verdict == "mission_success":
+        task_record.status = "done"
+        task_record.outcome = {
+            "kind": "task_completed",
+            "summary": reason or "Mission completed successfully.",
+            "final_text": reason or "Mission completed successfully.",
+        }
+    elif verdict == "mission_failed":
+        task_record.status = "failed"
+        task_record.outcome = {
+            "kind": "task_failed",
+            "summary": reason or "Mission failed.",
+            "failure_class": str(judge_result.get("failure_class") or "mission_failed").strip() or "mission_failed",
+        }
+    else:
+        task_record.status = "running"
+        task_record.outcome = None
+    return task_record
+
+
+def _build_check_result(
+    *,
+    task_record: TaskRecord,
+    verdict: str,
+    judge_result: dict[str, Any],
+    case_type: str,
+    consumed_inputs: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    return {
+        "task_record": task_record,
+        "verdict": verdict,
+        "judge_result": dict(judge_result),
+        "case_type": case_type,
+        "status": task_record.status,
+        "outcome": task_record.outcome,
+        "reason": str(judge_result.get("reason") or "").strip(),
+        "confidence": float(judge_result.get("confidence") or 0.0),
+        "consumed_inputs": list(consumed_inputs or []),
+    }
+
+
+def _build_judge_prompt_failure_result(
+    *,
+    task_record: TaskRecord,
+    logger: Any,
+    log_task_event: Any,
+    error: str,
+) -> dict[str, Any]:
+    judge_result = _mission_failed_judge_result(
+        case_type="execution_review",
+        reason="The PDCA check templating system failed; contact the admin.",
+        failure_class="judge_prompt_template_failed",
+    )
+    verdict = _extract_verdict_kind(judge_result)
+    failed_record = _apply_terminal_result(task_record=task_record, verdict=verdict, judge_result=judge_result)
+    log_task_event(
+        logger=logger,
+        state={"correlation_id": None, "channel_type": None, "actor_person_id": task_record.user_id},
+        task_state={"cycle_index": 0, "status": failed_record.status},
+        node="check_node",
+        event="judge.prompt_template.failed",
+        template_id="pdca.check.judge.user.j2",
+        error=error,
+    )
+    return _build_check_result(
+        task_record=failed_record,
+        verdict=verdict,
+        judge_result=judge_result,
+        case_type="execution_review",
+    )
+
+
+def _log_check_result(
+    *,
+    task_record: TaskRecord,
+    verdict: str,
+    judge_result: dict[str, Any],
+    logger: Any,
+    log_task_event: Any,
+) -> None:
+    logger.info(
+        "task_mode check verdict=%s status=%s",
+        verdict,
+        task_record.status,
+    )
+    log_task_event(
+        logger=logger,
+        state={"correlation_id": None, "channel_type": None, "actor_person_id": task_record.user_id},
+        task_state={"cycle_index": 0, "status": task_record.status},
+        node="check_node",
+        event="graph.check.judge_verdict",
+        verdict_kind=verdict,
+        case_type=str(judge_result.get("case_type") or ""),
+        confidence=float(judge_result.get("confidence") or 0.0),
+        route="next_step_node" if verdict == "plan" else "respond_node",
+    )
+
+
+def run_check_from_state(
+    state: dict[str, Any],
+    *,
+    logger: Any,
+    log_task_event: Any,
+) -> dict[str, Any]:
+    context = _prepare_check_context(state)
+    task_state = context["task_state"]
+    corr = context["correlation_id"]
+    cycle = context["cycle"]
+
+    case_type = _validate_case_type(select_case_deterministically(task_state))
+    if case_type is None:
+        judge_result = _mission_failed_judge_result(
+            case_type="execution_review",
+            reason="check_provenance is required and must be one of: entry|do|slice_resume.",
+            failure_class="invalid_provenance",
+        )
+        verdict = _extract_verdict_kind(judge_result)
+        task_record = _build_task_record_from_state(state=state, task_state=task_state)
+        return _finalize_check_state_result(
+            state=state,
+            task_state=task_state,
+            task_record=task_record,
+            verdict=verdict,
+            judge_result=judge_result,
+            logger=logger,
+            log_task_event=log_task_event,
+            correlation_id=corr,
+            cycle=cycle,
+        )
+
+    task_record = _build_task_record_from_state(state=state, task_state=task_state)
+    result = check_node_impl(
+        task_record,
+        llm_client=state.get("_llm_client"),
+        logger=logger,
+        log_task_event=log_task_event,
+    )
+    consumed_inputs = result.get("consumed_inputs") if isinstance(result.get("consumed_inputs"), list) else []
     if consumed_inputs:
         _apply_check_consumed_inputs(state=state, task_state=task_state, consumed_inputs=consumed_inputs)
-        task_state["steering_consumed_in_check"] = True
+        task_metrics(task_state)["steering_consumed_in_check"] = True
+        task_state["goal"] = ""
         task_state["acceptance_criteria"] = []
         log_task_event(
             logger=logger,
@@ -76,140 +387,50 @@ def check_node_impl(
                 for item in consumed_inputs
             ),
         )
-        log_task_event(
-            logger=logger,
-            state=state,
-            task_state=task_state,
-            node="check_node",
-            event="pdca.check.replan_forced_by_steering",
-            cycle=cycle,
-            accepted_criteria_reset=True,
-            consumed_count=len(consumed_inputs),
-        )
-        verdict = _forced_replan_verdict_for_steering(task_state=task_state)
-        return _finalize_check_cycle(
-            state=state,
-            task_state=task_state,
-            verdict=verdict,
-            logger=logger,
-            log_task_event=log_task_event,
-            corr=corr,
-            cycle=cycle,
-        )
-
-    case_type = select_case_deterministically(task_state)
-    if case_type is None:
-        verdict = _mission_failed_verdict(
-            case_type="execution_review",
-            reason="check_provenance is required and must be one of: entry|do|slice_resume.",
-            failure_class="invalid_provenance",
-        )
-        return _finalize_check_cycle(
-            state=state,
-            task_state=task_state,
-            verdict=verdict,
-            logger=logger,
-            log_task_event=log_task_event,
-            corr=corr,
-            cycle=cycle,
-        )
-
-    planner_invalid_streak = _update_planner_invalid_streak(task_state)
-    if planner_invalid_streak > 0 and planner_invalid_streak <= _planner_invalid_budget():
-        append_trace_event(
-            task_state,
-            {
-                "type": "planner_retry",
-                "summary": (
-                    f"Planner output invalid; retrying planning "
-                    f"({planner_invalid_streak}/{_planner_invalid_budget()})."
-                ),
-                "correlation_id": corr,
-            },
-        )
-    repeated_failure_streak = _update_repeated_failure_signature(task_state)
-    zero_progress_streak = _update_zero_progress_state(task_state)
-
-    try:
-        verdict = run_judge(
-            state=state,
-            task_state=task_state,
-            case_type=case_type,
-            diagnostic_context={
-                "planner_invalid_streak": planner_invalid_streak,
-                "planner_invalid_budget": _planner_invalid_budget(),
-                "repeated_failure_signature_streak": repeated_failure_streak,
-                "repeated_failure_signature_budget": _repeated_failure_budget(),
-                "zero_progress_streak": zero_progress_streak,
-                "zero_progress_budget": _zero_progress_budget(),
-            },
-        )
-    except JudgePromptTemplateError as exc:
-        log_task_event(
-            logger=logger,
-            state=state,
-            task_state=task_state,
-            node="check_node",
-            event="judge.prompt_template.failed",
-            level="error",
-            error_code="judge_prompt_template_failed",
-            template_id=exc.template_id,
-            error_message=str(exc),
-            cycle=cycle,
-        )
-        verdict = _mission_failed_verdict(
-            case_type=case_type,
-            reason="The templating system failed. Please contact the admin.",
-            failure_class="judge_prompt_template_failed",
-            retry_exhausted=True,
-        )
-        return _finalize_check_cycle(
-            state=state,
-            task_state=task_state,
-            verdict=verdict,
-            logger=logger,
-            log_task_event=log_task_event,
-            corr=corr,
-            cycle=cycle,
-        )
-    if not isinstance(verdict, dict):
-        streak = int(task_state.get("judge_invalid_streak") or 0) + 1
-        task_state["judge_invalid_streak"] = streak
-        if streak > _judge_invalid_budget():
-            verdict = _mission_failed_verdict(
-                case_type=case_type,
-                reason="Judge output remained invalid beyond retry budget.",
-                failure_class="judge_output_invalid",
-                retry_exhausted=True,
-            )
-        else:
-            verdict = {
-                "kind": "plan",
-                "case_type": case_type,
-                "reason": "Judge output invalid; continuing with deterministic retry policy.",
-                "confidence": 0.0,
-                "criteria_updates": [],
-                "evidence_refs": [],
-                "failure_class": None,
-            }
-    else:
-        task_state["judge_invalid_streak"] = 0
-
+    judge_result = result.get("judge_result") if isinstance(result.get("judge_result"), dict) else {}
+    verdict = str(result.get("verdict") or "").strip().lower() or _extract_verdict_kind(judge_result)
     task_state["acceptance_criteria"] = apply_criteria_updates(
-        existing=normalize_acceptance_criteria_records(task_state.get("acceptance_criteria")),
-        updates=verdict.get("criteria_updates"),
+        existing=[] if consumed_inputs else normalize_acceptance_criteria_records(task_state.get("acceptance_criteria")),
+        updates=judge_result.get("criteria_updates"),
         case_type=case_type,
-        fallback_user_text=str(state.get("last_user_message") or "").strip(),
+        fallback_user_text=str(
+            (
+                result.get("task_record").goal
+                if isinstance(result.get("task_record"), TaskRecord)
+                else task_record.goal
+            )
+            or ""
+        ).strip(),
     )
-    return _finalize_check_cycle(
+    return _finalize_check_state_result(
         state=state,
         task_state=task_state,
+        task_record=result.get("task_record") if isinstance(result.get("task_record"), TaskRecord) else task_record,
         verdict=verdict,
+        judge_result=judge_result,
         logger=logger,
         log_task_event=log_task_event,
-        corr=corr,
+        correlation_id=corr,
         cycle=cycle,
     )
+
+
+def _consume_task_inputs_for_task_record(task_record: TaskRecord) -> list[dict[str, Any]]:
+    task_id = str(task_record.task_id or "").strip()
+    if not task_id:
+        return []
+    try:
+        raw = consume_task_inputs_for_check(task_id=task_id)
+    except Exception:
+        return []
+    if not isinstance(raw, list):
+        return []
+    return [dict(item) for item in raw if isinstance(item, dict)]
+
+
+def _validate_case_type(case_type: str | None) -> str | None:
+    rendered = str(case_type or "").strip().lower()
+    return rendered if rendered in _CASE_TYPES else None
 
 
 def route_after_check_impl(state: dict[str, Any]) -> str:
@@ -228,42 +449,14 @@ def route_after_check_impl(state: dict[str, Any]) -> str:
 
 
 def select_case_deterministically(task_state: dict[str, Any]) -> str | None:
-    provenance = str(task_state.get("check_provenance") or "").strip().lower()
+    metrics = task_metrics(task_state)
+    provenance = str(metrics.get("check_provenance") or task_state.get("check_provenance") or "").strip().lower()
     mapping = {
         "entry": "new_request",
         "do": "execution_review",
         "slice_resume": "task_resumption",
     }
     return mapping.get(provenance)
-
-
-def run_judge(
-    *,
-    state: dict[str, Any],
-    task_state: dict[str, Any],
-    case_type: str,
-    diagnostic_context: dict[str, Any] | None = None,
-) -> dict[str, Any] | None:
-    if case_type not in _CASE_TYPES:
-        return None
-    llm_client = state.get("_llm_client")
-    if llm_client is None:
-        return _fallback_judge_verdict(case_type=case_type, state=state, task_state=task_state)
-
-    user_prompt = _build_judge_user_prompt(
-        state=state,
-        task_state=task_state,
-        case_type=case_type,
-        diagnostic_context=diagnostic_context,
-    )
-    raw = _call_llm(llm_client=llm_client, system_prompt=CHECK_SYSTEM_PROMPT, user_prompt=user_prompt)
-    parsed = parse_json_object(raw)
-    if not isinstance(parsed, dict):
-        return None
-    normalized = _normalize_judge_payload(parsed, case_type=case_type)
-    if normalized is None:
-        return None
-    return normalized
 
 
 def apply_criteria_updates(
@@ -323,58 +516,40 @@ def apply_criteria_updates(
     return normalize_acceptance_criteria_records(out)
 
 
-def _build_judge_user_prompt(
-    *,
-    state: dict[str, Any],
-    task_state: dict[str, Any],
-    case_type: str,
-    diagnostic_context: dict[str, Any] | None = None,
-) -> str:
+def _build_task_record_from_state(*, state: dict[str, Any], task_state: dict[str, Any]) -> TaskRecord:
+    recent_conversation_md = _resolve_recent_conversation_md(state)
+    record = TaskRecord(
+        task_id=_first_non_empty(task_state.get("task_id"), state.get("task_id")),
+        user_id=_first_non_empty(task_state.get("user_id"), state.get("actor_person_id")),
+        goal=str(task_state.get("goal") or "").strip(),
+        status=str(task_state.get("status") or "").strip() or "running",
+        outcome=task_state.get("outcome") if isinstance(task_state.get("outcome"), dict) else None,
+    )
+    record.set_recent_conversation_md(recent_conversation_md)
+    _append_fact_lines(
+        record,
+        facts=task_state.get("facts"),
+        channel_type=_first_non_empty(task_state.get("channel_type"), state.get("channel_type")),
+        channel_target=_first_non_empty(task_state.get("channel_target"), state.get("channel_target")),
+        locale=_first_non_empty(task_state.get("locale"), state.get("locale")),
+        timezone=_first_non_empty(task_state.get("timezone"), state.get("timezone")),
+        message_id=_first_non_empty(task_state.get("message_id"), state.get("message_id")),
+        conversation_key=_first_non_empty(task_state.get("conversation_key"), state.get("conversation_key")),
+    )
+    _append_plan_lines(record, plan=task_state.get("plan"))
+    _append_memory_fact_lines(record, memory_facts=task_state.get("memory_facts"))
+    _append_tool_call_history_lines(record, tool_call_history=task_state.get("tool_call_history"))
+    return record
+
+
+def _resolve_recent_conversation_md(state: dict[str, Any]) -> str:
     recent = str(state.get("recent_conversation_block") or "").strip()
-    if not recent:
-        session_state = state.get("session_state") if isinstance(state.get("session_state"), dict) else None
-        if session_state:
-            recent = render_recent_conversation_block(session_state)
-    criteria = normalize_acceptance_criteria_records(task_state.get("acceptance_criteria"))
-    criteria_lines = "\n".join(
-        f"- {str(item.get('id') or '')}: {str(item.get('text') or '')} [{str(item.get('status') or 'pending')}]"
-        for item in criteria
-    ) or "- (none)"
-    fact_lines = _render_fact_evidence_blocks(task_state)
-    policy = render_utterance_policy_block(
-        locale=state.get("locale"),
-        tone=state.get("tone"),
-        address_style=state.get("address_style"),
-        channel_type=state.get("channel_type"),
-    )
-    diagnostic = diagnostic_context if isinstance(diagnostic_context, dict) else {}
-    diagnostic_lines = (
-        f"- planner_invalid_streak: {int(diagnostic.get('planner_invalid_streak') or 0)} / "
-        f"{int(diagnostic.get('planner_invalid_budget') or _planner_invalid_budget())}\n"
-        f"- repeated_failure_signature_streak: {int(diagnostic.get('repeated_failure_signature_streak') or 0)} / "
-        f"{int(diagnostic.get('repeated_failure_signature_budget') or _repeated_failure_budget())}\n"
-        f"- zero_progress_streak: {int(diagnostic.get('zero_progress_streak') or 0)} / "
-        f"{int(diagnostic.get('zero_progress_budget') or _zero_progress_budget())}"
-    )
-    try:
-        return render_prompt_template(
-            CHECK_JUDGE_USER_TEMPLATE,
-            {
-                "POLICY_BLOCK": policy,
-                "CASE_TYPE": case_type,
-                "RECENT_CONVERSATION": recent or "- (none)",
-                "GOAL": str(task_state.get("goal") or "").strip(),
-                "ACCEPTANCE_CRITERIA_BASELINE": criteria_lines,
-                "FACT_EVIDENCE_SNAPSHOT": fact_lines,
-                "USER_MESSAGE": str(state.get("last_user_message") or "").strip(),
-                "DIAGNOSTIC_BUDGET_CONTEXT": diagnostic_lines,
-            },
-        )
-    except Exception as exc:
-        raise JudgePromptTemplateError(
-            template_id="check.judge.user.j2",
-            message=f"failed to render check judge template: {exc}",
-        ) from exc
+    if recent:
+        return recent
+    session_state = state.get("session_state") if isinstance(state.get("session_state"), dict) else None
+    if session_state:
+        return render_recent_conversation_block(session_state)
+    return ""
 
 def _normalize_judge_payload(payload: dict[str, Any], *, case_type: str) -> dict[str, Any] | None:
     raw_kind = str(payload.get("kind") or "").strip().lower()
@@ -433,9 +608,9 @@ def _normalize_criteria_updates(*, payload: dict[str, Any], case_type: str) -> l
     return out[:24]
 
 
-def _fallback_judge_verdict(*, case_type: str, state: dict[str, Any], task_state: dict[str, Any]) -> dict[str, Any]:
+def _fallback_trial_judge_result(*, case_type: str, task_record: TaskRecord) -> dict[str, Any]:
     if case_type == "new_request":
-        text = str(state.get("last_user_message") or "").strip()[:120] or "the user request"
+        text = str(task_record.goal or "").strip()[:120] or "the user request"
         return {
             "kind": "plan",
             "case_type": "new_request",
@@ -445,8 +620,8 @@ def _fallback_judge_verdict(*, case_type: str, state: dict[str, Any], task_state
             "evidence_refs": [],
             "failure_class": None,
         }
-    criteria = normalize_acceptance_criteria_records(task_state.get("acceptance_criteria"))
-    if criteria and all(str(item.get("status") or "").strip().lower() == "satisfied" for item in criteria):
+    criteria_text = task_record.get_acceptance_criteria_md().lower()
+    if criteria_text and "[pending]" not in criteria_text and criteria_text != "- (none)":
         return {
             "kind": "mission_success",
             "case_type": case_type,
@@ -467,20 +642,36 @@ def _fallback_judge_verdict(*, case_type: str, state: dict[str, Any], task_state
     }
 
 
-def _finalize_check_cycle(
+def _call_judge_llm(*, llm_client: object, judge_prompt: str) -> str:
+    return _call_llm(
+        llm_client=llm_client,
+        system_prompt=CHECK_JUDGE_SYSTEM_PROMPT_TEMPLATE,
+        user_prompt=judge_prompt,
+    )
+
+
+def _parse_judge_verdict(*, raw: str, case_type: str) -> dict[str, Any] | None:
+    parsed = parse_json_object(raw)
+    if not isinstance(parsed, dict):
+        return None
+    return _normalize_judge_payload(parsed, case_type=case_type)
+
+
+def _finalize_check_state_result(
     *,
     state: dict[str, Any],
     task_state: dict[str, Any],
-    verdict: dict[str, Any],
+    task_record: TaskRecord,
+    verdict: str,
+    judge_result: dict[str, Any],
     logger: Any,
     log_task_event: Any,
-    corr: str | None,
+    correlation_id: str | None,
     cycle: int,
 ) -> dict[str, Any]:
-    kind = str(verdict.get("kind") or "").strip().lower()
-    reason = str(verdict.get("reason") or "").strip()
-    task_state["judge_verdict"] = dict(verdict)
-    if kind == "mission_success":
+    reason = str(judge_result.get("reason") or "").strip()
+    task_state["judge_verdict"] = dict(judge_result)
+    if verdict == "mission_success":
         task_state["status"] = "done"
         task_state["outcome"] = {
             "kind": "task_completed",
@@ -488,13 +679,13 @@ def _finalize_check_cycle(
             "final_text": reason or "Mission completed successfully.",
             "evidence": {
                 "criteria": normalize_acceptance_criteria_records(task_state.get("acceptance_criteria")),
-                "verdict_confidence": float(verdict.get("confidence") or 0.0),
+                "verdict_confidence": float(judge_result.get("confidence") or 0.0),
             },
         }
-    elif kind == "mission_failed":
-        failure_code = str(verdict.get("failure_class") or "mission_failed").strip() or "mission_failed"
+    elif verdict == "mission_failed":
+        failure_code = str(judge_result.get("failure_class") or "mission_failed").strip() or "mission_failed"
         failure_reason = reason or "Mission failed."
-        retry_exhausted = bool(verdict.get("retry_exhausted"))
+        retry_exhausted = bool(judge_result.get("retry_exhausted"))
         task_state["status"] = "failed"
         task_state["last_validation_error"] = {
             "reason": failure_code,
@@ -523,7 +714,7 @@ def _finalize_check_cycle(
                 failure_reason=failure_reason,
                 cycle=cycle,
             )
-    elif kind == "conversation":
+    elif verdict == "conversation":
         task_state["status"] = "waiting_user"
         task_state["next_user_question"] = reason or "Could you tell me how I can help?"
     else:
@@ -531,14 +722,17 @@ def _finalize_check_cycle(
         task_state["next_user_question"] = None
         emit_transition_event(state, "thinking")
 
+    task_record.status = str(task_state.get("status") or "").strip() or "running"
+    task_record.outcome = task_state.get("outcome") if isinstance(task_state.get("outcome"), dict) else None
+
     check_route = post_check_route(verdict)
     task_state["check_route"] = check_route
     append_trace_event(
         task_state,
         {
             "type": "judge_verdict",
-            "summary": f"Check verdict={kind or 'plan'} case={str(verdict.get('case_type') or '')}",
-            "correlation_id": corr,
+            "summary": f"Check verdict={verdict or 'plan'} case={str(judge_result.get('case_type') or '')}",
+            "correlation_id": correlation_id,
         },
     )
     log_task_event(
@@ -547,173 +741,33 @@ def _finalize_check_cycle(
         task_state=task_state,
         node="check_node",
         event="graph.check.judge_verdict",
-        verdict_kind=kind,
-        case_type=str(verdict.get("case_type") or ""),
-        confidence=float(verdict.get("confidence") or 0.0),
+        verdict_kind=verdict,
+        case_type=str(judge_result.get("case_type") or ""),
+        confidence=float(judge_result.get("confidence") or 0.0),
         route=check_route,
         cycle=cycle,
     )
     _append_check_criteria_snapshot_event(
         state=state,
         task_state=task_state,
-        verdict=verdict,
-        correlation_id=corr,
+        judge_result=judge_result,
+        correlation_id=correlation_id,
         cycle=cycle,
     )
     logger.info(
         "task_mode check correlation_id=%s cycle=%s verdict=%s route=%s",
-        corr,
+        correlation_id,
         cycle,
-        kind or "plan",
+        verdict or "plan",
         check_route,
     )
     return {"task_state": task_state}
 
 
-def post_check_route(verdict: dict[str, Any]) -> str:
-    kind = str(verdict.get("kind") or "").strip().lower()
-    if kind == "plan":
+def post_check_route(verdict: str) -> str:
+    if verdict == "plan":
         return "next_step_node"
     return "respond_node"
-
-
-def _update_planner_invalid_streak(task_state: dict[str, Any]) -> int:
-    facts = task_state.get("facts")
-    if not isinstance(facts, dict) or not facts:
-        task_state["planner_error_streak"] = 0
-        task_state["planner_error_last_fact_key"] = None
-        return 0
-    latest_key, latest_entry = next(reversed(facts.items()))
-    if not isinstance(latest_entry, dict) or str(latest_entry.get("tool") or "").strip() != "planner_output":
-        task_state["planner_error_streak"] = 0
-        task_state["planner_error_last_fact_key"] = None
-        return 0
-    key_text = str(latest_key)
-    last_key = str(task_state.get("planner_error_last_fact_key") or "")
-    if key_text == last_key:
-        return int(task_state.get("planner_error_streak") or 0)
-    streak = int(task_state.get("planner_error_streak") or 0) + 1
-    task_state["planner_error_streak"] = streak
-    task_state["planner_error_last_fact_key"] = key_text
-    return streak
-
-
-def _update_repeated_failure_signature(task_state: dict[str, Any]) -> int:
-    signature = _latest_failure_signature(task_state)
-    if not signature:
-        task_state["check_failure_signature_last"] = None
-        task_state["check_failure_signature_streak"] = 0
-        return 0
-    last = str(task_state.get("check_failure_signature_last") or "").strip()
-    streak = int(task_state.get("check_failure_signature_streak") or 0)
-    streak = streak + 1 if signature == last else 1
-    task_state["check_failure_signature_last"] = signature
-    task_state["check_failure_signature_streak"] = streak
-    return streak
-
-
-def _update_zero_progress_state(task_state: dict[str, Any]) -> int:
-    signature = _latest_mission_fact_signature(task_state)
-    if not signature:
-        task_state["zero_progress_last_signature"] = None
-        task_state["zero_progress_streak"] = 0
-        return 0
-    last = str(task_state.get("zero_progress_last_signature") or "").strip()
-    streak = int(task_state.get("zero_progress_streak") or 0)
-    streak = streak + 1 if signature == last else 0
-    task_state["zero_progress_last_signature"] = signature
-    task_state["zero_progress_streak"] = streak
-    return streak
-
-
-def _render_fact_evidence_blocks(task_state: dict[str, Any]) -> str:
-    facts = task_state.get("facts")
-    if not isinstance(facts, dict) or not facts:
-        return "- (none)"
-    lines: list[str] = []
-    for key, entry in list(facts.items())[-10:]:
-        if not isinstance(entry, dict):
-            continue
-        tool = str(entry.get("tool_name") or entry.get("tool") or "").strip() or "unknown_tool"
-        params = entry.get("params")
-        if not isinstance(params, dict):
-            raw_args = entry.get("args")
-            params = raw_args if isinstance(raw_args, dict) else {}
-        output = entry.get("output")
-        if output is None and isinstance(entry.get("result"), dict):
-            output = entry["result"].get("output")
-        exception = entry.get("exception")
-        if exception is None and isinstance(entry.get("result"), dict):
-            exception = entry["result"].get("exception")
-        lines.append(f"- fact:{str(key)}")
-        lines.append(f"  tool_name: {tool}")
-        lines.append(f"  params: {_compact_json(params)}")
-        lines.append(f"  output: {_compact_json(output)}")
-        lines.append(f"  exception: {_compact_json(exception)}")
-    return "\n".join(lines) if lines else "- (none)"
-
-
-def _consume_steering_inputs_for_check(
-    *,
-    state: dict[str, Any],
-    task_state: dict[str, Any],
-    correlation_id: str | None,
-) -> list[dict[str, Any]]:
-    task_id = _resolve_task_id_for_check(state=state, task_state=task_state)
-    if not task_id:
-        return []
-    try:
-        raw = consume_task_inputs_for_check(task_id=task_id, correlation_id=correlation_id)
-    except Exception:
-        return []
-    if not isinstance(raw, list):
-        return []
-    consumed: list[dict[str, Any]] = []
-    for item in raw:
-        if not isinstance(item, dict):
-            continue
-        text = str(item.get("text") or "").strip()
-        attachments = item.get("attachments")
-        normalized_attachments = [dict(att) for att in attachments if isinstance(att, dict)] if isinstance(attachments, list) else []
-        if not text and not normalized_attachments:
-            continue
-        consumed.append(
-            {
-                "text": text,
-                "attachments": normalized_attachments,
-                "actor_id": str(item.get("actor_id") or "").strip() or None,
-                "message_id": str(item.get("message_id") or "").strip() or None,
-                "received_at": str(item.get("received_at") or "").strip() or None,
-                "consumed_at": str(item.get("consumed_at") or "").strip() or None,
-            }
-        )
-    return consumed
-
-
-def _resolve_task_id_for_check(*, state: dict[str, Any], task_state: dict[str, Any]) -> str:
-    for value in (
-        task_state.get("task_id"),
-        task_state.get("pdca_task_id"),
-        state.get("task_id"),
-        state.get("pdca_task_id"),
-    ):
-        rendered = str(value or "").strip()
-        if rendered:
-            return rendered
-    return ""
-
-
-def _forced_replan_verdict_for_steering(*, task_state: dict[str, Any]) -> dict[str, Any]:
-    case_type = select_case_deterministically(task_state) or "task_resumption"
-    return {
-        "kind": "plan",
-        "case_type": case_type,
-        "reason": "New steering input consumed at check boundary; acceptance criteria reset before replanning.",
-        "confidence": 1.0,
-        "criteria_updates": [],
-        "evidence_refs": [],
-        "failure_class": None,
-    }
 
 
 def _apply_check_consumed_inputs(
@@ -724,7 +778,7 @@ def _apply_check_consumed_inputs(
 ) -> None:
     if not consumed_inputs:
         return
-    task_state["check_provenance"] = "slice_resume"
+    task_metrics(task_state)["check_provenance"] = "slice_resume"
     latest_text = str(consumed_inputs[-1].get("text") or "").strip()
     if latest_text:
         state["last_user_message"] = latest_text
@@ -758,71 +812,21 @@ def _apply_check_consumed_inputs(
     task_state["facts"] = fact_bucket
 
 
-def _latest_failure_signature(task_state: dict[str, Any]) -> str:
-    facts = task_state.get("facts")
-    if not isinstance(facts, dict) or not facts:
-        return ""
-    for _, entry in reversed(list(facts.items())):
-        if not isinstance(entry, dict):
-            continue
-        if bool(entry.get("internal")):
-            continue
-        exception = _fact_exception_payload(entry)
-        if not _has_exception_payload(exception):
-            continue
-        tool = str(entry.get("tool_name") or entry.get("tool") or "").strip()
-        params = entry.get("params")
-        if not isinstance(params, dict):
-            params = entry.get("args") if isinstance(entry.get("args"), dict) else {}
-        raw = f"{tool}|{_compact_json(params)}|{_compact_json(exception)}"
-        return hashlib.sha1(raw.encode("utf-8")).hexdigest()
-    return ""
-
-
-def _latest_mission_fact_signature(task_state: dict[str, Any]) -> str:
-    facts = task_state.get("facts")
-    if not isinstance(facts, dict) or not facts:
-        return ""
-    for _, entry in reversed(list(facts.items())):
-        if not isinstance(entry, dict):
-            continue
-        if bool(entry.get("internal")):
-            continue
-        tool = str(entry.get("tool_name") or entry.get("tool") or "").strip()
-        params = entry.get("params")
-        if not isinstance(params, dict):
-            params = entry.get("args") if isinstance(entry.get("args"), dict) else {}
-        payload = entry.get("output")
-        if payload is None and isinstance(entry.get("result"), dict):
-            payload = entry["result"].get("output")
-        exception = _fact_exception_payload(entry)
-        raw = f"{tool}|{_compact_json(params)}|{_compact_json(payload)}|{_compact_json(exception)}"
-        return hashlib.sha1(raw.encode("utf-8")).hexdigest()
-    return ""
-
-
-def _fact_exception_payload(entry: dict[str, Any]) -> Any:
-    exception = entry.get("exception")
-    if exception is not None:
-        return exception
-    result = entry.get("result")
-    if isinstance(result, dict):
-        return result.get("exception")
-    return None
-
-
-def _has_exception_payload(value: Any) -> bool:
-    if value is None:
-        return False
-    if isinstance(value, str):
-        return bool(value.strip())
-    if isinstance(value, dict):
-        if str(value.get("message") or "").strip():
-            return True
-        if str(value.get("code") or "").strip():
-            return True
-        return bool(value)
-    return True
+def _append_consumed_inputs_to_task_record(
+    task_record: TaskRecord,
+    *,
+    consumed_inputs: list[dict[str, Any]],
+) -> None:
+    for item in consumed_inputs:
+        text = str(item.get("text") or "").strip()
+        attachments = item.get("attachments")
+        attachment_count = len(attachments) if isinstance(attachments, list) else 0
+        if text:
+            task_record.append_recent_conversation_line(f"User: {text}")
+        elif attachment_count:
+            task_record.append_recent_conversation_line(
+                f"User sent {attachment_count} attachment{'s' if attachment_count != 1 else ''}."
+            )
 
 
 def _compact_json(value: Any) -> str:
@@ -856,7 +860,7 @@ def _call_llm(*, llm_client: object, system_prompt: str, user_prompt: str) -> st
     return ""
 
 
-def _mission_failed_verdict(
+def _mission_failed_judge_result(
     *,
     case_type: str,
     reason: str,
@@ -879,7 +883,7 @@ def _append_check_criteria_snapshot_event(
     *,
     state: dict[str, Any],
     task_state: dict[str, Any],
-    verdict: dict[str, Any],
+    judge_result: dict[str, Any],
     correlation_id: str | None,
     cycle: int,
 ) -> None:
@@ -887,17 +891,19 @@ def _append_check_criteria_snapshot_event(
     if not task_id:
         return
     criteria = normalize_acceptance_criteria_records(task_state.get("acceptance_criteria"))
-    facts = task_state.get("facts")
+    history = task_state.get("tool_call_history")
     fact_refs: list[str] = []
-    if isinstance(facts, dict):
-        for key, entry in list(facts.items())[-12:]:
+    if isinstance(history, list):
+        for entry in history[-12:]:
+            if not isinstance(entry, dict):
+                continue
             if isinstance(entry, dict) and bool(entry.get("internal")):
                 continue
-            rendered = str(key).strip()
+            rendered = str(entry.get("step_id") or "").strip()
             if rendered:
                 fact_refs.append(f"fact:{rendered[:80]}")
     payload = {
-        "case_type": str(verdict.get("case_type") or "").strip()[:40],
+        "case_type": str(judge_result.get("case_type") or "").strip()[:40],
         "cycle": int(cycle),
         "acceptance_criteria": [
             {
@@ -909,11 +915,11 @@ def _append_check_criteria_snapshot_event(
         ],
         "fact_refs": fact_refs[:12],
         "verdict": {
-            "kind": str(verdict.get("kind") or "").strip()[:32],
-            "confidence": float(verdict.get("confidence") or 0.0),
+            "kind": str(judge_result.get("kind") or "").strip()[:32],
+            "confidence": float(judge_result.get("confidence") or 0.0),
         },
     }
-    reason = str(verdict.get("reason") or "").strip()
+    reason = str(judge_result.get("reason") or "").strip()
     if reason:
         payload["verdict"]["reason"] = reason[:220]
     try:
@@ -940,50 +946,6 @@ def _resolve_task_id(*, state: dict[str, Any], task_state: dict[str, Any], corre
     return ""
 
 
-def _judge_invalid_budget() -> int:
-    raw = str(os.getenv("ALPHONSE_CHECK_JUDGE_INVALID_BUDGET") or "").strip()
-    if not raw:
-        return _JUDGE_INVALID_BUDGET_DEFAULT
-    try:
-        parsed = int(raw)
-    except ValueError:
-        return _JUDGE_INVALID_BUDGET_DEFAULT
-    return max(0, parsed)
-
-
-def _zero_progress_budget() -> int:
-    raw = str(os.getenv("ALPHONSE_CHECK_ZERO_PROGRESS_BUDGET") or "").strip()
-    if not raw:
-        return _ZERO_PROGRESS_BUDGET_DEFAULT
-    try:
-        parsed = int(raw)
-    except ValueError:
-        return _ZERO_PROGRESS_BUDGET_DEFAULT
-    return max(1, parsed)
-
-
-def _repeated_failure_budget() -> int:
-    raw = str(os.getenv("ALPHONSE_CHECK_REPEATED_FAILURE_BUDGET") or "").strip()
-    if not raw:
-        return _REPEATED_FAILURE_BUDGET_DEFAULT
-    try:
-        parsed = int(raw)
-    except ValueError:
-        return _REPEATED_FAILURE_BUDGET_DEFAULT
-    return max(1, parsed)
-
-
-def _planner_invalid_budget() -> int:
-    raw = str(os.getenv("ALPHONSE_TASK_MODE_PLANNER_RETRY_BUDGET") or "").strip()
-    if not raw:
-        return _PLANNER_INVALID_BUDGET_DEFAULT
-    try:
-        parsed = int(raw)
-    except ValueError:
-        return _PLANNER_INVALID_BUDGET_DEFAULT
-    return max(0, parsed)
-
-
 def _coerce_confidence(value: Any) -> float:
     try:
         raw = float(value)
@@ -994,3 +956,83 @@ def _coerce_confidence(value: Any) -> float:
     if raw > 1.0:
         return 1.0
     return raw
+
+
+def _append_fact_lines(
+    record: TaskRecord,
+    *,
+    facts: Any,
+    channel_type: str | None,
+    channel_target: str | None,
+    locale: str | None,
+    timezone: str | None,
+    message_id: str | None,
+    conversation_key: str | None,
+) -> None:
+    facts = facts if isinstance(facts, dict) else {}
+    for key, value in list(facts.items())[:20]:
+        record.append_fact(f"{str(key)}: {_compact_json(value)}")
+    for key, value in (
+        ("channel_type", channel_type),
+        ("channel_target", channel_target),
+        ("locale", locale),
+        ("timezone", timezone),
+        ("message_id", message_id),
+        ("conversation_key", conversation_key),
+    ):
+        if value:
+            record.append_fact(f"{key}: {_compact_json(value)}")
+
+
+def _append_plan_lines(record: TaskRecord, *, plan: Any) -> None:
+    plan = plan if isinstance(plan, dict) else {}
+    steps = plan.get("steps") if isinstance(plan.get("steps"), list) else []
+    for step in steps[-10:]:
+        if not isinstance(step, dict):
+            continue
+        proposal = step.get("proposal") if isinstance(step.get("proposal"), dict) else {}
+        tool_name = str(proposal.get("tool_name") or "").strip() or "(none)"
+        args = proposal.get("args") if isinstance(proposal.get("args"), dict) else {}
+        record.append_plan_line(
+            f"{str(step.get('step_id') or '').strip() or '(unknown)'} "
+            f"[{str(step.get('status') or '').strip() or 'unknown'}] "
+            f"{tool_name} args={_compact_json(args)}"
+        )
+
+
+def _append_memory_fact_lines(record: TaskRecord, *, memory_facts: Any) -> None:
+    items = memory_facts
+    if not isinstance(items, list):
+        return
+    for entry in items[-8:]:
+        if not isinstance(entry, dict):
+            continue
+        record.append_memory_fact(
+            f"{str(entry.get('tool_name') or '').strip() or 'memory'} "
+            f"output={_compact_json(entry.get('output'))} "
+            f"exception={_compact_json(entry.get('exception'))}"
+        )
+
+
+def _append_tool_call_history_lines(record: TaskRecord, *, tool_call_history: Any) -> None:
+    history = tool_call_history
+    if not isinstance(history, list):
+        return
+    for entry in history[-12:]:
+        if not isinstance(entry, dict):
+            continue
+        record.append_tool_call_history_entry(
+            f"{str(entry.get('step_id') or '').strip() or '(no-step)'} "
+            f"{str(entry.get('tool_name') or entry.get('tool') or '').strip() or '(unknown)'} "
+            f"args={_compact_json(entry.get('params') if isinstance(entry.get('params'), dict) else entry.get('args'))} "
+            f"output={_compact_json(entry.get('output'))} "
+            f"exception={_compact_json(entry.get('exception'))}"
+        )
+
+
+def _first_non_empty(*values: Any) -> str | None:
+    for value in values:
+        rendered = str(value or "").strip()
+        if rendered:
+            return rendered
+    return None

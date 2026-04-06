@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
-from alphonse.agent.cortex.task_mode.check import check_node_impl
+from alphonse.agent.cortex.task_mode.check import run_check_from_state
 from alphonse.agent.cortex.task_mode.check import route_after_check_impl
 from alphonse.agent.cortex.task_mode.check_state import derive_outcome_from_state
 from alphonse.agent.cortex.transitions import emit_transition_event
@@ -79,12 +79,11 @@ def execute_step_node(state: dict[str, Any], *, tool_registry: Any) -> dict[str,
 
 
 def check_node(state: dict[str, Any], *, tool_registry: Any) -> dict[str, Any]:
-    return check_node_impl(
-        state=state,
-        tool_registry=tool_registry,
+    _ = tool_registry
+    return run_check_from_state(
+        state,
         logger=logger,
         log_task_event=log_task_event,
-        wip_emit_every_cycles=1,
     )
 
 
