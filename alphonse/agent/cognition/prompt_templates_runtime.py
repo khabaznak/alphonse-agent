@@ -59,11 +59,11 @@ SLOT_QUESTION_SYSTEM_PROMPT = _seed_text(
 )
 
 CHECK_SYSTEM_PROMPT = _seed_text(
-    "check.system.j2",
+    "pdca.check.judge.system.j2",
 )
 
 CHECK_JUDGE_USER_TEMPLATE = _seed_text(
-    "check.judge.user.j2",
+    "pdca.check.judge.user.j2",
 )
 
 SLOT_QUESTION_USER_TEMPLATE = _seed_text(
