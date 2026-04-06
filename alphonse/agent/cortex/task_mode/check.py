@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any, TypedDict
 
+from alphonse.agent.cognition.providers.contracts import TextCompletionProvider
 from alphonse.agent.cognition.prompt_templates_runtime import CHECK_JUDGE_SYSTEM_PROMPT_TEMPLATE
 from alphonse.agent.cognition.prompt_templates_runtime import CHECK_JUDGE_USER_PROMPT_TEMPLATE
 from alphonse.agent.cognition.prompt_templates_runtime import render_prompt_template
@@ -11,6 +12,7 @@ from alphonse.agent.cortex.task_mode.task_record import TaskRecord
 from alphonse.agent.services.pdca_task_inputs import consume_task_inputs_for_check
 
 _CASE_TYPES = {"new_request", "execution_review", "task_resumption"}
+_PROVENANCE_VALUES = {"entry", "do", "slice_resume"}
 _VERDICT_KINDS = {"conversation", "plan", "mission_success", "mission_failed"}
 
 
@@ -34,13 +36,17 @@ class JudgePromptTemplateError(RuntimeError):
 def check_node_impl(
     task_record: TaskRecord,
     *,
-    llm_client: Any,
+    provenance: str,
+    llm_client: TextCompletionProvider | None,
     logger: Any,
     log_task_event: Any,
 ) -> CheckResult:
-    case_type = _validate_case_type(task_record.check_case_type)
+    normalized_provenance = _validate_provenance(provenance)
+    if normalized_provenance is None:
+        return _build_invalid_provenance_result(task_record=task_record, provenance=provenance)
+    case_type = _derive_case_type_from_provenance(normalized_provenance)
     if case_type is None:
-        return _build_invalid_case_type_result(task_record=task_record)
+        return _build_invalid_provenance_result(task_record=task_record, provenance=provenance)
 
     consumed_inputs = _consume_task_inputs_for_task_record(task_record)
     if consumed_inputs:
@@ -89,11 +95,11 @@ def check_node_impl(
     return result
 
 
-def _build_invalid_case_type_result(*, task_record: TaskRecord) -> CheckResult:
+def _build_invalid_provenance_result(*, task_record: TaskRecord, provenance: str) -> CheckResult:
     judge_result = _mission_failed_judge_result(
-        case_type=str(task_record.check_case_type or "").strip().lower() or "execution_review",
-        reason="task_record.check_case_type is required and must be one of: new_request|execution_review|task_resumption.",
-        failure_class="invalid_case_type",
+        case_type="execution_review",
+        reason="check provenance is required and must be one of: entry|do|slice_resume.",
+        failure_class="invalid_provenance",
     )
     verdict = _extract_verdict_kind(judge_result)
     failed_record = _apply_terminal_result(task_record=task_record, verdict=verdict, judge_result=judge_result)
@@ -135,7 +141,7 @@ def _get_judge_prompt_from_task_record(
 
 def _conduct_trial(
     *,
-    llm_client: Any,
+    llm_client: TextCompletionProvider | None,
     judge_prompt: str,
     case_type: str,
     task_record: TaskRecord,
@@ -324,6 +330,20 @@ def _validate_case_type(case_type: str | None) -> str | None:
     rendered = str(case_type or "").strip().lower()
     return rendered if rendered in _CASE_TYPES else None
 
+
+def _validate_provenance(provenance: str | None) -> str | None:
+    rendered = str(provenance or "").strip().lower()
+    return rendered if rendered in _PROVENANCE_VALUES else None
+
+
+def _derive_case_type_from_provenance(provenance: str) -> str | None:
+    mapping = {
+        "entry": "new_request",
+        "do": "execution_review",
+        "slice_resume": "task_resumption",
+    }
+    return _validate_case_type(mapping.get(provenance))
+
 def _normalize_judge_payload(payload: dict[str, Any], *, case_type: str) -> dict[str, Any] | None:
     raw_kind = str(payload.get("kind") or "").strip().lower()
     kind = raw_kind if raw_kind in _VERDICT_KINDS else "plan"
@@ -379,40 +399,6 @@ def _normalize_criteria_updates(*, payload: dict[str, Any], case_type: str) -> l
                 continue
             out.append({"op": "append", "text": text[:180]})
     return out[:24]
-
-
-def _fallback_trial_judge_result(*, case_type: str, task_record: TaskRecord) -> dict[str, Any]:
-    if case_type == "new_request":
-        text = str(task_record.goal or "").strip()[:120] or "the user request"
-        return {
-            "kind": "plan",
-            "case_type": "new_request",
-            "reason": "No judge model available; applying deterministic baseline.",
-            "confidence": 0.0,
-            "criteria_updates": [{"op": "append", "text": f"Advance the request successfully: {text}"}],
-            "evidence_refs": [],
-            "failure_class": None,
-        }
-    criteria_text = task_record.get_acceptance_criteria_md().lower()
-    if criteria_text and "[pending]" not in criteria_text and criteria_text != "- (none)":
-        return {
-            "kind": "mission_success",
-            "case_type": case_type,
-            "reason": "All acceptance criteria are already satisfied.",
-            "confidence": 0.9,
-            "criteria_updates": [],
-            "evidence_refs": [],
-            "failure_class": None,
-        }
-    return {
-        "kind": "plan",
-        "case_type": case_type,
-        "reason": "No judge model available; continue with plan.",
-        "confidence": 0.0,
-        "criteria_updates": [],
-        "evidence_refs": [],
-        "failure_class": None,
-    }
 
 
 def _call_judge_llm(*, llm_client: object, judge_prompt: str) -> str:

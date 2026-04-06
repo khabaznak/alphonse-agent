@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import logging
 
-from alphonse.agent.cortex.task_mode.check import select_case_deterministically
 import alphonse.agent.cortex.task_mode.check as check_module
-from alphonse.agent.cortex.task_mode.pdca import check_node
+import alphonse.agent.cortex.task_mode.pdca as pdca_module
+import pytest
+from alphonse.agent.cognition.providers.contracts import require_text_completion_provider
+from alphonse.agent.cognition.providers.contracts import require_tool_calling_provider
+from alphonse.agent.cortex.task_mode.graph import check_node_state_adapter
 from alphonse.agent.cortex.task_mode.pdca import route_after_act
 from alphonse.agent.cortex.task_mode.task_record import TaskRecord
 from alphonse.agent.cortex.task_mode.state import build_default_task_state
@@ -14,10 +17,37 @@ from alphonse.agent.nervous_system.pdca_queue_store import list_pdca_events
 from alphonse.agent.nervous_system.pdca_queue_store import upsert_pdca_task
 from alphonse.agent.tools.registry import build_default_tool_registry
 
+_CURRENT_TEST_PROVIDER = None
+
+
+def _set_current_test_provider(provider):
+    global _CURRENT_TEST_PROVIDER
+    _CURRENT_TEST_PROVIDER = provider
+    return provider
+
+
+@pytest.fixture(autouse=True)
+def _patch_pdca_providers(monkeypatch: pytest.MonkeyPatch):
+    global _CURRENT_TEST_PROVIDER
+    _CURRENT_TEST_PROVIDER = None
+    monkeypatch.setattr(
+        pdca_module,
+        "build_text_completion_provider",
+        lambda: require_text_completion_provider(_CURRENT_TEST_PROVIDER, source="tests.test_check_capd"),
+    )
+    monkeypatch.setattr(
+        pdca_module,
+        "build_tool_calling_provider",
+        lambda: require_tool_calling_provider(_CURRENT_TEST_PROVIDER, source="tests.test_check_capd"),
+    )
+    yield
+    _CURRENT_TEST_PROVIDER = None
+
 
 class _QueuedLlm:
     def __init__(self, responses: list[str]) -> None:
         self._responses = list(responses)
+        _set_current_test_provider(self)
 
     def complete(self, system_prompt: str, user_prompt: str) -> str:
         _ = (system_prompt, user_prompt)
@@ -30,6 +60,7 @@ class _PromptCaptureLlm:
     def __init__(self, response: str) -> None:
         self._response = response
         self.last_user_prompt = ""
+        _set_current_test_provider(self)
 
     def complete(self, system_prompt: str, user_prompt: str) -> str:
         _ = system_prompt
@@ -38,10 +69,10 @@ class _PromptCaptureLlm:
 
 
 def test_select_case_deterministic_mapping() -> None:
-    assert select_case_deterministically({"agent_metrics_budget": {"check_provenance": "entry"}}) == "new_request"
-    assert select_case_deterministically({"agent_metrics_budget": {"check_provenance": "do"}}) == "execution_review"
-    assert select_case_deterministically({"agent_metrics_budget": {"check_provenance": "slice_resume"}}) == "task_resumption"
-    assert select_case_deterministically({"agent_metrics_budget": {"check_provenance": "unknown"}}) is None
+    assert check_module._derive_case_type_from_provenance("entry") == "new_request"
+    assert check_module._derive_case_type_from_provenance("do") == "execution_review"
+    assert check_module._derive_case_type_from_provenance("slice_resume") == "task_resumption"
+    assert check_module._derive_case_type_from_provenance("unknown") is None
 
 
 def test_check_missing_provenance_fails_explicitly() -> None:
@@ -50,7 +81,8 @@ def test_check_missing_provenance_fails_explicitly() -> None:
     task_state["agent_metrics_budget"]["check_provenance"] = "unknown"
     state = {"correlation_id": "corr-missing-provenance", "task_state": task_state}
 
-    out = check_node(state, tool_registry=tool_registry)
+    _ = tool_registry
+    out = check_node_state_adapter(state)
     next_state = out.get("task_state")
     assert isinstance(next_state, dict)
     verdict = next_state.get("judge_verdict")
@@ -78,7 +110,8 @@ def test_entry_case_always_emits_plan_and_creates_baseline_criteria() -> None:
         "task_state": task_state,
     }
 
-    out = check_node(state, tool_registry=tool_registry)
+    _ = tool_registry
+    out = check_node_state_adapter(state)
     next_state = out.get("task_state")
     assert isinstance(next_state, dict)
     verdict = next_state.get("judge_verdict")
@@ -117,7 +150,8 @@ def test_execution_review_marks_criteria_and_reaches_success() -> None:
     ]
     state = {"correlation_id": "corr-exec-success", "_llm_client": llm, "task_state": task_state}
 
-    out = check_node(state, tool_registry=tool_registry)
+    _ = tool_registry
+    out = check_node_state_adapter(state)
     next_state = out.get("task_state")
     assert isinstance(next_state, dict)
     assert next_state.get("status") == "done"
@@ -148,9 +182,10 @@ def test_repeated_failure_signature_is_advisory_and_does_not_force_mission_faile
     ]
     state = {"correlation_id": "corr-hard-stop", "_llm_client": llm, "task_state": task_state}
 
-    first = check_node(state, tool_registry=tool_registry)
+    _ = tool_registry
+    first = check_node_state_adapter(state)
     state["task_state"] = first["task_state"]
-    second = check_node(state, tool_registry=tool_registry)
+    second = check_node_state_adapter(state)
     next_state = second.get("task_state")
     assert isinstance(next_state, dict)
     verdict = next_state.get("judge_verdict")
@@ -177,7 +212,8 @@ def test_check_judge_prompt_renders_from_task_record_sections() -> None:
     ]
     state = {"correlation_id": "corr-check-template-prompt", "_llm_client": llm, "task_state": task_state}
 
-    _ = check_node(state, tool_registry=tool_registry)
+    _ = tool_registry
+    _ = check_node_state_adapter(state)
     prompt = llm.last_user_prompt
     assert "# FACTS" in prompt
     assert "# TOOL CALL HISTORY" in prompt
@@ -200,7 +236,8 @@ def test_check_judge_prompt_new_request_requires_objective_and_delivery_criteria
         "task_state": task_state,
     }
 
-    _ = check_node(state, tool_registry=tool_registry)
+    _ = tool_registry
+    _ = check_node_state_adapter(state)
     prompt = llm.last_user_prompt
     assert "Baseline criteria MUST include both" in prompt
     assert "1) objective completion" in prompt
@@ -226,10 +263,15 @@ def test_check_template_failure_mission_fails_with_admin_message(monkeypatch) ->
     def _capture_log_task_event(**kwargs):
         emitted.append(dict(kwargs))
 
-    task_record = TaskRecord(task_id="task-check-template-fail", user_id="owner-1", goal="do the task")
+    task_record = TaskRecord(
+        task_id="task-check-template-fail",
+        user_id="owner-1",
+        goal="do the task",
+    )
 
     out = check_module.check_node_impl(
         task_record=task_record,
+        provenance="do",
         llm_client=llm,
         logger=logging.getLogger("test.check"),
         log_task_event=_capture_log_task_event,
@@ -297,7 +339,8 @@ def test_check_consumes_task_inputs_resets_criteria_and_forces_replan(tmp_path, 
         "task_state": task_state,
     }
 
-    out = check_node(state, tool_registry=tool_registry)
+    _ = tool_registry
+    out = check_node_state_adapter(state)
     assert "new steering text from queue" in llm.last_user_prompt
     next_state = out.get("task_state")
     assert isinstance(next_state, dict)
@@ -329,8 +372,8 @@ def test_check_consumes_task_inputs_resets_criteria_and_forces_replan(tmp_path, 
 
 
 def test_route_after_act_prefers_judge_verdict_kind() -> None:
-    assert route_after_act({"task_state": {"judge_verdict": {"kind": "plan"}}}) == "next_step_node"
-    assert route_after_act({"task_state": {"judge_verdict": {"kind": "mission_success"}}}) == "respond_node"
+    assert route_after_act({"check_result": {"verdict": "plan"}}) == "next_step_node"
+    assert route_after_act({"check_result": {"verdict": "mission_success"}}) == "respond_node"
 
 
 def test_check_does_not_consume_same_queue_message_twice(tmp_path, monkeypatch) -> None:
@@ -375,7 +418,8 @@ def test_check_does_not_consume_same_queue_message_twice(tmp_path, monkeypatch) 
     task_state["task_id"] = task_id
     state = {"correlation_id": "corr-check-repeat", "_llm_client": llm, "task_state": task_state}
 
-    first = check_node(state, tool_registry=tool_registry)
+    _ = tool_registry
+    first = check_node_state_adapter(state)
     first_state = first.get("task_state")
     assert isinstance(first_state, dict)
     facts = first_state.get("facts")
@@ -383,7 +427,7 @@ def test_check_does_not_consume_same_queue_message_twice(tmp_path, monkeypatch) 
     assert isinstance(facts.get("user_reply_1"), dict)
     state["task_state"] = first_state
 
-    second = check_node(state, tool_registry=tool_registry)
+    second = check_node_state_adapter(state)
     second_state = second.get("task_state")
     assert isinstance(second_state, dict)
     second_facts = second_state.get("facts")
@@ -422,7 +466,8 @@ def test_check_node_persists_criteria_snapshot_pdca_event(tmp_path, monkeypatch)
         {"step_id": "step_2", "tool_name": "planner_output", "internal": True},
     ]
     state = {"task_id": task_id, "correlation_id": "corr-check-snapshot", "_llm_client": llm, "task_state": task_state}
-    _ = check_node(state, tool_registry=tool_registry)
+    _ = tool_registry
+    _ = check_node_state_adapter(state)
     events = list_pdca_events(task_id=task_id, limit=30)
     snapshots = [item for item in events if item.get("event_type") == "check.criteria_snapshot"]
     assert snapshots

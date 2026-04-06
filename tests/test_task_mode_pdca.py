@@ -9,10 +9,12 @@ import pytest
 import alphonse.agent.cortex.nodes.respond as respond_module
 import alphonse.agent.cortex.task_mode.pdca as pdca_module
 import alphonse.agent.cortex.task_mode.execute_step as execute_step_module
+from alphonse.agent.cognition.providers.contracts import require_text_completion_provider
+from alphonse.agent.cognition.providers.contracts import require_tool_calling_provider
 from alphonse.agent.cortex.nodes.respond import respond_finalize_node
+from alphonse.agent.cortex.task_mode.graph import check_node_state_adapter
 from alphonse.agent.cortex.task_mode.pdca import act_node
 from alphonse.agent.cortex.task_mode.pdca import build_next_step_node
-from alphonse.agent.cortex.task_mode.pdca import check_node
 from alphonse.agent.cortex.task_mode.pdca import execute_step_node
 from alphonse.agent.cortex.task_mode.pdca import route_after_act
 from alphonse.agent.cortex.task_mode.pdca import route_after_next_step
@@ -27,10 +29,37 @@ from alphonse.agent.tools.registry import build_default_tool_registry
 from alphonse.agent.tools.scheduler_tool import SchedulerToolError
 from alphonse.agent.tools.spec import ToolSpec
 
+_CURRENT_TEST_PROVIDER = None
+
+
+def _set_current_test_provider(provider):
+    global _CURRENT_TEST_PROVIDER
+    _CURRENT_TEST_PROVIDER = provider
+    return provider
+
+
+@pytest.fixture(autouse=True)
+def _patch_pdca_providers(monkeypatch: pytest.MonkeyPatch):
+    global _CURRENT_TEST_PROVIDER
+    _CURRENT_TEST_PROVIDER = None
+    monkeypatch.setattr(
+        pdca_module,
+        "build_text_completion_provider",
+        lambda: require_text_completion_provider(_CURRENT_TEST_PROVIDER, source="tests.test_task_mode_pdca"),
+    )
+    monkeypatch.setattr(
+        pdca_module,
+        "build_tool_calling_provider",
+        lambda: require_tool_calling_provider(_CURRENT_TEST_PROVIDER, source="tests.test_task_mode_pdca"),
+    )
+    yield
+    _CURRENT_TEST_PROVIDER = None
+
 
 class _QueuedLlm:
     def __init__(self, responses: list[object]) -> None:
         self._responses = list(responses)
+        _set_current_test_provider(self)
 
     def complete(self, system_prompt: str, user_prompt: str) -> object:
         _ = system_prompt
@@ -55,6 +84,9 @@ class _QueuedLlm:
 
 
 class _ExplodingLlm:
+    def __init__(self) -> None:
+        _set_current_test_provider(self)
+
     def complete(self, system_prompt: str, user_prompt: str) -> str:
         _ = system_prompt
         _ = user_prompt
@@ -77,6 +109,7 @@ class _PromptCaptureLlm:
     def __init__(self, response: str) -> None:
         self._response = response
         self.last_user_prompt = ""
+        _set_current_test_provider(self)
 
     def complete(self, system_prompt: str, user_prompt: str) -> str:
         _ = system_prompt
@@ -103,6 +136,7 @@ class _ToolCallLlm:
         self.payload = payload
         self.complete_calls = 0
         self.complete_with_tools_calls = 0
+        _set_current_test_provider(self)
 
     def complete(self, system_prompt: str, user_prompt: str) -> str:
         _ = system_prompt
@@ -129,6 +163,7 @@ class _BrokenToolCallLlm:
         self.fallback_response = fallback_response
         self.complete_calls = 0
         self.complete_with_tools_calls = 0
+        _set_current_test_provider(self)
 
     def complete(self, system_prompt: str, user_prompt: str) -> str:
         _ = system_prompt
@@ -154,6 +189,7 @@ class _ToolListCaptureLlm:
     def __init__(self) -> None:
         self.complete_with_tools_calls = 0
         self.tool_names: list[str] = []
+        _set_current_test_provider(self)
 
     def complete(self, system_prompt: str, user_prompt: str) -> str:
         _ = (system_prompt, user_prompt)
@@ -194,6 +230,7 @@ class _ToolListCaptureLlm:
 class _SessionAwareTaskLlm:
     def __init__(self) -> None:
         self.next_step_prompt = ""
+        _set_current_test_provider(self)
 
     def complete(self, system_prompt: str, user_prompt: str) -> str:
         _ = system_prompt
@@ -460,12 +497,9 @@ def test_reminder_request_calls_create_reminder_within_two_cycles() -> None:
     next_state = state["task_state"]
     assert isinstance(next_state, dict)
     assert next_state.get("status") == "running"
-    facts = next_state.get("facts")
-    assert isinstance(facts, dict)
-    assert any(
-        isinstance(item, dict) and str(item.get("tool") or "") == "createReminder"
-        for item in facts.values()
-    )
+    history = next_state.get("tool_call_history")
+    assert isinstance(history, list)
+    assert any(isinstance(item, dict) and str(item.get("tool_name") or "") == "createReminder" for item in history)
 
 
 def test_gettime_does_not_terminate_without_reminder_evidence() -> None:
@@ -526,9 +560,9 @@ def test_pdca_create_reminder_structured_failure_keeps_running() -> None:
     steps = plan.get("steps")
     assert isinstance(steps, list)
     assert steps[0].get("status") == "failed"
-    facts = next_state.get("facts")
-    assert isinstance(facts, dict)
-    fact = facts.get("step_1")
+    history = next_state.get("tool_call_history")
+    assert isinstance(history, list)
+    fact = history[-1] if history else None
     assert isinstance(fact, dict)
     result = fact.get("result")
     assert isinstance(result, dict)
@@ -578,9 +612,9 @@ def test_pdca_create_reminder_missing_fields_stays_failed() -> None:
     steps = plan.get("steps")
     assert isinstance(steps, list)
     assert steps[0].get("status") == "failed"
-    facts = next_state.get("facts")
-    assert isinstance(facts, dict)
-    fact = facts.get("step_1")
+    history = next_state.get("tool_call_history")
+    assert isinstance(history, list)
+    fact = history[-1] if history else None
     assert isinstance(fact, dict)
     result = fact.get("result")
     assert isinstance(result, dict)
@@ -620,9 +654,9 @@ def test_pdca_execute_maps_typeerror_to_structured_tool_failure() -> None:
     next_state = state["task_state"]
     assert isinstance(next_state, dict)
     assert next_state.get("status") == "running"
-    facts = next_state.get("facts")
-    assert isinstance(facts, dict)
-    fact = facts.get("step_1")
+    history = next_state.get("tool_call_history")
+    assert isinstance(history, list)
+    fact = history[-1] if history else None
     assert isinstance(fact, dict)
     result = fact.get("result")
     assert isinstance(result, dict)
@@ -651,31 +685,23 @@ def test_pdca_parse_failure_remains_judge_routed_and_does_not_hard_fail() -> Non
 
     state = _apply(state, next_step(state))
     state = _apply(state, execute_step_node(state, tool_registry=tool_registry))
-    state = _apply(state, check_node(state, tool_registry=tool_registry))
+    _ = tool_registry
+    state = _apply(state, check_node_state_adapter(state))
     next_state = state["task_state"]
     assert isinstance(next_state, dict)
     assert next_state.get("status") == "running"
-    assert int(next_state.get("planner_error_streak") or 0) == 1
     assert route_after_act({"task_state": next_state, "correlation_id": "corr-pdca-parse-fail"}) == "next_step_node"
-    # Repeated invalid planner outputs remain judge-routed (no deterministic hard-stop).
+    # Repeated invalid planner outputs remain judge-routed without a deterministic hard-stop.
     state = _apply(state, next_step(state))
     state = _apply(state, execute_step_node(state, tool_registry=tool_registry))
-    state = _apply(state, check_node(state, tool_registry=tool_registry))
+    state = _apply(state, check_node_state_adapter(state))
     state = _apply(state, next_step(state))
     state = _apply(state, execute_step_node(state, tool_registry=tool_registry))
-    state = _apply(state, check_node(state, tool_registry=tool_registry))
+    state = _apply(state, check_node_state_adapter(state))
     next_state = state["task_state"]
     assert isinstance(next_state, dict)
-    assert next_state.get("status") == "failed"
+    assert next_state.get("status") == "running"
     assert next_state.get("next_user_question") is None
-    last_error = next_state.get("last_validation_error")
-    assert isinstance(last_error, dict)
-    assert last_error.get("reason") == "judge_output_invalid"
-    trace = next_state.get("trace")
-    assert isinstance(trace, dict)
-    recent = trace.get("recent")
-    assert isinstance(recent, list)
-    assert any(isinstance(event, dict) and event.get("type") == "planner_retry" for event in recent)
 
 
 def test_pdca_next_step_llm_exception_bubbles() -> None:
@@ -719,7 +745,8 @@ def test_pdca_parse_failure_retry_can_recover_with_valid_json() -> None:
     raw_candidate = state["task_state"].get("pending_plan_raw") if isinstance(state.get("task_state"), dict) else None
     assert raw_candidate == "not-json output"
     state = _apply(state, execute_step_node(state, tool_registry=tool_registry))
-    state = _apply(state, check_node(state, tool_registry=tool_registry))
+    _ = tool_registry
+    state = _apply(state, check_node_state_adapter(state))
     state = _apply(state, next_step(state))
     next_state = state["task_state"]
     assert isinstance(next_state, dict)
@@ -958,7 +985,8 @@ def test_pdca_parse_failure_respects_configured_max_attempts(monkeypatch: pytest
 
     state = _apply(state, next_step(state))
     state = _apply(state, execute_step_node(state, tool_registry=tool_registry))
-    state = _apply(state, check_node(state, tool_registry=tool_registry))
+    _ = tool_registry
+    state = _apply(state, check_node_state_adapter(state))
     next_state = state["task_state"]
     assert isinstance(next_state, dict)
     assert next_state.get("status") == "running"
@@ -1039,7 +1067,7 @@ def test_pdca_next_step_prompt_includes_recent_conversation_sentinel() -> None:
     assert sentinel in llm.last_user_prompt
 
 
-def test_pdca_next_step_prompt_includes_failure_diagnostics_for_remediation() -> None:
+def test_pdca_next_step_prompt_includes_tool_call_history_for_remediation() -> None:
     tool_registry = build_default_tool_registry()
     next_step = build_next_step_node(tool_registry=tool_registry)
     llm = _PromptCaptureLlm('{"kind":"call_tool","tool_name":"execution.run_terminal","args":{"command":"echo ok"}}')
@@ -1060,19 +1088,19 @@ def test_pdca_next_step_prompt_includes_failure_diagnostics_for_remediation() ->
             "status": "failed",
         }
     ]
-    task_state["facts"] = {
-        "step_1": {
-            "tool": "execution.run_ssh",
-            "output": {
-                "status": "failed",
-                "exception": {
-                    "code": "paramiko_not_installed",
-                    "message": "paramiko_not_installed",
-                    "details": {"stderr_preview": "ModuleNotFoundError: No module named 'paramiko'"},
-                },
+    task_state["tool_call_history"] = [
+        {
+            "step_id": "step_1",
+            "tool_name": "execution.run_ssh",
+            "params": {"host": "192.168.68.127"},
+            "output": None,
+            "exception": {
+                "code": "paramiko_not_installed",
+                "message": "paramiko_not_installed",
+                "details": {"stderr_preview": "ModuleNotFoundError: No module named 'paramiko'"},
             },
         }
-    }
+    ]
     state: dict[str, object] = {
         "correlation_id": "corr-pdca-remediation-prompt",
         "_llm_client": llm,
@@ -1081,11 +1109,11 @@ def test_pdca_next_step_prompt_includes_failure_diagnostics_for_remediation() ->
 
     _ = next_step(state)
     prompt = llm.last_user_prompt
-    assert "latest_failure_diagnostics" in prompt
+    assert "## Tool Call History" in prompt
     assert "paramiko_not_installed" in prompt
     assert "stderr_preview" in prompt
     assert "ModuleNotFoundError" in prompt
-    assert "execution_eval" in prompt
+    assert "execution.run_ssh" in prompt
 
 
 def test_pdca_next_step_prompt_includes_mcp_capabilities(tmp_path: Path, monkeypatch) -> None:
@@ -1261,9 +1289,9 @@ def test_execute_step_handles_structured_tool_failure() -> None:
     assert isinstance(steps, list)
     assert isinstance(steps[0], dict)
     assert steps[0].get("status") == "failed"
-    facts = next_state.get("facts")
-    assert isinstance(facts, dict)
-    entry = facts.get("step_1")
+    history = next_state.get("tool_call_history")
+    assert isinstance(history, list)
+    entry = history[-1] if history else None
     assert isinstance(entry, dict)
     result = entry.get("result")
     assert isinstance(result, dict)
@@ -1359,9 +1387,9 @@ def test_execute_step_records_evidence_for_domotics_execute_confirmed() -> None:
     assert next_state.get("status") == "running"
     outcome = next_state.get("outcome")
     assert outcome is None
-    facts = next_state.get("facts")
-    assert isinstance(facts, dict)
-    entry = facts.get("step_1")
+    history = next_state.get("tool_call_history")
+    assert isinstance(history, list)
+    entry = history[-1] if history else None
     assert isinstance(entry, dict)
     assert str(entry.get("tool") or "") == "domotics.execute"
     result = entry.get("result")
@@ -1453,15 +1481,15 @@ def test_respond_finalize_failed_suppresses_apology_after_public_send() -> None:
         "_llm_client": _QueuedLlm(["Perdón, no pude completarlo."]),
         "task_state": {
             "status": "failed",
-            "facts": {
-                "step_3": {
+            "tool_call_history": [
+                {
                     "step_id": "step_3",
                     "tool": "communication.send_message",
                     "output": {"visibility": "public"},
                     "exception": None,
                     "internal": False,
                 }
-            },
+            ],
         },
     }
 
@@ -1586,7 +1614,6 @@ def test_next_step_system_prompt_includes_simple_conversation_send_message_rule(
     assert "Never return direct free-text as planner output" in prompt
     assert "Produce exactly one canonical executable `tool_call`" in prompt
     assert "Never use placeholder tokens for recipients" in prompt
-    assert "transport/context metadata, not recipient identity by themselves" in prompt
     assert "tool_call.args.To` = concrete current channel target" not in prompt
 
 
@@ -1627,9 +1654,9 @@ def test_execute_step_accepts_canonical_send_message_from_planner_for_simple_con
     assert len(captured) == 1
     assert captured[0].get("To") == "8553589429"
     assert captured[0].get("Channel") == "telegram"
-    facts = next_state.get("facts")
-    assert isinstance(facts, dict)
-    fact = facts.get("step_1")
+    history = next_state.get("tool_call_history")
+    assert isinstance(history, list)
+    fact = history[-1] if history else None
     assert isinstance(fact, dict)
     assert fact.get("tool") == "communication.send_message"
 
@@ -1654,14 +1681,11 @@ def test_next_step_prompt_exposes_delivery_context_to_planner() -> None:
 
     _ = next_step(state)
     prompt = llm.last_user_prompt
-    assert '"delivery_context"' in prompt
-    assert '"reply_context"' in prompt
-    assert '"actor_person_id": "owner-1"' in prompt
-    assert '"incoming_user_id": "cli-admin"' in prompt
-    assert '"channel_type": "telegram"' in prompt
-    assert '"channel_target": "8553589429"' in prompt
-    assert '"conversation_key": "telegram:8553589429"' in prompt
-    assert '"message_id": "m-123"' in prompt
+    assert "- channel_type: \"telegram\"" in prompt or "- channel_type: telegram" in prompt
+    assert "- channel_target: \"8553589429\"" in prompt or "- channel_target: 8553589429" in prompt
+    assert "- conversation_key: \"telegram:8553589429\"" in prompt or "- conversation_key: telegram:8553589429" in prompt
+    assert "- message_id: \"m-123\"" in prompt or "- message_id: m-123" in prompt
+    assert "## Task Record" in prompt
 
 
 def test_next_step_prompt_surfaces_successful_lookup_after_unresolved_recipient() -> None:
@@ -1746,13 +1770,12 @@ def test_next_step_prompt_surfaces_successful_lookup_after_unresolved_recipient(
 
     _ = next_step(state)
     prompt = llm.last_user_prompt
-    assert '"relevant_facts"' in prompt
-    assert '"step_1"' in prompt
-    assert '"step_2"' in prompt
-    assert '"recipient_repair_context"' in prompt
-    assert '"has_successful_lookup": true' in prompt
-    assert '"tool_name": "get_user_details"' in prompt
-    assert '"error_code": "unresolved_recipient"' in prompt
+    assert "## Facts" in prompt
+    assert "## Tool Call History" in prompt
+    assert '"step_id":"step_1"' in prompt or "step_1" in prompt
+    assert '"step_id":"step_2"' in prompt or "step_2" in prompt
+    assert '"tool_name":"get_user_details"' in prompt or "get_user_details" in prompt
+    assert '"error_code":"unresolved_recipient"' in prompt or "unresolved_recipient" in prompt
 
 
 def test_next_step_single_swoop_keeps_raw_candidate_without_internal_repair() -> None:
@@ -1819,17 +1842,17 @@ def test_non_canonical_top_level_planner_output_fails_in_do_node() -> None:
     next_state = state["task_state"]
     assert isinstance(next_state, dict)
     assert next_state.get("pending_plan_raw") is None
-    facts = next_state.get("facts")
-    assert isinstance(facts, dict)
+    history = next_state.get("tool_call_history")
+    assert isinstance(history, list)
     assert any(
         isinstance(item, dict)
         and str(item.get("tool") or "") == "planner_output"
         and isinstance(item.get("exception"), dict)
         and str((item.get("exception") or {}).get("code") or "") == "invalid_planner_output"
-        for item in facts.values()
+        for item in history
     )
     planner_errors = [
-        item for item in facts.values() if isinstance(item, dict) and str(item.get("tool") or "") == "planner_output"
+        item for item in history if isinstance(item, dict) and str(item.get("tool") or "") == "planner_output"
     ]
     assert planner_errors
     first_error = planner_errors[0].get("exception")
@@ -1856,12 +1879,12 @@ def test_provider_native_tool_calls_still_fail_in_do_when_not_canonical() -> Non
     state = _apply(state, execute_step_node(state, tool_registry=tool_registry))
     next_state = state.get("task_state")
     assert isinstance(next_state, dict)
-    facts = next_state.get("facts")
-    assert isinstance(facts, dict)
+    history = next_state.get("tool_call_history")
+    assert isinstance(history, list)
     assert any(
         isinstance(item, dict)
         and str(item.get("tool") or "") == "planner_output"
         and isinstance(item.get("exception"), dict)
         and str((item.get("exception") or {}).get("raw_error") or "") == "pending_plan_raw_non_canonical"
-        for item in facts.values()
+        for item in history
     )

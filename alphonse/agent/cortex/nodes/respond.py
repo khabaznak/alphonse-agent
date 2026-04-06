@@ -5,6 +5,7 @@ from typing import Any, Callable
 
 from alphonse.agent.cortex.nodes.capability_gap import has_capability_gap_plan
 from alphonse.agent.cortex.nodes.telemetry import emit_brain_state
+from alphonse.agent.cortex.task_mode.task_record import TaskRecord
 from alphonse.agent.observability.log_manager import get_log_manager
 from alphonse.agent.rendering.stage import render_stage
 from alphonse.agent.rendering.types import TextDeliverable
@@ -105,8 +106,13 @@ def respond_finalize_node(
         )
 
     pending = state.get("pending_interaction")
+    task_record = state.get("task_record") if isinstance(state.get("task_record"), TaskRecord) else None
     task_state = state.get("task_state") if isinstance(state.get("task_state"), dict) else None
-    task_status = str((task_state or {}).get("status") or "").strip().lower() if isinstance(task_state, dict) else ""
+    task_status = (
+        str(task_record.status or "").strip().lower()
+        if isinstance(task_record, TaskRecord)
+        else str((task_state or {}).get("status") or "").strip().lower() if isinstance(task_state, dict) else ""
+    )
     terminal_task_statuses = {"done", "failed"}
     is_terminal_task_state = task_status in terminal_task_statuses
     if has_capability_gap_plan(state):
@@ -202,9 +208,22 @@ def respond_finalize_node(
 
 
 def build_utterance_from_state(state: dict[str, Any]) -> dict[str, Any] | None:
+    task_record = state.get("task_record")
+    if isinstance(task_record, TaskRecord):
+        status = str(task_record.status or "").strip().lower()
+        if status:
+            task_state = state.get("task_state") if isinstance(state.get("task_state"), dict) else {}
+            synthetic_task_state = dict(task_state)
+            synthetic_task_state["status"] = task_record.status
+            synthetic_task_state["outcome"] = task_record.outcome
+            return _build_utterance_from_task_state(state=state, task_state=synthetic_task_state)
     task_state = state.get("task_state")
     if not isinstance(task_state, dict):
         return None
+    return _build_utterance_from_task_state(state=state, task_state=task_state)
+
+
+def _build_utterance_from_task_state(state: dict[str, Any], *, task_state: dict[str, Any]) -> dict[str, Any] | None:
     status = str(task_state.get("status") or "").strip().lower()
     if not status:
         return None
@@ -290,10 +309,10 @@ def build_utterance_from_state(state: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def _has_public_mission_send_success(task_state: dict[str, Any]) -> bool:
-    facts = task_state.get("facts")
-    if not isinstance(facts, dict):
+    history = task_state.get("tool_call_history")
+    if not isinstance(history, list):
         return False
-    for fact in facts.values():
+    for fact in history:
         if not isinstance(fact, dict):
             continue
         tool = str(fact.get("tool_name") or fact.get("tool") or "").strip()

@@ -8,10 +8,9 @@ from langgraph.graph import END, StateGraph
 from alphonse.agent.cognition.providers.contracts import TextCompletionProvider
 from alphonse.agent.cognition.providers.contracts import require_text_completion_provider
 from alphonse.agent.cognition.plans import CortexPlan, CortexResult
-from alphonse.agent.cortex.nodes import build_apology_node
-from alphonse.agent.cortex.nodes import task_mode_entry_node
 from alphonse.agent.cortex.nodes import respond_finalize_node
 from alphonse.agent.cortex.task_mode.state import TaskState
+from alphonse.agent.cortex.task_mode.task_record import TaskRecord
 from alphonse.agent.cortex.task_mode.graph import wire_task_mode_pdca
 from alphonse.agent.cortex.transitions import emit_transition_event
 from alphonse.agent.cortex.utils import build_cognition_state, build_meta
@@ -45,6 +44,7 @@ class CortexState(TypedDict, total=False):
     pending_interaction: dict[str, Any] | None
     ability_state: dict[str, Any] | None
     planning_context: dict[str, Any] | None
+    task_record: TaskRecord | None
     task_state: TaskState | None
     plan_retry: bool
     plan_repair_attempts: int
@@ -65,26 +65,15 @@ class CortexGraph:
     def build(self) -> StateGraph:
         graph = StateGraph(CortexState)
         graph.add_node(
-            "apology_node",
-            build_apology_node(
-                llm_client_from_state=self._llm_client_from_state,
-            ),
-        )
-        graph.add_node(
             "respond_node",
             lambda state: respond_finalize_node(
                 state,
                 emit_transition_event=emit_transition_event,
             ),
         )
-        graph.add_node(
-            "task_mode_entry_node",
-            task_mode_entry_node,
-        )
         wire_task_mode_pdca(graph, tool_registry=self._tool_registry)
 
-        graph.set_entry_point("task_mode_entry_node")
-        graph.add_edge("apology_node", "respond_node")
+        graph.set_entry_point("task_record_entry_node")
         graph.add_edge("respond_node", END)
         return graph
 
