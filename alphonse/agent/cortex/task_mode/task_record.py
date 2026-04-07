@@ -8,6 +8,7 @@ from typing import Any
 class TaskRecord:
     task_id: str | None = None
     user_id: str | None = None
+    correlation_id: str = ""
     goal: str = ""
     facts_md: str = "- (none)"
     recent_conversation_md: str = "- (none)"
@@ -22,6 +23,7 @@ class TaskRecord:
         return {
             "task_id": self.task_id,
             "user_id": self.user_id,
+            "correlation_id": self.correlation_id,
             "goal": self.goal,
             "facts_md": self.facts_md,
             "recent_conversation_md": self.recent_conversation_md,
@@ -71,6 +73,9 @@ class TaskRecord:
 
     def clear_acceptance_criteria(self) -> None:
         self.acceptance_criteria_md = "- (none)"
+
+    def set_correlation_id(self, correlation_id: str) -> None:
+        self.correlation_id = correlation_id
 
     def replan(self) -> None:
         self.goal = ""
