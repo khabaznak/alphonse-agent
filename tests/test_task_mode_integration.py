@@ -5,9 +5,10 @@ import pytest
 import alphonse.agent.cortex.task_mode.pdca as pdca_module
 from alphonse.agent.cognition.providers.contracts import require_text_completion_provider
 from alphonse.agent.cognition.providers.contracts import require_tool_calling_provider
-from alphonse.agent.cortex.nodes.task_mode import task_mode_entry_node
 from alphonse.agent.cortex.graph import check_node_state_adapter
+from alphonse.agent.cortex.nodes.task_mode import task_mode_entry_node
 from alphonse.agent.cortex.task_mode.pdca import build_next_step_node
+from alphonse.agent.cortex.task_mode.task_record import TaskRecord
 from alphonse.agent.tools.registry import build_default_tool_registry
 
 _CURRENT_TEST_PROVIDER = None
@@ -53,12 +54,12 @@ class _FakeLlm:
         messages: list[dict[str, object]],
         tools: list[dict[str, object]],
         tool_choice: str = "auto",
-    ) -> str:
+    ) -> dict[str, object]:
         _ = (messages, tools, tool_choice)
-        return self._response
+        return {"tool_call": {"kind": "call_tool", "tool_name": "jobs.list", "args": {"limit": 10}}}
 
 
-def test_task_route_initializes_task_state() -> None:
+def test_task_route_initializes_task_record() -> None:
     state = {
         "chat_id": "123",
         "channel_type": "telegram",
@@ -67,36 +68,31 @@ def test_task_route_initializes_task_state() -> None:
         "correlation_id": "corr-task-entry",
     }
     result = task_mode_entry_node(state)
-    task_state = result.get("task_state")
-    assert isinstance(task_state, dict)
-    assert task_state.get("mode") == "task"
-    assert str(task_state.get("pdca_phase") or "") in {"plan", "check", "do", "act"}
-    assert int(task_state.get("cycle_index") or 0) >= 0
-    assert task_state.get("initialized") is True
+    task_record = result.get("task_record")
+    assert isinstance(task_record, TaskRecord)
+    assert task_record.goal == "What can you do?"
+    assert task_record.correlation_id == "corr-task-entry"
+    assert result.get("check_provenance") == "entry"
 
 
-def test_chat_route_now_starts_plan_first_even_for_greetings() -> None:
-    llm = _FakeLlm(
+def test_chat_route_now_starts_check_first_even_for_greetings() -> None:
+    _FakeLlm(
         '{"kind":"plan","case_type":"new_request","reason":"baseline plan first",'
         '"confidence":0.8,"criteria_updates":[{"op":"append","text":"Maintain general conversation context"}],'
         '"evidence_refs":[],"failure_class":null}'
     )
-    tool_registry = build_default_tool_registry()
     state = {
         "chat_id": "123",
         "channel_type": "telegram",
         "channel_target": "123",
         "last_user_message": "Hi",
         "correlation_id": "corr-chat-route",
-        "_llm_client": llm,
     }
     state.update(task_mode_entry_node(state))
     state.update(check_node_state_adapter(state))
-    task_state = state.get("task_state")
-    assert isinstance(task_state, dict)
-    verdict = task_state.get("judge_verdict")
-    assert isinstance(verdict, dict)
-    assert verdict.get("kind") == "plan"
+    check_result = state.get("check_result")
+    assert isinstance(check_result, dict)
+    assert check_result.get("verdict") == "plan"
 
 
 def test_task_mode_entry_extracts_goal_from_incoming_payload_not_raw_blob() -> None:
@@ -120,21 +116,16 @@ def test_task_mode_entry_extracts_goal_from_incoming_payload_not_raw_blob() -> N
     }
 
     update = task_mode_entry_node(state)
-    task_state = update.get("task_state")
-    assert isinstance(task_state, dict)
-    assert task_state.get("goal") == "Please set a recurring USD to MXN reminder at 7am."
+    task_record = update.get("task_record")
+    assert isinstance(task_record, TaskRecord)
+    assert task_record.goal == "Please set a recurring USD to MXN reminder at 7am."
 
 
-def test_acceptance_criteria_pending_context_uses_clean_goal_text() -> None:
-    tool_registry = build_default_tool_registry()
-    next_step = build_next_step_node(tool_registry=tool_registry)
-    llm = _FakeLlm(
-        '{"kind":"call_tool","tool_name":"jobs.list","args":{"limit":10},'
-        '"acceptance_criteria":["Return the scheduled jobs list."]}'
-    )
+def test_planner_uses_clean_goal_text_from_task_record() -> None:
+    next_step = build_next_step_node(tool_registry=build_default_tool_registry())
+    _FakeLlm('unused')
     state = {
         "correlation_id": "corr-clean-goal",
-        "_llm_client": llm,
         "incoming_raw_message": {
             "text": "Schedule my daily FX update at 7am.",
             "provider_event": {
@@ -149,10 +140,9 @@ def test_acceptance_criteria_pending_context_uses_clean_goal_text() -> None:
         ),
     }
     state.update(task_mode_entry_node(state))
-    task_state = state.get("task_state")
-    assert isinstance(task_state, dict)
-    out = next_step(state)
-    goal = str(task_state.get("goal") or "")
-    assert goal == "Schedule my daily FX update at 7am."
-    assert "## RAW MESSAGE" not in goal
-    assert not isinstance(out.get("pending_interaction"), dict)
+    task_record = state.get("task_record")
+    assert isinstance(task_record, TaskRecord)
+    out = next_step(task_record)
+    assert task_record.goal == "Schedule my daily FX update at 7am."
+    assert "## RAW MESSAGE" not in task_record.goal
+    assert isinstance(out, dict)

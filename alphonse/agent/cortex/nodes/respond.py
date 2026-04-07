@@ -107,11 +107,10 @@ def respond_finalize_node(
 
     pending = state.get("pending_interaction")
     task_record = state.get("task_record") if isinstance(state.get("task_record"), TaskRecord) else None
-    task_state = state.get("task_state") if isinstance(state.get("task_state"), dict) else None
     task_status = (
         str(task_record.status or "").strip().lower()
         if isinstance(task_record, TaskRecord)
-        else str((task_state or {}).get("status") or "").strip().lower() if isinstance(task_state, dict) else ""
+        else ""
     )
     terminal_task_statuses = {"done", "failed"}
     is_terminal_task_state = task_status in terminal_task_statuses
@@ -121,8 +120,8 @@ def respond_finalize_node(
     if pending and not is_terminal_task_state and task_status != "waiting_user":
         emit_transition_event(state, "waiting_user")
         return _return({})
-    if isinstance(task_state, dict):
-        if task_status == "failed" and _has_public_mission_send_success(task_state):
+    if isinstance(task_record, TaskRecord):
+        if task_status == "failed" and _has_public_mission_send_success_from_record(task_record):
             _LOG.emit(
                 event="pdca.failure.user_reply_suppressed",
                 component="cortex.nodes.respond",
@@ -166,13 +165,8 @@ def respond_finalize_node(
                             channel=str(state.get("channel_type") or "").strip() or None,
                             user_id=str(state.get("actor_person_id") or "").strip() or None,
                             payload={
-                                "failure_code": str(
-                                    ((task_state.get("last_validation_error") or {}) if isinstance(task_state.get("last_validation_error"), dict) else {}).get("reason")
-                                    or "mission_failed"
-                                ),
-                                "retry_exhausted": bool(
-                                    ((task_state.get("last_validation_error") or {}) if isinstance(task_state.get("last_validation_error"), dict) else {}).get("retry_exhausted")
-                                ),
+                                "failure_code": str((task_record.outcome or {}).get("failure_class") or "mission_failed"),
+                                "retry_exhausted": False,
                             },
                         )
                     if task_status == "failed":
@@ -210,21 +204,12 @@ def respond_finalize_node(
 def build_utterance_from_state(state: dict[str, Any]) -> dict[str, Any] | None:
     task_record = state.get("task_record")
     if isinstance(task_record, TaskRecord):
-        status = str(task_record.status or "").strip().lower()
-        if status:
-            task_state = state.get("task_state") if isinstance(state.get("task_state"), dict) else {}
-            synthetic_task_state = dict(task_state)
-            synthetic_task_state["status"] = task_record.status
-            synthetic_task_state["outcome"] = task_record.outcome
-            return _build_utterance_from_task_state(state=state, task_state=synthetic_task_state)
-    task_state = state.get("task_state")
-    if not isinstance(task_state, dict):
-        return None
-    return _build_utterance_from_task_state(state=state, task_state=task_state)
+        return _build_utterance_from_task_record(state=state, task_record=task_record)
+    return None
 
 
-def _build_utterance_from_task_state(state: dict[str, Any], *, task_state: dict[str, Any]) -> dict[str, Any] | None:
-    status = str(task_state.get("status") or "").strip().lower()
+def _build_utterance_from_task_record(state: dict[str, Any], *, task_record: TaskRecord) -> dict[str, Any] | None:
+    status = str(task_record.status or "").strip().lower()
     if not status:
         return None
     locale = str(state.get("locale") or "en-US")
@@ -254,20 +239,19 @@ def _build_utterance_from_task_state(state: dict[str, Any], *, task_state: dict[
     if status == "waiting_user":
         utterance["type"] = "question"
         utterance["content"] = {
-            "question": str(task_state.get("next_user_question") or "").strip(),
+            "question": str(state.get("pending_interaction", {}).get("question") or "").strip(),
         }
         return utterance
     if status == "failed":
-        if _has_public_mission_send_success(task_state):
+        if _has_public_mission_send_success_from_record(task_record):
             return None
-        reason = task_state.get("last_validation_error")
         utterance["type"] = "task_failed"
         utterance["content"] = {
-            "reason": reason if isinstance(reason, dict) else "task_failed",
+            "reason": task_record.outcome if isinstance(task_record.outcome, dict) else "task_failed",
         }
         return utterance
     if status == "done":
-        outcome = task_state.get("outcome")
+        outcome = task_record.outcome
         if isinstance(outcome, dict) and str(outcome.get("kind") or "").strip() == "reminder_created":
             evidence = outcome.get("evidence")
             evidence_payload = evidence if isinstance(evidence, dict) else {}
@@ -308,41 +292,15 @@ def _build_utterance_from_task_state(state: dict[str, Any], *, task_state: dict[
     return None
 
 
-def _has_public_mission_send_success(task_state: dict[str, Any]) -> bool:
-    history = task_state.get("tool_call_history")
-    if not isinstance(history, list):
+def _has_public_mission_send_success_from_record(task_record: TaskRecord) -> bool:
+    history = [
+        line.strip().removeprefix("- ").strip()
+        for line in str(task_record.get_tool_call_history_md() or "").splitlines()
+        if line.strip()
+    ]
+    if not history:
         return False
     for fact in history:
-        if not isinstance(fact, dict):
-            continue
-        tool = str(fact.get("tool_name") or fact.get("tool") or "").strip()
-        if tool not in {"communication.send_message"}:
-            continue
-        if bool(fact.get("internal")):
-            continue
-        exception_payload = fact.get("exception")
-        if exception_payload is None and isinstance(fact.get("result"), dict):
-            exception_payload = fact["result"].get("exception")
-        has_exception = False
-        if isinstance(exception_payload, str):
-            has_exception = bool(exception_payload.strip())
-        elif isinstance(exception_payload, dict):
-            has_exception = bool(exception_payload)
-        elif exception_payload is not None:
-            has_exception = True
-        if has_exception:
-            continue
-        result_payload = fact.get("output")
-        if not isinstance(result_payload, dict):
-            result_payload = fact.get("result_payload")
-        if not isinstance(result_payload, dict) and isinstance(fact.get("result"), dict):
-            nested = fact.get("result")
-            result_payload = nested.get("output") if isinstance(nested.get("output"), dict) else None
-        visibility = (
-            str(result_payload.get("visibility") or "").strip().lower()
-            if isinstance(result_payload, dict)
-            else ""
-        )
-        if visibility in {"", "public"}:
+        if "communication.send_message" in fact and "exception=null" in fact:
             return True
     return False
