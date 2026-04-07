@@ -12,15 +12,12 @@ import alphonse.agent.cortex.task_mode.execute_step as execute_step_module
 from alphonse.agent.cognition.providers.contracts import require_text_completion_provider
 from alphonse.agent.cognition.providers.contracts import require_tool_calling_provider
 from alphonse.agent.cortex.nodes.respond import respond_finalize_node
-from alphonse.agent.cortex.task_mode.graph import check_node_state_adapter
-from alphonse.agent.cortex.task_mode.pdca import act_node
+from alphonse.agent.cortex.graph import act_node_state_adapter
+from alphonse.agent.cortex.graph import check_node_state_adapter
+from alphonse.agent.cortex.graph import execute_step_state_adapter
 from alphonse.agent.cortex.task_mode.pdca import build_next_step_node
-from alphonse.agent.cortex.task_mode.pdca import execute_step_node
 from alphonse.agent.cortex.task_mode.pdca import route_after_act
 from alphonse.agent.cortex.task_mode.pdca import route_after_next_step
-from alphonse.agent.cortex.task_mode.pdca import route_after_validate_step
-from alphonse.agent.cortex.task_mode.pdca import update_state_node
-from alphonse.agent.cortex.task_mode.pdca import validate_step_node
 from alphonse.agent.cortex.task_mode.prompt_templates import NEXT_STEP_SYSTEM_PROMPT
 from alphonse.agent.cortex.task_mode.state import build_default_task_state
 from alphonse.agent.tools.base import ToolDefinition
@@ -445,13 +442,16 @@ def _run_cycle(
     tool_registry: object,
 ) -> dict[str, object]:
     assert callable(next_step)
-    state = _apply(state, next_step(state))
-    state = _apply(state, validate_step_node(state, tool_registry=tool_registry))
-    route = route_after_validate_step(state)
+    _ = tool_registry
+    task_record = state.get("task_record")
+    assert task_record is not None
+    planner_output = next_step(task_record)
+    state = _apply(state, {"planner_output": planner_output, "task_record": task_record})
+    route = route_after_next_step(planner_output)
     if route == "execute_step_node":
-        state = _apply(state, execute_step_node(state, tool_registry=tool_registry))
-        state = _apply(state, update_state_node(state))
-        state = _apply(state, act_node(state))
+        state = _apply(state, execute_step_state_adapter(state))
+        state = _apply(state, check_node_state_adapter(state))
+        state = _apply(state, act_node_state_adapter(state))
     return state
 
 
@@ -551,7 +551,7 @@ def test_pdca_create_reminder_structured_failure_keeps_running() -> None:
         "task_state": task_state,
     }
 
-    state = _apply(state, execute_step_node(state, tool_registry=tool_registry))
+    state = _apply(state, execute_step_state_adapter(state))
     next_state = state["task_state"]
     assert isinstance(next_state, dict)
     assert next_state.get("status") == "running"
@@ -603,7 +603,7 @@ def test_pdca_create_reminder_missing_fields_stays_failed() -> None:
         "task_state": task_state,
     }
 
-    state = _apply(state, execute_step_node(state, tool_registry=tool_registry))
+    state = _apply(state, execute_step_state_adapter(state))
     next_state = state["task_state"]
     assert isinstance(next_state, dict)
     assert next_state.get("status") == "running"
@@ -650,7 +650,7 @@ def test_pdca_execute_maps_typeerror_to_structured_tool_failure() -> None:
         "task_state": task_state,
     }
 
-    state = _apply(state, execute_step_node(state, tool_registry=tool_registry))
+    state = _apply(state, execute_step_state_adapter(state))
     next_state = state["task_state"]
     assert isinstance(next_state, dict)
     assert next_state.get("status") == "running"
@@ -684,7 +684,7 @@ def test_pdca_parse_failure_remains_judge_routed_and_does_not_hard_fail() -> Non
     }
 
     state = _apply(state, next_step(state))
-    state = _apply(state, execute_step_node(state, tool_registry=tool_registry))
+    state = _apply(state, execute_step_state_adapter(state))
     _ = tool_registry
     state = _apply(state, check_node_state_adapter(state))
     next_state = state["task_state"]
@@ -693,10 +693,10 @@ def test_pdca_parse_failure_remains_judge_routed_and_does_not_hard_fail() -> Non
     assert route_after_act({"task_state": next_state, "correlation_id": "corr-pdca-parse-fail"}) == "next_step_node"
     # Repeated invalid planner outputs remain judge-routed without a deterministic hard-stop.
     state = _apply(state, next_step(state))
-    state = _apply(state, execute_step_node(state, tool_registry=tool_registry))
+    state = _apply(state, execute_step_state_adapter(state))
     state = _apply(state, check_node_state_adapter(state))
     state = _apply(state, next_step(state))
-    state = _apply(state, execute_step_node(state, tool_registry=tool_registry))
+    state = _apply(state, execute_step_state_adapter(state))
     state = _apply(state, check_node_state_adapter(state))
     next_state = state["task_state"]
     assert isinstance(next_state, dict)
@@ -744,7 +744,7 @@ def test_pdca_parse_failure_retry_can_recover_with_valid_json() -> None:
     state = _apply(state, next_step(state))
     raw_candidate = state["task_state"].get("pending_plan_raw") if isinstance(state.get("task_state"), dict) else None
     assert raw_candidate == "not-json output"
-    state = _apply(state, execute_step_node(state, tool_registry=tool_registry))
+    state = _apply(state, execute_step_state_adapter(state))
     _ = tool_registry
     state = _apply(state, check_node_state_adapter(state))
     state = _apply(state, next_step(state))
@@ -984,7 +984,7 @@ def test_pdca_parse_failure_respects_configured_max_attempts(monkeypatch: pytest
     }
 
     state = _apply(state, next_step(state))
-    state = _apply(state, execute_step_node(state, tool_registry=tool_registry))
+    state = _apply(state, execute_step_state_adapter(state))
     _ = tool_registry
     state = _apply(state, check_node_state_adapter(state))
     next_state = state["task_state"]
@@ -1227,7 +1227,15 @@ def test_pdca_validation_allows_unknown_mcp_operation_for_native_profile(tmp_pat
     ]
     state: dict[str, object] = {"correlation_id": "corr-pdca-native-mcp-operation", "task_state": task_state}
 
-    state = _apply(state, validate_step_node(state, tool_registry=tool_registry))
+    planner_output = {
+        "tool_call": {
+            "kind": "call_tool",
+            "tool_name": "execution.call_mcp",
+            "args": {"profile": "chrome", "operation": "web_search", "arguments": {"query": "Veloswim"}},
+        },
+        "planner_intent": "",
+    }
+    state = _apply(state, {"planner_output": planner_output})
     next_state = state["task_state"]
     assert isinstance(next_state, dict)
     assert next_state.get("last_validation_error") is None
@@ -1256,7 +1264,7 @@ def test_route_after_next_step_routes_to_execute_step_node() -> None:
         "task_state": task_state,
     }
 
-    assert route_after_next_step(state) == "execute_step_node"
+    assert route_after_next_step({"tool_call": {"kind": "call_tool", "tool_name": "execution.call_mcp", "args": {}}}) == "execute_step_node"
 
 
 
@@ -1279,7 +1287,7 @@ def test_execute_step_handles_structured_tool_failure() -> None:
     }
     state: dict[str, object] = {"correlation_id": "corr-pdca-tool-fail", "task_state": task_state}
 
-    updated = execute_step_node(state, tool_registry=registry)
+    updated = execute_step_state_adapter(state)
     next_state = updated["task_state"]
     assert isinstance(next_state, dict)
     assert next_state.get("status") == "running"
@@ -1330,7 +1338,7 @@ def test_execute_step_passes_mcp_call_payload_through_without_do_normalization()
     }
     state: dict[str, object] = {"correlation_id": "corr-pdca-mcp-normalize-in-do", "task_state": task_state}
 
-    updated = execute_step_node(state, tool_registry=registry)
+    updated = execute_step_state_adapter(state)
     next_state = updated["task_state"]
     assert isinstance(next_state, dict)
     assert len(mcp_tool.calls) == 1
@@ -1378,9 +1386,9 @@ def test_execute_step_records_evidence_for_domotics_execute_confirmed() -> None:
     }
     state: dict[str, object] = {"correlation_id": "corr-pdca-domotics-outcome", "task_state": task_state}
 
-    state = _apply(state, execute_step_node(state, tool_registry=registry))
-    state = _apply(state, update_state_node(state))
-    state = _apply(state, act_node(state))
+    state = _apply(state, execute_step_state_adapter(state))
+    state = _apply(state, check_node_state_adapter(state))
+    state = _apply(state, act_node_state_adapter(state))
 
     next_state = state["task_state"]
     assert isinstance(next_state, dict)
@@ -1596,7 +1604,7 @@ def test_execute_step_emits_presence_progress_from_planner_intent(monkeypatch: p
         "task_state": task_state,
     }
 
-    updated = execute_step_node(state, tool_registry=tool_registry)
+    updated = execute_step_state_adapter(state)
     assert isinstance(updated.get("task_state"), dict)
     assert len(emitted) == 1
     detail = emitted[0]
@@ -1648,7 +1656,7 @@ def test_execute_step_accepts_canonical_send_message_from_planner_for_simple_con
         "task_state": task_state,
     }
 
-    updated = execute_step_node(state, tool_registry=tool_registry)
+    updated = execute_step_state_adapter(state)
     next_state = updated.get("task_state")
     assert isinstance(next_state, dict)
     assert len(captured) == 1
@@ -1876,7 +1884,7 @@ def test_provider_native_tool_calls_still_fail_in_do_when_not_canonical() -> Non
         "task_state": task_state,
     }
 
-    state = _apply(state, execute_step_node(state, tool_registry=tool_registry))
+    state = _apply(state, execute_step_state_adapter(state))
     next_state = state.get("task_state")
     assert isinstance(next_state, dict)
     history = next_state.get("tool_call_history")

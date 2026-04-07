@@ -6,7 +6,7 @@ import alphonse.agent.cortex.task_mode.pdca as pdca_module
 from alphonse.agent.cognition.providers.contracts import require_text_completion_provider
 from alphonse.agent.cognition.providers.contracts import require_tool_calling_provider
 from alphonse.agent.cortex.nodes.task_mode import task_mode_entry_node
-from alphonse.agent.cortex.task_mode.graph import check_node_state_adapter
+from alphonse.agent.cortex.graph import check_node_state_adapter
 from alphonse.agent.cortex.task_mode.pdca import build_next_step_node
 from alphonse.agent.tools.registry import build_default_tool_registry
 
