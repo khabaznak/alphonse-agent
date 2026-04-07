@@ -1,202 +1,118 @@
 from __future__ import annotations
 
 import inspect
-import logging
+import json
 from datetime import datetime, timezone
-from typing import Any, Callable
+from functools import lru_cache
+from typing import Any, Literal, TypedDict
 
 from alphonse.agent.cognition.memory import record_after_tool_call
 from alphonse.agent.cognition.memory import record_plan_step_completion
+from alphonse.agent.cortex.task_mode.plan import PlannerOutput
+from alphonse.agent.cortex.task_mode.task_record import TaskRecord
 from alphonse.agent.cortex.transitions import emit_presence_transition_event
 from alphonse.agent.tools.base import ensure_tool_result
+from alphonse.agent.tools.registry import ToolRegistry
+from alphonse.agent.tools.registry import build_default_tool_registry
+
+
+class DoResult(TypedDict):
+    task_record: TaskRecord
+    provenance: Literal["do"]
 
 
 def execute_step_node_impl(
-    state: dict[str, Any],
+    task_record: TaskRecord,
+    planner_output: PlannerOutput,
     *,
-    tool_registry: Any,
-    task_state_with_defaults: Callable[[dict[str, Any]], dict[str, Any]],
-    correlation_id: Callable[[dict[str, Any]], str | None],
-    current_step: Callable[[dict[str, Any]], dict[str, Any] | None],
-    append_trace_event: Callable[[dict[str, Any], dict[str, Any]], None],
-    logger: logging.Logger,
-    log_task_event: Callable[..., None],
-) -> dict[str, Any]:
-    _ = (logger, log_task_event)
-    task_state = task_state_with_defaults(state)
-    task_state["pdca_phase"] = "do"
-    task_state["check_provenance"] = "do"
-    corr = correlation_id(state)
-    current = current_step(task_state)
-    proposal, proposal_error, planner_intent = _proposal_from_pending_plan_raw(task_state=task_state, current=current)
-    if isinstance(proposal_error, dict):
-        _record_planner_output_error(
-            task_state=task_state,
-            current=current,
-            corr=corr,
-            error_payload=proposal_error,
-            append_trace_event=append_trace_event,
-        )
-        return {"task_state": task_state}
-    if not isinstance(proposal, dict):
-        _record_planner_output_error(
-            task_state=task_state,
-            current=current,
-            corr=corr,
-            error_payload={
-                "code": "invalid_planner_output",
-                "raw_error": "no_executable_tool_call",
-                "details": {},
-            },
-            append_trace_event=append_trace_event,
-        )
-        return {"task_state": task_state}
-
-    kind = str(proposal.get("kind") or "").strip()
-    if kind != "call_tool":
-        _record_planner_output_error(
-            task_state=task_state,
-            current=current,
-            corr=corr,
-            error_payload={
-                "code": "invalid_planner_output",
-                "raw_error": f"unsupported_proposal_kind:{kind or 'unknown'}",
-                "details": {"proposal_kind": kind},
-            },
-            append_trace_event=append_trace_event,
-        )
-        return {"task_state": task_state}
+    logger: Any,
+    log_task_event: Any,
+) -> DoResult:
+    tool_call = _require_canonical_tool_call(planner_output)
+    planner_intent = str(planner_output.get("planner_intent") or "").strip()[:160]
     _emit_planner_intent_progress(
-        state=state,
-        task_state=task_state,
-        proposal=proposal,
+        task_record=task_record,
+        proposal=tool_call,
         planner_intent=planner_intent,
     )
-    return _execute_call_tool_step(
-        state=state,
-        task_state=task_state,
-        current=current,
-        proposal=proposal,
-        corr=corr,
-        tool_registry=tool_registry,
-        append_trace_event=append_trace_event,
+    result = _execute_tool_call(
+        task_record=task_record,
+        tool_name=str(tool_call["tool_name"]),
+        args=dict(tool_call["args"]),
     )
-
-
-def _record_planner_output_error(
-    *,
-    task_state: dict[str, Any],
-    current: dict[str, Any] | None,
-    corr: str | None,
-    error_payload: dict[str, Any],
-    append_trace_event: Callable[[dict[str, Any], dict[str, Any]], None],
-) -> None:
-    step_id = str((current or {}).get("step_id") or "")
-    task_state["status"] = "running"
-    error_code = str(error_payload.get("code") or "invalid_planner_output")
-    raw_error = str(error_payload.get("raw_error") or error_code)
-    details = error_payload.get("details") if isinstance(error_payload.get("details"), dict) else {}
-    facts = task_state.get("facts")
-    fact_bucket = dict(facts) if isinstance(facts, dict) else {}
-    fact_entry = _build_mission_fact_entry(
-        step_id=step_id,
-        tool_name="planner_output",
-        args={},
-        output=None,
-        exception={
-            "code": error_code,
-            "raw_error": raw_error,
-            "details": details,
-        },
+    output_payload = _serialize_result(result.get("output"))
+    exception_payload = _serialize_result(result.get("exception"))
+    _append_tool_call_history_entry(
+        task_record=task_record,
+        tool_name=str(tool_call["tool_name"]),
+        args=dict(tool_call["args"]),
+        output=output_payload,
+        exception=exception_payload,
     )
-    fact_bucket[step_id or f"result_{len(fact_bucket) + 1}"] = fact_entry
-    task_state["facts"] = fact_bucket
-    append_trace_event(
-        task_state,
-        {
-            "type": "planner_output_invalid",
-            "summary": f"Planner output invalid: {raw_error}.",
-            "correlation_id": corr,
-        },
+    _merge_stable_facts(task_record=task_record, tool_name=str(tool_call["tool_name"]), output=output_payload)
+    _append_memory_fact(
+        task_record=task_record,
+        tool_name=str(tool_call["tool_name"]),
+        output=output_payload,
+        exception=exception_payload,
     )
+    _record_execution_hooks(
+        task_record=task_record,
+        tool_name=str(tool_call["tool_name"]),
+        args=dict(tool_call["args"]),
+        result=result,
+        planner_output=planner_output,
+    )
+    _log_execution(
+        task_record=task_record,
+        tool_name=str(tool_call["tool_name"]),
+        planner_intent=planner_intent,
+        logger=logger,
+        log_task_event=log_task_event,
+    )
+    return {
+        "task_record": task_record,
+        "provenance": "do",
+    }
 
 
-def _proposal_from_pending_plan_raw(
-    *,
-    task_state: dict[str, Any],
-    current: dict[str, Any] | None,
-) -> tuple[dict[str, Any] | None, dict[str, Any] | None, str]:
-    existing = (current or {}).get("proposal") if isinstance(current, dict) else None
-    if isinstance(existing, dict):
-        canonical = _coerce_canonical_tool_call(existing)
-        if isinstance(canonical, dict):
-            return canonical, None, ""
-        return None, {
-            "code": "invalid_planner_output",
-            "raw_error": "current_step_proposal_non_canonical",
-            "details": {},
-        }, ""
-    raw = task_state.get("pending_plan_raw")
-    if isinstance(raw, dict):
-        tool_call = raw.get("tool_call")
-        if isinstance(tool_call, dict):
-            canonical = _coerce_canonical_tool_call(tool_call)
-            if isinstance(canonical, dict):
-                planner_intent = _extract_planner_intent(raw)
-                task_state["current_plan_step"] = {
-                    "step_id": str((current or {}).get("step_id") or ""),
-                    "tool_call": dict(canonical),
-                }
-                if isinstance(current, dict):
-                    current["proposal"] = dict(canonical)
-                task_state["pending_plan_raw"] = None
-                return dict(canonical), None, planner_intent
-        task_state["current_plan_step"] = {
-            "step_id": str((current or {}).get("step_id") or ""),
-            "tool_call": None,
-        }
-        task_state["pending_plan_raw"] = None
-    elif raw is not None:
-        task_state["pending_plan_raw"] = None
-    return None, {
-        "code": "invalid_planner_output",
-        "raw_error": "pending_plan_raw_non_canonical",
-        "details": {},
-    }, ""
-
-
-def _coerce_canonical_tool_call(raw: Any) -> dict[str, Any] | None:
-    if isinstance(raw, dict):
-        kind = str(raw.get("kind") or "").strip()
-        tool_name = str(raw.get("tool_name") or "").strip()
-        args = raw.get("args")
-        if kind == "call_tool" and tool_name and isinstance(args, dict):
-            return {"kind": "call_tool", "tool_name": tool_name, "args": dict(args)}
-    return None
-
-
-def _extract_planner_intent(raw: dict[str, Any]) -> str:
-    value = raw.get("planner_intent")
-    if not isinstance(value, str):
-        return ""
-    text = value.strip()
-    return text[:160] if text else ""
+def _require_canonical_tool_call(planner_output: PlannerOutput) -> dict[str, Any]:
+    if not isinstance(planner_output, dict):
+        raise ValueError("execute_step.invalid_planner_output: planner_output must be an object")
+    tool_call = planner_output.get("tool_call")
+    if not isinstance(tool_call, dict):
+        raise ValueError("execute_step.invalid_planner_output: missing tool_call")
+    kind = str(tool_call.get("kind") or "").strip()
+    tool_name = str(tool_call.get("tool_name") or "").strip()
+    args = tool_call.get("args")
+    if kind != "call_tool":
+        raise ValueError("execute_step.invalid_planner_output: invalid tool_call.kind")
+    if not tool_name:
+        raise ValueError("execute_step.invalid_planner_output: missing tool_call.tool_name")
+    if not isinstance(args, dict):
+        raise ValueError("execute_step.invalid_planner_output: invalid tool_call.args")
+    return {
+        "kind": "call_tool",
+        "tool_name": tool_name,
+        "args": dict(args),
+    }
 
 
 def _emit_planner_intent_progress(
     *,
-    state: dict[str, Any],
-    task_state: dict[str, Any],
+    task_record: TaskRecord,
     proposal: dict[str, Any],
     planner_intent: str,
 ) -> None:
     hint = str(planner_intent or "").strip()
     emit_presence_transition_event(
-        state,
+        {
+            "events": [],
+            "correlation_id": task_record.correlation_id or None,
+        },
         event_family="presence.progress",
         phase="thinking",
         detail={
-            "cycle": int(task_state.get("cycle_index") or 0) + 1,
             "tool": str(proposal.get("tool_name") or ""),
             "intention": "planning_next_step",
             "text": hint[:160] if hint else "",
@@ -204,106 +120,13 @@ def _emit_planner_intent_progress(
     )
 
 
-def _execute_call_tool_step(
-    *,
-    state: dict[str, Any],
-    task_state: dict[str, Any],
-    current: dict[str, Any] | None,
-    proposal: dict[str, Any],
-    corr: str | None,
-    tool_registry: Any,
-    append_trace_event: Callable[[dict[str, Any], dict[str, Any]], None],
-) -> dict[str, Any]:
-    tool_name = str(proposal.get("tool_name") or "").strip()
-    args = proposal.get("args")
-    params = dict(args) if isinstance(args, dict) else {}
-    step_id = str((current or {}).get("step_id") or "")
-    result = _execute_tool_call(
-        state=state,
-        tool_registry=tool_registry,
-        tool_name=tool_name,
-        args=params,
-    )
-    facts = task_state.get("facts")
-    fact_bucket = dict(facts) if isinstance(facts, dict) else {}
-    output_payload = _serialize_result(result.get("output")) if isinstance(result, dict) else None
-    exception_payload = _serialize_result(result.get("exception")) if isinstance(result, dict) else {"message": "unknown_tool_error"}
-    fact_entry = _build_mission_fact_entry(
-        step_id=step_id,
-        tool_name=tool_name,
-        args=params,
-        output=output_payload,
-        exception=exception_payload,
-    )
-    fact_bucket[step_id or f"result_{len(fact_bucket) + 1}"] = fact_entry
-    task_state["facts"] = fact_bucket
-    has_exception = _has_exception_payload(exception_payload)
-    task_state["status"] = "running"
-    if isinstance(current, dict):
-        current["status"] = "failed" if has_exception else "executed"
-        current["failure_retryable"] = _exception_retryable(exception_payload)
-    append_trace_event(
-        task_state,
-        {
-            "type": "tool_executed",
-            "summary": f"Executed tool {tool_name} with exception={'yes' if has_exception else 'no'}.",
-            "correlation_id": corr,
-        },
-    )
-    record_after_tool_call(
-        state=state,
-        task_state=task_state,
-        current=current,
-        tool_name=tool_name,
-        args=params,
-        result=result if isinstance(result, dict) else {"output": None, "exception": {"message": "unknown_tool_error"}, "metadata": {}},
-        correlation_id=corr,
-    )
-    record_plan_step_completion(
-        state=state,
-        task_state=task_state,
-        current=current,
-        proposal=proposal,
-        correlation_id=corr,
-    )
-    return {"task_state": task_state}
-
-
-def _build_mission_fact_entry(
-    *,
-    step_id: str,
-    tool_name: str,
-    args: dict[str, Any],
-    output: Any,
-    exception: Any,
-) -> dict[str, Any]:
-    redacted_args = _redact_sensitive(dict(args or {}))
-    return {
-        "step_id": step_id or None,
-        "tool_name": tool_name,
-        "params": redacted_args,
-        "output": _serialize_result(output),
-        "exception": _serialize_result(exception),
-        # Compatibility aliases during migration.
-        "tool": tool_name,
-        "args": redacted_args,
-        "result": {
-            "output": _serialize_result(output),
-            "exception": _serialize_result(exception),
-        },
-        "internal": False,
-        "ts": datetime.now(timezone.utc).isoformat(),
-    }
-
-
 def _execute_tool_call(
     *,
-    state: dict[str, Any],
-    tool_registry: Any,
+    task_record: TaskRecord,
     tool_name: str,
     args: dict[str, Any],
-) -> Any:
-    definition = tool_registry.get(tool_name) if hasattr(tool_registry, "get") else None
+) -> dict[str, Any]:
+    definition = _tool_registry().get(tool_name)
     if definition is None:
         raise RuntimeError(f"tool_not_found:{tool_name}")
     execute = getattr(definition.executor, "execute", None)
@@ -316,7 +139,10 @@ def _execute_tool_call(
             p.kind == inspect.Parameter.VAR_KEYWORD for p in signature.parameters.values()
         )
         if accepts_state:
-            call_args["state"] = state
+            call_args["state"] = {
+                "correlation_id": task_record.correlation_id or None,
+                "task_record": task_record,
+            }
         raw_result = definition.invoke(call_args)
     except Exception as exc:
         as_payload = getattr(exc, "as_payload", None)
@@ -333,9 +159,147 @@ def _execute_tool_call(
         return {
             "output": None,
             "exception": _coerce_error(error_payload),
-                "metadata": {"tool": tool_name},
-            }
+            "metadata": {"tool": tool_name},
+        }
     return _coerce_tool_result(tool_name=tool_name, raw_result=raw_result)
+
+
+def _append_tool_call_history_entry(
+    *,
+    task_record: TaskRecord,
+    tool_name: str,
+    args: dict[str, Any],
+    output: Any,
+    exception: Any,
+) -> None:
+    redacted_args = _redact_sensitive(dict(args or {}))
+    line = (
+        f"{tool_name} "
+        f"args={_compact_json(redacted_args)} "
+        f"output={_compact_json(output)} "
+        f"exception={_compact_json(exception)}"
+    )
+    task_record.append_tool_call_history_entry(line)
+
+
+def _merge_stable_facts(*, task_record: TaskRecord, tool_name: str, output: Any) -> None:
+    if not isinstance(output, dict):
+        return
+    if tool_name == "get_user_details":
+        for key in (
+            "actor_person_id",
+            "user_id",
+            "resolved_user_id",
+            "incoming_user_id",
+            "channel_type",
+            "channel_target",
+            "service_id",
+            "service_key",
+            "chat_id",
+            "conversation_key",
+        ):
+            if key in output:
+                task_record.append_fact(f"{key}: {_compact_json(output.get(key))}")
+    elif tool_name == "get_my_settings":
+        for key in ("locale", "tone", "address_style", "timezone", "channel_type"):
+            if key in output:
+                task_record.append_fact(f"{key}: {_compact_json(output.get(key))}")
+    elif tool_name == "users.search":
+        task_record.append_fact(f"users.search.last_result: {_compact_json(output)}")
+
+
+def _append_memory_fact(
+    *,
+    task_record: TaskRecord,
+    tool_name: str,
+    output: Any,
+    exception: Any,
+) -> None:
+    if not str(tool_name or "").strip().startswith("memory."):
+        return
+    task_record.append_memory_fact(
+        f"{tool_name} output={_compact_json(output)} exception={_compact_json(exception)}"
+    )
+
+
+def _record_execution_hooks(
+    *,
+    task_record: TaskRecord,
+    tool_name: str,
+    args: dict[str, Any],
+    result: dict[str, Any],
+    planner_output: PlannerOutput,
+) -> None:
+    state = {
+        "correlation_id": task_record.correlation_id or None,
+        "task_record": task_record,
+    }
+    task_state = {
+        "task_id": task_record.task_id,
+        "user_id": task_record.user_id,
+        "status": task_record.status,
+        "tool_call_history": [
+            {
+                "tool_name": tool_name,
+                "args": _redact_sensitive(dict(args or {})),
+                "output": _serialize_result(result.get("output")),
+                "exception": _serialize_result(result.get("exception")),
+            }
+        ],
+    }
+    current = {"status": "failed" if _has_exception_payload(result.get("exception")) else "executed"}
+    record_after_tool_call(
+        state=state,
+        task_state=task_state,
+        current=current,
+        tool_name=tool_name,
+        args=dict(args or {}),
+        result=result,
+        correlation_id=task_record.correlation_id or None,
+    )
+    record_plan_step_completion(
+        state=state,
+        task_state=task_state,
+        current=current,
+        proposal=planner_output.get("tool_call") if isinstance(planner_output.get("tool_call"), dict) else {},
+        correlation_id=task_record.correlation_id or None,
+    )
+
+
+def _log_execution(
+    *,
+    task_record: TaskRecord,
+    tool_name: str,
+    planner_intent: str,
+    logger: Any,
+    log_task_event: Any,
+) -> None:
+    logger.info(
+        "task_mode do executed tool=%s task_id=%s",
+        tool_name,
+        str(task_record.task_id or ""),
+    )
+    log_task_event(
+        logger=logger,
+        state={
+            "correlation_id": task_record.correlation_id or None,
+            "channel_type": None,
+            "actor_person_id": task_record.user_id,
+        },
+        task_state={
+            "cycle_index": 0,
+            "status": str(task_record.status or "running"),
+        },
+        node="execute_step_node",
+        event="graph.execute_step.completed",
+        tool_name=tool_name,
+        planner_intent=planner_intent,
+    )
+
+
+@lru_cache(maxsize=1)
+def _tool_registry() -> ToolRegistry:
+    return build_default_tool_registry()
 
 
 def _coerce_tool_result(*, tool_name: str, raw_result: Any) -> dict[str, Any]:
@@ -371,14 +335,6 @@ def _has_exception_payload(value: Any) -> bool:
     return True
 
 
-def _exception_retryable(value: Any) -> bool | None:
-    if not isinstance(value, dict):
-        return None
-    if "retryable" not in value:
-        return None
-    return bool(value.get("retryable"))
-
-
 def _serialize_result(result: Any) -> Any:
     if isinstance(result, (dict, list, str, int, float, bool)) or result is None:
         return result
@@ -400,3 +356,10 @@ def _redact_sensitive(value: Any) -> Any:
     if isinstance(value, list):
         return [_redact_sensitive(item) for item in value]
     return value
+
+
+def _compact_json(value: Any) -> str:
+    try:
+        return json.dumps(value, ensure_ascii=False, separators=(",", ":"), default=str)[:500]
+    except Exception:
+        return str(value)[:500]
