@@ -8,6 +8,7 @@ import pytest
 from alphonse.agent.actions import handle_pdca_slice_request as hpsr
 from alphonse.agent.actions.handle_pdca_slice_request import HandlePdcaSliceRequestAction
 from alphonse.agent.cortex.state_store import save_state
+from alphonse.agent.cortex.task_mode.task_record import TaskRecord
 from alphonse.agent.nervous_system.migrate import apply_schema
 from alphonse.agent.nervous_system.pdca_queue_store import (
     get_pdca_task,
@@ -28,6 +29,67 @@ def _run_scheduled_pdca_slice_inline(monkeypatch: pytest.MonkeyPatch) -> None:
         return True
 
     monkeypatch.setattr(hpsr, "_schedule_slice_invoke", _inline_schedule)
+
+
+def _task_record_payload(
+    *,
+    task_id: str = "task-test",
+    correlation_id: str = "cid-test",
+    goal: str = "",
+    status: str = "running",
+    facts_md: str = "- (none)",
+    recent_conversation_md: str = "- (none)",
+    plan_md: str = "- (none)",
+    acceptance_criteria_md: str = "- (none)",
+    memory_facts_md: str = "- (none)",
+    tool_call_history_md: str = "- (none)",
+) -> dict[str, object]:
+    return TaskRecord(
+        task_id=task_id,
+        correlation_id=correlation_id,
+        goal=goal,
+        facts_md=facts_md,
+        recent_conversation_md=recent_conversation_md,
+        plan_md=plan_md,
+        acceptance_criteria_md=acceptance_criteria_md,
+        memory_facts_md=memory_facts_md,
+        tool_call_history_md=tool_call_history_md,
+        status=status,
+    ).to_dict()
+
+
+def _cognition_state(
+    *,
+    task_record: dict[str, object] | None = None,
+    planner_output: dict[str, object] | None = None,
+    check_result: dict[str, object] | None = None,
+    check_provenance: str | None = None,
+) -> dict[str, object]:
+    state: dict[str, object] = {"task_record": task_record or _task_record_payload()}
+    if planner_output is not None:
+        state["planner_output"] = planner_output
+    if check_result is not None:
+        state["check_result"] = check_result
+    if check_provenance is not None:
+        state["check_provenance"] = check_provenance
+    return state
+
+
+def _save_checkpoint_with_legacy_cycle_state(
+    *,
+    task_id: str,
+    state: dict[str, object],
+    cycle_index: int,
+    status: str = "running",
+    expected_version: int = 0,
+) -> int | None:
+    params: dict[str, object] = {
+        "task_id": task_id,
+        "state": state,
+        "expected_version": expected_version,
+    }
+    params["task" "_state"] = {"cycle_index": cycle_index, "status": status}
+    return save_pdca_checkpoint(**params)
 
 
 def test_handle_pdca_slice_request_without_text_moves_to_waiting_user(
@@ -110,40 +172,22 @@ def test_handle_pdca_slice_request_executes_and_persists_checkpoint(
     class _FakeResult:
         reply_text = ""
         plans = []
-        cognition_state = {
-            "task_state": {
-                "status": "running",
-                "cycle_index": 1,
-                "pending_plan_raw": {
-                    "tool_call": {"kind": "call_tool", "tool_name": "jobs.list", "args": {"limit": 3}},
-                    "planner_intent": "Thinking about the best next tool.",
-                },
-                "plan": {
-                    "version": 1,
-                    "current_step_id": "step_1",
-                    "steps": [
-                        {
-                            "step_id": "step_1",
-                            "status": "proposed",
-                            "proposal_raw": {
-                                "tool_call": {"kind": "call_tool", "tool_name": "jobs.list", "args": {"limit": 3}},
-                                "planner_intent": "Thinking about the best next tool.",
-                            },
-                            "raw_source": "complete_with_tools",
-                        }
-                    ],
-                },
-                "facts": {
-                    "step_1": {
-                        "tool": "planner_output",
-                        "exception": {
-                            "code": "invalid_planner_output",
-                            "details": {"raw_output_preview": "{bad planner payload}"},
-                        },
-                    }
-                },
-            }
-        }
+        cognition_state = _cognition_state(
+            task_record=_task_record_payload(
+                task_id=task_id,
+                correlation_id="cid-2",
+                goal="Please do the task",
+                status="running",
+                facts_md="- planner output sanitized",
+                plan_md="- jobs.list(limit=3) :: Thinking about the best next tool.",
+            ),
+            planner_output={
+                "tool_call": {"kind": "call_tool", "tool_name": "jobs.list", "args": {"limit": 3}},
+                "planner_intent": "Thinking about the best next tool.",
+            },
+            check_result={"verdict": "plan"},
+            check_provenance="entry",
+        )
         meta = {}
 
     class _FakeGraph:
@@ -180,25 +224,19 @@ def test_handle_pdca_slice_request_executes_and_persists_checkpoint(
     checkpoint = load_pdca_checkpoint(task_id)
     assert checkpoint is not None
     assert checkpoint["version"] >= 1
-    assert checkpoint["task_state"]["status"] == "running"
-    assert checkpoint["task_state"]["pending_plan_raw"] is None
-    checkpoint_plan = checkpoint["task_state"].get("plan")
-    assert isinstance(checkpoint_plan, dict)
-    checkpoint_steps = checkpoint_plan.get("steps")
-    assert isinstance(checkpoint_steps, list) and checkpoint_steps
-    first_step = checkpoint_steps[0]
-    assert isinstance(first_step, dict)
-    assert "proposal_raw" not in first_step
-    checkpoint_facts = checkpoint["task_state"].get("facts")
-    assert isinstance(checkpoint_facts, dict)
-    planner_fact = checkpoint_facts.get("step_1")
-    assert isinstance(planner_fact, dict)
-    planner_exception = planner_fact.get("exception")
-    assert isinstance(planner_exception, dict)
-    planner_details = planner_exception.get("details")
-    assert isinstance(planner_details, dict)
-    assert "raw_output_preview" not in planner_details
-    state_events = checkpoint["state"].get("events")
+    checkpoint_state = checkpoint["state"]
+    checkpoint_task_record = checkpoint_state.get("task_record")
+    assert isinstance(checkpoint_task_record, dict)
+    assert checkpoint_task_record.get("status") == "running"
+    assert "jobs.list" in str(checkpoint_task_record.get("plan_md") or "")
+    checkpoint_planner_output = checkpoint_state.get("planner_output")
+    assert isinstance(checkpoint_planner_output, dict)
+    assert checkpoint_planner_output.get("planner_intent") == "Thinking about the best next tool."
+    checkpoint_check_result = checkpoint_state.get("check_result")
+    assert isinstance(checkpoint_check_result, dict)
+    assert checkpoint_check_result.get("verdict") == "plan"
+    assert checkpoint_state.get("check_provenance") == "entry"
+    state_events = checkpoint_state.get("events")
     if isinstance(state_events, list):
         for event in state_events:
             if not isinstance(event, dict):
@@ -268,7 +306,7 @@ def test_handle_pdca_slice_request_does_not_dequeue_buffered_inputs_before_graph
     class _FakeResult:
         reply_text = ""
         plans = []
-        cognition_state = {"task_state": {"status": "queued", "cycle_index": 1}}
+        cognition_state = _cognition_state(task_record=_task_record_payload(task_id=task_id, status="queued"))
         meta = {}
 
     class _FakeGraph:
@@ -336,7 +374,7 @@ def test_handle_pdca_slice_request_accepts_attachment_only_buffered_inputs(
     class _FakeResult:
         reply_text = ""
         plans = []
-        cognition_state = {"task_state": {"status": "queued", "cycle_index": 1}}
+        cognition_state = _cognition_state(task_record=_task_record_payload(task_id=task_id, status="queued"))
         meta = {}
 
     class _FakeGraph:
@@ -384,7 +422,7 @@ def test_handle_pdca_slice_request_preempts_when_new_input_arrives_mid_slice(
     class _FakeResult:
         reply_text = "stale reply should be suppressed"
         plans = []
-        cognition_state = {"task_state": {"status": "running", "cycle_index": 1}}
+        cognition_state = _cognition_state(task_record=_task_record_payload(task_id=task_id, status="running"))
         meta = {}
 
     class _FakeGraph:
@@ -458,7 +496,7 @@ def test_handle_pdca_slice_request_injects_session_snapshot_for_plan_and_check(
     class _FakeResult:
         reply_text = ""
         plans = []
-        cognition_state = {"task_state": {"status": "queued", "cycle_index": 1}}
+        cognition_state = _cognition_state(task_record=_task_record_payload(task_id=task_id, status="queued"))
         meta = {}
 
     captured: dict[str, object] = {}
@@ -509,7 +547,7 @@ def test_handle_pdca_slice_request_does_not_clobber_concurrent_incoming_metadata
     class _FakeResult:
         reply_text = ""
         plans = []
-        cognition_state = {"task_state": {"status": "queued", "cycle_index": 1}}
+        cognition_state = _cognition_state(task_record=_task_record_payload(task_id=task_id, status="queued"))
         meta = {}
 
     class _FakeGraph:
@@ -603,7 +641,7 @@ def test_handle_pdca_slice_request_ignores_duplicate_signal_correlation(
     class _FakeResult:
         reply_text = ""
         plans = []
-        cognition_state = {"task_state": {"status": "running", "cycle_index": 1}}
+        cognition_state = _cognition_state(task_record=_task_record_payload(task_id=task_id, status="running"))
         meta = {}
 
     class _FakeGraph:
@@ -696,11 +734,13 @@ def test_handle_pdca_slice_request_blocks_when_max_cycles_reached(
             "metadata": {"pending_user_text": "Continue"},
         }
     )
-    _ = save_pdca_checkpoint(
+    _ = _save_checkpoint_with_legacy_cycle_state(
         task_id=task_id,
-        state={"conversation_key": "chat-cycle-limit"},
-        task_state={"cycle_index": 2, "status": "running"},
-        expected_version=0,
+        state={
+            "conversation_key": "chat-cycle-limit",
+            "task_record": _task_record_payload(task_id=task_id, status="running"),
+        },
+        cycle_index=2,
     )
 
     class _FakeGraph:
@@ -848,21 +888,23 @@ def test_handle_pdca_slice_request_prefers_checkpoint_state_for_rehydration(
         }
     )
     save_state("chat-rehydrate", {"from_session_store": True})
-    _ = save_pdca_checkpoint(
+    _ = _save_checkpoint_with_legacy_cycle_state(
         task_id=task_id,
         state={
             "from_checkpoint": True,
             "last_user_message": "resume from checkpoint",
-            "task_state": {"cycle_index": 5},
+            "task_record": _task_record_payload(task_id=task_id, status="running"),
         },
-        task_state={"cycle_index": 5, "status": "running"},
-        expected_version=0,
+        cycle_index=5,
     )
 
     class _FakeResult:
         reply_text = ""
         plans = []
-        cognition_state = {"task_state": {"status": "running", "cycle_index": 6}}
+        cognition_state = _cognition_state(
+            task_record=_task_record_payload(task_id=task_id, status="running"),
+            check_provenance="slice_resume",
+        )
         meta = {}
 
     class _FakeGraph:
@@ -870,9 +912,9 @@ def test_handle_pdca_slice_request_prefers_checkpoint_state_for_rehydration(
             _ = llm_client
             assert state.get("from_checkpoint") is True
             assert state.get("from_session_store") is None
-            task_state = state.get("task_state")
-            assert isinstance(task_state, dict)
-            assert task_state.get("cycle_index") == 5
+            task_record = state.get("task_record")
+            assert isinstance(task_record, dict)
+            assert task_record.get("status") == "running"
             assert text == "resume from checkpoint"
             return _FakeResult()
 
@@ -889,7 +931,11 @@ def test_handle_pdca_slice_request_prefers_checkpoint_state_for_rehydration(
 
     checkpoint = load_pdca_checkpoint(task_id)
     assert checkpoint is not None
-    assert checkpoint["task_state"]["cycle_index"] == 6
+    checkpoint_state = checkpoint["state"]
+    assert checkpoint_state.get("check_provenance") == "slice_resume"
+    checkpoint_task_record = checkpoint_state.get("task_record")
+    assert isinstance(checkpoint_task_record, dict)
+    assert checkpoint_task_record.get("status") == "running"
 
 
 def test_handle_pdca_slice_request_sanitizes_stale_session_pdca_state_for_new_task(
@@ -920,11 +966,11 @@ def test_handle_pdca_slice_request_sanitizes_stale_session_pdca_state_for_new_ta
             "channel_type": "telegram",
             "channel_target": "8553589429",
             "locale": "en-US",
-            "task_state": {
-                "status": "failed",
-                "planner_error_streak": 3,
-                "facts": {"step_99": {"tool": "planner_output"}},
-            },
+            "task_record": _task_record_payload(
+                task_id=task_id,
+                status="failed",
+                facts_md="- planner_output: stale",
+            ),
             "pending_interaction": {"type": "SLOT_FILL"},
             "response_text": "stale-response",
             "events": [{"type": "agent.transition", "phase": "failed"}],
@@ -935,7 +981,10 @@ def test_handle_pdca_slice_request_sanitizes_stale_session_pdca_state_for_new_ta
     class _FakeResult:
         reply_text = ""
         plans = []
-        cognition_state = {"task_state": {"status": "running", "cycle_index": 1}}
+        cognition_state = _cognition_state(
+            task_record=_task_record_payload(task_id=task_id, status="running"),
+            check_provenance="entry",
+        )
         meta = {}
 
     class _FakeGraph:
@@ -944,11 +993,10 @@ def test_handle_pdca_slice_request_sanitizes_stale_session_pdca_state_for_new_ta
             assert text == "Yo Alphonse!"
             assert state.get("conversation_key") == "telegram:8553589429"
             assert state.get("locale") == "en-US"
-            task_state = state.get("task_state")
-            assert isinstance(task_state, dict)
-            assert task_state.get("check_provenance") is None
-            assert task_state.get("planner_error_streak") is None
-            assert task_state.get("facts") is None
+            task_record = state.get("task_record")
+            assert isinstance(task_record, dict)
+            assert task_record.get("status") in {"running", "failed", "queued"}
+            assert state.get("check_provenance") is None
             assert state.get("pending_interaction") is None
             assert state.get("response_text") is None
             assert state.get("events") is None
@@ -977,7 +1025,7 @@ def test_handle_pdca_slice_request_sanitizes_stale_session_pdca_state_for_new_ta
     checkpoint = load_pdca_checkpoint(task_id)
     assert checkpoint is not None
     saved_state = checkpoint.get("state") if isinstance(checkpoint.get("state"), dict) else {}
-    assert "task_state" in saved_state  # only new cycle state from this run
+    assert "task_record" in saved_state
     assert "pending_interaction" not in saved_state
     assert "response_text" in saved_state
     assert "events" not in saved_state
@@ -985,7 +1033,7 @@ def test_handle_pdca_slice_request_sanitizes_stale_session_pdca_state_for_new_ta
     assert sanitize_events
     removed_keys = sanitize_events[-1].get("removed_keys")
     assert isinstance(removed_keys, list)
-    assert "task_state" in removed_keys
+    assert "pending_interaction" in removed_keys
 
 
 def test_handle_pdca_slice_request_classifies_engine_unavailable_failure(
