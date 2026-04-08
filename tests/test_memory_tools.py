@@ -5,6 +5,7 @@ from pathlib import Path
 from alphonse.agent.nervous_system.migrate import apply_schema
 from alphonse.agent.cognition.memory import MemoryService
 from alphonse.agent.cognition.memory import record_after_tool_call
+from alphonse.agent.cortex.task_mode.task_record import TaskRecord
 from alphonse.agent.nervous_system import users as users_store
 from alphonse.agent.tools.registry import build_default_tool_registry
 from alphonse.agent.tools.registry import planner_tool_schemas
@@ -187,7 +188,7 @@ def test_record_hook_and_tools_share_canonical_owner(monkeypatch, tmp_path: Path
             "incoming_user_id": "user_legacy",
             "channel_target": "telegram:legacy",
         },
-        task_state={"goal": "find client info", "task_id": "task_1", "status": "running"},
+        task_record=TaskRecord(goal="find client info", task_id="task_1", status="running"),
         current={"step_id": "step_1"},
         tool_name="get_time",
         args={},

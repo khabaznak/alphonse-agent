@@ -1,12 +1,9 @@
 from __future__ import annotations
 
-from typing import Any
-
 from alphonse.agent import identity
 from alphonse.agent.actions.session_context import IncomingContext
 from alphonse.agent.cognition.preferences.store import get_or_create_principal_for_channel
 from alphonse.agent.cognition.preferences.store import resolve_preference_with_precedence
-from alphonse.agent.services.audio_dispatch import extract_tts_transcript
 from alphonse.config import settings
 
 
@@ -65,22 +62,6 @@ def resolve_session_user_id(*, incoming: IncomingContext, payload: dict[str, Any
         if mapped:
             return mapped
     raise ValueError("unresolved_session_user_id")
-
-
-def resolve_assistant_session_message(*, reply_text: str, plans: list[Any]) -> str:
-    reply_line = str(reply_text or "").strip()
-    transcript = extract_tts_transcript(plans)
-    if not transcript:
-        return reply_line
-    if not reply_line:
-        return f"[TTS transcript] {transcript}"
-    if _normalized_text(reply_line) == _normalized_text(transcript):
-        return f"[TTS transcript] {reply_line}"
-    return f"{reply_line} [TTS transcript: {transcript}]"
-
-
-def _normalized_text(value: str) -> str:
-    return " ".join(str(value or "").strip().lower().split())
 
 
 def _principal_id_for_incoming(incoming: IncomingContext) -> str | None:

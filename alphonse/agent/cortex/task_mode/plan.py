@@ -129,12 +129,10 @@ def _log_planner_output(
             "channel_type": None,
             "actor_person_id": task_record.user_id,
         },
-        task_state={
-            "cycle_index": 0,
-            "status": str(task_record.status or "running"),
-        },
         node="next_step_node",
         event="graph.next_step.planner_output",
+        task_record=task_record,
+        cycle_index=0,
         tool_name=tool_name,
         planner_intent=str(planner_output.get("planner_intent") or ""),
     )

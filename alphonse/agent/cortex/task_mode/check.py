@@ -273,9 +273,10 @@ def _build_judge_prompt_failure_result(
     log_task_event(
         logger=logger,
         state={"correlation_id": None, "channel_type": None, "actor_person_id": task_record.user_id},
-        task_state={"cycle_index": 0, "status": failed_record.status},
         node="check_node",
         event="judge.prompt_template.failed",
+        task_record=failed_record,
+        cycle_index=0,
         template_id="pdca.check.judge.user.j2",
         error=error,
     )
@@ -303,9 +304,10 @@ def _log_check_result(
     log_task_event(
         logger=logger,
         state={"correlation_id": None, "channel_type": None, "actor_person_id": task_record.user_id},
-        task_state={"cycle_index": 0, "status": task_record.status},
         node="check_node",
         event="graph.check.judge_verdict",
+        task_record=task_record,
+        cycle_index=0,
         verdict_kind=verdict,
         case_type=str(judge_result.get("case_type") or ""),
         confidence=float(judge_result.get("confidence") or 0.0),

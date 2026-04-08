@@ -85,12 +85,10 @@ def _log_act_result(
             "channel_type": None,
             "actor_person_id": task_record.user_id,
         },
-        task_state={
-            "cycle_index": 0,
-            "status": str(task_record.status or "running"),
-        },
         node="act_node",
         event="graph.act.routed",
+        task_record=task_record,
+        cycle_index=0,
         verdict=verdict,
         route=route,
     )

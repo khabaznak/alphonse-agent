@@ -12,11 +12,11 @@ def flush_cognition_state_if_task_succeeded(
     *,
     correlation_id: str | None = None,
 ) -> dict[str, Any]:
-    task_state = cognition_state.get("task_state")
-    if not isinstance(task_state, dict):
+    task_record = cognition_state.get("task_record")
+    if not isinstance(task_record, dict):
         return dict(cognition_state)
-    status = str(task_state.get("status") or "").strip().lower()
-    if status != "done" or not task_state.get("outcome"):
+    status = str(task_record.get("status") or "").strip().lower()
+    if status != "done" or not task_record.get("outcome"):
         return dict(cognition_state)
     logger.info(
         "flush_after_task_success correlation_id=%s",

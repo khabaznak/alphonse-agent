@@ -6,6 +6,7 @@ import sqlite3
 from pathlib import Path
 
 from alphonse.agent.cortex.task_mode.observability import log_task_event
+from alphonse.agent.cortex.task_mode.task_record import TaskRecord
 from alphonse.agent.nervous_system.paths import resolve_observability_db_path
 
 
@@ -17,15 +18,16 @@ def test_log_task_event_emits_required_fields(caplog, tmp_path: Path, monkeypatc
         "channel_type": "telegram",
         "actor_person_id": "user-1",
     }
-    task_state = {"cycle_index": 3, "status": "running"}
+    task_record = TaskRecord(task_id="task-1", user_id="user-1", correlation_id="cid-123", status="running")
 
     with caplog.at_level(logging.INFO):
         log_task_event(
             logger=logging.getLogger("alphonse.agent.cortex.task_mode.test"),
             state=state,
-            task_state=task_state,
             node="check_node",
             event="graph.state.updated",
+            task_record=task_record,
+            cycle_index=3,
             tool="get_time",
         )
 

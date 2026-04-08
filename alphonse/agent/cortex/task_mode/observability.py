@@ -6,18 +6,23 @@ from datetime import datetime, timezone
 from typing import Any
 
 from alphonse.agent.observability.log_manager import get_log_manager
+from alphonse.agent.cortex.task_mode.task_record import TaskRecord
 
 
 def log_task_event(
     *,
     logger: logging.Logger,
     state: dict[str, Any],
-    task_state: dict[str, Any],
     node: str,
     event: str,
+    task_record: TaskRecord | None = None,
+    cycle_index: int | None = None,
+    status: str | None = None,
     level: str = "info",
     **extra: Any,
 ) -> None:
+    effective_cycle = 0 if cycle_index is None else int(cycle_index)
+    effective_status = str(status or (task_record.status if isinstance(task_record, TaskRecord) else "") or "")
     manager = get_log_manager()
     payload: dict[str, Any] = {
         "ts": datetime.now(timezone.utc).isoformat(),
@@ -28,8 +33,8 @@ def log_task_event(
         "channel": state.get("channel_type"),
         "user_id": state.get("actor_person_id"),
         "node": node,
-        "cycle": int(task_state.get("cycle_index") or 0),
-        "status": str(task_state.get("status") or ""),
+        "cycle": effective_cycle,
+        "status": effective_status,
     }
     if extra:
         payload.update({k: v for k, v in extra.items() if v is not None})

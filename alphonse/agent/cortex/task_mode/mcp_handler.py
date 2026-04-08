@@ -69,9 +69,10 @@ def mcp_handler_node_impl(
     log_task_event(
         logger=logger,
         state=state,
-        task_state=task_state,
         node="mcp_handler_node",
         event="graph.mcp_handler.prepared",
+        cycle_index=int(task_state.get("cycle_index") or 0),
+        status=str(task_state.get("status") or "running"),
         step_id=str((current or {}).get("step_id") or ""),
         intent=intent[:500],
         profile=str(normalized.get("profile") or ""),
@@ -80,4 +81,3 @@ def mcp_handler_node_impl(
         ignored=list(report.get("ignored") or []),
     )
     return {"task_state": task_state}
-

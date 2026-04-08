@@ -234,23 +234,10 @@ def _record_execution_hooks(
         "correlation_id": task_record.correlation_id or None,
         "task_record": task_record,
     }
-    task_state = {
-        "task_id": task_record.task_id,
-        "user_id": task_record.user_id,
-        "status": task_record.status,
-        "tool_call_history": [
-            {
-                "tool_name": tool_name,
-                "args": _redact_sensitive(dict(args or {})),
-                "output": _serialize_result(result.get("output")),
-                "exception": _serialize_result(result.get("exception")),
-            }
-        ],
-    }
     current = {"status": "failed" if _has_exception_payload(result.get("exception")) else "executed"}
     record_after_tool_call(
         state=state,
-        task_state=task_state,
+        task_record=task_record,
         current=current,
         tool_name=tool_name,
         args=dict(args or {}),
@@ -259,7 +246,7 @@ def _record_execution_hooks(
     )
     record_plan_step_completion(
         state=state,
-        task_state=task_state,
+        task_record=task_record,
         current=current,
         proposal=planner_output.get("tool_call") if isinstance(planner_output.get("tool_call"), dict) else {},
         correlation_id=task_record.correlation_id or None,
@@ -286,12 +273,10 @@ def _log_execution(
             "channel_type": None,
             "actor_person_id": task_record.user_id,
         },
-        task_state={
-            "cycle_index": 0,
-            "status": str(task_record.status or "running"),
-        },
         node="execute_step_node",
         event="graph.execute_step.completed",
+        task_record=task_record,
+        cycle_index=0,
         tool_name=tool_name,
         planner_intent=planner_intent,
     )

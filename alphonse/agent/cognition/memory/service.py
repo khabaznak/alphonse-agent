@@ -16,6 +16,7 @@ from typing import Any
 
 from alphonse.agent.actions.conscious_message_handler import build_incoming_message_envelope
 from alphonse.agent import identity
+from alphonse.agent.cortex.task_mode.task_record import TaskRecord
 from alphonse.agent.cognition.memory.paths import resolve_memory_root
 from alphonse.agent.cognition.memory.paths import sanitize_segment
 from alphonse.agent.cognition.memory.paths import user_root
@@ -967,7 +968,7 @@ def resolve_memory_owner_id(*, state: dict[str, Any] | None = None, explicit: st
 def record_after_tool_call(
     *,
     state: dict[str, Any],
-    task_state: dict[str, Any],
+    task_record: TaskRecord,
     current: dict[str, Any] | None,
     tool_name: str,
     args: dict[str, Any],
@@ -986,7 +987,7 @@ def record_after_tool_call(
         return
     try:
         user_id = resolve_memory_owner_id(state=state)
-        mission_id = _memory_mission_id(task_state=task_state, correlation_id=correlation_id)
+        mission_id = _memory_mission_id(task_record=task_record, correlation_id=correlation_id)
         artifacts = _memory_artifacts_from_result(
             mission_id=mission_id,
             tool_name=tool_name,
@@ -1001,11 +1002,11 @@ def record_after_tool_call(
         output_payload = (result or {}).get("output")
         output_summary = _compact_result_summary(output_payload)
         payload = {
-            "intent": str(task_state.get("goal") or "").strip() or "task execution",
+            "intent": str(task_record.goal or "").strip() or "task execution",
             "action": f"{tool_name}({_safe_args_preview(args)})",
             "result": "exception=" + (exception_text or "none") if exception_text else "status=ok",
             "step_id": str((current or {}).get("step_id") or "").strip() or None,
-            "next": _memory_next_hint(task_state=task_state, current=current),
+            "next": _memory_next_hint(task_record=task_record, current=current),
         }
         if output_summary:
             payload["output_summary"] = output_summary
@@ -1047,7 +1048,7 @@ def record_after_tool_call(
 def record_plan_step_completion(
     *,
     state: dict[str, Any],
-    task_state: dict[str, Any],
+    task_record: TaskRecord,
     current: dict[str, Any] | None,
     proposal: dict[str, Any],
     correlation_id: str | None,
@@ -1065,13 +1066,13 @@ def record_plan_step_completion(
             payload={"reason": "missing_user_id"},
         )
         return
-    mission_id = _memory_mission_id(task_state=task_state, correlation_id=correlation_id)
+    mission_id = _memory_mission_id(task_record=task_record, correlation_id=correlation_id)
     payload = {
-        "intent": str(task_state.get("goal") or "").strip() or "task execution",
+        "intent": str(task_record.goal or "").strip() or "task execution",
         "step_id": str((current or {}).get("step_id") or "").strip() or None,
         "action": str(proposal.get("kind") or "").strip(),
         "result": f"step_status={str((current or {}).get('status') or '').strip() or 'unknown'}",
-        "next": _memory_next_hint(task_state=task_state, current=current),
+        "next": _memory_next_hint(task_record=task_record, current=current),
     }
     _memory_append_episode(
         state=state,
@@ -1121,11 +1122,8 @@ def _memory_user_id(state: dict[str, Any]) -> str:
     return resolve_memory_owner_id(state=state)
 
 
-def _memory_mission_id(*, task_state: dict[str, Any], correlation_id: str | None) -> str:
-    explicit = str(task_state.get("mission_id") or "").strip()
-    if explicit:
-        return explicit
-    task_id = str(task_state.get("task_id") or "").strip()
+def _memory_mission_id(*, task_record: TaskRecord, correlation_id: str | None) -> str:
+    task_id = str(task_record.task_id or "").strip()
     if task_id:
         return task_id
     corr = str(correlation_id or "").strip()
@@ -1134,10 +1132,11 @@ def _memory_mission_id(*, task_state: dict[str, Any], correlation_id: str | None
     return "ad_hoc"
 
 
-def _memory_next_hint(*, task_state: dict[str, Any], current: dict[str, Any] | None) -> str:
-    status = str(task_state.get("status") or "").strip().lower()
+def _memory_next_hint(*, task_record: TaskRecord, current: dict[str, Any] | None) -> str:
+    status = str(task_record.status or "").strip().lower()
     if status == "waiting_user":
-        return str(task_state.get("next_user_question") or "waiting for user input").strip()
+        outcome = task_record.outcome if isinstance(task_record.outcome, dict) else {}
+        return str(outcome.get("next_user_question") or "waiting for user input").strip()
     if status == "done":
         return "mission complete"
     return f"continue from step {str((current or {}).get('step_id') or '').strip() or '?'}"

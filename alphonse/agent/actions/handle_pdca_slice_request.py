@@ -196,9 +196,9 @@ class HandlePdcaSliceRequestAction(Action):
         invoke_state = dict(base_state)
         invoke_state.setdefault("task_id", task_id)
         invoke_state.setdefault("pdca_task_id", task_id)
-        task_state_for_id = invoke_state.get("task_state")
-        if isinstance(task_state_for_id, dict):
-            task_state_for_id.setdefault("task_id", task_id)
+        task_record_for_id = invoke_state.get("task_record")
+        if isinstance(task_record_for_id, dict) and not str(task_record_for_id.get("task_id") or "").strip():
+            task_record_for_id["task_id"] = task_id
         _emit_context_continuity_gap_if_any(
             task=task,
             invoke_state=invoke_state,
@@ -366,16 +366,11 @@ def _run_slice_invoke_job(
             )
         effective_reply_text = "" if should_preempt else str(result.reply_text or "")
         merged_state = _merge_state(base=base_state, cognition_state=cognition_state, reply_text=effective_reply_text)
-        sanitized_task_state = _sanitize_task_state_for_persistence(
-            cognition_state.get("task_state") if isinstance(cognition_state.get("task_state"), dict) else {}
-        )
         merged_state = _sanitize_state_for_persistence(merged_state)
-        if isinstance(merged_state, dict):
-            merged_state["task_state"] = sanitized_task_state
         _ = save_pdca_checkpoint(
             task_id=task_id,
             state=merged_state,
-            task_state=sanitized_task_state,
+            task_state={},
             expected_version=int(checkpoint.get("version") or 0) if isinstance(checkpoint, dict) else 0,
         )
         conversation_key = str(task.get("conversation_key") or "").strip()
@@ -419,7 +414,7 @@ def _run_slice_invoke_job(
             event_type=f"slice.completed.{next_status}",
             payload={
                 "reply_text": effective_reply_text.strip(),
-                "has_task_state": isinstance(cognition_state.get("task_state"), dict),
+                "has_task_record": isinstance(cognition_state.get("task_record"), dict),
             },
             correlation_id=correlation_id,
         )
@@ -575,6 +570,7 @@ def _update_day_session_memory(
             timezone_name=timezone_name,
         )
         assistant_message = resolve_assistant_session_message(reply_text=reply_text, plans=[])
+        task_record = merged_state.get("task_record") if isinstance(merged_state.get("task_record"), dict) else {}
         updated = build_next_session_state(
             previous=day_session,
             channel=channel,
@@ -583,8 +579,12 @@ def _update_day_session_memory(
             ability_state=cognition_state.get("ability_state")
             if isinstance(cognition_state.get("ability_state"), dict)
             else None,
-            task_state=_sanitize_task_state_for_persistence(cognition_state.get("task_state"))
-            if isinstance(cognition_state.get("task_state"), dict)
+            task_state={
+                "task_id": task_record.get("task_id"),
+                "status": task_record.get("status"),
+                "goal": task_record.get("goal"),
+            }
+            if isinstance(task_record, dict)
             else None,
             planning_context=cognition_state.get("planning_context")
             if isinstance(cognition_state.get("planning_context"), dict)
@@ -864,8 +864,8 @@ def _sanitize_state_for_persistence(state: dict[str, Any]) -> dict[str, Any]:
 
 
 def _next_status(*, cognition_state: dict[str, Any], reply_text: str) -> str:
-    task_state = cognition_state.get("task_state") if isinstance(cognition_state.get("task_state"), dict) else {}
-    task_status = str(task_state.get("status") or "").strip().lower()
+    task_record = cognition_state.get("task_record") if isinstance(cognition_state.get("task_record"), dict) else {}
+    task_status = str(task_record.get("status") or "").strip().lower()
     if task_status in {"done", "failed", "waiting_user"}:
         return task_status
     if str(reply_text or "").strip():
@@ -966,6 +966,10 @@ def _budget_block(*, task: dict[str, Any], checkpoint: dict[str, Any] | None, re
 def _current_cycle_index(checkpoint: dict[str, Any] | None) -> int:
     if not isinstance(checkpoint, dict):
         return 0
+    state = checkpoint.get("state") if isinstance(checkpoint.get("state"), dict) else {}
+    value = _as_optional_int(state.get("cycle_index"))
+    if value is not None:
+        return value
     task_state = checkpoint.get("task_state") if isinstance(checkpoint.get("task_state"), dict) else {}
     return _as_optional_int(task_state.get("cycle_index")) or 0
 

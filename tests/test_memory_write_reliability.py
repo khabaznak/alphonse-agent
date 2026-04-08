@@ -5,6 +5,7 @@ from typing import Any
 
 from alphonse.agent.cognition.memory import service as memory_service
 from alphonse.agent.cognition.memory import MemoryService
+from alphonse.agent.cortex.task_mode.task_record import TaskRecord
 from alphonse.agent.nervous_system import users as users_store
 from alphonse.agent.nervous_system.migrate import apply_schema
 from alphonse.agent.nervous_system.senses.bus import Signal
@@ -37,7 +38,7 @@ def test_memory_write_retries_then_succeeds(monkeypatch, tmp_path: Path) -> None
 
     memory_service.record_plan_step_completion(
         state={"correlation_id": "corr-memory-retry-1", "owner_id": "alex"},
-        task_state={"goal": "test", "status": "running"},
+        task_record=TaskRecord(goal="test", status="running"),
         current={"step_id": "step_1", "status": "executed"},
         proposal={"kind": "call_tool"},
         correlation_id="corr-memory-retry-1",
@@ -64,7 +65,7 @@ def test_memory_write_retry_exhausted_escalates_to_admin(monkeypatch, tmp_path: 
 
     memory_service.record_after_tool_call(
         state={"correlation_id": "corr-memory-retry-2", "_bus": bus, "owner_id": "alex", "incoming_user_id": "alex"},
-        task_state={"goal": "test", "status": "running"},
+        task_record=TaskRecord(goal="test", status="running"),
         current={"step_id": "step_1"},
         tool_name="communication.send_message",
         args={"To": "8553589429", "Message": "hello"},
@@ -86,7 +87,7 @@ def test_record_after_tool_call_persists_output_summary_for_search(monkeypatch, 
     users_store.upsert_user({"user_id": "alex", "display_name": "Alex", "is_active": True})
     memory_service.record_after_tool_call(
         state={"correlation_id": "corr-memory-summary-1", "owner_id": "alex", "incoming_user_id": "alex"},
-        task_state={"goal": "research potential client", "status": "running", "task_id": "task_client_1"},
+        task_record=TaskRecord(goal="research potential client", status="running", task_id="task_client_1"),
         current={"step_id": "step_1"},
         tool_name="execution.call_mcp",
         args={"profile": "web", "operation": "search"},
