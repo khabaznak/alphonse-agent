@@ -8,14 +8,13 @@ from alphonse.agent.actions.conscious_message_handler import IncomingMessageEnve
 from alphonse.agent.actions.models import ActionResult
 from alphonse.agent.actions.session_context import IncomingContext
 from alphonse.agent.actions.session_context import build_session_key
-from alphonse.agent.actions.state_context import build_cortex_state
-from alphonse.agent.actions.state_context import ensure_conversation_locale
 from alphonse.agent.actions.transitions import emit_agent_transitions_from_meta
 from alphonse.agent.cognition.plan_executor import PlanExecutionContext
 from alphonse.agent.cognition.plans import CortexPlan
 from alphonse.agent.cortex.state_store import load_state, save_state
 from alphonse.agent.session.day_state import render_recent_conversation_block
 from alphonse.agent.session.day_state import resolve_day_session
+from alphonse.config import settings
 
 
 @dataclass(frozen=True)
@@ -40,7 +39,6 @@ class ConsciousMessageExecutionDeps:
     plan_executor_cls: Any
     build_next_session_state_fn: Callable[..., dict[str, Any]]
     commit_session_state_fn: Callable[[dict[str, Any]], None]
-    outgoing_locale_fn: Callable[[dict[str, Any] | None], str]
 
 
 class ConsciousMessageExecutionHandler:
@@ -100,17 +98,13 @@ class ConsciousMessageExecutionHandler:
         )
 
         stored_state = load_state(session_key) or {}
-        ensure_conversation_locale(
-            conversation_key=session_key,
+        state = _build_ingress_state(
             stored_state=stored_state,
-            incoming=incoming,
-        )
-        state = build_cortex_state(
-            stored_state=stored_state,
+            session_key=session_key,
             incoming=incoming,
             correlation_id=correlation_id,
             payload=payload,
-            normalized=None,
+            envelope=envelope,
         )
         state["_bus"] = context.get("ctx")
         state["session_id"] = day_session.get("session_id")
@@ -246,7 +240,7 @@ class ConsciousMessageExecutionHandler:
             correlation_id=incoming.correlation_id,
         )
         if result.reply_text:
-            locale = self._deps.outgoing_locale_fn(cognition_state)
+            locale = _outgoing_locale(cognition_state)
             result_locale = str(cognition_state.get("locale") or "").strip()
             if not result_locale:
                 state_locale = str(state.get("locale") or "").strip()
@@ -305,3 +299,47 @@ class ConsciousMessageExecutionHandler:
             payload={"message": "noop"},
         )
         return ActionResult(intention_key="NOOP", payload={}, urgency=None)
+
+
+def _build_ingress_state(
+    *,
+    stored_state: dict[str, Any],
+    session_key: str,
+    incoming: IncomingContext,
+    correlation_id: str,
+    payload: dict[str, Any],
+    envelope: IncomingMessageEnvelope,
+) -> dict[str, Any]:
+    incoming_user_id = str(payload.get("user_id") or payload.get("from_user") or "").strip() or None
+    incoming_user_name = str(payload.get("user_name") or payload.get("from_user_name") or "").strip() or None
+    locale = (
+        str(stored_state.get("locale") or "").strip()
+        or str(envelope.context.get("locale") or "").strip()
+        or settings.get_default_locale()
+    )
+    timezone_name = (
+        str(stored_state.get("timezone") or "").strip()
+        or str(envelope.context.get("timezone") or "").strip()
+        or settings.get_timezone()
+    )
+    return {
+        "chat_id": session_key,
+        "channel_type": incoming.channel_type,
+        "channel_target": incoming.address,
+        "conversation_key": session_key,
+        "incoming_raw_message": payload if isinstance(payload, dict) else None,
+        "actor_person_id": incoming.person_id,
+        "incoming_user_id": incoming_user_id,
+        "incoming_user_name": incoming_user_name,
+        "correlation_id": correlation_id,
+        "locale": locale,
+        "timezone": timezone_name,
+    }
+
+
+def _outgoing_locale(cognition_state: dict[str, Any] | None) -> str:
+    if isinstance(cognition_state, dict):
+        locale = cognition_state.get("locale")
+        if isinstance(locale, str) and locale.strip():
+            return locale.strip()
+    return settings.get_default_locale()

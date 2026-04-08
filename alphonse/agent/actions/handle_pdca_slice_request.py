@@ -781,6 +781,9 @@ def _merge_state(*, base: dict[str, Any], cognition_state: dict[str, Any], reply
     ):
         if source_key in cognition_state:
             merged[target_key] = cognition_state.get(source_key)
+    for key in ("task_record", "planner_output", "check_result", "check_provenance", "act_result"):
+        if key in cognition_state:
+            merged[key] = cognition_state.get(key)
     merged["response_text"] = str(reply_text or "").strip() or None
     merged["last_updated_at"] = datetime.now(timezone.utc).isoformat()
     return merged
@@ -1010,15 +1013,11 @@ def _stamp_check_provenance_for_slice(
     checkpoint: dict[str, Any] | None,
 ) -> None:
     signal_type = str(getattr(signal, "type", "") or "").strip().lower()
-    task_state = base_state.get("task_state")
-    if not isinstance(task_state, dict):
-        task_state = {}
-        base_state["task_state"] = task_state
     if signal_type == "pdca.resume_requested":
-        task_state["check_provenance"] = "slice_resume"
+        base_state["check_provenance"] = "slice_resume"
         return
     if isinstance(checkpoint, dict):
-        task_state["check_provenance"] = "do"
+        base_state["check_provenance"] = "do"
 
 
 def _estimate_token_burn(request_text: str, reply_text: str) -> int:

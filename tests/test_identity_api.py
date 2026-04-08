@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from alphonse.agent import identity
 from alphonse.agent.actions.session_context import IncomingContext
+from alphonse.agent.identity.session import resolve_session_user_id
 from alphonse.agent.nervous_system import user_service_resolvers as resolvers
 from alphonse.agent.nervous_system import users as users_store
 from alphonse.agent.nervous_system.migrate import apply_schema
@@ -64,7 +65,7 @@ def test_identity_facade_resolves_session_user_from_service_mapping(monkeypatch,
         "metadata": {"service_key": "telegram"},
     }
 
-    assert identity.resolve_session_user_id(incoming=incoming, payload=payload) == "u-telegram"
+    assert resolve_session_user_id(incoming=incoming, payload=payload) == "u-telegram"
 
 
 def test_get_user_details_returns_canonical_user_id(monkeypatch, tmp_path) -> None:
