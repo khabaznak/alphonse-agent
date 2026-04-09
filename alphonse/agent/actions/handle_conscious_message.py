@@ -199,9 +199,7 @@ def _write_through_user_message(
             channel=str(channel or "").strip() or "api",
             user_message=text,
             assistant_message="",
-            ability_state=None,
             task_record=None,
-            planning_context=None,
             pending_interaction=None,
             user_event_meta={
                 "correlation_id": correlation_id,

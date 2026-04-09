@@ -109,20 +109,14 @@ def build_next_session_state(
     channel: str,
     user_message: str,
     assistant_message: str,
-    ability_state: dict[str, Any] | None,
     task_record: dict[str, Any] | None,
-    planning_context: dict[str, Any] | None,
     pending_interaction: dict[str, Any] | None,
     assistant_visibility: str = "public",
     user_event_meta: dict[str, Any] | None = None,
     assistant_event_meta: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     state = _normalize_state(previous)
-    last_action = _infer_last_action(
-        ability_state=ability_state,
-        task_record=task_record,
-        planning_context=planning_context,
-    )
+    last_action = _infer_last_action(task_record=task_record)
     user_text = str(user_message or "")
     user_line = _sanitize_line(user_text, max_len=100)
     visibility = str(assistant_visibility or "public").strip().lower() or "public"
@@ -279,26 +273,14 @@ def render_session_markdown(state: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def _infer_last_action(
-    *,
-    ability_state: dict[str, Any] | None,
-    task_record: dict[str, Any] | None,
-    planning_context: dict[str, Any] | None,
-) -> dict[str, Any] | None:
-    selected = _last_ability_step(ability_state)
-    if selected is None:
-        selected = _last_task_record_tool_step(task_record)
+def _infer_last_action(*, task_record: dict[str, Any] | None) -> dict[str, Any] | None:
+    selected = _last_task_record_tool_step(task_record)
     if not isinstance(selected, dict):
         return None
     tool = _sanitize_line(str(selected.get("tool") or ""), max_len=40)
     if not tool:
         return None
-    summary = _last_action_summary(
-        tool=tool,
-        step=selected,
-        task_record=task_record,
-        planning_context=planning_context,
-    )
+    summary = _last_action_summary(tool=tool, step=selected, task_record=task_record)
     if not summary:
         summary = f"Executed {tool}."
     return {
@@ -306,20 +288,6 @@ def _infer_last_action(
         "summary": summary,
         "ts": datetime.now(timezone.utc).isoformat(),
     }
-
-
-def _last_ability_step(ability_state: dict[str, Any] | None) -> dict[str, Any] | None:
-    if not isinstance(ability_state, dict):
-        return None
-    steps = ability_state.get("steps") if isinstance(ability_state.get("steps"), list) else []
-    selected: dict[str, Any] | None = None
-    for item in steps:
-        if not isinstance(item, dict):
-            continue
-        status = str(item.get("status") or "").strip().lower()
-        if status in {"executed", "waiting_user", "failed"}:
-            selected = item
-    return selected
 
 
 def _last_task_record_tool_step(task_record: dict[str, Any] | None) -> dict[str, Any] | None:
@@ -351,22 +319,8 @@ def _last_action_summary(
     tool: str,
     step: dict[str, Any],
     task_record: dict[str, Any] | None,
-    planning_context: dict[str, Any] | None,
 ) -> str:
-    step_idx = step.get("idx")
-    facts = []
-    if isinstance(planning_context, dict):
-        facts_container = planning_context.get("facts") if isinstance(planning_context.get("facts"), dict) else {}
-        facts = facts_container.get("tool_results") if isinstance(facts_container.get("tool_results"), list) else []
-    fact = None
-    for item in facts:
-        if not isinstance(item, dict):
-            continue
-        if step_idx is not None and item.get("step") == step_idx:
-            fact = item
     if tool in {"get_time"}:
-        if isinstance(fact, dict) and fact.get("time"):
-            return "Fetched current time."
         return "Fetched current time."
     if tool in {"create_reminder", "createReminder"}:
         return "Created a reminder."

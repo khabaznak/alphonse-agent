@@ -575,13 +575,7 @@ def _update_day_session_memory(
             channel=channel,
             user_message="",
             assistant_message=assistant_message,
-            ability_state=cognition_state.get("ability_state")
-            if isinstance(cognition_state.get("ability_state"), dict)
-            else None,
             task_record=task_record if isinstance(task_record, dict) else None,
-            planning_context=cognition_state.get("planning_context")
-            if isinstance(cognition_state.get("planning_context"), dict)
-            else None,
             pending_interaction=merged_state.get("pending_interaction")
             if isinstance(merged_state.get("pending_interaction"), dict)
             else None,
@@ -665,7 +659,6 @@ def _sanitize_loaded_state_for_new_task(
     sanitized = dict(loaded)
     removed_keys: list[str] = []
     for key in (
-        "task_state",
         "pending_interaction",
         "response_text",
         "events",

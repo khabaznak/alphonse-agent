@@ -46,9 +46,7 @@ def test_session_state_persists_rev_and_working_set(tmp_path: Path) -> None:
         channel="webui",
         user_message="Please run get_time again",
         assistant_message="It is 11:00 now.",
-        ability_state={"kind": "tool_calls", "steps": [{"idx": 0, "tool": "get_time", "status": "executed"}]},
         task_record=None,
-        planning_context={"facts": {"tool_results": [{"step": 0, "tool": "get_time", "time": "2026-02-15T11:00:00"}]}},
         pending_interaction=None,
     )
     commit_session_state(updated, root_dir=tmp_path)
@@ -129,9 +127,7 @@ def test_session_last_action_can_come_from_task_record_history() -> None:
         channel="telegram",
         user_message="otra vez",
         assistant_message="Listo",
-        ability_state=None,
         task_record=task_record,
-        planning_context=None,
         pending_interaction=None,
     )
     assert isinstance(updated.get("last_action"), dict)
@@ -203,9 +199,7 @@ def test_day_state_persists_full_transcript_text_without_capping(tmp_path: Path)
         channel="telegram",
         user_message=long_user,
         assistant_message=long_assistant,
-        ability_state=None,
         task_record=None,
-        planning_context=None,
         pending_interaction=None,
     )
     commit_session_state(updated, root_dir=tmp_path)
@@ -240,9 +234,7 @@ def test_day_state_does_not_duplicate_user_when_assistant_is_appended_later() ->
         channel="telegram",
         user_message="hello",
         assistant_message="",
-        ability_state=None,
         task_record=None,
-        planning_context=None,
         pending_interaction=None,
     )
     second = build_next_session_state(
@@ -250,9 +242,7 @@ def test_day_state_does_not_duplicate_user_when_assistant_is_appended_later() ->
         channel="telegram",
         user_message="",
         assistant_message="done",
-        ability_state=None,
         task_record=None,
-        planning_context=None,
         pending_interaction=None,
     )
     events = second.get("conversation_events")

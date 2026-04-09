@@ -127,9 +127,7 @@ class ConsciousMessageExecutionHandler:
                 channel=incoming.channel_type,
                 user_message=str(payload.get("text") or ""),
                 assistant_message="",
-                ability_state=None,
                 task_record=None,
-                planning_context=None,
                 pending_interaction={"type": "pdca_slice", "key": task_id} if task_id else None,
                 user_event_meta={
                     "correlation_id": correlation_id,
@@ -274,14 +272,8 @@ class ConsciousMessageExecutionHandler:
             channel=incoming.channel_type,
             user_message=str(payload.get("text") or ""),
             assistant_message=session_assistant_message,
-            ability_state=cognition_state.get("ability_state")
-            if isinstance(cognition_state.get("ability_state"), dict)
-            else None,
             task_record=cognition_state.get("task_record")
             if isinstance(cognition_state.get("task_record"), dict)
-            else None,
-            planning_context=cognition_state.get("planning_context")
-            if isinstance(cognition_state.get("planning_context"), dict)
             else None,
             pending_interaction=cognition_state.get("pending_interaction")
             if isinstance(cognition_state.get("pending_interaction"), dict)

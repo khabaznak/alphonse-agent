@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 import alphonse.agent.cortex.task_mode.execute_step as execute_step_module
 from alphonse.agent.cortex.task_mode.execute_step import execute_step_node_impl
+from alphonse.agent.cortex.task_mode.task_record import TaskRecord
 from alphonse.agent.tools.base import ToolDefinition
 from alphonse.agent.tools.registry import ToolRegistry
 from alphonse.agent.tools.spec import ToolSpec
@@ -52,25 +54,6 @@ def _register_tool(registry: ToolRegistry, key: str, executor: object) -> None:
     registry.register(ToolDefinition(spec=spec, executor=executor))  # type: ignore[arg-type]
 
 
-def _task_state_with_defaults(state: dict[str, Any]) -> dict[str, Any]:
-    task_state = state.get("task_state")
-    assert isinstance(task_state, dict)
-    return task_state
-
-
-def _current_step(task_state: dict[str, Any]) -> dict[str, Any] | None:
-    plan = task_state.get("plan")
-    if not isinstance(plan, dict):
-        return None
-    step_id = str(plan.get("current_step_id") or "").strip()
-    for step in plan.get("steps") or []:
-        if not isinstance(step, dict):
-            continue
-        if str(step.get("step_id") or "").strip() == step_id:
-            return step
-    return None
-
-
 def test_execute_step_emits_memory_hooks_after_tool_call(monkeypatch) -> None:
     calls: list[str] = []
 
@@ -79,40 +62,26 @@ def test_execute_step_emits_memory_hooks_after_tool_call(monkeypatch) -> None:
 
     registry = ToolRegistry()
     _register_tool(registry, "echo_tool", _EchoTool())
-    state: dict[str, Any] = {
-        "correlation_id": "corr-memory-hook-1",
-        "incoming_user_id": "alex",
-        "task_state": {
-            "status": "running",
-            "goal": "echo data",
-            "plan": {
-                "current_step_id": "step_1",
-                "steps": [
-                    {
-                        "step_id": "step_1",
-                        "status": "proposed",
-                        "proposal": {
-                            "kind": "call_tool",
-                            "tool_name": "echo_tool",
-                            "args": {"value": "hello"},
-                        },
-                    }
-                ],
-            },
-        },
-    }
+    monkeypatch.setattr(execute_step_module, "_tool_registry", lambda: registry)
+    task_record = TaskRecord(
+        task_id="task-memory-hook-1",
+        user_id="alex",
+        correlation_id="corr-memory-hook-1",
+        goal="echo data",
+    )
 
     updated = execute_step_node_impl(
-        state,
-        tool_registry=registry,
-        task_state_with_defaults=_task_state_with_defaults,
-        correlation_id=lambda s: str(s.get("correlation_id") or ""),
-        current_step=_current_step,
-        append_trace_event=lambda *_args, **_kwargs: None,
-        logger=execute_step_module.logging.getLogger("test.execute_step.memory"),
+        task_record,
+        {
+            "tool_call": {"kind": "call_tool", "tool_name": "echo_tool", "args": {"value": "hello"}},
+            "planner_intent": "Echo the provided data.",
+        },
+        logger=logging.getLogger("test.execute_step.memory"),
         log_task_event=lambda **_kwargs: None,
     )
-    assert isinstance(updated.get("task_state"), dict)
+    assert updated["provenance"] == "do"
+    assert isinstance(updated.get("task_record"), TaskRecord)
+    assert "echo_tool" in updated["task_record"].tool_call_history_md
     assert "after_tool_call" in calls
     assert "plan_step_completed" in calls
 
@@ -125,40 +94,24 @@ def test_execute_ask_question_tool_emits_plan_step_completion_memory(monkeypatch
 
     registry = ToolRegistry()
     _register_tool(registry, "askQuestion", _AskQuestionTool())
-
-    state: dict[str, Any] = {
-        "correlation_id": "corr-memory-hook-2",
-        "incoming_user_id": "alex",
-        "task_state": {
-            "status": "running",
-            "goal": "finish task",
-            "plan": {
-                "current_step_id": "step_2",
-                "steps": [
-                    {
-                        "step_id": "step_2",
-                        "status": "proposed",
-                        "proposal": {
-                            "kind": "call_tool",
-                            "tool_name": "askQuestion",
-                            "args": {"question": "Can you clarify?"},
-                        },
-                    }
-                ],
-            },
-        },
-    }
+    monkeypatch.setattr(execute_step_module, "_tool_registry", lambda: registry)
+    task_record = TaskRecord(
+        task_id="task-memory-hook-2",
+        user_id="alex",
+        correlation_id="corr-memory-hook-2",
+        goal="finish task",
+    )
     updated = execute_step_node_impl(
-        state,
-        tool_registry=registry,
-        task_state_with_defaults=_task_state_with_defaults,
-        correlation_id=lambda s: str(s.get("correlation_id") or ""),
-        current_step=_current_step,
-        append_trace_event=lambda *_args, **_kwargs: None,
-        logger=execute_step_module.logging.getLogger("test.execute_step.memory"),
+        task_record,
+        {
+            "tool_call": {"kind": "call_tool", "tool_name": "askQuestion", "args": {"question": "Can you clarify?"}},
+            "planner_intent": "Ask the user for clarification.",
+        },
+        logger=logging.getLogger("test.execute_step.memory"),
         log_task_event=lambda **_kwargs: None,
     )
-    assert isinstance(updated.get("task_state"), dict)
+    assert updated["provenance"] == "do"
+    assert "askQuestion" in updated["task_record"].tool_call_history_md
     assert "plan_step_completed" in calls
 
 
@@ -170,49 +123,30 @@ def test_send_message_call_writes_facts_and_memory(monkeypatch) -> None:
 
     registry = ToolRegistry()
     _register_tool(registry, "communication.send_message", _InternalMessageTool())
-    state: dict[str, Any] = {
-        "correlation_id": "corr-memory-hook-internal",
-        "incoming_user_id": "alex",
-        "task_state": {
-            "status": "running",
-            "goal": "internal progress",
-            "plan": {
-                "current_step_id": "step_9",
-                "steps": [
-                    {
-                        "step_id": "step_9",
-                        "status": "proposed",
-                        "proposal": {
-                            "kind": "call_tool",
-                            "tool_name": "communication.send_message",
-                            "args": {
-                                "message": "Estoy avanzando",
-                                "recipient": "8553589429",
-                                "internal_progress": True,
-                            },
-                        },
-                    }
-                ],
-            },
-            "facts": {},
-        },
-    }
+    monkeypatch.setattr(execute_step_module, "_tool_registry", lambda: registry)
+    task_record = TaskRecord(
+        task_id="task-memory-hook-internal",
+        user_id="alex",
+        correlation_id="corr-memory-hook-internal",
+        goal="internal progress",
+    )
     updated = execute_step_node_impl(
-        state,
-        tool_registry=registry,
-        task_state_with_defaults=_task_state_with_defaults,
-        correlation_id=lambda s: str(s.get("correlation_id") or ""),
-        current_step=_current_step,
-        append_trace_event=lambda *_args, **_kwargs: None,
-        logger=execute_step_module.logging.getLogger("test.execute_step.memory"),
+        task_record,
+        {
+            "tool_call": {
+                "kind": "call_tool",
+                "tool_name": "communication.send_message",
+                "args": {
+                    "message": "Estoy avanzando",
+                    "recipient": "8553589429",
+                    "internal_progress": True,
+                },
+            },
+            "planner_intent": "Send an internal progress update.",
+        },
+        logger=logging.getLogger("test.execute_step.memory"),
         log_task_event=lambda **_kwargs: None,
     )
-    next_state = updated.get("task_state")
-    assert isinstance(next_state, dict)
-    facts = next_state.get("facts")
-    assert isinstance(facts, dict)
-    fact = facts.get("step_9")
-    assert isinstance(fact, dict)
-    assert fact.get("tool") == "communication.send_message"
+    assert "communication.send_message" in updated["task_record"].tool_call_history_md
     assert "after_tool_call" in calls
     assert "plan_step_completed" in calls

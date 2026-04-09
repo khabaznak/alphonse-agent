@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import json
 import time
 from dataclasses import dataclass
 
 from alphonse.agent.cortex.graph import CortexGraph
+import alphonse.agent.cortex.graph as graph_module
+import alphonse.agent.cortex.task_mode.pdca as pdca_module
+from alphonse.agent.cortex.task_mode.task_record import TaskRecord
 
 
 @dataclass(frozen=True)
@@ -97,6 +101,17 @@ class _EvalLlm:
             return self._plan_for_message(message)
         return "{}"
 
+    def complete_with_tools(self, *, messages, tools, tool_choice="auto"):  # noqa: ANN001
+        _ = (tools, tool_choice)
+        user_prompt = ""
+        for message in messages or []:
+            if isinstance(message, dict) and str(message.get("role") or "").strip().lower() == "user":
+                user_prompt = str(message.get("content") or "")
+        message = _extract_goal(user_prompt)
+        if not message:
+            message = _extract_message(user_prompt, prefix="MESSAGE:")
+        return json.loads(self._pdca_for_message(message))
+
     @staticmethod
     def _first_decision_for_message(message: str, *, case_type: str) -> str:
         _ = message
@@ -146,8 +161,14 @@ class _EvalLlm:
         )
 
 
-def test_mvp_eval_suite() -> None:
+def test_mvp_eval_suite(monkeypatch) -> None:
     llm = _EvalLlm()
+    monkeypatch.setattr(pdca_module, "_resolve_plan_provider", lambda: (llm, None))
+    monkeypatch.setattr(
+        graph_module,
+        "check_node",
+        lambda task_record, provenance: _synthetic_check_result(task_record, provenance=provenance),
+    )
     runner = CortexGraph().build().compile()
 
     total = 0
@@ -200,23 +221,55 @@ def test_mvp_eval_suite() -> None:
     assert sum(metrics.latency_buckets.values()) == metrics.total, _render_metrics(metrics)
 
 
+def _synthetic_check_result(task_record: TaskRecord, *, provenance: str) -> dict[str, object]:
+    normalized = str(provenance or "").strip().lower()
+    if normalized == "entry":
+        task_record.status = "running"
+        task_record.outcome = None
+        return {
+            "task_record": task_record,
+            "verdict": "plan",
+            "judge_result": {"kind": "plan", "reason": "Plan-first CAPD policy."},
+            "case_type": "new_request",
+            "status": task_record.status,
+            "outcome": task_record.outcome,
+            "reason": "Plan-first CAPD policy.",
+            "confidence": 0.95,
+            "consumed_inputs": [],
+        }
+    task_record.status = "failed"
+    task_record.outcome = {
+        "kind": "task_failed",
+        "summary": "Synthetic eval stop condition.",
+        "failure_class": "eval_stop",
+    }
+    return {
+        "task_record": task_record,
+        "verdict": "mission_failed",
+        "judge_result": {"kind": "mission_failed", "reason": "Synthetic eval stop condition."},
+        "case_type": "execution_review" if normalized == "do" else "task_resumption",
+        "status": task_record.status,
+        "outcome": task_record.outcome,
+        "reason": "Synthetic eval stop condition.",
+        "confidence": 0.99,
+        "consumed_inputs": [],
+    }
+
+
 def _classify_actual_route(*, result: dict[str, object], planning_calls: int) -> str:
-    task_state = result.get("task_state")
-    if isinstance(task_state, dict):
-        verdict = task_state.get("judge_verdict")
-        if isinstance(verdict, dict):
-            kind = str(verdict.get("kind") or "").strip().lower()
-            if kind == "plan":
-                return "tool_plan"
-            if kind == "conversation":
-                return "direct_reply"
-            if kind == "mission_success":
-                return "tool_plan"
-            if kind == "mission_failed":
-                return "tool_plan"
+    check_result = result.get("check_result")
+    if isinstance(check_result, dict):
+        kind = str(check_result.get("verdict") or "").strip().lower()
+        if kind == "plan":
+            return "tool_plan"
+        if kind == "conversation":
+            return "direct_reply"
+        if kind in {"mission_success", "mission_failed"}:
+            return "tool_plan"
     if planning_calls > 0:
         return "tool_plan"
-    if isinstance(task_state, dict) and str(task_state.get("status") or "").strip().lower() == "waiting_user":
+    task_record = result.get("task_record")
+    if isinstance(task_record, dict) and str(task_record.get("status") or "").strip().lower() == "waiting_user":
         return "clarify"
     pending = result.get("pending_interaction")
     if isinstance(pending, dict):
