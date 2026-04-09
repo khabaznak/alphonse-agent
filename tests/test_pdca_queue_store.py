@@ -114,18 +114,18 @@ def test_pdca_checkpoint_versioning_and_events(tmp_path: Path, monkeypatch: pyte
         }
     )
 
-    v1 = save_pdca_checkpoint(task_id=task_id, state={"a": 1}, task_state={"cycle_index": 1}, expected_version=0)
+    v1 = save_pdca_checkpoint(task_id=task_id, state={"a": 1, "cycle_index": 1}, expected_version=0)
     assert v1 == 1
 
     loaded1 = load_pdca_checkpoint(task_id)
     assert loaded1 is not None
     assert loaded1["version"] == 1
-    assert loaded1["task_state"]["cycle_index"] == 1
+    assert loaded1["state"]["cycle_index"] == 1
 
-    stale = save_pdca_checkpoint(task_id=task_id, state={"a": 2}, task_state={"cycle_index": 2}, expected_version=0)
+    stale = save_pdca_checkpoint(task_id=task_id, state={"a": 2, "cycle_index": 2}, expected_version=0)
     assert stale is None
 
-    v2 = save_pdca_checkpoint(task_id=task_id, state={"a": 2}, task_state={"cycle_index": 2}, expected_version=1)
+    v2 = save_pdca_checkpoint(task_id=task_id, state={"a": 2, "cycle_index": 2}, expected_version=1)
     assert v2 == 2
 
     loaded2 = load_pdca_checkpoint(task_id)
@@ -158,7 +158,7 @@ def test_pdca_runtime_flush_deletes_tables_and_is_idempotent(tmp_path: Path, mon
             "status": "queued",
         }
     )
-    _ = save_pdca_checkpoint(task_id=task_id, state={"a": 1}, task_state={"cycle_index": 1}, expected_version=0)
+    _ = save_pdca_checkpoint(task_id=task_id, state={"a": 1, "cycle_index": 1}, expected_version=0)
     _ = append_pdca_event(task_id=task_id, event_type="slice.requested", payload={"ok": True})
 
     with sqlite3.connect(db_path) as conn:
@@ -224,7 +224,7 @@ def test_pdca_runtime_flush_rolls_back_on_failure(tmp_path: Path, monkeypatch: p
     monkeypatch.setenv("NERVE_DB_PATH", str(db_path))
     apply_schema(db_path)
     task_id = upsert_pdca_task({"owner_id": "u1", "conversation_key": "chat-rollback", "status": "queued"})
-    _ = save_pdca_checkpoint(task_id=task_id, state={"ok": True}, task_state={"cycle_index": 1}, expected_version=0)
+    _ = save_pdca_checkpoint(task_id=task_id, state={"ok": True, "cycle_index": 1}, expected_version=0)
     _ = append_pdca_event(task_id=task_id, event_type="slice.requested", payload={})
     with sqlite3.connect(db_path) as conn:
         conn.execute(

@@ -370,7 +370,6 @@ def _run_slice_invoke_job(
         _ = save_pdca_checkpoint(
             task_id=task_id,
             state=merged_state,
-            task_state={},
             expected_version=int(checkpoint.get("version") or 0) if isinstance(checkpoint, dict) else 0,
         )
         conversation_key = str(task.get("conversation_key") or "").strip()
@@ -579,13 +578,7 @@ def _update_day_session_memory(
             ability_state=cognition_state.get("ability_state")
             if isinstance(cognition_state.get("ability_state"), dict)
             else None,
-            task_state={
-                "task_id": task_record.get("task_id"),
-                "status": task_record.get("status"),
-                "goal": task_record.get("goal"),
-            }
-            if isinstance(task_record, dict)
-            else None,
+            task_record=task_record if isinstance(task_record, dict) else None,
             planning_context=cognition_state.get("planning_context")
             if isinstance(cognition_state.get("planning_context"), dict)
             else None,
@@ -776,7 +769,6 @@ def _merge_state(*, base: dict[str, Any], cognition_state: dict[str, Any], reply
         ("route_decision", "route_decision"),
         ("pending_interaction", "pending_interaction"),
         ("ability_state", "ability_state"),
-        ("task_state", "task_state"),
         ("planning_context", "planning_context"),
     ):
         if source_key in cognition_state:
@@ -787,58 +779,6 @@ def _merge_state(*, base: dict[str, Any], cognition_state: dict[str, Any], reply
     merged["response_text"] = str(reply_text or "").strip() or None
     merged["last_updated_at"] = datetime.now(timezone.utc).isoformat()
     return merged
-
-
-def _sanitize_task_state_for_persistence(task_state: dict[str, Any]) -> dict[str, Any]:
-    sanitized = dict(task_state) if isinstance(task_state, dict) else {}
-    sanitized["pending_plan_raw"] = None
-    plan = sanitized.get("plan")
-    if isinstance(plan, dict):
-        next_plan = dict(plan)
-        raw_steps = next_plan.get("steps")
-        if isinstance(raw_steps, list):
-            next_steps: list[dict[str, Any]] = []
-            for raw_step in raw_steps:
-                if not isinstance(raw_step, dict):
-                    continue
-                step = dict(raw_step)
-                step.pop("proposal_raw", None)
-                next_steps.append(step)
-            next_plan["steps"] = next_steps
-        sanitized["plan"] = next_plan
-    facts = sanitized.get("facts")
-    if isinstance(facts, dict):
-        next_facts: dict[str, Any] = {}
-        for key, raw_fact in facts.items():
-            if not isinstance(raw_fact, dict):
-                next_facts[str(key)] = raw_fact
-                continue
-            fact = dict(raw_fact)
-            exception = fact.get("exception")
-            if isinstance(exception, dict):
-                next_exception = dict(exception)
-                details = next_exception.get("details")
-                if isinstance(details, dict):
-                    next_details = dict(details)
-                    next_details.pop("raw_output_preview", None)
-                    next_exception["details"] = next_details
-                fact["exception"] = next_exception
-            result = fact.get("result")
-            if isinstance(result, dict):
-                next_result = dict(result)
-                nested_exception = next_result.get("exception")
-                if isinstance(nested_exception, dict):
-                    next_nested_exception = dict(nested_exception)
-                    nested_details = next_nested_exception.get("details")
-                    if isinstance(nested_details, dict):
-                        next_nested_details = dict(nested_details)
-                        next_nested_details.pop("raw_output_preview", None)
-                        next_nested_exception["details"] = next_nested_details
-                    next_result["exception"] = next_nested_exception
-                fact["result"] = next_result
-            next_facts[str(key)] = fact
-        sanitized["facts"] = next_facts
-    return sanitized
 
 
 def _sanitize_state_for_persistence(state: dict[str, Any]) -> dict[str, Any]:
@@ -970,8 +910,7 @@ def _current_cycle_index(checkpoint: dict[str, Any] | None) -> int:
     value = _as_optional_int(state.get("cycle_index"))
     if value is not None:
         return value
-    task_state = checkpoint.get("task_state") if isinstance(checkpoint.get("task_state"), dict) else {}
-    return _as_optional_int(task_state.get("cycle_index")) or 0
+    return 0
 
 
 def _elapsed_runtime_seconds(task: dict[str, Any]) -> int | None:

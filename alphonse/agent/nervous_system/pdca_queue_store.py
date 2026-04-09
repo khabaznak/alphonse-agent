@@ -337,7 +337,6 @@ def save_pdca_checkpoint(
     *,
     task_id: str,
     state: dict[str, Any],
-    task_state: dict[str, Any],
     expected_version: int | None = None,
 ) -> int | None:
     task_key = str(task_id or "").strip()
@@ -345,7 +344,7 @@ def save_pdca_checkpoint(
         return None
     now = _now_iso()
     state_json = json.dumps(state or {}, ensure_ascii=False)
-    task_state_json = json.dumps(task_state or {}, ensure_ascii=False)
+    task_state_json = json.dumps({}, ensure_ascii=False)
     with _connect() as conn:
         if expected_version is None:
             conn.execute(
@@ -420,7 +419,6 @@ def load_pdca_checkpoint(task_id: str) -> dict[str, Any] | None:
     return {
         "task_id": str(row[0]),
         "state": _parse_json(str(row[1])) or {},
-        "task_state": _parse_json(str(row[2])) or {},
         "version": int(row[3] or 0),
         "created_at": str(row[4] or ""),
         "updated_at": str(row[5] or ""),

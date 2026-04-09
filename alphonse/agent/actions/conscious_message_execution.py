@@ -128,7 +128,7 @@ class ConsciousMessageExecutionHandler:
                 user_message=str(payload.get("text") or ""),
                 assistant_message="",
                 ability_state=None,
-                task_state=None,
+                task_record=None,
                 planning_context=None,
                 pending_interaction={"type": "pdca_slice", "key": task_id} if task_id else None,
                 user_event_meta={
@@ -277,8 +277,8 @@ class ConsciousMessageExecutionHandler:
             ability_state=cognition_state.get("ability_state")
             if isinstance(cognition_state.get("ability_state"), dict)
             else None,
-            task_state=cognition_state.get("task_state")
-            if isinstance(cognition_state.get("task_state"), dict)
+            task_record=cognition_state.get("task_record")
+            if isinstance(cognition_state.get("task_record"), dict)
             else None,
             planning_context=cognition_state.get("planning_context")
             if isinstance(cognition_state.get("planning_context"), dict)

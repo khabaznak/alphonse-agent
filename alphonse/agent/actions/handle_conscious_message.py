@@ -200,7 +200,7 @@ def _write_through_user_message(
             user_message=text,
             assistant_message="",
             ability_state=None,
-            task_state=None,
+            task_record=None,
             planning_context=None,
             pending_interaction=None,
             user_event_meta={

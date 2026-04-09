@@ -47,7 +47,7 @@ def test_session_state_persists_rev_and_working_set(tmp_path: Path) -> None:
         user_message="Please run get_time again",
         assistant_message="It is 11:00 now.",
         ability_state={"kind": "tool_calls", "steps": [{"idx": 0, "tool": "get_time", "status": "executed"}]},
-        task_state=None,
+        task_record=None,
         planning_context={"facts": {"tool_results": [{"step": 0, "tool": "get_time", "time": "2026-02-15T11:00:00"}]}},
         pending_interaction=None,
     )
@@ -105,7 +105,7 @@ def test_session_markdown_render_matches_json_content() -> None:
     assert "- Tool: createReminder" in markdown
 
 
-def test_session_last_action_can_come_from_task_state_steps() -> None:
+def test_session_last_action_can_come_from_task_record_history() -> None:
     previous = {
         "session_id": "u-9|2026-02-15",
         "user_id": "u-9",
@@ -116,32 +116,13 @@ def test_session_last_action_can_come_from_task_state_steps() -> None:
         "open_loops": [],
         "last_action": None,
     }
-    task_state = {
-        "plan": {
-            "steps": [
-                {
-                    "step_id": "step_1",
-                    "status": "executed",
-                    "proposal": {"kind": "call_tool", "tool_name": "get_time", "args": {}},
-                },
-                {
-                    "step_id": "step_2",
-                    "status": "executed",
-                    "proposal": {
-                        "kind": "call_tool",
-                        "tool_name": "audio.speak_local",
-                        "args": {"text": "Son las 5:22 p. m."},
-                    },
-                },
-            ],
-            "current_step_id": "step_2",
-        },
-        "facts": {
-            "step_2": {
-                "tool": "audio.speak_local",
-                "result": {"status": "ok"},
-            }
-        },
+    task_record = {
+        "task_id": "task-1",
+        "tool_call_history_md": (
+            "- get_time args={} output={\"time\":\"2026-02-15T17:22:00\"} exception=null\n"
+            "- audio.speak_local args={\"text\":\"Son las 5:22 p. m.\"} output={\"status\":\"ok\"} exception=null"
+        ),
+        "plan_md": "- audio.speak_local args={\"text\":\"Son las 5:22 p. m.\"} intent=Play local audio.",
     }
     updated = build_next_session_state(
         previous=previous,
@@ -149,7 +130,7 @@ def test_session_last_action_can_come_from_task_state_steps() -> None:
         user_message="otra vez",
         assistant_message="Listo",
         ability_state=None,
-        task_state=task_state,
+        task_record=task_record,
         planning_context=None,
         pending_interaction=None,
     )
@@ -223,7 +204,7 @@ def test_day_state_persists_full_transcript_text_without_capping(tmp_path: Path)
         user_message=long_user,
         assistant_message=long_assistant,
         ability_state=None,
-        task_state=None,
+        task_record=None,
         planning_context=None,
         pending_interaction=None,
     )
@@ -260,7 +241,7 @@ def test_day_state_does_not_duplicate_user_when_assistant_is_appended_later() ->
         user_message="hello",
         assistant_message="",
         ability_state=None,
-        task_state=None,
+        task_record=None,
         planning_context=None,
         pending_interaction=None,
     )
@@ -270,7 +251,7 @@ def test_day_state_does_not_duplicate_user_when_assistant_is_appended_later() ->
         user_message="",
         assistant_message="done",
         ability_state=None,
-        task_state=None,
+        task_record=None,
         planning_context=None,
         pending_interaction=None,
     )

@@ -22,8 +22,7 @@ def _seed_runtime_rows(db_path: Path) -> None:
     )
     _ = save_pdca_checkpoint(
         task_id=task_id,
-        state={"a": 1},
-        task_state={"cycle_index": 1},
+        state={"a": 1, "cycle_index": 1},
         expected_version=0,
     )
     _ = append_pdca_event(task_id=task_id, event_type="slice.requested", payload={"seeded": True})

@@ -83,13 +83,14 @@ def _save_checkpoint_with_legacy_cycle_state(
     status: str = "running",
     expected_version: int = 0,
 ) -> int | None:
-    params: dict[str, object] = {
-        "task_id": task_id,
-        "state": state,
-        "expected_version": expected_version,
-    }
-    params["task" "_state"] = {"cycle_index": cycle_index, "status": status}
-    return save_pdca_checkpoint(**params)
+    checkpoint_state = dict(state)
+    checkpoint_state["cycle_index"] = cycle_index
+    checkpoint_state["legacy_status"] = status
+    return save_pdca_checkpoint(
+        task_id=task_id,
+        state=checkpoint_state,
+        expected_version=expected_version,
+    )
 
 
 def test_handle_pdca_slice_request_without_text_moves_to_waiting_user(

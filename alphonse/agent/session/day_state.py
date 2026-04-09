@@ -110,7 +110,7 @@ def build_next_session_state(
     user_message: str,
     assistant_message: str,
     ability_state: dict[str, Any] | None,
-    task_state: dict[str, Any] | None,
+    task_record: dict[str, Any] | None,
     planning_context: dict[str, Any] | None,
     pending_interaction: dict[str, Any] | None,
     assistant_visibility: str = "public",
@@ -120,7 +120,7 @@ def build_next_session_state(
     state = _normalize_state(previous)
     last_action = _infer_last_action(
         ability_state=ability_state,
-        task_state=task_state,
+        task_record=task_record,
         planning_context=planning_context,
     )
     user_text = str(user_message or "")
@@ -282,12 +282,12 @@ def render_session_markdown(state: dict[str, Any]) -> str:
 def _infer_last_action(
     *,
     ability_state: dict[str, Any] | None,
-    task_state: dict[str, Any] | None,
+    task_record: dict[str, Any] | None,
     planning_context: dict[str, Any] | None,
 ) -> dict[str, Any] | None:
     selected = _last_ability_step(ability_state)
     if selected is None:
-        selected = _last_task_tool_step(task_state)
+        selected = _last_task_record_tool_step(task_record)
     if not isinstance(selected, dict):
         return None
     tool = _sanitize_line(str(selected.get("tool") or ""), max_len=40)
@@ -296,7 +296,7 @@ def _infer_last_action(
     summary = _last_action_summary(
         tool=tool,
         step=selected,
-        task_state=task_state,
+        task_record=task_record,
         planning_context=planning_context,
     )
     if not summary:
@@ -322,34 +322,35 @@ def _last_ability_step(ability_state: dict[str, Any] | None) -> dict[str, Any] |
     return selected
 
 
-def _last_task_tool_step(task_state: dict[str, Any] | None) -> dict[str, Any] | None:
-    if not isinstance(task_state, dict):
+def _last_task_record_tool_step(task_record: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not isinstance(task_record, dict):
         return None
-    plan = task_state.get("plan") if isinstance(task_state.get("plan"), dict) else {}
-    steps = plan.get("steps") if isinstance(plan.get("steps"), list) else []
-    selected: dict[str, Any] | None = None
-    for step in steps:
-        if not isinstance(step, dict):
-            continue
-        proposal = step.get("proposal") if isinstance(step.get("proposal"), dict) else {}
-        kind = str(proposal.get("kind") or "").strip().lower()
-        if kind != "call_tool":
-            continue
-        status = str(step.get("status") or "").strip().lower()
-        if status not in {"executed", "failed"}:
-            continue
-        tool = _sanitize_line(str(proposal.get("tool_name") or ""), max_len=40)
-        if not tool:
-            continue
-        selected = {"tool": tool, "status": status, "step_id": str(step.get("step_id") or "").strip()}
-    return selected
+    history_line = _last_markdown_line(task_record.get("tool_call_history_md"))
+    if history_line:
+        tool = _tool_name_from_history_line(history_line)
+        if tool:
+            return {
+                "tool": tool,
+                "status": "failed" if _history_line_has_exception(history_line) else "executed",
+                "history_line": history_line,
+            }
+    plan_line = _last_markdown_line(task_record.get("plan_md"))
+    if plan_line:
+        tool = _tool_name_from_history_line(plan_line)
+        if tool:
+            return {
+                "tool": tool,
+                "status": "planned",
+                "history_line": plan_line,
+            }
+    return None
 
 
 def _last_action_summary(
     *,
     tool: str,
     step: dict[str, Any],
-    task_state: dict[str, Any] | None,
+    task_record: dict[str, Any] | None,
     planning_context: dict[str, Any] | None,
 ) -> str:
     step_idx = step.get("idx")
@@ -380,23 +381,47 @@ def _last_action_summary(
         return "Ran a terminal command."
     if tool == "askQuestion":
         return "Asked the user for clarification."
-    if isinstance(task_state, dict):
-        facts = task_state.get("facts") if isinstance(task_state.get("facts"), dict) else {}
-        step_id = str(step.get("step_id") or "").strip()
-        if step_id and isinstance(facts.get(step_id), dict):
-            result = facts[step_id].get("result")
-            if tool == "audio.speak_local":
-                return "Played local audio output."
-            if tool in {"get_time"}:
-                return "Fetched current time."
-            if tool in {"create_reminder", "createReminder"}:
-                return "Created a reminder."
+    if isinstance(task_record, dict) and str(step.get("status") or "").strip().lower() == "executed":
+        if tool == "audio.speak_local":
+            return "Played local audio output."
+        if tool in {"get_time"}:
+            return "Fetched current time."
+        if tool in {"create_reminder", "createReminder"}:
+            return "Created a reminder."
     status = str(step.get("status") or "").strip().lower()
+    if status == "planned":
+        return f"Planned {tool}."
     if status == "waiting_user":
         return f"Waiting on user after {tool}."
     if status == "failed":
         return f"{tool} failed."
     return f"Executed {tool}."
+
+
+def _last_markdown_line(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text or text == "- (none)":
+        return ""
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if not lines:
+        return ""
+    last = lines[-1]
+    return last[2:].strip() if last.startswith("- ") else last
+
+
+def _tool_name_from_history_line(line: str) -> str:
+    text = str(line or "").strip()
+    if not text:
+        return ""
+    tool = text.split(" ", 1)[0].strip()
+    return _sanitize_line(tool, max_len=40)
+
+
+def _history_line_has_exception(line: str) -> bool:
+    lowered = str(line or "").strip().lower()
+    if not lowered:
+        return False
+    return "exception=null" not in lowered and "exception=none" not in lowered
 
 
 def _normalize_state(state: dict[str, Any]) -> dict[str, Any]:
