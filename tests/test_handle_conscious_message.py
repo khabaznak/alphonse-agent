@@ -183,6 +183,60 @@ def test_handle_conscious_message_logs_missing_actor_context(monkeypatch) -> Non
     assert any(str(item.get("event") or "") == "incoming_message.context_missing_fields" for item in emitted)
 
 
+def test_handle_conscious_message_backfills_person_id_from_external_user_id(monkeypatch) -> None:
+    action = HandleConsciousMessageAction()
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        "alphonse.agent.actions.handle_conscious_message.resolve_session_user_id",
+        lambda **_: "u-1",
+    )
+    monkeypatch.setattr(
+        "alphonse.agent.actions.handle_conscious_message.resolve_session_timezone",
+        lambda *_: "UTC",
+    )
+    monkeypatch.setattr(
+        "alphonse.agent.actions.handle_conscious_message.resolve_day_session",
+        lambda **_: {"session_id": "s-1"},
+    )
+    monkeypatch.setattr(
+        "alphonse.agent.actions.handle_conscious_message.enqueue_pdca_slice",
+        lambda **kwargs: captured.update(kwargs) or "task-backfill-1",
+    )
+    monkeypatch.setattr(
+        "alphonse.agent.actions.handle_conscious_message.is_pdca_slicing_enabled",
+        lambda: True,
+    )
+    monkeypatch.setattr(
+        "alphonse.agent.actions.handle_conscious_message.emit_presence_phase_changed",
+        lambda **_: None,
+    )
+    monkeypatch.setattr(
+        "alphonse.agent.actions.handle_conscious_message.identity.resolve_service_id",
+        lambda service_key: 1 if str(service_key or "").strip() == "telegram" else None,
+    )
+    monkeypatch.setattr(
+        "alphonse.agent.actions.handle_conscious_message.identity.resolve_user_id",
+        lambda **kwargs: "owner-1" if kwargs == {"service_id": 1, "service_user_id": "u-ext"} else None,
+    )
+
+    envelope = build_incoming_message_envelope(
+        message_id="m-backfill-1",
+        channel_type="telegram",
+        channel_target="123",
+        provider="telegram",
+        text="Hello",
+        correlation_id="c-backfill-1",
+        actor_external_user_id="u-ext",
+    )
+    result = action.execute({"signal": Signal(type="sense.telegram.message.user.received", payload=envelope), "ctx": Bus()})
+    assert result.payload.get("task_id") == "task-backfill-1"
+    seeded_state = captured.get("state")
+    assert isinstance(seeded_state, dict)
+    assert seeded_state.get("actor_person_id") == "owner-1"
+    assert seeded_state.get("incoming_user_id") == "u-ext"
+
+
 def test_handle_conscious_message_cli_seeded_identity_has_no_missing_actor_context(monkeypatch, tmp_path) -> None:
     db_path = tmp_path / "nerve-db"
     monkeypatch.setenv("NERVE_DB_PATH", str(db_path))
