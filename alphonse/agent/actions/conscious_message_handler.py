@@ -87,9 +87,9 @@ class IncomingMessageEnvelope:
                 **dict(self.metadata),
                 "envelope": self.to_dict(),
             },
-            "user_id": str(self.actor.get("external_user_id") or "").strip() or None,
+            "user_id": str(self.actor.get("user_id") or "").strip() or None,
+            "external_user_id": str(self.actor.get("external_user_id") or "").strip() or None,
             "user_name": str(self.actor.get("display_name") or "").strip() or None,
-            "person_id": str(self.actor.get("person_id") or "").strip() or None,
             "provider": str(self.channel.get("provider") or "").strip() or channel_type,
             "origin": str(self.channel.get("provider") or "").strip() or channel_type,
         }
@@ -129,7 +129,7 @@ def build_incoming_message_envelope(
     correlation_id: str | None = None,
     actor_external_user_id: str | None = None,
     actor_display_name: str | None = None,
-    actor_person_id: str | None = None,
+    actor_user_id: str | None = None,
     attachments: list[dict[str, Any]] | None = None,
     locale: str | None = None,
     timezone_name: str | None = None,
@@ -152,7 +152,7 @@ def build_incoming_message_envelope(
         "actor": {
             "external_user_id": str(actor_external_user_id or "").strip() or None,
             "display_name": str(actor_display_name or "").strip() or None,
-            "person_id": str(actor_person_id or "").strip() or None,
+            "user_id": str(actor_user_id or "").strip() or None,
         },
         "content": {
             "text": str(text or "").strip(),
