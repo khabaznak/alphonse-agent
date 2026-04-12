@@ -311,7 +311,7 @@ def _log_check_result(
         verdict_kind=verdict,
         case_type=str(judge_result.get("case_type") or ""),
         confidence=float(judge_result.get("confidence") or 0.0),
-        route="next_step_node" if verdict == "plan" else "respond_node",
+        route="next_step_node" if verdict == "plan" else "end",
     )
 
 
@@ -421,7 +421,7 @@ def _parse_judge_verdict(*, raw: str, case_type: str) -> dict[str, Any] | None:
 def post_check_route(verdict: str) -> str:
     if verdict == "plan":
         return "next_step_node"
-    return "respond_node"
+    return "end"
 
 
 def _append_consumed_inputs_to_task_record(

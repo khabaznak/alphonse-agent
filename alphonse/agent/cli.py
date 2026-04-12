@@ -670,7 +670,7 @@ def _command_say(args: argparse.Namespace, db_path: Path) -> None:
         occurred_at=occurred_at,
         correlation_id=correlation_id,
         actor_external_user_id=str(args.chat_id or "").strip() or None,
-        actor_person_id=args.person_id,
+        actor_user_id=args.person_id,
         metadata={"source": "cli.say"},
     )
     if args.planning_mode:

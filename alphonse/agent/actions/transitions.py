@@ -81,8 +81,6 @@ def phase_from_transition_event(event: dict[str, Any]) -> str | None:
     if stage == "start":
         if node in {"next_step_node", "act_node", "apology_node"}:
             return "thinking"
-        if node == "respond_node":
-            return "executing"
     if stage == "done" and has_pending:
         return "waiting_user"
     return None

@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-import alphonse.agent.cortex.nodes.respond as respond_module
+import alphonse.agent.cortex.task_mode.act_node as act_node_module
 import alphonse.agent.cortex.task_mode.execute_step as execute_step_module
 import alphonse.agent.cortex.task_mode.pdca as pdca_module
 from alphonse.agent.cognition.providers.contracts import require_text_completion_provider
@@ -12,7 +12,6 @@ from alphonse.agent.cognition.providers.contracts import require_tool_calling_pr
 from alphonse.agent.cortex.graph import act_node_state_adapter
 from alphonse.agent.cortex.graph import check_node_state_adapter
 from alphonse.agent.cortex.graph import execute_step_state_adapter
-from alphonse.agent.cortex.nodes.respond import respond_finalize_node
 from alphonse.agent.cortex.task_mode.pdca import build_next_step_node
 from alphonse.agent.cortex.task_mode.pdca import route_after_act
 from alphonse.agent.cortex.task_mode.pdca import route_after_next_step
@@ -45,6 +44,11 @@ def _patch_pdca_providers(monkeypatch: pytest.MonkeyPatch):
         pdca_module,
         "build_tool_calling_provider",
         lambda: require_tool_calling_provider(_CURRENT_TEST_PROVIDER, source="tests.test_task_mode_pdca"),
+    )
+    monkeypatch.setattr(
+        act_node_module,
+        "build_text_completion_provider",
+        lambda: require_text_completion_provider(_CURRENT_TEST_PROVIDER, source="tests.test_task_mode_pdca"),
     )
     yield
     _CURRENT_TEST_PROVIDER = None
@@ -415,33 +419,74 @@ def test_non_canonical_top_level_planner_output_fails_in_do_node() -> None:
         execute_step_state_adapter({"task_record": task_record, "planner_output": {"kind": "call_tool"}})
 
 
-def test_respond_finalize_done_uses_task_record() -> None:
-    state = {
-        "task_record": _task_record(goal="list jobs", status="done"),
-        "response_text": None,
-        "channel_type": "telegram",
-        "channel_target": "123",
-        "correlation_id": "corr-respond-done",
+def test_act_success_routes_to_end_with_outcome_response_text() -> None:
+    task_record = _task_record(goal="list jobs", status="done")
+    task_record.outcome = {
+        "kind": "task_completed",
+        "summary": "I found your jobs.",
+        "final_text": "Here are your jobs.",
     }
-    rendered = respond_finalize_node(
-        state,
-        emit_transition_event=lambda *_args, **_kwargs: None,
-    )
-    assert isinstance(rendered, dict)
+    state = {
+        "task_record": task_record,
+        "check_result": {"verdict": "mission_success"},
+    }
+    rendered = act_node_state_adapter(state)
+    assert route_after_act(rendered["act_result"]) == "end"
+    assert rendered["act_result"]["response_text"] == "Here are your jobs."
+    assert rendered["response_text"] == "Here are your jobs."
 
 
-def test_respond_finalize_failed_suppresses_after_public_send() -> None:
+def test_act_success_suppresses_response_after_public_send() -> None:
     task_record = _task_record(
-        status="failed",
+        goal="say hello",
+        status="done",
         tool_history=[
-            'step_1 communication.send_message args={"To":"123"} output={"visibility":"public"} exception=null'
+            'step_1 communication.send_message args={"To":"123"} output={"message_id":"m-1"} exception=null'
         ],
     )
-    rendered = respond_finalize_node(
-        {"task_record": task_record, "correlation_id": "corr-respond-failed"},
-        emit_transition_event=lambda *_args, **_kwargs: None,
+    task_record.outcome = {
+        "kind": "task_completed",
+        "summary": "Message sent.",
+        "final_text": "Hello!",
+    }
+    rendered = act_node_state_adapter(
+        {
+            "task_record": task_record,
+            "check_result": {"verdict": "mission_success"},
+        }
     )
-    assert not rendered.get("response_text")
+    assert route_after_act(rendered["act_result"]) == "end"
+    assert rendered["act_result"]["response_text"] is None
+    assert "response_text" not in rendered
+
+
+def test_act_failed_routes_to_end_with_llm_failure_summary() -> None:
+    _QueuedLlm(["I could not complete the task because the scheduler service failed."])
+    task_record = _task_record(status="failed", goal="schedule a reminder")
+    task_record.outcome = {"kind": "task_failed", "summary": "scheduler exploded"}
+    state = {
+        "task_record": task_record,
+        "check_result": {"verdict": "mission_failed"},
+    }
+    rendered = act_node_state_adapter(state)
+    assert route_after_act(rendered["act_result"]) == "end"
+    assert rendered["response_text"] == "I could not complete the task because the scheduler service failed."
+    assert len(rendered["response_text"]) <= 256
+    assert task_record.outcome["final_text"] == rendered["response_text"]
+
+
+def test_act_failed_falls_back_when_llm_summary_fails() -> None:
+    _ExplodingLlm()
+    task_record = _task_record(status="failed", goal="schedule a reminder")
+    task_record.outcome = {"kind": "task_failed", "summary": "scheduler exploded"}
+    state = {
+        "task_record": task_record,
+        "check_result": {"verdict": "mission_failed"},
+    }
+    rendered = act_node_state_adapter(state)
+    assert route_after_act(rendered["act_result"]) == "end"
+    assert rendered["response_text"] == "scheduler exploded"
+    assert len(rendered["response_text"]) <= 256
 
 
 def test_check_act_plan_route_stays_native() -> None:

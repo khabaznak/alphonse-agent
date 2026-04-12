@@ -248,4 +248,4 @@ def test_check_consumes_task_inputs_and_persists_snapshot(tmp_path, monkeypatch)
 
 def test_route_after_act_prefers_check_result_verdict() -> None:
     assert route_after_act({"check_result": {"verdict": "plan"}}) == "next_step_node"
-    assert route_after_act({"check_result": {"verdict": "mission_success"}}) == "respond_node"
+    assert route_after_act({"check_result": {"verdict": "mission_success"}}) == "end"

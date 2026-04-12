@@ -58,7 +58,7 @@ def build_cli_user_message_signal(
         correlation_id=normalized.correlation_id,
         actor_external_user_id=identity["external_user_id"],
         actor_display_name=identity["display_name"],
-        actor_person_id=identity["person_id"],
+        actor_user_id=identity["person_id"],
         metadata={
             "normalized_metadata": normalized.metadata,
             "service_key": "cli",

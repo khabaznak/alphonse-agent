@@ -1,11 +1,83 @@
 from __future__ import annotations
 
+from alphonse.agent.actions.conscious_message_handler import IncomingMessageEnvelope
 from alphonse.agent.actions.conscious_message_handler import build_incoming_message_envelope
 from alphonse.agent.actions.handle_conscious_message import HandleConsciousMessageAction
 from alphonse.agent.nervous_system.migrate import apply_schema
 from alphonse.agent.nervous_system.seed import apply_seed
 from alphonse.agent.nervous_system.senses.bus import Bus, Signal
 from alphonse.agent.nervous_system.senses.cli import build_cli_user_message_signal
+
+
+def test_from_payload_resolves_actor_user_id_from_external_user_id(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "alphonse.agent.actions.conscious_message_handler.identity.resolve_service_id",
+        lambda service_key: 1 if str(service_key or "").strip() == "telegram" else None,
+    )
+    monkeypatch.setattr(
+        "alphonse.agent.actions.conscious_message_handler.identity.resolve_user_id",
+        lambda **kwargs: "owner-1" if kwargs == {"service_id": 1, "service_user_id": "u-ext"} else None,
+    )
+
+    raw_payload = build_incoming_message_envelope(
+        message_id="m-env-1",
+        channel_type="telegram",
+        channel_target="123",
+        provider="telegram",
+        text="Hello",
+        correlation_id="c-env-1",
+        actor_external_user_id="u-ext",
+    )
+    envelope = IncomingMessageEnvelope.from_payload(raw_payload)
+
+    assert envelope.actor == {
+        "external_user_id": "u-ext",
+        "display_name": None,
+        "user_id": "owner-1",
+    }
+    runtime_payload = envelope.runtime_payload()
+    assert runtime_payload["user_id"] == "owner-1"
+    assert runtime_payload["external_user_id"] == "u-ext"
+
+
+def test_from_payload_preserves_actor_user_id() -> None:
+    raw_payload = build_incoming_message_envelope(
+        message_id="m-env-2",
+        channel_type="telegram",
+        channel_target="123",
+        provider="telegram",
+        text="Hello",
+        correlation_id="c-env-2",
+        actor_external_user_id="u-ext",
+        actor_user_id="owner-1",
+    )
+
+    envelope = IncomingMessageEnvelope.from_payload(raw_payload)
+
+    assert envelope.actor == {
+        "external_user_id": "u-ext",
+        "display_name": None,
+        "user_id": "owner-1",
+    }
+
+
+def test_from_payload_returns_stable_actor_keys_when_missing() -> None:
+    raw_payload = build_incoming_message_envelope(
+        message_id="m-env-3",
+        channel_type="telegram",
+        channel_target="123",
+        provider="telegram",
+        text="Hello",
+        correlation_id="c-env-3",
+    )
+
+    envelope = IncomingMessageEnvelope.from_payload(raw_payload)
+
+    assert envelope.actor == {
+        "external_user_id": None,
+        "display_name": None,
+        "user_id": None,
+    }
 
 
 def test_handle_conscious_message_enqueues_pdca_slice(monkeypatch) -> None:
@@ -56,9 +128,9 @@ def test_handle_conscious_message_enqueues_pdca_slice(monkeypatch) -> None:
     assert result.payload.get("task_id") == "task-123"
     assert called.get("session_user_id") == "u-1"
     assert presence.get("phase") == "acknowledged"
-    seeded_state = called.get("state")
-    assert isinstance(seeded_state, dict)
-    assert seeded_state.get("message_id") == "m-1"
+    enqueued_envelope = called.get("envelope")
+    assert isinstance(enqueued_envelope, IncomingMessageEnvelope)
+    assert enqueued_envelope.message_id == "m-1"
 
 
 def test_handle_conscious_message_does_not_parse_control_intent(monkeypatch) -> None:
@@ -100,7 +172,9 @@ def test_handle_conscious_message_does_not_parse_control_intent(monkeypatch) -> 
     )
     result = action.execute({"signal": Signal(type="sense.telegram.message.user.received", payload=envelope), "ctx": Bus()})
     assert result.payload.get("task_id") == "task-cancel-test"
-    assert captured.get("payload", {}).get("text") == "Please cancel task"
+    enqueued_envelope = captured.get("envelope")
+    assert isinstance(enqueued_envelope, IncomingMessageEnvelope)
+    assert enqueued_envelope.content.get("text") == "Please cancel task"
 
 
 def test_handle_conscious_message_fail_fast_when_slicing_disabled(monkeypatch) -> None:
@@ -134,55 +208,6 @@ def test_handle_conscious_message_fail_fast_when_slicing_disabled(monkeypatch) -
     assert called == {}
 
 
-def test_handle_conscious_message_logs_missing_actor_context(monkeypatch) -> None:
-    action = HandleConsciousMessageAction()
-    emitted: list[dict[str, object]] = []
-
-    class _FakeLog:
-        def emit(self, **kwargs: object) -> None:
-            emitted.append(dict(kwargs))
-
-    monkeypatch.setattr(
-        "alphonse.agent.actions.handle_conscious_message.resolve_session_user_id",
-        lambda **_: "u-1",
-    )
-    monkeypatch.setattr(
-        "alphonse.agent.actions.handle_conscious_message.resolve_session_timezone",
-        lambda *_: "UTC",
-    )
-    monkeypatch.setattr(
-        "alphonse.agent.actions.handle_conscious_message.resolve_day_session",
-        lambda **_: {"session_id": "s-1"},
-    )
-    monkeypatch.setattr(
-        "alphonse.agent.actions.handle_conscious_message.enqueue_pdca_slice",
-        lambda **_: "task-ctx-1",
-    )
-    monkeypatch.setattr(
-        "alphonse.agent.actions.handle_conscious_message.is_pdca_slicing_enabled",
-        lambda: True,
-    )
-    monkeypatch.setattr(
-        "alphonse.agent.actions.handle_conscious_message.emit_presence_phase_changed",
-        lambda **_: None,
-    )
-    monkeypatch.setattr(
-        "alphonse.agent.actions.handle_conscious_message._LOG",
-        _FakeLog(),
-    )
-
-    envelope = build_incoming_message_envelope(
-        message_id="m-ctx-1",
-        channel_type="telegram",
-        channel_target="123",
-        provider="telegram",
-        text="Hello",
-        correlation_id="c-ctx-1",
-    )
-    _ = action.execute({"signal": Signal(type="sense.telegram.message.user.received", payload=envelope), "ctx": Bus()})
-    assert any(str(item.get("event") or "") == "incoming_message.context_missing_fields" for item in emitted)
-
-
 def test_handle_conscious_message_backfills_person_id_from_external_user_id(monkeypatch) -> None:
     action = HandleConsciousMessageAction()
     captured: dict[str, object] = {}
@@ -212,11 +237,11 @@ def test_handle_conscious_message_backfills_person_id_from_external_user_id(monk
         lambda **_: None,
     )
     monkeypatch.setattr(
-        "alphonse.agent.actions.handle_conscious_message.identity.resolve_service_id",
+        "alphonse.agent.actions.conscious_message_handler.identity.resolve_service_id",
         lambda service_key: 1 if str(service_key or "").strip() == "telegram" else None,
     )
     monkeypatch.setattr(
-        "alphonse.agent.actions.handle_conscious_message.identity.resolve_user_id",
+        "alphonse.agent.actions.conscious_message_handler.identity.resolve_user_id",
         lambda **kwargs: "owner-1" if kwargs == {"service_id": 1, "service_user_id": "u-ext"} else None,
     )
 
@@ -231,10 +256,10 @@ def test_handle_conscious_message_backfills_person_id_from_external_user_id(monk
     )
     result = action.execute({"signal": Signal(type="sense.telegram.message.user.received", payload=envelope), "ctx": Bus()})
     assert result.payload.get("task_id") == "task-backfill-1"
-    seeded_state = captured.get("state")
-    assert isinstance(seeded_state, dict)
-    assert seeded_state.get("actor_person_id") == "owner-1"
-    assert seeded_state.get("incoming_user_id") == "u-ext"
+    enqueued_envelope = captured.get("envelope")
+    assert isinstance(enqueued_envelope, IncomingMessageEnvelope)
+    assert enqueued_envelope.actor.get("user_id") == "owner-1"
+    assert enqueued_envelope.actor.get("external_user_id") == "u-ext"
 
 
 def test_handle_conscious_message_cli_seeded_identity_has_no_missing_actor_context(monkeypatch, tmp_path) -> None:
@@ -244,12 +269,6 @@ def test_handle_conscious_message_cli_seeded_identity_has_no_missing_actor_conte
     apply_seed(db_path)
 
     action = HandleConsciousMessageAction()
-    emitted: list[dict[str, object]] = []
-
-    class _FakeLog:
-        def emit(self, **kwargs: object) -> None:
-            emitted.append(dict(kwargs))
-
     monkeypatch.setattr(
         "alphonse.agent.actions.handle_conscious_message.resolve_session_user_id",
         lambda **_: "owner-1",
@@ -274,10 +293,6 @@ def test_handle_conscious_message_cli_seeded_identity_has_no_missing_actor_conte
         "alphonse.agent.actions.handle_conscious_message.emit_presence_phase_changed",
         lambda **_: None,
     )
-    monkeypatch.setattr(
-        "alphonse.agent.actions.handle_conscious_message._LOG",
-        _FakeLog(),
-    )
 
     signal = build_cli_user_message_signal(
         text="Hi Alphonse!",
@@ -285,7 +300,6 @@ def test_handle_conscious_message_cli_seeded_identity_has_no_missing_actor_conte
         metadata={"source": "test.cli"},
     )
     _ = action.execute({"signal": signal, "ctx": Bus()})
-    assert not any(str(item.get("event") or "") == "incoming_message.context_missing_fields" for item in emitted)
 
 
 def test_handle_conscious_message_writes_through_user_message_to_day_session(monkeypatch) -> None:
@@ -446,6 +460,6 @@ def test_handle_conscious_message_transcribes_telegram_voice_when_text_empty(mon
     )
     result = action.execute({"signal": Signal(type="sense.telegram.message.user.received", payload=envelope), "ctx": Bus()})
     assert result.payload.get("task_id") == "task-transcribed"
-    enqueued_payload = captured.get("payload")
-    assert isinstance(enqueued_payload, dict)
-    assert str(enqueued_payload.get("text") or "") == "transcript for voice-1"
+    enqueued_envelope = captured.get("envelope")
+    assert isinstance(enqueued_envelope, IncomingMessageEnvelope)
+    assert str(enqueued_envelope.content.get("text") or "") == "transcript for voice-1"

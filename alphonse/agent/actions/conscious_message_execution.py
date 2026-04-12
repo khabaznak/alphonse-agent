@@ -114,12 +114,9 @@ class ConsciousMessageExecutionHandler:
         if self._deps.pdca_slicing_enabled():
             task_id = self._deps.enqueue_pdca_slice(
                 context=context,
-                incoming=incoming,
-                state=state,
-                session_key=session_key,
                 session_user_id=session_user_id,
                 day_session=day_session,
-                payload=payload,
+                envelope=envelope,
                 correlation_id=correlation_id,
             )
             updated_day_session = self._deps.build_next_session_state_fn(
@@ -302,7 +299,7 @@ def _build_ingress_state(
     payload: dict[str, Any],
     envelope: IncomingMessageEnvelope,
 ) -> dict[str, Any]:
-    incoming_user_id = str(payload.get("user_id") or payload.get("from_user") or "").strip() or None
+    incoming_user_id = str(payload.get("external_user_id") or payload.get("from_user") or "").strip() or None
     incoming_user_name = str(payload.get("user_name") or payload.get("from_user_name") or "").strip() or None
     locale = (
         str(stored_state.get("locale") or "").strip()

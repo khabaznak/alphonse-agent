@@ -183,9 +183,12 @@ def test_mvp_eval_suite(monkeypatch) -> None:
         started = time.perf_counter()
         result = runner.invoke(
             {
-                "chat_id": "eval-chat",
-                "channel_type": "telegram",
-                "channel_target": "eval-chat",
+                "task_record": TaskRecord(
+                    user_id="eval-user",
+                    correlation_id="corr-eval",
+                    goal=scenario.message,
+                    recent_conversation_md=f"- User: {scenario.message}",
+                ),
                 "last_user_message": scenario.message,
                 "_llm_client": llm,
             }

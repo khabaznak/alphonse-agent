@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import os
 from typing import Any, TypedDict
 
@@ -9,7 +8,6 @@ from langgraph.graph import END, StateGraph
 from alphonse.agent.cognition.providers.contracts import TextCompletionProvider
 from alphonse.agent.cognition.providers.contracts import require_text_completion_provider
 from alphonse.agent.cognition.plans import CortexPlan, CortexResult
-from alphonse.agent.cortex.nodes.respond import respond_finalize_node
 from alphonse.agent.cortex.task_mode.pdca import act_node
 from alphonse.agent.cortex.task_mode.pdca import build_next_step_node
 from alphonse.agent.cortex.task_mode.pdca import check_node
@@ -18,10 +16,8 @@ from alphonse.agent.cortex.task_mode.pdca import route_after_act
 from alphonse.agent.cortex.task_mode.pdca import route_after_next_step
 from alphonse.agent.cortex.task_mode.plan import PlannerOutput
 from alphonse.agent.cortex.task_mode.task_record import TaskRecord
-from alphonse.agent.cortex.transitions import emit_transition_event
 from alphonse.agent.cortex.utils import build_cognition_state, build_meta
 from alphonse.agent.nervous_system.pdca_queue_store import append_pdca_event
-from alphonse.agent.session.day_state import render_recent_conversation_block
 from alphonse.agent.tools.registry import ToolRegistry, build_default_tool_registry
 
 
@@ -61,13 +57,6 @@ class CortexGraph:
         graph.add_node("act_node", act_node_state_adapter)
         graph.add_node("next_step_node", next_step_state_adapter(tool_registry=self._tool_registry))
         graph.add_node("execute_step_node", execute_step_state_adapter)
-        graph.add_node(
-            "respond_node",
-            lambda state: respond_finalize_node(
-                state,
-                emit_transition_event=emit_transition_event,
-            ),
-        )
 
         graph.set_entry_point("task_record_entry_node")
         graph.add_edge("task_record_entry_node", "check_node")
@@ -75,7 +64,7 @@ class CortexGraph:
         graph.add_conditional_edges(
             "act_node",
             _route_after_act_state,
-            {"next_step_node": "next_step_node", "respond_node": "respond_node"},
+            {"next_step_node": "next_step_node", "end": END},
         )
         graph.add_conditional_edges(
             "next_step_node",
@@ -83,7 +72,6 @@ class CortexGraph:
             {"execute_step_node": "execute_step_node"},
         )
         graph.add_edge("execute_step_node", "check_node")
-        graph.add_edge("respond_node", END)
         return graph
 
     def invoke(
@@ -152,11 +140,16 @@ def act_node_state_adapter(state: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("act_node_state_adapter.missing_task_record")
     if not isinstance(check_result, dict):
         raise ValueError("act_node_state_adapter.missing_check_result")
-    verdict = str(check_result.get("verdict") or "").strip().lower()
-    return {
+    _ = check_result
+    result = act_node(task_record)
+    out = {
         "task_record": task_record,
-        "act_result": act_node(verdict, task_record),
+        "act_result": result,
     }
+    response_text = str(result.get("response_text") or "").strip()
+    if response_text:
+        out["response_text"] = response_text
+    return out
 
 
 def next_step_state_adapter(*, tool_registry: ToolRegistry | None = None):
@@ -201,6 +194,8 @@ def _select_check_provenance(state: dict[str, Any]) -> str:
     if provenance in {"entry", "do", "slice_resume"}:
         return provenance
     task_record = state.get("task_record")
+    if isinstance(task_record, dict):
+        task_record = TaskRecord.from_dict(task_record)
     if isinstance(task_record, TaskRecord) and task_record.task_id:
         return "slice_resume"
     return "entry"
@@ -208,99 +203,11 @@ def _select_check_provenance(state: dict[str, Any]) -> str:
 
 def _hydrate_task_record_from_state(state: dict[str, Any]) -> TaskRecord:
     existing = state.get("task_record")
-    record = existing if isinstance(existing, TaskRecord) else TaskRecord()
-    record.task_id = _first_non_empty(record.task_id, state.get("task_id"))
-    record.user_id = _first_non_empty(record.user_id, state.get("actor_person_id"))
-    record.set_correlation_id(_first_non_empty(record.correlation_id, state.get("correlation_id")) or "")
-    if not str(record.goal or "").strip():
-        record.goal = _resolve_goal_text(state)
-    if not str(record.status or "").strip():
-        record.status = "running"
-    record.set_recent_conversation_md(_resolve_recent_conversation_md(state=state, task_record=record))
-    _append_runtime_facts(record, state)
-    return record
-
-
-def _resolve_recent_conversation_md(*, state: dict[str, Any], task_record: TaskRecord) -> str:
-    existing = str(task_record.recent_conversation_md or "").strip()
-    if existing and existing != "- (none)":
+    if isinstance(existing, TaskRecord):
         return existing
-    recent = str(state.get("recent_conversation_block") or "").strip()
-    if recent:
-        return recent
-    session_state = state.get("session_state") if isinstance(state.get("session_state"), dict) else None
-    if session_state:
-        rendered = render_recent_conversation_block(session_state)
-        if rendered:
-            return rendered
-    last_user_message = str(state.get("last_user_message") or "").strip()
-    if last_user_message:
-        return f"- User: {last_user_message}"
-    return "- (none)"
-
-
-def _resolve_goal_text(state: dict[str, Any]) -> str:
-    incoming = state.get("incoming_raw_message")
-    if isinstance(incoming, dict):
-        extracted = _extract_goal_from_payload(incoming)
-        if extracted:
-            return extracted
-    return _extract_goal_from_packed_message(str(state.get("last_user_message") or ""))
-
-
-def _extract_goal_from_payload(payload: dict[str, Any]) -> str:
-    direct = str(payload.get("text") or "").strip()
-    if direct:
-        return direct
-    message = payload.get("message") if isinstance(payload.get("message"), dict) else {}
-    nested = str(message.get("text") or "").strip()
-    if nested:
-        return nested
-    provider_event = payload.get("provider_event") if isinstance(payload.get("provider_event"), dict) else {}
-    provider_message = provider_event.get("message") if isinstance(provider_event.get("message"), dict) else {}
-    provider_text = str(provider_message.get("text") or "").strip()
-    if provider_text:
-        return provider_text
-    return ""
-
-
-def _extract_goal_from_packed_message(last_user_message: str) -> str:
-    rendered = str(last_user_message or "").strip()
-    if not rendered:
-        return ""
-    marker = "```json"
-    if marker in rendered:
-        after = rendered.split(marker, 1)[1]
-        json_payload = after.split("```", 1)[0].strip()
-        try:
-            parsed = json.loads(json_payload)
-        except Exception:
-            parsed = None
-        if isinstance(parsed, dict):
-            extracted = _extract_goal_from_payload(parsed)
-            if extracted:
-                return extracted
-    for line in rendered.splitlines():
-        if line.lower().startswith("- text:"):
-            candidate = line.split(":", 1)[1].strip()
-            if candidate:
-                return candidate
-    return rendered[:240]
-
-
-def _append_runtime_facts(record: TaskRecord, state: dict[str, Any]) -> None:
-    for key in (
-        "channel_type",
-        "channel_target",
-        "locale",
-        "timezone",
-        "message_id",
-        "conversation_key",
-        "actor_person_id",
-    ):
-        value = _first_non_empty(state.get(key))
-        if value and f"- {key}: " not in record.get_facts_md():
-            record.append_fact(f"{key}: {value}")
+    elif isinstance(existing, dict):
+        return TaskRecord.from_dict(existing)
+    raise ValueError("pdca_graph.missing_task_record")
 
 
 def _append_check_criteria_snapshot_event(task_record: TaskRecord, judge_result: Any) -> None:
@@ -335,13 +242,6 @@ def _append_check_criteria_snapshot_event(task_record: TaskRecord, judge_result:
     except Exception:
         return
 
-
-def _first_non_empty(*values: Any) -> str | None:
-    for value in values:
-        rendered = str(value or "").strip()
-        if rendered:
-            return rendered
-    return None
 
 
 def _resolve_recursion_limit() -> int:

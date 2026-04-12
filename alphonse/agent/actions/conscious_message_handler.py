@@ -4,6 +4,13 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
+from alphonse.agent import identity
+
+_ACTOR_FIELD_KEY = "actor"
+_ACTOR_FIELD_KEY_EXTERNAL_USER_ID = "external_user_id"
+_ACTOR_FIELD_KEY_DISPLAY_NAME = "display_name"
+_ACTOR_FIELD_KEY_USER_ID = "user_id"
+
 
 @dataclass(frozen=True)
 class IncomingMessageEnvelope:
@@ -27,7 +34,7 @@ class IncomingMessageEnvelope:
         occurred_at = str(payload.get("occurred_at") or "").strip()
         channel = payload.get("channel") if isinstance(payload.get("channel"), dict) else {}
         content = payload.get("content") if isinstance(payload.get("content"), dict) else {}
-        actor = payload.get("actor") if isinstance(payload.get("actor"), dict) else {}
+        actor = payload.get(_ACTOR_FIELD_KEY) if isinstance(payload.get(_ACTOR_FIELD_KEY), dict) else {}
         context = payload.get("context") if isinstance(payload.get("context"), dict) else {}
         controls = payload.get("controls") if isinstance(payload.get("controls"), dict) else {}
         metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
@@ -52,19 +59,25 @@ class IncomingMessageEnvelope:
             raise ValueError("missing channel.type")
         if not channel_target:
             raise ValueError("missing channel.target")
+        provider = str(channel.get("provider") or "").strip() or channel_type
         text = str(content.get("text") or "").strip()
         attachments_raw = content.get("attachments") if isinstance(content.get("attachments"), list) else []
         attachments = [dict(item) for item in attachments_raw if isinstance(item, dict)]
         if not text and not attachments:
             raise ValueError("content.text is required unless attachments are present")
+        normalized_actor = _normalize_actor(
+            actor=actor,
+            channel={"type": channel_type, "target": channel_target, "provider": provider},
+            metadata=metadata,
+        )
 
         return cls(
             schema_version=schema_version,
             message_id=message_id,
             occurred_at=occurred_at,
             correlation_id=correlation_id,
-            channel=dict(channel),
-            actor=dict(actor),
+            channel={**dict(channel), "type": channel_type, "target": channel_target, "provider": provider},
+            actor=normalized_actor,
             content={"text": text, "attachments": attachments},
             context=dict(context),
             controls=dict(controls),
@@ -107,6 +120,71 @@ class IncomingMessageEnvelope:
             "controls": dict(self.controls),
             "metadata": dict(self.metadata),
         }
+
+
+def _normalize_actor(
+    *,
+    actor: dict[str, Any],
+    channel: dict[str, Any],
+    metadata: dict[str, Any],
+) -> dict[str, str | None]:
+    external_user_id = _as_optional_str(actor.get(_ACTOR_FIELD_KEY_EXTERNAL_USER_ID))
+    display_name = _as_optional_str(actor.get(_ACTOR_FIELD_KEY_DISPLAY_NAME))
+    user_id = _normalize_actor_user_id(
+        actor_user_id=_as_optional_str(actor.get(_ACTOR_FIELD_KEY_USER_ID)),
+        external_user_id=external_user_id,
+        channel=channel,
+        metadata=metadata,
+    )
+    return {
+        _ACTOR_FIELD_KEY_EXTERNAL_USER_ID: external_user_id,
+        _ACTOR_FIELD_KEY_DISPLAY_NAME: display_name,
+        _ACTOR_FIELD_KEY_USER_ID: user_id,
+    }
+
+
+def _normalize_actor_user_id(
+    *,
+    actor_user_id: str | None,
+    external_user_id: str | None,
+    channel: dict[str, Any],
+    metadata: dict[str, Any],
+) -> str | None:
+    rendered_user_id = _as_optional_str(actor_user_id)
+    if rendered_user_id:
+        return rendered_user_id
+    rendered_external_user_id = _as_optional_str(external_user_id)
+    if not rendered_external_user_id:
+        return None
+    service_id = _resolve_actor_service_id(channel=channel, metadata=metadata)
+    if service_id is None:
+        return None
+    return identity.resolve_user_id(
+        service_id=service_id,
+        service_user_id=rendered_external_user_id,
+    )
+
+
+def _resolve_actor_service_id(
+    *,
+    channel: dict[str, Any],
+    metadata: dict[str, Any],
+) -> int | None:
+    for candidate in (
+        metadata.get("service_id"),
+        metadata.get("service_key"),
+        channel.get("provider"),
+        channel.get("type"),
+    ):
+        resolved = identity.resolve_service_id(_as_optional_str(candidate))
+        if resolved is not None:
+            return resolved
+    return None
+
+
+def _as_optional_str(value: object | None) -> str | None:
+    rendered = str(value or "").strip()
+    return rendered or None
 
 
 @dataclass(frozen=True)

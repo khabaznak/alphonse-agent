@@ -78,13 +78,12 @@ def route_after_check(check_result: Any) -> str:
     if verdict == "plan":
         return "next_step_node"
     if verdict in {"mission_success", "mission_failed"}:
-        return "respond_node"
+        return "end"
     raise ValueError("route_after_check.invalid_result: missing semantic check verdict")
 
 
-def act_node(verdict: str, task_record: TaskRecord) -> ActResult:
+def act_node(task_record: TaskRecord) -> ActResult:
     return act_node_impl(
-        verdict,
         task_record,
         logger=logger,
         log_task_event=log_task_event,
@@ -99,12 +98,12 @@ def route_after_act(act_result: Any) -> str:
         check_result = act_result.get("check_result")
         if isinstance(check_result, dict):
             verdict = str(check_result.get("verdict") or "").strip().lower()
-    if route in {"next_step_node", "respond_node"}:
+    if route in {"next_step_node", "end"}:
         return route
     if verdict == "plan":
         return "next_step_node"
     if verdict in {"mission_success", "mission_failed"}:
-        return "respond_node"
+        return "end"
     raise ValueError("route_after_act.invalid_result: missing semantic act route")
 
 

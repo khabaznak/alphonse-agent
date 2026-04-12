@@ -18,7 +18,7 @@ def build_incoming_context_from_envelope(
     address = str(channel.get("target") or "").strip()
     if not address:
         raise ValueError("invalid_envelope: missing channel.target")
-    person_id = str(actor.get("person_id") or "").strip() or None
+    person_id = str(actor.get("user_id") or "").strip() or None
     message_id = str(envelope.message_id or "").strip() or None
     update_id = str(metadata.get("provider_event_id") or "").strip() or None
     return IncomingContext(

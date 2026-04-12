@@ -3,7 +3,6 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
-from alphonse.agent import identity
 from alphonse.agent.actions.base import Action
 from alphonse.agent.actions.conscious_message_context_adapter import (
     build_incoming_context_from_envelope,
@@ -11,7 +10,7 @@ from alphonse.agent.actions.conscious_message_context_adapter import (
 from alphonse.agent.actions.conscious_message_handler import IncomingMessageEnvelope
 from alphonse.agent.actions.models import ActionResult
 from alphonse.agent.actions.presence_projection import emit_presence_phase_changed
-from alphonse.agent.actions.session_context import IncomingContext, build_session_key
+from alphonse.agent.actions.session_context import build_session_key
 from alphonse.agent.cognition.memory import append_conversation_transcript
 from alphonse.agent.observability.log_manager import get_component_logger
 from alphonse.agent.observability.log_manager import get_log_manager
@@ -26,7 +25,7 @@ from alphonse.agent.tools.telegram_files import TranscribeTelegramAudioTool
 
 logger = get_component_logger("actions.handle_conscious_message")
 _LOG = get_log_manager()
-
+_SIGNAL_CORRELATION_KEY = "correlation_id"
 
 class HandleConsciousMessageAction(Action):
     key = "handle_conscious_message"
@@ -38,7 +37,7 @@ class HandleConsciousMessageAction(Action):
             raise ValueError("invalid_envelope: payload must be an object")
 
         envelope = IncomingMessageEnvelope.from_payload(raw_payload)
-        correlation_id = envelope.correlation_id or getattr(signal, "correlation_id", None) or str(uuid.uuid4())
+        correlation_id = envelope.correlation_id or getattr(signal, _SIGNAL_CORRELATION_KEY, None) or str(uuid.uuid4())
         payload = envelope.runtime_payload()
         payload = _enrich_multimodal_payload(
             payload=payload,
@@ -46,30 +45,10 @@ class HandleConsciousMessageAction(Action):
             correlation_id=str(correlation_id),
             incoming_channel=str((envelope.channel or {}).get("type") or "").strip() or "telegram",
         )
-        missing_actor_fields = [
-            key
-            for key in ("external_user_id", "display_name", "person_id")
-            if not str((envelope.actor or {}).get(key) or "").strip()
-        ]
         incoming = build_incoming_context_from_envelope(
             envelope=envelope,
             correlation_id=str(correlation_id),
         )
-        if "person_id" in missing_actor_fields:
-            resolved_person_id = _resolve_person_id_from_external_user_id(
-                channel_type=incoming.channel_type,
-                external_user_id=str(payload.get("user_id") or "").strip() or None,
-            )
-            if resolved_person_id:
-                incoming = IncomingContext(
-                    channel_type=incoming.channel_type,
-                    address=incoming.address,
-                    person_id=resolved_person_id,
-                    correlation_id=incoming.correlation_id,
-                    update_id=incoming.update_id,
-                    message_id=incoming.message_id,
-                )
-                payload["person_id"] = resolved_person_id
         _LOG.emit(
             event="incoming_message.accepted",
             component="actions.handle_conscious_message",
@@ -81,18 +60,6 @@ class HandleConsciousMessageAction(Action):
                 "message_id": incoming.message_id,
             },
         )
-        if missing_actor_fields:
-            _LOG.emit(
-                event="incoming_message.context_missing_fields",
-                component="actions.handle_conscious_message",
-                correlation_id=str(correlation_id),
-                channel=incoming.channel_type,
-                user_id=incoming.person_id,
-                payload={
-                    "missing_fields": missing_actor_fields,
-                    "has_display_name": "display_name" not in missing_actor_fields,
-                },
-            )
         emit_presence_phase_changed(
             incoming=incoming,
             phase="acknowledged",
@@ -148,23 +115,9 @@ class HandleConsciousMessageAction(Action):
 
         task_id = enqueue_pdca_slice(
             context=context,
-            incoming=incoming,
-            state={
-                "conversation_key": session_key,
-                "chat_id": session_key,
-                "channel_type": incoming.channel_type,
-                "channel_target": incoming.address,
-                "actor_person_id": incoming.person_id,
-                "message_id": incoming.message_id,
-                "incoming_user_id": str(payload.get("user_id") or "").strip() or None,
-                "incoming_user_name": str(payload.get("user_name") or "").strip() or None,
-                "locale": envelope.context.get("locale"),
-                "timezone": envelope.context.get("timezone"),
-            },
-            session_key=session_key,
             session_user_id=session_user_id,
             day_session=day_session,
-            payload=payload,
+            envelope=envelope,
             correlation_id=str(correlation_id),
         )
         logger.info(
@@ -186,20 +139,6 @@ class HandleConsciousMessageAction(Action):
             payload={"task_id": task_id},
             urgency=None,
         )
-
-
-def _resolve_person_id_from_external_user_id(
-    *,
-    channel_type: str,
-    external_user_id: str | None,
-) -> str | None:
-    rendered_external = str(external_user_id or "").strip()
-    if not rendered_external:
-        return None
-    service_id = identity.resolve_service_id(str(channel_type or "").strip() or None)
-    if service_id is None:
-        return None
-    return identity.resolve_user_id(service_id=service_id, service_user_id=rendered_external)
 
 
 def _write_through_user_message(
@@ -277,6 +216,7 @@ def _enrich_multimodal_payload(
     if transcript:
         payload["text"] = transcript
         content["text"] = transcript
+        envelope.content["text"] = transcript
     payload["content"] = content
     return payload
 

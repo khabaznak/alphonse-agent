@@ -244,7 +244,7 @@ def agent_message(
         correlation_id=correlation_id,
         actor_external_user_id=_as_optional_str(payload.get("user_id")),
         actor_display_name=_as_optional_str(payload.get("user_name")),
-        actor_person_id=_as_optional_str(payload.get("person_id")),
+        actor_user_id=_as_optional_str(payload.get("user_id") or payload.get("person_id")),
         controls=controls,
         metadata={
             "args": payload.get("args") or {},

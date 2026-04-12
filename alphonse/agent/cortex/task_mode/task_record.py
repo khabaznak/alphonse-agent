@@ -19,6 +19,24 @@ class TaskRecord:
     status: str = "running"
     outcome: dict[str, Any] | None = None
 
+    @classmethod
+    def from_dict(cls, value: dict[str, Any]) -> "TaskRecord":
+        outcome = value.get("outcome")
+        return cls(
+            task_id=str(value.get("task_id") or "").strip() or None,
+            user_id=str(value.get("user_id") or "").strip() or None,
+            correlation_id=str(value.get("correlation_id") or "").strip(),
+            goal=str(value.get("goal") or "").strip(),
+            facts_md=str(value.get("facts_md") or "").strip() or "- (none)",
+            recent_conversation_md=str(value.get("recent_conversation_md") or "").strip() or "- (none)",
+            plan_md=str(value.get("plan_md") or "").strip() or "- (none)",
+            acceptance_criteria_md=str(value.get("acceptance_criteria_md") or "").strip() or "- (none)",
+            memory_facts_md=str(value.get("memory_facts_md") or "").strip() or "- (none)",
+            tool_call_history_md=str(value.get("tool_call_history_md") or "").strip() or "- (none)",
+            status=str(value.get("status") or "").strip() or "running",
+            outcome=dict(outcome) if isinstance(outcome, dict) else None,
+        )
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "task_id": self.task_id,
