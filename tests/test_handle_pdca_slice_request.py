@@ -1037,6 +1037,86 @@ def test_handle_pdca_slice_request_sanitizes_stale_session_pdca_state_for_new_ta
     assert "pending_interaction" in removed_keys
 
 
+def test_handle_pdca_slice_request_prefers_seeded_task_record_over_stale_conversation_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db_path = tmp_path / "nerve-db"
+    monkeypatch.setenv("NERVE_DB_PATH", str(db_path))
+    monkeypatch.setenv("ALPHONSE_PDCA_QUEUE_DISPATCH_COOLDOWN_SECONDS", "10")
+    apply_schema(db_path)
+
+    task_id = upsert_pdca_task(
+        {
+            "owner_id": "owner-1",
+            "conversation_key": "telegram:8553589429",
+            "status": "queued",
+            "metadata": {
+                "pending_user_text": "Hi Alphonse",
+                "last_user_channel": "telegram",
+                "last_user_target": "8553589429",
+                "state": {
+                    "conversation_key": "telegram:8553589429",
+                    "chat_id": "telegram:8553589429",
+                    "check_provenance": "entry",
+                    "task_record": _task_record_payload(
+                        task_id="",
+                        correlation_id="cid-fresh",
+                        goal="Hi Alphonse",
+                        status="running",
+                        tool_call_history_md="- (none)",
+                    ),
+                },
+            },
+        }
+    )
+    save_state(
+        "telegram:8553589429",
+        {
+            "conversation_key": "telegram:8553589429",
+            "check_provenance": "do",
+            "task_record": _task_record_payload(
+                task_id="old-task",
+                status="done",
+                tool_call_history_md="- communication.send_message args={} output={} exception=null",
+            ),
+        },
+    )
+
+    class _FakeResult:
+        reply_text = ""
+        plans = []
+        cognition_state = _cognition_state(
+            task_record=_task_record_payload(task_id=task_id, goal="Hi Alphonse", status="running"),
+            check_result={"verdict": "plan"},
+            check_provenance="entry",
+        )
+        meta = {}
+
+    class _FakeGraph:
+        def invoke(self, state, text, *, llm_client=None):  # noqa: ANN001
+            _ = llm_client
+            assert text == "Hi Alphonse"
+            assert state.get("check_provenance") == "entry"
+            task_record = state.get("task_record")
+            assert isinstance(task_record, dict)
+            assert task_record.get("task_id") in {"", None}
+            assert task_record.get("goal") == "Hi Alphonse"
+            assert task_record.get("tool_call_history_md") == "- (none)"
+            return _FakeResult()
+
+    monkeypatch.setattr(hpsr, "_CORTEX_GRAPH", _FakeGraph())
+    monkeypatch.setattr(hpsr, "build_llm_client", lambda: None)
+
+    action = HandlePdcaSliceRequestAction()
+    signal = Signal(
+        type="pdca.slice.requested",
+        payload={"task_id": task_id, "correlation_id": "cid-fresh"},
+        source="pdca_queue_runner",
+    )
+    _ = action.execute({"signal": signal, "ctx": None})
+
+
 def test_handle_pdca_slice_request_classifies_engine_unavailable_failure(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

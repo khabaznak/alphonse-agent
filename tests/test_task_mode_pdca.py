@@ -12,6 +12,7 @@ from alphonse.agent.cognition.providers.contracts import require_tool_calling_pr
 from alphonse.agent.cortex.graph import act_node_state_adapter
 from alphonse.agent.cortex.graph import check_node_state_adapter
 from alphonse.agent.cortex.graph import execute_step_state_adapter
+from alphonse.agent.cortex.graph import task_record_entry_node
 from alphonse.agent.cortex.task_mode.pdca import build_next_step_node
 from alphonse.agent.cortex.task_mode.pdca import route_after_act
 from alphonse.agent.cortex.task_mode.pdca import route_after_next_step
@@ -500,3 +501,13 @@ def test_check_act_plan_route_stays_native() -> None:
     state.update(check_node_state_adapter(state))
     state.update(act_node_state_adapter(state))
     assert route_after_act(state["act_result"]) == "next_step_node"
+
+
+def test_fresh_persisted_task_defaults_to_entry_provenance_even_with_task_id() -> None:
+    task_record = _task_record(
+        task_id="task-fresh-greeting",
+        goal="hi alphonse",
+        recent_conversation_md="- User: hi alphonse",
+    )
+    out = task_record_entry_node({"task_record": task_record})
+    assert out.get("check_provenance") == "entry"

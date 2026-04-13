@@ -7,8 +7,6 @@ from alphonse.agent.actions.conscious_message_handler import IncomingMessageEnve
 from alphonse.agent.cortex.task_mode.task_record import TaskRecord
 from alphonse.agent.nervous_system.pdca_queue_store import (
     append_pdca_event,
-    get_latest_pdca_task_for_conversation,
-    get_latest_pdca_task_for_owner,
     update_pdca_task_metadata,
     update_pdca_task_status,
     upsert_pdca_task,
@@ -245,44 +243,6 @@ def _ensure_initial_identity(
         metadata["initial_correlation_id"] = correlation_id
 
 
-def _build_initial_task_record(
-    *,
-    task_id: str | None,
-    session_user_id: str,
-    correlation_id: str,
-    user_text: str,
-    channel_type: str,
-    channel_target: str,
-    message_id: str | None,
-    external_user_id: str | None,
-    display_name: str | None,
-    locale: str | None,
-    timezone_name: str | None,
-    recent_conversation_md: str,
-) -> TaskRecord:
-    record = TaskRecord(
-        task_id=task_id,
-        user_id=str(session_user_id or "").strip() or None,
-        correlation_id=str(correlation_id or "").strip(),
-        goal=str(user_text or "").strip(),
-        status="running",
-    )
-    record.set_recent_conversation_md(recent_conversation_md)
-    for key, value in (
-        ("channel_type", channel_type),
-        ("channel_target", channel_target),
-        ("message_id", message_id),
-        ("external_user_id", external_user_id),
-        ("display_name", display_name),
-        ("locale", locale),
-        ("timezone", timezone_name),
-    ):
-        rendered = str(value or "").strip()
-        if rendered:
-            record.append_fact(f"{key}: {rendered}")
-    return record
-
-
 def enqueue_pdca_slice(
     *,
     context: dict[str, Any],
@@ -290,12 +250,12 @@ def enqueue_pdca_slice(
     day_session: dict[str, Any],
     envelope: IncomingMessageEnvelope,
     correlation_id: str,
+    task_record: TaskRecord,
+    existing_task: dict[str, Any] | None = None,
 ) -> str:
     now = now_iso()
     channel = envelope.channel if isinstance(envelope.channel, dict) else {}
-    actor = envelope.actor if isinstance(envelope.actor, dict) else {}
     content = envelope.content if isinstance(envelope.content, dict) else {}
-    envelope_context = envelope.context if isinstance(envelope.context, dict) else {}
     channel_type = str(channel.get("type") or "").strip()
     channel_target = str(channel.get("target") or "").strip()
     message_id = str(envelope.message_id or "").strip()
@@ -305,14 +265,17 @@ def enqueue_pdca_slice(
     if not user_text:
         user_text = _render_attachment_summary(attachments)
     force_new_task = _force_new_task(envelope=envelope)
-    existing = None
-    if not force_new_task:
-        existing = get_latest_pdca_task_for_owner(owner_id=session_user_id, statuses=["running"])
-        if not isinstance(existing, dict):
-            existing = get_latest_pdca_task_for_conversation(
-                conversation_key=session_key,
-                statuses=["waiting_user", "queued", "running", "paused"],
-            )
+    existing = (
+        existing_task
+        if isinstance(existing_task, dict)
+        and not force_new_task
+        and _existing_task_matches_ingress(
+            existing_task=existing_task,
+            session_user_id=session_user_id,
+            session_key=session_key,
+        )
+        else None
+    )
     if isinstance(existing, dict):
         task_id = str(existing.get("task_id") or "").strip()
         metadata = dict(existing.get("metadata") or {}) if isinstance(existing.get("metadata"), dict) else {}
@@ -340,10 +303,18 @@ def enqueue_pdca_slice(
         metadata["last_enqueue_correlation_id"] = correlation_id
         metadata["last_enqueued_at"] = now
         state_snapshot = metadata.get("state") if isinstance(metadata.get("state"), dict) else {}
-        if state_snapshot:
-            state_snapshot = dict(state_snapshot)
-            state_snapshot["correlation_id"] = str(correlation_id or "").strip() or state_snapshot.get("correlation_id")
-            metadata["state"] = state_snapshot
+        state_snapshot = dict(state_snapshot)
+        state_snapshot["conversation_key"] = state_snapshot.get("conversation_key") or session_key
+        state_snapshot["chat_id"] = state_snapshot.get("chat_id") or session_key
+        state_snapshot["correlation_id"] = str(correlation_id or "").strip() or state_snapshot.get("correlation_id")
+        state_snapshot["task_record"] = task_record.to_dict()
+        state_snapshot["message_id"] = message_id or state_snapshot.get("message_id")
+        state_snapshot["session_state"] = state_snapshot.get("session_state") or day_session
+        state_snapshot["recent_conversation_block"] = (
+            state_snapshot.get("recent_conversation_block") or render_recent_conversation_block(day_session)
+        )
+        state_snapshot["check_provenance"] = "slice_resume"
+        metadata["state"] = state_snapshot
         status = str(existing.get("status") or "").strip().lower()
         if status == "running":
             metadata["input_dirty"] = True
@@ -381,20 +352,11 @@ def enqueue_pdca_slice(
         )
         return task_id
 
-    task_record = _build_initial_task_record(
-        task_id=None,
-        session_user_id=session_user_id,
-        correlation_id=correlation_id,
-        user_text=user_text,
-        channel_type=channel_type,
-        channel_target=channel_target,
-        message_id=message_id,
-        external_user_id=str(actor.get("external_user_id") or "").strip() or None,
-        display_name=str(actor.get("display_name") or "").strip() or None,
-        locale=str(envelope_context.get("locale") or "").strip() or None,
-        timezone_name=str(envelope_context.get("timezone") or "").strip() or None,
-        recent_conversation_md=render_recent_conversation_block(day_session),
-    )
+    task_record.task_id = None
+    task_record.user_id = task_record.user_id or str(session_user_id or "").strip() or None
+    task_record.correlation_id = task_record.correlation_id or str(correlation_id or "").strip()
+    task_record.goal = task_record.goal or user_text
+    task_record.status = task_record.status or "running"
     metadata = {
         "pending_user_text": user_text,
         "last_user_message": user_text,
@@ -427,6 +389,7 @@ def enqueue_pdca_slice(
             "message_id": message_id,
             "session_state": day_session,
             "recent_conversation_block": render_recent_conversation_block(day_session),
+            "check_provenance": "entry",
         },
     }
     source = _payload_source(envelope=envelope)
@@ -474,6 +437,19 @@ def _force_new_task(*, envelope: IncomingMessageEnvelope) -> bool:
         return True
     source = _payload_source(envelope=envelope)
     return source in {"job_runner", "job_trigger", "jobs_reconcile"}
+
+
+def _existing_task_matches_ingress(
+    *,
+    existing_task: dict[str, Any],
+    session_user_id: str,
+    session_key: str,
+) -> bool:
+    if str(existing_task.get("owner_id") or "").strip() != str(session_user_id or "").strip():
+        return False
+    if str(existing_task.get("conversation_key") or "").strip() != str(session_key or "").strip():
+        return False
+    return True
 
 
 def _payload_source(*, envelope: IncomingMessageEnvelope) -> str:

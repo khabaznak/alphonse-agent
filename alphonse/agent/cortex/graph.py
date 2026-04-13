@@ -106,7 +106,7 @@ class CortexGraph:
 
 def task_record_entry_node(state: dict[str, Any]) -> dict[str, Any]:
     task_record = _hydrate_task_record_from_state(state)
-    provenance = "slice_resume" if bool(task_record.task_id) else "entry"
+    provenance = _select_check_provenance(state)
     return {
         "task_record": task_record,
         "check_provenance": provenance,
@@ -193,11 +193,6 @@ def _select_check_provenance(state: dict[str, Any]) -> str:
     provenance = str(state.get("check_provenance") or "").strip().lower()
     if provenance in {"entry", "do", "slice_resume"}:
         return provenance
-    task_record = state.get("task_record")
-    if isinstance(task_record, dict):
-        task_record = TaskRecord.from_dict(task_record)
-    if isinstance(task_record, TaskRecord) and task_record.task_id:
-        return "slice_resume"
     return "entry"
 
 

@@ -6,6 +6,8 @@ from typing import Any, Callable
 
 from alphonse.agent.actions.conscious_message_handler import IncomingMessageEnvelope
 from alphonse.agent.actions.models import ActionResult
+from alphonse.agent.actions.pdca_task_boundary import build_task_record_for_message
+from alphonse.agent.actions.pdca_task_boundary import select_pending_pdca_task_for_message
 from alphonse.agent.actions.session_context import IncomingContext
 from alphonse.agent.actions.session_context import build_session_key
 from alphonse.agent.actions.transitions import emit_agent_transitions_from_meta
@@ -112,12 +114,25 @@ class ConsciousMessageExecutionHandler:
         state["recent_conversation_block"] = render_recent_conversation_block(day_session)
         has_live_transition_sink = self._deps.attach_transition_sink(state, incoming)
         if self._deps.pdca_slicing_enabled():
+            existing_task = select_pending_pdca_task_for_message(
+                envelope=envelope,
+                session_user_id=session_user_id,
+            )
+            task_record = build_task_record_for_message(
+                envelope=envelope,
+                session_user_id=session_user_id,
+                day_session=day_session,
+                correlation_id=correlation_id,
+                existing_task=existing_task,
+            )
             task_id = self._deps.enqueue_pdca_slice(
                 context=context,
                 session_user_id=session_user_id,
                 day_session=day_session,
                 envelope=envelope,
                 correlation_id=correlation_id,
+                task_record=task_record,
+                existing_task=existing_task,
             )
             updated_day_session = self._deps.build_next_session_state_fn(
                 previous=day_session,

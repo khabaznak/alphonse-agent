@@ -9,6 +9,8 @@ from alphonse.agent.actions.conscious_message_context_adapter import (
 )
 from alphonse.agent.actions.conscious_message_handler import IncomingMessageEnvelope
 from alphonse.agent.actions.models import ActionResult
+from alphonse.agent.actions.pdca_task_boundary import build_task_record_for_message
+from alphonse.agent.actions.pdca_task_boundary import select_pending_pdca_task_for_message
 from alphonse.agent.actions.presence_projection import emit_presence_phase_changed
 from alphonse.agent.actions.session_context import build_session_key
 from alphonse.agent.cognition.memory import append_conversation_transcript
@@ -98,7 +100,6 @@ class HandleConsciousMessageAction(Action):
                 urgency="normal",
             )
 
-        session_key = build_session_key(incoming)
         session_user_id = resolve_session_user_id(incoming=incoming, payload=payload)
         day_session = resolve_day_session(
             user_id=session_user_id,
@@ -112,6 +113,17 @@ class HandleConsciousMessageAction(Action):
             payload=payload,
             correlation_id=str(correlation_id),
         )
+        existing_task = select_pending_pdca_task_for_message(
+            envelope=envelope,
+            session_user_id=session_user_id,
+        )
+        task_record = build_task_record_for_message(
+            envelope=envelope,
+            session_user_id=session_user_id,
+            day_session=day_session,
+            correlation_id=str(correlation_id),
+            existing_task=existing_task,
+        )
 
         task_id = enqueue_pdca_slice(
             context=context,
@@ -119,6 +131,8 @@ class HandleConsciousMessageAction(Action):
             day_session=day_session,
             envelope=envelope,
             correlation_id=str(correlation_id),
+            task_record=task_record,
+            existing_task=existing_task,
         )
         logger.info(
             "HandleConsciousMessageAction enqueued task_id=%s channel=%s target=%s",

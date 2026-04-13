@@ -493,6 +493,17 @@ def _base_state(
     metadata = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
     seeded = metadata.get("state") if isinstance(metadata.get("state"), dict) else {}
     conversation_key = str(task.get("conversation_key") or "").strip()
+    if isinstance(seeded.get("task_record"), dict):
+        out = dict(seeded)
+        out.setdefault("conversation_key", conversation_key)
+        out.setdefault("chat_id", conversation_key)
+        _ensure_state_correlation_id(
+            base=out,
+            task=task,
+            seeded=seeded,
+            incoming_correlation_id=correlation_id,
+        )
+        return out
     loaded = load_state(conversation_key) if conversation_key else None
     if isinstance(loaded, dict):
         sanitized, removed_keys = _sanitize_loaded_state_for_new_task(

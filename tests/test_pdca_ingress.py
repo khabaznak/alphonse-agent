@@ -3,6 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 from alphonse.agent.actions.conscious_message_handler import IncomingMessageEnvelope
 from alphonse.agent.actions.conscious_message_handler import build_incoming_message_envelope
+from alphonse.agent.actions.pdca_task_boundary import build_task_record_for_message
+from alphonse.agent.actions.pdca_task_boundary import select_pending_pdca_task_for_message
 from alphonse.agent.nervous_system.migrate import apply_schema
 from alphonse.agent.nervous_system.pdca_queue_store import get_pdca_task
 from alphonse.agent.nervous_system.pdca_queue_store import upsert_pdca_task
@@ -29,6 +31,27 @@ def _envelope(
         controls=controls,
         metadata=metadata,
     ))
+
+
+def _day_session(user_id: str = "u-1") -> dict[str, object]:
+    return {"session_id": f"{user_id}|2026-03-12", "user_id": user_id, "date": "2026-03-12"}
+
+
+def _task_record(
+    *,
+    envelope: IncomingMessageEnvelope,
+    session_user_id: str = "u-1",
+    day_session: dict[str, object] | None = None,
+    correlation_id: str,
+    existing_task: dict[str, object] | None = None,
+):
+    return build_task_record_for_message(
+        envelope=envelope,
+        session_user_id=session_user_id,
+        day_session=dict(day_session or _day_session(session_user_id)),
+        correlation_id=correlation_id,
+        existing_task=existing_task,
+    )
 
 
 def test_enqueue_pdca_slice_buffers_inputs_for_running_task(tmp_path: Path, monkeypatch) -> None:
@@ -60,12 +83,23 @@ def test_enqueue_pdca_slice_buffers_inputs_for_running_task(tmp_path: Path, monk
         }
     )
 
+    envelope = _envelope(message_id="m-2", text="second")
+    day_session = _day_session("u-1")
+    existing_task = get_pdca_task(task_id)
+    assert isinstance(existing_task, dict)
     returned = enqueue_pdca_slice(
         context={},
         session_user_id="u-1",
-        day_session={"session_id": "u-1|2026-03-12", "user_id": "u-1", "date": "2026-03-12"},
-        envelope=_envelope(message_id="m-2", text="second"),
+        day_session=day_session,
+        envelope=envelope,
         correlation_id="cid-m-2",
+        task_record=_task_record(
+            envelope=envelope,
+            day_session=day_session,
+            correlation_id="cid-m-2",
+            existing_task=existing_task,
+        ),
+        existing_task=existing_task,
     )
     assert returned == task_id
 
@@ -80,6 +114,8 @@ def test_enqueue_pdca_slice_buffers_inputs_for_running_task(tmp_path: Path, monk
     assert str(inputs[1].get("actor_id") or "") == "u-1"
     assert bool(metadata.get("input_dirty")) is True
     assert int(metadata.get("next_unconsumed_index") or 0) == 0
+    state = metadata.get("state") if isinstance(metadata.get("state"), dict) else {}
+    assert state.get("check_provenance") == "slice_resume"
 
 
 def test_enqueue_pdca_slice_dedupes_same_message_id_and_correlation(tmp_path: Path, monkeypatch) -> None:
@@ -95,12 +131,23 @@ def test_enqueue_pdca_slice_dedupes_same_message_id_and_correlation(tmp_path: Pa
             "status": "queued",
         }
     )
+    envelope = _envelope(message_id="m-dup", text="same")
+    day_session = _day_session("u-1")
+    existing_task = get_pdca_task(task_id)
+    assert isinstance(existing_task, dict)
     kwargs = dict(
         context={},
         session_user_id="u-1",
-        day_session={"session_id": "u-1|2026-03-12", "user_id": "u-1", "date": "2026-03-12"},
-        envelope=_envelope(message_id="m-dup", text="same"),
+        day_session=day_session,
+        envelope=envelope,
         correlation_id="cid-dup",
+        task_record=_task_record(
+            envelope=envelope,
+            day_session=day_session,
+            correlation_id="cid-dup",
+            existing_task=existing_task,
+        ),
+        existing_task=existing_task,
     )
 
     _ = enqueue_pdca_slice(**kwargs)
@@ -114,7 +161,7 @@ def test_enqueue_pdca_slice_dedupes_same_message_id_and_correlation(tmp_path: Pa
     assert len(inputs) == 1
 
 
-def test_enqueue_pdca_slice_ignores_legacy_steering_policy_and_enqueues_message(tmp_path: Path, monkeypatch) -> None:
+def test_enqueue_pdca_slice_rejects_mismatched_existing_task_and_creates_new_task(tmp_path: Path, monkeypatch) -> None:
     db_path = tmp_path / "nerve-db"
     monkeypatch.setenv("NERVE_DB_PATH", str(db_path))
     apply_schema(db_path)
@@ -136,22 +183,42 @@ def test_enqueue_pdca_slice_ignores_legacy_steering_policy_and_enqueues_message(
         }
     )
 
+    envelope = _envelope(message_id="m-policy", text="must still enqueue")
+    day_session = {"session_id": "owner-1|2026-03-12", "user_id": "owner-1", "date": "2026-03-12"}
+    existing_task = get_pdca_task(task_id)
+    assert isinstance(existing_task, dict)
     returned = enqueue_pdca_slice(
         context={},
         session_user_id="not-owner",
-        day_session={"session_id": "owner-1|2026-03-12", "user_id": "owner-1", "date": "2026-03-12"},
-        envelope=_envelope(message_id="m-policy", text="must still enqueue"),
+        day_session=day_session,
+        envelope=envelope,
         correlation_id="cid-policy",
+        task_record=_task_record(
+            envelope=envelope,
+            session_user_id="not-owner",
+            day_session=day_session,
+            correlation_id="cid-policy",
+            existing_task=existing_task,
+        ),
+        existing_task=existing_task,
     )
-    assert returned == task_id
+    assert returned != task_id
 
     task = get_pdca_task(task_id)
     assert isinstance(task, dict)
     metadata = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
     inputs = metadata.get("inputs")
     assert isinstance(inputs, list)
-    assert len(inputs) == 1
-    assert str(inputs[0].get("text") or "") == "must still enqueue"
+    assert len(inputs) == 0
+
+    created = get_pdca_task(returned)
+    assert isinstance(created, dict)
+    assert str(created.get("owner_id") or "") == "not-owner"
+    created_metadata = created.get("metadata") if isinstance(created.get("metadata"), dict) else {}
+    created_inputs = created_metadata.get("inputs")
+    assert isinstance(created_inputs, list)
+    assert len(created_inputs) == 1
+    assert str(created_inputs[0].get("text") or "") == "must still enqueue"
 
 
 def test_enqueue_pdca_slice_accepts_attachment_only_input(tmp_path: Path, monkeypatch) -> None:
@@ -173,15 +240,26 @@ def test_enqueue_pdca_slice_accepts_attachment_only_input(tmp_path: Path, monkey
         }
     )
 
+    envelope = _envelope(
+        message_id="m-a1",
+        attachments=[{"kind": "voice", "provider": "telegram", "file_id": "voice-1"}],
+    )
+    day_session = _day_session("u-1")
+    existing_task = get_pdca_task(task_id)
+    assert isinstance(existing_task, dict)
     returned = enqueue_pdca_slice(
         context={},
         session_user_id="u-1",
-        day_session={"session_id": "u-1|2026-03-12", "user_id": "u-1", "date": "2026-03-12"},
-        envelope=_envelope(
-            message_id="m-a1",
-            attachments=[{"kind": "voice", "provider": "telegram", "file_id": "voice-1"}],
-        ),
+        day_session=day_session,
+        envelope=envelope,
         correlation_id="cid-a1",
+        task_record=_task_record(
+            envelope=envelope,
+            day_session=day_session,
+            correlation_id="cid-a1",
+            existing_task=existing_task,
+        ),
+        existing_task=existing_task,
     )
     assert returned == task_id
 
@@ -215,24 +293,35 @@ def test_enqueue_pdca_slice_preserves_contact_payload_and_extras(tmp_path: Path,
         }
     )
 
+    envelope = _envelope(
+        message_id="m-contact-1",
+        attachments=[
+            {
+                "kind": "contact",
+                "provider": "telegram",
+                "contact": {"user_id": 8593816828, "first_name": "Gabriela", "last_name": "Villasana"},
+                "contact_user_id": "8593816828",
+                "labels": ["lead", "priority"],
+                "meta": {"source": "telegram_card"},
+            }
+        ],
+    )
+    day_session = _day_session("u-1")
+    existing_task = get_pdca_task(task_id)
+    assert isinstance(existing_task, dict)
     returned = enqueue_pdca_slice(
         context={},
         session_user_id="u-1",
-        day_session={"session_id": "u-1|2026-03-12", "user_id": "u-1", "date": "2026-03-12"},
-        envelope=_envelope(
-            message_id="m-contact-1",
-            attachments=[
-                {
-                    "kind": "contact",
-                    "provider": "telegram",
-                    "contact": {"user_id": 8593816828, "first_name": "Gabriela", "last_name": "Villasana"},
-                    "contact_user_id": "8593816828",
-                    "labels": ["lead", "priority"],
-                    "meta": {"source": "telegram_card"},
-                }
-            ],
-        ),
+        day_session=day_session,
+        envelope=envelope,
         correlation_id="cid-contact-1",
+        task_record=_task_record(
+            envelope=envelope,
+            day_session=day_session,
+            correlation_id="cid-contact-1",
+            existing_task=existing_task,
+        ),
+        existing_task=existing_task,
     )
     assert returned == task_id
 
@@ -261,12 +350,19 @@ def test_enqueue_pdca_slice_persists_correlation_in_metadata_state(tmp_path: Pat
     monkeypatch.setenv("NERVE_DB_PATH", str(db_path))
     apply_schema(db_path)
 
+    envelope = _envelope(message_id="m-corr-state", text="create task with correlation")
+    day_session = _day_session("u-1")
     task_id = enqueue_pdca_slice(
         context={},
         session_user_id="u-1",
-        day_session={"session_id": "u-1|2026-03-12", "user_id": "u-1", "date": "2026-03-12"},
-        envelope=_envelope(message_id="m-corr-state", text="create task with correlation"),
+        day_session=day_session,
+        envelope=envelope,
         correlation_id="cid-corr-state",
+        task_record=_task_record(
+            envelope=envelope,
+            day_session=day_session,
+            correlation_id="cid-corr-state",
+        ),
     )
 
     task = get_pdca_task(task_id)
@@ -274,6 +370,7 @@ def test_enqueue_pdca_slice_persists_correlation_in_metadata_state(tmp_path: Pat
     metadata = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
     state = metadata.get("state") if isinstance(metadata.get("state"), dict) else {}
     assert str(state.get("correlation_id") or "") == "cid-corr-state"
+    assert state.get("check_provenance") == "entry"
     assert str(metadata.get("initial_message_id") or "") == "m-corr-state"
     assert str(metadata.get("initial_correlation_id") or "") == "cid-corr-state"
 
@@ -297,25 +394,36 @@ def test_enqueue_pdca_slice_keeps_non_contact_media_behavior(tmp_path: Path, mon
         }
     )
 
+    envelope = _envelope(
+        message_id="m-photo-1",
+        attachments=[
+            {
+                "kind": "photo",
+                "provider": "telegram",
+                "file_id": "photo-1",
+                "mime_type": "image/jpeg",
+                "size_bytes": 1234,
+                "width": 200,
+                "height": 100,
+            }
+        ],
+    )
+    day_session = _day_session("u-1")
+    existing_task = get_pdca_task(task_id)
+    assert isinstance(existing_task, dict)
     _ = enqueue_pdca_slice(
         context={},
         session_user_id="u-1",
-        day_session={"session_id": "u-1|2026-03-12", "user_id": "u-1", "date": "2026-03-12"},
-        envelope=_envelope(
-            message_id="m-photo-1",
-            attachments=[
-                {
-                    "kind": "photo",
-                    "provider": "telegram",
-                    "file_id": "photo-1",
-                    "mime_type": "image/jpeg",
-                    "size_bytes": 1234,
-                    "width": 200,
-                    "height": 100,
-                }
-            ],
-        ),
+        day_session=day_session,
+        envelope=envelope,
         correlation_id="cid-photo-1",
+        task_record=_task_record(
+            envelope=envelope,
+            day_session=day_session,
+            correlation_id="cid-photo-1",
+            existing_task=existing_task,
+        ),
+        existing_task=existing_task,
     )
 
     task = get_pdca_task(task_id)
@@ -334,7 +442,7 @@ def test_enqueue_pdca_slice_keeps_non_contact_media_behavior(tmp_path: Path, mon
     assert int(first.get("height") or 0) == 100
 
 
-def test_enqueue_pdca_slice_routes_to_running_owner_task_before_conversation_latest(
+def test_enqueue_pdca_slice_creates_new_task_instead_of_routing_to_running_owner_task(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -355,7 +463,7 @@ def test_enqueue_pdca_slice_routes_to_running_owner_task_before_conversation_lat
             },
         }
     )
-    _ = upsert_pdca_task(
+    conversation_task = upsert_pdca_task(
         {
             "task_id": "task-conversation-latest",
             "owner_id": "u-1",
@@ -369,22 +477,84 @@ def test_enqueue_pdca_slice_routes_to_running_owner_task_before_conversation_lat
         }
     )
 
+    envelope = _envelope(message_id="m-owner-route", text="new greeting")
+    day_session = _day_session("u-1")
     returned = enqueue_pdca_slice(
         context={},
         session_user_id="u-1",
-        day_session={"session_id": "u-1|2026-03-12", "user_id": "u-1", "date": "2026-03-12"},
-        envelope=_envelope(message_id="m-owner-route", text="steer running task"),
+        day_session=day_session,
+        envelope=envelope,
         correlation_id="cid-owner-route",
+        task_record=_task_record(
+            envelope=envelope,
+            day_session=day_session,
+            correlation_id="cid-owner-route",
+        ),
     )
-    assert returned == running_task
+    assert returned != running_task
+    assert returned != conversation_task
 
     running = get_pdca_task(running_task)
     assert isinstance(running, dict)
     running_metadata = running.get("metadata") if isinstance(running.get("metadata"), dict) else {}
     running_inputs = running_metadata.get("inputs")
     assert isinstance(running_inputs, list)
-    assert len(running_inputs) == 1
-    assert str(running_inputs[0].get("text") or "") == "steer running task"
+    assert len(running_inputs) == 0
+
+    created = get_pdca_task(returned)
+    assert isinstance(created, dict)
+    assert str(created.get("conversation_key") or "") == "telegram:8553589429"
+    metadata = created.get("metadata") if isinstance(created.get("metadata"), dict) else {}
+    inputs = metadata.get("inputs")
+    assert isinstance(inputs, list)
+    assert len(inputs) == 1
+    assert str(inputs[0].get("text") or "") == "new greeting"
+
+
+def test_message_boundary_selects_only_waiting_same_conversation_task(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    db_path = tmp_path / "nerve-db"
+    monkeypatch.setenv("NERVE_DB_PATH", str(db_path))
+    apply_schema(db_path)
+
+    _ = upsert_pdca_task(
+        {
+            "task_id": "task-running-owner-boundary",
+            "owner_id": "u-1",
+            "conversation_key": "telegram:old-thread",
+            "status": "running",
+        }
+    )
+    _ = upsert_pdca_task(
+        {
+            "task_id": "task-queued-same-conversation",
+            "owner_id": "u-1",
+            "conversation_key": "telegram:8553589429",
+            "status": "queued",
+        }
+    )
+    selected = select_pending_pdca_task_for_message(
+        envelope=_envelope(message_id="m-boundary-1", text="hi"),
+        session_user_id="u-1",
+    )
+    assert selected is None
+
+    waiting_task = upsert_pdca_task(
+        {
+            "task_id": "task-waiting-same-conversation",
+            "owner_id": "u-1",
+            "conversation_key": "telegram:8553589429",
+            "status": "waiting_user",
+        }
+    )
+    selected = select_pending_pdca_task_for_message(
+        envelope=_envelope(message_id="m-boundary-2", text="answer"),
+        session_user_id="u-1",
+    )
+    assert isinstance(selected, dict)
+    assert str(selected.get("task_id") or "") == waiting_task
 
 
 def test_enqueue_pdca_slice_force_new_task_skips_running_task(tmp_path: Path, monkeypatch) -> None:
@@ -406,17 +576,24 @@ def test_enqueue_pdca_slice_force_new_task_skips_running_task(tmp_path: Path, mo
         }
     )
 
+    envelope = _envelope(
+        message_id="m-force-new",
+        text="run job prompt in isolated task",
+        controls={"force_new_task": True},
+        metadata={"source": "job_runner", "job": {"job_id": "job_123"}},
+    )
+    day_session = _day_session("u-1")
     returned = enqueue_pdca_slice(
         context={},
         session_user_id="u-1",
-        day_session={"session_id": "u-1|2026-03-12", "user_id": "u-1", "date": "2026-03-12"},
-        envelope=_envelope(
-            message_id="m-force-new",
-            text="run job prompt in isolated task",
-            controls={"force_new_task": True},
-            metadata={"source": "job_runner", "job": {"job_id": "job_123"}},
-        ),
+        day_session=day_session,
+        envelope=envelope,
         correlation_id="cid-force-new",
+        task_record=_task_record(
+            envelope=envelope,
+            day_session=day_session,
+            correlation_id="cid-force-new",
+        ),
     )
     assert returned != running_task
 
