@@ -69,7 +69,6 @@ def check_node_impl(
         llm_client=llm_client,
         judge_prompt=judge_prompt,
         case_type=case_type,
-        task_record=task_record,
     )
     verdict = _extract_verdict_kind(judge_result)
     updated_task_record = _apply_check_updates(
@@ -144,7 +143,6 @@ def _conduct_trial(
     llm_client: TextCompletionProvider | None,
     judge_prompt: str,
     case_type: str,
-    task_record: TaskRecord,
 ) -> dict[str, Any]:
     if llm_client is None:
         return _mission_failed_judge_result(

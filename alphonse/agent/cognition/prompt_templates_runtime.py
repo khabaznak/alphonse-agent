@@ -54,6 +54,7 @@ def get_prompt_seed_template(template_id: str) -> dict[str, Any] | None:
     }
 
 
+
 SLOT_QUESTION_SYSTEM_PROMPT = _seed_text(
     "slot_question.system.j2",
 )
