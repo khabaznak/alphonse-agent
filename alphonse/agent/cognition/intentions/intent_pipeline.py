@@ -47,7 +47,7 @@ class IntentPipeline:
                 delivery = self.coordinator.deliver(result, context)
                 if delivery:
                     self._deliver_normalized(delivery)
-            self._emit_outcome(result, context, success=True, error=None)
+            ## self._emit_outcome(result, context, success=True, error=None)
         except Exception as exc:
             self._escalate_subconscious_failure(action_key=action_key, context=context, error=exc)
             self._emit_outcome(None, context, success=False, error=exc)
