@@ -205,7 +205,7 @@ def test_handle_pdca_slice_request_executes_and_persists_checkpoint(
     monkeypatch.setattr(
         hpsr,
         "emit_channel_transition_event",
-        lambda _incoming, event: projected.append(event if isinstance(event, dict) else {}),
+        lambda **kwargs: projected.append(kwargs["event"] if isinstance(kwargs.get("event"), dict) else {}),
     )
 
     action = HandlePdcaSliceRequestAction()

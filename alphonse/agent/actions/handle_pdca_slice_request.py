@@ -310,7 +310,14 @@ def _run_slice_invoke_job(
             llm_client = None
         invoke_state["_bus"] = bus
         if incoming is not None:
-            invoke_state["_transition_sink"] = lambda event: emit_channel_transition_event(incoming, event)
+            invoke_state["_transition_sink"] = lambda event: emit_channel_transition_event(
+                event=event,
+                channel_type=incoming.channel_type,
+                channel_target=incoming.address,
+                user_id=incoming.person_id,
+                message_id=incoming.message_id,
+                correlation_id=incoming.correlation_id,
+            )
         slice_started_at = datetime.now(timezone.utc)
         try:
             result = _CORTEX_GRAPH.invoke(invoke_state, text, llm_client=llm_client)
@@ -1140,11 +1147,15 @@ def _emit_presence_lifecycle_event(
         return
     corr = str(correlation_id or incoming.correlation_id or "").strip() or None
     emit_channel_transition_event(
-        incoming,
-        {
+        event={
             "type": "agent.transition",
             "phase": str(phase or "").strip(),
             "correlation_id": corr,
             "detail": {"presence_event_family": str(event_family or "").strip()},
         },
+        channel_type=incoming.channel_type,
+        channel_target=incoming.address,
+        user_id=incoming.person_id,
+        message_id=incoming.message_id,
+        correlation_id=corr,
     )

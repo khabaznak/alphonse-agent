@@ -4,66 +4,61 @@ import uuid
 from typing import Any
 
 from alphonse.agent.actions.base import Action
-from alphonse.agent.actions.conscious_message_context_adapter import (
-    build_incoming_context_from_envelope,
-)
-from alphonse.agent.actions.conscious_message_handler import IncomingMessageEnvelope
 from alphonse.agent.actions.models import ActionResult
-from alphonse.agent.actions.pdca_task_boundary import build_task_record_for_message
-from alphonse.agent.actions.pdca_task_boundary import select_pending_pdca_task_for_message
 from alphonse.agent.actions.presence_projection import emit_presence_phase_changed
-from alphonse.agent.actions.session_context import build_session_key
-from alphonse.agent.cognition.memory import append_conversation_transcript
+from alphonse.agent.cortex.task_mode.task_record import TaskRecord
 from alphonse.agent.observability.log_manager import get_component_logger
 from alphonse.agent.observability.log_manager import get_log_manager
 from alphonse.agent.services.pdca_ingress import enqueue_pdca_slice
 from alphonse.agent.services.pdca_queue_runner import is_pdca_slicing_enabled
-from alphonse.agent.services.session_identity_resolution import resolve_session_timezone
-from alphonse.agent.services.session_identity_resolution import resolve_session_user_id
-from alphonse.agent.session.day_state import build_next_session_state
-from alphonse.agent.session.day_state import commit_session_state
-from alphonse.agent.session.day_state import resolve_day_session
-from alphonse.agent.tools.telegram_files import TranscribeTelegramAudioTool
 
 logger = get_component_logger("actions.handle_conscious_message")
 _LOG = get_log_manager()
 _SIGNAL_CORRELATION_KEY = "correlation_id"
+_PAYLOAD_KEY = "payload"
+_SIGNAL_KEY = "signal"
+
 
 class HandleConsciousMessageAction(Action):
     key = "handle_conscious_message"
 
     def execute(self, context: dict) -> ActionResult:
-        signal = context.get("signal")
-        raw_payload = getattr(signal, "payload", {}) if signal else {}
+        signal = context.get(_SIGNAL_KEY)
+        raw_payload = getattr(signal, _PAYLOAD_KEY, {}) if signal else {}
         if not isinstance(raw_payload, dict):
             raise ValueError("invalid_envelope: payload must be an object")
 
-        envelope = IncomingMessageEnvelope.from_payload(raw_payload)
-        correlation_id = envelope.correlation_id or getattr(signal, _SIGNAL_CORRELATION_KEY, None) or str(uuid.uuid4())
-        payload = envelope.runtime_payload()
-        payload = _enrich_multimodal_payload(
-            payload=payload,
-            envelope=envelope,
-            correlation_id=str(correlation_id),
-            incoming_channel=str((envelope.channel or {}).get("type") or "").strip() or "telegram",
+        payload = dict(raw_payload)
+        correlation_id = (
+            str(payload.get(_SIGNAL_CORRELATION_KEY) or "").strip()
+            or str(getattr(signal, _SIGNAL_CORRELATION_KEY, "") or "").strip()
+            or str(uuid.uuid4())
         )
-        incoming = build_incoming_context_from_envelope(
-            envelope=envelope,
-            correlation_id=str(correlation_id),
-        )
+        channel_type = channel_type_for_payload(payload)
+        channel_target = channel_target_for_payload(payload)
+        message_id = message_id_for_payload(payload) or None
+        user_id = resolved_user_id_for_payload(payload) or None
+        if not channel_type:
+            raise ValueError("invalid_conscious_payload: missing channel type")
+        if not channel_target:
+            raise ValueError("invalid_conscious_payload: missing channel target")
+
         _LOG.emit(
             event="incoming_message.accepted",
             component="actions.handle_conscious_message",
             correlation_id=str(correlation_id),
-            channel=incoming.channel_type,
-            user_id=incoming.person_id,
+            channel=channel_type,
+            user_id=user_id,
             payload={
-                "address": incoming.address,
-                "message_id": incoming.message_id,
+                "address": channel_target,
+                "message_id": message_id,
             },
         )
         emit_presence_phase_changed(
-            incoming=incoming,
+            channel_type=channel_type,
+            channel_target=channel_target,
+            user_id=user_id,
+            message_id=message_id,
             phase="acknowledged",
             correlation_id=str(correlation_id),
         )
@@ -74,12 +69,12 @@ class HandleConsciousMessageAction(Action):
                 event="incoming_message.rejected",
                 component="actions.handle_conscious_message",
                 correlation_id=str(correlation_id),
-                channel=incoming.channel_type,
-                user_id=incoming.person_id,
+                channel=channel_type,
+                user_id=user_id,
                 error_code="pdca_slicing_disabled",
                 payload={
                     "reason": "pdca_slicing_disabled",
-                    "address": incoming.address,
+                    "address": channel_target,
                 },
             )
             text = "I am temporarily unable to process messages right now. Please try again in a moment."
@@ -87,12 +82,12 @@ class HandleConsciousMessageAction(Action):
                 intention_key="MESSAGE_READY",
                 payload={
                     "message": text,
-                    "channel_hint": incoming.channel_type,
-                    "target": incoming.address,
+                    "channel_hint": channel_type,
+                    "target": channel_target,
                     "correlation_id": str(correlation_id),
                     "direct_reply": {
-                        "channel_type": incoming.channel_type,
-                        "target": incoming.address,
+                        "channel_type": channel_type,
+                        "target": channel_target,
                         "text": text,
                         "correlation_id": str(correlation_id),
                     },
@@ -100,52 +95,29 @@ class HandleConsciousMessageAction(Action):
                 urgency="normal",
             )
 
-        session_user_id = resolve_session_user_id(incoming=incoming, payload=payload)
-        day_session = resolve_day_session(
-            user_id=session_user_id,
-            channel=incoming.channel_type,
-            timezone_name=resolve_session_timezone(incoming),
-        )
-        _write_through_user_message(
-            day_session=day_session,
-            channel=incoming.channel_type,
-            user_text=str(payload.get("text") or "").strip(),
+        session_user_id = _session_user_id_from_payload(payload)
+        task_record = _build_task_record_from_payload(
             payload=payload,
-            correlation_id=str(correlation_id),
-        )
-        existing_task = select_pending_pdca_task_for_message(
-            envelope=envelope,
             session_user_id=session_user_id,
-        )
-        task_record = build_task_record_for_message(
-            envelope=envelope,
-            session_user_id=session_user_id,
-            day_session=day_session,
             correlation_id=str(correlation_id),
-            existing_task=existing_task,
         )
 
         task_id = enqueue_pdca_slice(
             context=context,
-            session_user_id=session_user_id,
-            day_session=day_session,
-            envelope=envelope,
-            correlation_id=str(correlation_id),
             task_record=task_record,
-            existing_task=existing_task,
         )
         logger.info(
             "HandleConsciousMessageAction enqueued task_id=%s channel=%s target=%s",
             task_id,
-            incoming.channel_type,
-            incoming.address,
+            channel_type,
+            channel_target,
         )
         _LOG.emit(
             event="incoming_message.enqueued",
             component="actions.handle_conscious_message",
             correlation_id=str(correlation_id),
-            channel=incoming.channel_type,
-            user_id=incoming.person_id,
+            channel=channel_type,
+            user_id=user_id,
             payload={"task_id": task_id},
         )
         return ActionResult(
@@ -155,136 +127,161 @@ class HandleConsciousMessageAction(Action):
         )
 
 
-def _write_through_user_message(
-    *,
-    day_session: dict[str, object],
-    channel: str,
-    user_text: str,
-    payload: dict[str, Any] | None = None,
-    correlation_id: str,
-) -> None:
-    text = str(user_text or "").strip()
-    if not text and isinstance(payload, dict):
-        text = _render_attachment_summary(payload)
-    if not text or not isinstance(day_session, dict):
-        return
-    try:
-        append_conversation_transcript(
-            user_id=str(day_session.get("user_id") or "").strip() or "anonymous",
-            session_id=str(day_session.get("session_id") or "").strip() or "unknown",
-            role="user",
-            text=text,
-            channel=str(channel or "").strip() or "api",
-            correlation_id=correlation_id,
-        )
-        updated = build_next_session_state(
-            previous=day_session,
-            channel=str(channel or "").strip() or "api",
-            user_message=text,
-            assistant_message="",
-            task_record=None,
-            pending_interaction=None,
-            user_event_meta={
-                "correlation_id": correlation_id,
-                "message_id": str((payload or {}).get("message_id") or "").strip() or None,
-                "channel": str(channel or "").strip() or "api",
-                "attachments": (
-                    (payload or {}).get("content", {}).get("attachments")
-                    if isinstance((payload or {}).get("content"), dict)
-                    else []
-                ),
-            },
-        )
-        commit_session_state(updated)
-    except Exception:
-        _LOG.emit(
-            level="warning",
-            event="pdca.input.history_append_failed",
-            component="actions.handle_conscious_message",
-            correlation_id=correlation_id or None,
-            payload={"channel": str(channel or "").strip() or None},
-        )
+def _session_user_id_from_payload(payload: dict[str, Any]) -> str:
+    return resolved_user_id_for_payload(payload) or "anonymous"
 
 
-def _enrich_multimodal_payload(
+def _build_task_record_from_payload(
     *,
     payload: dict[str, Any],
-    envelope: IncomingMessageEnvelope,
+    session_user_id: str,
     correlation_id: str,
-    incoming_channel: str,
-) -> dict[str, Any]:
-    content = payload.get("content") if isinstance(payload.get("content"), dict) else {}
-    attachments_raw = content.get("attachments") if isinstance(content.get("attachments"), list) else []
-    attachments = [dict(item) for item in attachments_raw if isinstance(item, dict)]
-    if not attachments:
-        return payload
-    text = str(payload.get("text") or "").strip()
-    if text:
-        return payload
-    transcript = _transcribe_audio_attachments(
-        attachments=attachments,
-        locale_hint=str((envelope.context or {}).get("locale") or "").strip() or None,
-        correlation_id=correlation_id,
-        channel=incoming_channel,
+) -> TaskRecord:
+    record = TaskRecord(
+        user_id=str(session_user_id or "").strip() or None,
+        correlation_id=str(correlation_id or "").strip(),
+        goal=_message_text_for_payload(payload),
+        status="running",
     )
-    if transcript:
-        payload["text"] = transcript
-        content["text"] = transcript
-        envelope.content["text"] = transcript
-    payload["content"] = content
-    return payload
+    for key, value in (
+        ("channel_type", channel_type_for_payload(payload)),
+        ("channel_target", channel_target_for_payload(payload)),
+        ("message_id", message_id_for_payload(payload)),
+        ("external_user_id", external_user_id_for_payload(payload)),
+        ("display_name", display_name_for_payload(payload)),
+        ("locale", locale_for_payload(payload)),
+        ("timezone", timezone_for_payload(payload)),
+    ):
+        rendered = str(value or "").strip()
+        if rendered:
+            record.append_fact(f"{key}: {rendered}")
+    return record
 
 
-def _transcribe_audio_attachments(
-    *,
-    attachments: list[dict[str, Any]],
-    locale_hint: str | None,
-    correlation_id: str,
-    channel: str,
-) -> str:
-    lines: list[str] = []
-    tool = TranscribeTelegramAudioTool()
-    for item in attachments:
-        kind = str(item.get("kind") or "").strip().lower()
-        provider = str(item.get("provider") or "").strip().lower()
-        file_id = str(item.get("file_id") or "").strip()
-        if kind not in {"voice", "audio"} or provider != "telegram" or not file_id:
-            continue
-        result = tool.execute(file_id=file_id, language=locale_hint)
-        exception = result.get("exception") if isinstance(result, dict) else None
-        if isinstance(exception, dict):
-            _LOG.emit(
-                level="warning",
-                event="incoming_message.audio_transcription_failed",
-                component="actions.handle_conscious_message",
-                correlation_id=correlation_id or None,
-                channel=str(channel or "").strip() or None,
-                error_code=str(exception.get("code") or "transcribe_failed"),
-                payload={
-                    "file_id": file_id,
-                    "kind": kind,
-                },
-            )
-            continue
-        output = result.get("output") if isinstance(result, dict) else None
-        transcript_text = str((output or {}).get("text") or "").strip() if isinstance(output, dict) else ""
-        if transcript_text:
-            lines.append(transcript_text)
-    return "\n".join(lines).strip()
-
-
-def _render_attachment_summary(payload: dict[str, Any]) -> str:
+def _message_text_for_payload(payload: dict[str, Any]) -> str:
     content = payload.get("content") if isinstance(payload.get("content"), dict) else {}
-    attachments = content.get("attachments") if isinstance(content.get("attachments"), list) else []
-    if not isinstance(attachments, list) or not attachments:
-        return ""
-    counts: dict[str, int] = {}
-    for item in attachments:
-        if not isinstance(item, dict):
-            continue
-        kind = str(item.get("kind") or "attachment").strip().lower() or "attachment"
-        counts[kind] = int(counts.get(kind) or 0) + 1
-    if not counts:
-        return ""
-    parts = [f"{value} {key}" for key, value in sorted(counts.items())]
-    return f"[attachments: {', '.join(parts)}]"
+    text = str(content.get("text") or payload.get("text") or "").strip()
+    if text:
+        return text
+    parts: list[str] = []
+    for item in attachments_for_payload(payload):
+        kind = str(item.get("kind") or "").strip().lower() or "file"
+        if kind == "contact":
+            contact = item.get("contact") if isinstance(item.get("contact"), dict) else {}
+            name = " ".join(
+                value
+                for value in (
+                    str(contact.get("first_name") or "").strip(),
+                    str(contact.get("last_name") or "").strip(),
+                )
+                if value
+            ).strip()
+            if name:
+                parts.append(f"contact ({name})")
+                continue
+        file_id = str(item.get("file_id") or "").strip()
+        parts.append(f"{kind}({file_id})" if file_id else kind)
+    return f"[attachments: {', '.join(parts)}]" if parts else ""
+
+
+def channel_type_for_payload(payload: dict[str, Any]) -> str:
+    transport = payload.get("transport") if isinstance(payload.get("transport"), dict) else {}
+    channel = payload.get("channel") if isinstance(payload.get("channel"), dict) else {}
+    for candidate in (
+        transport.get("channel_type"),
+        channel.get("type"),
+        payload.get("channel_type"),
+        payload.get("channel"),
+        payload.get("service_key"),
+        payload.get("provider"),
+        payload.get("origin"),
+    ):
+        rendered = str(candidate or "").strip()
+        if rendered:
+            return rendered
+    return ""
+
+
+def channel_target_for_payload(payload: dict[str, Any]) -> str:
+    transport = payload.get("transport") if isinstance(payload.get("transport"), dict) else {}
+    channel = payload.get("channel") if isinstance(payload.get("channel"), dict) else {}
+    for candidate in (
+        transport.get("channel_target"),
+        channel.get("target"),
+        payload.get("channel_target"),
+        payload.get("target"),
+    ):
+        rendered = str(candidate or "").strip()
+        if rendered:
+            return rendered
+    return ""
+
+
+def message_id_for_payload(payload: dict[str, Any]) -> str:
+    return str(payload.get("message_id") or payload.get("id") or "").strip()
+
+
+def attachments_for_payload(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    content = payload.get("content") if isinstance(payload.get("content"), dict) else {}
+    raw = content.get("attachments") if isinstance(content.get("attachments"), list) else payload.get("attachments")
+    return [dict(item) for item in raw if isinstance(item, dict)] if isinstance(raw, list) else []
+
+
+def external_user_id_for_payload(payload: dict[str, Any]) -> str:
+    identity = payload.get("identity") if isinstance(payload.get("identity"), dict) else {}
+    actor = payload.get("actor") if isinstance(payload.get("actor"), dict) else {}
+    for candidate in (
+        identity.get("external_user_id"),
+        actor.get("external_user_id"),
+        payload.get("external_user_id"),
+        payload.get("user_id"),
+        payload.get("from_user"),
+    ):
+        rendered = str(candidate or "").strip()
+        if rendered:
+            return rendered
+    return ""
+
+
+def display_name_for_payload(payload: dict[str, Any]) -> str:
+    identity = payload.get("identity") if isinstance(payload.get("identity"), dict) else {}
+    actor = payload.get("actor") if isinstance(payload.get("actor"), dict) else {}
+    for candidate in (
+        identity.get("display_name"),
+        actor.get("display_name"),
+        payload.get("display_name"),
+        payload.get("user_name"),
+        payload.get("from_user_name"),
+    ):
+        rendered = str(candidate or "").strip()
+        if rendered:
+            return rendered
+    return ""
+
+
+def locale_for_payload(payload: dict[str, Any]) -> str:
+    context = payload.get("context") if isinstance(payload.get("context"), dict) else {}
+    return str(payload.get("locale") or context.get("locale") or "").strip()
+
+
+def timezone_for_payload(payload: dict[str, Any]) -> str:
+    context = payload.get("context") if isinstance(payload.get("context"), dict) else {}
+    return str(payload.get("timezone") or context.get("timezone") or "").strip()
+
+
+def resolved_user_id_for_payload(payload: dict[str, Any]) -> str:
+    identity = payload.get("identity") if isinstance(payload.get("identity"), dict) else {}
+    actor = payload.get("actor") if isinstance(payload.get("actor"), dict) else {}
+    for candidate in (
+        identity.get("alphonse_user_id"),
+        identity.get("user_id"),
+        payload.get("alphonse_user_id"),
+        payload.get("resolved_user_id"),
+        payload.get("person_id"),
+        actor.get("user_id"),
+        actor.get("person_id"),
+    ):
+        rendered = str(candidate or "").strip()
+        if rendered:
+            return rendered
+    return ""

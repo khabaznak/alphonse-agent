@@ -3,10 +3,8 @@ from __future__ import annotations
 from alphonse.agent.actions.conscious_message_handler import IncomingMessageEnvelope
 from alphonse.agent.actions.conscious_message_handler import build_incoming_message_envelope
 from alphonse.agent.actions.handle_conscious_message import HandleConsciousMessageAction
-from alphonse.agent.nervous_system.migrate import apply_schema
-from alphonse.agent.nervous_system.seed import apply_seed
+from alphonse.agent.cortex.task_mode.task_record import TaskRecord
 from alphonse.agent.nervous_system.senses.bus import Bus, Signal
-from alphonse.agent.nervous_system.senses.cli import build_cli_user_message_signal
 
 
 def test_from_payload_resolves_actor_user_id_from_external_user_id(monkeypatch) -> None:
@@ -85,18 +83,6 @@ def test_handle_conscious_message_enqueues_pdca_slice(monkeypatch) -> None:
     called: dict[str, object] = {}
     presence: dict[str, object] = {}
 
-    monkeypatch.setattr(
-        "alphonse.agent.actions.handle_conscious_message.resolve_session_user_id",
-        lambda **_: "u-1",
-    )
-    monkeypatch.setattr(
-        "alphonse.agent.actions.handle_conscious_message.resolve_session_timezone",
-        lambda *_: "UTC",
-    )
-    monkeypatch.setattr(
-        "alphonse.agent.actions.handle_conscious_message.resolve_day_session",
-        lambda **_: {"session_id": "s-1"},
-    )
     def _enqueue(**kwargs):
         called.update(kwargs)
         return "task-123"
@@ -122,33 +108,28 @@ def test_handle_conscious_message_enqueues_pdca_slice(monkeypatch) -> None:
         text="Hello",
         correlation_id="c-1",
         actor_external_user_id="u-ext",
+        actor_user_id="u-1",
     )
     result = action.execute({"signal": Signal(type="sense.telegram.message.user.received", payload=envelope), "ctx": Bus()})
     assert result.intention_key == "NOOP"
     assert result.payload.get("task_id") == "task-123"
-    assert called.get("session_user_id") == "u-1"
+    assert set(called) == {"context", "task_record"}
+    assert isinstance(called.get("context"), dict)
+    task_record = called.get("task_record")
+    assert isinstance(task_record, TaskRecord)
+    assert task_record.user_id == "u-1"
+    assert task_record.correlation_id == "c-1"
+    assert task_record.goal == "Hello"
     assert presence.get("phase") == "acknowledged"
-    enqueued_envelope = called.get("envelope")
-    assert isinstance(enqueued_envelope, IncomingMessageEnvelope)
-    assert enqueued_envelope.message_id == "m-1"
+    assert presence.get("channel_type") == "telegram"
+    assert presence.get("channel_target") == "123"
+    assert presence.get("message_id") == "m-1"
 
 
 def test_handle_conscious_message_does_not_parse_control_intent(monkeypatch) -> None:
     action = HandleConsciousMessageAction()
     captured: dict[str, object] = {}
 
-    monkeypatch.setattr(
-        "alphonse.agent.actions.handle_conscious_message.resolve_session_user_id",
-        lambda **_: "u-1",
-    )
-    monkeypatch.setattr(
-        "alphonse.agent.actions.handle_conscious_message.resolve_session_timezone",
-        lambda *_: "UTC",
-    )
-    monkeypatch.setattr(
-        "alphonse.agent.actions.handle_conscious_message.resolve_day_session",
-        lambda **_: {"session_id": "s-1"},
-    )
     monkeypatch.setattr(
         "alphonse.agent.actions.handle_conscious_message.enqueue_pdca_slice",
         lambda **kwargs: captured.update(kwargs) or "task-cancel-test",
@@ -172,9 +153,9 @@ def test_handle_conscious_message_does_not_parse_control_intent(monkeypatch) -> 
     )
     result = action.execute({"signal": Signal(type="sense.telegram.message.user.received", payload=envelope), "ctx": Bus()})
     assert result.payload.get("task_id") == "task-cancel-test"
-    enqueued_envelope = captured.get("envelope")
-    assert isinstance(enqueued_envelope, IncomingMessageEnvelope)
-    assert enqueued_envelope.content.get("text") == "Please cancel task"
+    task_record = captured.get("task_record")
+    assert isinstance(task_record, TaskRecord)
+    assert task_record.goal == "Please cancel task"
 
 
 def test_handle_conscious_message_fail_fast_when_slicing_disabled(monkeypatch) -> None:
@@ -208,25 +189,13 @@ def test_handle_conscious_message_fail_fast_when_slicing_disabled(monkeypatch) -
     assert called == {}
 
 
-def test_handle_conscious_message_backfills_person_id_from_external_user_id(monkeypatch) -> None:
+def test_handle_conscious_message_uses_signal_correlation_fallback(monkeypatch) -> None:
     action = HandleConsciousMessageAction()
     captured: dict[str, object] = {}
 
     monkeypatch.setattr(
-        "alphonse.agent.actions.handle_conscious_message.resolve_session_user_id",
-        lambda **_: "u-1",
-    )
-    monkeypatch.setattr(
-        "alphonse.agent.actions.handle_conscious_message.resolve_session_timezone",
-        lambda *_: "UTC",
-    )
-    monkeypatch.setattr(
-        "alphonse.agent.actions.handle_conscious_message.resolve_day_session",
-        lambda **_: {"session_id": "s-1"},
-    )
-    monkeypatch.setattr(
         "alphonse.agent.actions.handle_conscious_message.enqueue_pdca_slice",
-        lambda **kwargs: captured.update(kwargs) or "task-backfill-1",
+        lambda **kwargs: captured.update(kwargs) or "task-correlation",
     )
     monkeypatch.setattr(
         "alphonse.agent.actions.handle_conscious_message.is_pdca_slicing_enabled",
@@ -236,152 +205,39 @@ def test_handle_conscious_message_backfills_person_id_from_external_user_id(monk
         "alphonse.agent.actions.handle_conscious_message.emit_presence_phase_changed",
         lambda **_: None,
     )
-    monkeypatch.setattr(
-        "alphonse.agent.actions.conscious_message_handler.identity.resolve_service_id",
-        lambda service_key: 1 if str(service_key or "").strip() == "telegram" else None,
-    )
-    monkeypatch.setattr(
-        "alphonse.agent.actions.conscious_message_handler.identity.resolve_user_id",
-        lambda **kwargs: "owner-1" if kwargs == {"service_id": 1, "service_user_id": "u-ext"} else None,
-    )
 
     envelope = build_incoming_message_envelope(
-        message_id="m-backfill-1",
+        message_id="m-correlation",
         channel_type="telegram",
         channel_target="123",
         provider="telegram",
         text="Hello",
-        correlation_id="c-backfill-1",
+        correlation_id=None,
         actor_external_user_id="u-ext",
     )
-    result = action.execute({"signal": Signal(type="sense.telegram.message.user.received", payload=envelope), "ctx": Bus()})
-    assert result.payload.get("task_id") == "task-backfill-1"
-    enqueued_envelope = captured.get("envelope")
-    assert isinstance(enqueued_envelope, IncomingMessageEnvelope)
-    assert enqueued_envelope.actor.get("user_id") == "owner-1"
-    assert enqueued_envelope.actor.get("external_user_id") == "u-ext"
+    result = action.execute(
+        {
+            "signal": Signal(
+                type="sense.telegram.message.user.received",
+                payload=envelope,
+                correlation_id="signal-correlation",
+            ),
+            "ctx": Bus(),
+        }
+    )
+    assert result.payload.get("task_id") == "task-correlation"
+    task_record = captured.get("task_record")
+    assert isinstance(task_record, TaskRecord)
+    assert task_record.correlation_id == "signal-correlation"
 
 
-def test_handle_conscious_message_cli_seeded_identity_has_no_missing_actor_context(monkeypatch, tmp_path) -> None:
-    db_path = tmp_path / "nerve-db"
-    monkeypatch.setenv("NERVE_DB_PATH", str(db_path))
-    apply_schema(db_path)
-    apply_seed(db_path)
-
-    action = HandleConsciousMessageAction()
-    monkeypatch.setattr(
-        "alphonse.agent.actions.handle_conscious_message.resolve_session_user_id",
-        lambda **_: "owner-1",
-    )
-    monkeypatch.setattr(
-        "alphonse.agent.actions.handle_conscious_message.resolve_session_timezone",
-        lambda *_: "UTC",
-    )
-    monkeypatch.setattr(
-        "alphonse.agent.actions.handle_conscious_message.resolve_day_session",
-        lambda **_: {"session_id": "owner-1|2026-03-12", "user_id": "owner-1", "date": "2026-03-12"},
-    )
-    monkeypatch.setattr(
-        "alphonse.agent.actions.handle_conscious_message.enqueue_pdca_slice",
-        lambda **_: "task-cli-ctx-1",
-    )
-    monkeypatch.setattr(
-        "alphonse.agent.actions.handle_conscious_message.is_pdca_slicing_enabled",
-        lambda: True,
-    )
-    monkeypatch.setattr(
-        "alphonse.agent.actions.handle_conscious_message.emit_presence_phase_changed",
-        lambda **_: None,
-    )
-
-    signal = build_cli_user_message_signal(
-        text="Hi Alphonse!",
-        correlation_id="c-cli-1",
-        metadata={"source": "test.cli"},
-    )
-    _ = action.execute({"signal": signal, "ctx": Bus()})
-
-
-def test_handle_conscious_message_writes_through_user_message_to_day_session(monkeypatch) -> None:
+def test_handle_conscious_message_preserves_attachment_only_payload(monkeypatch) -> None:
     action = HandleConsciousMessageAction()
     captured: dict[str, object] = {}
 
     monkeypatch.setattr(
-        "alphonse.agent.actions.handle_conscious_message.resolve_session_user_id",
-        lambda **_: "u-1",
-    )
-    monkeypatch.setattr(
-        "alphonse.agent.actions.handle_conscious_message.resolve_session_timezone",
-        lambda *_: "UTC",
-    )
-    monkeypatch.setattr(
-        "alphonse.agent.actions.handle_conscious_message.resolve_day_session",
-        lambda **_: {"session_id": "u-1|2026-03-12", "user_id": "u-1", "date": "2026-03-12"},
-    )
-    monkeypatch.setattr(
-        "alphonse.agent.actions.handle_conscious_message.build_next_session_state",
-        lambda **kwargs: captured.update({"build": kwargs}) or {"session_id": "u-1|2026-03-12", "user_id": "u-1", "date": "2026-03-12"},
-    )
-    monkeypatch.setattr(
-        "alphonse.agent.actions.handle_conscious_message.commit_session_state",
-        lambda state: captured.update({"committed": state}),
-    )
-    monkeypatch.setattr(
         "alphonse.agent.actions.handle_conscious_message.enqueue_pdca_slice",
-        lambda **_: "task-write-through",
-    )
-    monkeypatch.setattr(
-        "alphonse.agent.actions.handle_conscious_message.is_pdca_slicing_enabled",
-        lambda: True,
-    )
-    monkeypatch.setattr(
-        "alphonse.agent.actions.handle_conscious_message.emit_presence_phase_changed",
-        lambda **_: None,
-    )
-
-    envelope = build_incoming_message_envelope(
-        message_id="m-write-through",
-        channel_type="telegram",
-        channel_target="123",
-        provider="telegram",
-        text="This should be in history immediately",
-        correlation_id="cid-write-through",
-    )
-    _ = action.execute({"signal": Signal(type="sense.telegram.message.user.received", payload=envelope), "ctx": Bus()})
-    build_kwargs = captured.get("build")
-    assert isinstance(build_kwargs, dict)
-    assert build_kwargs.get("user_message") == "This should be in history immediately"
-    assert build_kwargs.get("assistant_message") == ""
-    assert "committed" in captured
-
-
-def test_handle_conscious_message_attachment_only_writes_history_summary(monkeypatch) -> None:
-    action = HandleConsciousMessageAction()
-    captured: dict[str, object] = {}
-
-    monkeypatch.setattr(
-        "alphonse.agent.actions.handle_conscious_message.resolve_session_user_id",
-        lambda **_: "u-1",
-    )
-    monkeypatch.setattr(
-        "alphonse.agent.actions.handle_conscious_message.resolve_session_timezone",
-        lambda *_: "UTC",
-    )
-    monkeypatch.setattr(
-        "alphonse.agent.actions.handle_conscious_message.resolve_day_session",
-        lambda **_: {"session_id": "u-1|2026-03-12", "user_id": "u-1", "date": "2026-03-12"},
-    )
-    monkeypatch.setattr(
-        "alphonse.agent.actions.handle_conscious_message.build_next_session_state",
-        lambda **kwargs: captured.update({"build": kwargs}) or {"session_id": "u-1|2026-03-12", "user_id": "u-1", "date": "2026-03-12"},
-    )
-    monkeypatch.setattr(
-        "alphonse.agent.actions.handle_conscious_message.commit_session_state",
-        lambda state: captured.update({"committed": state}),
-    )
-    monkeypatch.setattr(
-        "alphonse.agent.actions.handle_conscious_message.enqueue_pdca_slice",
-        lambda **_: "task-attachment-only",
+        lambda **kwargs: captured.update(kwargs) or "task-attachment-only",
     )
     monkeypatch.setattr(
         "alphonse.agent.actions.handle_conscious_message.is_pdca_slicing_enabled",
@@ -398,68 +254,11 @@ def test_handle_conscious_message_attachment_only_writes_history_summary(monkeyp
         channel_target="123",
         provider="telegram",
         text="",
-        attachments=[{"kind": "photo", "provider": "telegram", "file_id": "photo-1"}],
+        attachments=[{"kind": "voice", "provider": "telegram", "file_id": "voice-1"}],
         correlation_id="cid-attach-only",
     )
-    _ = action.execute({"signal": Signal(type="sense.telegram.message.user.received", payload=envelope), "ctx": Bus()})
-    build_kwargs = captured.get("build")
-    assert isinstance(build_kwargs, dict)
-    assert str(build_kwargs.get("user_message") or "").startswith("[attachments:")
-
-
-def test_handle_conscious_message_transcribes_telegram_voice_when_text_empty(monkeypatch) -> None:
-    action = HandleConsciousMessageAction()
-    captured: dict[str, object] = {}
-
-    class _FakeTranscribeTool:
-        def execute(self, *, file_id: str, language: str | None = None, sandbox_alias: str = "telegram") -> dict[str, object]:
-            _ = (language, sandbox_alias)
-            return {
-                "output": {"text": f"transcript for {file_id}"},
-                "exception": None,
-                "metadata": {"tool": "transcribe_telegram_audio"},
-            }
-
-    monkeypatch.setattr(
-        "alphonse.agent.actions.handle_conscious_message.TranscribeTelegramAudioTool",
-        _FakeTranscribeTool,
-    )
-    monkeypatch.setattr(
-        "alphonse.agent.actions.handle_conscious_message.resolve_session_user_id",
-        lambda **_: "u-1",
-    )
-    monkeypatch.setattr(
-        "alphonse.agent.actions.handle_conscious_message.resolve_session_timezone",
-        lambda *_: "UTC",
-    )
-    monkeypatch.setattr(
-        "alphonse.agent.actions.handle_conscious_message.resolve_day_session",
-        lambda **_: {"session_id": "s-1"},
-    )
-    monkeypatch.setattr(
-        "alphonse.agent.actions.handle_conscious_message.enqueue_pdca_slice",
-        lambda **kwargs: captured.update(kwargs) or "task-transcribed",
-    )
-    monkeypatch.setattr(
-        "alphonse.agent.actions.handle_conscious_message.is_pdca_slicing_enabled",
-        lambda: True,
-    )
-    monkeypatch.setattr(
-        "alphonse.agent.actions.handle_conscious_message.emit_presence_phase_changed",
-        lambda **_: None,
-    )
-
-    envelope = build_incoming_message_envelope(
-        message_id="m-voice-only",
-        channel_type="telegram",
-        channel_target="123",
-        provider="telegram",
-        text="",
-        attachments=[{"kind": "voice", "provider": "telegram", "file_id": "voice-1"}],
-        correlation_id="cid-voice-only",
-    )
     result = action.execute({"signal": Signal(type="sense.telegram.message.user.received", payload=envelope), "ctx": Bus()})
-    assert result.payload.get("task_id") == "task-transcribed"
-    enqueued_envelope = captured.get("envelope")
-    assert isinstance(enqueued_envelope, IncomingMessageEnvelope)
-    assert str(enqueued_envelope.content.get("text") or "") == "transcript for voice-1"
+    assert result.payload.get("task_id") == "task-attachment-only"
+    task_record = captured.get("task_record")
+    assert isinstance(task_record, TaskRecord)
+    assert task_record.goal.startswith("[attachments:")

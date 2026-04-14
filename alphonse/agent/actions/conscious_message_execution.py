@@ -33,7 +33,7 @@ class ConsciousMessageExecutionDeps:
     attach_transition_sink: Callable[[dict[str, object], IncomingContext], bool]
     pdca_slicing_enabled: Callable[[], bool]
     enqueue_pdca_slice: Callable[..., str]
-    emit_channel_transition_event: Callable[[IncomingContext, dict[str, object]], None]
+    emit_channel_transition_event: Callable[..., None]
     flush_cognition_state_if_task_succeeded: Callable[..., dict[str, Any]]
     resolve_assistant_session_message: Callable[..., str]
     maybe_emit_local_audio_reply: Callable[..., None]
@@ -90,7 +90,14 @@ class ConsciousMessageExecutionHandler:
                 "address": incoming.address,
             },
         )
-        self._deps.emit_presence_phase_changed(incoming=incoming, phase="acknowledged", correlation_id=correlation_id)
+        self._deps.emit_presence_phase_changed(
+            channel_type=incoming.channel_type,
+            channel_target=incoming.address,
+            user_id=incoming.person_id,
+            message_id=incoming.message_id,
+            phase="acknowledged",
+            correlation_id=correlation_id,
+        )
         session_timezone = self._deps.resolve_session_timezone(incoming)
         session_user_id = self._deps.resolve_session_user_id(incoming=incoming, payload=payload)
         day_session = resolve_day_session(
@@ -127,12 +134,7 @@ class ConsciousMessageExecutionHandler:
             )
             task_id = self._deps.enqueue_pdca_slice(
                 context=context,
-                session_user_id=session_user_id,
-                day_session=day_session,
-                envelope=envelope,
-                correlation_id=correlation_id,
                 task_record=task_record,
-                existing_task=existing_task,
             )
             updated_day_session = self._deps.build_next_session_state_fn(
                 previous=day_session,
@@ -203,7 +205,14 @@ class ConsciousMessageExecutionHandler:
             emit_agent_transitions_from_meta(
                 incoming=incoming,
                 meta=result.meta if isinstance(result.meta, dict) else {},
-                emit_presence_event=lambda ctx, event: self._deps.emit_channel_transition_event(ctx, event),
+                emit_presence_event=lambda ctx, event: self._deps.emit_channel_transition_event(
+                    channel_type=ctx.channel_type,
+                    channel_target=ctx.address,
+                    user_id=ctx.person_id,
+                    message_id=ctx.message_id,
+                    event=event,
+                    correlation_id=ctx.correlation_id,
+                ),
                 skip_phases=set(),
             )
         self._deps.log_manager.emit(

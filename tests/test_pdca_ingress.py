@@ -6,6 +6,7 @@ from alphonse.agent.actions.conscious_message_handler import build_incoming_mess
 from alphonse.agent.actions.pdca_task_boundary import build_task_record_for_message
 from alphonse.agent.actions.pdca_task_boundary import select_pending_pdca_task_for_message
 from alphonse.agent.nervous_system.migrate import apply_schema
+from alphonse.agent.nervous_system.senses.bus import Signal
 from alphonse.agent.nervous_system.pdca_queue_store import get_pdca_task
 from alphonse.agent.nervous_system.pdca_queue_store import upsert_pdca_task
 from alphonse.agent.services.pdca_ingress import enqueue_pdca_slice
@@ -35,6 +36,16 @@ def _envelope(
 
 def _day_session(user_id: str = "u-1") -> dict[str, object]:
     return {"session_id": f"{user_id}|2026-03-12", "user_id": user_id, "date": "2026-03-12"}
+
+
+def _context(envelope: IncomingMessageEnvelope, correlation_id: str) -> dict[str, object]:
+    return {
+        "signal": Signal(
+            type="sense.user_communication.message.user.received",
+            payload=envelope.to_dict(),
+            correlation_id=correlation_id,
+        ),
+    }
 
 
 def _task_record(
@@ -88,18 +99,13 @@ def test_enqueue_pdca_slice_buffers_inputs_for_running_task(tmp_path: Path, monk
     existing_task = get_pdca_task(task_id)
     assert isinstance(existing_task, dict)
     returned = enqueue_pdca_slice(
-        context={},
-        session_user_id="u-1",
-        day_session=day_session,
-        envelope=envelope,
-        correlation_id="cid-m-2",
+        context=_context(envelope, "cid-m-2"),
         task_record=_task_record(
             envelope=envelope,
             day_session=day_session,
             correlation_id="cid-m-2",
             existing_task=existing_task,
         ),
-        existing_task=existing_task,
     )
     assert returned == task_id
 
@@ -124,30 +130,25 @@ def test_enqueue_pdca_slice_dedupes_same_message_id_and_correlation(tmp_path: Pa
     apply_schema(db_path)
 
     task_id = upsert_pdca_task(
-        {
-            "task_id": "task-buffer-2",
-            "owner_id": "u-1",
-            "conversation_key": "telegram:8553589429",
-            "status": "queued",
-        }
-    )
+            {
+                "task_id": "task-buffer-2",
+                "owner_id": "u-1",
+                "conversation_key": "telegram:8553589429",
+                "status": "running",
+            }
+        )
     envelope = _envelope(message_id="m-dup", text="same")
     day_session = _day_session("u-1")
     existing_task = get_pdca_task(task_id)
     assert isinstance(existing_task, dict)
     kwargs = dict(
-        context={},
-        session_user_id="u-1",
-        day_session=day_session,
-        envelope=envelope,
-        correlation_id="cid-dup",
+        context=_context(envelope, "cid-dup"),
         task_record=_task_record(
             envelope=envelope,
             day_session=day_session,
             correlation_id="cid-dup",
             existing_task=existing_task,
         ),
-        existing_task=existing_task,
     )
 
     _ = enqueue_pdca_slice(**kwargs)
@@ -188,11 +189,7 @@ def test_enqueue_pdca_slice_rejects_mismatched_existing_task_and_creates_new_tas
     existing_task = get_pdca_task(task_id)
     assert isinstance(existing_task, dict)
     returned = enqueue_pdca_slice(
-        context={},
-        session_user_id="not-owner",
-        day_session=day_session,
-        envelope=envelope,
-        correlation_id="cid-policy",
+        context=_context(envelope, "cid-policy"),
         task_record=_task_record(
             envelope=envelope,
             session_user_id="not-owner",
@@ -200,7 +197,6 @@ def test_enqueue_pdca_slice_rejects_mismatched_existing_task_and_creates_new_tas
             correlation_id="cid-policy",
             existing_task=existing_task,
         ),
-        existing_task=existing_task,
     )
     assert returned != task_id
 
@@ -248,18 +244,13 @@ def test_enqueue_pdca_slice_accepts_attachment_only_input(tmp_path: Path, monkey
     existing_task = get_pdca_task(task_id)
     assert isinstance(existing_task, dict)
     returned = enqueue_pdca_slice(
-        context={},
-        session_user_id="u-1",
-        day_session=day_session,
-        envelope=envelope,
-        correlation_id="cid-a1",
+        context=_context(envelope, "cid-a1"),
         task_record=_task_record(
             envelope=envelope,
             day_session=day_session,
             correlation_id="cid-a1",
             existing_task=existing_task,
         ),
-        existing_task=existing_task,
     )
     assert returned == task_id
 
@@ -310,18 +301,13 @@ def test_enqueue_pdca_slice_preserves_contact_payload_and_extras(tmp_path: Path,
     existing_task = get_pdca_task(task_id)
     assert isinstance(existing_task, dict)
     returned = enqueue_pdca_slice(
-        context={},
-        session_user_id="u-1",
-        day_session=day_session,
-        envelope=envelope,
-        correlation_id="cid-contact-1",
+        context=_context(envelope, "cid-contact-1"),
         task_record=_task_record(
             envelope=envelope,
             day_session=day_session,
             correlation_id="cid-contact-1",
             existing_task=existing_task,
         ),
-        existing_task=existing_task,
     )
     assert returned == task_id
 
@@ -353,11 +339,7 @@ def test_enqueue_pdca_slice_persists_correlation_in_metadata_state(tmp_path: Pat
     envelope = _envelope(message_id="m-corr-state", text="create task with correlation")
     day_session = _day_session("u-1")
     task_id = enqueue_pdca_slice(
-        context={},
-        session_user_id="u-1",
-        day_session=day_session,
-        envelope=envelope,
-        correlation_id="cid-corr-state",
+        context=_context(envelope, "cid-corr-state"),
         task_record=_task_record(
             envelope=envelope,
             day_session=day_session,
@@ -412,18 +394,13 @@ def test_enqueue_pdca_slice_keeps_non_contact_media_behavior(tmp_path: Path, mon
     existing_task = get_pdca_task(task_id)
     assert isinstance(existing_task, dict)
     _ = enqueue_pdca_slice(
-        context={},
-        session_user_id="u-1",
-        day_session=day_session,
-        envelope=envelope,
-        correlation_id="cid-photo-1",
+        context=_context(envelope, "cid-photo-1"),
         task_record=_task_record(
             envelope=envelope,
             day_session=day_session,
             correlation_id="cid-photo-1",
             existing_task=existing_task,
         ),
-        existing_task=existing_task,
     )
 
     task = get_pdca_task(task_id)
@@ -480,11 +457,7 @@ def test_enqueue_pdca_slice_creates_new_task_instead_of_routing_to_running_owner
     envelope = _envelope(message_id="m-owner-route", text="new greeting")
     day_session = _day_session("u-1")
     returned = enqueue_pdca_slice(
-        context={},
-        session_user_id="u-1",
-        day_session=day_session,
-        envelope=envelope,
-        correlation_id="cid-owner-route",
+        context=_context(envelope, "cid-owner-route"),
         task_record=_task_record(
             envelope=envelope,
             day_session=day_session,
@@ -584,11 +557,7 @@ def test_enqueue_pdca_slice_force_new_task_skips_running_task(tmp_path: Path, mo
     )
     day_session = _day_session("u-1")
     returned = enqueue_pdca_slice(
-        context={},
-        session_user_id="u-1",
-        day_session=day_session,
-        envelope=envelope,
-        correlation_id="cid-force-new",
+        context=_context(envelope, "cid-force-new"),
         task_record=_task_record(
             envelope=envelope,
             day_session=day_session,

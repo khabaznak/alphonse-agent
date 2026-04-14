@@ -3,17 +3,19 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
-from alphonse.agent.actions.conscious_message_handler import IncomingMessageEnvelope
 from alphonse.agent.cortex.task_mode.task_record import TaskRecord
 from alphonse.agent.nervous_system.pdca_queue_store import (
     append_pdca_event,
+    get_latest_pdca_task_for_conversation,
     update_pdca_task_metadata,
     update_pdca_task_status,
     upsert_pdca_task,
 )
 from alphonse.agent.observability.log_manager import get_log_manager
 from alphonse.agent.services.pdca_queue_runner import emit_pdca_dispatch_kick
+from alphonse.agent.session.day_state import resolve_day_session
 from alphonse.agent.session.day_state import render_recent_conversation_block
+from alphonse.config import settings
 
 _LOG = get_log_manager()
 
@@ -122,12 +124,6 @@ def _json_safe_copy(value: Any) -> Any:
     return _JSON_UNSAFE
 
 
-def _extract_envelope_attachments(envelope: IncomingMessageEnvelope) -> list[dict[str, Any]]:
-    content = envelope.content if isinstance(envelope.content, dict) else {}
-    attachments = content.get("attachments") if isinstance(content.get("attachments"), list) else []
-    return _normalize_attachments(attachments)
-
-
 def _render_attachment_summary(attachments: list[dict[str, Any]]) -> str:
     if not attachments:
         return ""
@@ -208,11 +204,10 @@ def _append_input_record(
 
 def _resolve_actor_id(
     *,
-    envelope: IncomingMessageEnvelope,
+    payload: dict[str, Any],
     session_user_id: str,
 ) -> str:
-    actor = envelope.actor if isinstance(envelope.actor, dict) else {}
-    for value in (actor.get("user_id"), session_user_id):
+    for value in (resolved_user_id_for_payload(payload), session_user_id):
         rendered = str(value or "").strip()
         if rendered:
             return rendered
@@ -246,29 +241,56 @@ def _ensure_initial_identity(
 def enqueue_pdca_slice(
     *,
     context: dict[str, Any],
-    session_user_id: str,
-    day_session: dict[str, Any],
-    envelope: IncomingMessageEnvelope,
-    correlation_id: str,
     task_record: TaskRecord,
-    existing_task: dict[str, Any] | None = None,
 ) -> str:
     now = now_iso()
-    channel = envelope.channel if isinstance(envelope.channel, dict) else {}
-    content = envelope.content if isinstance(envelope.content, dict) else {}
-    channel_type = str(channel.get("type") or "").strip()
-    channel_target = str(channel.get("target") or "").strip()
-    message_id = str(envelope.message_id or "").strip()
+    signal = context.get("signal") if isinstance(context, dict) else None
+    raw_payload = getattr(signal, "payload", {}) if signal is not None else {}
+    if not isinstance(raw_payload, dict):
+        raise ValueError("invalid_conscious_payload: payload must be an object")
+    payload = dict(raw_payload)
+    correlation_id = (
+        str(task_record.correlation_id or "").strip()
+        or str(payload.get("correlation_id") or "").strip()
+        or str(getattr(signal, "correlation_id", "") or "").strip()
+    )
+    channel_type = channel_type_for_payload(payload)
+    channel_target = channel_target_for_payload(payload)
+    if not channel_type:
+        raise ValueError("invalid_conscious_payload: missing channel type")
+    if not channel_target:
+        raise ValueError("invalid_conscious_payload: missing channel target")
+    message_id = message_id_for_payload(payload)
     session_key = f"{channel_type}:{channel_target}"
-    attachments = _extract_envelope_attachments(envelope)
-    user_text = str(content.get("text") or "").strip()
+    attachments = _normalize_attachments(attachments_for_payload(payload))
+    user_text = message_text_for_payload(payload)
     if not user_text:
         user_text = _render_attachment_summary(attachments)
-    force_new_task = _force_new_task(envelope=envelope)
+    session_user_id = task_record.user_id or resolved_user_id_for_payload(payload) or "anonymous"
+    day_session = resolve_day_session(
+        user_id=session_user_id,
+        channel=channel_type,
+        timezone_name=timezone_for_payload(payload) or settings.get_timezone(),
+    )
+    task_record.user_id = task_record.user_id or str(session_user_id or "").strip() or None
+    task_record.correlation_id = task_record.correlation_id or str(correlation_id or "").strip()
+    task_record.goal = task_record.goal or user_text
+    task_record.status = task_record.status or "running"
+    task_record.set_recent_conversation_md(render_recent_conversation_block(day_session))
+    force_new_task = _force_new_task(payload=payload)
+    existing_task: dict[str, Any] | None = None
+    if not force_new_task:
+        try:
+            candidate = get_latest_pdca_task_for_conversation(
+                conversation_key=session_key,
+                statuses=["running", "waiting_user"],
+            )
+        except Exception:
+            candidate = None
+        existing_task = candidate if isinstance(candidate, dict) else None
     existing = (
         existing_task
         if isinstance(existing_task, dict)
-        and not force_new_task
         and _existing_task_matches_ingress(
             existing_task=existing_task,
             session_user_id=session_user_id,
@@ -279,7 +301,7 @@ def enqueue_pdca_slice(
     if isinstance(existing, dict):
         task_id = str(existing.get("task_id") or "").strip()
         metadata = dict(existing.get("metadata") or {}) if isinstance(existing.get("metadata"), dict) else {}
-        actor_id = _resolve_actor_id(envelope=envelope, session_user_id=session_user_id)
+        actor_id = _resolve_actor_id(payload=payload, session_user_id=session_user_id)
         _ensure_initial_identity(
             metadata=metadata,
             initial_message_id="",
@@ -352,11 +374,6 @@ def enqueue_pdca_slice(
         )
         return task_id
 
-    task_record.task_id = None
-    task_record.user_id = task_record.user_id or str(session_user_id or "").strip() or None
-    task_record.correlation_id = task_record.correlation_id or str(correlation_id or "").strip()
-    task_record.goal = task_record.goal or user_text
-    task_record.status = task_record.status or "running"
     metadata = {
         "pending_user_text": user_text,
         "last_user_message": user_text,
@@ -374,7 +391,7 @@ def enqueue_pdca_slice(
                 "correlation_id": str(correlation_id or "").strip(),
                 "text": user_text,
                 "channel": channel_type,
-                "actor_id": _resolve_actor_id(envelope=envelope, session_user_id=session_user_id),
+                "actor_id": _resolve_actor_id(payload=payload, session_user_id=session_user_id),
                 "attachments": attachments,
                 "received_at": now,
                 "consumed_at": None,
@@ -392,10 +409,10 @@ def enqueue_pdca_slice(
             "check_provenance": "entry",
         },
     }
-    source = _payload_source(envelope=envelope)
+    source = _payload_source(payload=payload)
     if source:
         metadata["trigger_source"] = source
-    job_id = _payload_job_id(envelope=envelope)
+    job_id = _payload_job_id(payload=payload)
     if job_id:
         metadata["trigger_job_id"] = job_id
     metadata["force_new_task"] = bool(force_new_task)
@@ -431,11 +448,85 @@ def enqueue_pdca_slice(
     return task_id
 
 
-def _force_new_task(*, envelope: IncomingMessageEnvelope) -> bool:
-    controls = envelope.controls if isinstance(envelope.controls, dict) else {}
+def message_text_for_payload(payload: dict[str, Any]) -> str:
+    content = payload.get("content") if isinstance(payload.get("content"), dict) else {}
+    text = str(content.get("text") or payload.get("text") or "").strip()
+    if text:
+        return text
+    return ""
+
+
+def channel_type_for_payload(payload: dict[str, Any]) -> str:
+    transport = payload.get("transport") if isinstance(payload.get("transport"), dict) else {}
+    channel = payload.get("channel") if isinstance(payload.get("channel"), dict) else {}
+    for candidate in (
+        transport.get("channel_type"),
+        channel.get("type"),
+        payload.get("channel_type"),
+        payload.get("channel"),
+        payload.get("service_key"),
+        payload.get("provider"),
+        payload.get("origin"),
+    ):
+        rendered = str(candidate or "").strip()
+        if rendered:
+            return rendered
+    return ""
+
+
+def channel_target_for_payload(payload: dict[str, Any]) -> str:
+    transport = payload.get("transport") if isinstance(payload.get("transport"), dict) else {}
+    channel = payload.get("channel") if isinstance(payload.get("channel"), dict) else {}
+    for candidate in (
+        transport.get("channel_target"),
+        channel.get("target"),
+        payload.get("channel_target"),
+        payload.get("target"),
+    ):
+        rendered = str(candidate or "").strip()
+        if rendered:
+            return rendered
+    return ""
+
+
+def message_id_for_payload(payload: dict[str, Any]) -> str:
+    return str(payload.get("message_id") or payload.get("id") or "").strip()
+
+
+def attachments_for_payload(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    content = payload.get("content") if isinstance(payload.get("content"), dict) else {}
+    raw = content.get("attachments") if isinstance(content.get("attachments"), list) else payload.get("attachments")
+    return [dict(item) for item in raw if isinstance(item, dict)] if isinstance(raw, list) else []
+
+
+def timezone_for_payload(payload: dict[str, Any]) -> str:
+    context = payload.get("context") if isinstance(payload.get("context"), dict) else {}
+    return str(payload.get("timezone") or context.get("timezone") or "").strip()
+
+
+def resolved_user_id_for_payload(payload: dict[str, Any]) -> str:
+    identity = payload.get("identity") if isinstance(payload.get("identity"), dict) else {}
+    actor = payload.get("actor") if isinstance(payload.get("actor"), dict) else {}
+    for candidate in (
+        identity.get("alphonse_user_id"),
+        identity.get("user_id"),
+        payload.get("alphonse_user_id"),
+        payload.get("resolved_user_id"),
+        payload.get("person_id"),
+        actor.get("user_id"),
+        actor.get("person_id"),
+    ):
+        rendered = str(candidate or "").strip()
+        if rendered:
+            return rendered
+    return ""
+
+
+def _force_new_task(*, payload: dict[str, Any]) -> bool:
+    controls = payload.get("controls") if isinstance(payload.get("controls"), dict) else {}
     if _as_bool(controls.get("force_new_task")):
         return True
-    source = _payload_source(envelope=envelope)
+    source = _payload_source(payload=payload)
     return source in {"job_runner", "job_trigger", "jobs_reconcile"}
 
 
@@ -452,16 +543,16 @@ def _existing_task_matches_ingress(
     return True
 
 
-def _payload_source(*, envelope: IncomingMessageEnvelope) -> str:
-    metadata = envelope.metadata if isinstance(envelope.metadata, dict) else {}
-    rendered = str(metadata.get("source") or "").strip().lower()
+def _payload_source(*, payload: dict[str, Any]) -> str:
+    metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
+    rendered = str(payload.get("source") or metadata.get("source") or "").strip().lower()
     return rendered
 
 
-def _payload_job_id(*, envelope: IncomingMessageEnvelope) -> str:
-    metadata = envelope.metadata if isinstance(envelope.metadata, dict) else {}
+def _payload_job_id(*, payload: dict[str, Any]) -> str:
+    metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
     job = metadata.get("job") if isinstance(metadata.get("job"), dict) else {}
-    candidate = str(metadata.get("job_id") or job.get("job_id") or "").strip()
+    candidate = str(payload.get("job_id") or metadata.get("job_id") or job.get("job_id") or "").strip()
     return candidate
 
 
