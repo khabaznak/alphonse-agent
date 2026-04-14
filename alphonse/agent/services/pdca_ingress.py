@@ -249,11 +249,6 @@ def enqueue_pdca_slice(
     if not isinstance(raw_payload, dict):
         raise ValueError("invalid_conscious_payload: payload must be an object")
     payload = dict(raw_payload)
-    correlation_id = (
-        str(task_record.correlation_id or "").strip()
-        or str(payload.get("correlation_id") or "").strip()
-        or str(getattr(signal, "correlation_id", "") or "").strip()
-    )
     channel_type = channel_type_for_payload(payload)
     channel_target = channel_target_for_payload(payload)
     if not channel_type:
@@ -266,18 +261,16 @@ def enqueue_pdca_slice(
     user_text = message_text_for_payload(payload)
     if not user_text:
         user_text = _render_attachment_summary(attachments)
-    session_user_id = task_record.user_id or resolved_user_id_for_payload(payload) or "anonymous"
+
     day_session = resolve_day_session(
-        user_id=session_user_id,
+        user_id=task_record.user_id,
         channel=channel_type,
         timezone_name=timezone_for_payload(payload) or settings.get_timezone(),
     )
-    task_record.user_id = task_record.user_id or str(session_user_id or "").strip() or None
-    task_record.correlation_id = task_record.correlation_id or str(correlation_id or "").strip()
-    task_record.goal = task_record.goal or user_text
-    task_record.status = task_record.status or "running"
+
     task_record.set_recent_conversation_md(render_recent_conversation_block(day_session))
     force_new_task = _force_new_task(payload=payload)
+
     existing_task: dict[str, Any] | None = None
     if not force_new_task:
         try:
@@ -293,60 +286,35 @@ def enqueue_pdca_slice(
         if isinstance(existing_task, dict)
         and _existing_task_matches_ingress(
             existing_task=existing_task,
-            session_user_id=session_user_id,
+            session_user_id=task_record.user_id,
             session_key=session_key,
         )
         else None
     )
     if isinstance(existing, dict):
         task_id = str(existing.get("task_id") or "").strip()
-        metadata = dict(existing.get("metadata") or {}) if isinstance(existing.get("metadata"), dict) else {}
-        actor_id = _resolve_actor_id(payload=payload, session_user_id=session_user_id)
-        _ensure_initial_identity(
-            metadata=metadata,
-            initial_message_id="",
-            initial_correlation_id="",
-        )
-        metadata, buffered_count = _append_input_record(
-            metadata=metadata,
-            message_id=message_id,
+        metadata, buffered_count = _build_ingress_metadata(
+            existing=existing,
+            payload=payload,
+            task_record=task_record,
+            session_key=session_key,
             channel_type=channel_type,
-            correlation_id=correlation_id,
+            channel_target=channel_target,
+            message_id=message_id,
             user_text=user_text,
             attachments=attachments,
-            actor_id=actor_id,
+            day_session=day_session,
+            force_new_task=force_new_task,
             now=now,
         )
-        metadata["pending_user_text"] = user_text
-        metadata["last_user_message"] = user_text
-        metadata["last_user_channel"] = channel_type
-        metadata["last_user_target"] = channel_target
-        metadata["last_user_message_id"] = message_id
-        metadata["last_enqueue_correlation_id"] = correlation_id
-        metadata["last_enqueued_at"] = now
-        state_snapshot = metadata.get("state") if isinstance(metadata.get("state"), dict) else {}
-        state_snapshot = dict(state_snapshot)
-        state_snapshot["conversation_key"] = state_snapshot.get("conversation_key") or session_key
-        state_snapshot["chat_id"] = state_snapshot.get("chat_id") or session_key
-        state_snapshot["correlation_id"] = str(correlation_id or "").strip() or state_snapshot.get("correlation_id")
-        state_snapshot["task_record"] = task_record.to_dict()
-        state_snapshot["message_id"] = message_id or state_snapshot.get("message_id")
-        state_snapshot["session_state"] = state_snapshot.get("session_state") or day_session
-        state_snapshot["recent_conversation_block"] = (
-            state_snapshot.get("recent_conversation_block") or render_recent_conversation_block(day_session)
-        )
-        state_snapshot["check_provenance"] = "slice_resume"
-        metadata["state"] = state_snapshot
         status = str(existing.get("status") or "").strip().lower()
-        if status == "running":
-            metadata["input_dirty"] = True
         update_pdca_task_metadata(task_id=task_id, metadata=metadata)
         if status in {"waiting_user", "paused"}:
             update_pdca_task_status(task_id=task_id, status="queued")
         _emit_dispatch_kick(
             context=context,
             task_id=task_id,
-            correlation_id=correlation_id,
+            correlation_id=task_record.correlation_id or "",
             reason="ingress_existing_task",
         )
         append_pdca_event(
@@ -359,12 +327,12 @@ def enqueue_pdca_slice(
                 "input_dirty": bool(metadata.get("input_dirty")),
                 "attachment_count": len(attachments),
             },
-            correlation_id=correlation_id,
+            correlation_id=task_record.correlation_id,
         )
         _LOG.emit(
             event="pdca.input.buffered",
             component="services.pdca_ingress",
-            correlation_id=correlation_id or None,
+            correlation_id=task_record.correlation_id or None,
             channel=channel_type or None,
             payload={
                 "task_id": task_id,
@@ -374,51 +342,23 @@ def enqueue_pdca_slice(
         )
         return task_id
 
-    metadata = {
-        "pending_user_text": user_text,
-        "last_user_message": user_text,
-        "last_user_channel": channel_type,
-        "last_user_target": channel_target,
-        "last_user_message_id": message_id,
-        "last_enqueue_correlation_id": correlation_id,
-        "initial_message_id": message_id or None,
-        "initial_correlation_id": str(correlation_id or "").strip() or None,
-        "input_dirty": False,
-        "next_unconsumed_index": 0,
-        "inputs": [
-            {
-                "message_id": message_id,
-                "correlation_id": str(correlation_id or "").strip(),
-                "text": user_text,
-                "channel": channel_type,
-                "actor_id": _resolve_actor_id(payload=payload, session_user_id=session_user_id),
-                "attachments": attachments,
-                "received_at": now,
-                "consumed_at": None,
-                "sequence": 1,
-            }
-        ],
-        "state": {
-            "conversation_key": session_key,
-            "chat_id": session_key,
-            "correlation_id": str(correlation_id or "").strip() or None,
-            "task_record": task_record.to_dict(),
-            "message_id": message_id,
-            "session_state": day_session,
-            "recent_conversation_block": render_recent_conversation_block(day_session),
-            "check_provenance": "entry",
-        },
-    }
-    source = _payload_source(payload=payload)
-    if source:
-        metadata["trigger_source"] = source
-    job_id = _payload_job_id(payload=payload)
-    if job_id:
-        metadata["trigger_job_id"] = job_id
-    metadata["force_new_task"] = bool(force_new_task)
+    metadata, _ = _build_ingress_metadata(
+        existing=None,
+        payload=payload,
+        task_record=task_record,
+        session_key=session_key,
+        channel_type=channel_type,
+        channel_target=channel_target,
+        message_id=message_id,
+        user_text=user_text,
+        attachments=attachments,
+        day_session=day_session,
+        force_new_task=force_new_task,
+        now=now,
+    )
     task_id = upsert_pdca_task(
         {
-            "owner_id": session_user_id,
+            "owner_id": task_record.user_id,
             "conversation_key": session_key,
             "session_id": str(day_session.get("session_id") or "").strip() or None,
             "status": "queued",
@@ -437,15 +377,136 @@ def enqueue_pdca_slice(
         task_id=task_id,
         event_type="incoming.task_created",
         payload={"channel": channel_type, "target": channel_target},
-        correlation_id=correlation_id,
+        correlation_id=task_record.correlation_id,
     )
     _emit_dispatch_kick(
         context=context,
         task_id=task_id,
-        correlation_id=correlation_id,
+        correlation_id=task_record.correlation_id,
         reason="ingress_task_created",
     )
     return task_id
+
+
+def _build_ingress_metadata(
+    *,
+    existing: dict[str, Any] | None,
+    payload: dict[str, Any],
+    task_record: TaskRecord,
+    session_key: str,
+    channel_type: str,
+    channel_target: str,
+    message_id: str,
+    user_text: str,
+    attachments: list[dict[str, Any]],
+    day_session: dict[str, Any],
+    force_new_task: bool,
+    now: str,
+) -> tuple[dict[str, Any], int]:
+    correlation_id = str(task_record.correlation_id or "").strip()
+    actor_id = _resolve_actor_id(payload=payload, session_user_id=task_record.user_id)
+    if isinstance(existing, dict):
+        metadata = dict(existing.get("metadata") or {}) if isinstance(existing.get("metadata"), dict) else {}
+        _ensure_initial_identity(
+            metadata=metadata,
+            initial_message_id="",
+            initial_correlation_id="",
+        )
+        metadata, buffered_count = _append_input_record(
+            metadata=metadata,
+            message_id=message_id,
+            channel_type=channel_type,
+            correlation_id=correlation_id,
+            user_text=user_text,
+            attachments=attachments,
+            actor_id=actor_id,
+            now=now,
+        )
+        metadata["last_enqueued_at"] = now
+        existing_state = metadata.get("state") if isinstance(metadata.get("state"), dict) else {}
+        metadata["state"] = _build_metadata_state(
+            existing_state=existing_state,
+            task_record=task_record,
+            session_key=session_key,
+            message_id=message_id,
+            day_session=day_session,
+            check_provenance="slice_resume",
+        )
+        status = str(existing.get("status") or "").strip().lower()
+        if status == "running":
+            metadata["input_dirty"] = True
+    else:
+        metadata = {
+            "initial_message_id": message_id or None,
+            "initial_correlation_id": correlation_id or None,
+            "input_dirty": False,
+            "next_unconsumed_index": 0,
+            "inputs": [
+                {
+                    "message_id": message_id,
+                    "correlation_id": correlation_id,
+                    "text": user_text,
+                    "channel": channel_type,
+                    "actor_id": actor_id,
+                    "attachments": attachments,
+                    "received_at": now,
+                    "consumed_at": None,
+                    "sequence": 1,
+                }
+            ],
+            "state": _build_metadata_state(
+                existing_state=None,
+                task_record=task_record,
+                session_key=session_key,
+                message_id=message_id,
+                day_session=day_session,
+                check_provenance="entry",
+            ),
+        }
+        source = _payload_source(payload=payload)
+        if source:
+            metadata["trigger_source"] = source
+        job_id = _payload_job_id(payload=payload)
+        if job_id:
+            metadata["trigger_job_id"] = job_id
+        metadata["force_new_task"] = bool(force_new_task)
+        buffered_count = len(metadata["inputs"])
+
+    metadata["pending_user_text"] = user_text
+    metadata["last_user_message"] = user_text
+    metadata["last_user_channel"] = channel_type
+    metadata["last_user_target"] = channel_target
+    metadata["last_user_message_id"] = message_id
+    metadata["last_enqueue_correlation_id"] = correlation_id
+    return metadata, buffered_count
+
+
+def _build_metadata_state(
+    *,
+    existing_state: dict[str, Any] | None,
+    task_record: TaskRecord,
+    session_key: str,
+    message_id: str,
+    day_session: dict[str, Any],
+    check_provenance: str,
+) -> dict[str, Any]:
+    state = dict(existing_state or {}) if isinstance(existing_state, dict) else {}
+    state["conversation_key"] = state.get("conversation_key") or session_key
+    state["chat_id"] = state.get("chat_id") or session_key
+    state["correlation_id"] = str(task_record.correlation_id or "").strip() or state.get("correlation_id")
+    state["task_record"] = task_record.to_dict()
+    if message_id:
+        state["message_id"] = message_id
+    elif isinstance(existing_state, dict):
+        state["message_id"] = state.get("message_id")
+    else:
+        state["message_id"] = message_id
+    state["session_state"] = state.get("session_state") or day_session
+    state["recent_conversation_block"] = state.get("recent_conversation_block") or render_recent_conversation_block(
+        day_session
+    )
+    state["check_provenance"] = check_provenance
+    return state
 
 
 def message_text_for_payload(payload: dict[str, Any]) -> str:
