@@ -3,7 +3,6 @@ from __future__ import annotations
 import pytest
 
 from alphonse.agent.actions import presence_projection as projection
-from alphonse.agent.actions.session_context import IncomingContext
 
 
 class _FakeAdapter:
@@ -70,14 +69,14 @@ class _FakeRegistry:
         return None
 
 
-def _incoming() -> IncomingContext:
-    return IncomingContext(
-        channel_type="telegram",
-        address="8553589429",
-        person_id="person-1",
-        correlation_id="cid-intent-1",
-        message_id="msg-1",
-    )
+def _routing() -> dict[str, str | None]:
+    return {
+        "channel_type": "telegram",
+        "channel_target": "8553589429",
+        "user_id": "person-1",
+        "correlation_id": "cid-intent-1",
+        "message_id": "msg-1",
+    }
 
 
 def test_presence_progress_with_hint_sends_telegram_intent_update(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -86,7 +85,6 @@ def test_presence_progress_with_hint_sends_telegram_intent_update(monkeypatch: p
     monkeypatch.setattr(projection, "get_io_registry", lambda: _FakeRegistry(adapter))
 
     projection.project_presence_event(
-        incoming=_incoming(),
         presence_event={
             "event_family": "presence.progress",
             "correlation_id": "cid-intent-1",
@@ -95,6 +93,7 @@ def test_presence_progress_with_hint_sends_telegram_intent_update(monkeypatch: p
             "hint": "Running scheduler reconciliation.",
             "tool_name": "scheduler_tool",
         },
+        **_routing(),
     )
 
     assert len(adapter.chat_actions) == 1
@@ -109,7 +108,6 @@ def test_presence_progress_without_hint_skips_intent_update(monkeypatch: pytest.
     monkeypatch.setattr(projection, "get_io_registry", lambda: _FakeRegistry(adapter))
 
     projection.project_presence_event(
-        incoming=_incoming(),
         presence_event={
             "event_family": "presence.progress",
             "correlation_id": "cid-intent-1",
@@ -117,6 +115,7 @@ def test_presence_progress_without_hint_skips_intent_update(monkeypatch: pytest.
             "phase": "thinking",
             "tool_name": "scheduler_tool",
         },
+        **_routing(),
     )
 
     assert len(adapter.chat_actions) == 1
@@ -137,7 +136,7 @@ def test_presence_progress_intent_update_dedupes_same_tool(monkeypatch: pytest.M
         "hint": "Calling communication.send_message now.",
         "tool_name": "communication.send_message",
     }
-    projection.project_presence_event(incoming=_incoming(), presence_event=event)
-    projection.project_presence_event(incoming=_incoming(), presence_event=event)
+    projection.project_presence_event(presence_event=event, **_routing())
+    projection.project_presence_event(presence_event=event, **_routing())
 
     assert len(adapter.intent_updates) == 1
