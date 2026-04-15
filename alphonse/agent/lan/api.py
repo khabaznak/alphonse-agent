@@ -19,7 +19,7 @@ from alphonse.agent.lan.pairing_store import (
     append_audit,
 )
 from alphonse.agent.lan.pairing_notify import notify_pairing_request
-from alphonse.brain.orchestrator import handle_event as handle_habit_event
+
 from alphonse.agent.lan.store import set_device_token
 from alphonse.agent.lan.store import (
     DEFAULT_ALLOWED_SCOPES,
@@ -196,16 +196,7 @@ def pair_start(payload: PairStartRequest) -> dict[str, Any]:
     ttl = _pairing_ttl_minutes()
     request, otp = create_pairing_request(payload.device_name, ttl)
     try:
-        handle_habit_event(
-            "pairing.requested",
-            {"severity": "critical", "requires_ack": True, "ttl_sec": ttl * 60},
-            {
-                "pairing_id": request.pairing_id,
-                "device_name": request.device_name,
-                "otp": otp,
-                "expires_at": request.expires_at.isoformat(),
-            },
-        )
+        logger.info("New pairing requested: %s (expires at %s)", payload.device_name, request.expires_at.isoformat())
     except Exception as exc:
         logger.warning("Habit pipeline failed for pairing.requested: %s", exc)
         notify_pairing_request(
