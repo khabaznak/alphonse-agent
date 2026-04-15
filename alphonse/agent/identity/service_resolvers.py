@@ -43,6 +43,27 @@ def resolve_user_id_by_service_user_id(*, service_id: int, service_user_id: str)
     return str(row[0]) if row and row[0] is not None else None
 
 
+def resolve_service_key_by_service_user_id(service_user_id: str) -> str | None:
+    value = str(service_user_id or "").strip()
+    if not value:
+        return None
+    with sqlite3.connect(resolve_nervous_system_db_path()) as conn:
+        row = conn.execute(
+            """
+            SELECT s.service_key
+            FROM user_service_resolvers r
+            JOIN services s ON s.service_id = r.service_id
+            WHERE r.service_user_id = ? AND r.is_active = 1
+            ORDER BY r.updated_at DESC
+            LIMIT 1
+            """,
+            (value,),
+        ).fetchone()
+    # TODO: service_user_id is not globally unique; choose an explicit conflict policy
+    # instead of returning the most recently updated resolver.
+    return str(row[0]).strip().lower() if row and row[0] is not None else None
+
+
 def upsert_service_resolver(
     *,
     user_id: str,

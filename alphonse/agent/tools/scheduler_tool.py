@@ -7,6 +7,7 @@ import re
 from typing import Any, ClassVar
 from zoneinfo import ZoneInfo
 
+from alphonse.agent.identity.service_resolvers import resolve_service_key_by_service_user_id
 from alphonse.agent.nervous_system.prompt_artifacts import create_prompt_artifact
 from alphonse.agent.services.scheduler_service import SchedulerService
 from alphonse.agent.services.automation_tool_call_contract import build_canonical_tool_call_payload
@@ -68,7 +69,8 @@ class SchedulerTool:
         if not origin_channel_value and isinstance(state, dict):
             origin_channel_value = str(state.get("channel_type") or state.get("channel") or "").strip()
         if not origin_channel_value:
-            origin_channel_value = "api"
+            origin_channel_value = resolve_service_key_by_service_user_id(for_whom) or ""
+
         channel_target = args.get("channel_target")
         reminder = tool.create_reminder(
             for_whom=for_whom,
