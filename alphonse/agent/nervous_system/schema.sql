@@ -565,48 +565,6 @@ CREATE TABLE IF NOT EXISTS cortex_sessions (
 ) STRICT;
 
 ----------------------------------------------------------------------
--- 2.7.1) TELEGRAM UPDATES
-----------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS telegram_updates (
-  update_id   INTEGER PRIMARY KEY,
-  chat_id     TEXT,
-  created_at  TEXT NOT NULL DEFAULT (datetime('now'))
-) STRICT;
-
-CREATE TABLE IF NOT EXISTS telegram_pending_invites (
-  chat_id        TEXT PRIMARY KEY,
-  chat_type      TEXT,
-  from_user_id   TEXT,
-  from_user_username TEXT,
-  from_user_name TEXT,
-  last_message   TEXT,
-  status         TEXT NOT NULL DEFAULT 'pending',
-  created_at     TEXT NOT NULL DEFAULT (datetime('now')),
-  updated_at     TEXT NOT NULL DEFAULT (datetime('now'))
-) STRICT;
-
-CREATE INDEX IF NOT EXISTS idx_telegram_pending_invites_status
-  ON telegram_pending_invites (status, updated_at);
-
-CREATE TABLE IF NOT EXISTS telegram_chat_access (
-  chat_id       TEXT PRIMARY KEY,
-  chat_type     TEXT NOT NULL,
-  status        TEXT NOT NULL DEFAULT 'active',
-  owner_user_id TEXT,
-  policy        TEXT NOT NULL DEFAULT 'registered_private',
-  created_at    TEXT NOT NULL DEFAULT (datetime('now')),
-  updated_at    TEXT NOT NULL DEFAULT (datetime('now')),
-  revoked_at    TEXT,
-  revoke_reason TEXT,
-  CHECK (chat_type IN ('private', 'group', 'supergroup')),
-  CHECK (status IN ('active', 'revoked', 'pending')),
-  CHECK (policy IN ('registered_private', 'owner_managed_group'))
-) STRICT;
-
-CREATE INDEX IF NOT EXISTS idx_telegram_chat_access_status
-  ON telegram_chat_access (status, updated_at);
-
-----------------------------------------------------------------------
 -- 2.8) IDENTITY REGISTRY
 ----------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS persons (
@@ -650,7 +608,6 @@ CREATE TABLE IF NOT EXISTS communication_prefs (
   quiet_hours_start   INTEGER,
   quiet_hours_end     INTEGER,
   allow_push          INTEGER NOT NULL DEFAULT 1,
-  allow_telegram      INTEGER NOT NULL DEFAULT 1,
   allow_web           INTEGER NOT NULL DEFAULT 1,
   allow_cli           INTEGER NOT NULL DEFAULT 1,
   model_budget_policy TEXT

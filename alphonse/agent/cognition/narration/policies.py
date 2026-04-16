@@ -162,7 +162,7 @@ def _resolve_prefs(context: ContextBundle, audience: AudienceRef) -> dict[str, A
         ),
         "allow_telegram": resolve_preference_with_precedence(
             key="allow_telegram",
-            default=defaults.get("allow_telegram", True),
+            default=True,
             person_principal_id=principal_id,
         ),
         "allow_web": resolve_preference_with_precedence(
