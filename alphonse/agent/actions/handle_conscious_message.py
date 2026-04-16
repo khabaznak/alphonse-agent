@@ -128,7 +128,10 @@ class HandleConsciousMessageAction(Action):
 
 
 def _session_user_id_from_payload(payload: dict[str, Any]) -> str:
-    return resolved_user_id_for_payload(payload) or "anonymous"
+    try:
+        return resolved_user_id_for_payload(payload)
+    except Exception:
+        raise
 
 
 def _build_task_record_from_payload(
@@ -272,6 +275,7 @@ def timezone_for_payload(payload: dict[str, Any]) -> str:
 def resolved_user_id_for_payload(payload: dict[str, Any]) -> str:
     identity = payload.get("identity") if isinstance(payload.get("identity"), dict) else {}
     actor = payload.get("actor") if isinstance(payload.get("actor"), dict) else {}
+
     for candidate in (
         identity.get("alphonse_user_id"),
         identity.get("user_id"),
@@ -284,4 +288,6 @@ def resolved_user_id_for_payload(payload: dict[str, Any]) -> str:
         rendered = str(candidate or "").strip()
         if rendered:
             return rendered
-    return ""
+        else:
+            raise ValueError("Unable to resolve user ID from payload")
+

@@ -24,6 +24,8 @@ _PATH_PATTERNS = (
     re.compile(r"\b[A-Za-z]:\\[^\s]+"),
 )
 
+class InvalidUserIdError(ValueError):
+    pass
 
 def resolve_day_session(
     *,
@@ -581,7 +583,8 @@ def _sanitize_line(value: str, *, max_len: int = _MAX_LINE_LENGTH) -> str:
 def _canonical_user_id(user_id: str) -> str:
     candidate = str(user_id or "").strip()
     if not candidate:
-        return "anonymous"
+        raise InvalidUserIdError("user_id is invalid after canonicalization")
+    
     candidate = candidate.replace("|", "_")
     candidate = candidate.replace("\n", "_")
     return candidate
@@ -608,7 +611,9 @@ def _sessions_root(*, root_dir: Path | None) -> Path:
 def _safe_path_segment(value: str) -> str:
     cleaned = re.sub(r"[^A-Za-z0-9._-]+", "_", str(value or "").strip())
     cleaned = cleaned.strip("._")
-    return cleaned or "anonymous"
+    if not cleaned:
+        raise InvalidUserIdError(f"invalid path segment {value}")
+    return cleaned
 
 
 def _atomic_write(path: Path, content: str) -> None:

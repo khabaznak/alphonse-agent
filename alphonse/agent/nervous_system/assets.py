@@ -35,7 +35,7 @@ def register_uploaded_asset(
     content: bytes,
     kind: str,
     mime_type: str | None,
-    owner_user_id: str | None,
+    owner_user_id: str,
     provider: str | None,
     channel_type: str | None,
     channel_target: str | None,
@@ -46,17 +46,25 @@ def register_uploaded_asset(
     blob = bytes(content or b"")
     if not blob:
         raise ValueError("asset_content_empty")
+    
+    if not owner_user_id or not str(owner_user_id).strip():
+        raise ValueError("owner_user_id_required")
+
+
+    asset_id = str(uuid.uuid4())
+    digest = hashlib.sha256(blob).hexdigest()
+    byte_size = len(blob)
+    
+    user_slug = _safe_slug(owner_user_id)
+    if not user_slug:
+        raise ValueError(f"invalid_owner_user_id: {owner_user_id}")
 
     normalized_kind = str(kind or "audio").strip().lower() or "audio"
     normalized_mime = str(mime_type or "").strip().lower()
     if not normalized_mime:
         guessed = mimetypes.guess_type(str(original_filename or ""))[0]
         normalized_mime = guessed or "application/octet-stream"
-
-    asset_id = str(uuid.uuid4())
-    digest = hashlib.sha256(blob).hexdigest()
-    byte_size = len(blob)
-    user_slug = _safe_slug(owner_user_id) or "anonymous"
+        
     suffix = _choose_suffix(original_filename=original_filename, mime_type=normalized_mime)
     relative_path = f"users/{user_slug}/stt/inbox/{asset_id}{suffix}"
     resolved = resolve_sandbox_path(alias=ASSET_SANDBOX_ALIAS, relative_path=relative_path)

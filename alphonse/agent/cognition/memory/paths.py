@@ -4,6 +4,8 @@ import os
 import re
 from pathlib import Path
 
+class InvalidUserIdError(ValueError):
+    pass
 
 def resolve_memory_root() -> Path:
     configured = str(os.getenv("ALPHONSE_MEMORY_ROOT") or "").strip()
@@ -25,11 +27,17 @@ def user_root(user_id: str, *, root: Path | None = None) -> Path:
     path.mkdir(parents=True, exist_ok=True)
     return path
 
-
 def sanitize_segment(value: str) -> str:
-    cleaned = re.sub(r"[^A-Za-z0-9._-]+", "_", str(value or "").strip())
+    if value is None:
+        raise InvalidUserIdError("User id cannot be None")
+
+    cleaned = re.sub(r"[^A-Za-z0-9._-]+", "_", str(value).strip())
     cleaned = cleaned.strip("._")
-    return cleaned or "anonymous"
+
+    if not cleaned:
+        raise InvalidUserIdError(f"User id '{value}' is invalid after sanitization")
+
+    return cleaned
 
 
 def _repo_root() -> Path:
