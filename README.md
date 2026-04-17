@@ -454,27 +454,6 @@ In `production`, set `OPENAI_API_KEY` for the OpenAI provider.
 
 ---
 
-## Supabase Integration
-
-Set these environment variables (see `alphonse/agent/.env.example`):
-
-- `SUPABASE_URL`
-- `SUPABASE_SERVICE_ROLE_KEY` (preferred) or `SUPABASE_ANON_KEY`
-- `ALPHONSE_WEBHOOK_SECRET` (optional; required for webhook auth)
-- `FCM_CREDENTIALS_JSON` (Firebase service account JSON, for push notifications)
-- `VAPID_PRIVATE_KEY` (Web Push private key)
-- `VAPID_PUBLIC_KEY` (Web Push public key)
-- `VAPID_EMAIL` (Web Push contact email)
-
-Generate VAPID keys with your preferred Web Push tooling and export:
-- `VAPID_PUBLIC_KEY`
-- `VAPID_PRIVATE_KEY`
-
-Legacy push-device and agent HTTP endpoints have been removed. Use Telegram,
-CLI, scheduler, or relay-backed flows instead.
-
----
-
 ## Notification Worker
 
 Run the separate notification worker to dispatch due events:

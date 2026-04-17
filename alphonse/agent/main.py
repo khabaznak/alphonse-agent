@@ -15,7 +15,6 @@ from alphonse.agent.nervous_system.senses.registry import (
     register_senses,
     register_signals,
 )
-from alphonse.agent.relay.client import build_relay_client_from_env
 from alphonse.agent.nervous_system.paths import resolve_nervous_system_db_path
 from alphonse.agent.nervous_system.migrate import apply_schema
 from alphonse.agent.nervous_system.seed import apply_seed
@@ -78,19 +77,14 @@ def main() -> None:
     sense_manager = SenseManager(db_path=str(db_path), bus=bus)
     pdca_queue_runner = PdcaQueueRunner(bus=bus)
     _emit_pdca_startup_mode(pdca_queue_runner.enabled)
-    relay_client = build_relay_client_from_env()
     heart = load_heart(config, bus, ddfsm)
     senses_started = False
     queue_runner_started = False
-    relay_started = False
     try:
         sense_manager.start()
         senses_started = True
         pdca_queue_runner.start()
         queue_runner_started = True
-        if relay_client:
-            relay_client.start()
-            relay_started = True
         heart.run()
     except KeyboardInterrupt:
         logging.info("Shutdown requested (KeyboardInterrupt).")
@@ -99,8 +93,6 @@ def main() -> None:
         bus.emit(Signal(type=SHUTDOWN, source="system"))
         if queue_runner_started:
             pdca_queue_runner.stop()
-        if relay_client and relay_started:
-            relay_client.stop()
         if senses_started:
             sense_manager.stop()
 

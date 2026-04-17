@@ -278,10 +278,6 @@ def build_parser() -> argparse.ArgumentParser:
     )
     lan_devices = lan_sub.add_parser("devices", help="List paired devices")
     lan_devices.add_argument("--limit", type=int, default=25)
-    lan_token = lan_sub.add_parser("relay-token", help="Mint relay access token")
-    lan_token.add_argument("device_id", help="Device id")
-    lan_token.add_argument("--device-name", default=None, help="Optional device name")
-
     repl_parser = sub.add_parser("repl", help="Start interactive CLI session")
 
     voice_parser = sub.add_parser("voice", help="Voice profile enrollment and defaults")
@@ -897,7 +893,6 @@ def _command_report_daily(db_path: Path) -> None:
 def _command_lan(args: argparse.Namespace) -> None:
     from alphonse.agent.lan.store import generate_pairing_code, list_paired_devices
     from alphonse.agent.lan.qr import render_ascii_qr
-    from alphonse.agent.relay.issuer import mint_relay_token
 
     if args.lan_command == "pairing-code":
         ttl = args.ttl_minutes if args.ttl_minutes is not None else None
@@ -921,13 +916,6 @@ def _command_lan(args: argparse.Namespace) -> None:
             print(f"- {device.device_id} ({name}) last_seen={last_seen}")
         return
 
-    if args.lan_command == "relay-token":
-        result = mint_relay_token(args.device_id, args.device_name)
-        if not result:
-            print("Relay not configured or channel creation failed.")
-            return
-        print(result.get("relay_token"))
-        return
     if not row:
         print("Daily report schedule not found.")
         return
