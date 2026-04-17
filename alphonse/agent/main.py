@@ -15,9 +15,6 @@ from alphonse.agent.nervous_system.senses.registry import (
     register_senses,
     register_signals,
 )
-from alphonse.infrastructure.api_server import ApiServer
-from alphonse.infrastructure.api_gateway import gateway
-from alphonse.infrastructure.api_exchange import ApiExchange
 from alphonse.agent.relay.client import build_relay_client_from_env
 from alphonse.agent.nervous_system.paths import resolve_nervous_system_db_path
 from alphonse.agent.nervous_system.migrate import apply_schema
@@ -68,8 +65,6 @@ def main() -> None:
     # Signal bus is in-memory transport only.
     bus = Bus()
 
-    gateway.configure(bus, ApiExchange())
-
     register_senses(str(db_path))
     register_signals(str(db_path))
 
@@ -83,21 +78,16 @@ def main() -> None:
     sense_manager = SenseManager(db_path=str(db_path), bus=bus)
     pdca_queue_runner = PdcaQueueRunner(bus=bus)
     _emit_pdca_startup_mode(pdca_queue_runner.enabled)
-    api_server = _build_api_server()
     relay_client = build_relay_client_from_env()
     heart = load_heart(config, bus, ddfsm)
     senses_started = False
     queue_runner_started = False
-    api_started = False
     relay_started = False
     try:
         sense_manager.start()
         senses_started = True
         pdca_queue_runner.start()
         queue_runner_started = True
-        if api_server:
-            api_server.start()
-            api_started = True
         if relay_client:
             relay_client.start()
             relay_started = True
@@ -109,8 +99,6 @@ def main() -> None:
         bus.emit(Signal(type=SHUTDOWN, source="system"))
         if queue_runner_started:
             pdca_queue_runner.stop()
-        if api_server and api_started:
-            api_server.stop()
         if relay_client and relay_started:
             relay_client.stop()
         if senses_started:
@@ -121,7 +109,6 @@ def _emit_pdca_startup_mode(slicing_enabled: bool) -> None:
     log = get_log_manager()
     ingress = {
         "telegram": _env_enabled("ALPHONSE_ENABLE_TELEGRAM", default=False),
-        "api": _env_enabled("ALPHONSE_ENABLE_API", default=True),
         "cli": _env_enabled("ALPHONSE_ENABLE_CLI", default=False),
     }
     log.emit(
@@ -142,24 +129,6 @@ def _emit_pdca_startup_mode(slicing_enabled: bool) -> None:
         error_code="pdca_slicing_disabled",
         payload={"ingress": ingress},
     )
-
-
-def _build_api_server() -> ApiServer | None:
-    enabled = os.getenv("ALPHONSE_ENABLE_API", "true").strip().lower() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }
-    if not enabled:
-        return None
-    host = os.getenv("ALPHONSE_API_HOST", "0.0.0.0")
-    port_raw = os.getenv("ALPHONSE_API_PORT", "8001")
-    try:
-        port = int(port_raw)
-    except ValueError:
-        port = 8001
-    return ApiServer(host=host, port=port)
 
 
 def _resolve_nerve_db_path() -> Path:

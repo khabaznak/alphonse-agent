@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 import time
 import uuid
 from dataclasses import dataclass
@@ -21,7 +20,7 @@ class ApiSignal:
 class ApiSense(Sense):
     key = "api"
     name = "API Sense"
-    description = "Emits api.* signals from HTTP requests"
+    description = "Emits api.* signals from internal runtime requests"
     source_type = "service"
     signals = [
         SignalSpec(key="sense.api.message.user.received", name="API User Message Received"),
@@ -34,7 +33,6 @@ class ApiSense(Sense):
         self._bus = None
 
     def emit(self, bus: Bus, api_signal: ApiSignal) -> None:
-        _assert_api_token(api_signal.payload)
         signal_type = _canonical_api_signal_type(api_signal.type)
         if str(api_signal.payload.get("schema_version") or "").strip() == "1.0":
             correlation_id = str(api_signal.payload.get("correlation_id") or api_signal.correlation_id or "").strip() or api_signal.correlation_id
@@ -109,15 +107,6 @@ class ApiSense(Sense):
 def build_api_signal(signal_type: str, payload: dict[str, object] | None, correlation_id: str | None) -> ApiSignal:
     cid = correlation_id or str(uuid.uuid4())
     return ApiSignal(type=signal_type, payload=payload or {}, correlation_id=cid)
-
-
-def _assert_api_token(payload: dict[str, object]) -> None:
-    expected = os.getenv("ALPHONSE_API_TOKEN")
-    if not expected:
-        return
-    provided = payload.get("api_token")
-    if provided != expected:
-        raise PermissionError("Invalid API token")
 
 
 def _canonical_api_signal_type(value: str) -> str:

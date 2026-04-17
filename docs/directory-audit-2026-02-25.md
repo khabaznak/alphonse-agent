@@ -47,14 +47,12 @@ Audit of potentially duplicated, legacy, or placeholder directories under `/User
 
 ### 4) `brain` vs `agent/cognition` skill-like structures
 - Paths:
-  - `alphonse/brain/graphs`, `alphonse/brain/skills`
   - `alphonse/agent/cognition/skills`, `alphonse/agent/cognition/narration`
 - Evidence:
-  - `alphonse/brain/*` is still imported by active modules (`alphonse/brain/orchestrator.py`, `alphonse/agent/lan/api.py`) and tests.
-  - `agent/cognition/*` is the newer active path for planning/narration.
-  - There is naming overlap (`skills`, `narration`) but not direct duplication of code.
-- Recommendation: **Do not merge/delete yet**. Treat as a staged-architecture boundary.
-- Risk: **High** if merged without migration plan.
+  - `alphonse/brain/*` has been removed.
+  - `agent/cognition/*` is the active path for planning/narration.
+- Recommendation: keep future skill-like work under `agent/cognition/*`.
+- Risk: **Low** after the removal.
 
 ### 5) Runtime/state directories in workspace
 - Paths:
@@ -83,7 +81,7 @@ Audit of potentially duplicated, legacy, or placeholder directories under `/User
 
 ### Keep (for now)
 - `alphonse/tools` (compatibility wrapper)
-- `alphonse/brain/*` and `alphonse/agent/cognition/*` split until explicit migration
+- `alphonse/agent/cognition/*`
 
 ### Follow-up hygiene
 - Update stale namespace references in `alphonse/README.md` from `alphonse.nervous_system` to `alphonse.agent.nervous_system`.

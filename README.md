@@ -62,9 +62,6 @@ Key files:
 - `docs/refactor_roadmap.md` — Cleanup and separation roadmap
 - `docs/message_io_contract.md` — Normalized inbound/outbound adapter contract
 
-Alphonse HTTP chat integration (MVP) uses `POST /agent/message`.
-Web UI outbound push can subscribe to `GET /agent/events` (SSE).
-
 Configuration is driven by environment variables in `alphonse/agent/.env`.
 Provider routing is controlled by:
 
@@ -391,35 +388,9 @@ These are managed via store modules:
 - `/Users/alex/Code Projects/alphonse-agent/alphonse/agent/nervous_system/onboarding_profiles.py`
 - `/Users/alex/Code Projects/alphonse-agent/alphonse/agent/nervous_system/location_profiles.py`
 
-### Onboarding + Location API Endpoints
-
-Onboarding:
-
-- `GET /agent/onboarding/profiles`
-- `GET /agent/onboarding/profiles/{principal_id}`
-- `POST /agent/onboarding/profiles`
-- `DELETE /agent/onboarding/profiles/{principal_id}`
-
-Locations:
-
-- `GET /agent/locations`
-- `GET /agent/locations/{location_id}`
-- `POST /agent/locations`
-- `DELETE /agent/locations/{location_id}`
-
-Device location stream/snapshots:
-
-- `GET /agent/device-locations`
-- `POST /agent/device-locations`
-
 ### Tool Configs (Secrets / API Keys)
 
-Store tool API keys or configs in `nerve-db` and manage them via:
-
-- `GET /agent/tool-configs`
-- `GET /agent/tool-configs/{config_id}`
-- `POST /agent/tool-configs`
-- `DELETE /agent/tool-configs/{config_id}`
+Store tool API keys or configs in `nerve-db` and manage them via CLI:
 
 CLI:
 
@@ -499,9 +470,8 @@ Generate VAPID keys with your preferred Web Push tooling and export:
 - `VAPID_PUBLIC_KEY`
 - `VAPID_PRIVATE_KEY`
 
-Legacy push-device endpoints under `/api/*` were removed with the legacy
-`interfaces/` service. Use the active `/agent/*` API in
-`alphonse/infrastructure/api.py`.
+Legacy push-device and agent HTTP endpoints have been removed. Use Telegram,
+CLI, scheduler, or relay-backed flows instead.
 
 ---
 

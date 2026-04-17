@@ -13,7 +13,6 @@ import subprocess
 import sys
 from pathlib import Path
 from datetime import datetime, timezone
-from urllib import request
 
 from dotenv import load_dotenv
 
@@ -950,29 +949,8 @@ def _command_debug(args: argparse.Namespace) -> None:
 
 def _command_debug_wiring() -> None:
     db_path = resolve_nervous_system_db_path()
-    api_base = os.getenv("ALPHONSE_API_BASE_URL", "http://localhost:8001").rstrip("/")
-    token = os.getenv("ALPHONSE_API_TOKEN")
     print(f"DB path: {db_path}")
-    print(f"API base: {api_base}")
-    print("API token set: yes" if token else "API token set: no")
-
-    url = f"{api_base}/agent/timed-signals"
-    req = request.Request(url, method="GET")
-    if token:
-        req.add_header("x-alphonse-api-token", token)
-    try:
-        with request.urlopen(req, timeout=5) as response:
-            payload = response.read().decode("utf-8")
-            data = json.loads(payload)
-            if isinstance(data, dict) and "data" in data:
-                timed_signals = data.get("data", {}).get("timed_signals", [])
-            else:
-                timed_signals = (
-                    data.get("timed_signals", []) if isinstance(data, dict) else []
-                )
-            print(f"API timed signals count: {len(timed_signals)}")
-    except Exception as exc:
-        print(f"API timed signals error: {exc}")
+    print("HTTP API: removed")
 
 
 def _command_trace(args: argparse.Namespace) -> None:

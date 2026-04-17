@@ -4,11 +4,8 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
-from alphonse.agent.io.contracts import NormalizedInboundMessage, NormalizedOutboundMessage
-from alphonse.agent.io.adapters import SenseAdapter, ExtremityAdapter
-from alphonse.agent.observability.log_manager import get_component_logger
-
-logger = get_component_logger("io.web_channel")
+from alphonse.agent.io.contracts import NormalizedInboundMessage
+from alphonse.agent.io.adapters import SenseAdapter
 
 
 @dataclass(frozen=True)
@@ -31,34 +28,6 @@ class WebSenseAdapter(SenseAdapter):
             timestamp=timestamp,
             correlation_id=correlation_id,
             metadata={"raw": payload},
-        )
-
-
-class WebExtremityAdapter(ExtremityAdapter):
-    channel_type: str = "webui"
-
-    def deliver(self, message: NormalizedOutboundMessage) -> None:
-        from alphonse.infrastructure.api_gateway import gateway
-        from alphonse.infrastructure.web_event_hub import web_event_hub
-
-        # API/web UI currently use the API exchange for request-response delivery.
-        event_payload = {
-            "message": message.message,
-            "data": (message.metadata or {}).get("data"),
-            "channel_target": message.channel_target,
-            "correlation_id": message.correlation_id,
-        }
-        if message.channel_target:
-            web_event_hub.publish(str(message.channel_target), event_payload)
-        if message.correlation_id and gateway.exchange:
-            gateway.exchange.publish(
-                str(message.correlation_id),
-                {"message": message.message, "data": (message.metadata or {}).get("data")},
-            )
-        logger.info(
-            "WebExtremityAdapter delivered target=%s correlation_id=%s",
-            message.channel_target,
-            message.correlation_id,
         )
 
 

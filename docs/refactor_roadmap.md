@@ -12,7 +12,7 @@ Separate Alphonse agent core from presentation layers and treat all UIs as extre
 ## Phase 2 — Structural Separation
 - Move agent core modules under `alphonse/core/`.
 - Move UI routes/templates under a Web UI module (in-process extremity).
-- Keep FastAPI as infrastructure that mounts extremities.
+- Keep transport adapters explicit and remove unused HTTP infrastructure.
 
 ## Phase 3 — Externalize the Web UI
 - Introduce a clean API boundary (`/messages`, `/status`).
