@@ -18,8 +18,6 @@ from alphonse.agent.lan.pairing_store import (
     mark_expired,
     append_audit,
 )
-from alphonse.agent.lan.pairing_notify import notify_pairing_request
-
 from alphonse.agent.lan.store import set_device_token
 from alphonse.agent.lan.store import (
     DEFAULT_ALLOWED_SCOPES,
@@ -194,17 +192,8 @@ def relay_token(payload: RelayTokenRequest) -> dict[str, Any]:
 @router.post("/pair/start")
 def pair_start(payload: PairStartRequest) -> dict[str, Any]:
     ttl = _pairing_ttl_minutes()
-    request, otp = create_pairing_request(payload.device_name, ttl)
-    try:
-        logger.info("New pairing requested: %s (expires at %s)", payload.device_name, request.expires_at.isoformat())
-    except Exception as exc:
-        logger.warning("Habit pipeline failed for pairing.requested: %s", exc)
-        notify_pairing_request(
-            request.pairing_id,
-            request.device_name,
-            otp,
-            request.expires_at.isoformat(),
-        )
+    request, _otp = create_pairing_request(payload.device_name, ttl)
+    logger.info("New pairing requested: %s (expires at %s)", payload.device_name, request.expires_at.isoformat())
     append_audit(
         "pairing.requested",
         request.pairing_id,

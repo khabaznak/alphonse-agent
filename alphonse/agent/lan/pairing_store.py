@@ -118,30 +118,6 @@ def deny_pairing(pairing_id: str, via: str) -> bool:
     return cur
 
 
-def create_delivery_receipt(pairing_id: str, channel: str, status: str, details: dict[str, Any]) -> None:
-    _execute(
-        """
-        INSERT INTO delivery_receipts (
-          receipt_id, run_id, pairing_id, stage_id, action_id, skill, channel, status,
-          details_json, created_at
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            str(uuid.uuid4()),
-            None,
-            pairing_id,
-            None,
-            None,
-            channel,
-            channel,
-            status,
-            json.dumps(details),
-            _utcnow().isoformat(),
-        ),
-    )
-
-
 def append_audit(event_type: str, correlation_id: str | None, payload: dict[str, Any]) -> None:
     _execute(
         """

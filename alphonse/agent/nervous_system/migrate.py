@@ -22,7 +22,6 @@ def apply_schema(db_path: Path) -> None:
         _ensure_scheduled_jobs_table(conn)
         _ensure_paired_device_columns(conn)
         _ensure_pairing_columns(conn)
-        _ensure_delivery_receipts_columns(conn)
         _ensure_intent_specs_columns(conn)
         _ensure_principals_constraints(conn)
         _ensure_users_table(conn)
@@ -126,28 +125,6 @@ def _ensure_pairing_columns(conn: sqlite3.Connection) -> None:
         ) STRICT
         """
     )
-
-
-def _ensure_delivery_receipts_columns(conn: sqlite3.Connection) -> None:
-    columns = [
-        "receipt_id",
-        "run_id",
-        "pairing_id",
-        "stage_id",
-        "action_id",
-        "skill",
-        "channel",
-        "status",
-        "details_json",
-        "created_at",
-    ]
-    try:
-        rows = conn.execute("PRAGMA table_info(delivery_receipts)").fetchall()
-    except sqlite3.OperationalError:
-        return
-    existing = {row[1] for row in rows}
-    if not rows or "receipt_id" not in existing or "run_id" not in existing or "skill" not in existing:
-        _rebuild_delivery_receipts(conn)
 
 
 def _ensure_intent_specs_columns(conn: sqlite3.Connection) -> None:
@@ -478,109 +455,6 @@ def _ensure_telegram_invite_columns(conn: sqlite3.Connection) -> None:
             )
         except sqlite3.OperationalError:
             continue
-
-
-def _rebuild_delivery_receipts(conn: sqlite3.Connection) -> None:
-    conn.execute("ALTER TABLE delivery_receipts RENAME TO delivery_receipts_old")
-    conn.execute(
-        """
-        CREATE TABLE delivery_receipts (
-          receipt_id   TEXT PRIMARY KEY,
-          run_id       TEXT,
-          pairing_id   TEXT,
-          stage_id     TEXT,
-          action_id    TEXT,
-          skill        TEXT,
-          channel      TEXT,
-          status       TEXT NOT NULL,
-          details_json TEXT,
-          created_at   TEXT NOT NULL
-        ) STRICT
-        """
-    )
-    conn.execute(
-        """
-        INSERT INTO delivery_receipts (
-          receipt_id, run_id, pairing_id, stage_id, action_id, skill, channel, status,
-          details_json, created_at
-        )
-        SELECT id, NULL, pairing_id, NULL, NULL, channel, channel, status, details_json, created_at
-        FROM delivery_receipts_old
-        """
-    )
-    conn.execute("DROP TABLE delivery_receipts_old")
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS delivery_receipts (
-          receipt_id   TEXT PRIMARY KEY,
-          run_id       TEXT,
-          pairing_id   TEXT,
-          stage_id     TEXT,
-          action_id    TEXT,
-          skill        TEXT,
-          channel      TEXT,
-          status       TEXT NOT NULL,
-          details_json TEXT,
-          created_at   TEXT NOT NULL
-        ) STRICT
-        """
-    )
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS audit_log (
-          id            TEXT PRIMARY KEY,
-          event_type    TEXT NOT NULL,
-          correlation_id TEXT,
-          payload_json  TEXT,
-          created_at    TEXT NOT NULL
-        ) STRICT
-        """
-    )
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS habits (
-          habit_id           TEXT PRIMARY KEY,
-          name               TEXT NOT NULL,
-          trigger            TEXT NOT NULL,
-          conditions_json    TEXT NOT NULL,
-          plan_json          TEXT NOT NULL,
-          version            INTEGER NOT NULL,
-          enabled            INTEGER NOT NULL DEFAULT 1,
-          created_at         TEXT NOT NULL,
-          updated_at         TEXT NOT NULL,
-          success_count      INTEGER NOT NULL DEFAULT 0,
-          fail_count         INTEGER NOT NULL DEFAULT 0,
-          last_success_at    TEXT,
-          last_fail_at       TEXT,
-          menu_snapshot_hash TEXT
-        ) STRICT
-        """
-    )
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS plan_runs (
-          run_id         TEXT PRIMARY KEY,
-          habit_id       TEXT,
-          plan_id        TEXT NOT NULL,
-          trigger        TEXT NOT NULL,
-          correlation_id TEXT NOT NULL,
-          status         TEXT NOT NULL,
-          resolution     TEXT,
-          resolved_via   TEXT,
-          started_at     TEXT NOT NULL,
-          ended_at       TEXT,
-          state_json     TEXT,
-          scheduled_json TEXT,
-          plan_json      TEXT NOT NULL
-        ) STRICT
-        """
-    )
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_habits_trigger_enabled ON habits (trigger, enabled)"
-    )
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_plan_runs_correlation ON plan_runs (correlation_id)"
-    )
 
 
 def _rebuild_timed_signals(conn: sqlite3.Connection) -> None:

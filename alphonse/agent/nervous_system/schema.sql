@@ -717,19 +717,6 @@ CREATE TABLE IF NOT EXISTS pairing_requests (
   created_at   TEXT NOT NULL
 ) STRICT;
 
-CREATE TABLE IF NOT EXISTS delivery_receipts (
-  receipt_id   TEXT PRIMARY KEY,
-  run_id       TEXT,
-  pairing_id   TEXT,
-  stage_id     TEXT,
-  action_id    TEXT,
-  skill        TEXT,
-  channel      TEXT,
-  status       TEXT NOT NULL,
-  details_json TEXT,
-  created_at   TEXT NOT NULL
-) STRICT;
-
 CREATE TABLE IF NOT EXISTS audit_log (
   id            TEXT PRIMARY KEY,
   event_type    TEXT NOT NULL,
@@ -739,46 +726,7 @@ CREATE TABLE IF NOT EXISTS audit_log (
 ) STRICT;
 
 ----------------------------------------------------------------------
--- 7) HABITS + PLAN RUNS
-----------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS habits (
-  habit_id           TEXT PRIMARY KEY,
-  name               TEXT NOT NULL,
-  trigger            TEXT NOT NULL,
-  conditions_json    TEXT NOT NULL,
-  plan_json          TEXT NOT NULL,
-  version            INTEGER NOT NULL,
-  enabled            INTEGER NOT NULL DEFAULT 1,
-  created_at         TEXT NOT NULL,
-  updated_at         TEXT NOT NULL,
-  success_count      INTEGER NOT NULL DEFAULT 0,
-  fail_count         INTEGER NOT NULL DEFAULT 0,
-  last_success_at    TEXT,
-  last_fail_at       TEXT,
-  menu_snapshot_hash TEXT
-) STRICT;
-
-CREATE TABLE IF NOT EXISTS plan_runs (
-  run_id         TEXT PRIMARY KEY,
-  habit_id       TEXT,
-  plan_id        TEXT NOT NULL,
-  trigger        TEXT NOT NULL,
-  correlation_id TEXT NOT NULL,
-  status         TEXT NOT NULL,
-  resolution     TEXT,
-  resolved_via   TEXT,
-  started_at     TEXT NOT NULL,
-  ended_at       TEXT,
-  state_json     TEXT,
-  scheduled_json TEXT,
-  plan_json      TEXT NOT NULL
-) STRICT;
-
-CREATE INDEX IF NOT EXISTS idx_habits_trigger_enabled ON habits (trigger, enabled);
-CREATE INDEX IF NOT EXISTS idx_plan_runs_correlation ON plan_runs (correlation_id);
-
-----------------------------------------------------------------------
--- 8) INTENT LIFECYCLE
+-- 7) INTENT LIFECYCLE
 ----------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS intent_lifecycle (
   signature_key     TEXT PRIMARY KEY,
@@ -797,7 +745,7 @@ CREATE TABLE IF NOT EXISTS intent_lifecycle (
 ) STRICT;
 
 ----------------------------------------------------------------------
--- 9) HABIT LIFECYCLE
+-- 8) HABIT LIFECYCLE
 ----------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS habit_lifecycle (
   habit_id               TEXT PRIMARY KEY,
@@ -818,7 +766,7 @@ CREATE TABLE IF NOT EXISTS habit_lifecycle (
 ) STRICT;
 
 ----------------------------------------------------------------------
--- 10) PDCA SLICE QUEUE
+-- 9) PDCA SLICE QUEUE
 ----------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS pdca_tasks (
   task_id                 TEXT PRIMARY KEY,
