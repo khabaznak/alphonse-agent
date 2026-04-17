@@ -7,6 +7,7 @@ from alphonse.agent.actions.base import Action
 from alphonse.agent.actions.models import ActionResult
 from alphonse.agent.actions.presence_projection import emit_presence_phase_changed
 from alphonse.agent.cortex.task_mode.task_record import TaskRecord
+from alphonse.agent.identity.users import get_user_by_display_name
 from alphonse.agent.observability.log_manager import get_component_logger
 from alphonse.agent.observability.log_manager import get_log_manager
 from alphonse.agent.services.pdca_ingress import enqueue_pdca_slice
@@ -273,21 +274,6 @@ def timezone_for_payload(payload: dict[str, Any]) -> str:
 
 
 def resolved_user_id_for_payload(payload: dict[str, Any]) -> str:
-    identity = payload.get("identity") if isinstance(payload.get("identity"), dict) else {}
     actor = payload.get("actor") if isinstance(payload.get("actor"), dict) else {}
-
-    for candidate in (
-        identity.get("alphonse_user_id"),
-        identity.get("user_id"),
-        payload.get("alphonse_user_id"),
-        payload.get("resolved_user_id"),
-        payload.get("person_id"),
-        actor.get("user_id"),
-        actor.get("person_id"),
-    ):
-        rendered = str(candidate or "").strip()
-        if rendered:
-            return rendered
-        else:
-            raise ValueError("Unable to resolve user ID from payload")
-
+    user = get_user_by_display_name(actor.get("display_name") or "") if isinstance(actor.get("display_name"), str) else None
+    return str(user.get("user_id") if isinstance(user, dict) else "").strip()
