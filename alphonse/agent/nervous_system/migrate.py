@@ -32,6 +32,7 @@ def apply_schema(db_path: Path) -> None:
         _ensure_operational_facts_table(conn)
         _ensure_sandbox_directories(conn)
         _ensure_telegram_chat_access_table(conn)
+        _ensure_telegram_pending_invites_table(conn)
         _ensure_telegram_invite_columns(conn)
 
 
@@ -439,6 +440,24 @@ def _ensure_telegram_chat_access_table(conn: sqlite3.Connection) -> None:
         """
         CREATE INDEX IF NOT EXISTS idx_telegram_chat_access_status
           ON telegram_chat_access (status, updated_at)
+        """
+    )
+
+
+def _ensure_telegram_pending_invites_table(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS telegram_pending_invites (
+          chat_id             TEXT PRIMARY KEY,
+          chat_type           TEXT,
+          from_user_id        TEXT,
+          from_user_username  TEXT,
+          from_user_name      TEXT,
+          last_message        TEXT,
+          status              TEXT NOT NULL DEFAULT 'pending',
+          created_at          TEXT NOT NULL DEFAULT (datetime('now')),
+          updated_at          TEXT NOT NULL DEFAULT (datetime('now'))
+        ) STRICT
         """
     )
 

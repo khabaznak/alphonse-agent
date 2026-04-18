@@ -8,7 +8,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from alphonse.agent.nervous_system.assets import get_asset
+from alphonse.agent.nervous_system.assets import get_registered_asset
 from alphonse.agent.nervous_system.assets import resolve_asset_path
 
 
@@ -24,7 +24,7 @@ class SttTranscribeTool:
         if not normalized_asset_id:
             return _failed("asset_id_required", retryable=False, asset_id=normalized_asset_id)
 
-        asset = get_asset(normalized_asset_id)
+        asset = get_registered_asset(normalized_asset_id)
         if not isinstance(asset, dict):
             return _failed("asset_not_found", retryable=False, asset_id=normalized_asset_id)
         if str(asset.get("kind") or "").strip().lower() != "audio":

@@ -46,15 +46,14 @@ def register_uploaded_asset(
     blob = bytes(content or b"")
     if not blob:
         raise ValueError("asset_content_empty")
-    
+
     if not owner_user_id or not str(owner_user_id).strip():
         raise ValueError("owner_user_id_required")
-
 
     asset_id = str(uuid.uuid4())
     digest = hashlib.sha256(blob).hexdigest()
     byte_size = len(blob)
-    
+
     user_slug = _safe_slug(owner_user_id)
     if not user_slug:
         raise ValueError(f"invalid_owner_user_id: {owner_user_id}")
@@ -64,7 +63,7 @@ def register_uploaded_asset(
     if not normalized_mime:
         guessed = mimetypes.guess_type(str(original_filename or ""))[0]
         normalized_mime = guessed or "application/octet-stream"
-        
+
     suffix = _choose_suffix(original_filename=original_filename, mime_type=normalized_mime)
     relative_path = f"users/{user_slug}/stt/inbox/{asset_id}{suffix}"
     resolved = resolve_sandbox_path(alias=ASSET_SANDBOX_ALIAS, relative_path=relative_path)
@@ -107,7 +106,7 @@ def register_uploaded_asset(
     }
 
 
-def get_asset(asset_id: str) -> dict[str, Any] | None:
+def get_registered_asset(asset_id: str) -> dict[str, Any] | None:
     normalized_id = str(asset_id or "").strip()
     if not normalized_id:
         return None
@@ -151,7 +150,7 @@ def get_asset(asset_id: str) -> dict[str, Any] | None:
 
 
 def resolve_asset_path(asset_id: str) -> Path:
-    record = get_asset(asset_id)
+    record = get_registered_asset(asset_id)
     if not isinstance(record, dict):
         raise ValueError("asset_not_found")
     return resolve_sandbox_path(

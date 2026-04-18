@@ -3,13 +3,19 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
 
+from alphonse.agent import identity
 from alphonse.agent.actions.conscious_message_handler import build_incoming_message_envelope
 from alphonse.agent.extremities.interfaces.integrations.telegram.telegram_adapter import TelegramAdapter
 from alphonse.agent.io import TelegramSenseAdapter
+from alphonse.agent.nervous_system.assets import register_uploaded_asset
+from alphonse.agent.nervous_system.services import TELEGRAM_SERVICE_ID
 from alphonse.agent.observability.log_manager import get_component_logger
 from alphonse.agent.nervous_system.senses.base import Sense, SignalSpec
 from alphonse.agent.nervous_system.senses.bus import Bus, Signal
+from alphonse.agent.tools.stt_transcribe import SttTranscribeTool
 
 logger = get_component_logger("senses.telegram")
 
@@ -134,6 +140,22 @@ class TelegramSense(Sense):
         normalized = self._sense_adapter.normalize(payload)
         normalized_meta = normalized.metadata if isinstance(normalized.metadata, dict) else {}
         normalized_attachments = [dict(item) for item in normalized.attachments if isinstance(item, dict)]
+        ingestion = _ingest_telegram_audio_attachments(
+            adapter=self._adapter,
+            attachments=normalized_attachments,
+            channel_target=str(normalized.channel_target or "telegram"),
+            actor_external_user_id=normalized.user_id,
+            message_id=str(payload.get("message_id") or "").strip() or None,
+            update_id=str(payload.get("update_id") or "").strip() or None,
+        )
+        normalized_attachments = ingestion["attachments"]
+        transcript_text = str(ingestion.get("prompt_text") or "").strip()
+        envelope_text = normalized.text or transcript_text
+        normalized_meta = {
+            **normalized_meta,
+            "attachments": normalized_attachments,
+            "telegram_attachment_ingestion": ingestion["metadata"],
+        }
         self._bus.emit(
             Signal(
                 type="sense.telegram.message.user.received",
@@ -142,7 +164,7 @@ class TelegramSense(Sense):
                     channel_type=normalized.channel_type,
                     channel_target=str(normalized.channel_target or "telegram"),
                     provider="telegram",
-                    text=normalized.text,
+                    text=envelope_text,
                     occurred_at=datetime.fromtimestamp(float(normalized.timestamp), tz=timezone.utc).isoformat(),
                     correlation_id=normalized.correlation_id,
                     actor_external_user_id=normalized.user_id,
@@ -220,6 +242,171 @@ def _parse_float(raw: str | None, default: float) -> float:
         return float(raw)
     except ValueError:
         return default
+
+
+def _ingest_telegram_audio_attachments(
+    *,
+    adapter: TelegramAdapter | None,
+    attachments: list[dict[str, Any]],
+    channel_target: str,
+    actor_external_user_id: str | None,
+    message_id: str | None,
+    update_id: str | None,
+) -> dict[str, Any]:
+    enriched: list[dict[str, Any]] = []
+    transcripts: list[dict[str, Any]] = []
+    owner_user_id = _resolve_internal_telegram_user_id(actor_external_user_id)
+    for attachment in attachments:
+        item = dict(attachment)
+        if not _is_telegram_audio_attachment(item):
+            enriched.append(item)
+            continue
+        if not str(item.get("asset_id") or "").strip():
+            _register_telegram_audio_attachment(
+                adapter=adapter,
+                attachment=item,
+                channel_target=channel_target,
+                owner_user_id=owner_user_id,
+                actor_external_user_id=actor_external_user_id,
+                message_id=message_id,
+                update_id=update_id,
+            )
+        asset_id = str(item.get("asset_id") or "").strip()
+        if asset_id:
+            transcript = _transcribe_registered_audio_asset(asset_id)
+            item["transcription_status"] = str(transcript.get("status") or "failed")
+            if transcript.get("text"):
+                item["transcript"] = str(transcript.get("text") or "")
+                item["transcription"] = transcript
+                transcripts.append(
+                    {
+                        "asset_id": asset_id,
+                        "file_id": str(item.get("file_id") or "").strip() or None,
+                        "text": str(transcript.get("text") or ""),
+                    }
+                )
+            elif transcript.get("error"):
+                item["transcription_error"] = transcript.get("error")
+        enriched.append(item)
+    prompt_text = str((transcripts[0] if transcripts else {}).get("text") or "").strip()
+    return {
+        "attachments": enriched,
+        "prompt_text": prompt_text,
+        "metadata": {
+            "audio_attachment_count": sum(1 for item in enriched if _is_telegram_audio_attachment(item)),
+            "transcripts": transcripts,
+        },
+    }
+
+
+def _register_telegram_audio_attachment(
+    *,
+    adapter: TelegramAdapter | None,
+    attachment: dict[str, Any],
+    channel_target: str,
+    owner_user_id: str | None,
+    actor_external_user_id: str | None,
+    message_id: str | None,
+    update_id: str | None,
+) -> None:
+    if adapter is None:
+        attachment["asset_registration_status"] = "failed"
+        attachment["asset_registration_error"] = "telegram_adapter_unavailable"
+        return
+    if not owner_user_id:
+        attachment["asset_registration_status"] = "failed"
+        attachment["asset_registration_error"] = "owner_user_id_unresolved"
+        return
+    file_id = str(attachment.get("file_id") or "").strip()
+    if not file_id:
+        attachment["asset_registration_status"] = "failed"
+        attachment["asset_registration_error"] = "telegram_file_id_missing"
+        return
+    try:
+        file_meta = adapter.get_file(file_id=file_id)
+        file_path = str(file_meta.get("file_path") or "").strip()
+        if not file_path:
+            raise RuntimeError("telegram_file_path_missing")
+        content = adapter.download_file(file_path=file_path)
+        asset = register_uploaded_asset(
+            content=content,
+            kind="audio",
+            mime_type=str(attachment.get("mime_type") or "").strip() or None,
+            owner_user_id=owner_user_id,
+            provider="telegram",
+            channel_type="telegram",
+            channel_target=channel_target,
+            original_filename=Path(file_path).name or f"{file_id}.bin",
+            metadata={
+                "telegram_file_id": file_id,
+                "telegram_file_path": file_path,
+                "telegram_file_unique_id": file_meta.get("file_unique_id"),
+                "telegram_file_size": file_meta.get("file_size"),
+                "telegram_attachment": dict(attachment),
+                "telegram_message_id": message_id,
+                "telegram_update_id": update_id,
+                "actor_external_user_id": actor_external_user_id,
+            },
+        )
+    except Exception as exc:
+        logger.warning(
+            "TelegramSense failed to register audio attachment file_id=%s error=%s",
+            file_id,
+            exc,
+        )
+        attachment["asset_registration_status"] = "failed"
+        attachment["asset_registration_error"] = str(exc) or "asset_registration_failed"
+        return
+    attachment["asset_registration_status"] = "registered"
+    attachment["asset_id"] = str(asset.get("asset_id") or "")
+    attachment["asset_kind"] = str(asset.get("kind") or "audio")
+    attachment["asset_mime"] = str(asset.get("mime") or "")
+    attachment["asset_bytes"] = int(asset.get("bytes") or 0)
+    attachment["asset_sha256"] = str(asset.get("sha256") or "")
+    attachment["telegram_file_path"] = str(file_meta.get("file_path") or "")
+    attachment["telegram_file_unique_id"] = file_meta.get("file_unique_id")
+    attachment["telegram_file_size"] = file_meta.get("file_size")
+
+
+def _transcribe_registered_audio_asset(asset_id: str) -> dict[str, Any]:
+    try:
+        result = SttTranscribeTool().execute(asset_id=asset_id)
+    except Exception as exc:
+        logger.warning(
+            "TelegramSense failed to transcribe audio asset_id=%s error=%s",
+            asset_id,
+            exc,
+        )
+        return {"status": "failed", "asset_id": asset_id, "error": str(exc) or "transcription_failed"}
+    if isinstance(result, dict) and result.get("exception") is None:
+        output = result.get("output") if isinstance(result.get("output"), dict) else {}
+        text = str(output.get("text") or "").strip()
+        if text:
+            return {
+                "status": "ok",
+                "asset_id": asset_id,
+                "text": text,
+                "segments": output.get("segments") if isinstance(output.get("segments"), list) else [],
+            }
+    error = result.get("exception") if isinstance(result, dict) and isinstance(result.get("exception"), dict) else {}
+    code = str(error.get("code") or "transcription_failed").strip()
+    return {"status": "failed", "asset_id": asset_id, "error": code}
+
+
+def _is_telegram_audio_attachment(attachment: dict[str, Any]) -> bool:
+    provider = str(attachment.get("provider") or "").strip().lower()
+    kind = str(attachment.get("kind") or "").strip().lower()
+    return provider == "telegram" and kind in {"voice", "audio"}
+
+
+def _resolve_internal_telegram_user_id(actor_external_user_id: str | None) -> str | None:
+    try:
+        return identity.resolve_user_id(
+            service_id=TELEGRAM_SERVICE_ID,
+            service_user_id=str(actor_external_user_id or "").strip() or None,
+        )
+    except Exception:
+        return None
 
 
 def _snippet(text: str, limit: int = 80) -> str:
