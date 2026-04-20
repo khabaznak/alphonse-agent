@@ -38,7 +38,7 @@ class OllamaClient:
             json=payload,
             timeout=self.timeout,
         )
-        response.raise_for_status()
+        _raise_for_status_with_body(response, "Ollama chat completion failed")
 
         return response.json()["message"]["content"]
 
@@ -63,7 +63,7 @@ class OllamaClient:
             json=payload,
             timeout=self.timeout,
         )
-        response.raise_for_status()
+        _raise_for_status_with_body(response, "Ollama chat tool-call completion failed")
         body = response.json()
         message = body.get("message") if isinstance(body, dict) else None
         content = ""
@@ -76,14 +76,28 @@ class OllamaClient:
             if isinstance(rtc, list):
                 raw_tool_calls = rtc
         tool_call = _extract_first_canonical_tool_call(raw_tool_calls)
-        out: dict[str, Any] = {}
+        planner_intent: str | None = None
+        canonical_content: str | None = None
         if content:
+            canonical_tool_call, canonical_planner_intent, parsed_content = (
+                _extract_canonical_from_text_content(content)
+            )
+            if isinstance(canonical_tool_call, dict):
+                tool_call = canonical_tool_call
+            if isinstance(canonical_planner_intent, str):
+                planner_intent = canonical_planner_intent
+            if parsed_content is not None:
+                canonical_content = parsed_content
+        out: dict[str, Any] = {}
+        if canonical_content is not None:
+            if canonical_content:
+                out["content"] = canonical_content
+        elif content:
             out["content"] = content
-            planner_intent = _extract_planner_intent_from_canonical_json_content(content)
-            if isinstance(planner_intent, str) and planner_intent.strip():
-                out["planner_intent"] = planner_intent.strip()[:160]
         if isinstance(tool_call, dict):
             out["tool_call"] = tool_call
+        if isinstance(planner_intent, str) and planner_intent.strip():
+            out["planner_intent"] = planner_intent.strip()[:160]
         return _canonical_single_tool_call_result_or_raise(out)
 
 
@@ -120,24 +134,41 @@ def _parse_tool_args(raw_args: Any) -> dict[str, Any]:
     return {}
 
 
-def _extract_planner_intent_from_canonical_json_content(content: str) -> str | None:
+def _extract_canonical_from_text_content(
+    content: str,
+) -> tuple[dict[str, Any] | None, str | None, str | None]:
     parsed = _try_parse_json_object(content)
     if not isinstance(parsed, dict):
-        return None
-    tool_call = parsed.get("tool_call")
-    if not isinstance(tool_call, dict):
-        return None
+        return None, None, None
+
+    canonical_tool_call = parsed.get("tool_call")
+    tool_call: dict[str, Any] | None = (
+        canonical_tool_call if isinstance(canonical_tool_call, dict) else None
+    )
+    if tool_call is not None and not _is_canonical_tool_call(tool_call):
+        return None, None, None
+
+    planner_intent_raw = parsed.get("planner_intent")
+    planner_intent: str | None = None
+    if isinstance(planner_intent_raw, str):
+        text = planner_intent_raw.strip()
+        if text:
+            planner_intent = text[:160]
+
+    parsed_content = parsed.get("content")
+    if isinstance(parsed_content, str):
+        return tool_call, planner_intent, parsed_content.strip()
+    if tool_call is not None or planner_intent is not None:
+        return tool_call, planner_intent, ""
+    return None, None, None
+
+
+def _is_canonical_tool_call(tool_call: dict[str, Any]) -> bool:
     if str(tool_call.get("kind") or "").strip() != "call_tool":
-        return None
+        return False
     tool_name = str(tool_call.get("tool_name") or "").strip()
     args = tool_call.get("args")
-    if not tool_name or not isinstance(args, dict):
-        return None
-    planner_intent = parsed.get("planner_intent")
-    if not isinstance(planner_intent, str):
-        return None
-    text = planner_intent.strip()
-    return text[:160] if text else None
+    return bool(tool_name) and isinstance(args, dict)
 
 
 def _try_parse_json_object(text: str) -> dict[str, Any] | None:
@@ -178,6 +209,17 @@ def _try_parse_json_object(text: str) -> dict[str, Any] | None:
                 return parsed_obj
             idx = value.find("{", idx + 1)
     return None
+
+
+def _raise_for_status_with_body(response: requests.Response, prefix: str) -> None:
+    try:
+        response.raise_for_status()
+    except requests.HTTPError as exc:
+        body = (response.text or "").strip()
+        snippet = body[:1000]
+        raise ValueError(
+            f"{prefix}. status={response.status_code} body={snippet!r}"
+        ) from exc
 
 
 def _canonical_single_tool_call_result_or_raise(raw: Any) -> CanonicalCompleteWithToolsResult:
