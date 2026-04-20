@@ -174,10 +174,13 @@ def _append_tool_call_history_entry(
     exception: Any,
 ) -> None:
     redacted_args = _redact_sensitive(dict(args or {}))
+    # TODO: I had to implement this output_string because the _compact_json only cuts to 500 chars arbirarily.
+    # We might need a better way to compact JSONs
+    output_string = json.dumps(output, ensure_ascii=False, separators=(",", ":"), default=str)
     line = (
         f"{tool_name} "
         f"args={_compact_json(redacted_args)} "
-        f"output={_compact_json(output)} "
+        f"output={output_string} "
         f"exception={_compact_json(exception)}"
     )
     task_record.append_tool_call_history_entry(line)
