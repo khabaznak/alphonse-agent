@@ -15,6 +15,7 @@ from alphonse.agent.tools.base import ensure_tool_result
 from alphonse.agent.tools.registry import ToolRegistry
 from alphonse.agent.tools.registry import build_default_tool_registry
 
+_PLANNER_INTENT_MAX_LENGTH = 160
 
 class DoResult(TypedDict):
     task_record: TaskRecord
@@ -29,7 +30,7 @@ def execute_step_node_impl(
     log_task_event: Any,
 ) -> DoResult:
     tool_call = _require_canonical_tool_call(planner_output)
-    planner_intent = str(planner_output.get("planner_intent") or "").strip()[:160]
+    planner_intent = str(planner_output.get("planner_intent") or "").strip()[:_PLANNER_INTENT_MAX_LENGTH]
     _emit_planner_intent_progress(
         task_record=task_record,
         proposal=tool_call,
@@ -115,7 +116,7 @@ def _emit_planner_intent_progress(
         detail={
             "tool": str(proposal.get("tool_name") or ""),
             "intention": "planning_next_step",
-            "text": hint[:160] if hint else "",
+            "text": hint[:_PLANNER_INTENT_MAX_LENGTH] if hint else "",
         },
     )
 
@@ -235,8 +236,7 @@ def _record_execution_hooks(
         "task_record": task_record,
     }
     current = {"status": "failed" if _has_exception_payload(result.get("exception")) else "executed"}
-    record_after_tool_call(
-        state=state,
+    record_after_tool_call(        
         task_record=task_record,
         current=current,
         tool_name=tool_name,
@@ -244,8 +244,7 @@ def _record_execution_hooks(
         result=result,
         correlation_id=task_record.correlation_id or None,
     )
-    record_plan_step_completion(
-        state=state,
+    record_plan_step_completion(       
         task_record=task_record,
         current=current,
         proposal=planner_output.get("tool_call") if isinstance(planner_output.get("tool_call"), dict) else {},

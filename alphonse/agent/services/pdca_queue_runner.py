@@ -260,6 +260,8 @@ def _as_float(value: float | None, *, env_name: str, default: float, minimum: fl
     raw: Any = value
     if raw is None:
         raw = os.getenv(env_name)
+    if raw is None or str(raw).strip() == "":
+        raw = default
     try:
         parsed = float(raw)
     except (TypeError, ValueError):
@@ -271,6 +273,8 @@ def _as_int(value: int | None, *, env_name: str, default: int, minimum: int) -> 
     raw: Any = value
     if raw is None:
         raw = os.getenv(env_name)
+    if raw is None or str(raw).strip() == "":
+        raw = default
     try:
         parsed = int(raw)
     except (TypeError, ValueError):

@@ -18,6 +18,7 @@ from alphonse.agent.nervous_system.senses.bus import Bus, Signal
 from alphonse.agent.tools.stt_transcribe import SttTranscribeTool
 
 logger = get_component_logger("senses.telegram")
+_PROVIDER_KEY = "telegram"
 
 
 @dataclass(frozen=True)
@@ -76,59 +77,70 @@ class TelegramSense(Sense):
         if not self._bus:
             return
         if signal.type == "external.telegram.invite_request":
-            payload = signal.payload or {}
-            chat_id = payload.get("chat_id")
-            if chat_id is None:
-                return
-            from_user = payload.get("from_user")
-            from_user_name = payload.get("from_user_name")
-            text = payload.get("text") or ""
-            from alphonse.agent.nervous_system.telegram_invites import upsert_invite
-
-            upsert_invite(
-                {
-                    "chat_id": str(chat_id),
-                    "chat_type": payload.get("chat_type"),
-                    "from_user_id": str(from_user) if from_user is not None else None,
-                    "from_user_username": payload.get("from_user_username"),
-                    "from_user_name": from_user_name,
-                    "last_message": text,
-                    "status": "pending",
-                }
-            )
-            self._bus.emit(
-                Signal(
-                    type="sense.telegram.message.user.received",
-                    payload=build_incoming_message_envelope(
-                        message_id=str(payload.get("message_id") or payload.get("update_id") or chat_id),
-                        channel_type="telegram",
-                        channel_target=str(chat_id),
-                        provider="telegram",
-                        text=text or "Telegram invite request",
-                        occurred_at=datetime.now(timezone.utc).isoformat(),
-                        correlation_id=str(chat_id),
-                        actor_external_user_id=str(from_user) if from_user is not None else None,
-                        actor_display_name=str(from_user_name or "").strip() or None,
-                        metadata={
-                            "message_kind": "invite_request",
-                            "invite": {
-                                "chat_id": str(chat_id),
-                                "chat_type": payload.get("chat_type"),
-                                "from_user": from_user,
-                                "from_user_name": from_user_name,
-                            },
-                        },
-                    ),
-                    source="telegram",
-                    correlation_id=str(chat_id),
-                )
-            )
-            logger.info(
-                "TelegramSense emitted sense.telegram.message.user.received (invite) chat_id=%s",
-                chat_id,
-            )
+            self._on_invite_request(signal)
             return
         if signal.type != "external.telegram.message":
+            return
+        self._on_message(signal)
+
+    def _on_invite_request(self, signal: Signal) -> None:
+        if not self._bus:
+            return
+        payload = signal.payload or {}
+        chat_id = payload.get("chat_id")
+        if chat_id is None:
+            return
+        from_user = payload.get("from_user")
+        from_user_name = payload.get("from_user_name")
+        text = payload.get("text") or ""
+        from alphonse.agent.nervous_system.telegram_invites import upsert_invite
+
+        upsert_invite(
+            {
+                "chat_id": str(chat_id),
+                "chat_type": payload.get("chat_type"),
+                "from_user_id": str(from_user) if from_user is not None else None,
+                "from_user_username": payload.get("from_user_username"),
+                "from_user_name": from_user_name,
+                "last_message": text,
+                "status": "pending",
+            }
+        )
+        self._bus.emit(
+            Signal(
+                type="sense.telegram.message.user.received",
+                payload=build_incoming_message_envelope(
+                    message_id=str(payload.get("message_id") or payload.get("update_id") or chat_id),
+                    channel_type="telegram",
+                    channel_target=str(chat_id),
+                    provider="telegram",
+                    text=text or "Telegram invite request",
+                    occurred_at=datetime.now(timezone.utc).isoformat(),
+                    correlation_id=str(chat_id),
+                    actor_external_user_id=str(from_user) if from_user is not None else None,
+                    actor_display_name=str(from_user_name or "").strip() or None,
+                    metadata={
+                        "message_kind": "invite_request",
+                        "invite": {
+                            "chat_id": str(chat_id),
+                            "chat_type": payload.get("chat_type"),
+                            "from_user": from_user,
+                            "from_user_name": from_user_name,
+                        },
+                    },
+                ),
+                source="telegram",
+                correlation_id=str(chat_id),
+            )
+        )
+        logger.info(
+            "TelegramSense emitted sense.telegram.message.user.received (invite) chat_id=%s",
+            chat_id,
+        )
+
+    # Handles all messages received from Telegram which are not invite requests.
+    def _on_message(self, signal: Signal) -> None:
+        if not self._bus:
             return
         payload = signal.payload or {}
         logger.info(
@@ -143,7 +155,7 @@ class TelegramSense(Sense):
         ingestion = _ingest_telegram_audio_attachments(
             adapter=self._adapter,
             attachments=normalized_attachments,
-            channel_target=str(normalized.channel_target or "telegram"),
+            channel_target=normalized.channel_target,
             actor_external_user_id=normalized.user_id,
             message_id=str(payload.get("message_id") or "").strip() or None,
             update_id=str(payload.get("update_id") or "").strip() or None,
@@ -162,8 +174,8 @@ class TelegramSense(Sense):
                 payload=build_incoming_message_envelope(
                     message_id=str(payload.get("message_id") or payload.get("update_id") or normalized.correlation_id or normalized.timestamp),
                     channel_type=normalized.channel_type,
-                    channel_target=str(normalized.channel_target or "telegram"),
-                    provider="telegram",
+                    channel_target=str(normalized.channel_target).strip(),
+                    provider=_PROVIDER_KEY,
                     text=envelope_text,
                     occurred_at=datetime.fromtimestamp(float(normalized.timestamp), tz=timezone.utc).isoformat(),
                     correlation_id=normalized.correlation_id,
@@ -176,9 +188,9 @@ class TelegramSense(Sense):
                         if isinstance(payload.get("provider_event"), dict)
                         else None,
                     },
-                    reply_to_message_id=str(payload.get("reply_to_message_id") or "").strip() or None,
+                    reply_to_message_id=str(payload.get("message_id") or "").strip() or None,
                 ),
-                source="telegram",
+                source=_PROVIDER_KEY,
                 correlation_id=normalized.correlation_id,
             )
         )

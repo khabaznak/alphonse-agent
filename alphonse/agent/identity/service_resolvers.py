@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 
 from alphonse.agent.identity import users as users_store
 from alphonse.agent.nervous_system.paths import resolve_nervous_system_db_path
+from alphonse.agent.nervous_system.services import get_service_by_key
 from alphonse.agent.nervous_system.services import TELEGRAM_SERVICE_ID
 
 
@@ -25,7 +26,7 @@ def resolve_service_user_id(*, user_id: str, service_id: int) -> str | None:
         ).fetchone()
     return str(row[0]) if row and row[0] is not None else None
 
-
+# This function is correct but it has a little tech debt as it only considers 1 id per service_id
 def resolve_user_id_by_service_user_id(*, service_id: int, service_user_id: str) -> str | None:
     value = str(service_user_id or "").strip()
     if not value:
@@ -41,6 +42,17 @@ def resolve_user_id_by_service_user_id(*, service_id: int, service_user_id: str)
             (int(service_id), value),
         ).fetchone()
     return str(row[0]) if row and row[0] is not None else None
+
+def resolve_service_id_by_channel_type(channel_type: str | None) -> int | None:
+    """Resolve a channel type using services.service_key in the current schema."""
+    rendered = str(channel_type or "").strip().lower()
+    if not rendered:
+        return None
+    service = get_service_by_key(rendered)
+    if not isinstance(service, dict):
+        return None
+    value = service.get("service_id")
+    return int(value) if value is not None else None
 
 
 def resolve_service_key_by_service_user_id(service_user_id: str) -> str | None:
@@ -103,41 +115,6 @@ def upsert_service_resolver(
         )
         conn.commit()
     return resolver_id
-
-
-def resolve_telegram_chat_id_for_user(user_ref: str) -> str | None:
-    candidate = str(user_ref or "").strip()
-    if not candidate:
-        return None
-    if _is_numeric_identifier(candidate):
-        return candidate
-    mapped = resolve_service_user_id(user_id=candidate, service_id=TELEGRAM_SERVICE_ID)
-    if mapped:
-        return mapped
-    matched = users_store.get_user_by_display_name(candidate)
-    if isinstance(matched, dict):
-        internal_user_id = str(matched.get("user_id") or "").strip()
-        if internal_user_id:
-            mapped = resolve_service_user_id(user_id=internal_user_id, service_id=TELEGRAM_SERVICE_ID)
-            if mapped:
-                return mapped
-    return None
-
-
-def resolve_internal_user_by_telegram_id(telegram_user_id: str) -> str | None:
-    return resolve_user_id_by_service_user_id(
-        service_id=TELEGRAM_SERVICE_ID,
-        service_user_id=str(telegram_user_id or "").strip(),
-    )
-
-
-def _is_numeric_identifier(value: str) -> bool:
-    rendered = str(value or "").strip()
-    if not rendered:
-        return False
-    if rendered.startswith("-"):
-        return rendered[1:].isdigit()
-    return rendered.isdigit()
 
 
 def _now_iso() -> str:

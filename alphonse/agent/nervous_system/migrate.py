@@ -102,11 +102,7 @@ def _ensure_paired_device_columns(conn: sqlite3.Connection) -> None:
         "token_hash": "TEXT",
         "token_expires_at": "TEXT",
     }
-    for name, definition in columns.items():
-        try:
-            conn.execute(f"ALTER TABLE paired_devices ADD COLUMN {name} {definition}")
-        except sqlite3.OperationalError:
-            continue
+    _ensure_columns(conn, table="paired_devices", columns=columns)
 
 
 def _ensure_pairing_columns(conn: sqlite3.Connection) -> None:
@@ -136,11 +132,7 @@ def _ensure_intent_specs_columns(conn: sqlite3.Connection) -> None:
         "created_at": "TEXT NOT NULL DEFAULT '1970-01-01T00:00:00Z'",
         "updated_at": "TEXT NOT NULL DEFAULT '1970-01-01T00:00:00Z'",
     }
-    for name, definition in columns.items():
-        try:
-            conn.execute(f"ALTER TABLE intent_specs ADD COLUMN {name} {definition}")
-        except sqlite3.OperationalError:
-            continue
+    _ensure_columns(conn, table="intent_specs", columns=columns)
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_intent_specs_category ON intent_specs (category, intent_name)"
     )
@@ -284,11 +276,7 @@ def _ensure_prompt_template_columns(conn: sqlite3.Connection) -> None:
     columns = {
         "purpose": "TEXT NOT NULL DEFAULT 'general'",
     }
-    for name, definition in columns.items():
-        try:
-            conn.execute(f"ALTER TABLE prompt_templates ADD COLUMN {name} {definition}")
-        except sqlite3.OperationalError:
-            continue
+    _ensure_columns(conn, table="prompt_templates", columns=columns)
 
 
 def _ensure_voice_profiles_table(conn: sqlite3.Connection) -> None:
@@ -467,13 +455,23 @@ def _ensure_telegram_invite_columns(conn: sqlite3.Connection) -> None:
         "chat_type": "TEXT",
         "from_user_username": "TEXT",
     }
+    _ensure_columns(conn, table="telegram_pending_invites", columns=columns)
+
+
+def _ensure_columns(
+    conn: sqlite3.Connection,
+    *,
+    table: str,
+    columns: dict[str, str],
+) -> None:
+    existing = {
+        str(row[1] or "")
+        for row in conn.execute(f"PRAGMA table_info({table})").fetchall()
+    }
     for name, definition in columns.items():
-        try:
-            conn.execute(
-                f"ALTER TABLE telegram_pending_invites ADD COLUMN {name} {definition}"
-            )
-        except sqlite3.OperationalError:
+        if name in existing:
             continue
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {definition}")
 
 
 def _rebuild_timed_signals(conn: sqlite3.Connection) -> None:

@@ -946,28 +946,8 @@ def remove_operational_fact(
 ) -> bool:
     return MemoryService().remove_operational_fact(created_by=created_by, fact_id=fact_id, key=key)
 
-
-def resolve_memory_owner_id(*, state: dict[str, Any] | None = None, explicit: str | None = None) -> str:
-    explicit_value = str(explicit or "").strip()
-    if explicit_value:
-        user = identity.get_user(explicit_value)
-        if user:
-            return str(user.get("user_id") or "")
-        raise ValueError("missing_user_id")
-    payload = dict(state or {})
-    resolved = identity.resolve_current_actor_user_id(payload)
-    if resolved:
-        return resolved
-    for key in ("principal_id", "owner_principal_id", "conversation_principal_id"):
-        user = identity.get_user_by_principal_id(str(payload.get(key) or "").strip() or None)
-        if user:
-            return str(user.get("user_id") or "")
-    raise ValueError("missing_user_id")
-
-
 def record_after_tool_call(
-    *,
-    state: dict[str, Any],
+    *,   
     task_record: TaskRecord,
     current: dict[str, Any] | None,
     tool_name: str,
@@ -986,7 +966,7 @@ def record_after_tool_call(
     }:
         return
     try:
-        user_id = resolve_memory_owner_id(state=state)
+        user_id = task_record.user_id
         mission_id = _memory_mission_id(task_record=task_record, correlation_id=correlation_id)
         artifacts = _memory_artifacts_from_result(
             mission_id=mission_id,
@@ -1011,7 +991,6 @@ def record_after_tool_call(
         if output_summary:
             payload["output_summary"] = output_summary
         _memory_append_episode(
-            state=state,
             user_id=user_id,
             mission_id=mission_id,
             event_type="after_tool_call",
@@ -1029,17 +1008,12 @@ def record_after_tool_call(
             payload={"reason": "missing_user_id", "tool_name": str(tool_name or "").strip() or None},
         )
     except Exception as exc:
-        fallback_user_id = None
-        try:
-            fallback_user_id = resolve_memory_owner_id(state=state)
-        except ValueError:
-            fallback_user_id = None
         _LOG.emit(
             level="error",
             event="memory.hook.record_after_tool_call_failed",
             component="cognition.memory.service",
             correlation_id=str(correlation_id or "").strip() or None,
-            user_id=fallback_user_id,
+            user_id=user_id,
             error_code=type(exc).__name__,
             payload={"tool_name": str(tool_name or "").strip() or None},
         )
@@ -1047,14 +1021,13 @@ def record_after_tool_call(
 
 def record_plan_step_completion(
     *,
-    state: dict[str, Any],
     task_record: TaskRecord,
     current: dict[str, Any] | None,
     proposal: dict[str, Any],
     correlation_id: str | None,
 ) -> None:
     try:
-        user_id = resolve_memory_owner_id(state=state)
+        user_id = task_record.user_id
     except ValueError as exc:
         if str(exc) != "missing_user_id":
             raise
@@ -1075,7 +1048,7 @@ def record_plan_step_completion(
         "next": _memory_next_hint(task_record=task_record, current=current),
     }
     _memory_append_episode(
-        state=state,
+        correlation_id=task_record.correlation_id,
         user_id=user_id,
         mission_id=mission_id,
         event_type="plan_step_completed",
@@ -1112,16 +1085,6 @@ def _render_episode_entry(
     lines.append("")
     return "\n".join(lines) + "\n"
 
-
-def _memory_hooks_enabled() -> bool:
-    # Memory writes are mandatory for subconscious continuity.
-    return True
-
-
-def _memory_user_id(state: dict[str, Any]) -> str:
-    return resolve_memory_owner_id(state=state)
-
-
 def _memory_mission_id(*, task_record: TaskRecord, correlation_id: str | None) -> str:
     task_id = str(task_record.task_id or "").strip()
     if task_id:
@@ -1144,14 +1107,13 @@ def _memory_next_hint(*, task_record: TaskRecord, current: dict[str, Any] | None
 
 def _memory_append_episode(
     *,
-    state: dict[str, Any],
+    correlation_id: str | None = None,
     user_id: str,
     mission_id: str,
     event_type: str,
     payload: dict[str, Any],
     artifacts: list[dict[str, Any]],
-) -> None:
-    correlation_id = str(state.get("correlation_id") or "").strip() or None
+) -> None:    
     max_retries = max(1, _env_int("ALPHONSE_MEMORY_WRITE_MAX_RETRIES", 3))
     backoff = max(0.0, _env_float("ALPHONSE_MEMORY_WRITE_RETRY_BACKOFF_SECONDS", 0.2))
     last_error: Exception | None = None
@@ -1209,8 +1171,8 @@ def _memory_append_episode(
             "error": str(last_error or ""),
         },
     )
-    _emit_memory_failure_escalation(
-        state=state,
+    _emit_memory_failure_escalation(        
+        correlation_id=correlation_id,
         user_id=user_id,
         mission_id=mission_id,
         event_type=event_type,
@@ -1220,7 +1182,7 @@ def _memory_append_episode(
 
 def _emit_memory_failure_escalation(
     *,
-    state: dict[str, Any],
+    correlation_id: str | None = None,
     user_id: str,
     mission_id: str,
     event_type: str,
@@ -1229,7 +1191,7 @@ def _emit_memory_failure_escalation(
     bus = state.get("_bus")
     if not hasattr(bus, "emit"):
         return
-    correlation_id = str(state.get("correlation_id") or "").strip() or None
+   
     dedupe_key = f"{user_id}:{mission_id}:{event_type}:{str(correlation_id or '')}"
     if dedupe_key in _MEMORY_ESCALATION_DEDUPE:
         return
@@ -1244,7 +1206,7 @@ def _emit_memory_failure_escalation(
     )
     envelope = build_incoming_message_envelope(
         message_id=f"memory-write-failure:{correlation_id or 'unknown'}",
-        channel_type="telegram",
+        channel_type="telegram", # TODO this should be the channel and not hardcoded to telegram.
         channel_target=admin_target,
         provider="runtime",
         text=text,

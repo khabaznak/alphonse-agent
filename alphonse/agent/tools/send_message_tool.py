@@ -26,7 +26,7 @@ class SendMessageTool:
             return
         dispatcher = CommunicationDispatcher(coordinator=build_default_coordinator(), logger=logger)
         object.__setattr__(self, "_communication", CommunicationService(dispatcher=dispatcher))
-
+# TODO check if you can turn this function to use TaskRecord instead of state.
     def execute(self, *, state: dict[str, Any] | None = None, **args: Any) -> dict[str, Any]:
         try:
             message = _get_message_from_args(args)

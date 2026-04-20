@@ -12,7 +12,7 @@ from alphonse.agent.io.adapters import SenseAdapter, ExtremityAdapter
 from alphonse.agent.extremities.interfaces.integrations.telegram.telegram_adapter import TelegramAdapter
 from alphonse.agent.extremities.telegram_config import build_telegram_adapter_config
 from alphonse.agent.nervous_system.telegram_chat_access import can_deliver_to_chat
-from alphonse.agent.nervous_system.user_service_resolvers import resolve_telegram_chat_id_for_user
+from alphonse.agent.nervous_system.user_service_resolvers import resolve_service_user_id
 from alphonse.agent.observability.log_manager import get_component_logger
 
 logger = get_component_logger("io.telegram_channel")
@@ -249,12 +249,12 @@ def _resolve_telegram_delivery_target(message: NormalizedOutboundMessage) -> str
     audience = message.audience if isinstance(message.audience, dict) else {}
     if str(audience.get("kind") or "").strip().lower() == "person":
         internal_user_id = str(audience.get("id") or "").strip()
-        resolved = resolve_telegram_chat_id_for_user(internal_user_id)
+        resolved = resolve_service_user_id(internal_user_id)
         if resolved:
             return resolved
 
     if candidate:
-        resolved = resolve_telegram_chat_id_for_user(candidate)
+        resolved = resolve_service_user_id(candidate)
         if resolved:
             return resolved
     return candidate if candidate and _is_numeric_chat_id(candidate) else None

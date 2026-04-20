@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from alphonse.agent import identity
+from alphonse.agent.cortex.task_mode.task_record import TaskRecord
 from alphonse.config import settings
 
 
@@ -30,24 +31,12 @@ class GetUserDetailsTool:
     canonical_name: str = "get_user_details"
     capability: str = "context"
 
-    def execute(self, *, state: dict[str, Any] | None = None, **_: Any) -> dict[str, Any]:
-        payload = dict(state or {})
-        canonical_user_id = identity.resolve_current_actor_user_id(payload)
-        service_id = identity.resolve_service_id(
-            str(payload.get("service_key") or payload.get("channel_type") or "").strip() or None
-        )
+    def execute(self, *, task_record: TaskRecord) -> dict[str, Any]:        
+        user_id = task_record.user_id        
         return {
             "output": {
-                "actor_person_id": str(payload.get("actor_person_id") or "").strip() or None,
-                "user_id": canonical_user_id,
-                "resolved_user_id": canonical_user_id,
-                "incoming_user_id": str(payload.get("incoming_user_id") or "").strip() or None,
-                "channel_type": str(payload.get("channel_type") or "").strip() or None,
-                "channel_target": str(payload.get("channel_target") or "").strip() or None,
-                "service_id": service_id,
-                "service_key": identity.resolve_service_key(service_id) or str(payload.get("channel_type") or "").strip() or None,
-                "chat_id": str(payload.get("chat_id") or "").strip() or None,
-                "conversation_key": str(payload.get("conversation_key") or "").strip() or None,
+                
+                "user_id": user_id                
             },
             "exception": None,
             "metadata": {"tool": "get_user_details"},

@@ -202,18 +202,6 @@ def _append_input_record(
     return metadata, len(inputs)
 
 
-def _resolve_actor_id(
-    *,
-    payload: dict[str, Any],
-    session_user_id: str,
-) -> str:
-    for value in (resolved_user_id_for_payload(payload), session_user_id):
-        rendered = str(value or "").strip()
-        if rendered:
-            return rendered
-    return "unknown"
-
-
 def _ensure_initial_identity(
     *,
     metadata: dict[str, Any],
@@ -404,7 +392,7 @@ def _build_ingress_metadata(
     now: str,
 ) -> tuple[dict[str, Any], int]:
     correlation_id = str(task_record.correlation_id or "").strip()
-    actor_id = _resolve_actor_id(payload=payload, session_user_id=task_record.user_id)
+    actor_id = task_record.user_id
     if isinstance(existing, dict):
         metadata = dict(existing.get("metadata") or {}) if isinstance(existing.get("metadata"), dict) else {}
         _ensure_initial_identity(
@@ -564,7 +552,7 @@ def timezone_for_payload(payload: dict[str, Any]) -> str:
     context = payload.get("context") if isinstance(payload.get("context"), dict) else {}
     return str(payload.get("timezone") or context.get("timezone") or "").strip()
 
-
+# TODO there is no "identity" in payload, should we remove this function?
 def resolved_user_id_for_payload(payload: dict[str, Any]) -> str:
     identity = payload.get("identity") if isinstance(payload.get("identity"), dict) else {}
     actor = payload.get("actor") if isinstance(payload.get("actor"), dict) else {}
@@ -582,7 +570,7 @@ def resolved_user_id_for_payload(payload: dict[str, Any]) -> str:
             return rendered
     return ""
 
-
+# TODO The name of this function is misleading, it is validating but it seems to be forcing a new task.
 def _force_new_task(*, payload: dict[str, Any]) -> bool:
     controls = payload.get("controls") if isinstance(payload.get("controls"), dict) else {}
     if _as_bool(controls.get("force_new_task")):

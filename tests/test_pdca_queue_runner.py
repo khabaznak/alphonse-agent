@@ -76,6 +76,28 @@ def test_pdca_watchdog_enabled_by_default(tmp_path: Path, monkeypatch) -> None:
     assert runner.enabled is True
 
 
+def test_pdca_watchdog_uses_defaults_for_missing_optional_timing_env(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    db_path = tmp_path / "nerve-db"
+    monkeypatch.setenv("NERVE_DB_PATH", str(db_path))
+    for name in (
+        "ALPHONSE_PDCA_DISPATCH_WATCHDOG_SECONDS",
+        "ALPHONSE_PDCA_QUEUE_LEASE_SECONDS",
+        "ALPHONSE_PDCA_QUEUE_DISPATCH_COOLDOWN_SECONDS",
+        "ALPHONSE_PDCA_QUEUE_INTERACTIVE_BOOST",
+        "ALPHONSE_PDCA_QUEUE_STARVATION_WARN_SECONDS",
+        "ALPHONSE_PDCA_QUEUE_STARVATION_WARN_COOLDOWN_SECONDS",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    apply_schema(db_path)
+
+    runner = PdcaQueueRunner(bus=Bus(), enabled=True)
+
+    assert runner.enabled is True
+
+
 def test_pdca_watchdog_emits_starvation_warning_with_cooldown(tmp_path: Path, monkeypatch) -> None:
     db_path = tmp_path / "nerve-db"
     monkeypatch.setenv("NERVE_DB_PATH", str(db_path))
@@ -112,4 +134,3 @@ def test_pdca_watchdog_emits_starvation_warning_with_cooldown(tmp_path: Path, mo
     payload = warning_events[0]["payload"]
     assert int(payload.get("warn_threshold_seconds") or 0) == 60
     assert int(payload.get("queue_depth") or 0) >= 1
-

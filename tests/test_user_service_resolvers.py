@@ -31,6 +31,18 @@ def test_upsert_and_resolve_service_user_id(tmp_path: Path, monkeypatch) -> None
     assert resolved == "8553589429"
 
 
+def test_resolve_service_id_by_channel_type_uses_service_key(tmp_path: Path, monkeypatch) -> None:
+    db_path = tmp_path / "nerve-db"
+    monkeypatch.setenv("NERVE_DB_PATH", str(db_path))
+    apply_schema(db_path)
+
+    assert resolvers.resolve_service_id_by_channel_type("telegram") == 2
+    assert resolvers.resolve_service_id_by_channel_type(" Telegram ") == 2
+    assert resolvers.resolve_service_id_by_channel_type("unknown") is None
+    assert resolvers.resolve_service_id_by_channel_type("") is None
+    assert resolvers.resolve_service_id_by_channel_type(None) is None
+
+
 def test_resolve_telegram_chat_id_for_internal_and_display_name(tmp_path: Path, monkeypatch) -> None:
     db_path = tmp_path / "nerve-db"
     monkeypatch.setenv("NERVE_DB_PATH", str(db_path))

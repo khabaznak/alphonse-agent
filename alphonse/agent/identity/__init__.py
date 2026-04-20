@@ -59,11 +59,12 @@ def resolve_user_id(*, service_id: int | None, service_user_id: str | None) -> s
     rendered = str(service_user_id or "").strip()
     if not rendered:
         return None
+    # TODO This function is actually finding the right user! make sure the others behave like this one. 
     resolved = resolver_store.resolve_user_id_by_service_user_id(
         service_id=int(service_id),
         service_user_id=rendered,
     )
-    return _validated_user_id(resolved)
+    return resolved
 
 
 def resolve_service_user_id(*, user_id: str | None, service_id: int | None) -> str | None:
@@ -133,8 +134,9 @@ def resolve_delivery_target(*, user_id: str | None, service_id: int | None) -> s
 
 
 def resolve_current_actor_user_id(state: dict[str, Any] | None) -> str | None:
+    # TODO This function is candidate for removal
     payload = dict(state or {})
-    for key in ("actor_person_id", "resolved_user_id", "session_user_id", "owner_id"):
+    for key in ("actor_person_id", "resolved_user_id", "session_user_id", "owner_id","user_id"):
         resolved = _validated_user_id(payload.get(key))
         if resolved:
             return resolved

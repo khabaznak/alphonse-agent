@@ -7,7 +7,7 @@ from alphonse.agent.actions.base import Action
 from alphonse.agent.actions.models import ActionResult
 from alphonse.agent.actions.presence_projection import emit_presence_phase_changed
 from alphonse.agent.cortex.task_mode.task_record import TaskRecord
-from alphonse.agent.identity.users import get_user_by_display_name
+from alphonse.agent.identity.service_resolvers import resolve_user_id_by_service_user_id, resolve_service_id_by_channel_type
 from alphonse.agent.observability.log_manager import get_component_logger
 from alphonse.agent.observability.log_manager import get_log_manager
 from alphonse.agent.services.pdca_ingress import enqueue_pdca_slice
@@ -95,11 +95,10 @@ class HandleConsciousMessageAction(Action):
                 },
                 urgency="normal",
             )
-
-        session_user_id = _session_user_id_from_payload(payload)
+        
         task_record = _build_task_record_from_payload(
             payload=payload,
-            session_user_id=session_user_id,
+            session_user_id=user_id,
             correlation_id=str(correlation_id),
         )
 
@@ -126,14 +125,6 @@ class HandleConsciousMessageAction(Action):
             payload={"task_id": task_id},
             urgency=None,
         )
-
-
-def _session_user_id_from_payload(payload: dict[str, Any]) -> str:
-    try:
-        return resolved_user_id_for_payload(payload)
-    except Exception:
-        raise
-
 
 def _build_task_record_from_payload(
     *,
@@ -275,5 +266,7 @@ def timezone_for_payload(payload: dict[str, Any]) -> str:
 
 def resolved_user_id_for_payload(payload: dict[str, Any]) -> str:
     actor = payload.get("actor") if isinstance(payload.get("actor"), dict) else {}
-    user = get_user_by_display_name(actor.get("display_name") or "") if isinstance(actor.get("display_name"), str) else None
-    return str(user.get("user_id") if isinstance(user, dict) else "").strip()
+    payload_channel = payload.get("channel") if isinstance(payload.get("channel"), dict) else {}  
+    service_id = resolve_service_id_by_channel_type(payload_channel.get("type"))
+    user_id = resolve_user_id_by_service_user_id(service_id=service_id, service_user_id=actor.get("external_user_id"))
+    return user_id

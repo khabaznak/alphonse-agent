@@ -5,12 +5,7 @@ from typing import Any
 
 from alphonse.agent.cognition.memory import MemoryService
 from alphonse.agent.cognition.memory import TimeRange
-from alphonse.agent.cognition.memory import resolve_memory_owner_id
-
-
-def _state_user_id(state: dict[str, Any] | None, explicit: str | None = None) -> str:
-    return resolve_memory_owner_id(state=state, explicit=explicit)
-
+from alphonse.agent.cortex.task_mode.task_record import TaskRecord
 
 def _parse_dt(value: str | None) -> datetime | None:
     text = str(value or "").strip()
@@ -35,14 +30,10 @@ class SearchEpisodesTool:
         mission_id: str | None = None,
         start_time: str | None = None,
         end_time: str | None = None,
-        limit: int | None = None,
-        state: dict[str, Any] | None = None,
+        limit: int | None = None,        
         **_: Any,
-    ) -> dict[str, Any]:
-        try:
-            uid = _state_user_id(state, user_id)
-        except ValueError as exc:
-            return _failed(self.canonical_name, str(exc))
+    ) -> dict[str, Any]:        
+           
         service = MemoryService()
         time_range = None
         if str(start_time or "").strip() or str(end_time or "").strip():
@@ -50,14 +41,14 @@ class SearchEpisodesTool:
         query_text = str(query or "")
         normalized_limit = max(1, int(limit or 100))
         rows = service.search_episodes(
-            uid,
+            user_id,
             query_text,
             mission_id=mission_id,
             time_range=time_range,
             limit=normalized_limit,
         )
         output_payload: dict[str, Any] = {
-            "user_id": uid,
+            "user_id": user_id,
             "hits": rows,
             "count": len(rows),
         }
@@ -77,17 +68,14 @@ class GetMissionTool:
         *,
         mission_id: str,
         user_id: str | None = None,
-        state: dict[str, Any] | None = None,
+        task_record: TaskRecord,
         **_: Any,
     ) -> dict[str, Any]:
-        try:
-            uid = _state_user_id(state, user_id)
-        except ValueError as exc:
-            return _failed(self.canonical_name, str(exc))
+                
         service = MemoryService()
-        mission = service.get_mission(uid, str(mission_id or ""))
+        mission = service.get_mission(task_record.user_id, str(mission_id or ""))
         return {
-            "output": {"user_id": uid, "mission": mission},
+            "output": {"user_id": task_record.user_id, "mission": mission},
             "exception": None,
             "metadata": {"tool": "memory.get_mission"},
         }
@@ -101,17 +89,14 @@ class ListActiveMissionsTool:
         self,
         *,
         user_id: str | None = None,
-        state: dict[str, Any] | None = None,
+        
         **_: Any,
     ) -> dict[str, Any]:
-        try:
-            uid = _state_user_id(state, user_id)
-        except ValueError as exc:
-            return _failed(self.canonical_name, str(exc))
+       
         service = MemoryService()
-        rows = service.list_active_missions(uid)
+        rows = service.list_active_missions(user_id)
         return {
-            "output": {"user_id": uid, "missions": rows, "count": len(rows)},
+            "output": {"user_id": user_id, "missions": rows, "count": len(rows)},
             "exception": None,
             "metadata": {"tool": "memory.list_active_missions"},
         }
@@ -125,18 +110,14 @@ class GetWorkspacePointerTool:
         self,
         *,
         key: str,
-        user_id: str | None = None,
-        state: dict[str, Any] | None = None,
+        user_id: str | None = None,        
         **_: Any,
     ) -> dict[str, Any]:
-        try:
-            uid = _state_user_id(state, user_id)
-        except ValueError as exc:
-            return _failed(self.canonical_name, str(exc))
+        
         service = MemoryService()
-        value = service.get_workspace_pointer(uid, str(key or ""))
+        value = service.get_workspace_pointer(user_id, str(key or ""))
         return {
-            "output": {"user_id": uid, "key": str(key or ""), "value": value},
+            "output": {"user_id": user_id, "key": str(key or ""), "value": value},
             "exception": None,
             "metadata": {"tool": "memory.get_workspace"},
         }
@@ -161,16 +142,13 @@ class UpsertOperationalFactTool:
         status: str | None = None,
         scope: str = "private",
         last_verified_at: str | None = None,
-        confidence: float | None = None,
-        created_by: str | None = None,
-        user_id: str | None = None,
-        state: dict[str, Any] | None = None,
+        confidence: float | None = None,        
+        user_id: str | None = None,      
         **_: Any,
     ) -> dict[str, Any]:
-        try:
-            owner = _state_user_id(state, created_by or user_id)
-        except ValueError as exc:
-            return _failed(self.canonical_name, str(exc))
+       
+        owner = user_id
+        
         service = MemoryService()
         fact = service.upsert_operational_fact(
             created_by=owner,
@@ -210,16 +188,11 @@ class SearchOperationalFactsTool:
         importance: str | None = None,
         scope: str | None = None,
         limit: int = 50,
-        offset: int = 0,
-        created_by: str | None = None,
-        user_id: str | None = None,
-        state: dict[str, Any] | None = None,
+        offset: int = 0,        
+        user_id: str | None = None,        
         **_: Any,
     ) -> dict[str, Any]:
-        try:
-            owner = _state_user_id(state, created_by or user_id)
-        except ValueError as exc:
-            return _failed(self.canonical_name, str(exc))
+        owner = user_id
         service = MemoryService()
         normalized_limit = max(1, min(int(limit), 200))
         normalized_offset = max(0, int(offset))
@@ -253,13 +226,10 @@ class RemoveOperationalFactTool:
         key: str | None = None,
         created_by: str | None = None,
         user_id: str | None = None,
-        state: dict[str, Any] | None = None,
+        task_record: TaskRecord,
         **_: Any,
     ) -> dict[str, Any]:
-        try:
-            owner = _state_user_id(state, created_by or user_id)
-        except ValueError as exc:
-            return _failed(self.canonical_name, str(exc))
+        owner = user_id        
         service = MemoryService()
         deleted = service.remove_operational_fact(
             created_by=owner,
@@ -267,7 +237,12 @@ class RemoveOperationalFactTool:
             key=str(key or "").strip() or None,
         )
         return {
-            "output": {"created_by": owner, "deleted": bool(deleted), "fact_id": str(fact_id or "").strip() or None, "key": str(key or "").strip() or None},
+            "output": {
+                "created_by": owner, 
+                "deleted": bool(deleted), 
+                "fact_id": str(fact_id or "").strip() or None, 
+                "key": str(key or "").strip() or None
+                },
             "exception": None,
             "metadata": {"tool": "memory.remove_operational_fact"},
         }

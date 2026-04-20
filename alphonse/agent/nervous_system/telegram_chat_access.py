@@ -5,13 +5,10 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
+from alphonse.agent.identity import resolve_user_id
+from alphonse.agent.identity.service_resolvers import resolve_user_id_by_service_user_id, resolve_service_user_id
 from alphonse.agent.nervous_system.paths import resolve_nervous_system_db_path
 from alphonse.agent.nervous_system.services import TELEGRAM_SERVICE_ID
-from alphonse.agent.nervous_system.user_service_resolvers import (
-    resolve_internal_user_by_telegram_id,
-    resolve_service_user_id,
-)
-
 
 @dataclass(frozen=True)
 class TelegramInboundAccessDecision:
@@ -116,7 +113,7 @@ def provision_from_invite(invite: dict[str, Any], *, status: str) -> dict[str, A
     if chat_type in {"group", "supergroup"}:
         owner_service_user_id = str(invite.get("from_user_id") or "").strip()
         if owner_service_user_id:
-            owner_user_id = resolve_internal_user_by_telegram_id(owner_service_user_id)
+            owner_user_id = resolve_user_id_by_service_user_id(owner_service_user_id)
     return upsert_chat_access(
         {
             "chat_id": chat_id,
@@ -172,7 +169,7 @@ def evaluate_inbound_access(
         access=access,
     )
 
-
+# TODO consider deprecating this function as it is Telegram-specific and it does not belong in nervous_system layer
 def owner_telegram_user_id(access: dict[str, Any] | None) -> str | None:
     if not isinstance(access, dict):
         return None
