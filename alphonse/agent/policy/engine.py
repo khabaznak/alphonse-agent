@@ -1,9 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Protocol
-
-from alphonse.agent.cognition.plans import CortexPlan
+from typing import Any, Protocol
 
 
 @dataclass(frozen=True)
@@ -13,7 +11,7 @@ class PolicyDecision:
 
 
 class PolicyRule(Protocol):
-    def evaluate(self, plan: CortexPlan, exec_context: object) -> PolicyDecision | None:
+    def evaluate(self, plan: dict[str, Any], exec_context: object) -> PolicyDecision | None:
         ...
 
 
@@ -39,16 +37,16 @@ class PolicyEngine:
     def register_rule(self, rule: PolicyRule) -> None:
         self._rules.append(rule)
 
-    def approve(self, plans: list[CortexPlan], context: object) -> list[CortexPlan]:
+    def approve(self, plans: list[dict[str, Any]], context: object) -> list[dict[str, Any]]:
         _ = context
-        approved: list[CortexPlan] = []
+        approved: list[dict[str, Any]] = []
         for plan in plans:
             decision = self.approve_plan(plan, context)
             if decision.allowed:
                 approved.append(plan)
         return approved
 
-    def approve_plan(self, plan: CortexPlan, exec_context: object) -> PolicyDecision:
+    def approve_plan(self, plan: dict[str, Any], exec_context: object) -> PolicyDecision:
         for rule in self._rules:
             decision = rule.evaluate(plan, exec_context)
             if decision is not None:

@@ -22,20 +22,6 @@ def build_cognition_state(state: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def build_meta(state: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "intent": state.get("intent"),
-        "intent_confidence": state.get("intent_confidence"),
-        "correlation_id": state.get("correlation_id"),
-        "chat_id": state.get("chat_id"),
-        "autonomy_level": state.get("autonomy_level"),
-        "planning_mode": state.get("planning_mode"),
-        "intent_category": state.get("intent_category"),
-        "route_decision": state.get("route_decision"),
-        "events": state.get("events") or [],
-    }
-
-
 def safe_json(value: Any, limit: int = 1200) -> str:
     try:
         rendered = json.dumps(value, ensure_ascii=False, separators=(",", ":"))

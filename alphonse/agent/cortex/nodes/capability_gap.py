@@ -2,9 +2,6 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
-from alphonse.agent.cognition.plans import CortexPlan
-
-
 def has_capability_gap_plan(state: dict[str, Any]) -> bool:
     plans = state.get("plans")
     if not isinstance(plans, list):
@@ -30,42 +27,27 @@ def build_gap_plan(
         principal_id = get_or_create_principal_for_channel(
             str(channel_type), str(channel_id)
         )
-    plan = CortexPlan(
-        tool="capability_gap",
-        parameters={
-            "user_text": str(state.get("last_user_message") or ""),
-            "reason": reason,
-            "status": "open",
-            "intent": str(state.get("intent") or ""),
-            "confidence": state.get("intent_confidence"),
-            "missing_slots": missing_slots,
-            "principal_type": "channel_chat",
-            "principal_id": principal_id,
-            "channel_type": str(channel_type) if channel_type else None,
-            "channel_id": str(channel_id) if channel_id else None,
-            "correlation_id": state.get("correlation_id"),
-            "metadata": {
-                "intent_evidence": state.get("intent_evidence"),
-            },
+    payload = {
+        "user_text": str(state.get("last_user_message") or ""),
+        "reason": reason,
+        "status": "open",
+        "intent": str(state.get("intent") or ""),
+        "confidence": state.get("intent_confidence"),
+        "missing_slots": missing_slots,
+        "principal_type": "channel_chat",
+        "principal_id": principal_id,
+        "channel_type": str(channel_type) if channel_type else None,
+        "channel_id": str(channel_id) if channel_id else None,
+        "correlation_id": state.get("correlation_id"),
+        "metadata": {
+            "intent_evidence": state.get("intent_evidence"),
         },
-        payload={
-            "user_text": str(state.get("last_user_message") or ""),
-            "reason": reason,
-            "status": "open",
-            "intent": str(state.get("intent") or ""),
-            "confidence": state.get("intent_confidence"),
-            "missing_slots": missing_slots,
-            "principal_type": "channel_chat",
-            "principal_id": principal_id,
-            "channel_type": str(channel_type) if channel_type else None,
-            "channel_id": str(channel_id) if channel_id else None,
-            "correlation_id": state.get("correlation_id"),
-            "metadata": {
-                "intent_evidence": state.get("intent_evidence"),
-            },
-        },
-    )
-    return plan.model_dump()
+    }
+    return {
+        "tool": "capability_gap",
+        "parameters": dict(payload),
+        "payload": payload,
+    }
 
 
 def run_capability_gap_tool(

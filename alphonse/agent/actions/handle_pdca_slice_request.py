@@ -14,7 +14,6 @@ from alphonse.agent.actions.session_context import IncomingContext
 from alphonse.agent.cognition.memory import append_conversation_transcript
 from alphonse.agent.cognition.providers.factory import build_llm_client
 from alphonse.agent.cortex.graph import CortexGraph
-from alphonse.agent.cortex.state_store import load_state, save_state
 from alphonse.agent.nervous_system.pdca_queue_store import (
     append_pdca_event,
     get_pdca_task,
@@ -366,22 +365,51 @@ def _run_slice_invoke_job(
                 correlation_id=correlation_id,
                 payload={"task_id": task_id},
             )
-        effective_reply_text = "" if should_preempt else str(result.reply_text or "")
-        merged_state = _merge_state(base=base_state, reply_text=effective_reply_text)
-        merged_state = _sanitize_state_for_persistence(merged_state)
-        _ = save_pdca_checkpoint( # TODO what is this save?
-            task_id=task_id,
-            state=merged_state,
-            expected_version=int(checkpoint.get("version") or 0) if isinstance(checkpoint, dict) else 0,
+        effective_reply_text = "" if should_preempt else str(_result_field(result, "reply_text") or "")
+        cognition_state = (
+            dict(_result_field(result, "cognition_state"))
+            if isinstance(_result_field(result, "cognition_state"), dict)
+            else dict(invoke_state)
         )
-        conversation_key = str(task.get("conversation_key") or "").strip()
-        if conversation_key:
-            save_state(conversation_key, merged_state) # TODO then we have another save here!?
+        merged_state = _merge_state(base=cognition_state, reply_text=effective_reply_text)
+        try:
+            checkpoint_state = _build_checkpoint_payload(
+                cognition_state=cognition_state,
+                request_text=text,
+                previous_checkpoint=checkpoint,
+            )
+            _ = save_pdca_checkpoint(
+                task_id=task_id,
+                state=checkpoint_state,
+                expected_version=int(checkpoint.get("version") or 0) if isinstance(checkpoint, dict) else 0,
+            )
+        except Exception as exc:
+            error = str(exc) or exc.__class__.__name__
+            _LOG.emit(
+                event="pdca.slice.checkpoint_save_failed",
+                component="actions.handle_pdca_slice_request",
+                correlation_id=correlation_id,
+                payload={"task_id": task_id, "error": error},
+            )
+            _finalize_failure(task=task, correlation_id=correlation_id, error=error)
+            _emit_presence_lifecycle_event(
+                incoming=incoming,
+                event_family="presence.failed",
+                phase="failed",
+                correlation_id=correlation_id,
+            )
+            _emit_slice_signal(
+                context=context,
+                event_type="pdca.failed",
+                task_id=task_id,
+                correlation_id=correlation_id,
+                extra_payload={"failure_code": "checkpoint_save_failed"},
+            )
+            return
         _update_day_session_memory(
             task=task,
             user_message=text,
             reply_text=effective_reply_text,
-           
             merged_state=merged_state,
         )
 
@@ -450,6 +478,12 @@ def _read_inflight_state(*, task: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _result_field(result: Any, key: str) -> Any:
+    if isinstance(result, dict):
+        return result.get(key)
+    return getattr(result, key, None)
+
+
 def _mark_inflight_metadata(*, task_id: str, correlation_id: str | None) -> None:
     task = get_pdca_task(task_id)
     if not isinstance(task, dict):
@@ -481,20 +515,22 @@ def _base_state(
     checkpoint: dict[str, Any] | None,
     correlation_id: str | None,
 ) -> dict[str, Any]:
-    if isinstance(checkpoint, dict) and isinstance(checkpoint.get("state"), dict):
-        out = dict(checkpoint.get("state") or {})
-        _ensure_state_correlation_id(
-            base=out,
-            task=task,
-            seeded=(task.get("metadata") or {}).get("state")
-            if isinstance(task.get("metadata"), dict)
-            else {},
-            incoming_correlation_id=correlation_id,
-        )
-        return out
     metadata = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
     seeded = metadata.get("state") if isinstance(metadata.get("state"), dict) else {}
     conversation_key = str(task.get("conversation_key") or "").strip()
+    if isinstance(checkpoint, dict) and isinstance(checkpoint.get("state"), dict):
+        out = _base_state_from_checkpoint(
+            checkpoint_state=checkpoint.get("state") or {},
+            seeded=seeded,
+            conversation_key=conversation_key,
+        )
+        _ensure_state_correlation_id(
+            base=out,
+            task=task,
+            seeded=seeded,
+            incoming_correlation_id=correlation_id,
+        )
+        return out
     if isinstance(seeded.get("task_record"), dict):
         out = dict(seeded)
         out.setdefault("conversation_key", conversation_key)
@@ -506,34 +542,13 @@ def _base_state(
             incoming_correlation_id=correlation_id,
         )
         return out
-    loaded = load_state(conversation_key) if conversation_key else None
-    if isinstance(loaded, dict):
-        sanitized, removed_keys = _sanitize_loaded_state_for_new_task(
-            loaded,
-            preserve_pending_interaction=_should_preserve_pending_interaction(task=task),
-        )
-        _overlay_ingress_context(base=sanitized, seeded=seeded)
-        _ensure_state_correlation_id(
-            base=sanitized,
-            task=task,
-            seeded=seeded,
-            incoming_correlation_id=correlation_id,
-        )
-        if removed_keys:
-            _LOG.emit(
-                event="pdca.slice.base_state.sanitized",
-                component="actions.handle_pdca_slice_request",
-                correlation_id=correlation_id,
-                payload={
-                    "task_id": str(task.get("task_id") or "").strip() or None,
-                    "conversation_key": conversation_key or None,
-                    "removed_keys": removed_keys,
-                },
-            )
-        return sanitized
     out = dict(seeded)
     out.setdefault("conversation_key", conversation_key)
     out.setdefault("chat_id", conversation_key)
+    if not isinstance(out.get("task_record"), dict):
+        synthesized = _synthesize_task_record(task=task, seeded=seeded, correlation_id=correlation_id)
+        if synthesized is not None:
+            out["task_record"] = synthesized
     _ensure_state_correlation_id(
         base=out,
         task=task,
@@ -541,6 +556,59 @@ def _base_state(
         incoming_correlation_id=correlation_id,
     )
     return out
+
+
+def _base_state_from_checkpoint(
+    *,
+    checkpoint_state: dict[str, Any],
+    seeded: dict[str, Any],
+    conversation_key: str,
+) -> dict[str, Any]:
+    out = dict(seeded)
+    out.setdefault("conversation_key", conversation_key)
+    out.setdefault("chat_id", conversation_key)
+    for key in ("task_record", "last_user_message", "check_provenance", "cycle_index"):
+        value = checkpoint_state.get(key)
+        if value is not None:
+            out[key] = value
+    return out
+
+
+def _synthesize_task_record(
+    *,
+    task: dict[str, Any],
+    seeded: dict[str, Any] | None,
+    correlation_id: str | None,
+) -> dict[str, Any] | None:
+    metadata = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
+    goal = ""
+    for key in ("pending_user_text", "last_user_message", "user_text"):
+        goal = str(metadata.get(key) or "").strip()
+        if goal:
+            break
+    rendered_correlation = str(correlation_id or "").strip() or str(metadata.get("last_enqueue_correlation_id") or "").strip()
+    record = {
+        "task_id": str(task.get("task_id") or "").strip() or None,
+        "user_id": str(task.get("owner_id") or "").strip() or None,
+        "correlation_id": rendered_correlation,
+        "goal": goal,
+        "facts_md": "- (none)",
+        "recent_conversation_md": "- (none)",
+        "plan_md": "- (none)",
+        "acceptance_criteria_md": "- (none)",
+        "memory_facts_md": "- (none)",
+        "tool_call_history_md": "- (none)",
+        "status": "running",
+        "outcome": None,
+    }
+    for key, value in (
+        ("channel_type", str((seeded or {}).get("channel_type") or metadata.get("last_user_channel") or "").strip()),
+        ("channel_target", str((seeded or {}).get("channel_target") or metadata.get("last_user_target") or "").strip()),
+        ("message_id", str(metadata.get("last_user_message_id") or "").strip()),
+    ):
+        if value:
+            record["facts_md"] = f"{record['facts_md']}\n- {key}: {value}"
+    return record if record["correlation_id"] or record["task_id"] else None
 
 
 def _inject_session_memory_context(*, base_state: dict[str, Any], task: dict[str, Any]) -> None:
@@ -685,14 +753,6 @@ def _sanitize_loaded_state_for_new_task(
     return sanitized, removed_keys
 
 
-def _should_preserve_pending_interaction(*, task: dict[str, Any]) -> bool:
-    status = str(task.get("status") or "").strip().lower()
-    if status in {"waiting_user", "running", "paused"}:
-        return True
-    metadata = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
-    return bool(str(metadata.get("last_user_message") or "").strip())
-
-
 def _should_preempt_after_step(*, task_id: str, slice_started_at: datetime) -> bool:
     latest = get_pdca_task(task_id)
     if not isinstance(latest, dict):
@@ -704,32 +764,6 @@ def _should_preempt_after_step(*, task_id: str, slice_started_at: datetime) -> b
     if enqueued_at is None:
         return True
     return enqueued_at >= slice_started_at
-
-
-def _overlay_ingress_context(*, base: dict[str, Any], seeded: dict[str, Any]) -> None:
-    for key in (
-        "conversation_key",
-        "chat_id",
-        "channel_type",
-        "channel_target",
-        "actor_person_id",
-        "incoming_user_id",
-        "incoming_user_name",
-        "locale",
-        "tone",
-        "address_style",
-        "timezone",
-        "correlation_id",
-    ):
-        if str(base.get(key) or "").strip():
-            continue
-        value = seeded.get(key)
-        if value is None:
-            continue
-        rendered = str(value).strip()
-        if not rendered:
-            continue
-        base[key] = value
 
 
 def _ensure_state_correlation_id(
@@ -766,27 +800,34 @@ def _merge_state(*, base: dict[str, Any], reply_text: str) -> dict[str, Any]:
     merged["last_updated_at"] = datetime.now(timezone.utc).isoformat()
     return merged
 
-# TODO: review this function is it really needed?
-def _sanitize_state_for_persistence(state: dict[str, Any]) -> dict[str, Any]:
-    sanitized = dict(state) if isinstance(state, dict) else {}
-    events = sanitized.get("events")
-    if isinstance(events, list):
-        next_events: list[Any] = []
-        for raw_event in events:
-            if not isinstance(raw_event, dict):
-                continue
-            event = dict(raw_event)
-            detail = event.get("detail")
-            if isinstance(detail, dict):
-                next_detail = dict(detail)
-                if str(next_detail.get("presence_event_family") or "").strip().lower() == "presence.progress":
-                    next_detail.pop("text", None)
-                    next_detail.pop("planner_intent", None)
-                    next_detail.pop("hint", None)
-                event["detail"] = next_detail
-            next_events.append(event)
-        sanitized["events"] = next_events
-    return sanitized
+
+def _build_checkpoint_payload(
+    *,
+    cognition_state: dict[str, Any],
+    request_text: str,
+    previous_checkpoint: dict[str, Any] | None,
+) -> dict[str, Any]:
+    task_record_value = cognition_state.get("task_record")
+    if isinstance(task_record_value, dict):
+        task_record = dict(task_record_value)
+    elif hasattr(task_record_value, "to_dict"):
+        task_record = dict(task_record_value.to_dict())
+    else:
+        raise ValueError("pdca_checkpoint.missing_task_record")
+    previous_state = previous_checkpoint.get("state") if isinstance(previous_checkpoint, dict) and isinstance(previous_checkpoint.get("state"), dict) else {}
+    cycle_index = _as_optional_int(cognition_state.get("cycle_index"))
+    if cycle_index is None:
+        cycle_index = _as_optional_int(previous_state.get("cycle_index"))
+    payload: dict[str, Any] = {
+        "task_record": task_record,
+        "last_user_message": str(cognition_state.get("last_user_message") or request_text or "").strip() or None,
+    }
+    check_provenance = str(cognition_state.get("check_provenance") or "").strip()
+    if check_provenance:
+        payload["check_provenance"] = check_provenance
+    if cycle_index is not None:
+        payload["cycle_index"] = cycle_index
+    return payload
 
 
 def _next_status(*, cognition_state: dict[str, Any], reply_text: str) -> str:

@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 from types import SimpleNamespace
 
-from alphonse.agent.cognition.plans import CortexPlan
 from alphonse.agent.policy.engine import PolicyDecision, PolicyEngine, PolicyRule
 
 
@@ -16,7 +16,7 @@ def test_schedule_rule_denies_unapproved_telegram_chat(monkeypatch) -> None:
     engine = PolicyEngine()
 
     decision = engine.approve_plan(
-        CortexPlan(tool="schedule_timed_signal", parameters={}),
+        {"tool": "schedule_timed_signal", "parameters": {}, "payload": {}},
         _context("telegram", "333"),
     )
 
@@ -28,7 +28,7 @@ def test_pairing_rule_allows_cli_channel() -> None:
     engine = PolicyEngine()
 
     decision = engine.approve_plan(
-        CortexPlan(tool="pair_approve", parameters={}),
+        {"tool": "pair_approve", "parameters": {}, "payload": {}},
         _context("cli", "local"),
     )
 
@@ -37,7 +37,7 @@ def test_pairing_rule_allows_cli_channel() -> None:
 
 @dataclass
 class DenyAllRule:
-    def evaluate(self, plan: CortexPlan, exec_context: object) -> PolicyDecision | None:
+    def evaluate(self, plan: dict[str, Any], exec_context: object) -> PolicyDecision | None:
         _ = plan
         _ = exec_context
         return PolicyDecision(allowed=False, reason="deny_all")
@@ -53,7 +53,7 @@ def test_custom_rule_provider_overrides_default_rules() -> None:
     engine = PolicyEngine(rule_providers=[CustomProvider()])
 
     decision = engine.approve_plan(
-        CortexPlan(tool="communicate", parameters={}),
+        {"tool": "communicate", "parameters": {}, "payload": {}},
         _context("telegram", "111"),
     )
 

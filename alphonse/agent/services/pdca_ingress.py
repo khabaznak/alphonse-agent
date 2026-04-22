@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
@@ -12,12 +13,36 @@ from alphonse.agent.nervous_system.pdca_queue_store import (
     upsert_pdca_task,
 )
 from alphonse.agent.observability.log_manager import get_log_manager
+from alphonse.agent.nervous_system.senses.bus import Bus
 from alphonse.agent.services.pdca_queue_runner import emit_pdca_dispatch_kick
-from alphonse.agent.session.day_state import resolve_day_session
-from alphonse.agent.session.day_state import render_recent_conversation_block
-from alphonse.config import settings
 
 _LOG = get_log_manager()
+
+
+@dataclass(frozen=True)
+class BufferedTaskInput:
+    message_id: str | None
+    correlation_id: str
+    channel_type: str
+    channel_target: str
+    actor_id: str | None
+    text: str
+    attachments: list[dict[str, Any]]
+    received_at: str | None = None
+    timezone: str | None = None
+    locale: str | None = None
+
+    def normalized_text(self) -> str:
+        text = str(self.text or "").strip()
+        if text:
+            return text
+        return _render_attachment_summary(self.attachments)
+
+    def normalized_received_at(self) -> str:
+        rendered = str(self.received_at or "").strip()
+        if rendered:
+            return rendered
+        return now_iso()
 
 
 def _normalize_inputs(metadata: dict[str, Any]) -> list[dict[str, Any]]:
@@ -97,6 +122,10 @@ def _normalize_attachments(raw: Any) -> list[dict[str, Any]]:
                 normalized[key] = safe
         out.append(normalized)
     return out
+
+
+def normalize_buffered_attachments(raw: Any) -> list[dict[str, Any]]:
+    return _normalize_attachments(raw)
 
 
 _JSON_UNSAFE = object()
@@ -228,36 +257,22 @@ def _ensure_initial_identity(
 
 def enqueue_pdca_slice(
     *,
-    context: dict[str, Any],
     task_record: TaskRecord,
+    buffered_input: BufferedTaskInput,
+    bus: Bus | None = None,
+    force_new_task: bool = False,
 ) -> str:
-    now = now_iso()
-    signal = context.get("signal") if isinstance(context, dict) else None
-    raw_payload = getattr(signal, "payload", {}) if signal is not None else {}
-    if not isinstance(raw_payload, dict):
-        raise ValueError("invalid_conscious_payload: payload must be an object")
-    payload = dict(raw_payload)
-    channel_type = channel_type_for_payload(payload)
-    channel_target = channel_target_for_payload(payload)
+    now = buffered_input.normalized_received_at()
+    channel_type = str(buffered_input.channel_type or "").strip()
+    channel_target = str(buffered_input.channel_target or "").strip()
     if not channel_type:
         raise ValueError("invalid_conscious_payload: missing channel type")
     if not channel_target:
         raise ValueError("invalid_conscious_payload: missing channel target")
-    message_id = message_id_for_payload(payload)
+    message_id = str(buffered_input.message_id or "").strip()
     session_key = f"{channel_type}:{channel_target}"
-    attachments = _normalize_attachments(attachments_for_payload(payload))
-    user_text = message_text_for_payload(payload)
-    if not user_text:
-        user_text = _render_attachment_summary(attachments)
-
-    day_session = resolve_day_session(
-        user_id=task_record.user_id,
-        channel=channel_type,
-        timezone_name=timezone_for_payload(payload) or settings.get_timezone(),
-    )
-
-    task_record.set_recent_conversation_md(render_recent_conversation_block(day_session))
-    force_new_task = _force_new_task(payload=payload)
+    attachments = normalize_buffered_attachments(buffered_input.attachments)
+    user_text = buffered_input.normalized_text()
 
     existing_task: dict[str, Any] | None = None
     if not force_new_task:
@@ -283,16 +298,12 @@ def enqueue_pdca_slice(
         task_id = str(existing.get("task_id") or "").strip()
         metadata, buffered_count = _build_ingress_metadata(
             existing=existing,
-            payload=payload,
             task_record=task_record,
+            buffered_input=buffered_input,
             session_key=session_key,
-            channel_type=channel_type,
-            channel_target=channel_target,
             message_id=message_id,
             user_text=user_text,
             attachments=attachments,
-            day_session=day_session,
-            force_new_task=force_new_task,
             now=now,
         )
         status = str(existing.get("status") or "").strip().lower()
@@ -300,7 +311,7 @@ def enqueue_pdca_slice(
         if status in {"waiting_user", "paused"}:
             update_pdca_task_status(task_id=task_id, status="queued")
         _emit_dispatch_kick(
-            context=context,
+            bus=bus,
             task_id=task_id,
             correlation_id=task_record.correlation_id or "",
             reason="ingress_existing_task",
@@ -332,23 +343,19 @@ def enqueue_pdca_slice(
 
     metadata, _ = _build_ingress_metadata(
         existing=None,
-        payload=payload,
         task_record=task_record,
+        buffered_input=buffered_input,
         session_key=session_key,
-        channel_type=channel_type,
-        channel_target=channel_target,
         message_id=message_id,
         user_text=user_text,
         attachments=attachments,
-        day_session=day_session,
-        force_new_task=force_new_task,
         now=now,
     )
     task_id = upsert_pdca_task(
         {
             "owner_id": task_record.user_id,
             "conversation_key": session_key,
-            "session_id": str(day_session.get("session_id") or "").strip() or None,
+            "session_id": None,
             "status": "queued",
             "priority": 100,
             "next_run_at": now,
@@ -368,7 +375,7 @@ def enqueue_pdca_slice(
         correlation_id=task_record.correlation_id,
     )
     _emit_dispatch_kick(
-        context=context,
+        bus=bus,
         task_id=task_id,
         correlation_id=task_record.correlation_id,
         reason="ingress_task_created",
@@ -379,20 +386,18 @@ def enqueue_pdca_slice(
 def _build_ingress_metadata(
     *,
     existing: dict[str, Any] | None,
-    payload: dict[str, Any],
     task_record: TaskRecord,
+    buffered_input: BufferedTaskInput,
     session_key: str,
-    channel_type: str,
-    channel_target: str,
     message_id: str,
     user_text: str,
     attachments: list[dict[str, Any]],
-    day_session: dict[str, Any],
-    force_new_task: bool,
     now: str,
 ) -> tuple[dict[str, Any], int]:
     correlation_id = str(task_record.correlation_id or "").strip()
     actor_id = task_record.user_id
+    channel_type = str(buffered_input.channel_type or "").strip()
+    channel_target = str(buffered_input.channel_target or "").strip()
     if isinstance(existing, dict):
         metadata = dict(existing.get("metadata") or {}) if isinstance(existing.get("metadata"), dict) else {}
         _ensure_initial_identity(
@@ -415,9 +420,9 @@ def _build_ingress_metadata(
         metadata["state"] = _build_metadata_state(
             existing_state=existing_state,
             task_record=task_record,
+            buffered_input=buffered_input,
             session_key=session_key,
             message_id=message_id,
-            day_session=day_session,
             check_provenance="slice_resume",
         )
         status = str(existing.get("status") or "").strip().lower()
@@ -445,19 +450,12 @@ def _build_ingress_metadata(
             "state": _build_metadata_state(
                 existing_state=None,
                 task_record=task_record,
+                buffered_input=buffered_input,
                 session_key=session_key,
                 message_id=message_id,
-                day_session=day_session,
                 check_provenance="entry",
             ),
         }
-        source = _payload_source(payload=payload)
-        if source:
-            metadata["trigger_source"] = source
-        job_id = _payload_job_id(payload=payload)
-        if job_id:
-            metadata["trigger_job_id"] = job_id
-        metadata["force_new_task"] = bool(force_new_task)
         buffered_count = len(metadata["inputs"])
 
     metadata["pending_user_text"] = user_text
@@ -473,9 +471,9 @@ def _build_metadata_state(
     *,
     existing_state: dict[str, Any] | None,
     task_record: TaskRecord,
+    buffered_input: BufferedTaskInput,
     session_key: str,
     message_id: str,
-    day_session: dict[str, Any],
     check_provenance: str,
 ) -> dict[str, Any]:
     state = dict(existing_state or {}) if isinstance(existing_state, dict) else {}
@@ -483,100 +481,22 @@ def _build_metadata_state(
     state["chat_id"] = state.get("chat_id") or session_key
     state["correlation_id"] = str(task_record.correlation_id or "").strip() or state.get("correlation_id")
     state["task_record"] = task_record.to_dict()
+    state["channel_type"] = str(buffered_input.channel_type or "").strip() or state.get("channel_type")
+    state["channel_target"] = str(buffered_input.channel_target or "").strip() or state.get("channel_target")
     if message_id:
         state["message_id"] = message_id
     elif isinstance(existing_state, dict):
         state["message_id"] = state.get("message_id")
     else:
         state["message_id"] = message_id
-    state["session_state"] = state.get("session_state") or day_session
-    state["recent_conversation_block"] = state.get("recent_conversation_block") or render_recent_conversation_block(
-        day_session
-    )
+    if str(buffered_input.actor_id or "").strip():
+        state["actor_person_id"] = str(buffered_input.actor_id or "").strip()
+    if str(buffered_input.timezone or "").strip():
+        state["timezone"] = str(buffered_input.timezone or "").strip()
+    if str(buffered_input.locale or "").strip():
+        state["locale"] = str(buffered_input.locale or "").strip()
     state["check_provenance"] = check_provenance
     return state
-
-
-def message_text_for_payload(payload: dict[str, Any]) -> str:
-    content = payload.get("content") if isinstance(payload.get("content"), dict) else {}
-    text = str(content.get("text") or payload.get("text") or "").strip()
-    if text:
-        return text
-    return ""
-
-
-def channel_type_for_payload(payload: dict[str, Any]) -> str:
-    transport = payload.get("transport") if isinstance(payload.get("transport"), dict) else {}
-    channel = payload.get("channel") if isinstance(payload.get("channel"), dict) else {}
-    for candidate in (
-        transport.get("channel_type"),
-        channel.get("type"),
-        payload.get("channel_type"),
-        payload.get("channel"),
-        payload.get("service_key"),
-        payload.get("provider"),
-        payload.get("origin"),
-    ):
-        rendered = str(candidate or "").strip()
-        if rendered:
-            return rendered
-    return ""
-
-
-def channel_target_for_payload(payload: dict[str, Any]) -> str:
-    transport = payload.get("transport") if isinstance(payload.get("transport"), dict) else {}
-    channel = payload.get("channel") if isinstance(payload.get("channel"), dict) else {}
-    for candidate in (
-        transport.get("channel_target"),
-        channel.get("target"),
-        payload.get("channel_target"),
-        payload.get("target"),
-    ):
-        rendered = str(candidate or "").strip()
-        if rendered:
-            return rendered
-    return ""
-
-
-def message_id_for_payload(payload: dict[str, Any]) -> str:
-    return str(payload.get("message_id") or payload.get("id") or "").strip()
-
-
-def attachments_for_payload(payload: dict[str, Any]) -> list[dict[str, Any]]:
-    content = payload.get("content") if isinstance(payload.get("content"), dict) else {}
-    raw = content.get("attachments") if isinstance(content.get("attachments"), list) else payload.get("attachments")
-    return [dict(item) for item in raw if isinstance(item, dict)] if isinstance(raw, list) else []
-
-
-def timezone_for_payload(payload: dict[str, Any]) -> str:
-    context = payload.get("context") if isinstance(payload.get("context"), dict) else {}
-    return str(payload.get("timezone") or context.get("timezone") or "").strip()
-
-# TODO there is no "identity" in payload, should we remove this function?
-def resolved_user_id_for_payload(payload: dict[str, Any]) -> str:
-    identity = payload.get("identity") if isinstance(payload.get("identity"), dict) else {}
-    actor = payload.get("actor") if isinstance(payload.get("actor"), dict) else {}
-    for candidate in (
-        identity.get("alphonse_user_id"),
-        identity.get("user_id"),
-        payload.get("alphonse_user_id"),
-        payload.get("resolved_user_id"),
-        payload.get("person_id"),
-        actor.get("user_id"),
-        actor.get("person_id"),
-    ):
-        rendered = str(candidate or "").strip()
-        if rendered:
-            return rendered
-    return ""
-
-# TODO The name of this function is misleading, it is validating but it seems to be forcing a new task.
-def _force_new_task(*, payload: dict[str, Any]) -> bool:
-    controls = payload.get("controls") if isinstance(payload.get("controls"), dict) else {}
-    if _as_bool(controls.get("force_new_task")):
-        return True
-    source = _payload_source(payload=payload)
-    return source in {"job_runner", "job_trigger", "jobs_reconcile"}
 
 
 def _existing_task_matches_ingress(
@@ -591,20 +511,6 @@ def _existing_task_matches_ingress(
         return False
     return True
 
-
-def _payload_source(*, payload: dict[str, Any]) -> str:
-    metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
-    rendered = str(payload.get("source") or metadata.get("source") or "").strip().lower()
-    return rendered
-
-
-def _payload_job_id(*, payload: dict[str, Any]) -> str:
-    metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
-    job = metadata.get("job") if isinstance(metadata.get("job"), dict) else {}
-    candidate = str(payload.get("job_id") or metadata.get("job_id") or job.get("job_id") or "").strip()
-    return candidate
-
-
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -617,12 +523,11 @@ def _as_bool(value: Any) -> bool:
 
 def _emit_dispatch_kick(
     *,
-    context: dict[str, Any],
+    bus: Bus | None,
     task_id: str,
     correlation_id: str,
     reason: str,
 ) -> None:
-    bus = context.get("ctx")
     emitted = emit_pdca_dispatch_kick(
         bus=bus if hasattr(bus, "emit") else None,
         task_id=task_id,

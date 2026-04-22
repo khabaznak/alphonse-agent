@@ -19,8 +19,5 @@ def test_cortex_state_persists_planning_fields() -> None:
         "planning_mode": "aventurizacion",
     }
     cognition_state = cortex_utils.build_cognition_state(state)
-    meta = cortex_utils.build_meta(state)
     assert cognition_state["autonomy_level"] == 0.8
     assert cognition_state["planning_mode"] == "aventurizacion"
-    assert meta["autonomy_level"] == 0.8
-    assert meta["planning_mode"] == "aventurizacion"

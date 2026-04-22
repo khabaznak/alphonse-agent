@@ -6,6 +6,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from alphonse.agent.cortex.task_mode.task_record import TaskRecord
 from alphonse.agent.nervous_system.paths import resolve_nervous_system_db_path
 
 _ACTIVE_TASK_STATUSES = {"queued", "running", "waiting_user", "paused"}
@@ -343,7 +344,8 @@ def save_pdca_checkpoint(
     if not task_key:
         return None
     now = _now_iso()
-    state_json = json.dumps(state or {}, ensure_ascii=False)
+    normalized_state = _normalize_checkpoint_state(state or {})
+    state_json = json.dumps(normalized_state, ensure_ascii=False)
     task_state_json = json.dumps({}, ensure_ascii=False)
     with _connect() as conn:
         if expected_version is None:
@@ -423,6 +425,37 @@ def load_pdca_checkpoint(task_id: str) -> dict[str, Any] | None:
         "created_at": str(row[4] or ""),
         "updated_at": str(row[5] or ""),
     }
+
+
+def _normalize_checkpoint_state(state: dict[str, Any]) -> dict[str, Any]:
+    task_record_value = state.get("task_record")
+    if isinstance(task_record_value, dict):
+        task_record = _checkpoint_safe_value(task_record_value)
+    elif isinstance(task_record_value, TaskRecord):
+        task_record = task_record_value.to_dict()
+    else:
+        raise ValueError("pdca_checkpoint.missing_task_record")
+
+    payload: dict[str, Any] = {"task_record": task_record}
+    if "last_user_message" in state:
+        payload["last_user_message"] = _checkpoint_safe_value(state.get("last_user_message"))
+    if "check_provenance" in state:
+        payload["check_provenance"] = _checkpoint_safe_value(state.get("check_provenance"))
+    if "cycle_index" in state:
+        payload["cycle_index"] = _checkpoint_safe_value(state.get("cycle_index"))
+    return payload
+
+
+def _checkpoint_safe_value(value: Any) -> Any:
+    if isinstance(value, TaskRecord):
+        return value.to_dict()
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    if isinstance(value, list):
+        return [_checkpoint_safe_value(item) for item in value]
+    if isinstance(value, dict):
+        return {str(key): _checkpoint_safe_value(item) for key, item in value.items()}
+    raise TypeError(f"pdca_checkpoint.unsupported_value_type:{type(value).__name__}")
 
 
 def append_pdca_event(*, task_id: str, event_type: str, payload: dict[str, Any] | None = None, correlation_id: str | None = None) -> str:

@@ -230,25 +230,12 @@ def test_handle_pdca_slice_request_executes_and_persists_checkpoint(
     assert isinstance(checkpoint_task_record, dict)
     assert checkpoint_task_record.get("status") == "running"
     assert "jobs.list" in str(checkpoint_task_record.get("plan_md") or "")
-    checkpoint_planner_output = checkpoint_state.get("planner_output")
-    assert isinstance(checkpoint_planner_output, dict)
-    assert checkpoint_planner_output.get("planner_intent") == "Thinking about the best next tool."
-    checkpoint_check_result = checkpoint_state.get("check_result")
-    assert isinstance(checkpoint_check_result, dict)
-    assert checkpoint_check_result.get("verdict") == "plan"
+    assert checkpoint_state.get("last_user_message") == "Please do the task"
     assert checkpoint_state.get("check_provenance") == "entry"
-    state_events = checkpoint_state.get("events")
-    if isinstance(state_events, list):
-        for event in state_events:
-            if not isinstance(event, dict):
-                continue
-            detail = event.get("detail")
-            if not isinstance(detail, dict):
-                continue
-            if str(detail.get("presence_event_family") or "") != "presence.progress":
-                continue
-            assert "text" not in detail
-    assert "_transition_sink" not in checkpoint["state"]
+    assert "planner_output" not in checkpoint_state
+    assert "check_result" not in checkpoint_state
+    assert "events" not in checkpoint_state
+    assert "_transition_sink" not in checkpoint_state
 
     events = list_pdca_events(task_id=task_id, limit=20)
     assert any(item["event_type"] == "slice.request.signal_received" for item in events)
@@ -400,6 +387,56 @@ def test_handle_pdca_slice_request_accepts_attachment_only_buffered_inputs(
     assert isinstance(task, dict)
     metadata = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
     assert int(metadata.get("next_unconsumed_index") or 0) == 0
+
+
+def test_handle_pdca_slice_request_fails_cleanly_when_checkpoint_payload_lacks_task_record(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db_path = tmp_path / "nerve-db"
+    monkeypatch.setenv("NERVE_DB_PATH", str(db_path))
+    apply_schema(db_path)
+
+    task_id = upsert_pdca_task(
+        {
+            "owner_id": "owner-1",
+            "conversation_key": "chat-missing-task-record",
+            "status": "queued",
+            "metadata": {"pending_user_text": "Please continue"},
+        }
+    )
+
+    class _FakeResult:
+        reply_text = ""
+        cognition_state = {"check_provenance": "entry"}
+
+    class _FakeGraph:
+        def invoke(self, state, text, *, llm_client=None):  # noqa: ANN001
+            _ = state
+            _ = text
+            _ = llm_client
+            return _FakeResult()
+
+    monkeypatch.setattr(hpsr, "_CORTEX_GRAPH", _FakeGraph())
+    monkeypatch.setattr(hpsr, "build_llm_client", lambda: None)
+
+    action = HandlePdcaSliceRequestAction()
+    signal = Signal(
+        type="pdca.slice.requested",
+        payload={"task_id": task_id, "correlation_id": "cid-missing-task-record"},
+        source="pdca_queue_runner",
+    )
+    result = action.execute({"signal": signal, "ctx": None})
+
+    assert result.intention_key == "NOOP"
+    task = get_pdca_task(task_id)
+    assert isinstance(task, dict)
+    assert task["status"] == "failed"
+    assert task["last_error"] == "pdca_checkpoint.missing_task_record"
+    assert load_pdca_checkpoint(task_id) is None
+
+    events = list_pdca_events(task_id=task_id, limit=20)
+    assert any(item["event_type"] == "slice.failed" for item in events)
 
 
 def test_handle_pdca_slice_request_preempts_when_new_input_arrives_mid_slice(
@@ -911,8 +948,7 @@ def test_handle_pdca_slice_request_prefers_checkpoint_state_for_rehydration(
     class _FakeGraph:
         def invoke(self, state, text, *, llm_client=None):  # noqa: ANN001
             _ = llm_client
-            assert state.get("from_checkpoint") is True
-            assert state.get("from_session_store") is None
+            assert state.get("from_metadata") is True
             task_record = state.get("task_record")
             assert isinstance(task_record, dict)
             assert task_record.get("status") == "running"
@@ -937,9 +973,10 @@ def test_handle_pdca_slice_request_prefers_checkpoint_state_for_rehydration(
     checkpoint_task_record = checkpoint_state.get("task_record")
     assert isinstance(checkpoint_task_record, dict)
     assert checkpoint_task_record.get("status") == "running"
+    assert checkpoint_state.get("last_user_message") == "resume from checkpoint"
 
 
-def test_handle_pdca_slice_request_sanitizes_stale_session_pdca_state_for_new_task(
+def test_handle_pdca_slice_request_ignores_stale_session_state_for_new_task(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -977,8 +1014,6 @@ def test_handle_pdca_slice_request_sanitizes_stale_session_pdca_state_for_new_ta
             "events": [{"type": "agent.transition", "phase": "failed"}],
         },
     )
-    observed: list[tuple[str, dict[str, object]]] = []
-
     class _FakeResult:
         reply_text = ""
         plans = []
@@ -993,11 +1028,10 @@ def test_handle_pdca_slice_request_sanitizes_stale_session_pdca_state_for_new_ta
             _ = llm_client
             assert text == "Yo Alphonse!"
             assert state.get("conversation_key") == "telegram:8553589429"
-            assert state.get("locale") == "en-US"
+            assert state.get("locale") is None
             task_record = state.get("task_record")
             assert isinstance(task_record, dict)
-            assert task_record.get("status") in {"running", "failed", "queued"}
-            assert state.get("check_provenance") is None
+            assert task_record.get("status") == "running"
             assert state.get("pending_interaction") is None
             assert state.get("response_text") is None
             assert state.get("events") is None
@@ -1005,15 +1039,6 @@ def test_handle_pdca_slice_request_sanitizes_stale_session_pdca_state_for_new_ta
 
     monkeypatch.setattr(hpsr, "_CORTEX_GRAPH", _FakeGraph())
     monkeypatch.setattr(hpsr, "build_llm_client", lambda: None)
-    monkeypatch.setattr(
-        hpsr,
-        "_LOG",
-        type(
-            "_CaptureLog",
-            (),
-            {"emit": staticmethod(lambda **kwargs: observed.append((str(kwargs.get("event") or ""), kwargs.get("payload") or {})))},
-        )(),
-    )
 
     action = HandlePdcaSliceRequestAction()
     signal = Signal(
@@ -1027,14 +1052,11 @@ def test_handle_pdca_slice_request_sanitizes_stale_session_pdca_state_for_new_ta
     assert checkpoint is not None
     saved_state = checkpoint.get("state") if isinstance(checkpoint.get("state"), dict) else {}
     assert "task_record" in saved_state
+    assert saved_state.get("last_user_message") == "Yo Alphonse!"
     assert "pending_interaction" not in saved_state
-    assert "response_text" in saved_state
+    assert "response_text" not in saved_state
     assert "events" not in saved_state
-    sanitize_events = [payload for event, payload in observed if event == "pdca.slice.base_state.sanitized"]
-    assert sanitize_events
-    removed_keys = sanitize_events[-1].get("removed_keys")
-    assert isinstance(removed_keys, list)
-    assert "pending_interaction" in removed_keys
+    assert saved_state.get("locale") is None
 
 
 def test_handle_pdca_slice_request_prefers_seeded_task_record_over_stale_conversation_state(

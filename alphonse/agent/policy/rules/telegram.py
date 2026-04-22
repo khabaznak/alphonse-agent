@@ -1,17 +1,18 @@
 from __future__ import annotations
 
+from typing import Any
+
 from alphonse.agent.observability.log_manager import get_component_logger
 import os
 
-from alphonse.agent.cognition.plans import CortexPlan
 from alphonse.agent.policy.engine import PolicyDecision, PolicyRule
 
 logger = get_component_logger("policy.rules.telegram")
 
 
 class TelegramScheduleRule:
-    def evaluate(self, plan: CortexPlan, exec_context: object) -> PolicyDecision | None:
-        if str(plan.tool or "").strip().lower() != "schedule_timed_signal":
+    def evaluate(self, plan: dict[str, Any], exec_context: object) -> PolicyDecision | None:
+        if str(plan.get("tool") or "").strip().lower() != "schedule_timed_signal":
             return None
         channel_type = getattr(exec_context, "channel_type", None)
         channel_target = getattr(exec_context, "channel_target", None)
@@ -36,8 +37,8 @@ class TelegramScheduleRule:
 
 
 class TelegramLanRule:
-    def evaluate(self, plan: CortexPlan, exec_context: object) -> PolicyDecision | None:
-        if str(plan.tool or "").strip().lower() not in {"lan_arm", "lan_disarm"}:
+    def evaluate(self, plan: dict[str, Any], exec_context: object) -> PolicyDecision | None:
+        if str(plan.get("tool") or "").strip().lower() not in {"lan_arm", "lan_disarm"}:
             return None
         channel_type = getattr(exec_context, "channel_type", None)
         channel_target = getattr(exec_context, "channel_target", None)
@@ -64,8 +65,8 @@ class PairingRule:
     def __init__(self, *, lan_rule: TelegramLanRule | None = None) -> None:
         self._lan_rule = lan_rule or TelegramLanRule()
 
-    def evaluate(self, plan: CortexPlan, exec_context: object) -> PolicyDecision | None:
-        if str(plan.tool or "").strip().lower() not in {"pair_approve", "pair_deny"}:
+    def evaluate(self, plan: dict[str, Any], exec_context: object) -> PolicyDecision | None:
+        if str(plan.get("tool") or "").strip().lower() not in {"pair_approve", "pair_deny"}:
             return None
         channel_type = getattr(exec_context, "channel_type", None)
         if channel_type == "cli":
@@ -73,7 +74,7 @@ class PairingRule:
         if channel_type != "telegram":
             return PolicyDecision(allowed=False, reason="not_telegram")
         return self._lan_rule.evaluate(
-            CortexPlan(tool="lan_arm", parameters={}),
+            {"tool": "lan_arm", "parameters": {}, "payload": {}},
             exec_context,
         ) or PolicyDecision(allowed=True)
 

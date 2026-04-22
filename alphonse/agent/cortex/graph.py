@@ -7,7 +7,6 @@ from langgraph.graph import END, StateGraph
 
 from alphonse.agent.cognition.providers.contracts import TextCompletionProvider
 from alphonse.agent.cognition.providers.contracts import require_text_completion_provider
-from alphonse.agent.cognition.plans import CortexPlan, CortexResult
 from alphonse.agent.cortex.task_mode.pdca import act_node
 from alphonse.agent.cortex.task_mode.pdca import build_next_step_node
 from alphonse.agent.cortex.task_mode.pdca import check_node
@@ -16,7 +15,7 @@ from alphonse.agent.cortex.task_mode.pdca import route_after_act
 from alphonse.agent.cortex.task_mode.pdca import route_after_next_step
 from alphonse.agent.cortex.task_mode.plan import PlannerOutput
 from alphonse.agent.cortex.task_mode.task_record import TaskRecord
-from alphonse.agent.cortex.utils import build_cognition_state, build_meta
+from alphonse.agent.cortex.utils import build_cognition_state
 from alphonse.agent.nervous_system.pdca_queue_store import append_pdca_event
 from alphonse.agent.tools.registry import ToolRegistry, build_default_tool_registry
 
@@ -79,17 +78,17 @@ class CortexGraph:
         state: dict[str, Any],
         text: str,
 
-    ) -> CortexResult:
+    ) -> dict[str, Any]:
         runner = self.build().compile()
         recursion_limit = _resolve_recursion_limit()
         result_state = runner.invoke(
             {**state, "last_user_message": text},
             config={"recursion_limit": recursion_limit},
         )
-        return CortexResult( # TODO who ends up using a CortexResult in the end?
-            reply_text=result_state.get("response_text"),       
-            meta=build_meta(result_state),
-        )
+        return {
+            "reply_text": result_state.get("response_text"),
+            "cognition_state": result_state,
+        }
 
 
 def task_record_entry_node(state: dict[str, Any]) -> dict[str, Any]:

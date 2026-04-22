@@ -4,6 +4,7 @@ import sqlite3
 from pathlib import Path
 
 from alphonse.agent import cli
+from alphonse.agent.cortex.task_mode.task_record import TaskRecord
 from alphonse.agent.nervous_system.migrate import apply_schema
 from alphonse.agent.nervous_system.pdca_queue_store import append_pdca_event
 from alphonse.agent.nervous_system.pdca_queue_store import describe_pdca_runtime_flush_counts
@@ -22,7 +23,21 @@ def _seed_runtime_rows(db_path: Path) -> None:
     )
     _ = save_pdca_checkpoint(
         task_id=task_id,
-        state={"a": 1, "cycle_index": 1},
+        state={
+            "task_record": TaskRecord(
+                task_id=task_id,
+                correlation_id="cid-seed",
+                goal="seed runtime rows",
+                facts_md="- (none)",
+                recent_conversation_md="- (none)",
+                plan_md="- (none)",
+                acceptance_criteria_md="- (none)",
+                memory_facts_md="- (none)",
+                tool_call_history_md="- (none)",
+                status="running",
+            ),
+            "cycle_index": 1,
+        },
         expected_version=0,
     )
     _ = append_pdca_event(task_id=task_id, event_type="slice.requested", payload={"seeded": True})

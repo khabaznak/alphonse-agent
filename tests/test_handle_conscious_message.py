@@ -5,6 +5,7 @@ from alphonse.agent.actions.conscious_message_handler import build_incoming_mess
 from alphonse.agent.actions.handle_conscious_message import HandleConsciousMessageAction
 from alphonse.agent.cortex.task_mode.task_record import TaskRecord
 from alphonse.agent.nervous_system.senses.bus import Bus, Signal
+from alphonse.agent.services.pdca_ingress import BufferedTaskInput
 
 
 def test_from_payload_resolves_actor_user_id_from_external_user_id(monkeypatch) -> None:
@@ -113,13 +114,18 @@ def test_handle_conscious_message_enqueues_pdca_slice(monkeypatch) -> None:
     result = action.execute({"signal": Signal(type="sense.telegram.message.user.received", payload=envelope), "ctx": Bus()})
     assert result.intention_key == "NOOP"
     assert result.payload.get("task_id") == "task-123"
-    assert set(called) == {"context", "task_record"}
-    assert isinstance(called.get("context"), dict)
+    assert set(called) == {"task_record", "buffered_input", "bus", "force_new_task"}
     task_record = called.get("task_record")
     assert isinstance(task_record, TaskRecord)
+    buffered_input = called.get("buffered_input")
+    assert isinstance(buffered_input, BufferedTaskInput)
     assert task_record.user_id == "u-1"
     assert task_record.correlation_id == "c-1"
     assert task_record.goal == "Hello"
+    assert buffered_input.text == "Hello"
+    assert buffered_input.message_id == "m-1"
+    assert buffered_input.channel_type == "telegram"
+    assert buffered_input.channel_target == "123"
     assert presence.get("phase") == "acknowledged"
     assert presence.get("channel_type") == "telegram"
     assert presence.get("channel_target") == "123"
@@ -156,6 +162,7 @@ def test_handle_conscious_message_does_not_parse_control_intent(monkeypatch) -> 
     task_record = captured.get("task_record")
     assert isinstance(task_record, TaskRecord)
     assert task_record.goal == "Please cancel task"
+    assert isinstance(captured.get("buffered_input"), BufferedTaskInput)
 
 
 def test_handle_conscious_message_fail_fast_when_slicing_disabled(monkeypatch) -> None:
@@ -229,6 +236,9 @@ def test_handle_conscious_message_uses_signal_correlation_fallback(monkeypatch) 
     task_record = captured.get("task_record")
     assert isinstance(task_record, TaskRecord)
     assert task_record.correlation_id == "signal-correlation"
+    buffered_input = captured.get("buffered_input")
+    assert isinstance(buffered_input, BufferedTaskInput)
+    assert buffered_input.correlation_id == "signal-correlation"
 
 
 def test_handle_conscious_message_preserves_attachment_only_payload(monkeypatch) -> None:
@@ -262,3 +272,6 @@ def test_handle_conscious_message_preserves_attachment_only_payload(monkeypatch)
     task_record = captured.get("task_record")
     assert isinstance(task_record, TaskRecord)
     assert task_record.goal.startswith("[attachments:")
+    buffered_input = captured.get("buffered_input")
+    assert isinstance(buffered_input, BufferedTaskInput)
+    assert buffered_input.text.startswith("[attachments:")

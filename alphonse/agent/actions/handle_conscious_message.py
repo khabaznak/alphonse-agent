@@ -10,7 +10,9 @@ from alphonse.agent.cortex.task_mode.task_record import TaskRecord
 from alphonse.agent.identity.service_resolvers import resolve_user_id_by_service_user_id, resolve_service_id_by_channel_type
 from alphonse.agent.observability.log_manager import get_component_logger
 from alphonse.agent.observability.log_manager import get_log_manager
+from alphonse.agent.services.pdca_ingress import BufferedTaskInput
 from alphonse.agent.services.pdca_ingress import enqueue_pdca_slice
+from alphonse.agent.services.pdca_ingress import normalize_buffered_attachments
 from alphonse.agent.services.pdca_queue_runner import is_pdca_slicing_enabled
 
 logger = get_component_logger("actions.handle_conscious_message")
@@ -101,10 +103,17 @@ class HandleConsciousMessageAction(Action):
             session_user_id=user_id,
             correlation_id=str(correlation_id),
         )
+        buffered_input = _build_buffered_input_from_payload(
+            payload=payload,
+            session_user_id=user_id,
+            correlation_id=str(correlation_id),
+        )
 
         task_id = enqueue_pdca_slice(
-            context=context,
             task_record=task_record,
+            buffered_input=buffered_input,
+            bus=context.get("ctx") if isinstance(context, dict) else None,
+            force_new_task=_force_new_task_for_payload(payload),
         )
         logger.info(
             "HandleConsciousMessageAction enqueued task_id=%s channel=%s target=%s",
@@ -125,6 +134,7 @@ class HandleConsciousMessageAction(Action):
             payload={"task_id": task_id},
             urgency=None,
         )
+
 
 def _build_task_record_from_payload(
     *,
@@ -151,6 +161,25 @@ def _build_task_record_from_payload(
         if rendered:
             record.append_fact(f"{key}: {rendered}")
     return record
+
+
+def _build_buffered_input_from_payload(
+    *,
+    payload: dict[str, Any],
+    session_user_id: str | None,
+    correlation_id: str,
+) -> BufferedTaskInput:
+    attachments = normalize_buffered_attachments(attachments_for_payload(payload))
+    text = _message_text_for_payload(payload)
+    return BufferedTaskInput(
+        message_id=message_id_for_payload(payload) or None,
+        correlation_id=str(correlation_id or "").strip(),
+        channel_type=channel_type_for_payload(payload),
+        channel_target=channel_target_for_payload(payload),
+        actor_id=str(session_user_id or "").strip() or None,
+        text=text,
+        attachments=attachments,
+    )
 
 
 def _message_text_for_payload(payload: dict[str, Any]) -> str:
@@ -264,9 +293,27 @@ def timezone_for_payload(payload: dict[str, Any]) -> str:
     return str(payload.get("timezone") or context.get("timezone") or "").strip()
 
 
+def _force_new_task_for_payload(payload: dict[str, Any]) -> bool:
+    controls = payload.get("controls") if isinstance(payload.get("controls"), dict) else {}
+    if _as_bool(controls.get("force_new_task")):
+        return True
+    metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
+    source = str(payload.get("source") or metadata.get("source") or "").strip().lower()
+    return source in {"job_runner", "job_trigger", "jobs_reconcile"}
+
+
+def _as_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 def resolved_user_id_for_payload(payload: dict[str, Any]) -> str:
     actor = payload.get("actor") if isinstance(payload.get("actor"), dict) else {}
+    direct = str(actor.get("user_id") or payload.get("resolved_user_id") or "").strip()
+    if direct:
+        return direct
     payload_channel = payload.get("channel") if isinstance(payload.get("channel"), dict) else {}  
     service_id = resolve_service_id_by_channel_type(payload_channel.get("type"))
     user_id = resolve_user_id_by_service_user_id(service_id=service_id, service_user_id=actor.get("external_user_id"))
-    return user_id
+    return str(user_id or "").strip()

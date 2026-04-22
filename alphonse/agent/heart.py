@@ -82,6 +82,7 @@ class Heart:
                         "state": self.state,
                         "signal": signal,
                         "outcome": outcome,
+                        "ctx": self.bus,
                     },
                 )
                 next_id = getattr(outcome, "next_state_id", None) or getattr(outcome, "id", None) or self.state.id

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from typing import Any
 
-from alphonse.agent.cognition.plans import CortexPlan
 from alphonse.agent.observability.log_manager import get_component_logger
 from alphonse.agent.tools.local_audio_output import LocalAudioOutputSpeakTool
 
@@ -31,11 +30,11 @@ def maybe_emit_local_audio_reply(*, payload: dict[str, object], reply_text: str,
 
 def extract_tts_transcript(plans: list[Any]) -> str:
     for item in plans:
-        if not isinstance(item, CortexPlan):
+        if not isinstance(item, dict):
             continue
-        tool_name = str(item.tool or "").strip().lower()
-        params = dict(item.parameters or {})
-        payload = dict(item.payload or {})
+        tool_name = str(item.get("tool") or "").strip().lower()
+        params = dict(item.get("parameters") or {}) if isinstance(item.get("parameters"), dict) else {}
+        payload = dict(item.get("payload") or {}) if isinstance(item.get("payload"), dict) else {}
         merged = dict(payload)
         merged.update(params)
         transcript = ""

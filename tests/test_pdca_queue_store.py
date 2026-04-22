@@ -7,6 +7,7 @@ import sqlite3
 import pytest
 
 import alphonse.agent.nervous_system.pdca_queue_store as pdca_queue_store_module
+from alphonse.agent.cortex.task_mode.task_record import TaskRecord
 from alphonse.agent.nervous_system.migrate import apply_schema
 from alphonse.agent.nervous_system.pdca_queue_store import (
     acquire_pdca_task_lease,
@@ -22,6 +23,27 @@ from alphonse.agent.nervous_system.pdca_queue_store import (
     save_pdca_checkpoint,
     upsert_pdca_task,
 )
+
+
+def _checkpoint_payload(*, task_id: str, cycle_index: int = 1, last_user_message: str | None = None) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "task_record": TaskRecord(
+            task_id=task_id,
+            correlation_id="cid-test",
+            goal="test goal",
+            facts_md="- (none)",
+            recent_conversation_md="- (none)",
+            plan_md="- (none)",
+            acceptance_criteria_md="- (none)",
+            memory_facts_md="- (none)",
+            tool_call_history_md="- (none)",
+            status="running",
+        ),
+        "cycle_index": cycle_index,
+    }
+    if last_user_message is not None:
+        payload["last_user_message"] = last_user_message
+    return payload
 
 
 def test_pdca_task_upsert_and_runnable_selection(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -114,24 +136,39 @@ def test_pdca_checkpoint_versioning_and_events(tmp_path: Path, monkeypatch: pyte
         }
     )
 
-    v1 = save_pdca_checkpoint(task_id=task_id, state={"a": 1, "cycle_index": 1}, expected_version=0)
+    v1 = save_pdca_checkpoint(
+        task_id=task_id,
+        state=_checkpoint_payload(task_id=task_id, cycle_index=1, last_user_message="first"),
+        expected_version=0,
+    )
     assert v1 == 1
 
     loaded1 = load_pdca_checkpoint(task_id)
     assert loaded1 is not None
     assert loaded1["version"] == 1
     assert loaded1["state"]["cycle_index"] == 1
+    assert loaded1["state"]["last_user_message"] == "first"
+    assert loaded1["state"]["task_record"]["task_id"] == task_id
 
-    stale = save_pdca_checkpoint(task_id=task_id, state={"a": 2, "cycle_index": 2}, expected_version=0)
+    stale = save_pdca_checkpoint(
+        task_id=task_id,
+        state=_checkpoint_payload(task_id=task_id, cycle_index=2, last_user_message="stale"),
+        expected_version=0,
+    )
     assert stale is None
 
-    v2 = save_pdca_checkpoint(task_id=task_id, state={"a": 2, "cycle_index": 2}, expected_version=1)
+    v2 = save_pdca_checkpoint(
+        task_id=task_id,
+        state=_checkpoint_payload(task_id=task_id, cycle_index=2, last_user_message="second"),
+        expected_version=1,
+    )
     assert v2 == 2
 
     loaded2 = load_pdca_checkpoint(task_id)
     assert loaded2 is not None
     assert loaded2["version"] == 2
-    assert loaded2["state"]["a"] == 2
+    assert loaded2["state"]["cycle_index"] == 2
+    assert loaded2["state"]["last_user_message"] == "second"
 
     event_id = append_pdca_event(
         task_id=task_id,
@@ -158,7 +195,7 @@ def test_pdca_runtime_flush_deletes_tables_and_is_idempotent(tmp_path: Path, mon
             "status": "queued",
         }
     )
-    _ = save_pdca_checkpoint(task_id=task_id, state={"a": 1, "cycle_index": 1}, expected_version=0)
+    _ = save_pdca_checkpoint(task_id=task_id, state=_checkpoint_payload(task_id=task_id, cycle_index=1), expected_version=0)
     _ = append_pdca_event(task_id=task_id, event_type="slice.requested", payload={"ok": True})
 
     with sqlite3.connect(db_path) as conn:
@@ -224,7 +261,7 @@ def test_pdca_runtime_flush_rolls_back_on_failure(tmp_path: Path, monkeypatch: p
     monkeypatch.setenv("NERVE_DB_PATH", str(db_path))
     apply_schema(db_path)
     task_id = upsert_pdca_task({"owner_id": "u1", "conversation_key": "chat-rollback", "status": "queued"})
-    _ = save_pdca_checkpoint(task_id=task_id, state={"ok": True, "cycle_index": 1}, expected_version=0)
+    _ = save_pdca_checkpoint(task_id=task_id, state=_checkpoint_payload(task_id=task_id, cycle_index=1), expected_version=0)
     _ = append_pdca_event(task_id=task_id, event_type="slice.requested", payload={})
     with sqlite3.connect(db_path) as conn:
         conn.execute(
@@ -250,3 +287,18 @@ def test_pdca_runtime_flush_rolls_back_on_failure(tmp_path: Path, monkeypatch: p
     assert counts["pdca_checkpoints"] == 1
     assert counts["pdca_events"] == 1
     assert counts["signal_queue"] == 1
+
+
+def test_pdca_checkpoint_requires_task_record(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    db_path = tmp_path / "nerve-db"
+    monkeypatch.setenv("NERVE_DB_PATH", str(db_path))
+    apply_schema(db_path)
+
+    task_id = upsert_pdca_task({"owner_id": "u1", "conversation_key": "chat-checkpoint", "status": "queued"})
+
+    with pytest.raises(ValueError, match="pdca_checkpoint.missing_task_record"):
+        _ = save_pdca_checkpoint(
+            task_id=task_id,
+            state={"last_user_message": "hello", "cycle_index": 1},
+            expected_version=0,
+        )
