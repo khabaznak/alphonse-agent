@@ -32,7 +32,7 @@ def load_env() -> None:
 
 
 def load_heart(config: HeartConfig, bus: Bus, ddfsm: DDFSM) -> Heart:
-    return Heart(config, bus=bus, ddfsm=ddfsm, ctx=bus)
+    return Heart(config, bus=bus, ddfsm=ddfsm)
 
 
 def main() -> None:

@@ -78,28 +78,16 @@ class CortexGraph:
         self,
         state: dict[str, Any],
         text: str,
-        *,
-        llm_client: TextCompletionProvider | None = None,
+
     ) -> CortexResult:
-        validated_llm_client: TextCompletionProvider | None = None
-        if llm_client is not None:
-            validated_llm_client = require_text_completion_provider(
-                llm_client,
-                source="cortex.graph.invoke",
-            )
         runner = self.build().compile()
         recursion_limit = _resolve_recursion_limit()
         result_state = runner.invoke(
-            {**state, "last_user_message": text, "_llm_client": validated_llm_client},
+            {**state, "last_user_message": text},
             config={"recursion_limit": recursion_limit},
         )
-        plans = [
-            CortexPlan.model_validate(plan) for plan in result_state.get("plans") or []
-        ]
-        return CortexResult(
-            reply_text=result_state.get("response_text"),
-            plans=plans,
-            cognition_state=build_cognition_state(result_state),
+        return CortexResult( # TODO who ends up using a CortexResult in the end?
+            reply_text=result_state.get("response_text"),       
             meta=build_meta(result_state),
         )
 

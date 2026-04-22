@@ -159,9 +159,8 @@ class DDFSM:
         )
         return outcome
 
-    def handle(self, state: CurrentState, signal: BusSignal, ctx: object) -> TransitionOutcome:
-        """Apply a signal to the current state and return the transition outcome."""
-        _ = ctx  # reserved for future policy/guard evaluation.
+    def handle(self, state: CurrentState, signal: BusSignal) -> TransitionOutcome:
+        """Apply a signal to the current state and return the transition outcome."""        
 
         # If we ever introduce a reload signal, allow it to invalidate cache.
         if signal.type == "RELOAD_FSM":

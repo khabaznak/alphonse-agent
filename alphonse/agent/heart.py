@@ -32,15 +32,13 @@ class Heart:
         *,
         bus: Bus,
         ddfsm: DDFSM,
-        state: CurrentState | None = None,
-        ctx: object | None = None,
+        state: CurrentState | None = None,        
         pipeline: IntentPipeline | None = None,
     ) -> None:
         self.config = config or HeartConfig()
         self.bus = bus
         self.ddfsm = ddfsm
-        self.state = state or CurrentState(id=self.config.initial_state_id)
-        self.ctx = ctx
+        self.state = state or CurrentState(id=self.config.initial_state_id)        
         self.signal = RUNNING
         self._runtime = get_runtime()
         self._runtime.update_state(self.state.id, self.state.key, self.state.name)
@@ -65,7 +63,7 @@ class Heart:
             self._runtime.update_signal(signal.type, signal.source)
             if signal.type == SHUTDOWN:
                 break
-            outcome = self.ddfsm.handle(self.state, signal, self.ctx)
+            outcome = self.ddfsm.handle(self.state, signal)
             _LOG.emit(
                 event="heart.transition.evaluated",
                 component="heart",
@@ -84,7 +82,6 @@ class Heart:
                         "state": self.state,
                         "signal": signal,
                         "outcome": outcome,
-                        "ctx": self.ctx,
                     },
                 )
                 next_id = getattr(outcome, "next_state_id", None) or getattr(outcome, "id", None) or self.state.id

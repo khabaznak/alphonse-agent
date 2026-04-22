@@ -33,6 +33,4 @@ class CortexResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     reply_text: str | None = None
-    plans: list[CortexPlan] = Field(default_factory=list)
-    cognition_state: dict[str, Any] = Field(default_factory=dict)
     meta: dict[str, Any] = Field(default_factory=dict)

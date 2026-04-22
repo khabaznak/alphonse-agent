@@ -303,13 +303,9 @@ def _run_slice_invoke_job(
     bus: Any,
 ) -> None:
     context = {"ctx": bus}
-    try:
-        try:
-            llm_client = build_llm_client()
-        except Exception:
-            llm_client = None
+    try:       
         invoke_state["_bus"] = bus
-        if incoming is not None:
+        if incoming is not None: # TODO: what if inconing IS none? exception? 
             invoke_state["_transition_sink"] = lambda event: emit_channel_transition_event(
                 event=event,
                 channel_type=incoming.channel_type,
@@ -320,10 +316,10 @@ def _run_slice_invoke_job(
             )
         slice_started_at = datetime.now(timezone.utc)
         try:
-            result = _CORTEX_GRAPH.invoke(invoke_state, text, llm_client=llm_client)
+            result = _CORTEX_GRAPH.invoke(invoke_state, text)
         except Exception as exc:
             failure_code = _classify_failure_code(exc)
-            user_notice_required = failure_code == "engine_unavailable"
+            user_notice_required = failure_code == "engine_unavailable" # TODO this was already part of the _classify_failure_code why whould we put this additional?
             _LOG.emit(
                 event="pdca.slice.failed.classified",
                 component="actions.handle_pdca_slice_request",
@@ -352,8 +348,7 @@ def _run_slice_invoke_job(
                 },
             )
             return
-
-        cognition_state = result.cognition_state if isinstance(result.cognition_state, dict) else {}
+        
         should_preempt = _should_preempt_after_step(
             task_id=task_id,
             slice_started_at=slice_started_at,
@@ -372,21 +367,21 @@ def _run_slice_invoke_job(
                 payload={"task_id": task_id},
             )
         effective_reply_text = "" if should_preempt else str(result.reply_text or "")
-        merged_state = _merge_state(base=base_state, cognition_state=cognition_state, reply_text=effective_reply_text)
+        merged_state = _merge_state(base=base_state, reply_text=effective_reply_text)
         merged_state = _sanitize_state_for_persistence(merged_state)
-        _ = save_pdca_checkpoint(
+        _ = save_pdca_checkpoint( # TODO what is this save?
             task_id=task_id,
             state=merged_state,
             expected_version=int(checkpoint.get("version") or 0) if isinstance(checkpoint, dict) else 0,
         )
         conversation_key = str(task.get("conversation_key") or "").strip()
         if conversation_key:
-            save_state(conversation_key, merged_state)
+            save_state(conversation_key, merged_state) # TODO then we have another save here!?
         _update_day_session_memory(
             task=task,
             user_message=text,
             reply_text=effective_reply_text,
-            cognition_state=cognition_state,
+           
             merged_state=merged_state,
         )
 
@@ -571,11 +566,10 @@ def _update_day_session_memory(
     *,
     task: dict[str, Any],
     user_message: str,
-    reply_text: str,
-    cognition_state: dict[str, Any],
+    reply_text: str,    
     merged_state: dict[str, Any],
 ) -> None:
-    owner_id = str(task.get("owner_id") or "").strip()
+    owner_id = str(task.get("owner_id") or "").strip() # TODO is this even correct? is it "owner_id"?
     if not owner_id:
         return
     channel = str(merged_state.get("channel_type") or "").strip() or "api"
@@ -766,32 +760,13 @@ def _ensure_state_correlation_id(
     base["correlation_id"] = f"pdca:{task_id}" if task_id else "pdca:unknown"
 
 
-def _merge_state(*, base: dict[str, Any], cognition_state: dict[str, Any], reply_text: str) -> dict[str, Any]:
-    merged = dict(base)
-    slots_collected = cognition_state.get("slots_collected")
-    if isinstance(slots_collected, dict):
-        merged["slots"] = dict(slots_collected)
-    for source_key, target_key in (
-        ("last_intent", "intent"),
-        ("locale", "locale"),
-        ("autonomy_level", "autonomy_level"),
-        ("planning_mode", "planning_mode"),
-        ("intent_category", "intent_category"),
-        ("route_decision", "route_decision"),
-        ("pending_interaction", "pending_interaction"),
-        ("ability_state", "ability_state"),
-        ("planning_context", "planning_context"),
-    ):
-        if source_key in cognition_state:
-            merged[target_key] = cognition_state.get(source_key)
-    for key in ("task_record", "planner_output", "check_result", "check_provenance", "act_result"):
-        if key in cognition_state:
-            merged[key] = cognition_state.get(key)
+def _merge_state(*, base: dict[str, Any], reply_text: str) -> dict[str, Any]:
+    merged = dict(base)        
     merged["response_text"] = str(reply_text or "").strip() or None
     merged["last_updated_at"] = datetime.now(timezone.utc).isoformat()
     return merged
 
-
+# TODO: review this function is it really needed?
 def _sanitize_state_for_persistence(state: dict[str, Any]) -> dict[str, Any]:
     sanitized = dict(state) if isinstance(state, dict) else {}
     events = sanitized.get("events")

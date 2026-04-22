@@ -40,13 +40,13 @@ class HandlePdcaFailureNoticeAction(Action):
                 reason="missing_task_id",
             )
             return ActionResult(intention_key="NOOP", payload={}, urgency=None)
-        if not notice_required:
+        if not notice_required: # TODO: if notice_required is false (notice is not required) then you still emit a notice?
             _emit_notice_event(
                 event="incoming_message.failure_notice_skipped",
                 correlation_id=correlation_id,
                 task_id=task_id,
                 failure_code=failure_code,
-                reason="not_engine_unavailable",
+                reason="not_engine_unavailable", # TODO this message is misleading. it is not clear. 
             )
             return ActionResult(intention_key="NOOP", payload={}, urgency=None)
 
