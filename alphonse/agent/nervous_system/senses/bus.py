@@ -1,15 +1,11 @@
 """In-memory signal bus.
 
 The bus is transport-only: it enqueues signals and allows a consumer (Heart)
-
 to block waiting for the next signal. No persistence, no handlers, no ack.
 """
 
-import json
 import uuid
-import sqlite3
 from functools import lru_cache
-from pathlib import Path
 from queue import Queue, Empty
 from typing import Optional
 from dataclasses import dataclass, field
@@ -46,7 +42,6 @@ class Bus:
         """Enqueue a signal."""
         _validate_signal_contract(signal)
         self._q.put(signal)
-        _persist_signal(signal)
 
     def get(self, timeout: Optional[float] = None) -> Optional[Signal]:
         """Return the next signal, blocking up to `timeout` seconds.
@@ -58,38 +53,6 @@ class Bus:
             return self._q.get(timeout=timeout)
         except Empty:
             return None
-
-
-def _persist_signal(signal: Signal) -> None:
-    try:
-        from alphonse.agent.nervous_system.paths import resolve_nervous_system_db_path
-
-        db_path = resolve_nervous_system_db_path()
-        db_path.parent.mkdir(parents=True, exist_ok=True)
-        payload = {
-            **(signal.payload or {}),
-            "correlation_id": signal.correlation_id,
-        }
-        with sqlite3.connect(db_path) as conn:
-            conn.execute(
-                """
-                INSERT OR IGNORE INTO signal_queue
-                  (signal_id, signal_type, payload, source, durable)
-                VALUES
-                  (?, ?, ?, ?, ?)
-                """,
-                (
-                    signal.id,
-                    signal.type,
-                    json.dumps(payload),
-                    signal.source,
-                    1 if signal.durable else 0,
-                ),
-            )
-            conn.commit()
-    except Exception:
-        return
-
 
 @lru_cache(maxsize=1)
 def _allowed_signal_keys_by_source() -> dict[str, set[str]]:

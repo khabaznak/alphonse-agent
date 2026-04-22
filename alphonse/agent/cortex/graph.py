@@ -6,7 +6,6 @@ from typing import Any, TypedDict
 from langgraph.graph import END, StateGraph
 
 from alphonse.agent.cognition.providers.contracts import TextCompletionProvider
-from alphonse.agent.cognition.providers.contracts import require_text_completion_provider
 from alphonse.agent.cortex.task_mode.pdca import act_node
 from alphonse.agent.cortex.task_mode.pdca import build_next_step_node
 from alphonse.agent.cortex.task_mode.pdca import check_node
@@ -15,7 +14,6 @@ from alphonse.agent.cortex.task_mode.pdca import route_after_act
 from alphonse.agent.cortex.task_mode.pdca import route_after_next_step
 from alphonse.agent.cortex.task_mode.plan import PlannerOutput
 from alphonse.agent.cortex.task_mode.task_record import TaskRecord
-from alphonse.agent.cortex.utils import build_cognition_state
 from alphonse.agent.nervous_system.pdca_queue_store import append_pdca_event
 from alphonse.agent.tools.registry import ToolRegistry, build_default_tool_registry
 
@@ -202,18 +200,18 @@ def _append_check_criteria_snapshot_event(task_record: TaskRecord, judge_result:
             continue
         status = "satisfied" if rendered.startswith("[x] ") else "pending"
         text = rendered[4:].strip() if rendered.startswith(("[x] ", "[ ] ")) else rendered
-        criteria.append({"id": f"ac_{index}", "text": text[:180], "status": status})
+        criteria.append({"id": f"ac_{index}", "text": text, "status": status})
     payload = {
-        "case_type": str(judge_result.get("case_type") or "").strip()[:40],
-        "acceptance_criteria": criteria[:12],
+        "case_type": str(judge_result.get("case_type") or "").strip(),
+        "acceptance_criteria": criteria,
         "verdict": {
-            "kind": str(judge_result.get("kind") or "").strip()[:32],
+            "kind": str(judge_result.get("kind") or "").strip(),
             "confidence": float(judge_result.get("confidence") or 0.0),
         },
     }
     reason = str(judge_result.get("reason") or "").strip()
     if reason:
-        payload["verdict"]["reason"] = reason[:220]
+        payload["verdict"]["reason"] = reason
     try:
         append_pdca_event(
             task_id=task_record.task_id,
@@ -226,7 +224,7 @@ def _append_check_criteria_snapshot_event(task_record: TaskRecord, judge_result:
 
 
 
-def _resolve_recursion_limit() -> int:
+def _resolve_recursion_limit() -> int: ## TODO this is horrible. fix this
     raw = str(os.getenv("ALPHONSE_GRAPH_RECURSION_LIMIT") or "").strip()
     if not raw:
         return 1000

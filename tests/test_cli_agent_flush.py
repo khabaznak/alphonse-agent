@@ -87,7 +87,7 @@ def test_agent_flush_blocks_when_runtime_appears_active_without_force(tmp_path, 
     assert "Refusing to flush while agent runtime appears active" in out
     counts = describe_pdca_runtime_flush_counts(include_signal_queue=True)
     assert counts["pdca_tasks"] == 1
-    assert counts["signal_queue"] == 1
+    assert counts["signal_queue"] == 0
 
 
 def test_agent_flush_dry_run_does_not_delete_rows(tmp_path, monkeypatch, capsys) -> None:
@@ -106,7 +106,7 @@ def test_agent_flush_dry_run_does_not_delete_rows(tmp_path, monkeypatch, capsys)
     assert counts["pdca_events"] == 1
     assert counts["pdca_checkpoints"] == 1
     assert counts["pdca_tasks"] == 1
-    assert counts["signal_queue"] == 1
+    assert counts["signal_queue"] == 0
 
 
 def test_agent_flush_force_overrides_runtime_activity_check(tmp_path, monkeypatch, capsys) -> None:
