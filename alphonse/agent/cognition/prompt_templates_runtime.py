@@ -71,20 +71,10 @@ SLOT_QUESTION_USER_TEMPLATE = _seed_text(
     "slot_question.user.j2",
 )
 
-CAPABILITY_GAP_APOLOGY_SYSTEM_PROMPT = _seed_text(
-    "capability_gap.apology.system.j2",
-)
-
-CAPABILITY_GAP_APOLOGY_USER_TEMPLATE = _seed_text(
-    "capability_gap.apology.user.j2",
-)
-
 SCHEDULER_PARAPHRASE_SYSTEM_PROMPT = _seed_text("scheduler.paraphrase.system.j2")
 SCHEDULER_NORMALIZE_TIME_SYSTEM_PROMPT = _seed_text("scheduler.normalize_time.system.j2")
 JOBS_YOU_JUST_REMEMBERED_SYSTEM_PROMPT = _seed_text("jobs.you_just_remembered.system.j2")
 RENDERER_UTTERANCE_SYSTEM_PROMPT = _seed_text("renderer.utterance.system.j2")
-CAPABILITY_GAP_REFLECTION_SYSTEM_PROMPT = _seed_text("capability_gap.reflection.system.j2")
-CAPABILITY_GAP_REFLECTION_USER_TEMPLATE = _seed_text("capability_gap.reflection.user.j2")
 MEMORY_SUMMARY_SYSTEM_PROMPT = _seed_text("memory.summary.system.j2")
 MEMORY_SUMMARY_USER_TEMPLATE = _seed_text("memory.summary.user.j2")
 

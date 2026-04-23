@@ -251,21 +251,6 @@
     }
   },
   {
-    "intent_name": "meta.gaps_list",
-    "kind": "plan_emit",
-    "tools": [],
-    "plan": {
-      "tool": "query_status",
-      "target_from": ["channel_target", "chat_id"],
-      "channels_from": ["channel_type"],
-      "parameters": {
-        "include": ["gaps_summary"],
-        "limit": 5,
-        "locale": "{locale}"
-      }
-    }
-  },
-  {
     "intent_name": "core.onboarding.start",
     "kind": "ability_flow",
     "tools": [],

@@ -240,63 +240,6 @@ def _build_critic_exception_payload(validation: StepValidationResult) -> dict[st
     }
 
 
-def build_capability_gap_apology(
-    *,
-    state: dict[str, Any],
-    llm_client: Any,
-    reason: str,
-    missing_slots: list[str] | None,
-    render_prompt_template: Callable[[str, dict[str, Any]], str],
-    apology_user_template: str,
-    apology_system_prompt: str,
-    locale_for_state: Callable[[dict[str, Any]], str],
-    logger_exception: Callable[[str, Any, Any, str], None],
-) -> str:
-    fallback = (
-        "I am sorry, I cannot complete that request yet because I am missing a required ability or tool."
-    )
-    if llm_client is None:
-        return fallback
-    try:
-        user_prompt = render_prompt_template(
-            apology_user_template,
-            {
-                "USER_MESSAGE": str(state.get("last_user_message") or ""),
-                "INTENT": str(state.get("intent") or ""),
-                "GAP_REASON": reason,
-                "MISSING_SLOTS": _markdown_list(missing_slots or []),
-                "LOCALE": locale_for_state(state),
-            },
-        )
-        raw = llm_client.complete(
-            system_prompt=apology_system_prompt,
-            user_prompt=user_prompt,
-        )
-    except Exception:
-        logger_exception(
-            "cortex capability gap apology generation failed chat_id=%s correlation_id=%s reason=%s",
-            state.get("chat_id"),
-            state.get("correlation_id"),
-            reason,
-        )
-        return fallback
-    message = str(raw or "").strip()
-    if not message:
-        return fallback
-    if message.startswith("{") and message.endswith("}"):
-        return fallback
-    if message.startswith("[") and message.endswith("]"):
-        return fallback
-    return message
-
-
-def _markdown_list(values: list[str]) -> str:
-    cleaned = [str(item).strip() for item in values if str(item).strip()]
-    if not cleaned:
-        return "- (none)"
-    return "\n".join(f"- {item}" for item in cleaned)
-
-
 def _markdown_from_json_text(payload: str) -> str:
     raw = str(payload or "").strip()
     if not raw:
