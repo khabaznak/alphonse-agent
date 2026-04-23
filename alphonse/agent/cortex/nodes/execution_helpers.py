@@ -68,10 +68,10 @@ def run_ask_question_step(
 
 def available_tool_catalog_data(
     *,
-    format_available_ability_catalog: Callable[[], str],
+    format_available_tool_catalog: Callable[[], str],
     list_registered_intents: Callable[[], list[str]],
 ) -> dict[str, Any]:
-    _ = format_available_ability_catalog
+    _ = format_available_tool_catalog
     try:
         from alphonse.agent.cognition.planning_engine import planner_tool_catalog_data
 
@@ -95,7 +95,7 @@ def available_tool_catalog_data(
         tools.append(
             {
                 "tool": name,
-                "summary": "runtime-registered ability",
+                "summary": "runtime-registered tool",
                 "required_parameters": [],
                 "input_parameters": [],
             }
@@ -127,9 +127,9 @@ def critic_repair_invalid_step(
     plan_critic_user_template: str,
     plan_critic_system_prompt: str,
     safe_json: Callable[[Any, int], str],
-    format_available_abilities: Callable[[], str],
-    format_available_ability_catalog: Callable[[], str],
-    ability_exists: Callable[[str], bool],
+    format_available_tools: Callable[[], str],
+    format_available_tool_catalog: Callable[[], str],
+    tool_exists: Callable[[str], bool],
     is_internal_tool_question: Callable[[str], bool],
 ) -> dict[str, Any] | None:
     if llm_client is None:
@@ -147,8 +147,8 @@ def critic_repair_invalid_step(
             "USER_MESSAGE": str(state.get("last_user_message") or ""),
             "INVALID_STEP_JSON": invalid_step_md,
             "VALIDATION_EXCEPTION_JSON": validation_exception_md,
-            "AVAILABLE_TOOL_SIGNATURES": format_available_abilities(),
-            "AVAILABLE_TOOL_CATALOG": str(format_available_ability_catalog() or "").strip(),
+            "AVAILABLE_TOOL_SIGNATURES": format_available_tools(),
+            "AVAILABLE_TOOL_CATALOG": str(format_available_tool_catalog() or "").strip(),
         },
     )
     try:
@@ -172,7 +172,7 @@ def critic_repair_invalid_step(
     tool_name = str(repaired.get("tool") or "").strip()
     if not tool_name:
         return None
-    if tool_name != "askQuestion" and not ability_exists(tool_name):
+    if tool_name != "askQuestion" and not tool_exists(tool_name):
         return None
     params = repaired.get("parameters")
     repaired["parameters"] = params if isinstance(params, dict) else {}

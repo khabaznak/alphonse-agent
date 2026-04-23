@@ -7,11 +7,11 @@ from alphonse.agent.tools.registry import planner_canonical_tool_names
 from alphonse.agent.tools.registry import planner_tool_schemas
 
 
-def format_available_abilities() -> str:
-    return format_available_ability_catalog()
+def format_available_tools() -> str:
+    return format_available_tool_catalog()
 
 
-def format_available_ability_catalog() -> str:
+def format_available_tool_catalog() -> str:
     payload = planner_tool_catalog_data()
     tools = payload.get("tools") if isinstance(payload, dict) else []
     lines = ["# Available Tools"]

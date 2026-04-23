@@ -34,7 +34,6 @@ from alphonse.agent.nervous_system.senses.bus import Bus, Signal
 from alphonse.agent.nervous_system.senses.cli import build_cli_user_message_signal
 from alphonse.agent.nervous_system.senses.timer import TimerSense
 from alphonse.agent.nervous_system.seed import apply_seed
-from alphonse.agent.cognition.abilities.store import AbilitySpecStore
 from alphonse.agent.nervous_system.onboarding_profiles import (
     delete_onboarding_profile,
     get_onboarding_profile,
@@ -236,71 +235,6 @@ def build_parser() -> argparse.ArgumentParser:
     voice_test = voice_sub.add_parser("test", help="Synthesize test audio using a profile")
     voice_test.add_argument("--profile", required=True, help="Profile id or name")
     voice_test.add_argument("--text", required=True, help="Text to synthesize")
-
-    abilities_parser = sub.add_parser("abilities", help="Abilities CRUD")
-    abilities_sub = abilities_parser.add_subparsers(
-        dest="abilities_command", required=True
-    )
-    abilities_list = abilities_sub.add_parser("list", help="List ability specs")
-    abilities_list.add_argument(
-        "--enabled-only",
-        action="store_true",
-        help="Show only enabled ability specs",
-    )
-    abilities_list.add_argument("--limit", type=int, default=100, help="Limit results")
-    abilities_show = abilities_sub.add_parser("show", help="Show ability spec by intent")
-    abilities_show.add_argument("intent_name", help="Intent name")
-    abilities_create = abilities_sub.add_parser("create", help="Create ability spec")
-    abilities_create.add_argument("intent_name", help="Intent name")
-    abilities_create.add_argument("kind", help="Ability kind")
-    abilities_create.add_argument(
-        "--tools",
-        nargs="*",
-        default=[],
-        help="Tool names (space-separated)",
-    )
-    abilities_create.add_argument(
-        "--spec-json",
-        default=None,
-        help="Ability spec JSON object override",
-    )
-    abilities_create.add_argument(
-        "--spec-file",
-        default=None,
-        help="Path to ability spec JSON file",
-    )
-    abilities_create.add_argument("--source", default="user", help="Ability source")
-    abilities_create.add_argument(
-        "--disabled",
-        action="store_true",
-        help="Create with enabled=false",
-    )
-    abilities_update = abilities_sub.add_parser("update", help="Update ability spec")
-    abilities_update.add_argument("intent_name", help="Intent name")
-    abilities_update.add_argument("--kind", default=None, help="New kind")
-    abilities_update.add_argument(
-        "--tools",
-        nargs="*",
-        default=None,
-        help="Replacement tool names",
-    )
-    abilities_update.add_argument(
-        "--spec-json",
-        default=None,
-        help="Spec JSON patch object",
-    )
-    abilities_update.add_argument(
-        "--spec-file",
-        default=None,
-        help="Path to spec JSON patch file",
-    )
-    abilities_update.add_argument("--source", default=None, help="Updated source")
-    abilities_enable = abilities_sub.add_parser("enable", help="Enable ability spec")
-    abilities_enable.add_argument("intent_name", help="Intent name")
-    abilities_disable = abilities_sub.add_parser("disable", help="Disable ability spec")
-    abilities_disable.add_argument("intent_name", help="Intent name")
-    abilities_delete = abilities_sub.add_parser("delete", help="Delete ability spec")
-    abilities_delete.add_argument("intent_name", help="Intent name")
 
     routing_parser = sub.add_parser("routing", help="Routing strategy")
     routing_sub = routing_parser.add_subparsers(dest="routing_command", required=True)
@@ -650,9 +584,6 @@ def _dispatch_command(
         return
     if args.command == "lan":
         _command_lan(args)
-        return
-    if args.command == "abilities":
-        _command_abilities(args)
         return
     if args.command == "onboarding":
         _command_onboarding(args)
@@ -1104,133 +1035,6 @@ def _load_env() -> None:
     env_path = Path(__file__).resolve().parent / ".env"
     if env_path.exists():
         load_dotenv(env_path)
-
-
-def _command_abilities(args: argparse.Namespace) -> None:
-    store = AbilitySpecStore()
-    if args.abilities_command == "list":
-        rows = store.list_specs(enabled_only=args.enabled_only, limit=args.limit)
-        if not rows:
-            print("No ability specs found.")
-            return
-        for row in rows:
-            state = "enabled" if row.get("enabled") else "disabled"
-            print(
-                f"- {row.get('intent_name')} kind={row.get('kind')} "
-                f"tools={','.join(row.get('tools') or [])} {state}"
-            )
-        return
-
-    if args.abilities_command == "show":
-        item = store.get_spec(args.intent_name)
-        if not item:
-            print("Ability spec not found.")
-            return
-        print(json.dumps(item, indent=2, ensure_ascii=True))
-        return
-
-    if args.abilities_command == "create":
-        try:
-            spec = _load_spec_patch(args.spec_json, args.spec_file)
-        except ValueError as exc:
-            print(str(exc))
-            return
-        spec["intent_name"] = args.intent_name
-        spec["kind"] = args.kind
-        spec["tools"] = list(args.tools)
-        store.upsert_spec(
-            args.intent_name,
-            spec,
-            enabled=not args.disabled,
-            source=args.source,
-        )
-        print(f"Created ability spec: {args.intent_name}")
-        return
-
-    if args.abilities_command == "update":
-        current = store.get_spec(args.intent_name)
-        if not current:
-            print("Ability spec not found.")
-            return
-        current_spec = current.get("spec")
-        if not isinstance(current_spec, dict):
-            current_spec = {}
-        spec = dict(current_spec)
-        try:
-            patch_spec = _load_spec_patch(args.spec_json, args.spec_file)
-        except ValueError as exc:
-            print(str(exc))
-            return
-        spec.update(patch_spec)
-        if args.kind is not None:
-            spec["kind"] = args.kind
-        if args.tools is not None:
-            spec["tools"] = list(args.tools)
-        spec["intent_name"] = args.intent_name
-        enabled = bool(current.get("enabled"))
-        source = str(current.get("source") or "user")
-        if args.source is not None:
-            source = args.source
-        store.upsert_spec(
-            args.intent_name,
-            spec,
-            enabled=enabled,
-            source=source,
-        )
-        print(f"Updated ability spec: {args.intent_name}")
-        return
-
-    if args.abilities_command in {"enable", "disable"}:
-        current = store.get_spec(args.intent_name)
-        if not current:
-            print("Ability spec not found.")
-            return
-        spec = current.get("spec")
-        if not isinstance(spec, dict):
-            print("Ability spec invalid.")
-            return
-        enabled = args.abilities_command == "enable"
-        store.upsert_spec(
-            args.intent_name,
-            spec,
-            enabled=enabled,
-            source=str(current.get("source") or "user"),
-        )
-        print(f"{args.intent_name} -> {'enabled' if enabled else 'disabled'}")
-        return
-
-    if args.abilities_command == "delete":
-        ok = store.delete_spec(args.intent_name)
-        if not ok:
-            print("Ability spec not found.")
-            return
-        print(f"Deleted ability spec: {args.intent_name}")
-        return
-
-
-def _load_spec_patch(spec_json: str | None, spec_file: str | None) -> dict[str, object]:
-    if spec_json and spec_file:
-        raise ValueError("Use either --spec-json or --spec-file, not both.")
-    if spec_json:
-        try:
-            parsed = json.loads(spec_json)
-        except json.JSONDecodeError as exc:
-            raise ValueError(f"Invalid --spec-json: {exc}") from exc
-        if not isinstance(parsed, dict):
-            raise ValueError("--spec-json must be a JSON object.")
-        return parsed
-    if spec_file:
-        path = Path(spec_file)
-        if not path.exists():
-            raise ValueError(f"Spec file not found: {path}")
-        try:
-            parsed = json.loads(path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError as exc:
-            raise ValueError(f"Invalid JSON in {path}: {exc}") from exc
-        if not isinstance(parsed, dict):
-            raise ValueError(f"Spec file must contain a JSON object: {path}")
-        return parsed
-    return {}
 
 
 def _command_onboarding(args: argparse.Namespace) -> None:

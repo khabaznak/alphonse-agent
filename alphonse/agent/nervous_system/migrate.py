@@ -19,6 +19,7 @@ def apply_schema(db_path: Path) -> None:
     with sqlite3.connect(db_path) as conn:
         conn.executescript(schema_sql)
         _drop_capability_gap_tables(conn)
+        _drop_ability_specs_table(conn)
         _hard_reset_timed_signals(conn)
         _ensure_scheduled_jobs_table(conn)
         _ensure_paired_device_columns(conn)
@@ -48,6 +49,10 @@ def _drop_capability_gap_tables(conn: sqlite3.Connection) -> None:
     conn.execute("DROP TABLE IF EXISTS gap_tasks")
     conn.execute("DROP TABLE IF EXISTS gap_proposals")
     conn.execute("DROP TABLE IF EXISTS capability_gaps")
+
+
+def _drop_ability_specs_table(conn: sqlite3.Connection) -> None:
+    conn.execute("DROP TABLE IF EXISTS ability_specs")
 
 
 def _hard_reset_timed_signals(conn: sqlite3.Connection) -> None:

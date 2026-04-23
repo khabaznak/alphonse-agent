@@ -1,21 +1,21 @@
 from __future__ import annotations
 
 from alphonse.agent.cognition.planning_engine import (
-    format_available_abilities,
-    format_available_ability_catalog,
+    format_available_tool_catalog,
+    format_available_tools,
     planner_tool_catalog_data,
 )
 
 
-def test_available_abilities_renders_full_markdown_catalog() -> None:
-    rendered = format_available_abilities()
+def test_available_tools_renders_full_markdown_catalog() -> None:
+    rendered = format_available_tools()
     assert rendered.startswith("# Available Tools")
     assert "### `get_time`" in rendered
     assert "### `communication.send_message`" in rendered
     assert "### `get_time`" in rendered
 
 
-def test_available_ability_catalog_is_llm_focused() -> None:
+def test_available_tool_catalog_is_llm_focused() -> None:
     payload = planner_tool_catalog_data()
     assert isinstance(payload, dict)
     assert "tools" in payload
@@ -29,7 +29,7 @@ def test_available_ability_catalog_is_llm_focused() -> None:
     assert "returns" in ask
 
 
-def test_available_ability_catalog_has_minimal_tools_only() -> None:
+def test_available_tool_catalog_has_minimal_tools_only() -> None:
     payload = planner_tool_catalog_data()
     tools = payload.get("tools") if isinstance(payload, dict) else []
     names = {
@@ -56,7 +56,7 @@ def test_available_ability_catalog_has_minimal_tools_only() -> None:
     assert required.issubset(names)
 
 
-def test_available_ability_catalog_prompt_is_markdown() -> None:
-    rendered = format_available_ability_catalog()
+def test_available_tool_catalog_prompt_is_markdown() -> None:
+    rendered = format_available_tool_catalog()
     assert rendered.startswith("# Available Tools")
     assert "### `get_time`" in rendered

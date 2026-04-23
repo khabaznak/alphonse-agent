@@ -295,24 +295,6 @@ CREATE TABLE IF NOT EXISTS intent_specs (
 CREATE INDEX IF NOT EXISTS idx_intent_specs_enabled
   ON intent_specs (enabled, intent_name);
 
-----------------------------------------------------------------------
--- 2.6.2.4) ABILITY SPECS (RUNTIME)
-----------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS ability_specs (
-  intent_name    TEXT PRIMARY KEY,
-  kind           TEXT NOT NULL,
-  tools_json     TEXT NOT NULL,
-  spec_json      TEXT NOT NULL,
-  enabled        INTEGER NOT NULL DEFAULT 1,
-  source         TEXT NOT NULL,
-  created_at     TEXT NOT NULL,
-  updated_at     TEXT NOT NULL
-) STRICT;
-
-CREATE INDEX IF NOT EXISTS idx_ability_specs_enabled
-  ON ability_specs (enabled, intent_name);
-
-----------------------------------------------------------------------
 -- 2.6.2.5) ONBOARDING PROFILES
 ----------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS onboarding_profiles (
