@@ -807,12 +807,8 @@ def _build_checkpoint_payload(
     request_text: str,
     previous_checkpoint: dict[str, Any] | None,
 ) -> dict[str, Any]:
-    task_record_value = cognition_state.get("task_record")
-    if isinstance(task_record_value, dict):
-        task_record = dict(task_record_value)
-    elif hasattr(task_record_value, "to_dict"):
-        task_record = dict(task_record_value.to_dict())
-    else:
+    task_record = _task_record_dict(cognition_state.get("task_record"))
+    if task_record is None:
         raise ValueError("pdca_checkpoint.missing_task_record")
     previous_state = previous_checkpoint.get("state") if isinstance(previous_checkpoint, dict) and isinstance(previous_checkpoint.get("state"), dict) else {}
     cycle_index = _as_optional_int(cognition_state.get("cycle_index"))
@@ -831,13 +827,23 @@ def _build_checkpoint_payload(
 
 
 def _next_status(*, cognition_state: dict[str, Any], reply_text: str) -> str:
-    task_record = cognition_state.get("task_record") if isinstance(cognition_state.get("task_record"), dict) else {}
+    task_record = _task_record_dict(cognition_state.get("task_record")) or {}
     task_status = str(task_record.get("status") or "").strip().lower()
     if task_status in {"done", "failed", "waiting_user"}:
         return task_status
     if str(reply_text or "").strip():
         return "done"
     return "queued"
+
+
+def _task_record_dict(task_record_value: Any) -> dict[str, Any] | None:
+    if isinstance(task_record_value, dict):
+        return dict(task_record_value)
+    if hasattr(task_record_value, "to_dict"):
+        serialized = task_record_value.to_dict()
+        if isinstance(serialized, dict):
+            return dict(serialized)
+    return None
 
 
 def _upsert_task_after_slice(*, task: dict[str, Any], status: str, request_text: str, reply_text: str) -> None:

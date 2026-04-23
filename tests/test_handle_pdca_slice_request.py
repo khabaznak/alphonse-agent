@@ -439,6 +439,76 @@ def test_handle_pdca_slice_request_fails_cleanly_when_checkpoint_payload_lacks_t
     assert any(item["event_type"] == "slice.failed" for item in events)
 
 
+def test_handle_pdca_slice_request_marks_done_when_graph_returns_live_task_record(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db_path = tmp_path / "nerve-db"
+    monkeypatch.setenv("NERVE_DB_PATH", str(db_path))
+    monkeypatch.setenv("ALPHONSE_PDCA_QUEUE_DISPATCH_COOLDOWN_SECONDS", "10")
+    apply_schema(db_path)
+
+    task_id = upsert_pdca_task(
+        {
+            "owner_id": "owner-1",
+            "conversation_key": "chat-live-task-record",
+            "status": "queued",
+            "metadata": {"pending_user_text": "Any scheduled jobs?"},
+        }
+    )
+
+    class _FakeResult:
+        reply_text = ""
+        plans = []
+        cognition_state = {
+            "task_record": TaskRecord(
+                task_id=task_id,
+                correlation_id="cid-live-task-record",
+                goal="Any scheduled jobs?",
+                status="done",
+            ),
+            "check_provenance": "entry",
+        }
+        meta = {}
+
+    class _FakeGraph:
+        def invoke(self, state, text, *, llm_client=None):  # noqa: ANN001
+            _ = (state, llm_client)
+            assert text == "Any scheduled jobs?"
+            return _FakeResult()
+
+    monkeypatch.setattr(hpsr, "_CORTEX_GRAPH", _FakeGraph())
+    monkeypatch.setattr(hpsr, "build_llm_client", lambda: None)
+
+    action = HandlePdcaSliceRequestAction()
+    signal = Signal(
+        type="pdca.slice.requested",
+        payload={"task_id": task_id, "correlation_id": "cid-live-task-record"},
+        source="pdca_queue_runner",
+    )
+    result = action.execute({"signal": signal, "ctx": None})
+
+    assert result.intention_key == "NOOP"
+    task = get_pdca_task(task_id)
+    assert isinstance(task, dict)
+    assert task["status"] == "done"
+    assert task.get("next_run_at") in {"", None}
+
+    checkpoint = load_pdca_checkpoint(task_id)
+    assert isinstance(checkpoint, dict)
+    checkpoint_task_record = checkpoint["state"].get("task_record")
+    assert isinstance(checkpoint_task_record, dict)
+    assert checkpoint_task_record.get("status") == "done"
+
+    events = list_pdca_events(task_id=task_id, limit=30)
+    assert any(item["event_type"] == "slice.completed.done" for item in events)
+    assert not any(
+        item["event_type"] == "pdca.dispatch.kick_emitted"
+        and item["payload"].get("reason") == "slice_completed_queued"
+        for item in events
+    )
+
+
 def test_handle_pdca_slice_request_preempts_when_new_input_arrives_mid_slice(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
