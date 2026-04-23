@@ -187,7 +187,7 @@ def _raise_for_status_with_body(response: requests.Response, prefix: str) -> Non
 
 def _read_json_response(response: requests.Response) -> dict[str, Any]:
     try:
-        parsed = response.json()
+        parsed = response.json() # TODO: when would it not parse and still is worth trying to extract strngs? 
     except ValueError:
         text = (response.text or "").strip()
         if text.startswith("data:"):

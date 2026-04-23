@@ -157,7 +157,7 @@ def _conduct_trial(
     parsed = _parse_judge_verdict(raw=raw, case_type=case_type)
     if isinstance(parsed, dict):
         return parsed
-    return {
+    return { # TODO if parsed is None due to an exception the code flow still falls here, which is incorrect!
         "kind": "plan",
         "case_type": case_type,
         "reason": "Judge output invalid; continue planning.",
@@ -383,21 +383,21 @@ def _normalize_criteria_updates(*, payload: dict[str, Any], case_type: str) -> l
                 text = str(update.get("text") or "").strip()
                 if not text:
                     continue
-                out.append({"op": "append", "text": text[:180]})
+                out.append({"op": "append", "text": text})
                 continue
             criterion_id = str(update.get("criterion_id") or "").strip()
             if not criterion_id:
                 continue
             refs = update.get("evidence_refs")
             evidence_refs = [str(item).strip() for item in refs if str(item).strip()][:8] if isinstance(refs, list) else []
-            out.append({"op": "mark_satisfied", "criterion_id": criterion_id[:40], "evidence_refs": evidence_refs})
+            out.append({"op": "mark_satisfied", "criterion_id": criterion_id, "evidence_refs": evidence_refs})
     baseline = payload.get("baseline_criteria")
     if case_type == "new_request" and isinstance(baseline, list):
         for item in baseline:
             text = str(item).strip()
             if not text:
                 continue
-            out.append({"op": "append", "text": text[:180]})
+            out.append({"op": "append", "text": text})
     return out[:24]
 
 
@@ -473,6 +473,6 @@ def _call_llm(*, llm_client: object, system_prompt: str, user_prompt: str) -> st
         complete = getattr(llm_client, "complete", None)
         if callable(complete):
             return str(complete(system_prompt=system_prompt, user_prompt=user_prompt))
-    except Exception:
+    except Exception: # TODO this is a horrible catch-all. Need to implement more robutst error handling.
         return ""
     return ""

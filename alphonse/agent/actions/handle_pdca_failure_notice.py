@@ -46,7 +46,7 @@ class HandlePdcaFailureNoticeAction(Action):
                 correlation_id=correlation_id,
                 task_id=task_id,
                 failure_code=failure_code,
-                reason="not_engine_unavailable", # TODO this message is misleading. it is not clear. 
+                reason="Inference engine failure", 
             )
             return ActionResult(intention_key="NOOP", payload={}, urgency=None)
 
