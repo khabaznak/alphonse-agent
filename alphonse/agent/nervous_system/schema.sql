@@ -96,25 +96,10 @@ CREATE TABLE IF NOT EXISTS prompt_artifacts (
   updated_at        TEXT NOT NULL DEFAULT (datetime('now'))
 ) STRICT;
 
+-- 2.6.1) USERS + CHANNELS
 ----------------------------------------------------------------------
--- 2.6.1) PRINCIPALS
-----------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS principals (
-  principal_id   TEXT PRIMARY KEY,
-  principal_type TEXT NOT NULL,
-  channel_type   TEXT,
-  channel_id     TEXT,
-  display_name   TEXT,
-  created_at     TEXT NOT NULL DEFAULT (datetime('now')),
-  updated_at     TEXT NOT NULL DEFAULT (datetime('now')),
-  CHECK (principal_type IN ('person', 'channel_chat', 'household', 'office', 'system'))
-) STRICT;
-
-CREATE INDEX IF NOT EXISTS idx_principals_channel ON principals (channel_type, channel_id);
-
 CREATE TABLE IF NOT EXISTS users (
   user_id      TEXT PRIMARY KEY,
-  principal_id TEXT,
   display_name TEXT NOT NULL,
   role         TEXT,
   relationship TEXT,
@@ -125,7 +110,34 @@ CREATE TABLE IF NOT EXISTS users (
   updated_at   TEXT NOT NULL DEFAULT (datetime('now'))
 ) STRICT;
 
-CREATE INDEX IF NOT EXISTS idx_users_principal ON users (principal_id);
+CREATE TABLE IF NOT EXISTS channels (
+  channel_id          INTEGER PRIMARY KEY,
+  channel_key         TEXT NOT NULL UNIQUE,
+  provider            TEXT NOT NULL,
+  channel_type        TEXT NOT NULL,
+  raw_user_key_field  TEXT NOT NULL,
+  name                TEXT NOT NULL,
+  description         TEXT,
+  created_at          TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at          TEXT NOT NULL DEFAULT (datetime('now'))
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS channels_users (
+  mapping_id        TEXT PRIMARY KEY,
+  user_id           TEXT NOT NULL,
+  channel_id        INTEGER NOT NULL,
+  channel_user_id   TEXT NOT NULL,
+  is_active         INTEGER NOT NULL DEFAULT 1,
+  created_at        TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at        TEXT NOT NULL DEFAULT (datetime('now')),
+  CHECK (is_active IN (0,1))
+) STRICT;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_channels_users_user_channel
+  ON channels_users (user_id, channel_id);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_channels_users_channel_user
+  ON channels_users (channel_id, channel_user_id);
 
 ----------------------------------------------------------------------
 -- 2.4.1) TERMINAL SANDBOXES + COMMANDS
@@ -178,25 +190,30 @@ CREATE TABLE IF NOT EXISTS terminal_commands (
 CREATE INDEX IF NOT EXISTS idx_terminal_commands_status
   ON terminal_commands (status, updated_at);
 
-CREATE UNIQUE INDEX IF NOT EXISTS idx_principals_channel_unique
-  ON principals (channel_type, channel_id)
-  WHERE channel_type IS NOT NULL AND channel_id IS NOT NULL;
-
 ----------------------------------------------------------------------
 -- 2.6.2) PREFERENCES
 ----------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS preferences (
   preference_id TEXT PRIMARY KEY,
-  principal_id  TEXT NOT NULL REFERENCES principals(principal_id) ON DELETE CASCADE,
-  key           TEXT NOT NULL,
-  value_json    TEXT NOT NULL,
-  source        TEXT NOT NULL,
+  name          TEXT NOT NULL UNIQUE,
+  description   TEXT,
+  value_kind    TEXT NOT NULL DEFAULT 'json',
   created_at    TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at    TEXT NOT NULL DEFAULT (datetime('now'))
 ) STRICT;
 
-CREATE UNIQUE INDEX IF NOT EXISTS idx_preferences_principal_key
-  ON preferences (principal_id, key);
+CREATE TABLE IF NOT EXISTS user_preferences (
+  user_preference_id TEXT PRIMARY KEY,
+  preference_id      TEXT NOT NULL,
+  user_id            TEXT NOT NULL,
+  value_json         TEXT NOT NULL,
+  source             TEXT NOT NULL,
+  created_at         TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at         TEXT NOT NULL DEFAULT (datetime('now'))
+) STRICT;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_user_preferences_user_pref
+  ON user_preferences (user_id, preference_id);
 
 ----------------------------------------------------------------------
 -- 2.6.2.0) VOICE PROFILES
@@ -298,7 +315,7 @@ CREATE INDEX IF NOT EXISTS idx_intent_specs_enabled
 -- 2.6.2.5) ONBOARDING PROFILES
 ----------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS onboarding_profiles (
-  principal_id    TEXT PRIMARY KEY,
+  user_id         TEXT PRIMARY KEY,
   state           TEXT NOT NULL DEFAULT 'not_started',
   primary_role    TEXT,
   next_steps_json TEXT NOT NULL DEFAULT '[]',
@@ -306,7 +323,6 @@ CREATE TABLE IF NOT EXISTS onboarding_profiles (
   completed_at    TEXT,
   created_at      TEXT NOT NULL,
   updated_at      TEXT NOT NULL,
-  FOREIGN KEY (principal_id) REFERENCES principals(principal_id) ON DELETE CASCADE,
   CHECK (state IN ('not_started', 'awaiting_name', 'operational', 'in_progress', 'completed'))
 ) STRICT;
 
@@ -318,7 +334,7 @@ CREATE INDEX IF NOT EXISTS idx_onboarding_profiles_state
 ----------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS location_profiles (
   location_id   TEXT PRIMARY KEY,
-  principal_id  TEXT NOT NULL,
+  user_id       TEXT NOT NULL,
   label         TEXT NOT NULL,
   address_text  TEXT,
   latitude      REAL,
@@ -328,20 +344,19 @@ CREATE TABLE IF NOT EXISTS location_profiles (
   is_active     INTEGER NOT NULL DEFAULT 1,
   created_at    TEXT NOT NULL,
   updated_at    TEXT NOT NULL,
-  FOREIGN KEY (principal_id) REFERENCES principals(principal_id) ON DELETE CASCADE,
   CHECK (label IN ('home', 'work', 'other')),
   CHECK (is_active IN (0,1))
 ) STRICT;
 
-CREATE INDEX IF NOT EXISTS idx_location_profiles_principal
-  ON location_profiles (principal_id, label, is_active);
+CREATE INDEX IF NOT EXISTS idx_location_profiles_user
+  ON location_profiles (user_id, label, is_active);
 
 ----------------------------------------------------------------------
 -- 2.6.2.7) DEVICE LOCATIONS (EPHEMERAL/STREAM)
 ----------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS device_locations (
   id              TEXT PRIMARY KEY,
-  principal_id    TEXT,
+  user_id         TEXT,
   device_id       TEXT NOT NULL,
   latitude        REAL NOT NULL,
   longitude       REAL NOT NULL,
@@ -349,8 +364,7 @@ CREATE TABLE IF NOT EXISTS device_locations (
   source          TEXT NOT NULL,
   observed_at     TEXT NOT NULL,
   metadata_json   TEXT,
-  created_at      TEXT NOT NULL,
-  FOREIGN KEY (principal_id) REFERENCES principals(principal_id) ON DELETE SET NULL
+  created_at      TEXT NOT NULL
 ) STRICT;
 
 CREATE INDEX IF NOT EXISTS idx_device_locations_device_observed
@@ -500,32 +514,6 @@ CREATE TABLE IF NOT EXISTS person_groups (
   person_id TEXT NOT NULL,
   group_id  TEXT NOT NULL,
   PRIMARY KEY (person_id, group_id)
-) STRICT;
-
-CREATE TABLE IF NOT EXISTS channels (
-  channel_id   TEXT PRIMARY KEY,
-  channel_type TEXT NOT NULL,
-  person_id    TEXT,
-  address      TEXT NOT NULL,
-  is_enabled   INTEGER NOT NULL DEFAULT 1,
-  priority     INTEGER NOT NULL DEFAULT 100
-) STRICT;
-
-CREATE TABLE IF NOT EXISTS communication_prefs (
-  prefs_id            TEXT PRIMARY KEY,
-  scope_type          TEXT NOT NULL,
-  scope_id            TEXT NOT NULL,
-  language_preference TEXT,
-  tone                TEXT,
-  formality           TEXT,
-  emoji               TEXT,
-  verbosity_cap       TEXT,
-  quiet_hours_start   INTEGER,
-  quiet_hours_end     INTEGER,
-  allow_push          INTEGER NOT NULL DEFAULT 1,
-  allow_web           INTEGER NOT NULL DEFAULT 1,
-  allow_cli           INTEGER NOT NULL DEFAULT 1,
-  model_budget_policy TEXT
 ) STRICT;
 
 CREATE TABLE IF NOT EXISTS presence_state (

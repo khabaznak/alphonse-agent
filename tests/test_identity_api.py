@@ -6,6 +6,7 @@ from alphonse.agent.identity.session import resolve_session_user_id
 from alphonse.agent.nervous_system import user_service_resolvers as resolvers
 from alphonse.agent.nervous_system import users as users_store
 from alphonse.agent.nervous_system.migrate import apply_schema
+from alphonse.agent.cortex.task_mode.task_record import TaskRecord
 from alphonse.agent.tools.context_tools import GetUserDetailsTool
 
 
@@ -16,7 +17,6 @@ def test_identity_facade_resolves_canonical_user_and_service_mapping(monkeypatch
     users_store.upsert_user(
         {
             "user_id": "u-1",
-            "principal_id": "p-1",
             "display_name": "Alex",
             "is_active": True,
         }
@@ -29,7 +29,6 @@ def test_identity_facade_resolves_canonical_user_and_service_mapping(monkeypatch
     )
 
     assert identity.get_user("u-1")["user_id"] == "u-1"
-    assert identity.get_user_by_principal_id("p-1")["user_id"] == "u-1"
     assert identity.resolve_user_id(service_id=2, service_user_id="8553589429") == "u-1"
     assert identity.resolve_service_user_id(user_id="u-1", service_id=2) == "8553589429"
     assert identity.resolve_delivery_target(user_id="u-1", service_id=2) == "8553589429"
@@ -42,7 +41,6 @@ def test_identity_facade_resolves_session_user_from_service_mapping(monkeypatch,
     users_store.upsert_user(
         {
             "user_id": "u-telegram",
-            "principal_id": "p-telegram",
             "display_name": "Telegram User",
             "is_active": True,
         }
@@ -75,25 +73,15 @@ def test_get_user_details_returns_canonical_user_id(monkeypatch, tmp_path) -> No
     users_store.upsert_user(
         {
             "user_id": "u-cli",
-            "principal_id": "p-cli",
             "display_name": "CLI User",
             "is_active": True,
         }
     )
     tool = GetUserDetailsTool()
     result = tool.execute(
-        state={
-            "actor_person_id": "u-cli",
-            "incoming_user_id": "owner-cli",
-            "channel_type": "cli",
-            "channel_target": "cli",
-            "chat_id": "cli:cli",
-            "conversation_key": "cli:cli",
-        }
+        task_record=TaskRecord(task_id="task-1", user_id="u-cli", correlation_id="corr-1")
     )
 
     assert result["exception"] is None
     output = result["output"]
     assert output["user_id"] == "u-cli"
-    assert output["resolved_user_id"] == "u-cli"
-    assert output["service_key"] == "cli"

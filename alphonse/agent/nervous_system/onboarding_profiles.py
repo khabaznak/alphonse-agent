@@ -9,19 +9,18 @@ from alphonse.agent.nervous_system.paths import resolve_nervous_system_db_path
 
 
 def upsert_onboarding_profile(record: dict[str, Any]) -> str:
-    principal_id = str(record.get("principal_id") or "")
-    if not principal_id:
-        raise ValueError("principal_id is required")
+    user_id = str(record.get("user_id") or "")
+    if not user_id:
+        raise ValueError("user_id is required")
     now = _now_iso()
     with sqlite3.connect(resolve_nervous_system_db_path()) as conn:
-        _ensure_principal_exists(conn, principal_id, now)
         conn.execute(
             """
             INSERT INTO onboarding_profiles (
-              principal_id, state, primary_role, next_steps_json, resume_token,
+              user_id, state, primary_role, next_steps_json, resume_token,
               completed_at, created_at, updated_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(principal_id) DO UPDATE SET
+            ON CONFLICT(user_id) DO UPDATE SET
               state = excluded.state,
               primary_role = excluded.primary_role,
               next_steps_json = excluded.next_steps_json,
@@ -30,7 +29,7 @@ def upsert_onboarding_profile(record: dict[str, Any]) -> str:
               updated_at = excluded.updated_at
             """,
             (
-                principal_id,
+                user_id,
                 record.get("state") or "not_started",
                 record.get("primary_role"),
                 _to_json(record.get("next_steps") or []),
@@ -41,18 +40,7 @@ def upsert_onboarding_profile(record: dict[str, Any]) -> str:
             ),
         )
         conn.commit()
-    return principal_id
-
-
-def _ensure_principal_exists(conn: sqlite3.Connection, principal_id: str, now: str) -> None:
-    conn.execute(
-        """
-        INSERT OR IGNORE INTO principals (
-          principal_id, principal_type, created_at, updated_at
-        ) VALUES (?, 'person', ?, ?)
-        """,
-        (principal_id, now, now),
-    )
+    return user_id
 
 
 def list_onboarding_profiles(*, state: str | None = None, limit: int = 100) -> list[dict[str, Any]]:
@@ -63,7 +51,7 @@ def list_onboarding_profiles(*, state: str | None = None, limit: int = 100) -> l
         values.append(state)
     where = f"WHERE {' AND '.join(filters)}" if filters else ""
     query = (
-        "SELECT principal_id, state, primary_role, next_steps_json, resume_token, "
+        "SELECT user_id, state, primary_role, next_steps_json, resume_token, "
         "completed_at, created_at, updated_at "
         f"FROM onboarding_profiles {where} ORDER BY updated_at DESC LIMIT ?"
     )
@@ -73,25 +61,25 @@ def list_onboarding_profiles(*, state: str | None = None, limit: int = 100) -> l
     return [_row_to_onboarding_profile(row) for row in rows]
 
 
-def get_onboarding_profile(principal_id: str) -> dict[str, Any] | None:
+def get_onboarding_profile(user_id: str) -> dict[str, Any] | None:
     with sqlite3.connect(resolve_nervous_system_db_path()) as conn:
         row = conn.execute(
             """
-            SELECT principal_id, state, primary_role, next_steps_json, resume_token,
+            SELECT user_id, state, primary_role, next_steps_json, resume_token,
                    completed_at, created_at, updated_at
             FROM onboarding_profiles
-            WHERE principal_id = ?
+            WHERE user_id = ?
             """,
-            (principal_id,),
+            (user_id,),
         ).fetchone()
     return _row_to_onboarding_profile(row) if row else None
 
 
-def delete_onboarding_profile(principal_id: str) -> bool:
+def delete_onboarding_profile(user_id: str) -> bool:
     with sqlite3.connect(resolve_nervous_system_db_path()) as conn:
         cur = conn.execute(
-            "DELETE FROM onboarding_profiles WHERE principal_id = ?",
-            (principal_id,),
+            "DELETE FROM onboarding_profiles WHERE user_id = ?",
+            (user_id,),
         )
         conn.commit()
     return cur.rowcount > 0
@@ -103,7 +91,7 @@ def _row_to_onboarding_profile(row: sqlite3.Row | tuple | None) -> dict[str, Any
     if not isinstance(row, tuple):
         row = tuple(row)
     return {
-        "principal_id": row[0],
+        "user_id": row[0],
         "state": row[1],
         "primary_role": row[2],
         "next_steps": _parse_json(row[3]) or [],

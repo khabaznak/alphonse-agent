@@ -5,7 +5,7 @@ from typing import Any
 
 from alphonse.agent import identity
 from alphonse.agent.cognition.plan_execution.communication_dispatcher import CommunicationDispatcher
-from alphonse.agent.cognition.preferences.store import get_preference, get_principal_for_channel
+from alphonse.agent.cognition.preferences.store import get_user_preference
 
 
 @dataclass(frozen=True)
@@ -69,15 +69,6 @@ class CommunicationService:
         origin_service_id = request.origin_service_id
         if origin_service_id is not None:
             return int(origin_service_id)
-        principal_id = get_principal_for_channel(
-            str(request.origin_channel or "").strip(),
-            str(request.origin_target or "").strip(),
-        )
-        if principal_id:
-            value = get_preference(principal_id, "preferred_communication_channel")
-            preferred = identity.resolve_service_id(str(value or "").strip())
-            if preferred is not None:
-                return preferred
         origin_channel = str(request.origin_channel or "").strip().lower()
         if origin_channel:
             return identity.resolve_service_id(origin_channel)
@@ -109,26 +100,20 @@ class CommunicationService:
     def _is_blocked_by_policy(self, *, request: CommunicationRequest, target: str | None) -> bool:
         if str(request.urgency or "").strip().lower() in {"urgent", "critical"}:
             return False
-        principal_id = get_principal_for_channel(
-            str(request.origin_channel or "").strip(),
-            str(target or request.origin_target or "").strip(),
-        )
-        if not principal_id:
+        user_id = str(request.user_id or "").strip()
+        if not user_id:
             return False
-        comm_mode = str(get_preference(principal_id, "communication_mode") or "").strip().lower()
+        comm_mode = str(get_user_preference(user_id, "communication_mode") or "").strip().lower()
         return comm_mode in {"dnd", "sleep"}
 
     def _apply_tone(self, *, request: CommunicationRequest, target: str | None) -> str:
         message = str(request.message or "").strip()
         if not message:
             return ""
-        principal_id = get_principal_for_channel(
-            str(request.origin_channel or "").strip(),
-            str(target or request.origin_target or "").strip(),
-        )
-        if not principal_id:
+        user_id = str(request.user_id or "").strip()
+        if not user_id:
             return message
-        tone = str(get_preference(principal_id, "tone") or "").strip().lower()
+        tone = str(get_user_preference(user_id, "tone") or "").strip().lower()
         if tone == "formal":
             return message
         return message

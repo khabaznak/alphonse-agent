@@ -17,6 +17,7 @@ def apply_schema(db_path: Path) -> None:
     schema_path = Path(__file__).resolve().parent / "schema.sql"
     schema_sql = schema_path.read_text(encoding="utf-8")
     with sqlite3.connect(db_path) as conn:
+        _rebuild_identity_preferences_tables(conn)
         conn.executescript(schema_sql)
         _drop_capability_gap_tables(conn)
         _drop_ability_specs_table(conn)
@@ -25,9 +26,6 @@ def apply_schema(db_path: Path) -> None:
         _ensure_paired_device_columns(conn)
         _ensure_pairing_columns(conn)
         _ensure_intent_specs_columns(conn)
-        _ensure_principals_constraints(conn)
-        _ensure_users_table(conn)
-        _ensure_services_registry(conn)
         _ensure_voice_profiles_table(conn)
         _ensure_prompt_template_columns(conn)
         _ensure_prompt_artifacts_table(conn)
@@ -162,24 +160,125 @@ def _ensure_intent_specs_columns(conn: sqlite3.Connection) -> None:
         pass
 
 
-def _ensure_principals_constraints(conn: sqlite3.Connection) -> None:
-    row = conn.execute(
-        "SELECT sql FROM sqlite_master WHERE type='table' AND name='principals'"
-    ).fetchone()
-    if not row or not row[0]:
-        return
-    sql = str(row[0]).lower()
-    if "check" in sql and "system" in sql and "office" in sql:
-        return
-    _rebuild_principals(conn)
+def _rebuild_identity_preferences_tables(conn: sqlite3.Connection) -> None:
+    try:
+        user_rows = list(
+            conn.execute(
+                """
+                SELECT user_id, display_name, role, relationship, is_admin, is_active,
+                       onboarded_at, created_at, updated_at
+                FROM users
+                """
+            ).fetchall()
+        )
+    except sqlite3.OperationalError:
+        user_rows = []
+    try:
+        principal_map_rows = conn.execute(
+            """
+            SELECT principal_id, user_id
+            FROM users
+            WHERE principal_id IS NOT NULL AND trim(principal_id) <> ''
+            """
+        ).fetchall()
+    except sqlite3.OperationalError:
+        principal_map_rows = []
+    principal_to_user = {
+        str(row[0] or "").strip(): str(row[1] or "").strip()
+        for row in principal_map_rows
+        if str(row[0] or "").strip() and str(row[1] or "").strip()
+    }
 
+    try:
+        channel_rows = list(
+            conn.execute(
+                """
+                SELECT service_id, service_key, raw_user_key_field, name, description
+                FROM services
+                ORDER BY service_id
+                """
+            ).fetchall()
+        )
+    except sqlite3.OperationalError:
+        channel_rows = []
+    if not channel_rows:
+        channel_rows = [
+            (1, "webui", "user_id", "Alphonse Web UI", "Alphonse Web UI delivery"),
+            (2, "telegram", "chat_id", "Telegram", "Telegram chat delivery"),
+            (3, "cli", "cli_user_id", "CLI", "Alphonse CLI bootstrap communication"),
+        ]
 
-def _ensure_users_table(conn: sqlite3.Connection) -> None:
+    try:
+        mapping_rows = list(
+            conn.execute(
+                """
+                SELECT resolver_id, user_id, service_id, service_user_id, is_active, created_at, updated_at
+                FROM user_service_resolvers
+                """
+            ).fetchall()
+        )
+    except sqlite3.OperationalError:
+        mapping_rows = []
+
+    try:
+        onboarding_rows = list(
+            conn.execute(
+                """
+                SELECT principal_id, state, primary_role, next_steps_json, resume_token,
+                       completed_at, created_at, updated_at
+                FROM onboarding_profiles
+                """
+            ).fetchall()
+        )
+    except sqlite3.OperationalError:
+        onboarding_rows = []
+
+    try:
+        location_rows = list(
+            conn.execute(
+                """
+                SELECT location_id, principal_id, label, address_text, latitude, longitude,
+                       source, confidence, is_active, created_at, updated_at
+                FROM location_profiles
+                """
+            ).fetchall()
+        )
+    except sqlite3.OperationalError:
+        location_rows = []
+
+    try:
+        device_rows = list(
+            conn.execute(
+                """
+                SELECT id, principal_id, device_id, latitude, longitude, accuracy_meters,
+                       source, observed_at, metadata_json, created_at
+                FROM device_locations
+                """
+            ).fetchall()
+        )
+    except sqlite3.OperationalError:
+        device_rows = []
+
+    for table in (
+        "channels_users",
+        "user_preferences",
+        "preferences",
+        "communication_prefs",
+        "channels",
+        "user_service_resolvers",
+        "services",
+        "principals",
+        "onboarding_profiles",
+        "location_profiles",
+        "device_locations",
+        "users",
+    ):
+        conn.execute(f"DROP TABLE IF EXISTS {table}")
+
     conn.execute(
         """
-        CREATE TABLE IF NOT EXISTS users (
+        CREATE TABLE users (
           user_id      TEXT PRIMARY KEY,
-          principal_id TEXT,
           display_name TEXT NOT NULL,
           role         TEXT,
           relationship TEXT,
@@ -191,97 +290,222 @@ def _ensure_users_table(conn: sqlite3.Connection) -> None:
         ) STRICT
         """
     )
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_users_principal ON users (principal_id)"
-    )
+    if user_rows:
+        conn.executemany(
+            """
+            INSERT INTO users (
+              user_id, display_name, role, relationship, is_admin, is_active,
+              onboarded_at, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            user_rows,
+        )
 
-
-def _ensure_services_registry(conn: sqlite3.Connection) -> None:
     conn.execute(
         """
-        CREATE TABLE IF NOT EXISTS services (
-          service_id         INTEGER PRIMARY KEY,
-          service_key        TEXT NOT NULL UNIQUE,
-          raw_user_key_field TEXT NOT NULL,
-          name               TEXT NOT NULL,
-          description        TEXT,
+        CREATE TABLE channels (
+          channel_id          INTEGER PRIMARY KEY,
+          channel_key         TEXT NOT NULL UNIQUE,
+          provider            TEXT NOT NULL,
+          channel_type        TEXT NOT NULL,
+          raw_user_key_field  TEXT NOT NULL,
+          name                TEXT NOT NULL,
+          description         TEXT,
+          created_at          TEXT NOT NULL DEFAULT (datetime('now')),
+          updated_at          TEXT NOT NULL DEFAULT (datetime('now'))
+        ) STRICT
+        """
+    )
+    normalized_channels = []
+    for channel_id, key, raw_user_key_field, name, description in channel_rows:
+        channel_key = str(key or "").strip().lower()
+        provider = (
+            "Telegram" if channel_key == "telegram"
+            else "Microsoft" if channel_key == "teams"
+            else "Meta" if channel_key == "whatsapp"
+            else "Local" if channel_key == "cli"
+            else "OpenAI" if channel_key == "webui"
+            else channel_key.title()
+        )
+        channel_type = "instant_messaging" if channel_key in {"telegram", "teams", "whatsapp"} else "interactive"
+        normalized_channels.append(
+            (
+                int(channel_id),
+                channel_key,
+                provider,
+                channel_type,
+                str(raw_user_key_field or "user_id"),
+                str(name or channel_key.title()),
+                description,
+            )
+        )
+    conn.executemany(
+        """
+        INSERT INTO channels (
+          channel_id, channel_key, provider, channel_type, raw_user_key_field, name, description
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        normalized_channels,
+    )
+
+    conn.execute(
+        """
+        CREATE TABLE channels_users (
+          mapping_id        TEXT PRIMARY KEY,
+          user_id           TEXT NOT NULL,
+          channel_id        INTEGER NOT NULL,
+          channel_user_id   TEXT NOT NULL,
+          is_active         INTEGER NOT NULL DEFAULT 1,
+          created_at        TEXT NOT NULL DEFAULT (datetime('now')),
+          updated_at        TEXT NOT NULL DEFAULT (datetime('now')),
+          CHECK (is_active IN (0,1))
+        ) STRICT
+        """
+    )
+    conn.execute(
+        "CREATE UNIQUE INDEX idx_channels_users_user_channel ON channels_users (user_id, channel_id)"
+    )
+    conn.execute(
+        "CREATE UNIQUE INDEX idx_channels_users_channel_user ON channels_users (channel_id, channel_user_id)"
+    )
+    if mapping_rows:
+        conn.executemany(
+            """
+            INSERT INTO channels_users (
+              mapping_id, user_id, channel_id, channel_user_id, is_active, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            mapping_rows,
+        )
+
+    conn.execute(
+        """
+        CREATE TABLE preferences (
+          preference_id TEXT PRIMARY KEY,
+          name          TEXT NOT NULL UNIQUE,
+          description   TEXT,
+          value_kind    TEXT NOT NULL DEFAULT 'json',
+          created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+          updated_at    TEXT NOT NULL DEFAULT (datetime('now'))
+        ) STRICT
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE user_preferences (
+          user_preference_id TEXT PRIMARY KEY,
+          preference_id      TEXT NOT NULL,
+          user_id            TEXT NOT NULL,
+          value_json         TEXT NOT NULL,
+          source             TEXT NOT NULL,
           created_at         TEXT NOT NULL DEFAULT (datetime('now')),
           updated_at         TEXT NOT NULL DEFAULT (datetime('now'))
         ) STRICT
         """
     )
     conn.execute(
+        "CREATE UNIQUE INDEX idx_user_preferences_user_pref ON user_preferences (user_id, preference_id)"
+    )
+
+    conn.execute(
         """
-        CREATE TABLE IF NOT EXISTS user_service_resolvers (
-          resolver_id      TEXT PRIMARY KEY,
-          user_id          TEXT NOT NULL,
-          service_id       INTEGER NOT NULL,
-          service_user_id  TEXT NOT NULL,
-          is_active        INTEGER NOT NULL DEFAULT 1,
-          created_at       TEXT NOT NULL DEFAULT (datetime('now')),
-          updated_at       TEXT NOT NULL DEFAULT (datetime('now')),
+        CREATE TABLE onboarding_profiles (
+          user_id         TEXT PRIMARY KEY,
+          state           TEXT NOT NULL DEFAULT 'not_started',
+          primary_role    TEXT,
+          next_steps_json TEXT NOT NULL DEFAULT '[]',
+          resume_token    TEXT,
+          completed_at    TEXT,
+          created_at      TEXT NOT NULL,
+          updated_at      TEXT NOT NULL,
+          CHECK (state IN ('not_started', 'awaiting_name', 'operational', 'in_progress', 'completed'))
+        ) STRICT
+        """
+    )
+    onboarding_inserts = []
+    for row in onboarding_rows:
+        user_id = principal_to_user.get(str(row[0] or "").strip(), str(row[0] or "").strip())
+        if user_id:
+            onboarding_inserts.append((user_id, row[1], row[2], row[3], row[4], row[5], row[6], row[7]))
+    if onboarding_inserts:
+        conn.executemany(
+            """
+            INSERT INTO onboarding_profiles (
+              user_id, state, primary_role, next_steps_json, resume_token,
+              completed_at, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            onboarding_inserts,
+        )
+    conn.execute("CREATE INDEX idx_onboarding_profiles_state ON onboarding_profiles (state, updated_at)")
+
+    conn.execute(
+        """
+        CREATE TABLE location_profiles (
+          location_id   TEXT PRIMARY KEY,
+          user_id       TEXT NOT NULL,
+          label         TEXT NOT NULL,
+          address_text  TEXT,
+          latitude      REAL,
+          longitude     REAL,
+          source        TEXT NOT NULL,
+          confidence    REAL,
+          is_active     INTEGER NOT NULL DEFAULT 1,
+          created_at    TEXT NOT NULL,
+          updated_at    TEXT NOT NULL,
+          CHECK (label IN ('home', 'work', 'other')),
           CHECK (is_active IN (0,1))
         ) STRICT
         """
     )
+    location_inserts = []
+    for row in location_rows:
+        user_id = principal_to_user.get(str(row[1] or "").strip(), str(row[1] or "").strip())
+        if user_id:
+            location_inserts.append((row[0], user_id, row[2], row[3], row[4], row[5], row[6], row[7], row[8], row[9], row[10]))
+    if location_inserts:
+        conn.executemany(
+            """
+            INSERT INTO location_profiles (
+              location_id, user_id, label, address_text, latitude, longitude,
+              source, confidence, is_active, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            location_inserts,
+        )
+    conn.execute("CREATE INDEX idx_location_profiles_user ON location_profiles (user_id, label, is_active)")
+
     conn.execute(
         """
-        CREATE UNIQUE INDEX IF NOT EXISTS idx_user_service_resolver_unique
-          ON user_service_resolvers (user_id, service_id)
+        CREATE TABLE device_locations (
+          id              TEXT PRIMARY KEY,
+          user_id         TEXT,
+          device_id       TEXT NOT NULL,
+          latitude        REAL NOT NULL,
+          longitude       REAL NOT NULL,
+          accuracy_meters REAL,
+          source          TEXT NOT NULL,
+          observed_at     TEXT NOT NULL,
+          metadata_json   TEXT,
+          created_at      TEXT NOT NULL
+        ) STRICT
         """
     )
-    conn.execute(
-        """
-        CREATE UNIQUE INDEX IF NOT EXISTS idx_service_user_unique
-          ON user_service_resolvers (service_id, service_user_id)
-        """
-    )
-    conn.execute(
-        """
-        CREATE INDEX IF NOT EXISTS idx_service_resolvers_active
-          ON user_service_resolvers (service_id, is_active)
-        """
-    )
-    # Temporary fixed registry ids by request:
-    # - Web UI: service_id=1
-    # - Telegram: service_id=2
-    # - CLI: service_id=3
-    conn.execute(
-        """
-        INSERT INTO services (service_id, service_key, raw_user_key_field, name, description)
-        VALUES (1, 'webui', 'user_id', 'Alphonse Web UI', 'Alphonse Web UI delivery')
-        ON CONFLICT(service_id) DO UPDATE SET
-          service_key = excluded.service_key,
-          raw_user_key_field = excluded.raw_user_key_field,
-          name = excluded.name,
-          description = excluded.description,
-          updated_at = datetime('now')
-        """
-    )
-    conn.execute(
-        """
-        INSERT INTO services (service_id, service_key, raw_user_key_field, name, description)
-        VALUES (2, 'telegram', 'chat_id', 'Telegram', 'Telegram chat delivery')
-        ON CONFLICT(service_id) DO UPDATE SET
-          service_key = excluded.service_key,
-          raw_user_key_field = excluded.raw_user_key_field,
-          name = excluded.name,
-          description = excluded.description,
-          updated_at = datetime('now')
-        """
-    )
-    conn.execute(
-        """
-        INSERT INTO services (service_id, service_key, raw_user_key_field, name, description)
-        VALUES (3, 'cli', 'cli_user_id', 'CLI', 'Alphonse CLI bootstrap communication')
-        ON CONFLICT(service_id) DO UPDATE SET
-          service_key = excluded.service_key,
-          raw_user_key_field = excluded.raw_user_key_field,
-          name = excluded.name,
-          description = excluded.description,
-          updated_at = datetime('now')
-        """
-    )
+    device_inserts = []
+    for row in device_rows:
+        user_id = principal_to_user.get(str(row[1] or "").strip(), str(row[1] or "").strip()) if row[1] is not None else None
+        device_inserts.append((row[0], user_id, row[2], row[3], row[4], row[5], row[6], row[7], row[8], row[9]))
+    if device_inserts:
+        conn.executemany(
+            """
+            INSERT INTO device_locations (
+              id, user_id, device_id, latitude, longitude, accuracy_meters,
+              source, observed_at, metadata_json, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            device_inserts,
+        )
+    conn.execute("CREATE INDEX idx_device_locations_device_observed ON device_locations (device_id, observed_at DESC)")
 
 
 def _ensure_prompt_template_columns(conn: sqlite3.Connection) -> None:

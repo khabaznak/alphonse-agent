@@ -6,10 +6,8 @@ from datetime import datetime, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from alphonse.agent.cognition.preferences.store import (
-    get_or_create_principal_for_channel,
-    get_with_fallback,
-)
+from alphonse.agent import identity
+from alphonse.agent.cognition.preferences.store import get_with_fallback
 from alphonse.config import settings
 
 logger = get_component_logger("cognition.reminders.renderer")
@@ -283,32 +281,28 @@ def _parse_datetime(value: str) -> datetime | None:
 def _load_preferences(payload: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(payload, dict):
         return {}
-    channel_type = payload.get("origin_channel") or payload.get("channel_type")
-    channel_id = (
-        payload.get("chat_id") or payload.get("channel_id") or payload.get("target")
+    user_id = (
+        payload.get("user_id")
+        or payload.get("person_id")
+        or payload.get("actor_person_id")
     )
-    if not channel_type or not channel_id:
-        return {}
-    principal_id = get_or_create_principal_for_channel(
-        str(channel_type), str(channel_id)
-    )
-    if not principal_id:
+    if not user_id:
+        channel_type = payload.get("origin_channel") or payload.get("channel_type")
+        channel_user_id = payload.get("chat_id") or payload.get("channel_id") or payload.get("target")
+        service_id = identity.resolve_service_id(str(channel_type or "").strip() or None)
+        if service_id is not None and channel_user_id:
+            user_id = identity.resolve_user_id(service_id=service_id, service_user_id=str(channel_user_id))
+    if not user_id:
         return {}
     prefs = {
-        "locale": get_with_fallback(
-            principal_id, "locale", settings.get_default_locale()
-        ),
-        "tone": get_with_fallback(principal_id, "tone", settings.get_tone()),
-        "address_style": get_with_fallback(
-            principal_id, "address_style", settings.get_address_style()
-        ),
-        "reminders.relay_style": get_with_fallback(
-            principal_id, "reminders.relay_style", True
-        ),
+        "locale": get_with_fallback(str(user_id), "locale", settings.get_default_locale()),
+        "tone": get_with_fallback(str(user_id), "tone", settings.get_tone()),
+        "address_style": get_with_fallback(str(user_id), "address_style", settings.get_address_style()),
+        "reminders.relay_style": get_with_fallback(str(user_id), "reminders.relay_style", True),
     }
     logger.info(
-        "ReminderRenderer prefs principal_id=%s locale=%s tone=%s address=%s",
-        principal_id,
+        "ReminderRenderer prefs user_id=%s locale=%s tone=%s address=%s",
+        user_id,
         prefs.get("locale"),
         prefs.get("tone"),
         prefs.get("address_style"),

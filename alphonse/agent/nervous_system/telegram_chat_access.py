@@ -113,7 +113,10 @@ def provision_from_invite(invite: dict[str, Any], *, status: str) -> dict[str, A
     if chat_type in {"group", "supergroup"}:
         owner_service_user_id = str(invite.get("from_user_id") or "").strip()
         if owner_service_user_id:
-            owner_user_id = resolve_user_id_by_service_user_id(owner_service_user_id)
+            owner_user_id = resolve_user_id_by_service_user_id(
+                service_id=TELEGRAM_SERVICE_ID,
+                service_user_id=owner_service_user_id,
+            )
     return upsert_chat_access(
         {
             "chat_id": chat_id,
@@ -197,11 +200,11 @@ def _is_registered_private_chat(telegram_chat_id: str) -> bool:
         row = conn.execute(
             """
             SELECT u.user_id
-            FROM user_service_resolvers r
-            JOIN users u ON u.user_id = r.user_id
-            WHERE r.service_id = ?
-              AND r.service_user_id = ?
-              AND r.is_active = 1
+            FROM channels_users cu
+            JOIN users u ON u.user_id = cu.user_id
+            WHERE cu.channel_id = ?
+              AND cu.channel_user_id = ?
+              AND cu.is_active = 1
               AND u.is_active = 1
             LIMIT 1
             """,

@@ -1,31 +1,26 @@
 from __future__ import annotations
 
+from typing import Any
+
 from alphonse.agent import identity
 from alphonse.agent.actions.session_context import IncomingContext
-from alphonse.agent.cognition.preferences.store import get_or_create_principal_for_channel
-from alphonse.agent.cognition.preferences.store import resolve_preference_with_precedence
+from alphonse.agent.cognition.preferences.store import get_user_preference
 from alphonse.config import settings
 
 
 def resolve_session_timezone(incoming: IncomingContext) -> str:
-    principal_id = _principal_id_for_incoming(incoming)
-    if principal_id:
-        timezone_name = resolve_preference_with_precedence(
-            key="timezone",
-            default=settings.get_timezone(),
-            channel_principal_id=principal_id,
-        )
+    user_id = _resolve_incoming_user_id(incoming)
+    if user_id:
+        timezone_name = get_user_preference(user_id, "timezone")
         if isinstance(timezone_name, str) and timezone_name.strip():
             return timezone_name.strip()
     return settings.get_timezone()
 
 
 def resolve_session_user_id(*, incoming: IncomingContext, payload: dict[str, Any]) -> str:
-    principal_id = _principal_id_for_incoming(incoming)
-    if principal_id:
-        principal_user = identity.get_user_by_principal_id(principal_id)
-        if principal_user:
-            return str(principal_user["user_id"])
+    resolved = _resolve_incoming_user_id(incoming)
+    if resolved:
+        return resolved
 
     metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
     for candidate in (
@@ -35,9 +30,9 @@ def resolve_session_user_id(*, incoming: IncomingContext, payload: dict[str, Any
         payload.get("resolved_user_id"),
         _nested_get(payload, "actor", "person_id"),
     ):
-        resolved = _validated_user_id(candidate)
-        if resolved:
-            return resolved
+        validated = _validated_user_id(candidate)
+        if validated:
+            return validated
 
     service_id = _resolve_service_id_from_incoming(incoming=incoming, payload=payload, metadata=metadata)
     for candidate in (
@@ -53,9 +48,9 @@ def resolve_session_user_id(*, incoming: IncomingContext, payload: dict[str, Any
         _nested_get(payload, "metadata", "raw", "metadata", "user_id"),
         _nested_get(payload, "metadata", "raw", "metadata", "from_user"),
     ):
-        resolved = _validated_user_id(candidate)
-        if resolved:
-            return resolved
+        validated = _validated_user_id(candidate)
+        if validated:
+            return validated
         if service_id is None:
             continue
         mapped = identity.resolve_user_id(service_id=service_id, service_user_id=str(candidate or "").strip() or None)
@@ -64,10 +59,16 @@ def resolve_session_user_id(*, incoming: IncomingContext, payload: dict[str, Any
     raise ValueError("unresolved_session_user_id")
 
 
-def _principal_id_for_incoming(incoming: IncomingContext) -> str | None:
-    if incoming.channel_type and (incoming.address or incoming.channel_type):
-        channel_id = str(incoming.address or incoming.channel_type)
-        return get_or_create_principal_for_channel(str(incoming.channel_type), channel_id)
+def _resolve_incoming_user_id(incoming: IncomingContext) -> str | None:
+    service_id = identity.resolve_service_id(str(incoming.channel_type or "").strip() or None)
+    address = str(incoming.address or incoming.channel_type or "").strip()
+    if service_id is not None and address:
+        resolved = identity.resolve_user_id(service_id=service_id, service_user_id=address)
+        if resolved:
+            return resolved
+    validated = _validated_user_id(incoming.person_id)
+    if validated:
+        return validated
     return None
 
 

@@ -20,14 +20,14 @@ def test_apply_seed_creates_bootstrap_cli_admin_identity(tmp_path: Path, monkeyp
 
     with sqlite3.connect(db_path) as conn:
         service = conn.execute(
-            "SELECT service_id, service_key FROM services WHERE service_key = 'cli'"
+            "SELECT channel_id, channel_key FROM channels WHERE channel_key = 'cli'"
         ).fetchone()
         user = conn.execute(
             "SELECT user_id, is_admin, is_active FROM users WHERE user_id = ?",
             (BOOTSTRAP_ADMIN_USER_ID,),
         ).fetchone()
         resolver = conn.execute(
-            "SELECT service_user_id FROM user_service_resolvers WHERE user_id = ? AND service_id = 3",
+            "SELECT channel_user_id FROM channels_users WHERE user_id = ? AND channel_id = 3",
             (BOOTSTRAP_ADMIN_USER_ID,),
         ).fetchone()
 
@@ -51,7 +51,7 @@ def test_apply_seed_is_idempotent_for_bootstrap_cli_admin(tmp_path: Path, monkey
 
     with sqlite3.connect(db_path) as conn:
         count = conn.execute(
-            "SELECT COUNT(*) FROM user_service_resolvers WHERE user_id = ? AND service_id = 3",
+            "SELECT COUNT(*) FROM channels_users WHERE user_id = ? AND channel_id = 3",
             (BOOTSTRAP_ADMIN_USER_ID,),
         ).fetchone()
     assert count is not None

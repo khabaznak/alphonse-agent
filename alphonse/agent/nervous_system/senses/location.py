@@ -39,7 +39,7 @@ class LocationSense(Sense):
     def ingest_address(
         self,
         *,
-        principal_id: str,
+        user_id: str,
         label: str,
         address_text: str,
         source: str = "user",
@@ -63,7 +63,7 @@ class LocationSense(Sense):
                 logger.warning("LocationSense geocode failed error=%s", exc)
         location_id = upsert_location_profile(
             {
-                "principal_id": principal_id,
+                "user_id": user_id,
                 "label": label,
                 "address_text": address_text,
                 "latitude": lat,
@@ -77,7 +77,7 @@ class LocationSense(Sense):
                 Signal(
                     type="location.profile_updated",
                     payload={
-                        "principal_id": principal_id,
+                        "user_id": user_id,
                         "label": label,
                         "location_id": location_id,
                         "address_text": address_text,

@@ -15,7 +15,6 @@ def test_upsert_and_resolve_service_user_id(tmp_path: Path, monkeypatch) -> None
     users_store.upsert_user(
         {
             "user_id": "u-1",
-            "principal_id": "p-1",
             "display_name": "Alex",
             "is_active": True,
         }
@@ -51,7 +50,6 @@ def test_resolve_telegram_chat_id_for_internal_and_display_name(tmp_path: Path, 
     users_store.upsert_user(
         {
             "user_id": "u-2",
-            "principal_id": "p-2",
             "display_name": "Alex",
             "is_active": True,
         }
@@ -76,7 +74,6 @@ def test_resolve_internal_user_by_telegram_id(tmp_path: Path, monkeypatch) -> No
     users_store.upsert_user(
         {
             "user_id": "u-3",
-            "principal_id": "p-3",
             "display_name": "Rex",
             "is_active": True,
         }

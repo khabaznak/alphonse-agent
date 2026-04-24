@@ -23,7 +23,7 @@ def test_cli_onboarding_crud(
     cli._command_onboarding(
         Namespace(
             onboarding_command="upsert",
-            principal_id="person-alex",
+            user_id="person-alex",
             state="in_progress",
             primary_role="admin",
             next_steps=["home_location"],
@@ -33,13 +33,13 @@ def test_cli_onboarding_crud(
     )
     assert "Upserted onboarding profile" in capsys.readouterr().out
 
-    cli._command_onboarding(Namespace(onboarding_command="show", principal_id="person-alex"))
-    assert '"principal_id": "person-alex"' in capsys.readouterr().out
+    cli._command_onboarding(Namespace(onboarding_command="show", user_id="person-alex"))
+    assert '"user_id": "person-alex"' in capsys.readouterr().out
 
     cli._command_onboarding(Namespace(onboarding_command="list", state=None, limit=20))
     assert "person-alex" in capsys.readouterr().out
 
-    cli._command_onboarding(Namespace(onboarding_command="delete", principal_id="person-alex"))
+    cli._command_onboarding(Namespace(onboarding_command="delete", user_id="person-alex"))
     assert "Deleted onboarding profile" in capsys.readouterr().out
 
 
@@ -52,7 +52,7 @@ def test_cli_locations_crud(
         Namespace(
             locations_command="upsert",
             location_id=None,
-            principal_id="person-alex",
+            user_id="person-alex",
             label="home",
             address_text="123 Main",
             lat=20.67,
@@ -69,7 +69,7 @@ def test_cli_locations_crud(
     cli._command_locations(
         Namespace(
             locations_command="device-add",
-            principal_id="person-alex",
+            user_id="person-alex",
             device_id="pixel-001",
             lat=20.68,
             lng=-103.34,
@@ -84,7 +84,7 @@ def test_cli_locations_crud(
     cli._command_locations(
         Namespace(
             locations_command="device-list",
-            principal_id=None,
+            user_id=None,
             device_id="pixel-001",
             limit=10,
         )

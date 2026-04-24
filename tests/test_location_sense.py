@@ -21,12 +21,12 @@ def test_location_sense_ingest_address_creates_profile(
     _prepare_db(tmp_path, monkeypatch)
     sense = LocationSense()
     location_id = sense.ingest_address(
-        principal_id="person-alex",
+        user_id="person-alex",
         label="home",
         address_text="123 Main St",
         source="user",
     )
     assert location_id
-    rows = list_location_profiles(principal_id="person-alex", limit=10)
+    rows = list_location_profiles(user_id="person-alex", limit=10)
     assert rows
     assert rows[0]["label"] == "home"

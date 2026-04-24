@@ -12,7 +12,7 @@ from alphonse.agent.cognition.narration.models import (
     NarrationIntent,
     PresentationSpec,
 )
-from alphonse.agent.cognition.preferences.store import resolve_preference_with_precedence
+from alphonse.agent.cognition.preferences.store import get_user_preference
 
 
 @dataclass
@@ -121,65 +121,21 @@ def _resolve_prefs(context: ContextBundle, audience: AudienceRef) -> dict[str, A
     if audience.kind != "person":
         return defaults
     user = identity.get_user(audience.id)
-    principal_id = str((user or {}).get("principal_id") or "").strip()
-    if not principal_id:
+    user_id = str((user or {}).get("user_id") or "").strip()
+    if not user_id:
         return defaults
     return {
-        "language_preference": resolve_preference_with_precedence(
-            key="language_preference",
-            default=defaults.get("language_preference", "en"),
-            person_principal_id=principal_id,
-        ),
-        "tone": resolve_preference_with_precedence(
-            key="tone",
-            default=defaults.get("tone", "neutral"),
-            person_principal_id=principal_id,
-        ),
-        "formality": resolve_preference_with_precedence(
-            key="formality",
-            default=defaults.get("formality", "neutral"),
-            person_principal_id=principal_id,
-        ),
-        "emoji": resolve_preference_with_precedence(
-            key="emoji",
-            default=defaults.get("emoji", "none"),
-            person_principal_id=principal_id,
-        ),
-        "verbosity_cap": resolve_preference_with_precedence(
-            key="verbosity_cap",
-            default=defaults.get("verbosity_cap", "normal"),
-            person_principal_id=principal_id,
-        ),
-        "quiet_hours_start": resolve_preference_with_precedence(
-            key="quiet_hours_start",
-            default=defaults.get("quiet_hours_start"),
-            person_principal_id=principal_id,
-        ),
-        "quiet_hours_end": resolve_preference_with_precedence(
-            key="quiet_hours_end",
-            default=defaults.get("quiet_hours_end"),
-            person_principal_id=principal_id,
-        ),
-        "allow_telegram": resolve_preference_with_precedence(
-            key="allow_telegram",
-            default=True,
-            person_principal_id=principal_id,
-        ),
-        "allow_web": resolve_preference_with_precedence(
-            key="allow_web",
-            default=defaults.get("allow_web", True),
-            person_principal_id=principal_id,
-        ),
-        "allow_cli": resolve_preference_with_precedence(
-            key="allow_cli",
-            default=defaults.get("allow_cli", True),
-            person_principal_id=principal_id,
-        ),
-        "allow_push": resolve_preference_with_precedence(
-            key="allow_push",
-            default=defaults.get("allow_push", True),
-            person_principal_id=principal_id,
-        ),
+        "language_preference": get_user_preference(user_id, "language_preference") or defaults.get("language_preference", "en"),
+        "tone": get_user_preference(user_id, "tone") or defaults.get("tone", "neutral"),
+        "formality": get_user_preference(user_id, "formality") or defaults.get("formality", "neutral"),
+        "emoji": get_user_preference(user_id, "emoji") or defaults.get("emoji", "none"),
+        "verbosity_cap": get_user_preference(user_id, "verbosity_cap") or defaults.get("verbosity_cap", "normal"),
+        "quiet_hours_start": get_user_preference(user_id, "quiet_hours_start") if get_user_preference(user_id, "quiet_hours_start") is not None else defaults.get("quiet_hours_start"),
+        "quiet_hours_end": get_user_preference(user_id, "quiet_hours_end") if get_user_preference(user_id, "quiet_hours_end") is not None else defaults.get("quiet_hours_end"),
+        "allow_telegram": get_user_preference(user_id, "allow_telegram") if get_user_preference(user_id, "allow_telegram") is not None else True,
+        "allow_web": get_user_preference(user_id, "allow_web") if get_user_preference(user_id, "allow_web") is not None else defaults.get("allow_web", True),
+        "allow_cli": get_user_preference(user_id, "allow_cli") if get_user_preference(user_id, "allow_cli") is not None else defaults.get("allow_cli", True),
+        "allow_push": get_user_preference(user_id, "allow_push") if get_user_preference(user_id, "allow_push") is not None else defaults.get("allow_push", True),
     }
 
 

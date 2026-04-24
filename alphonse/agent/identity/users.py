@@ -15,7 +15,7 @@ def list_users(*, active_only: bool = False, limit: int = 200) -> list[dict[str,
         filters.append("is_active = 1")
     where = f"WHERE {' AND '.join(filters)}" if filters else ""
     query = (
-        "SELECT user_id, principal_id, display_name, role, relationship, is_admin, is_active, "
+        "SELECT user_id, display_name, role, relationship, is_admin, is_active, "
         "onboarded_at, created_at, updated_at "
         f"FROM users {where} ORDER BY updated_at DESC LIMIT ?"
     )
@@ -28,7 +28,7 @@ def list_users(*, active_only: bool = False, limit: int = 200) -> list[dict[str,
 def get_user(user_id: str) -> dict[str, Any] | None:
     with sqlite3.connect(resolve_nervous_system_db_path()) as conn:
         row = conn.execute(
-            "SELECT user_id, principal_id, display_name, role, relationship, is_admin, is_active, "
+            "SELECT user_id, display_name, role, relationship, is_admin, is_active, "
             "onboarded_at, created_at, updated_at FROM users WHERE user_id = ?",
             (user_id,),
         ).fetchone()
@@ -41,7 +41,7 @@ def get_user_by_display_name(display_name: str) -> dict[str, Any] | None:
         return None
     with sqlite3.connect(resolve_nervous_system_db_path()) as conn:
         row = conn.execute(
-            "SELECT user_id, principal_id, display_name, role, relationship, is_admin, is_active, "
+            "SELECT user_id, display_name, role, relationship, is_admin, is_active, "
             "onboarded_at, created_at, updated_at FROM users WHERE lower(display_name) = lower(?) "
             "ORDER BY updated_at DESC LIMIT 1",
             (name,),
@@ -50,23 +50,13 @@ def get_user_by_display_name(display_name: str) -> dict[str, Any] | None:
 
 
 def get_user_by_principal_id(principal_id: str) -> dict[str, Any] | None:
-    value = str(principal_id or "").strip()
-    if not value:
-        return None
-    with sqlite3.connect(resolve_nervous_system_db_path()) as conn:
-        row = conn.execute(
-            "SELECT user_id, principal_id, display_name, role, relationship, is_admin, is_active, "
-            "onboarded_at, created_at, updated_at FROM users WHERE principal_id = ? "
-            "ORDER BY updated_at DESC LIMIT 1",
-            (value,),
-        ).fetchone()
-    return _row_to_user(row) if row else None
+    return get_user(principal_id)
 
 
 def get_active_admin_user() -> dict[str, Any] | None:
     with sqlite3.connect(resolve_nervous_system_db_path()) as conn:
         row = conn.execute(
-            "SELECT user_id, principal_id, display_name, role, relationship, is_admin, is_active, "
+            "SELECT user_id, display_name, role, relationship, is_admin, is_active, "
             "onboarded_at, created_at, updated_at FROM users "
             "WHERE is_admin = 1 AND is_active = 1 "
             "ORDER BY updated_at DESC LIMIT 1"
@@ -75,7 +65,7 @@ def get_active_admin_user() -> dict[str, Any] | None:
 
 
 def upsert_user(record: dict[str, Any]) -> str:
-    user_id = str(record.get("user_id") or record.get("principal_id") or uuid.uuid4())
+    user_id = str(record.get("user_id") or uuid.uuid4())
     display_name = str(record.get("display_name") or "").strip()
     if not display_name:
         raise ValueError("display_name is required")
@@ -84,11 +74,10 @@ def upsert_user(record: dict[str, Any]) -> str:
         conn.execute(
             """
             INSERT INTO users (
-              user_id, principal_id, display_name, role, relationship, is_admin, is_active,
+              user_id, display_name, role, relationship, is_admin, is_active,
               onboarded_at, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(user_id) DO UPDATE SET
-              principal_id = excluded.principal_id,
               display_name = excluded.display_name,
               role = excluded.role,
               relationship = excluded.relationship,
@@ -99,7 +88,6 @@ def upsert_user(record: dict[str, Any]) -> str:
             """,
             (
                 user_id,
-                record.get("principal_id"),
                 display_name,
                 record.get("role"),
                 record.get("relationship"),
@@ -139,15 +127,14 @@ def _row_to_user(row: sqlite3.Row | tuple | None) -> dict[str, Any]:
         row = tuple(row)
     return {
         "user_id": row[0],
-        "principal_id": row[1],
-        "display_name": row[2],
-        "role": row[3],
-        "relationship": row[4],
-        "is_admin": bool(row[5]),
-        "is_active": bool(row[6]),
-        "onboarded_at": row[7],
-        "created_at": row[8],
-        "updated_at": row[9],
+        "display_name": row[1],
+        "role": row[2],
+        "relationship": row[3],
+        "is_admin": bool(row[4]),
+        "is_active": bool(row[5]),
+        "onboarded_at": row[6],
+        "created_at": row[7],
+        "updated_at": row[8],
     }
 
 

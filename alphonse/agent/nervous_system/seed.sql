@@ -929,10 +929,12 @@ WHERE signal_id IN (
   )
 );
 
-INSERT OR IGNORE INTO channels (channel_id, channel_type, person_id, address, is_enabled, priority)
+INSERT OR IGNORE INTO channels (
+  channel_id, channel_key, provider, channel_type, raw_user_key_field, name, description
+)
 VALUES
-  ('api-default', 'api', NULL, 'api', 1, 0),
-  ('cli-default', 'cli', NULL, 'cli', 1, 0);
+  (4, 'api', 'OpenAI', 'interactive', 'user_id', 'API', 'API delivery'),
+  (3, 'cli', 'Local', 'interactive', 'cli_user_id', 'CLI', 'CLI delivery');
 
 INSERT OR IGNORE INTO plan_kinds (plan_kind, description, is_enabled)
 VALUES

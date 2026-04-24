@@ -11,23 +11,22 @@ from alphonse.agent.nervous_system.paths import resolve_nervous_system_db_path
 
 def upsert_location_profile(record: dict[str, Any]) -> str:
     location_id = str(record.get("location_id") or uuid.uuid4())
-    principal_id = str(record.get("principal_id") or "")
-    if not principal_id:
-        raise ValueError("principal_id is required")
+    user_id = str(record.get("user_id") or "")
+    if not user_id:
+        raise ValueError("user_id is required")
     label = str(record.get("label") or "other")
     if label not in {"home", "work", "other"}:
         raise ValueError("label must be one of: home, work, other")
     now = _now_iso()
     with sqlite3.connect(resolve_nervous_system_db_path()) as conn:
-        _ensure_principal_exists(conn, principal_id, now)
         conn.execute(
             """
             INSERT INTO location_profiles (
-              location_id, principal_id, label, address_text, latitude, longitude,
+              location_id, user_id, label, address_text, latitude, longitude,
               source, confidence, is_active, created_at, updated_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(location_id) DO UPDATE SET
-              principal_id = excluded.principal_id,
+              user_id = excluded.user_id,
               label = excluded.label,
               address_text = excluded.address_text,
               latitude = excluded.latitude,
@@ -39,7 +38,7 @@ def upsert_location_profile(record: dict[str, Any]) -> str:
             """,
             (
                 location_id,
-                principal_id,
+                user_id,
                 label,
                 record.get("address_text"),
                 record.get("latitude"),
@@ -57,16 +56,16 @@ def upsert_location_profile(record: dict[str, Any]) -> str:
 
 def list_location_profiles(
     *,
-    principal_id: str | None = None,
+    user_id: str | None = None,
     label: str | None = None,
     active_only: bool = False,
     limit: int = 100,
 ) -> list[dict[str, Any]]:
     filters: list[str] = []
     values: list[Any] = []
-    if principal_id:
-        filters.append("principal_id = ?")
-        values.append(principal_id)
+    if user_id:
+        filters.append("user_id = ?")
+        values.append(user_id)
     if label:
         filters.append("label = ?")
         values.append(label)
@@ -74,7 +73,7 @@ def list_location_profiles(
         filters.append("is_active = 1")
     where = f"WHERE {' AND '.join(filters)}" if filters else ""
     query = (
-        "SELECT location_id, principal_id, label, address_text, latitude, longitude, "
+        "SELECT location_id, user_id, label, address_text, latitude, longitude, "
         "source, confidence, is_active, created_at, updated_at "
         f"FROM location_profiles {where} ORDER BY updated_at DESC LIMIT ?"
     )
@@ -88,7 +87,7 @@ def get_location_profile(location_id: str) -> dict[str, Any] | None:
     with sqlite3.connect(resolve_nervous_system_db_path()) as conn:
         row = conn.execute(
             """
-            SELECT location_id, principal_id, label, address_text, latitude, longitude,
+            SELECT location_id, user_id, label, address_text, latitude, longitude,
                    source, confidence, is_active, created_at, updated_at
             FROM location_profiles
             WHERE location_id = ?
@@ -113,19 +112,16 @@ def insert_device_location(record: dict[str, Any]) -> str:
     now = _now_iso()
     observed_at = str(record.get("observed_at") or now)
     with sqlite3.connect(resolve_nervous_system_db_path()) as conn:
-        principal_id = record.get("principal_id")
-        if isinstance(principal_id, str) and principal_id:
-            _ensure_principal_exists(conn, principal_id, now)
         conn.execute(
             """
             INSERT INTO device_locations (
-              id, principal_id, device_id, latitude, longitude, accuracy_meters,
+              id, user_id, device_id, latitude, longitude, accuracy_meters,
               source, observed_at, metadata_json, created_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 entry_id,
-                record.get("principal_id"),
+                record.get("user_id"),
                 record.get("device_id"),
                 record.get("latitude"),
                 record.get("longitude"),
@@ -142,21 +138,21 @@ def insert_device_location(record: dict[str, Any]) -> str:
 
 def list_device_locations(
     *,
-    principal_id: str | None = None,
+    user_id: str | None = None,
     device_id: str | None = None,
     limit: int = 100,
 ) -> list[dict[str, Any]]:
     filters: list[str] = []
     values: list[Any] = []
-    if principal_id:
-        filters.append("principal_id = ?")
-        values.append(principal_id)
+    if user_id:
+        filters.append("user_id = ?")
+        values.append(user_id)
     if device_id:
         filters.append("device_id = ?")
         values.append(device_id)
     where = f"WHERE {' AND '.join(filters)}" if filters else ""
     query = (
-        "SELECT id, principal_id, device_id, latitude, longitude, accuracy_meters, "
+        "SELECT id, user_id, device_id, latitude, longitude, accuracy_meters, "
         "source, observed_at, metadata_json, created_at "
         f"FROM device_locations {where} ORDER BY observed_at DESC LIMIT ?"
     )
@@ -173,7 +169,7 @@ def _row_to_location_profile(row: sqlite3.Row | tuple | None) -> dict[str, Any]:
         row = tuple(row)
     return {
         "location_id": row[0],
-        "principal_id": row[1],
+        "user_id": row[1],
         "label": row[2],
         "address_text": row[3],
         "latitude": row[4],
@@ -193,7 +189,7 @@ def _row_to_device_location(row: sqlite3.Row | tuple | None) -> dict[str, Any]:
         row = tuple(row)
     return {
         "id": row[0],
-        "principal_id": row[1],
+        "user_id": row[1],
         "device_id": row[2],
         "latitude": row[3],
         "longitude": row[4],
@@ -222,14 +218,3 @@ def _parse_json(value: str | None) -> Any:
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
-
-
-def _ensure_principal_exists(conn: sqlite3.Connection, principal_id: str, now: str) -> None:
-    conn.execute(
-        """
-        INSERT OR IGNORE INTO principals (
-          principal_id, principal_type, created_at, updated_at
-        ) VALUES (?, 'person', ?, ?)
-        """,
-        (principal_id, now, now),
-    )

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from alphonse.agent.cognition.preferences.store import get_preference
+from alphonse.agent.cognition.preferences.store import get_user_preference
 from alphonse.agent.identity import service_resolvers as resolver_store
 from alphonse.agent.identity import users as users_store
 from alphonse.agent.nervous_system.services import get_service, get_service_by_key
@@ -32,7 +32,7 @@ def get_user_by_principal_id(principal_id: str | None) -> dict[str, Any] | None:
     rendered = str(principal_id or "").strip()
     if not rendered:
         return None
-    user = users_store.get_user_by_principal_id(rendered)
+    user = users_store.get_user(rendered)
     return user if isinstance(user, dict) and user else None
 
 
@@ -120,10 +120,10 @@ def resolve_service_key(service_id: int | None) -> str | None:
 
 def get_preferred_service_id(user_id: str | None) -> int | None:
     user = get_user(user_id)
-    principal_id = str((user or {}).get("principal_id") or "").strip()
-    if not principal_id:
+    canonical_user_id = str((user or {}).get("user_id") or "").strip()
+    if not canonical_user_id:
         return None
-    preferred = str(get_preference(principal_id, "preferred_communication_channel") or "").strip().lower()
+    preferred = str(get_user_preference(canonical_user_id, "preferred_communication_channel") or "").strip().lower()
     if not preferred:
         return None
     return resolve_service_id(preferred)

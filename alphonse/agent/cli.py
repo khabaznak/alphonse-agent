@@ -42,8 +42,6 @@ from alphonse.agent.nervous_system.onboarding_profiles import (
 )
 from alphonse.agent.cognition.preferences.store import (
     delete_preference,
-    get_or_create_scope_principal,
-    get_principal_for_channel,
 )
 from alphonse.agent import identity
 from alphonse.agent.nervous_system.terminal_tools import (
@@ -252,22 +250,20 @@ def build_parser() -> argparse.ArgumentParser:
     onboarding_list.add_argument("--state", default=None)
     onboarding_list.add_argument("--limit", type=int, default=100)
     onboarding_show = onboarding_sub.add_parser("show", help="Show onboarding profile")
-    onboarding_show.add_argument("principal_id")
+    onboarding_show.add_argument("user_id")
     onboarding_upsert = onboarding_sub.add_parser("upsert", help="Create/update onboarding profile")
-    onboarding_upsert.add_argument("principal_id")
+    onboarding_upsert.add_argument("user_id")
     onboarding_upsert.add_argument("--state", default="not_started")
     onboarding_upsert.add_argument("--primary-role", default=None)
     onboarding_upsert.add_argument("--next-steps", nargs="*", default=[])
     onboarding_upsert.add_argument("--resume-token", default=None)
     onboarding_upsert.add_argument("--completed-at", default=None)
     onboarding_delete = onboarding_sub.add_parser("delete", help="Delete onboarding profile")
-    onboarding_delete.add_argument("principal_id")
+    onboarding_delete.add_argument("user_id")
     onboarding_reset = onboarding_sub.add_parser(
         "reset-primary", help="Reset primary onboarding state"
     )
-    onboarding_reset.add_argument("--principal-id", default=None)
-    onboarding_reset.add_argument("--channel-type", default=None)
-    onboarding_reset.add_argument("--channel-id", default=None)
+    onboarding_reset.add_argument("--user-id", default=None)
     onboarding_reset.add_argument(
         "--keep-display-name",
         action="store_true",
@@ -278,13 +274,6 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Delete onboarding profile row if present",
     )
-    onboarding_resolve = onboarding_sub.add_parser(
-        "resolve-principal",
-        help="Resolve principal_id for a channel",
-    )
-    onboarding_resolve.add_argument("--channel-type", required=True)
-    onboarding_resolve.add_argument("--channel-id", required=True)
-
     users_parser = sub.add_parser("users", help="User registry utilities")
     users_sub = users_parser.add_subparsers(dest="users_command", required=True)
     users_list = users_sub.add_parser("list", help="List users")
@@ -296,7 +285,7 @@ def build_parser() -> argparse.ArgumentParser:
         dest="locations_command", required=True
     )
     locations_list = locations_sub.add_parser("list", help="List location profiles")
-    locations_list.add_argument("--principal-id", default=None)
+    locations_list.add_argument("--user-id", default=None)
     locations_list.add_argument("--label", default=None)
     locations_list.add_argument("--active-only", action="store_true")
     locations_list.add_argument("--limit", type=int, default=100)
@@ -304,7 +293,7 @@ def build_parser() -> argparse.ArgumentParser:
     locations_show.add_argument("location_id")
     locations_upsert = locations_sub.add_parser("upsert", help="Create/update location profile")
     locations_upsert.add_argument("--location-id", default=None)
-    locations_upsert.add_argument("principal_id")
+    locations_upsert.add_argument("user_id")
     locations_upsert.add_argument("--label", default="other")
     locations_upsert.add_argument("--address-text", default=None)
     locations_upsert.add_argument("--lat", type=float, default=None)
@@ -316,7 +305,7 @@ def build_parser() -> argparse.ArgumentParser:
     locations_delete.add_argument("location_id")
     device_add = locations_sub.add_parser("device-add", help="Insert device location sample")
     device_add.add_argument("device_id")
-    device_add.add_argument("--principal-id", default=None)
+    device_add.add_argument("--user-id", default=None)
     device_add.add_argument("--lat", type=float, required=True)
     device_add.add_argument("--lng", type=float, required=True)
     device_add.add_argument("--accuracy", type=float, default=None)
@@ -324,7 +313,7 @@ def build_parser() -> argparse.ArgumentParser:
     device_add.add_argument("--observed-at", default=None)
     device_add.add_argument("--metadata-json", default=None)
     device_list = locations_sub.add_parser("device-list", help="List device locations")
-    device_list.add_argument("--principal-id", default=None)
+    device_list.add_argument("--user-id", default=None)
     device_list.add_argument("--device-id", default=None)
     device_list.add_argument("--limit", type=int, default=100)
 
@@ -1045,13 +1034,13 @@ def _command_onboarding(args: argparse.Namespace) -> None:
             return
         for row in rows:
             print(
-                f"- principal={row.get('principal_id')} state={row.get('state')} "
+                f"- user={row.get('user_id')} state={row.get('state')} "
                 f"role={row.get('primary_role')}"
             )
         return
 
     if args.onboarding_command == "show":
-        item = get_onboarding_profile(args.principal_id)
+        item = get_onboarding_profile(args.user_id)
         if not item:
             print("Onboarding profile not found.")
             return
@@ -1059,9 +1048,9 @@ def _command_onboarding(args: argparse.Namespace) -> None:
         return
 
     if args.onboarding_command == "upsert":
-        principal_id = upsert_onboarding_profile(
+        user_id = upsert_onboarding_profile(
             {
-                "principal_id": args.principal_id,
+                "user_id": args.user_id,
                 "state": args.state,
                 "primary_role": args.primary_role,
                 "next_steps": list(args.next_steps or []),
@@ -1069,61 +1058,29 @@ def _command_onboarding(args: argparse.Namespace) -> None:
                 "completed_at": args.completed_at,
             }
         )
-        print(f"Upserted onboarding profile: {principal_id}")
+        print(f"Upserted onboarding profile: {user_id}")
         return
 
     if args.onboarding_command == "delete":
-        ok = delete_onboarding_profile(args.principal_id)
+        ok = delete_onboarding_profile(args.user_id)
         if not ok:
             print("Onboarding profile not found.")
             return
-        print(f"Deleted onboarding profile: {args.principal_id}")
+        print(f"Deleted onboarding profile: {args.user_id}")
         return
     if args.onboarding_command == "reset-primary":
-        principal_id = args.principal_id
-        conversation_principal_id = None
-        if not principal_id and args.channel_type and args.channel_id:
-            principal_id = get_principal_for_channel(
-                str(args.channel_type),
-                str(args.channel_id),
-            )
-            if not principal_id:
-                print("Channel principal not found.")
-                return
-        if args.channel_type and args.channel_id:
-            conversation_key = _conversation_key_from_args(
-                str(args.channel_type),
-                str(args.channel_id),
-            )
-            conversation_principal_id = get_principal_for_channel(
-                "conversation",
-                conversation_key,
-            )
-        if not principal_id:
-            print("Provide --principal-id or --channel-type and --channel-id.")
+        user_id = str(args.user_id or "").strip()
+        if not user_id:
+            print("Provide --user-id.")
             return
-        system_principal_id = get_or_create_scope_principal("system", "default")
-        if system_principal_id:
-            delete_preference(system_principal_id, "onboarding.primary.completed")
-            delete_preference(system_principal_id, "onboarding.primary.admin_principal_id")
-        delete_preference(principal_id, "onboarding.state")
+        delete_preference(user_id, "onboarding.primary.completed")
+        delete_preference(user_id, "onboarding.primary.admin_principal_id")
+        delete_preference(user_id, "onboarding.state")
         if not args.keep_display_name:
-            delete_preference(principal_id, "display_name")
-            if conversation_principal_id:
-                delete_preference(conversation_principal_id, "display_name")
+            delete_preference(user_id, "display_name")
         if args.purge_profile:
-            delete_onboarding_profile(principal_id)
-        print(f"Primary onboarding reset for principal: {principal_id}")
-        return
-    if args.onboarding_command == "resolve-principal":
-        principal_id = get_principal_for_channel(
-            str(args.channel_type),
-            str(args.channel_id),
-        )
-        if not principal_id:
-            print("Channel principal not found.")
-            return
-        print(principal_id)
+            delete_onboarding_profile(user_id)
+        print(f"Primary onboarding reset for user: {user_id}")
         return
 
 
@@ -1289,7 +1246,7 @@ def _validate_enrolled_voice_profile(profile_name: str) -> dict[str, object]:
 def _command_locations(args: argparse.Namespace) -> None:
     if args.locations_command == "list":
         rows = list_location_profiles(
-            principal_id=args.principal_id,
+            user_id=args.user_id,
             label=args.label,
             active_only=args.active_only,
             limit=args.limit,
@@ -1299,7 +1256,7 @@ def _command_locations(args: argparse.Namespace) -> None:
             return
         for row in rows:
             print(
-                f"- {row.get('location_id')} principal={row.get('principal_id')} "
+                f"- {row.get('location_id')} user={row.get('user_id')} "
                 f"label={row.get('label')} active={row.get('is_active')}"
             )
         return
@@ -1316,7 +1273,7 @@ def _command_locations(args: argparse.Namespace) -> None:
         location_id = upsert_location_profile(
             {
                 "location_id": args.location_id,
-                "principal_id": args.principal_id,
+                "user_id": args.user_id,
                 "label": args.label,
                 "address_text": args.address_text,
                 "latitude": args.lat,
@@ -1347,7 +1304,7 @@ def _command_locations(args: argparse.Namespace) -> None:
                 return
         entry_id = insert_device_location(
             {
-                "principal_id": args.principal_id,
+                "user_id": args.user_id,
                 "device_id": args.device_id,
                 "latitude": args.lat,
                 "longitude": args.lng,
@@ -1362,7 +1319,7 @@ def _command_locations(args: argparse.Namespace) -> None:
 
     if args.locations_command == "device-list":
         rows = list_device_locations(
-            principal_id=args.principal_id,
+            user_id=args.user_id,
             device_id=args.device_id,
             limit=args.limit,
         )
