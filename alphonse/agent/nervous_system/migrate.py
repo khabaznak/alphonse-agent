@@ -219,6 +219,17 @@ def _rebuild_identity_preferences_tables(conn: sqlite3.Connection) -> None:
         )
     except sqlite3.OperationalError:
         mapping_rows = []
+    try:
+        current_channel_mapping_rows = list(
+            conn.execute(
+                """
+                SELECT mapping_id, user_id, channel_id, channel_user_id, is_active, created_at, updated_at
+                FROM channels_users
+                """
+            ).fetchall()
+        )
+    except sqlite3.OperationalError:
+        current_channel_mapping_rows = []
 
     try:
         onboarding_rows = list(
@@ -368,14 +379,44 @@ def _rebuild_identity_preferences_tables(conn: sqlite3.Connection) -> None:
     conn.execute(
         "CREATE UNIQUE INDEX idx_channels_users_channel_user ON channels_users (channel_id, channel_user_id)"
     )
-    if mapping_rows:
+    combined_mapping_rows: list[tuple[Any, ...]] = []
+    seen_user_channel: set[tuple[str, int]] = set()
+    seen_channel_user: set[tuple[int, str]] = set()
+
+    for raw_row in [*current_channel_mapping_rows, *mapping_rows]:
+        mapping_id = str(raw_row[0] or "").strip()
+        user_id = str(raw_row[1] or "").strip()
+        channel_id_value = raw_row[2]
+        channel_user_id = str(raw_row[3] or "").strip()
+        if not mapping_id or not user_id or channel_id_value is None or not channel_user_id:
+            continue
+        channel_id = int(channel_id_value)
+        user_channel_key = (user_id, channel_id)
+        channel_user_key = (channel_id, channel_user_id)
+        if user_channel_key in seen_user_channel or channel_user_key in seen_channel_user:
+            continue
+        combined_mapping_rows.append(
+            (
+                mapping_id,
+                user_id,
+                channel_id,
+                channel_user_id,
+                raw_row[4],
+                raw_row[5],
+                raw_row[6],
+            )
+        )
+        seen_user_channel.add(user_channel_key)
+        seen_channel_user.add(channel_user_key)
+
+    if combined_mapping_rows:
         conn.executemany(
             """
             INSERT INTO channels_users (
               mapping_id, user_id, channel_id, channel_user_id, is_active, created_at, updated_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
-            mapping_rows,
+            combined_mapping_rows,
         )
 
     conn.execute(

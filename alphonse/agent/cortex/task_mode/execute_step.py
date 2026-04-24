@@ -234,10 +234,6 @@ def _record_execution_hooks(
     result: dict[str, Any],
     planner_output: PlannerOutput,
 ) -> None:
-    state = {
-        "correlation_id": task_record.correlation_id or None,
-        "task_record": task_record,
-    }
     current = {"status": "failed" if _has_exception_payload(result.get("exception")) else "executed"}
     record_after_tool_call(        
         task_record=task_record,
