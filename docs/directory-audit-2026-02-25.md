@@ -45,13 +45,13 @@ Audit of potentially duplicated, legacy, or placeholder directories under `/User
 - Merge option: move wrapper to `scripts/` and update docs/entrypoints.
 - Risk: **Medium** if removed now (breaks existing command usage).
 
-### 4) `brain` vs `agent/cognition` skill-like structures
+### 4) `brain` vs `agent/cognition` structures
 - Paths:
-  - `alphonse/agent/cognition/skills`, `alphonse/agent/cognition/narration`
+  - `alphonse/agent/cognition/narration`
 - Evidence:
   - `alphonse/brain/*` has been removed.
-  - `agent/cognition/*` is the active path for planning/narration.
-- Recommendation: keep future skill-like work under `agent/cognition/*`.
+  - `agent/cognition/*` is the active path for planning and narration.
+- Recommendation: keep future narration and cognition work under `agent/cognition/*`.
 - Risk: **Low** after the removal.
 
 ### 5) Runtime/state directories in workspace

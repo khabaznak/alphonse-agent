@@ -15,8 +15,8 @@ from alphonse.agent.cognition.narration.policies import (
     NarrationBehaviorPolicy,
     PolicyStack,
 )
-from alphonse.agent.cognition.skills.narration.renderer import render_message
-from alphonse.agent.cognition.skills.narration.skill import NarrationSkill
+from alphonse.agent.cognition.narration.renderer import render_message
+from alphonse.agent.cognition.narration.skill import NarrationSkill
 from alphonse.agent.io import NormalizedOutboundMessage
 
 logger = get_component_logger("cognition.narration.outbound_narration_orchestrator")

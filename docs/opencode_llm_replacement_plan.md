@@ -5,7 +5,7 @@
 - Deliver this as a drop-in provider swap first, without changing cognition behavior.
 
 ## What We Confirmed (Current State)
-- Alphonse currently builds an Ollama client from env vars in `/Users/alex/Code Projects/alphonse-agent/alphonse/agent/cognition/skills/interpretation/skills.py`.
+- Alphonse currently builds an Ollama client from env vars in the cognition provider layer.
 - The LLM interface contract is effectively `complete(system_prompt, user_prompt) -> str`.
 - Message handling currently calls `_build_llm_client()` and falls back to `None` on provider construction failure in `/Users/alex/Code Projects/alphonse-agent/alphonse/agent/actions/handle_incoming_message.py`.
 - Default model remains `mistral:7b-instruct` in:
