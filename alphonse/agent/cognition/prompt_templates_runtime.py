@@ -53,22 +53,12 @@ def get_prompt_seed_template(template_id: str) -> dict[str, Any] | None:
         "source": "file_seed",
     }
 
-
-
-SLOT_QUESTION_SYSTEM_PROMPT = _seed_text(
-    "slot_question.system.j2",
-)
-
 CHECK_JUDGE_SYSTEM_PROMPT_TEMPLATE = _seed_text(
     "pdca.check.judge.system.j2",
 )
 
 CHECK_JUDGE_USER_PROMPT_TEMPLATE = _seed_text(
     "pdca.check.judge.user.j2",
-)
-
-SLOT_QUESTION_USER_TEMPLATE = _seed_text(
-    "slot_question.user.j2",
 )
 
 SCHEDULER_PARAPHRASE_SYSTEM_PROMPT = _seed_text("scheduler.paraphrase.system.j2")
