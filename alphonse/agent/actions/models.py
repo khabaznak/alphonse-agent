@@ -9,5 +9,6 @@ class ActionResult:
     intention_key: str
     payload: dict[str, Any]
     urgency: str | None
+    delivers_message: bool = False
     requires_narration: bool = False
     narration_style: str | None = None

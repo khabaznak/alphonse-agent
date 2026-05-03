@@ -70,7 +70,12 @@ class CommunicationDispatcher:
             for key in ("delivery_mode", "audio_file_path", "as_voice", "caption"):
                 if key in payload_dict:
                     payload[key] = payload_dict.get(key)
-        action = ActionResult(intention_key="MESSAGE_READY", payload=payload, urgency="normal")
+        action = ActionResult(
+            intention_key="MESSAGE_READY",
+            payload=payload,
+            urgency="normal",
+            delivers_message=True,
+        )
         delivery = self._coordinator.deliver(action, context)
         if delivery:
             self._deliver_normalized(delivery)
@@ -91,7 +96,12 @@ class CommunicationDispatcher:
         )
         if isinstance(failure, dict):
             payload["error"] = failure
-        action = ActionResult(intention_key="MESSAGE_READY", payload=payload, urgency="normal")
+        action = ActionResult(
+            intention_key="MESSAGE_READY",
+            payload=payload,
+            urgency="normal",
+            delivers_message=True,
+        )
         delivery = self._coordinator.deliver(action, context)
         if delivery:
             self._deliver_normalized(delivery)

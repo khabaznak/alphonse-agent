@@ -17,9 +17,7 @@ from datetime import datetime, timezone
 from dotenv import load_dotenv
 
 from alphonse.agent.actions.conscious_message_handler import build_incoming_message_envelope
-from alphonse.agent.cognition.intentions.intent_pipeline import (
-    build_default_pipeline_with_bus,
-)
+from alphonse.agent.actions.runtime import build_action_runtime
 from alphonse.agent.heart import Heart, HeartConfig, SHUTDOWN
 from alphonse.agent.nervous_system.ddfsm import DDFSM, DDFSMConfig
 from alphonse.agent.nervous_system.migrate import apply_schema
@@ -463,7 +461,7 @@ def main() -> None:
 def _command_say(args: argparse.Namespace, db_path: Path) -> None:
     _ = db_path
     bus = Bus()
-    pipeline = build_default_pipeline_with_bus(bus)
+    action_runtime = build_action_runtime(bus=bus)
     correlation_id = args.correlation_id or str(uuid.uuid4())
     channel = str(args.channel).strip() or "cli"
     if channel == "cli":
@@ -487,7 +485,7 @@ def _command_say(args: argparse.Namespace, db_path: Path) -> None:
             source=signal.source,
             correlation_id=signal.correlation_id,
         )
-        pipeline.handle(
+        action_runtime.execute(
             "handle_conscious_message",
             {
                 "signal": signal,
@@ -529,7 +527,7 @@ def _command_say(args: argparse.Namespace, db_path: Path) -> None:
         source=channel,
         correlation_id=correlation_id,
     )
-    pipeline.handle(
+    action_runtime.execute(
         "handle_conscious_message",
         {
             "signal": signal,
@@ -608,7 +606,7 @@ def _dispatch_command(
 def _command_repl(parser: argparse.ArgumentParser, db_path: Path) -> None:
     supervisor = AgentSupervisor()
     repl_bus = Bus()
-    repl_pipeline = build_default_pipeline_with_bus(repl_bus)
+    repl_action_runtime = build_action_runtime(bus=repl_bus)
     while True:
         try:
             raw = input("alphonse> ").strip()
@@ -621,7 +619,7 @@ def _command_repl(parser: argparse.ArgumentParser, db_path: Path) -> None:
         if raw in {"help", "?"}:
             parser.print_help()
             continue
-        if _handle_repl_message_command(raw, bus=repl_bus, pipeline=repl_pipeline):
+        if _handle_repl_message_command(raw, bus=repl_bus, action_runtime=repl_action_runtime):
             continue
         try:
             args = parser.parse_args(shlex.split(raw))
@@ -636,14 +634,14 @@ def _command_repl(parser: argparse.ArgumentParser, db_path: Path) -> None:
         print("Managed agent is still running. Use 'agent stop' to stop it.")
 
 
-def _handle_repl_message_command(raw: str, *, bus: Bus | None, pipeline: object | None) -> bool:
+def _handle_repl_message_command(raw: str, *, bus: Bus | None, action_runtime: object | None) -> bool:
     parts = str(raw or "").split(maxsplit=1)
     if not parts or parts[0] != "message":
         return False
     if len(parts) < 2 or not str(parts[1]).strip():
         print("Usage: message <text>")
         return True
-    if bus is None or pipeline is None or not hasattr(pipeline, "handle"):
+    if bus is None or action_runtime is None or not hasattr(action_runtime, "execute"):
         print("Unable to queue message: REPL message bus is unavailable.")
         return True
     signal = build_cli_user_message_signal(
@@ -652,7 +650,7 @@ def _handle_repl_message_command(raw: str, *, bus: Bus | None, pipeline: object 
     )
     bus.emit(signal)
     print(f"Queued {signal.type} corr={signal.correlation_id}")
-    pipeline.handle(
+    action_runtime.execute(
         "handle_conscious_message",
         {
             "signal": signal,
