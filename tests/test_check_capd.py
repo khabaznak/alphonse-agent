@@ -181,6 +181,8 @@ def test_check_judge_prompt_renders_from_task_record_sections() -> None:
     assert "# FACTS" in prompt
     assert "# TOOL CALL HISTORY" in prompt
     assert "communication.send_message" in prompt
+    assert "# POLICY" not in prompt
+    assert "UTTERANCE POLICY CONTEXT" not in prompt
 
 
 def test_check_consumes_task_inputs_and_persists_snapshot(tmp_path, monkeypatch) -> None:

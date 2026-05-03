@@ -6,7 +6,6 @@ from alphonse.agent.cognition.providers.contracts import TextCompletionProvider
 from alphonse.agent.cognition.prompt_templates_runtime import CHECK_JUDGE_SYSTEM_PROMPT_TEMPLATE
 from alphonse.agent.cognition.prompt_templates_runtime import CHECK_JUDGE_USER_PROMPT_TEMPLATE
 from alphonse.agent.cognition.prompt_templates_runtime import render_prompt_template
-from alphonse.agent.cognition.utterance_policy import render_utterance_policy_block
 from alphonse.agent.cortex.llm_output.json_parse import parse_json_object
 from alphonse.agent.cortex.task_mode.task_record import TaskRecord
 from alphonse.agent.services.pdca_task_inputs import consume_task_inputs_for_check
@@ -110,17 +109,10 @@ def _get_judge_prompt_from_task_record(
     task_record: TaskRecord,
     case_type: str,
 ) -> str:
-    policy = render_utterance_policy_block(
-        locale=None,
-        tone=None,
-        address_style=None,
-        channel_type=None,
-    )
     try:
         return render_prompt_template(
             CHECK_JUDGE_USER_PROMPT_TEMPLATE,
             {
-                "POLICY_BLOCK": policy,
                 "CASE_TYPE": case_type,
                 "RECENT_CONVERSATION": task_record.recent_conversation_md,
                 "GOAL": task_record.goal,
