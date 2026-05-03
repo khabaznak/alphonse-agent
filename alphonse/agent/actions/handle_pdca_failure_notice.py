@@ -120,6 +120,7 @@ class HandlePdcaFailureNoticeAction(Action):
                 },
             },
             urgency="normal",
+            delivers_message=True,
         )
 
 

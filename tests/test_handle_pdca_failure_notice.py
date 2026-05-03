@@ -38,7 +38,7 @@ def test_pdca_failure_notice_sends_deterministic_reply_once(tmp_path: Path, monk
     first = action.execute({"signal": signal})
     second = action.execute({"signal": signal})
 
-    assert first.intention_key == "MESSAGE_READY"
+    assert first.delivers_message is True
     assert "inference engine is currently unavailable" in str(first.payload.get("message") or "")
     assert second.intention_key == "NOOP"
     events = list_pdca_events(task_id=task_id, limit=20)

@@ -96,6 +96,7 @@ class HandleConsciousMessageAction(Action):
                     },
                 },
                 urgency="normal",
+                delivers_message=True,
             )
         
         task_record = _build_task_record_from_payload(

@@ -191,7 +191,7 @@ def test_handle_conscious_message_fail_fast_when_slicing_disabled(monkeypatch) -
         correlation_id="c-2",
     )
     result = action.execute({"signal": Signal(type="sense.telegram.message.user.received", payload=envelope), "ctx": Bus()})
-    assert result.intention_key == "MESSAGE_READY"
+    assert result.delivers_message is True
     assert "temporarily unable to process messages" in str(result.payload.get("message") or "")
     assert called == {}
 

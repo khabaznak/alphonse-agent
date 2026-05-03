@@ -4,11 +4,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from alphonse.agent.runtime import get_runtime
-from alphonse.agent.cognition.intentions.intent_pipeline import (
-    IntentPipeline,
-    build_default_pipeline_with_bus,
+from alphonse.agent.actions.runtime import (
+    ActionExecutionRuntime,
+    build_action_runtime,
 )
+from alphonse.agent.runtime import get_runtime
 from alphonse.agent.observability.log_manager import get_log_manager
 from alphonse.agent.nervous_system.ddfsm import CurrentState, DDFSM
 from alphonse.agent.nervous_system.senses.bus import Bus
@@ -33,7 +33,7 @@ class Heart:
         bus: Bus,
         ddfsm: DDFSM,
         state: CurrentState | None = None,        
-        pipeline: IntentPipeline | None = None,
+        action_runtime: ActionExecutionRuntime | None = None,
     ) -> None:
         self.config = config or HeartConfig()
         self.bus = bus
@@ -42,7 +42,7 @@ class Heart:
         self.signal = RUNNING
         self._runtime = get_runtime()
         self._runtime.update_state(self.state.id, self.state.key, self.state.name)
-        self.pipeline = pipeline or build_default_pipeline_with_bus(self.bus)
+        self.action_runtime = action_runtime or build_action_runtime(bus=self.bus)
 
     def run(self) -> None:
         """Run the vital loop until a shutdown is requested or received.
@@ -76,7 +76,7 @@ class Heart:
                 },
             )
             if outcome:
-                self.pipeline.handle(
+                self.action_runtime.execute(
                     outcome.action_key,
                     {
                         "state": self.state,

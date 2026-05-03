@@ -28,8 +28,6 @@ VALUES
 INSERT OR IGNORE INTO signals (key, name, source, description, is_enabled)
 VALUES
   ('shutdown_requested', 'Shutdown Requested', 'system', 'Shutdown requested', 1),
-  ('action.succeeded', 'Action Succeeded', 'system', 'Action completed successfully', 1),
-  ('action.failed', 'Action Failed', 'system', 'Action execution failed', 1),
   ('sense.telegram.message.user.received', 'Telegram User Message Received', 'telegram', 'Incoming Telegram user message', 1),
   ('sense.cli.message.user.received', 'CLI User Message Received', 'cli', 'Incoming CLI user message', 1),
   ('sense.api.message.user.received', 'API User Message Received', 'api', 'Incoming API user message', 1),
@@ -586,10 +584,62 @@ SELECT
   NULL,
   NULL,
   0,
-  'rehydration succeeded; start executing'
+  'non-terminal slice persisted; return to idle'
 FROM states s1
-JOIN signals sig ON sig.key = 'action.succeeded'
-JOIN states s2 ON s2.key = 'executing'
+JOIN signals sig ON sig.key = 'pdca.slice.persisted'
+JOIN states s2 ON s2.key = 'idle'
+WHERE s1.key = 'rehydrating_slice';
+
+INSERT OR IGNORE INTO transitions (
+  state_id,
+  signal_id,
+  next_state_id,
+  priority,
+  is_enabled,
+  guard_key,
+  action_key,
+  match_any_state,
+  notes
+)
+SELECT
+  s1.id,
+  sig.id,
+  s2.id,
+  1,
+  1,
+  NULL,
+  NULL,
+  0,
+  'task waiting for user while rehydrating'
+FROM states s1
+JOIN signals sig ON sig.key = 'pdca.waiting_user'
+JOIN states s2 ON s2.key = 'waiting_user'
+WHERE s1.key = 'rehydrating_slice';
+
+INSERT OR IGNORE INTO transitions (
+  state_id,
+  signal_id,
+  next_state_id,
+  priority,
+  is_enabled,
+  guard_key,
+  action_key,
+  match_any_state,
+  notes
+)
+SELECT
+  s1.id,
+  sig.id,
+  s2.id,
+  1,
+  1,
+  NULL,
+  NULL,
+  0,
+  'terminal slice completed while rehydrating; return to idle'
+FROM states s1
+JOIN signals sig ON sig.key = 'pdca.slice.completed'
+JOIN states s2 ON s2.key = 'idle'
 WHERE s1.key = 'rehydrating_slice';
 
 INSERT OR IGNORE INTO transitions (
@@ -768,32 +818,6 @@ SELECT
   NULL,
   NULL,
   0,
-  'persisting succeeded; back to idle'
-FROM states s1
-JOIN signals sig ON sig.key = 'action.succeeded'
-JOIN states s2 ON s2.key = 'idle'
-WHERE s1.key = 'persisting_slice';
-
-INSERT OR IGNORE INTO transitions (
-  state_id,
-  signal_id,
-  next_state_id,
-  priority,
-  is_enabled,
-  guard_key,
-  action_key,
-  match_any_state,
-  notes
-)
-SELECT
-  s1.id,
-  sig.id,
-  s2.id,
-  1,
-  1,
-  NULL,
-  NULL,
-  0,
   'incoming message resumes waiting pdca slice'
 FROM states s1
 JOIN signals sig ON sig.key IN ('sense.telegram.message.user.received', 'sense.cli.message.user.received', 'sense.api.message.user.received')
@@ -824,56 +848,6 @@ SELECT
 FROM states s1
 JOIN signals sig ON sig.key = 'pdca.failed'
 JOIN states s2 ON s2.key = 'error';
-
-INSERT OR IGNORE INTO transitions (
-  state_id,
-  signal_id,
-  next_state_id,
-  priority,
-  is_enabled,
-  guard_key,
-  action_key,
-  match_any_state,
-  notes
-)
-SELECT
-  s1.id,
-  sig.id,
-  s2.id,
-  5,
-  1,
-  NULL,
-  'handle_action_failure',
-  1,
-  'default action failure'
-FROM states s1
-JOIN signals sig ON sig.key = 'action.failed'
-JOIN states s2 ON s2.key = 'error';
-
-INSERT OR IGNORE INTO transitions (
-  state_id,
-  signal_id,
-  next_state_id,
-  priority,
-  is_enabled,
-  guard_key,
-  action_key,
-  match_any_state,
-  notes
-)
-SELECT
-  s1.id,
-  sig.id,
-  s2.id,
-  5,
-  1,
-  NULL,
-  NULL,
-  1,
-  'default action success'
-FROM states s1
-JOIN signals sig ON sig.key = 'action.succeeded'
-JOIN states s2 ON s2.key = 'idle';
 
 -- Make routing explicit per state for conscious/timed/pdca routing signals.
 UPDATE transitions

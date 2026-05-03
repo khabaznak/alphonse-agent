@@ -3,17 +3,16 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
-from alphonse.agent.cognition.intentions.intent_pipeline import build_default_pipeline_with_bus
+from alphonse.agent.actions.runtime import build_default_action_registry
 from alphonse.agent.nervous_system.migrate import apply_schema
 from alphonse.agent.nervous_system.seed import apply_seed
-from alphonse.agent.nervous_system.senses.bus import Bus
 
 
-def test_intent_pipeline_registry_is_deterministic_only() -> None:
-    pipeline = build_default_pipeline_with_bus(Bus())
-    keys = set(pipeline.actions.list_keys())
+def test_action_registry_is_deterministic_only() -> None:
+    keys = set(build_default_action_registry().list_keys())
     assert keys == {
         "handle_conscious_message",
+        "handle_pdca_dispatch_kick",
         "handle_pdca_failure_notice",
         "handle_pdca_slice_request",
         "handle_timed_dispatch",
@@ -87,3 +86,12 @@ def test_seed_routes_conscious_and_status_removed(tmp_path: Path) -> None:
             """
         ).fetchone()
         assert int(notice_routes[0] or 0) > 0
+
+        generic_action_outcomes = conn.execute(
+            """
+            SELECT COUNT(*)
+            FROM signals
+            WHERE key IN ('action.succeeded', 'action.failed')
+            """
+        ).fetchone()
+        assert int(generic_action_outcomes[0] or 0) == 0
