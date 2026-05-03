@@ -293,7 +293,11 @@ def test_next_step_prompt_includes_recent_conversation_sentinel() -> None:
             ),
         )
     )
-    assert sentinel in llm.last_user_prompt
+    prompt = llm.last_user_prompt
+    assert sentinel in prompt
+    assert "## Task Record" in prompt
+    assert "## Output Contract" not in prompt
+    assert "### 1. Minimal Output Rules" not in prompt
 
 
 def test_next_step_prompt_includes_tool_call_history_for_remediation() -> None:
@@ -313,13 +317,15 @@ def test_next_step_prompt_includes_tool_call_history_for_remediation() -> None:
     assert "## Tool Call History" in prompt
     assert "paramiko_not_installed" in prompt
     assert "ModuleNotFoundError" in prompt
+    assert "### 4. Tool-Specific Constraints" not in prompt
+    assert "### 5. MCP Contract" not in prompt
 
 
 def test_next_step_prompt_includes_mcp_capabilities(tmp_path: Path, monkeypatch) -> None:
     profiles_dir = tmp_path / "profiles"
     profiles_dir.mkdir(parents=True, exist_ok=True)
     (profiles_dir / "chrome.json").write_text(
-        '{"key":"chrome","description":"Browser MCP","allowed_modes":["task"],"operations":{"web_search":{"key":"web_search","description":"Search web","required_args":["query"]}},"metadata":{"category":"browser"}}',
+        '{"key":"chrome","description":"Browser MCP","binary_candidates":["chrome-mcp"],"allowed_modes":["task"],"operations":{"web_search":{"key":"web_search","description":"Search web","command_template":"chrome-mcp search --query {query}","required_args":["query"]}},"metadata":{"category":"browser"}}',
         encoding="utf-8",
     )
     monkeypatch.setenv("ALPHONSE_MCP_PROFILES_DIR", str(profiles_dir))
@@ -328,8 +334,10 @@ def test_next_step_prompt_includes_mcp_capabilities(tmp_path: Path, monkeypatch)
     _ = llm
     _ = next_step(_task_record(goal="search web"))
     prompt = llm.last_user_prompt
-    assert "MCP" in prompt
-    assert "list_tools" in prompt
+    assert "## MCP Capabilities" in prompt
+    assert "profile `chrome`" in prompt
+    assert "operation `web_search`" in prompt
+    assert "capability_model `interactive_browser`" in prompt
 
 
 def test_tool_call_schema_includes_context_tools_when_runtime_registered() -> None:
