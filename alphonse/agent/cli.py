@@ -89,7 +89,6 @@ from alphonse.agent.nervous_system.voice_profiles import (
     store_voice_profile_sample,
 )
 from alphonse.agent.tools.local_audio_output import LocalAudioOutputRenderTool
-from alphonse.agent.core.settings_store import init_db as init_settings_db
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -448,7 +447,6 @@ def main() -> None:
     args = parser.parse_args()
     _configure_logging(args.log_level)
     _load_env()
-    init_settings_db()
     db_path = resolve_nervous_system_db_path()
     logging.info("Nerve DB path=%s exists=%s", db_path, db_path.exists())
     apply_schema(db_path)

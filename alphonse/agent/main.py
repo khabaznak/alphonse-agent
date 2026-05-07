@@ -19,7 +19,6 @@ from alphonse.agent.nervous_system.paths import resolve_nervous_system_db_path
 from alphonse.agent.nervous_system.migrate import apply_schema
 from alphonse.agent.nervous_system.seed import apply_seed
 from alphonse.agent.cognition.brain_health import BrainUnavailable, require_brain_health
-from alphonse.agent.core.settings_store import init_db as init_settings_db
 from alphonse.agent.io import get_io_registry
 from alphonse.agent.observability.log_manager import get_log_manager
 from alphonse.agent.services.pdca_queue_runner import PdcaQueueRunner
@@ -41,8 +40,6 @@ def main() -> None:
     logging.basicConfig(level=getattr(logging, log_level, logging.INFO))
     llm_model = os.getenv("LOCAL_LLM_MODEL", "mistral:7b-instruct")
     logging.info("LLM model=%s", llm_model)
-
-    init_settings_db()
 
     # Resolve once; used across Alphonse components.
     db_path = _resolve_nerve_db_path()

@@ -1,12 +1,12 @@
 from __future__ import annotations
 
+import json
 from typing import Any, TypedDict
 
 from alphonse.agent.cognition.providers.contracts import TextCompletionProvider
 from alphonse.agent.cognition.prompt_templates_runtime import CHECK_JUDGE_SYSTEM_PROMPT_TEMPLATE
 from alphonse.agent.cognition.prompt_templates_runtime import CHECK_JUDGE_USER_PROMPT_TEMPLATE
 from alphonse.agent.cognition.prompt_templates_runtime import render_prompt_template
-from alphonse.agent.cortex.llm_output.json_parse import parse_json_object
 from alphonse.agent.cortex.task_mode.task_record import TaskRecord
 from alphonse.agent.services.pdca_task_inputs import consume_task_inputs_for_check
 
@@ -30,6 +30,35 @@ class JudgePromptTemplateError(RuntimeError):
     def __init__(self, *, template_id: str, message: str) -> None:
         super().__init__(message)
         self.template_id = template_id
+
+
+def parse_json_object(raw: Any) -> dict[str, Any] | None:
+    if isinstance(raw, dict):
+        return raw
+    candidate = str(raw or "").strip()
+    if not candidate:
+        return None
+    if candidate.startswith("```"):
+        candidate = candidate.strip("`")
+        if candidate.startswith("json"):
+            candidate = candidate[4:].strip()
+    parsed = _json_loads(candidate)
+    if isinstance(parsed, dict):
+        return parsed
+    start = candidate.find("{")
+    end = candidate.rfind("}")
+    if start >= 0 and end > start:
+        parsed = _json_loads(candidate[start : end + 1])
+        if isinstance(parsed, dict):
+            return parsed
+    return None
+
+
+def _json_loads(text: str) -> Any:
+    try:
+        return json.loads(text)
+    except Exception:
+        return None
 
 
 def check_node_impl(

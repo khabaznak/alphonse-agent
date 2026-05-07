@@ -16,7 +16,6 @@ def test_main_exits_gracefully_when_brain_unavailable(
     monkeypatch.setattr(agent_main, "_resolve_nerve_db_path", lambda: db_path)
     monkeypatch.setattr(agent_main, "apply_schema", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(agent_main, "apply_seed", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(agent_main, "init_settings_db", lambda: None)
 
     def _raise_unavailable(*_args, **_kwargs):
         raise BrainUnavailable("intent catalog unavailable")
