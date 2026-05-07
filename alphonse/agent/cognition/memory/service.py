@@ -14,8 +14,6 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from alphonse.agent.actions.conscious_message_handler import build_incoming_message_envelope
-from alphonse.agent import identity
 from alphonse.agent.cortex.task_mode.task_record import TaskRecord
 from alphonse.agent.cognition.memory.paths import resolve_memory_root
 from alphonse.agent.cognition.memory.paths import sanitize_segment
@@ -25,8 +23,6 @@ from alphonse.agent.cognition.prompt_templates_runtime import MEMORY_SUMMARY_USE
 from alphonse.agent.cognition.prompt_templates_runtime import render_prompt_template
 from alphonse.agent.cognition.providers.factory import build_llm_client
 from alphonse.agent.nervous_system import operational_facts as operational_facts_store
-from alphonse.agent.nervous_system.senses.bus import Signal as BusSignal
-from alphonse.agent.nervous_system.services import TELEGRAM_SERVICE_ID
 from alphonse.agent.observability.log_manager import get_log_manager
 
 _DEFAULT_MAX_LINES = 20_000
@@ -38,10 +34,6 @@ _DEFAULT_MONTHLY_SUMMARY_RETENTION_DAYS = 365
 _ISO_DATE_FMT = "%Y-%m-%d"
 _EPISODE_TS_FMT = "%Y-%m-%d %H:%M:%S %z"
 _LOG = get_log_manager()
-_RUNTIME_FAILURE_SIGNAL = "sense.runtime.message.user.received"
-_MEMORY_ESCALATION_DEDUPE: set[str] = set()
-
-
 
 @dataclass(frozen=True)
 class TimeRange:
