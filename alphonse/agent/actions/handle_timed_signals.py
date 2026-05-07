@@ -7,7 +7,6 @@ import sqlite3
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from alphonse.agent.actions.conscious_message_handler import build_incoming_message_envelope
 from alphonse.agent.actions.base import Action
 from alphonse.agent.actions.models import ActionResult
 from alphonse.agent.cognition.memory import MemoryService
@@ -74,19 +73,20 @@ class HandleTimedSignalsAction(Action):
             )
             return ActionResult(intention_key="NOOP", payload={}, urgency=None)
         routed_signal_type = "timed_signal.conscious_payload"
-        routed_payload: dict[str, Any] = build_incoming_message_envelope(
-            message_id=str(payload.get("timed_signal_id") or _correlation_id(payload, signal) or "timed"),
-            channel_type=channel_type,
+        routed_payload = _build_timed_conscious_canonical_payload(
+            service_key=channel_type,
+            provider_user_id_from=user_id or target or channel_type,
+            provider_message_id=str(payload.get("timed_signal_id") or _correlation_id(payload, signal) or "timed"),
             channel_target=target or user_id or channel_type,
-            provider=channel_type,
             text=prompt,
-            occurred_at=datetime.now(timezone.utc).isoformat(),
             correlation_id=_correlation_id(payload, signal),
-            actor_external_user_id=user_id or None,
-            metadata={
-                "timed_signal": payload,
-                "mind_layer": mind_layer,
-                "channel_hint": channel_type,
+            provider_raw_message={
+                "timed_signal": dict(payload) if isinstance(payload, dict) else {},
+                "routing": {
+                    "mind_layer": mind_layer,
+                    "channel_hint": channel_type,
+                    "source": "timed_signal",
+                },
             },
         )
         bus.emit(
@@ -449,16 +449,30 @@ def _emit_brain_payload_to_bus(
     bus.emit(
         BusSignal(
             type="timed_signal.conscious_payload",
-            payload=build_incoming_message_envelope(
-                message_id=str((signal_payload or {}).get("message_id") or correlation_id),
-                channel_type=channel,
+            payload=_build_timed_conscious_canonical_payload(
+                service_key=channel,
+                provider_user_id_from=user_id or target or channel,
+                provider_message_id=str(
+                    (signal_payload or {}).get("timed_signal_id")
+                    or (signal_payload or {}).get("message_id")
+                    or correlation_id
+                    or "timed"
+                ),
                 channel_target=target,
-                provider=str(channel or "timer"),
                 text=text,
                 correlation_id=correlation_id,
-                actor_external_user_id=user_id,
-                controls={"force_new_task": True, "input_mode": "job_trigger"},
-                metadata=metadata,
+                provider_raw_message={
+                    "timed_signal": dict(signal_payload) if isinstance(signal_payload, dict) else {},
+                    "routing": {
+                        "source": "job_trigger" if signal_payload else "jobs_reconcile",
+                        "job_id": job_id or None,
+                    },
+                },
+                metadata={
+                    **metadata,
+                    "force_new_task": True,
+                    "input_mode": "job_trigger",
+                },
             ),
             source="timer",
             correlation_id=correlation_id,
@@ -473,3 +487,39 @@ def _extract_job_execution_prompt(payload: dict[str, Any] | None) -> str:
         if value:
             return value
     return ""
+
+
+def _build_timed_conscious_canonical_payload(
+    *,
+    service_key: str,
+    provider_user_id_from: str,
+    provider_message_id: str,
+    channel_target: str,
+    text: str,
+    correlation_id: str | None,
+    provider_raw_message: dict[str, Any],
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    normalized_service_key = str(service_key or "").strip() or "api"
+    normalized_provider_user_id = str(provider_user_id_from or "").strip() or normalized_service_key
+    normalized_message_id = str(provider_message_id or "").strip() or str(correlation_id or "timed")
+    normalized_target = str(channel_target or "").strip() or normalized_provider_user_id
+    normalized_text = str(text or "").strip()
+    payload: dict[str, Any] = {
+        "contract_type": "canonical_inbound_event",
+        "contract_version": "1.0",
+        "service_key": normalized_service_key,
+        "provider_user_id_from": normalized_provider_user_id,
+        "provider_message_id": normalized_message_id,
+        "channel_target": normalized_target,
+        "occurred_at": datetime.now(timezone.utc).isoformat(),
+        "event_kind": "message",
+        "provider_raw_message": dict(provider_raw_message or {}),
+        "text": normalized_text,
+        "attachments": [],
+        "dedupe_key": str(correlation_id or "").strip() or None,
+        "display_name": None,
+    }
+    if metadata:
+        payload["metadata"] = dict(metadata)
+    return payload

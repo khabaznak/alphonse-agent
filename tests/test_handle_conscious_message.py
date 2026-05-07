@@ -284,6 +284,60 @@ def test_handle_conscious_message_uses_signal_correlation_fallback(monkeypatch) 
     assert buffered_input.correlation_id == "signal-correlation"
 
 
+def test_handle_conscious_message_accepts_canonical_timed_conscious_payload(monkeypatch) -> None:
+    action = HandleConsciousMessageAction()
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        "alphonse.agent.actions.handle_conscious_message.enqueue_pdca_slice",
+        lambda **kwargs: captured.update(kwargs) or "task-timed-1",
+    )
+    monkeypatch.setattr(
+        "alphonse.agent.actions.handle_conscious_message.is_pdca_slicing_enabled",
+        lambda: True,
+    )
+    monkeypatch.setattr(
+        "alphonse.agent.actions.handle_conscious_message.emit_presence_phase_changed",
+        lambda **_: None,
+    )
+    monkeypatch.setattr(
+        "alphonse.agent.actions.handle_conscious_message.resolve_user_id_by_service_user_id",
+        lambda **kwargs: "u-1" if kwargs == {"service_id": 1, "service_user_id": "me"} else None,
+    )
+    monkeypatch.setattr(
+        "alphonse.agent.actions.handle_conscious_message.resolve_service_id_by_channel_type",
+        lambda service_key: 1 if str(service_key or "").strip() == "api" else None,
+    )
+
+    payload = {
+        "contract_type": "canonical_inbound_event",
+        "contract_version": "1.0",
+        "service_key": "api",
+        "provider_user_id_from": "me",
+        "provider_message_id": "tsig_1",
+        "channel_target": "me",
+        "occurred_at": "2026-05-07T12:00:00+00:00",
+        "event_kind": "message",
+        "provider_raw_message": {"timed_signal": {"timed_signal_id": "tsig_1"}},
+        "text": "Take a shower now.",
+        "attachments": [],
+        "dedupe_key": "corr-timed-1",
+        "metadata": {"mind_layer": "conscious"},
+    }
+    result = action.execute({"signal": Signal(type="timed_signal.conscious_payload", payload=payload), "ctx": Bus()})
+    assert result.intention_key == "NOOP"
+    assert result.payload.get("task_id") == "task-timed-1"
+    task_record = captured.get("task_record")
+    assert isinstance(task_record, TaskRecord)
+    assert task_record.user_id == "u-1"
+    assert task_record.goal == "Take a shower now."
+    buffered_input = captured.get("buffered_input")
+    assert isinstance(buffered_input, BufferedTaskInput)
+    assert buffered_input.channel_type == "api"
+    assert buffered_input.channel_target == "me"
+    assert buffered_input.text == "Take a shower now."
+
+
 def test_handle_conscious_message_preserves_attachment_only_payload(monkeypatch) -> None:
     action = HandleConsciousMessageAction()
     captured: dict[str, object] = {}

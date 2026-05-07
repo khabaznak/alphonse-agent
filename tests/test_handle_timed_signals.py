@@ -43,8 +43,14 @@ def test_conscious_reminder_dispatch_prefers_message_text_over_internal_prompt()
     emitted = bus.events[-1]
     assert emitted.type == "timed_signal.conscious_payload"
     payload = emitted.payload if isinstance(emitted.payload, dict) else {}
-    content = payload.get("content") if isinstance(payload.get("content"), dict) else {}
-    assert str(content.get("text") or "") == "Hi alex"
+    assert str(payload.get("contract_type") or "") == "canonical_inbound_event"
+    assert str(payload.get("service_key") or "") == "api"
+    assert str(payload.get("provider_user_id_from") or "") == "8553589429"
+    assert str(payload.get("provider_message_id") or "") == "tsig_1"
+    assert str(payload.get("channel_target") or "") == "8553589429"
+    assert str(payload.get("event_kind") or "") == "message"
+    assert isinstance(payload.get("provider_raw_message"), dict)
+    assert str(payload.get("text") or "") == "Hi alex"
 
 
 def test_conscious_reminder_dispatch_with_real_bus_contract() -> None:
@@ -70,6 +76,9 @@ def test_conscious_reminder_dispatch_with_real_bus_contract() -> None:
     emitted = bus.get(timeout=0.1)
     assert emitted is not None
     assert emitted.type == "timed_signal.conscious_payload"
+    payload = emitted.payload if isinstance(emitted.payload, dict) else {}
+    assert str(payload.get("contract_type") or "") == "canonical_inbound_event"
+    assert str(payload.get("text") or "") == "Take a shower now."
 
 
 def test_timer_fired_runs_jobs_reconcile_without_dispatch(monkeypatch) -> None:
@@ -205,8 +214,14 @@ def test_job_trigger_bus_prompt_uses_payload_text_not_setup_metadata() -> None:
     assert bus.events
     emitted = bus.events[-1]
     payload = emitted.payload if isinstance(emitted.payload, dict) else {}
-    content = payload.get("content") if isinstance(payload.get("content"), dict) else {}
-    text = str(content.get("text") or "")
+    assert str(payload.get("contract_type") or "") == "canonical_inbound_event"
+    assert str(payload.get("service_key") or "") == "telegram"
+    assert str(payload.get("provider_user_id_from") or "") == "u1"
+    assert isinstance(payload.get("provider_raw_message"), dict)
+    metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
+    assert metadata.get("force_new_task") is True
+    assert metadata.get("input_mode") == "job_trigger"
+    text = str(payload.get("text") or "")
     assert text == "Send voice note containing a stoic quote"
     assert "Create scheduled job" not in text
 
