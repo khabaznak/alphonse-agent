@@ -8,10 +8,85 @@ not know about Core, Heart, or the SignalBus.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
 from typing import Any, Callable, Dict
 
 Signal = Dict[str, Any]
 Action = Dict[str, Any]
+
+
+@dataclass(frozen=True)
+class CanonicalInboundEvent:
+    """Provider-agnostic inbound event contract emitted by integrations."""
+
+    service_key: str
+    provider_user_id_from: str
+    provider_message_id: str
+    channel_target: str
+    occurred_at: str
+    event_kind: str
+    provider_raw_message: dict[str, Any]
+    text: str | None = None
+    attachments: list[dict[str, Any]] = field(default_factory=list)
+    reply_to_provider_message_id: str | None = None
+    dedupe_key: str | None = None
+    display_name: str | None = None
+
+    def to_payload(self) -> dict[str, Any]:
+        return {
+            "contract_type": "canonical_inbound_event",
+            "contract_version": "1.0",
+            "service_key": str(self.service_key or "").strip(),
+            "provider_user_id_from": str(self.provider_user_id_from or "").strip(),
+            "provider_message_id": str(self.provider_message_id or "").strip(),
+            "channel_target": str(self.channel_target or "").strip(),
+            "occurred_at": str(self.occurred_at or "").strip(),
+            "event_kind": str(self.event_kind or "").strip(),
+            "provider_raw_message": dict(self.provider_raw_message),
+            "text": str(self.text or "").strip() or None,
+            "attachments": [dict(item) for item in self.attachments if isinstance(item, dict)],
+            "reply_to_provider_message_id": str(self.reply_to_provider_message_id or "").strip() or None,
+            "dedupe_key": str(self.dedupe_key or "").strip() or None,
+            "display_name": str(self.display_name or "").strip() or None,
+        }
+
+
+@dataclass(frozen=True)
+class CanonicalInboundMessage:
+    """Legacy internal message contract retained for downstream compatibility."""
+
+    message_id: str
+    occurred_at: str
+    service_id: int | None
+    service_key: str
+    channel_type: str
+    channel_target: str
+    text: str
+    correlation_id: str | None = None
+    external_user_id: str | None = None
+    display_name: str | None = None
+    resolved_user_id: str | None = None
+    attachments: list[dict[str, Any]] = field(default_factory=list)
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def to_payload(self) -> dict[str, Any]:
+        return {
+            "contract_type": "canonical_inbound_message",
+            "contract_version": "1.0",
+            "message_id": str(self.message_id or "").strip(),
+            "correlation_id": str(self.correlation_id or "").strip() or None,
+            "occurred_at": str(self.occurred_at or "").strip(),
+            "service_id": self.service_id,
+            "service_key": str(self.service_key or "").strip(),
+            "channel_type": str(self.channel_type or "").strip(),
+            "channel_target": str(self.channel_target or "").strip(),
+            "external_user_id": str(self.external_user_id or "").strip() or None,
+            "display_name": str(self.display_name or "").strip() or None,
+            "resolved_user_id": str(self.resolved_user_id or "").strip() or None,
+            "text": str(self.text or "").strip(),
+            "attachments": [dict(item) for item in self.attachments if isinstance(item, dict)],
+            "metadata": dict(self.metadata),
+        }
 
 
 class IntegrationAdapter(ABC):
@@ -57,4 +132,4 @@ class IntegrationAdapter(ABC):
         """Handle an internal action by producing an external effect."""
 
 
-__all__ = ["IntegrationAdapter", "Signal", "Action"]
+__all__ = ["IntegrationAdapter", "Signal", "Action", "CanonicalInboundEvent", "CanonicalInboundMessage"]

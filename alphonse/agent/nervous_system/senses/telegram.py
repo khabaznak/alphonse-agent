@@ -7,9 +7,8 @@ from pathlib import Path
 from typing import Any
 
 from alphonse.agent import identity
-from alphonse.agent.actions.conscious_message_handler import build_incoming_message_envelope
+from alphonse.agent.extremities.interfaces.integrations._contracts import CanonicalInboundMessage
 from alphonse.agent.extremities.interfaces.integrations.telegram.telegram_adapter import TelegramAdapter
-from alphonse.agent.io import TelegramSenseAdapter
 from alphonse.agent.nervous_system.assets import register_uploaded_asset
 from alphonse.agent.nervous_system.services import TELEGRAM_SERVICE_ID
 from alphonse.agent.observability.log_manager import get_component_logger
@@ -41,7 +40,6 @@ class TelegramSense(Sense):
         self._adapter: TelegramAdapter | None = None
         self._running = False
         self._bus: Bus | None = None
-        self._sense_adapter = TelegramSenseAdapter()
 
     def start(self, bus: Bus) -> None:
         if self._running:
@@ -109,16 +107,21 @@ class TelegramSense(Sense):
         self._bus.emit(
             Signal(
                 type="sense.telegram.message.user.received",
-                payload=build_incoming_message_envelope(
+                payload=CanonicalInboundMessage(
                     message_id=str(payload.get("message_id") or payload.get("update_id") or chat_id),
+                    correlation_id=str(chat_id),
+                    occurred_at=datetime.now(timezone.utc).isoformat(),
+                    service_id=TELEGRAM_SERVICE_ID,
+                    service_key="telegram",
                     channel_type="telegram",
                     channel_target=str(chat_id),
-                    provider="telegram",
-                    text=text or "Telegram invite request",
-                    occurred_at=datetime.now(timezone.utc).isoformat(),
-                    correlation_id=str(chat_id),
-                    actor_external_user_id=str(from_user) if from_user is not None else None,
-                    actor_display_name=str(from_user_name or "").strip() or None,
+                    external_user_id=str(from_user).strip() if from_user is not None else None,
+                    display_name=str(from_user_name or "").strip() or None,
+                    resolved_user_id=_resolve_internal_telegram_user_id(
+                        str(from_user).strip() if from_user is not None else None
+                    ),
+                    text=str(text or "Telegram invite request").strip(),
+                    attachments=[],
                     metadata={
                         "message_kind": "invite_request",
                         "invite": {
@@ -128,7 +131,7 @@ class TelegramSense(Sense):
                             "from_user_name": from_user_name,
                         },
                     },
-                ),
+                ).to_payload(),
                 source="telegram",
                 correlation_id=str(chat_id),
             )
@@ -145,59 +148,68 @@ class TelegramSense(Sense):
         payload = signal.payload or {}
         logger.info(
             "TelegramSense received update chat_id=%s from=%s text=%s",
-            payload.get("chat_id"),
-            payload.get("from_user"),
+            payload.get("channel_target"),
+            payload.get("provider_user_id_from"),
             _snippet(str(payload.get("text") or "")),
         )
-        normalized = self._sense_adapter.normalize(payload)
-        normalized_meta = normalized.metadata if isinstance(normalized.metadata, dict) else {}
-        normalized_attachments = [dict(item) for item in normalized.attachments if isinstance(item, dict)]
+        normalized_attachments = [
+            dict(item)
+            for item in payload.get("attachments")
+            if isinstance(payload.get("attachments"), list) and isinstance(item, dict)
+        ] if isinstance(payload.get("attachments"), list) else []
         ingestion = _ingest_telegram_audio_attachments(
             adapter=self._adapter,
             attachments=normalized_attachments,
-            channel_target=normalized.channel_target,
-            actor_external_user_id=normalized.user_id,
-            message_id=str(payload.get("message_id") or "").strip() or None,
-            update_id=str(payload.get("update_id") or "").strip() or None,
+            channel_target=str(payload.get("channel_target") or "").strip(),
+            actor_external_user_id=str(payload.get("provider_user_id_from") or "").strip() or None,
+            message_id=str(payload.get("provider_message_id") or "").strip() or None,
+            update_id=_provider_update_id(payload),
         )
         normalized_attachments = ingestion["attachments"]
         transcript_text = str(ingestion.get("prompt_text") or "").strip()
-        envelope_text = normalized.text or transcript_text
-        normalized_meta = {
-            **normalized_meta,
+        outbound_text = str(payload.get("text") or "").strip() or transcript_text
+        provider_raw_message = (
+            payload.get("provider_raw_message")
+            if isinstance(payload.get("provider_raw_message"), dict)
+            else {}
+        )
+        enriched_metadata = {
+            "provider_event": dict(provider_raw_message) if isinstance(provider_raw_message, dict) else {},
             "attachments": normalized_attachments,
             "telegram_attachment_ingestion": ingestion["metadata"],
         }
         self._bus.emit(
             Signal(
                 type="sense.telegram.message.user.received",
-                payload=build_incoming_message_envelope(
-                    message_id=str(payload.get("message_id") or payload.get("update_id") or normalized.correlation_id or normalized.timestamp),
-                    channel_type=normalized.channel_type,
-                    channel_target=str(normalized.channel_target).strip(),
-                    provider=_PROVIDER_KEY,
-                    text=envelope_text,
-                    occurred_at=datetime.fromtimestamp(float(normalized.timestamp), tz=timezone.utc).isoformat(),
-                    correlation_id=normalized.correlation_id,
-                    actor_external_user_id=normalized.user_id,
-                    actor_display_name=normalized.user_name,
-                    attachments=normalized_attachments,
-                    metadata={
-                        "normalized_metadata": normalized_meta,
-                        "provider_event": payload.get("provider_event")
-                        if isinstance(payload.get("provider_event"), dict)
-                        else None,
-                    },
-                    reply_to_message_id=str(payload.get("message_id") or "").strip() or None,
-                ),
+                payload={
+                    "contract_type": "canonical_inbound_event",
+                    "contract_version": "1.0",
+                    "service_key": str(payload.get("service_key") or "telegram").strip() or "telegram",
+                    "provider_user_id_from": str(payload.get("provider_user_id_from") or "").strip(),
+                    "provider_message_id": str(
+                        payload.get("provider_message_id")
+                        or _provider_update_id(payload)
+                        or payload.get("channel_target")
+                        or ""
+                    ).strip(),
+                    "channel_target": str(payload.get("channel_target") or "").strip(),
+                    "occurred_at": str(payload.get("occurred_at") or datetime.now(timezone.utc).isoformat()).strip(),
+                    "event_kind": str(payload.get("event_kind") or "message").strip() or "message",
+                    "provider_raw_message": dict(provider_raw_message) if isinstance(provider_raw_message, dict) else {},
+                    "text": outbound_text,
+                    "attachments": normalized_attachments,
+                    "dedupe_key": str(payload.get("dedupe_key") or "").strip() or None,
+                    "display_name": str(payload.get("display_name") or "").strip() or None,
+                    "metadata": enriched_metadata,
+                },
                 source=_PROVIDER_KEY,
-                correlation_id=normalized.correlation_id,
+                correlation_id=str(payload.get("dedupe_key") or "").strip() or None,
             )
         )
         logger.info(
             "TelegramSense emitted sense.telegram.message.user.received chat_id=%s message_id=%s",
-            payload.get("chat_id"),
-            payload.get("message_id"),
+            payload.get("channel_target"),
+            payload.get("provider_message_id"),
         )
 
 
@@ -418,6 +430,25 @@ def _resolve_internal_telegram_user_id(actor_external_user_id: str | None) -> st
             service_user_id=str(actor_external_user_id or "").strip() or None,
         )
     except Exception:
+        return None
+
+
+def _provider_update_id(payload: dict[str, Any]) -> str | None:
+    provider_event = (
+        payload.get("provider_raw_message")
+        if isinstance(payload.get("provider_raw_message"), dict)
+        else {}
+    )
+    rendered = str(provider_event.get("update_id") or "").strip()
+    return rendered or None
+
+
+def _coerce_int(value: Any) -> int | None:
+    try:
+        if value is None or str(value).strip() == "":
+            return None
+        return int(value)
+    except (TypeError, ValueError):
         return None
 
 

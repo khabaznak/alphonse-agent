@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from alphonse.agent.actions.conscious_message_handler import IncomingMessageEnvelope
 from alphonse.agent.actions.conscious_message_handler import build_incoming_message_envelope
 from alphonse.agent.actions.handle_conscious_message import HandleConsciousMessageAction
@@ -101,17 +103,28 @@ def test_handle_conscious_message_enqueues_pdca_slice(monkeypatch) -> None:
         lambda **kwargs: presence.update(kwargs),
     )
 
-    envelope = build_incoming_message_envelope(
-        message_id="m-1",
-        channel_type="telegram",
-        channel_target="123",
-        provider="telegram",
-        text="Hello",
-        correlation_id="c-1",
-        actor_external_user_id="u-ext",
-        actor_user_id="u-1",
+    monkeypatch.setattr(
+        "alphonse.agent.actions.handle_conscious_message.resolve_user_id_by_service_user_id",
+        lambda **kwargs: "u-1" if kwargs == {"service_id": 2, "service_user_id": "u-ext"} else None,
     )
-    result = action.execute({"signal": Signal(type="sense.telegram.message.user.received", payload=envelope), "ctx": Bus()})
+
+    payload = {
+        "contract_type": "canonical_inbound_event",
+        "contract_version": "1.0",
+        "service_key": "telegram",
+        "provider_user_id_from": "u-ext",
+        "provider_message_id": "m-1",
+        "channel_target": "123",
+        "occurred_at": "2026-05-04T12:00:00+00:00",
+        "event_kind": "message",
+        "provider_raw_message": {"update_id": 1},
+        "text": "Hello",
+        "attachments": [],
+        "dedupe_key": "c-1",
+        "display_name": "Alex",
+        "metadata": {},
+    }
+    result = action.execute({"signal": Signal(type="sense.telegram.message.user.received", payload=payload), "ctx": Bus()})
     assert result.intention_key == "NOOP"
     assert result.payload.get("task_id") == "task-123"
     assert set(called) == {"task_record", "buffered_input", "bus", "force_new_task"}
@@ -149,15 +162,25 @@ def test_handle_conscious_message_does_not_parse_control_intent(monkeypatch) -> 
         lambda **_: None,
     )
 
-    envelope = build_incoming_message_envelope(
-        message_id="m-1",
-        channel_type="telegram",
-        channel_target="123",
-        provider="telegram",
-        text="Please cancel task",
-        correlation_id="c-1",
+    monkeypatch.setattr(
+        "alphonse.agent.actions.handle_conscious_message.resolve_user_id_by_service_user_id",
+        lambda **kwargs: "u-1" if kwargs == {"service_id": 2, "service_user_id": "u-ext"} else None,
     )
-    result = action.execute({"signal": Signal(type="sense.telegram.message.user.received", payload=envelope), "ctx": Bus()})
+
+    payload = {
+        "contract_type": "canonical_inbound_event",
+        "contract_version": "1.0",
+        "service_key": "telegram",
+        "provider_user_id_from": "u-ext",
+        "provider_message_id": "m-1",
+        "channel_target": "123",
+        "occurred_at": "2026-05-04T12:00:00+00:00",
+        "event_kind": "message",
+        "provider_raw_message": {"update_id": 1},
+        "text": "Please cancel task",
+        "attachments": [],
+    }
+    result = action.execute({"signal": Signal(type="sense.telegram.message.user.received", payload=payload), "ctx": Bus()})
     assert result.payload.get("task_id") == "task-cancel-test"
     task_record = captured.get("task_record")
     assert isinstance(task_record, TaskRecord)
@@ -182,15 +205,26 @@ def test_handle_conscious_message_fail_fast_when_slicing_disabled(monkeypatch) -
         lambda **kwargs: called.update(kwargs) or "unexpected-task",
     )
 
-    envelope = build_incoming_message_envelope(
-        message_id="m-2",
-        channel_type="telegram",
-        channel_target="123",
-        provider="telegram",
-        text="Hello",
-        correlation_id="c-2",
+    monkeypatch.setattr(
+        "alphonse.agent.actions.handle_conscious_message.resolve_user_id_by_service_user_id",
+        lambda **kwargs: "u-1" if kwargs == {"service_id": 2, "service_user_id": "u-ext"} else None,
     )
-    result = action.execute({"signal": Signal(type="sense.telegram.message.user.received", payload=envelope), "ctx": Bus()})
+
+    payload = {
+        "contract_type": "canonical_inbound_event",
+        "contract_version": "1.0",
+        "service_key": "telegram",
+        "provider_user_id_from": "u-ext",
+        "provider_message_id": "m-2",
+        "channel_target": "123",
+        "occurred_at": "2026-05-04T12:00:00+00:00",
+        "event_kind": "message",
+        "provider_raw_message": {"update_id": 2},
+        "text": "Hello",
+        "attachments": [],
+        "dedupe_key": "c-2",
+    }
+    result = action.execute({"signal": Signal(type="sense.telegram.message.user.received", payload=payload), "ctx": Bus()})
     assert result.delivers_message is True
     assert "temporarily unable to process messages" in str(result.payload.get("message") or "")
     assert called == {}
@@ -213,20 +247,29 @@ def test_handle_conscious_message_uses_signal_correlation_fallback(monkeypatch) 
         lambda **_: None,
     )
 
-    envelope = build_incoming_message_envelope(
-        message_id="m-correlation",
-        channel_type="telegram",
-        channel_target="123",
-        provider="telegram",
-        text="Hello",
-        correlation_id=None,
-        actor_external_user_id="u-ext",
+    monkeypatch.setattr(
+        "alphonse.agent.actions.handle_conscious_message.resolve_user_id_by_service_user_id",
+        lambda **kwargs: "u-1" if kwargs == {"service_id": 2, "service_user_id": "u-ext"} else None,
     )
+
+    payload = {
+        "contract_type": "canonical_inbound_event",
+        "contract_version": "1.0",
+        "service_key": "telegram",
+        "provider_user_id_from": "u-ext",
+        "provider_message_id": "m-correlation",
+        "channel_target": "123",
+        "occurred_at": "2026-05-04T12:00:00+00:00",
+        "event_kind": "message",
+        "provider_raw_message": {"update_id": 3},
+        "text": "Hello",
+        "attachments": [],
+    }
     result = action.execute(
         {
             "signal": Signal(
                 type="sense.telegram.message.user.received",
-                payload=envelope,
+                payload=payload,
                 correlation_id="signal-correlation",
             ),
             "ctx": Bus(),
@@ -258,16 +301,26 @@ def test_handle_conscious_message_preserves_attachment_only_payload(monkeypatch)
         lambda **_: None,
     )
 
-    envelope = build_incoming_message_envelope(
-        message_id="m-attach-only",
-        channel_type="telegram",
-        channel_target="123",
-        provider="telegram",
-        text="",
-        attachments=[{"kind": "voice", "provider": "telegram", "file_id": "voice-1"}],
-        correlation_id="cid-attach-only",
+    monkeypatch.setattr(
+        "alphonse.agent.actions.handle_conscious_message.resolve_user_id_by_service_user_id",
+        lambda **kwargs: "u-1" if kwargs == {"service_id": 2, "service_user_id": "u-ext"} else None,
     )
-    result = action.execute({"signal": Signal(type="sense.telegram.message.user.received", payload=envelope), "ctx": Bus()})
+
+    payload = {
+        "contract_type": "canonical_inbound_event",
+        "contract_version": "1.0",
+        "service_key": "telegram",
+        "provider_user_id_from": "u-ext",
+        "provider_message_id": "m-attach-only",
+        "channel_target": "123",
+        "occurred_at": "2026-05-04T12:00:00+00:00",
+        "event_kind": "message",
+        "provider_raw_message": {"update_id": 4},
+        "text": "",
+        "attachments": [{"kind": "voice", "provider": "telegram", "file_id": "voice-1"}],
+        "dedupe_key": "cid-attach-only",
+    }
+    result = action.execute({"signal": Signal(type="sense.telegram.message.user.received", payload=payload), "ctx": Bus()})
     assert result.payload.get("task_id") == "task-attachment-only"
     task_record = captured.get("task_record")
     assert isinstance(task_record, TaskRecord)
@@ -275,3 +328,240 @@ def test_handle_conscious_message_preserves_attachment_only_payload(monkeypatch)
     buffered_input = captured.get("buffered_input")
     assert isinstance(buffered_input, BufferedTaskInput)
     assert buffered_input.text.startswith("[attachments:")
+
+
+def test_handle_conscious_message_accepts_canonical_telegram_payload(monkeypatch) -> None:
+    action = HandleConsciousMessageAction()
+
+    payload = {
+        "contract_type": "canonical_inbound_message",
+        "contract_version": "1.0",
+        "message_id": "m-can-1",
+        "correlation_id": "c-can-1",
+        "occurred_at": "2026-05-04T12:00:00+00:00",
+        "service_id": 2,
+        "service_key": "telegram",
+        "channel_type": "telegram",
+        "channel_target": "123",
+        "external_user_id": "u-ext",
+        "display_name": "Alex",
+        "resolved_user_id": "u-1",
+        "text": "Hello canonical",
+        "attachments": [],
+        "metadata": {"provider_event": {"update_id": 7}},
+    }
+    with pytest.raises(ValueError, match="unsupported contract_type"):
+        action.execute({"signal": Signal(type="sense.telegram.message.user.received", payload=payload), "ctx": Bus()})
+
+
+def test_handle_conscious_message_accepts_mechanical_telegram_payload(monkeypatch) -> None:
+    action = HandleConsciousMessageAction()
+    captured: dict[str, object] = {}
+    presence: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        "alphonse.agent.actions.handle_conscious_message.enqueue_pdca_slice",
+        lambda **kwargs: captured.update(kwargs) or "task-mechanical",
+    )
+    monkeypatch.setattr(
+        "alphonse.agent.actions.handle_conscious_message.is_pdca_slicing_enabled",
+        lambda: True,
+    )
+    monkeypatch.setattr(
+        "alphonse.agent.actions.handle_conscious_message.emit_presence_phase_changed",
+        lambda **kwargs: presence.update(kwargs),
+    )
+    monkeypatch.setattr(
+        "alphonse.agent.actions.handle_conscious_message.resolve_user_id_by_service_user_id",
+        lambda **kwargs: "u-1" if kwargs == {"service_id": 2, "service_user_id": "u-ext"} else None,
+    )
+
+    payload = {
+        "contract_type": "canonical_inbound_event",
+        "contract_version": "1.0",
+        "service_key": "telegram",
+        "provider_user_id_from": "u-ext",
+        "provider_message_id": "m-evt-1",
+        "channel_target": "123",
+        "occurred_at": "2026-05-04T12:00:00+00:00",
+        "event_kind": "message",
+        "provider_raw_message": {"update_id": 7},
+        "text": "Hello mechanical",
+        "attachments": [],
+        "dedupe_key": "d-1",
+        "display_name": "Alex",
+        "metadata": {},
+    }
+    result = action.execute({"signal": Signal(type="sense.telegram.message.user.received", payload=payload), "ctx": Bus()})
+
+    assert result.payload.get("task_id") == "task-mechanical"
+    task_record = captured.get("task_record")
+    assert isinstance(task_record, TaskRecord)
+    assert task_record.user_id == "u-1"
+    assert task_record.goal == "Hello mechanical"
+    buffered_input = captured.get("buffered_input")
+    assert isinstance(buffered_input, BufferedTaskInput)
+    assert buffered_input.channel_type == "telegram"
+    assert buffered_input.channel_target == "123"
+    assert buffered_input.message_id == "m-evt-1"
+    assert presence.get("channel_type") == "telegram"
+    assert presence.get("message_id") == "m-evt-1"
+
+
+def test_handle_conscious_message_canonical_payload_with_unresolved_user_raises(monkeypatch) -> None:
+    action = HandleConsciousMessageAction()
+
+    payload = {
+        "contract_type": "canonical_inbound_message",
+        "contract_version": "1.0",
+        "message_id": "m-can-2",
+        "correlation_id": "c-can-2",
+        "occurred_at": "2026-05-04T12:01:00+00:00",
+        "service_id": None,
+        "service_key": "unknown",
+        "channel_type": "telegram",
+        "channel_target": "123",
+        "external_user_id": "u-ext",
+        "display_name": "Alex",
+        "resolved_user_id": None,
+        "text": "Hello unresolved",
+        "attachments": [],
+        "metadata": {},
+    }
+    with pytest.raises(ValueError, match="unsupported contract_type"):
+        action.execute({"signal": Signal(type="sense.telegram.message.user.received", payload=payload), "ctx": Bus()})
+
+
+def test_handle_conscious_message_mechanical_payload_with_unresolved_service_key_raises(monkeypatch) -> None:
+    action = HandleConsciousMessageAction()
+
+    monkeypatch.setattr(
+        "alphonse.agent.actions.handle_conscious_message.is_pdca_slicing_enabled",
+        lambda: True,
+    )
+    monkeypatch.setattr(
+        "alphonse.agent.actions.handle_conscious_message.emit_presence_phase_changed",
+        lambda **_: None,
+    )
+
+    payload = {
+        "contract_type": "canonical_inbound_event",
+        "contract_version": "1.0",
+        "service_key": "unknown",
+        "provider_user_id_from": "u-ext",
+        "provider_message_id": "m-evt-2",
+        "channel_target": "123",
+        "occurred_at": "2026-05-04T12:01:00+00:00",
+        "event_kind": "message",
+        "provider_raw_message": {},
+        "text": "Hello unresolved",
+        "attachments": [],
+    }
+    with pytest.raises(ValueError, match="unknown service_key"):
+        action.execute({"signal": Signal(type="sense.telegram.message.user.received", payload=payload), "ctx": Bus()})
+
+
+def test_handle_conscious_message_mechanical_payload_missing_provider_message_id_raises(monkeypatch) -> None:
+    action = HandleConsciousMessageAction()
+
+    monkeypatch.setattr(
+        "alphonse.agent.actions.handle_conscious_message.is_pdca_slicing_enabled",
+        lambda: True,
+    )
+    monkeypatch.setattr(
+        "alphonse.agent.actions.handle_conscious_message.emit_presence_phase_changed",
+        lambda **_: None,
+    )
+
+    payload = {
+        "contract_type": "canonical_inbound_event",
+        "contract_version": "1.0",
+        "service_key": "telegram",
+        "provider_user_id_from": "u-ext",
+        "channel_target": "123",
+        "occurred_at": "2026-05-04T12:01:00+00:00",
+        "event_kind": "message",
+        "provider_raw_message": {},
+        "text": "Hello unresolved",
+        "attachments": [],
+    }
+    with pytest.raises(ValueError, match="missing provider_message_id"):
+        action.execute({"signal": Signal(type="sense.telegram.message.user.received", payload=payload), "ctx": Bus()})
+
+
+def test_handle_conscious_message_mechanical_payload_invalid_provider_raw_message_raises(monkeypatch) -> None:
+    action = HandleConsciousMessageAction()
+
+    monkeypatch.setattr(
+        "alphonse.agent.actions.handle_conscious_message.is_pdca_slicing_enabled",
+        lambda: True,
+    )
+    monkeypatch.setattr(
+        "alphonse.agent.actions.handle_conscious_message.emit_presence_phase_changed",
+        lambda **_: None,
+    )
+
+    payload = {
+        "contract_type": "canonical_inbound_event",
+        "contract_version": "1.0",
+        "service_key": "telegram",
+        "provider_user_id_from": "u-ext",
+        "provider_message_id": "m-evt-raw",
+        "channel_target": "123",
+        "occurred_at": "2026-05-04T12:01:00+00:00",
+        "event_kind": "message",
+        "provider_raw_message": "not-an-object",
+        "text": "Hello unresolved",
+        "attachments": [],
+    }
+    with pytest.raises(ValueError, match="provider_raw_message must be an object"):
+        action.execute({"signal": Signal(type="sense.telegram.message.user.received", payload=payload), "ctx": Bus()})
+
+
+def test_handle_conscious_message_canonical_payload_with_unmapped_user_raises(monkeypatch) -> None:
+    action = HandleConsciousMessageAction()
+
+    payload = {
+        "contract_type": "canonical_inbound_message",
+        "contract_version": "1.0",
+        "message_id": "m-can-3",
+        "correlation_id": "c-can-3",
+        "occurred_at": "2026-05-04T12:02:00+00:00",
+        "service_id": 2,
+        "service_key": "telegram",
+        "channel_type": "telegram",
+        "channel_target": "123",
+        "external_user_id": "u-ext",
+        "display_name": "Alex",
+        "resolved_user_id": None,
+        "text": "Hello unresolved",
+        "attachments": [],
+        "metadata": {},
+    }
+    with pytest.raises(ValueError, match="unsupported contract_type"):
+        action.execute({"signal": Signal(type="sense.telegram.message.user.received", payload=payload), "ctx": Bus()})
+
+
+def test_handle_conscious_message_legacy_payload_without_identity_raises(monkeypatch) -> None:
+    action = HandleConsciousMessageAction()
+
+    monkeypatch.setattr(
+        "alphonse.agent.actions.handle_conscious_message.is_pdca_slicing_enabled",
+        lambda: True,
+    )
+    monkeypatch.setattr(
+        "alphonse.agent.actions.handle_conscious_message.emit_presence_phase_changed",
+        lambda **_: None,
+    )
+
+    envelope = build_incoming_message_envelope(
+        message_id="m-legacy-missing-user",
+        channel_type="telegram",
+        channel_target="123",
+        provider="telegram",
+        text="Hello",
+        correlation_id="c-legacy-missing-user",
+    )
+
+    with pytest.raises(ValueError, match="unsupported contract_type"):
+        action.execute({"signal": Signal(type="sense.telegram.message.user.received", payload=envelope), "ctx": Bus()})

@@ -97,15 +97,25 @@ def _emit_voice_message(sense: TelegramSense, *, text: str = "", kind: str = "vo
         Signal(
             type="external.telegram.message",
             payload={
+                "contract_type": "canonical_inbound_event",
+                "contract_version": "1.0",
+                "service_key": "telegram",
+                "provider_user_id_from": "8593816828",
+                "provider_message_id": "2",
+                "channel_target": "8593816828",
+                "occurred_at": "2026-05-04T12:00:10+00:00",
+                "event_kind": "message",
+                "provider_raw_message": {
+                    "update_id": 31223564,
+                    "message": {
+                        "message_id": 2,
+                        "chat": {"id": 8593816828, "type": "private"},
+                        "from": {"id": 8593816828, "first_name": "Gabriela", "username": "gaby"},
+                    },
+                },
                 "text": text,
-                "content_type": "media",
-                "chat_type": "private",
-                "chat_id": 8593816828,
-                "from_user": 8593816828,
-                "from_user_name": "Gabriela",
-                "message_id": 2,
-                "update_id": 31223564,
-                "timestamp": 10.0,
+                "display_name": "Gabriela",
+                "dedupe_key": "31223564",
                 "attachments": [
                     {
                         "kind": kind,
@@ -136,8 +146,12 @@ def test_voice_attachment_is_registered_transcribed_and_used_as_prompt(
 
     assert len(bus.emitted) == 1
     payload = bus.emitted[0].payload
-    assert payload["content"]["text"] == "buy milk"
-    attachment = payload["content"]["attachments"][0]
+    assert payload["contract_type"] == "canonical_inbound_event"
+    assert payload["service_key"] == "telegram"
+    assert payload["provider_user_id_from"] == "8593816828"
+    assert payload["provider_message_id"] == "2"
+    assert payload["text"] == "buy milk"
+    attachment = payload["attachments"][0]
     assert attachment["asset_id"] == "asset-1"
     assert attachment["asset_registration_status"] == "registered"
     assert attachment["transcription_status"] == "ok"
@@ -161,8 +175,9 @@ def test_audio_attachment_follows_same_registration_and_transcription_path(
     bus = _emit_voice_message(sense, kind="audio")
 
     payload = bus.emitted[0].payload
-    attachment = payload["content"]["attachments"][0]
-    assert payload["content"]["text"] == "audio transcript"
+    assert payload["contract_type"] == "canonical_inbound_event"
+    attachment = payload["attachments"][0]
+    assert payload["text"] == "audio transcript"
     assert attachment["kind"] == "audio"
     assert attachment["asset_id"] == "asset-1"
     assert attachment["transcript"] == "audio transcript"
@@ -180,10 +195,11 @@ def test_text_plus_voice_keeps_text_primary_and_stores_transcript(
     bus = _emit_voice_message(sense, text="typed prompt")
 
     payload = bus.emitted[0].payload
-    assert payload["content"]["text"] == "typed prompt"
-    attachment = payload["content"]["attachments"][0]
+    assert payload["contract_type"] == "canonical_inbound_event"
+    assert payload["text"] == "typed prompt"
+    attachment = payload["attachments"][0]
     assert attachment["transcript"] == "voice detail"
-    ingestion = payload["metadata"]["normalized_metadata"]["telegram_attachment_ingestion"]
+    ingestion = payload["metadata"]["telegram_attachment_ingestion"]
     assert ingestion["transcripts"][0]["text"] == "voice detail"
 
 
@@ -200,8 +216,9 @@ def test_download_failure_preserves_attachment_without_crashing(
     bus = _emit_voice_message(sense)
 
     payload = bus.emitted[0].payload
-    assert payload["content"]["text"] == ""
-    attachment = payload["content"]["attachments"][0]
+    assert payload["contract_type"] == "canonical_inbound_event"
+    assert payload["text"] == ""
+    attachment = payload["attachments"][0]
     assert attachment["file_id"] == "voice-123"
     assert attachment["asset_registration_status"] == "failed"
     assert attachment["asset_registration_error"] == "download_failed"
@@ -221,8 +238,9 @@ def test_transcription_failure_preserves_registered_attachment(
     bus = _emit_voice_message(sense)
 
     payload = bus.emitted[0].payload
-    assert payload["content"]["text"] == ""
-    attachment = payload["content"]["attachments"][0]
+    assert payload["contract_type"] == "canonical_inbound_event"
+    assert payload["text"] == ""
+    attachment = payload["attachments"][0]
     assert attachment["asset_id"] == "asset-1"
     assert attachment["asset_registration_status"] == "registered"
     assert attachment["transcription_status"] == "failed"

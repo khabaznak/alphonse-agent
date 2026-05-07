@@ -6,11 +6,13 @@ import json
 import mimetypes
 import threading
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from urllib import error as urlerror
 from urllib import parse, request
 from typing import Any
 
+from alphonse.agent.extremities.interfaces.integrations._contracts import CanonicalInboundEvent
 from alphonse.agent.extremities.interfaces.integrations._contracts import IntegrationAdapter
 from alphonse.agent.nervous_system.senses.bus import Signal as BusSignal
 from alphonse.agent.observability.log_manager import get_component_logger
@@ -283,9 +285,10 @@ class TelegramAdapter(IntegrationAdapter):
             return
         self._seen_update_ids.add(update_id)
 
-        message = update.get("message")
+        message = _telegram_message_payload(update)
         if not isinstance(message, dict):
             return
+        event_kind = _telegram_event_kind(update)
         text = str(message.get("text") or message.get("caption") or "").strip()
         contact_payload = message.get("contact") if isinstance(message.get("contact"), dict) else None
         attachments = _extract_telegram_attachments(message)
@@ -383,23 +386,17 @@ class TelegramAdapter(IntegrationAdapter):
 
         signal = BusSignal(
             type="external.telegram.message",
-            payload={
-                "text": text,
-                "content_type": content_type,
-                "contact": contact_payload,
-                "chat_type": chat_type,
-                "chat_id": chat_id,
-                "from_user": from_user,
-                "from_user_username": from_user_username,
-                "from_user_name": from_user_name,
-                "reply_to_user": reply_to_user,
-                "reply_to_user_name": reply_to_user_name,
-                "reply_to_message_id": reply_to.get("message_id") if isinstance(reply_to, dict) else None,
-                "message_id": message.get("message_id"),
-                "update_id": update_id,
-                "attachments": attachments,
-                "provider_event": update,
-            },
+            payload=_build_canonical_telegram_inbound_payload(
+                message=message,
+                update=update,
+                event_kind=event_kind,
+                chat_id=chat_id,
+                from_user=from_user,
+                from_user_name=from_user_name,
+                reply_to_message_id=reply_to.get("message_id") if isinstance(reply_to, dict) else None,
+                text=text,
+                attachments=attachments,
+            ),
             source="telegram",
         )
         logger.info(
@@ -446,6 +443,8 @@ class TelegramAdapter(IntegrationAdapter):
         chat_id = message.get("chat_id") or chat.get("id")
         if chat_id is None:
             return
+        # TODO: Collapse invite_request into the canonical inbound event contract once event_kind
+        # is classified generically at the adapter boundary instead of using a Telegram-only signal.
         chat_type = str(chat.get("type") or "private")
         from_user_payload = message.get("from") if isinstance(message.get("from"), dict) else {}
         from_user = from_user_payload.get("id")
@@ -672,6 +671,46 @@ def _parse_json(text: str) -> dict[str, Any] | None:
     return None
 
 
+def _build_canonical_telegram_inbound_payload(
+    *,
+    message: dict[str, Any],
+    update: dict[str, Any],
+    event_kind: str,
+    chat_id: Any,
+    from_user: Any,
+    from_user_name: Any,
+    reply_to_message_id: Any,
+    text: str,
+    attachments: list[dict[str, Any]],
+) -> dict[str, Any]:
+    provider_message_id = str(message.get("message_id") or update.get("update_id") or chat_id or "").strip()
+    provider_user_id_from = str(from_user).strip() if from_user is not None else ""
+    return CanonicalInboundEvent(
+        service_key="telegram",
+        provider_user_id_from=provider_user_id_from,
+        provider_message_id=provider_message_id,
+        channel_target=str(chat_id or "").strip(),
+        occurred_at=_occurred_at_for_message(message),
+        event_kind=str(event_kind or "").strip() or "message",
+        provider_raw_message=dict(update),
+        text=str(text or "").strip() or None,
+        attachments=[dict(item) for item in attachments if isinstance(item, dict)],
+        reply_to_provider_message_id=str(reply_to_message_id).strip() if reply_to_message_id is not None else None,
+        dedupe_key=str(update.get("update_id") or provider_message_id or "").strip() or None,
+        display_name=str(from_user_name or "").strip() or None,
+    ).to_payload()
+
+
+def _occurred_at_for_message(message: dict[str, Any]) -> str:
+    raw = message.get("date")
+    try:
+        if raw is not None:
+            return datetime.fromtimestamp(float(raw), tz=timezone.utc).isoformat()
+    except (TypeError, ValueError, OSError):
+        pass
+    return datetime.now(timezone.utc).isoformat()
+
+
 def _to_int(value: Any) -> int | None:
     try:
         return int(str(value))
@@ -692,6 +731,26 @@ def _resolve_content_type(*, text: str, contact_payload: dict[str, Any] | None, 
     if has_media:
         return "media"
     return "text"
+
+
+def _telegram_message_payload(update: dict[str, Any]) -> dict[str, Any] | None:
+    for key in ("message", "edited_message"):
+        candidate = update.get(key)
+        if isinstance(candidate, dict):
+            return candidate
+    return None
+
+
+def _telegram_event_kind(update: dict[str, Any]) -> str:
+    if isinstance(update.get("edited_message"), dict):
+        return "edit"
+    if isinstance(update.get("callback_query"), dict):
+        return "callback"
+    if isinstance(update.get("message_reaction"), dict) or isinstance(update.get("message_reaction_count"), dict):
+        return "reaction"
+    if isinstance(update.get("message"), dict):
+        return "message"
+    return "system"
 
 
 def _extract_telegram_attachments(message: dict[str, Any]) -> list[dict[str, Any]]:

@@ -32,8 +32,10 @@ class HandleConsciousMessageAction(Action):
             raise ValueError("invalid_envelope: payload must be an object")
 
         payload = dict(raw_payload)
+        _validate_canonical_inbound_event_payload(payload)
         correlation_id = (
             str(payload.get(_SIGNAL_CORRELATION_KEY) or "").strip()
+            or str(payload.get("dedupe_key") or "").strip()
             or str(getattr(signal, _SIGNAL_CORRELATION_KEY, "") or "").strip()
             or str(uuid.uuid4())
         )
@@ -153,7 +155,7 @@ def _build_task_record_from_payload(
         ("channel_type", channel_type_for_payload(payload)),
         ("channel_target", channel_target_for_payload(payload)),
         ("message_id", message_id_for_payload(payload)),
-        ("external_user_id", external_user_id_for_payload(payload)),
+        ("provider_user_id_from", provider_user_id_from_for_payload(payload)),
         ("display_name", display_name_for_payload(payload)),
         ("locale", locale_for_payload(payload)),
         ("timezone", timezone_for_payload(payload)),
@@ -184,8 +186,7 @@ def _build_buffered_input_from_payload(
 
 
 def _message_text_for_payload(payload: dict[str, Any]) -> str:
-    content = payload.get("content") if isinstance(payload.get("content"), dict) else {}
-    text = str(content.get("text") or payload.get("text") or "").strip()
+    text = text_for_payload(payload)
     if text:
         return text
     parts: list[str] = []
@@ -210,93 +211,40 @@ def _message_text_for_payload(payload: dict[str, Any]) -> str:
 
 
 def channel_type_for_payload(payload: dict[str, Any]) -> str:
-    transport = payload.get("transport") if isinstance(payload.get("transport"), dict) else {}
-    channel = payload.get("channel") if isinstance(payload.get("channel"), dict) else {}
-    for candidate in (
-        transport.get("channel_type"),
-        channel.get("type"),
-        payload.get("channel_type"),
-        payload.get("channel"),
-        payload.get("service_key"),
-        payload.get("provider"),
-        payload.get("origin"),
-    ):
-        rendered = str(candidate or "").strip()
-        if rendered:
-            return rendered
-    return ""
+    return service_key_for_payload(payload)
 
 
 def channel_target_for_payload(payload: dict[str, Any]) -> str:
-    transport = payload.get("transport") if isinstance(payload.get("transport"), dict) else {}
-    channel = payload.get("channel") if isinstance(payload.get("channel"), dict) else {}
-    for candidate in (
-        transport.get("channel_target"),
-        channel.get("target"),
-        payload.get("channel_target"),
-        payload.get("target"),
-    ):
-        rendered = str(candidate or "").strip()
-        if rendered:
-            return rendered
-    return ""
+    return _required_str_field(payload, "channel_target")
 
 
 def message_id_for_payload(payload: dict[str, Any]) -> str:
-    return str(payload.get("message_id") or payload.get("id") or "").strip()
+    return _required_str_field(payload, "provider_message_id")
 
 
 def attachments_for_payload(payload: dict[str, Any]) -> list[dict[str, Any]]:
-    content = payload.get("content") if isinstance(payload.get("content"), dict) else {}
-    raw = content.get("attachments") if isinstance(content.get("attachments"), list) else payload.get("attachments")
+    raw = payload.get("attachments")
     return [dict(item) for item in raw if isinstance(item, dict)] if isinstance(raw, list) else []
 
 
-def external_user_id_for_payload(payload: dict[str, Any]) -> str:
-    identity = payload.get("identity") if isinstance(payload.get("identity"), dict) else {}
-    actor = payload.get("actor") if isinstance(payload.get("actor"), dict) else {}
-    for candidate in (
-        identity.get("external_user_id"),
-        actor.get("external_user_id"),
-        payload.get("external_user_id"),
-        payload.get("user_id"),
-        payload.get("from_user"),
-    ):
-        rendered = str(candidate or "").strip()
-        if rendered:
-            return rendered
-    return ""
+def provider_user_id_from_for_payload(payload: dict[str, Any]) -> str:
+    return _required_str_field(payload, "provider_user_id_from")
 
 
 def display_name_for_payload(payload: dict[str, Any]) -> str:
-    identity = payload.get("identity") if isinstance(payload.get("identity"), dict) else {}
-    actor = payload.get("actor") if isinstance(payload.get("actor"), dict) else {}
-    for candidate in (
-        identity.get("display_name"),
-        actor.get("display_name"),
-        payload.get("display_name"),
-        payload.get("user_name"),
-        payload.get("from_user_name"),
-    ):
-        rendered = str(candidate or "").strip()
-        if rendered:
-            return rendered
-    return ""
+    return str(payload.get("display_name") or "").strip()
 
 
 def locale_for_payload(payload: dict[str, Any]) -> str:
-    context = payload.get("context") if isinstance(payload.get("context"), dict) else {}
-    return str(payload.get("locale") or context.get("locale") or "").strip()
+    return str(payload.get("locale") or "").strip()
 
 
 def timezone_for_payload(payload: dict[str, Any]) -> str:
-    context = payload.get("context") if isinstance(payload.get("context"), dict) else {}
-    return str(payload.get("timezone") or context.get("timezone") or "").strip()
+    return str(payload.get("timezone") or "").strip()
 
 
 def _force_new_task_for_payload(payload: dict[str, Any]) -> bool:
-    controls = payload.get("controls") if isinstance(payload.get("controls"), dict) else {}
-    if _as_bool(controls.get("force_new_task")):
+    if _as_bool(payload.get("force_new_task")):
         return True
     metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
     source = str(payload.get("source") or metadata.get("source") or "").strip().lower()
@@ -310,11 +258,58 @@ def _as_bool(value: Any) -> bool:
 
 
 def resolved_user_id_for_payload(payload: dict[str, Any]) -> str:
-    actor = payload.get("actor") if isinstance(payload.get("actor"), dict) else {}
-    direct = str(actor.get("user_id") or payload.get("resolved_user_id") or "").strip()
+    direct = str(payload.get("alphonse_user_id") or "").strip()
     if direct:
         return direct
-    payload_channel = payload.get("channel") if isinstance(payload.get("channel"), dict) else {}  
-    service_id = resolve_service_id_by_channel_type(payload_channel.get("type"))
-    user_id = resolve_user_id_by_service_user_id(service_id=service_id, service_user_id=actor.get("external_user_id"))
-    return str(user_id or "").strip()
+    service_id = service_id_for_payload(payload)
+    if service_id is None:
+        raise ValueError("invalid_conscious_payload: unknown service_key")
+    provider_user_id_from = provider_user_id_from_for_payload(payload)
+    user_id = resolve_user_id_by_service_user_id(
+        service_id=service_id,
+        service_user_id=provider_user_id_from,
+    )
+    resolved = str(user_id or "").strip()
+    if not resolved:
+        raise ValueError("invalid_conscious_payload: user_id unresolved")
+    return resolved
+
+
+def service_id_for_payload(payload: dict[str, Any]) -> int | None:
+    resolved = resolve_service_id_by_channel_type(service_key_for_payload(payload))
+    return int(resolved) if resolved is not None else None
+
+
+def _is_canonical_inbound_event(payload: dict[str, Any]) -> bool:
+    return str(payload.get("contract_type") or "").strip() == "canonical_inbound_event"
+
+
+def _validate_canonical_inbound_event_payload(payload: dict[str, Any]) -> None:
+    if not _is_canonical_inbound_event(payload):
+        raise ValueError("invalid_conscious_payload: unsupported contract_type")
+    for field_name in (
+        "service_key",
+        "provider_user_id_from",
+        "provider_message_id",
+        "channel_target",
+        "occurred_at",
+        "event_kind",
+    ):
+        _required_str_field(payload, field_name)
+    if not isinstance(payload.get("provider_raw_message"), dict):
+        raise ValueError("invalid_conscious_payload: provider_raw_message must be an object")
+
+
+def _required_str_field(payload: dict[str, Any], field_name: str) -> str:
+    rendered = str(payload.get(field_name) or "").strip()
+    if not rendered:
+        raise ValueError(f"invalid_conscious_payload: missing {field_name}")
+    return rendered
+
+
+def service_key_for_payload(payload: dict[str, Any]) -> str:
+    return _required_str_field(payload, "service_key")
+
+
+def text_for_payload(payload: dict[str, Any]) -> str:
+    return str(payload.get("text") or "").strip()
