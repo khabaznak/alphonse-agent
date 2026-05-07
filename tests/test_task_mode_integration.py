@@ -6,7 +6,7 @@ import alphonse.agent.cortex.task_mode.pdca as pdca_module
 from alphonse.agent.cognition.providers.contracts import require_text_completion_provider
 from alphonse.agent.cognition.providers.contracts import require_tool_calling_provider
 from alphonse.agent.cortex.graph import check_node_state_adapter
-from alphonse.agent.cortex.nodes.task_mode import task_mode_entry_node
+from alphonse.agent.cortex.graph import task_record_entry_node
 from alphonse.agent.cortex.task_mode.pdca import build_next_step_node
 from alphonse.agent.cortex.task_mode.task_record import TaskRecord
 from alphonse.agent.tools.registry import build_default_tool_registry
@@ -59,15 +59,25 @@ class _FakeLlm:
         return {"tool_call": {"kind": "call_tool", "tool_name": "jobs.list", "args": {"limit": 10}}}
 
 
-def test_task_route_initializes_task_record() -> None:
-    state = {
-        "chat_id": "123",
-        "channel_type": "telegram",
-        "channel_target": "123",
-        "last_user_message": "What can you do?",
-        "correlation_id": "corr-task-entry",
+def _task_record_state(
+    *,
+    goal: str,
+    correlation_id: str = "",
+    recent_conversation_md: str = "- (none)",
+) -> dict[str, object]:
+    return {
+        "task_record": TaskRecord(
+            goal=goal,
+            correlation_id=correlation_id,
+            recent_conversation_md=recent_conversation_md,
+            status="running",
+        )
     }
-    result = task_mode_entry_node(state)
+
+
+def test_task_route_initializes_task_record() -> None:
+    state = _task_record_state(goal="What can you do?", correlation_id="corr-task-entry")
+    result = task_record_entry_node(state)
     task_record = result.get("task_record")
     assert isinstance(task_record, TaskRecord)
     assert task_record.goal == "What can you do?"
@@ -81,14 +91,8 @@ def test_chat_route_now_starts_check_first_even_for_greetings() -> None:
         '"confidence":0.8,"criteria_updates":[{"op":"append","text":"Maintain general conversation context"}],'
         '"evidence_refs":[],"failure_class":null}'
     )
-    state = {
-        "chat_id": "123",
-        "channel_type": "telegram",
-        "channel_target": "123",
-        "last_user_message": "Hi",
-        "correlation_id": "corr-chat-route",
-    }
-    state.update(task_mode_entry_node(state))
+    state = _task_record_state(goal="Hi", correlation_id="corr-chat-route")
+    state.update(task_record_entry_node(state))
     state.update(check_node_state_adapter(state))
     check_result = state.get("check_result")
     assert isinstance(check_result, dict)
@@ -96,26 +100,11 @@ def test_chat_route_now_starts_check_first_even_for_greetings() -> None:
 
 
 def test_task_mode_entry_extracts_goal_from_incoming_payload_not_raw_blob() -> None:
-    state = {
-        "incoming_raw_message": {
-            "text": "Please set a recurring USD to MXN reminder at 7am.",
-            "provider_event": {
-                "message": {
-                    "text": "Please set a recurring USD to MXN reminder at 7am.",
-                }
-            },
-        },
-        "last_user_message": (
-            "## RAW MESSAGE\n\n"
-            "- channel: telegram\n\n"
-            "## RAW JSON\n\n"
-            "```json\n"
-            "{\"message\":{\"text\":\"Please set a recurring USD to MXN reminder at 7am.\"}}\n"
-            "```"
-        ),
-    }
+    state = _task_record_state(
+        goal="Please set a recurring USD to MXN reminder at 7am.",
+    )
 
-    update = task_mode_entry_node(state)
+    update = task_record_entry_node(state)
     task_record = update.get("task_record")
     assert isinstance(task_record, TaskRecord)
     assert task_record.goal == "Please set a recurring USD to MXN reminder at 7am."
@@ -124,22 +113,11 @@ def test_task_mode_entry_extracts_goal_from_incoming_payload_not_raw_blob() -> N
 def test_planner_uses_clean_goal_text_from_task_record() -> None:
     next_step = build_next_step_node(tool_registry=build_default_tool_registry())
     _FakeLlm('unused')
-    state = {
-        "correlation_id": "corr-clean-goal",
-        "incoming_raw_message": {
-            "text": "Schedule my daily FX update at 7am.",
-            "provider_event": {
-                "message": {"text": "Schedule my daily FX update at 7am."}
-            },
-        },
-        "last_user_message": (
-            "## RAW MESSAGE\n\n"
-            "```json\n"
-            "{\"message\":{\"text\":\"Schedule my daily FX update at 7am.\"}}\n"
-            "```"
-        ),
-    }
-    state.update(task_mode_entry_node(state))
+    state = _task_record_state(
+        goal="Schedule my daily FX update at 7am.",
+        correlation_id="corr-clean-goal",
+    )
+    state.update(task_record_entry_node(state))
     task_record = state.get("task_record")
     assert isinstance(task_record, TaskRecord)
     out = next_step(task_record)
