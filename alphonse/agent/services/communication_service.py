@@ -4,8 +4,10 @@ from dataclasses import dataclass
 from typing import Any
 
 from alphonse.agent import identity
-from alphonse.agent.cognition.plan_execution.communication_dispatcher import CommunicationDispatcher
+from alphonse.agent.actions.models import ActionResult
+from alphonse.agent.cognition.narration.outbound_narration_orchestrator import DeliveryCoordinator
 from alphonse.agent.cognition.preferences.store import get_user_preference
+from alphonse.agent.io import NormalizedOutboundMessage, get_io_registry
 
 
 @dataclass(frozen=True)
@@ -24,8 +26,8 @@ class CommunicationRequest:
 
 
 class CommunicationService:
-    def __init__(self, *, dispatcher: CommunicationDispatcher) -> None:
-        self._dispatcher = dispatcher
+    def __init__(self, *, coordinator: DeliveryCoordinator) -> None:
+        self._coordinator = coordinator
 
     def send(
         self,
@@ -43,7 +45,7 @@ class CommunicationService:
         if self._is_blocked_by_policy(request=request, target=target):
             return
         message = self._apply_tone(request=request, target=target)
-        self._dispatcher.dispatch_step_message(
+        self._dispatch_step_message(
             channel=channel,
             target=target,
             message=message,
@@ -51,6 +53,54 @@ class CommunicationService:
             exec_context=exec_context,
             plan=plan,
         )
+
+    def _dispatch_step_message(
+        self,
+        *,
+        channel: str,
+        target: str | None,
+        message: str,
+        context: dict[str, Any],
+        exec_context: Any,
+        plan: Any,
+    ) -> None:
+        plan_id = str(getattr(plan, "plan_id", "") or "")
+        step = str(getattr(plan, "tool", "") or "unknown")
+        payload_dict = getattr(plan, "payload", {}) if hasattr(plan, "payload") else {}
+        outbound_intent = _derive_outbound_intent(payload_dict)
+        internal_progress = _as_bool(payload_dict.get("internal_progress")) if isinstance(payload_dict, dict) else False
+        visibility = str(payload_dict.get("visibility") or "").strip().lower() if isinstance(payload_dict, dict) else ""
+        if not target:
+            return
+        if outbound_intent == "internal_progress":
+            return
+        payload = _message_payload(message, channel, target, exec_context)
+        payload["outbound_intent"] = outbound_intent
+        payload["internal_progress"] = internal_progress
+        if visibility:
+            payload["visibility"] = visibility
+        if isinstance(payload_dict, dict) and payload_dict.get("locale"):
+            payload["locale"] = payload_dict.get("locale")
+        if isinstance(payload_dict, dict):
+            for key in ("delivery_mode", "audio_file_path", "as_voice", "caption"):
+                if key in payload_dict:
+                    payload[key] = payload_dict.get(key)
+        action = ActionResult(
+            intention_key="MESSAGE_READY",
+            payload=payload,
+            urgency="normal",
+            delivers_message=True,
+        )
+        delivery = self._coordinator.deliver(action, context)
+        if delivery:
+            self._deliver_normalized(delivery)
+
+    def _deliver_normalized(self, delivery: NormalizedOutboundMessage) -> None:
+        registry = get_io_registry()
+        adapter = registry.get_extremity(delivery.channel_type)
+        if not adapter:
+            return
+        adapter.deliver(delivery)
 
     def _resolve_service_id(self, request: CommunicationRequest) -> int | None:
         explicit_service_id = request.service_id
@@ -117,3 +167,42 @@ class CommunicationService:
         if tone == "formal":
             return message
         return message
+
+
+def _message_payload(
+    message: str,
+    channel: str,
+    target: str | None,
+    exec_context: Any,
+) -> dict[str, Any]:
+    actor_person_id = str(getattr(exec_context, "actor_person_id", "") or "").strip()
+    audience = {"kind": "person", "id": actor_person_id} if actor_person_id else {"kind": "system", "id": "system"}
+    payload: dict[str, Any] = {
+        "message": message,
+        "origin": channel,
+        "channel_hint": channel,
+        "correlation_id": str(getattr(exec_context, "correlation_id", "") or ""),
+        "audience": audience,
+    }
+    if target:
+        payload["target"] = target
+    return payload
+
+
+def _derive_outbound_intent(payload: dict[str, Any] | Any) -> str:
+    if not isinstance(payload, dict):
+        return "mission_public"
+    configured = str(payload.get("outbound_intent") or "").strip().lower()
+    if configured in {"wip_transition", "internal_progress", "mission_public"}:
+        return configured
+    if _as_bool(payload.get("internal_progress")):
+        return "internal_progress"
+    if str(payload.get("visibility") or "").strip().lower() == "internal":
+        return "internal_progress"
+    return "mission_public"
+
+
+def _as_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}

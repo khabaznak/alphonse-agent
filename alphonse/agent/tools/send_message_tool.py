@@ -7,7 +7,6 @@ import uuid
 from pathlib import Path
 
 from alphonse.agent import identity
-from alphonse.agent.cognition.plan_execution.communication_dispatcher import CommunicationDispatcher
 from alphonse.agent.cognition.narration.outbound_narration_orchestrator import build_default_coordinator
 from alphonse.agent.observability.log_manager import get_component_logger
 from alphonse.agent.services.communication_service import CommunicationRequest, CommunicationService
@@ -24,8 +23,7 @@ class SendMessageTool:
     def __post_init__(self) -> None:
         if self._communication is not None:
             return
-        dispatcher = CommunicationDispatcher(coordinator=build_default_coordinator(), logger=logger)
-        object.__setattr__(self, "_communication", CommunicationService(dispatcher=dispatcher))
+        object.__setattr__(self, "_communication", CommunicationService(coordinator=build_default_coordinator()))
 # TODO check if you can turn this function to use TaskRecord instead of state.
     def execute(self, *, state: dict[str, Any] | None = None, **args: Any) -> dict[str, Any]:
         try:

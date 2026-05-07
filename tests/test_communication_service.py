@@ -6,32 +6,35 @@ from typing import Any
 
 from alphonse.agent.nervous_system import user_service_resolvers as resolvers
 from alphonse.agent.nervous_system.migrate import apply_schema
+from alphonse.agent.io.contracts import NormalizedOutboundMessage
 from alphonse.agent.services.communication_service import CommunicationRequest, CommunicationService
 
 
 @dataclass
-class _FakeDispatcher:
-    called: bool = False
-    payload: dict[str, Any] | None = None
+class _FakeCoordinator:
+    calls: list[dict[str, Any]]
 
-    def dispatch_step_message(
-        self,
-        *,
-        channel: str,
-        target: str | None,
-        message: str,
-        context: dict[str, Any],
-        exec_context: Any,
-        plan: Any,
-    ) -> None:
-        _ = (context, exec_context, plan)
-        self.called = True
-        self.payload = {"channel": channel, "target": target, "message": message}
+    def __init__(self) -> None:
+        self.calls = []
+
+    def deliver(self, action: Any, context: dict[str, Any]) -> NormalizedOutboundMessage | None:
+        payload = action.payload if isinstance(getattr(action, "payload", None), dict) else {}
+        self.calls.append({"payload": dict(payload), "context": dict(context)})
+        return NormalizedOutboundMessage(
+            message=str(payload.get("message") or ""),
+            channel_type=str(payload.get("channel_hint") or "telegram"),
+            channel_target=str(payload.get("target") or "8553589429"),
+            audience={"kind": "system", "id": "system"},
+            correlation_id=str(payload.get("correlation_id") or ""),
+            metadata={},
+        )
 
 
 def test_send_uses_origin_target_when_no_explicit_target_or_user() -> None:
-    dispatcher = _FakeDispatcher()
-    service = CommunicationService(dispatcher=dispatcher)
+    coordinator = _FakeCoordinator()
+    service = CommunicationService(coordinator=coordinator)
+    delivered: list[NormalizedOutboundMessage] = []
+    service._deliver_normalized = lambda message: delivered.append(message)  # type: ignore[method-assign]
     request = CommunicationRequest(
         message="hello",
         correlation_id="cid-2",
@@ -46,8 +49,9 @@ def test_send_uses_origin_target_when_no_explicit_target_or_user() -> None:
         exec_context=SimpleNamespace(channel_type="telegram", channel_target="8553589429", correlation_id="cid-2"),
         plan=SimpleNamespace(plan_id="p2", tool="communication.send_message", payload={}),
     )
-    assert dispatcher.called is True
-    assert str((dispatcher.payload or {}).get("target") or "") == "8553589429"
+    assert len(coordinator.calls) == 1
+    assert str((coordinator.calls[0]["payload"].get("target") or "")) == "8553589429"
+    assert len(delivered) == 1
 
 
 def test_send_resolves_target_via_service_id_and_user_id(tmp_path, monkeypatch) -> None:
@@ -72,8 +76,10 @@ def test_send_resolves_target_via_service_id_and_user_id(tmp_path, monkeypatch) 
         is_active=True,
     )
 
-    dispatcher = _FakeDispatcher()
-    service = CommunicationService(dispatcher=dispatcher)
+    coordinator = _FakeCoordinator()
+    service = CommunicationService(coordinator=coordinator)
+    delivered: list[NormalizedOutboundMessage] = []
+    service._deliver_normalized = lambda message: delivered.append(message)  # type: ignore[method-assign]
     request = CommunicationRequest(
         message="hello",
         correlation_id="cid-3",
@@ -88,6 +94,77 @@ def test_send_resolves_target_via_service_id_and_user_id(tmp_path, monkeypatch) 
         exec_context=SimpleNamespace(channel_type="telegram", channel_target="8553589429", correlation_id="cid-3"),
         plan=SimpleNamespace(plan_id="p3", tool="communication.send_message", payload={}),
     )
-    assert dispatcher.called is True
-    assert str((dispatcher.payload or {}).get("channel") or "") == "telegram"
-    assert str((dispatcher.payload or {}).get("target") or "") == "8553589429"
+    assert len(coordinator.calls) == 1
+    payload = coordinator.calls[0]["payload"]
+    assert str(payload.get("channel_hint") or "") == "telegram"
+    assert str(payload.get("target") or "") == "8553589429"
+    assert len(delivered) == 1
+
+
+def test_send_suppresses_internal_progress_delivery() -> None:
+    coordinator = _FakeCoordinator()
+    service = CommunicationService(coordinator=coordinator)
+    delivered: list[NormalizedOutboundMessage] = []
+    service._deliver_normalized = lambda message: delivered.append(message)  # type: ignore[method-assign]
+    request = CommunicationRequest(
+        message="Estoy avanzando",
+        correlation_id="cid-4",
+        origin_channel="telegram",
+        origin_target="8553589429",
+        channel="telegram",
+    )
+    service.send(
+        request=request,
+        context={},
+        exec_context=SimpleNamespace(channel_type="telegram", channel_target="8553589429", correlation_id="cid-4"),
+        plan=SimpleNamespace(plan_id="p4", tool="communication.send_message", payload={"internal_progress": True}),
+    )
+    assert coordinator.calls == []
+    assert delivered == []
+
+
+def test_send_suppresses_internal_visibility_delivery() -> None:
+    coordinator = _FakeCoordinator()
+    service = CommunicationService(coordinator=coordinator)
+    delivered: list[NormalizedOutboundMessage] = []
+    service._deliver_normalized = lambda message: delivered.append(message)  # type: ignore[method-assign]
+    request = CommunicationRequest(
+        message="nota interna",
+        correlation_id="cid-5",
+        origin_channel="telegram",
+        origin_target="8553589429",
+        channel="telegram",
+    )
+    service.send(
+        request=request,
+        context={},
+        exec_context=SimpleNamespace(channel_type="telegram", channel_target="8553589429", correlation_id="cid-5"),
+        plan=SimpleNamespace(plan_id="p5", tool="communication.send_message", payload={"visibility": "internal"}),
+    )
+    assert coordinator.calls == []
+    assert delivered == []
+
+
+def test_send_delivers_public_mission_payload() -> None:
+    coordinator = _FakeCoordinator()
+    service = CommunicationService(coordinator=coordinator)
+    delivered: list[NormalizedOutboundMessage] = []
+    service._deliver_normalized = lambda message: delivered.append(message)  # type: ignore[method-assign]
+    request = CommunicationRequest(
+        message="Hola Alex",
+        correlation_id="cid-6",
+        origin_channel="telegram",
+        origin_target="8553589429",
+        channel="telegram",
+    )
+    service.send(
+        request=request,
+        context={},
+        exec_context=SimpleNamespace(channel_type="telegram", channel_target="8553589429", correlation_id="cid-6"),
+        plan=SimpleNamespace(plan_id="p6", tool="communication.send_message", payload={}),
+    )
+    assert len(coordinator.calls) == 1
+    payload = coordinator.calls[0]["payload"]
+    assert payload.get("outbound_intent") == "mission_public"
+    assert payload.get("internal_progress") is False
+    assert len(delivered) == 1
