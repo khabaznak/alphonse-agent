@@ -68,13 +68,6 @@ def get_autonomy_level() -> float:
     return min(max(value, 0.0), 1.0)
 
 
-def get_planning_mode() -> str | None:
-    configured = os.getenv("ALPHONSE_PLANNING_MODE")
-    if isinstance(configured, str) and configured.strip():
-        return configured.strip()
-    return None
-
-
 def get_execution_mode() -> str:
     configured = str(os.getenv("ALPHONSE_EXECUTION_MODE") or "").strip().lower()
     if configured in {"readonly", "dev", "ops"}:

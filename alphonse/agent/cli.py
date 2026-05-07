@@ -109,12 +109,6 @@ def build_parser() -> argparse.ArgumentParser:
         "--correlation-id", default=None, help="Optional correlation id"
     )
     say_parser.add_argument(
-        "--planning-mode",
-        choices=["aventurizacion", "contrato_de_resultado"],
-        default=None,
-        help="Override planning mode for this message",
-    )
-    say_parser.add_argument(
         "--autonomy-level",
         type=float,
         default=None,
@@ -473,8 +467,6 @@ def _command_say(args: argparse.Namespace, db_path: Path) -> None:
             metadata={"source": "cli.say"},
         )
         payload = dict(signal.payload)
-        if args.planning_mode:
-            payload["planning_mode"] = args.planning_mode
         if args.autonomy_level is not None:
             payload["autonomy_level"] = args.autonomy_level
         signal = Signal(
@@ -511,8 +503,6 @@ def _command_say(args: argparse.Namespace, db_path: Path) -> None:
         actor_user_id=args.person_id,
         metadata={"source": "cli.say"},
     )
-    if args.planning_mode:
-        payload["planning_mode"] = args.planning_mode
     if args.autonomy_level is not None:
         payload["autonomy_level"] = args.autonomy_level
     if args.person_id:

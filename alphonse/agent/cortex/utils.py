@@ -11,7 +11,6 @@ def build_cognition_state(state: dict[str, Any]) -> dict[str, Any]:
         "last_intent": state.get("intent"),
         "locale": state.get("locale"),
         "autonomy_level": state.get("autonomy_level"),
-        "planning_mode": state.get("planning_mode"),
         "intent_category": state.get("intent_category"),
         "route_decision": state.get("route_decision"),
         "pending_interaction": state.get("pending_interaction"),
