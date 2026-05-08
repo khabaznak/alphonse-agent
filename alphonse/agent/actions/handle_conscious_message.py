@@ -287,6 +287,9 @@ def _is_canonical_inbound_event(payload: dict[str, Any]) -> bool:
 def _validate_canonical_inbound_event_payload(payload: dict[str, Any]) -> None:
     if not _is_canonical_inbound_event(payload):
         raise ValueError("invalid_conscious_payload: unsupported contract_type")
+    for legacy_field_name in ("external_user_id", "resolved_user_id"):
+        if legacy_field_name in payload:
+            raise ValueError(f"invalid_conscious_payload: legacy field {legacy_field_name} is not allowed")
     for field_name in (
         "service_key",
         "provider_user_id_from",

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from alphonse.agent.actions.base import Action
 from alphonse.agent.actions.models import ActionResult
 from alphonse.agent.actions.registry import ActionRegistry
@@ -63,6 +65,12 @@ class _FakeRegistry:
         return None
 
 
+class _MissingAdapterRegistry:
+    def get_extremity(self, channel_type: str):  # noqa: ANN201
+        _ = channel_type
+        return None
+
+
 def test_subconscious_failure_escalates_to_runtime_conscious_signal(monkeypatch) -> None:
     bus = Bus()
     actions = ActionRegistry()
@@ -95,7 +103,9 @@ def test_subconscious_failure_escalates_to_runtime_conscious_signal(monkeypatch)
     assert first is not None
     assert first.type == "sense.runtime.message.user.received"
     assert isinstance(first.payload, dict)
-    assert first.payload.get("schema_version") == "1.0"
+    assert first.payload.get("contract_type") == "canonical_inbound_event"
+    assert first.payload.get("service_key") == "telegram"
+    assert first.payload.get("provider_user_id_from") == "runtime"
     assert second is None
 
 
@@ -148,3 +158,18 @@ def test_action_runtime_delivers_message_results(monkeypatch) -> None:
     assert result.delivers_message is True
     assert len(adapter.deliveries) == 1
     assert adapter.deliveries[0].message == "hello"
+
+
+def test_action_runtime_raises_when_outbound_adapter_is_missing(monkeypatch) -> None:
+    bus = Bus()
+    actions = ActionRegistry()
+    actions.register("message", lambda _ctx: _MessageAction())
+    runtime = ActionExecutionRuntime(actions=actions, bus=bus, coordinator=_FakeCoordinator())
+
+    monkeypatch.setattr(
+        "alphonse.agent.actions.runtime.get_io_registry",
+        lambda: _MissingAdapterRegistry(),
+    )
+
+    with pytest.raises(ValueError, match="missing_extremity_adapter:cli"):
+        runtime.execute("message", {"signal": Signal(type="test.message", source="system")})

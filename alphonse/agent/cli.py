@@ -16,8 +16,8 @@ from datetime import datetime, timezone
 
 from dotenv import load_dotenv
 
-from alphonse.agent.actions.conscious_message_handler import build_incoming_message_envelope
 from alphonse.agent.actions.runtime import build_action_runtime
+from alphonse.agent.extremities.interfaces.integrations._contracts import CanonicalInboundEvent
 from alphonse.agent.heart import Heart, HeartConfig, SHUTDOWN
 from alphonse.agent.nervous_system.ddfsm import DDFSM, DDFSMConfig
 from alphonse.agent.nervous_system.migrate import apply_schema
@@ -491,24 +491,30 @@ def _command_say(args: argparse.Namespace, db_path: Path) -> None:
         "api": "sense.api.message.user.received",
     }.get(channel, "sense.cli.message.user.received")
     occurred_at = datetime.now(timezone.utc).isoformat()
-    payload = build_incoming_message_envelope(
-        message_id=str(args.chat_id or correlation_id),
-        channel_type=channel,
+    payload = CanonicalInboundEvent(
+        service_key=channel,
+        provider_user_id_from=str(args.chat_id or "").strip() or channel,
+        provider_message_id=str(args.chat_id or correlation_id),
         channel_target=str(args.chat_id or channel),
-        provider=channel,
-        text=args.text,
         occurred_at=occurred_at,
-        correlation_id=correlation_id,
-        actor_external_user_id=str(args.chat_id or "").strip() or None,
-        actor_user_id=args.person_id,
-        metadata={"source": "cli.say"},
-    )
+        event_kind="message",
+        provider_raw_message={
+            "text": args.text,
+            "origin": channel,
+            "chat_id": str(args.chat_id or channel),
+            "person_id": args.person_id,
+            "correlation_id": correlation_id,
+        },
+        text=args.text,
+        attachments=[],
+        dedupe_key=correlation_id,
+    ).to_payload()
     if args.autonomy_level is not None:
         payload["autonomy_level"] = args.autonomy_level
+    payload["metadata"] = {"source": "cli.say"}
     if args.person_id:
-        actor = payload.get("actor") if isinstance(payload.get("actor"), dict) else {}
-        actor["person_id"] = args.person_id
-        payload["actor"] = actor
+        payload["alphonse_user_id"] = args.person_id
+        payload["metadata"]["alphonse_user_id"] = args.person_id
     signal = Signal(
         type=signal_type,
         payload=payload,

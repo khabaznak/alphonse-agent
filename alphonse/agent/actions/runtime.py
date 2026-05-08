@@ -3,7 +3,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from alphonse.agent import identity
-from alphonse.agent.actions.conscious_message_handler import build_incoming_message_envelope
 from alphonse.agent.actions.handle_conscious_message import HandleConsciousMessageAction
 from alphonse.agent.actions.handle_pdca_dispatch_kick import HandlePdcaDispatchKickAction
 from alphonse.agent.actions.handle_pdca_failure_notice import HandlePdcaFailureNoticeAction
@@ -16,6 +15,7 @@ from alphonse.agent.cognition.narration.outbound_narration_orchestrator import (
     DeliveryCoordinator,
     build_default_coordinator,
 )
+from alphonse.agent.extremities.interfaces.integrations._contracts import CanonicalInboundEvent
 from alphonse.agent.io import NormalizedOutboundMessage, get_io_registry
 from alphonse.agent.nervous_system.senses.bus import Bus, Signal
 from alphonse.agent.nervous_system.services import TELEGRAM_SERVICE_ID
@@ -87,28 +87,39 @@ class ActionExecutionRuntime:
             f"action={action_key} signal={signal_type or 'unknown'} "
             f"error={type(error).__name__}: {str(error or '').strip()[:280]}"
         )
-        envelope = build_incoming_message_envelope(
-            message_id=f"runtime-failure:{correlation_id or 'unknown'}",
-            channel_type="telegram",
+        occurred_at = _current_time_iso()
+        payload = CanonicalInboundEvent(
+            service_key="telegram",
+            provider_user_id_from="runtime",
+            provider_message_id=f"runtime-failure:{correlation_id or 'unknown'}",
             channel_target=admin_target,
-            provider="runtime",
-            text=text,
-            correlation_id=correlation_id,
-            actor_external_user_id="runtime",
-            actor_display_name="Alphonse Runtime",
-            metadata={
-                "message_kind": "runtime_failure_escalation",
-                "failure": {
+            occurred_at=occurred_at,
+            event_kind="system",
+            provider_raw_message={
+                "runtime_failure": {
                     "action_key": action_key,
                     "signal_type": signal_type or None,
                     "error_type": type(error).__name__,
-                },
+                    "error_message": str(error or "").strip()[:280],
+                }
             },
-        )
+            text=text,
+            attachments=[],
+            dedupe_key=correlation_id,
+            display_name="Alphonse Runtime",
+        ).to_payload()
+        payload["metadata"] = {
+            "message_kind": "runtime_failure_escalation",
+            "failure": {
+                "action_key": action_key,
+                "signal_type": signal_type or None,
+                "error_type": type(error).__name__,
+            },
+        }
         bus.emit(
             Signal(
                 type=_RUNTIME_FAILURE_SIGNAL,
-                payload=envelope,
+                payload=payload,
                 source="system",
                 correlation_id=correlation_id,
             )
@@ -150,7 +161,19 @@ def _deliver_normalized(delivery: NormalizedOutboundMessage) -> None:
     registry = get_io_registry()
     adapter = registry.get_extremity(delivery.channel_type)
     if not adapter:
-        return
+        channel = str(delivery.channel_type or "").strip() or "unknown"
+        _LOG.emit(
+            level="error",
+            event="runtime.delivery.failed",
+            component="actions.runtime",
+            correlation_id=str(delivery.correlation_id or "").strip() or None,
+            channel=channel or None,
+            payload={
+                "reason": "missing_extremity_adapter",
+                "channel_target": str(delivery.channel_target or "").strip() or None,
+            },
+        )
+        raise ValueError(f"missing_extremity_adapter:{channel}")
     adapter.deliver(delivery)
 
 
@@ -175,3 +198,9 @@ def _extract_correlation_id(context: dict) -> str | None:
         if rendered:
             return rendered
     return None
+
+
+def _current_time_iso() -> str:
+    from datetime import datetime, timezone
+
+    return datetime.now(timezone.utc).isoformat()

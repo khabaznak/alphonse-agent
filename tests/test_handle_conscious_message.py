@@ -2,83 +2,10 @@ from __future__ import annotations
 
 import pytest
 
-from alphonse.agent.actions.conscious_message_handler import IncomingMessageEnvelope
-from alphonse.agent.actions.conscious_message_handler import build_incoming_message_envelope
 from alphonse.agent.actions.handle_conscious_message import HandleConsciousMessageAction
 from alphonse.agent.cortex.task_mode.task_record import TaskRecord
 from alphonse.agent.nervous_system.senses.bus import Bus, Signal
 from alphonse.agent.services.pdca_ingress import BufferedTaskInput
-
-
-def test_from_payload_resolves_actor_user_id_from_external_user_id(monkeypatch) -> None:
-    monkeypatch.setattr(
-        "alphonse.agent.actions.conscious_message_handler.identity.resolve_service_id",
-        lambda service_key: 1 if str(service_key or "").strip() == "telegram" else None,
-    )
-    monkeypatch.setattr(
-        "alphonse.agent.actions.conscious_message_handler.identity.resolve_user_id",
-        lambda **kwargs: "owner-1" if kwargs == {"service_id": 1, "service_user_id": "u-ext"} else None,
-    )
-
-    raw_payload = build_incoming_message_envelope(
-        message_id="m-env-1",
-        channel_type="telegram",
-        channel_target="123",
-        provider="telegram",
-        text="Hello",
-        correlation_id="c-env-1",
-        actor_external_user_id="u-ext",
-    )
-    envelope = IncomingMessageEnvelope.from_payload(raw_payload)
-
-    assert envelope.actor == {
-        "external_user_id": "u-ext",
-        "display_name": None,
-        "user_id": "owner-1",
-    }
-    runtime_payload = envelope.runtime_payload()
-    assert runtime_payload["user_id"] == "owner-1"
-    assert runtime_payload["external_user_id"] == "u-ext"
-
-
-def test_from_payload_preserves_actor_user_id() -> None:
-    raw_payload = build_incoming_message_envelope(
-        message_id="m-env-2",
-        channel_type="telegram",
-        channel_target="123",
-        provider="telegram",
-        text="Hello",
-        correlation_id="c-env-2",
-        actor_external_user_id="u-ext",
-        actor_user_id="owner-1",
-    )
-
-    envelope = IncomingMessageEnvelope.from_payload(raw_payload)
-
-    assert envelope.actor == {
-        "external_user_id": "u-ext",
-        "display_name": None,
-        "user_id": "owner-1",
-    }
-
-
-def test_from_payload_returns_stable_actor_keys_when_missing() -> None:
-    raw_payload = build_incoming_message_envelope(
-        message_id="m-env-3",
-        channel_type="telegram",
-        channel_target="123",
-        provider="telegram",
-        text="Hello",
-        correlation_id="c-env-3",
-    )
-
-    envelope = IncomingMessageEnvelope.from_payload(raw_payload)
-
-    assert envelope.actor == {
-        "external_user_id": None,
-        "display_name": None,
-        "user_id": None,
-    }
 
 
 def test_handle_conscious_message_enqueues_pdca_slice(monkeypatch) -> None:
@@ -572,31 +499,49 @@ def test_handle_conscious_message_mechanical_payload_invalid_provider_raw_messag
         action.execute({"signal": Signal(type="sense.telegram.message.user.received", payload=payload), "ctx": Bus()})
 
 
-def test_handle_conscious_message_canonical_payload_with_unmapped_user_raises(monkeypatch) -> None:
+def test_handle_conscious_message_rejects_legacy_external_user_id_field(monkeypatch) -> None:
     action = HandleConsciousMessageAction()
 
     payload = {
-        "contract_type": "canonical_inbound_message",
+        "contract_type": "canonical_inbound_event",
         "contract_version": "1.0",
-        "message_id": "m-can-3",
-        "correlation_id": "c-can-3",
-        "occurred_at": "2026-05-04T12:02:00+00:00",
-        "service_id": 2,
         "service_key": "telegram",
-        "channel_type": "telegram",
+        "provider_user_id_from": "u-ext",
+        "provider_message_id": "m-evt-legacy-1",
         "channel_target": "123",
-        "external_user_id": "u-ext",
-        "display_name": "Alex",
-        "resolved_user_id": None,
+        "occurred_at": "2026-05-04T12:02:00+00:00",
+        "event_kind": "message",
+        "provider_raw_message": {},
         "text": "Hello unresolved",
         "attachments": [],
-        "metadata": {},
+        "external_user_id": "u-ext",
     }
-    with pytest.raises(ValueError, match="unsupported contract_type"):
+    with pytest.raises(ValueError, match="legacy field external_user_id is not allowed"):
         action.execute({"signal": Signal(type="sense.telegram.message.user.received", payload=payload), "ctx": Bus()})
 
 
-def test_handle_conscious_message_legacy_payload_without_identity_raises(monkeypatch) -> None:
+def test_handle_conscious_message_rejects_legacy_resolved_user_id_field(monkeypatch) -> None:
+    action = HandleConsciousMessageAction()
+
+    payload = {
+        "contract_type": "canonical_inbound_event",
+        "contract_version": "1.0",
+        "service_key": "telegram",
+        "provider_user_id_from": "u-ext",
+        "provider_message_id": "m-evt-legacy-2",
+        "channel_target": "123",
+        "occurred_at": "2026-05-04T12:02:00+00:00",
+        "event_kind": "message",
+        "provider_raw_message": {},
+        "text": "Hello unresolved",
+        "attachments": [],
+        "resolved_user_id": None,
+    }
+    with pytest.raises(ValueError, match="legacy field resolved_user_id is not allowed"):
+        action.execute({"signal": Signal(type="sense.telegram.message.user.received", payload=payload), "ctx": Bus()})
+
+
+def test_handle_conscious_message_legacy_payload_without_contract_type_raises(monkeypatch) -> None:
     action = HandleConsciousMessageAction()
 
     monkeypatch.setattr(
@@ -608,14 +553,12 @@ def test_handle_conscious_message_legacy_payload_without_identity_raises(monkeyp
         lambda **_: None,
     )
 
-    envelope = build_incoming_message_envelope(
-        message_id="m-legacy-missing-user",
-        channel_type="telegram",
-        channel_target="123",
-        provider="telegram",
-        text="Hello",
-        correlation_id="c-legacy-missing-user",
-    )
+    payload = {
+        "message_id": "m-legacy-missing-user",
+        "channel": {"type": "telegram", "target": "123"},
+        "actor": {"user_id": None, "external_user_id": "u-ext"},
+        "content": {"text": "Hello", "attachments": []},
+    }
 
     with pytest.raises(ValueError, match="unsupported contract_type"):
-        action.execute({"signal": Signal(type="sense.telegram.message.user.received", payload=envelope), "ctx": Bus()})
+        action.execute({"signal": Signal(type="sense.telegram.message.user.received", payload=payload), "ctx": Bus()})

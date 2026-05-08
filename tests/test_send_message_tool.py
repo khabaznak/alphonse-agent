@@ -233,6 +233,18 @@ def test_send_message_tool_maps_audio_file_not_found_error() -> None:
     assert str((result.get("exception") or {}).get("code") or "") == "audio_file_not_found"
 
 
+def test_send_message_tool_maps_missing_extremity_adapter_error() -> None:
+    tool = SendMessageTool(_communication=_FailingCommunication(code="missing_extremity_adapter:api"))
+    result = tool.execute(
+        state={"channel_type": "api", "channel_target": "me"},
+        To="123",
+        Message="Hola",
+        Channel="api",
+    )
+    assert result["exception"] is not None
+    assert str((result.get("exception") or {}).get("code") or "") == "missing_extremity_adapter"
+
+
 def test_send_voice_note_tool_enforces_audio_delivery_mode() -> None:
     fake = _FakeCommunication()
     tool = SendVoiceNoteTool(_send_message_tool=SendMessageTool(_communication=fake))

@@ -8,6 +8,9 @@ from alphonse.agent.actions.models import ActionResult
 from alphonse.agent.cognition.narration.outbound_narration_orchestrator import DeliveryCoordinator
 from alphonse.agent.cognition.preferences.store import get_user_preference
 from alphonse.agent.io import NormalizedOutboundMessage, get_io_registry
+from alphonse.agent.observability.log_manager import get_log_manager
+
+_LOG = get_log_manager()
 
 
 @dataclass(frozen=True)
@@ -99,7 +102,19 @@ class CommunicationService:
         registry = get_io_registry()
         adapter = registry.get_extremity(delivery.channel_type)
         if not adapter:
-            return
+            channel = str(delivery.channel_type or "").strip() or "unknown"
+            _LOG.emit(
+                level="error",
+                event="communication.delivery.failed",
+                component="services.communication_service",
+                correlation_id=str(delivery.correlation_id or "").strip() or None,
+                channel=channel or None,
+                payload={
+                    "reason": "missing_extremity_adapter",
+                    "channel_target": str(delivery.channel_target or "").strip() or None,
+                },
+            )
+            raise ValueError(f"missing_extremity_adapter:{channel}")
         adapter.deliver(delivery)
 
     def _resolve_service_id(self, request: CommunicationRequest) -> int | None:

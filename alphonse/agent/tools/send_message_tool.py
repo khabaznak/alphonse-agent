@@ -279,4 +279,8 @@ def _map_send_error(exc: Exception) -> dict[str, Any]:
         missing_path = rendered.split(":", 1)[1] if ":" in rendered else ""
         message = f"audio file not found: {missing_path}" if missing_path else "audio file not found"
         return _failed(code="audio_file_not_found", message=message)
+    if code.startswith("missing_extremity_adapter:"):
+        channel = rendered.split(":", 1)[1] if ":" in rendered else ""
+        message = f"no outbound adapter registered for channel: {channel}" if channel else "no outbound adapter registered"
+        return _failed(code="missing_extremity_adapter", message=message)
     return _failed(code="communication.send_message_failed", message=rendered or type(exc).__name__)

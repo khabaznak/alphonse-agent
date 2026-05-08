@@ -44,7 +44,7 @@ def _day_session(user_id: str = "u-1") -> dict[str, object]:
 def _context(envelope: IncomingMessageEnvelope, correlation_id: str) -> dict[str, object]:
     return {
         "signal": Signal(
-            type="sense.user_communication.message.user.received",
+            type="sense.telegram.message.user.received",
             payload=envelope.to_dict(),
             correlation_id=correlation_id,
         ),

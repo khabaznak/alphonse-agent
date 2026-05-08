@@ -4,6 +4,8 @@ from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import Any
 
+import pytest
+
 from alphonse.agent.nervous_system import user_service_resolvers as resolvers
 from alphonse.agent.nervous_system.migrate import apply_schema
 from alphonse.agent.io.contracts import NormalizedOutboundMessage
@@ -168,3 +170,34 @@ def test_send_delivers_public_mission_payload() -> None:
     assert payload.get("outbound_intent") == "mission_public"
     assert payload.get("internal_progress") is False
     assert len(delivered) == 1
+
+
+class _MissingAdapterRegistry:
+    def get_extremity(self, channel_type: str):  # noqa: ANN201
+        _ = channel_type
+        return None
+
+
+def test_send_raises_when_outbound_adapter_is_missing(monkeypatch: pytest.MonkeyPatch) -> None:
+    coordinator = _FakeCoordinator()
+    service = CommunicationService(coordinator=coordinator)
+    monkeypatch.setattr(
+        "alphonse.agent.services.communication_service.get_io_registry",
+        lambda: _MissingAdapterRegistry(),
+    )
+    request = CommunicationRequest(
+        message="hello",
+        correlation_id="cid-missing-adapter",
+        origin_channel="api",
+        origin_target="me",
+        channel="api",
+        target="me",
+    )
+
+    with pytest.raises(ValueError, match="missing_extremity_adapter:api"):
+        service.send(
+            request=request,
+            context={},
+            exec_context=SimpleNamespace(channel_type="api", channel_target="me", correlation_id="cid-missing-adapter"),
+            plan=SimpleNamespace(plan_id="p-missing-adapter", tool="communication.send_message", payload={}),
+        )
