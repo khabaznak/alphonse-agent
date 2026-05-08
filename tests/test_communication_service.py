@@ -59,7 +59,7 @@ def test_send_resolves_target_via_service_id_and_user_id(tmp_path, monkeypatch) 
     monkeypatch.setenv("NERVE_DB_PATH", str(db_path))
     apply_schema(db_path)
 
-    from alphonse.agent.nervous_system import users as users_store
+    from alphonse.agent import identity as users_store
 
     users_store.upsert_user(
         {

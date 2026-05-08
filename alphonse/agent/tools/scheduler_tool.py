@@ -7,6 +7,7 @@ import re
 from typing import Any, ClassVar
 from zoneinfo import ZoneInfo
 
+from alphonse.agent import identity
 from alphonse.agent.identity.service_resolvers import resolve_service_key_by_service_user_id
 from alphonse.agent.nervous_system.prompt_artifacts import create_prompt_artifact
 from alphonse.agent.services.scheduler_service import SchedulerService
@@ -80,6 +81,8 @@ class SchedulerTool:
             correlation_id=str(correlation_id).strip() if correlation_id is not None else None,
             origin_channel=origin_channel_value,
             channel_target=str(channel_target or ""),
+            user_id=str((state or {}).get("actor_person_id") or "").strip() or None,
+            provider_user_id_from=str((state or {}).get("incoming_user_id") or "").strip() or None,
         )
         return {
             "output": reminder,
@@ -97,6 +100,8 @@ class SchedulerTool:
         correlation_id: str | None = None,
         origin_channel: str | None = None,
         channel_target: str | None = None,
+        user_id: str | None = None,
+        provider_user_id_from: str | None = None,
     ) -> dict[str, str]:
         whom_raw = str(for_whom or "").strip()
         trigger_expr = str(time or "").strip()
@@ -125,22 +130,34 @@ class SchedulerTool:
             timezone_name=resolved_timezone,
             llm_client=self.llm_client,
         )
-        _ = channel_target
-        delivery_target = whom_raw
         resolved_origin_channel = str(origin_channel or "").strip().lower() or "api"
+        recipient = _resolve_reminder_recipient(
+            for_whom=whom_raw,
+            user_id=user_id,
+            provider_user_id_from=provider_user_id_from,
+            channel_target=str(channel_target or "").strip() or None,
+            origin_channel=resolved_origin_channel,
+        )
+        delivery_target = recipient.get("delivery_target")
+        canonical_user_id = recipient.get("user_id")
+        preferred_service_key = recipient.get("service_key") or resolved_origin_channel
         trigger_time = fire_at
         source_instruction = str(reminder_message or "").strip()
         message_mode, message_text = _build_reminder_message_payload(
             llm_client=self.llm_client,
             source_instruction=source_instruction,
         )
+        tool_args: dict[str, Any] = {
+            "Message": message_text,
+            "Channel": preferred_service_key,
+        }
+        if canonical_user_id:
+            tool_args["UserId"] = canonical_user_id
+        elif delivery_target:
+            tool_args["To"] = delivery_target
         payload = build_canonical_tool_call_payload(
             tool_name="communication.send_message",
-            args={
-                "To": delivery_target,
-                "Message": message_text,
-                "Channel": resolved_origin_channel,
-            },
+            args=tool_args,
         )
         payload.update(
             {
@@ -153,8 +170,11 @@ class SchedulerTool:
                 "message_mode": message_mode,
                 "reminder_text_raw": source_instruction,
                 "speaker": "alphonse",
-                "requested_by": delivery_target,
-                "origin_channel": resolved_origin_channel,
+                "requested_by": canonical_user_id or delivery_target,
+                "origin_channel": preferred_service_key,
+                "user_id": canonical_user_id,
+                "provider_user_id_from": str(provider_user_id_from or "").strip() or None,
+                "service_key": preferred_service_key,
                 "created_at": datetime.now(dt_timezone.utc).isoformat(),
                 "trigger_at": trigger_time,
                 "fire_at": trigger_time,
@@ -168,7 +188,7 @@ class SchedulerTool:
         )
         internal_prompt = message_text
         artifact_id = create_prompt_artifact(
-            user_id=str(delivery_target or "default"),
+            user_id=str(canonical_user_id or delivery_target or "default"),
             source_instruction=source_instruction,
             agent_internal_prompt=internal_prompt,
             language=None,
@@ -189,7 +209,7 @@ class SchedulerTool:
         return {
             "reminder_id": schedule_id,
             "fire_at": fire_at,
-            "delivery_target": delivery_target,
+            "delivery_target": str(delivery_target or ""),
             "message": reminder_message,
             "original_time_expression": trigger_expr,
         }
@@ -231,6 +251,48 @@ def _resolve_timezone_name(timezone_name: str | None) -> str:
         except Exception:
             pass
     return "UTC"
+
+
+def _resolve_reminder_recipient(
+    *,
+    for_whom: str,
+    user_id: str | None,
+    provider_user_id_from: str | None,
+    channel_target: str | None,
+    origin_channel: str,
+) -> dict[str, str | None]:
+    rendered = str(for_whom or "").strip()
+    normalized = rendered.lower()
+    current_user_aliases = {"me", "yo", "current_conversation"}
+    canonical_user_id = str(user_id or "").strip() or None
+    provider_identity = str(provider_user_id_from or "").strip() or None
+    concrete_target = str(channel_target or "").strip() or None
+    if normalized in current_user_aliases:
+        return {
+            "user_id": canonical_user_id,
+            "service_key": origin_channel,
+            "delivery_target": concrete_target or provider_identity,
+        }
+    user = identity.get_user(rendered) or identity.get_user_by_display_name(rendered)
+    if isinstance(user, dict):
+        user_id = str(user.get("user_id") or "").strip() or None
+        if user_id:
+            return {
+                "user_id": user_id,
+                "service_key": origin_channel,
+                "delivery_target": concrete_target,
+            }
+    if rendered.lstrip("-").isdigit():
+        return {
+            "user_id": None,
+            "service_key": origin_channel,
+            "delivery_target": rendered,
+        }
+    return {
+        "user_id": None,
+        "service_key": origin_channel,
+        "delivery_target": concrete_target,
+    }
 
 def _normalize_time_expression_to_iso(*, expression: str, timezone_name: str, llm_client: Any | None = None) -> str:
     raw = str(expression or "").strip()

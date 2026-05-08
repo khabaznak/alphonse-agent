@@ -282,3 +282,60 @@ def test_timed_signal_executes_canonical_tool_call_payload(monkeypatch) -> None:
     assert result.intention_key == "NOOP"
     assert str(called.get("To") or "") == "8553589429"
     assert str(called.get("Message") or "") == "hola"
+
+
+def test_timed_signal_treats_tool_result_exception_as_failure(monkeypatch) -> None:
+    called: dict[str, object] = {}
+
+    class _FakeExecutor:
+        def execute(self, *, To: str, Message: str, Channel: str | None = None, state: dict | None = None):  # noqa: N803
+            called["To"] = To
+            called["Message"] = Message
+            called["Channel"] = Channel
+            called["state"] = state
+            return {"output": None, "exception": {"code": "unresolved_recipient", "message": "bad recipient"}}
+
+    class _FakeRegistry:
+        def get(self, key: str):
+            if key != "communication.send_message":
+                return None
+            spec = ToolSpec(
+                canonical_name="communication.send_message",
+                summary="fake",
+                description="fake",
+                input_schema={"type": "object", "properties": {}, "required": [], "additionalProperties": False},
+                output_schema={"type": "object", "additionalProperties": True},
+            )
+            return ToolDefinition(spec=spec, executor=_FakeExecutor())
+
+    monkeypatch.setattr(
+        "alphonse.agent.tools.registry.build_default_tool_registry",
+        lambda: _FakeRegistry(),
+    )
+    action = HandleTimedSignalsAction()
+    result = action.execute(
+        {
+            "signal": Signal(
+                type="timed_signal.fired",
+                payload={
+                    "timed_signal_id": "tsig_tool_fail_1",
+                    "target": "8553589429",
+                    "origin": "telegram",
+                    "payload": {
+                        "tool_call": {
+                            "kind": "call_tool",
+                            "tool_name": "communication.send_message",
+                            "args": {"To": "8553589429", "Message": "hola", "Channel": "telegram"},
+                        }
+                    },
+                },
+                source="timer",
+                correlation_id="corr-tool-call-fail",
+            ),
+            "ctx": _FakeBus(),
+            "state": None,
+            "outcome": None,
+        }
+    )
+    assert result.intention_key == "NOOP"
+    assert str(called.get("To") or "") == "8553589429"

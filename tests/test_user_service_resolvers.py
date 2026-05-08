@@ -4,7 +4,7 @@ from pathlib import Path
 
 from alphonse.agent.nervous_system.migrate import apply_schema
 from alphonse.agent.nervous_system import user_service_resolvers as resolvers
-from alphonse.agent.nervous_system import users as users_store
+from alphonse.agent import identity as users_store
 
 
 def test_upsert_and_resolve_service_user_id(tmp_path: Path, monkeypatch) -> None:

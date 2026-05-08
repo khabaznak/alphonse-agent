@@ -11,7 +11,7 @@ from alphonse.agent.cognition.preferences.store import (
     set_user_preference,
 )
 from alphonse.agent.nervous_system.migrate import apply_schema
-from alphonse.agent.nervous_system import users as users_store
+from alphonse.agent import identity as users_store
 
 
 def _prepare_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from alphonse.agent.identity import upsert_user
 from alphonse.agent.nervous_system.migrate import apply_schema
 from alphonse.agent.nervous_system.senses.bus import Bus
 from alphonse.agent.nervous_system.senses.timer import (
@@ -29,6 +30,14 @@ def test_create_reminder_normalizes_fire_at_and_delivery_target(
     db_path = tmp_path / "nerve-db"
     apply_schema(db_path)
     monkeypatch.setenv("NERVE_DB_PATH", str(db_path))
+    upsert_user(
+        {
+            "user_id": "u-reminder",
+            "principal_id": "p-reminder",
+            "display_name": "Reminder User",
+            "is_active": True,
+        }
+    )
 
     class _FakeTimeLlm:
         def complete(self, system_prompt: str, user_prompt: str) -> str:
@@ -46,6 +55,8 @@ def test_create_reminder_normalizes_fire_at_and_delivery_target(
         timezone_name="America/Mexico_City",
         channel_target="8553589429",
         origin_channel="telegram",
+        user_id="u-reminder",
+        provider_user_id_from="8553589429",
     )
     assert isinstance(result, dict)
 
@@ -54,7 +65,7 @@ def test_create_reminder_normalizes_fire_at_and_delivery_target(
         (
             row
             for row in rows
-            if str(row.get("target") or "") == "me"
+            if str(row.get("target") or "") == "8553589429"
             and str(((row.get("payload") or {}).get("prompt") or "")).strip()
         ),
         None,
@@ -67,13 +78,24 @@ def test_create_reminder_normalizes_fire_at_and_delivery_target(
 
     fire_at = str(payload.get("fire_at") or "")
     delivery_target = str(payload.get("delivery_target") or "")
+    service_key = str(payload.get("service_key") or "")
+    user_id = str(payload.get("user_id") or "")
+    provider_user_id_from = str(payload.get("provider_user_id_from") or "")
+    tool_call = payload.get("tool_call")
+    assert isinstance(tool_call, dict)
+    args = tool_call.get("args")
+    assert isinstance(args, dict)
 
     parsed_trigger = _parse_iso(trigger_at)
     parsed_fire = _parse_iso(fire_at)
     now = datetime.now(timezone.utc)
 
-    assert target == "me"
-    assert delivery_target == "me"
+    assert target == "8553589429"
+    assert delivery_target == "8553589429"
+    assert service_key == "telegram"
+    assert user_id == "u-reminder"
+    assert provider_user_id_from == "8553589429"
+    assert str(args.get("UserId") or "") == "u-reminder"
     assert parsed_trigger == parsed_fire
     assert now <= parsed_trigger <= now + timedelta(minutes=2)
 
@@ -96,6 +118,8 @@ def test_timer_dispatches_when_now_gte_fire_at(
         timezone_name="America/Mexico_City",
         channel_target="8553589429",
         origin_channel="telegram",
+        user_id="u-convo",
+        provider_user_id_from="8553589429",
     )
 
     bus = Bus()
@@ -107,11 +131,14 @@ def test_timer_dispatches_when_now_gte_fire_at(
         assert signal.type == "timed_signal.fired"
         payload = signal.payload if isinstance(signal.payload, dict) else {}
         assert str(payload.get("mind_layer") or "") == "subconscious"
-        assert str(payload.get("target") or "") == "current_conversation"
+        assert str(payload.get("target") or "") == "8553589429"
         inner = payload.get("payload") if isinstance(payload.get("payload"), dict) else {}
         tool_call = inner.get("tool_call")
         assert isinstance(tool_call, dict)
         assert str(tool_call.get("tool_name") or "") == "communication.send_message"
+        args = tool_call.get("args")
+        assert isinstance(args, dict)
+        assert str(args.get("UserId") or "") == "u-convo"
     finally:
         timer.stop()
 

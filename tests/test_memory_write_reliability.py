@@ -6,7 +6,7 @@ from typing import Any
 from alphonse.agent.cognition.memory import service as memory_service
 from alphonse.agent.cognition.memory import MemoryService
 from alphonse.agent.cortex.task_mode.task_record import TaskRecord
-from alphonse.agent.nervous_system import users as users_store
+from alphonse.agent import identity as users_store
 from alphonse.agent.nervous_system.migrate import apply_schema
 from alphonse.agent.nervous_system.senses.bus import Signal
 

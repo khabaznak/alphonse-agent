@@ -175,6 +175,14 @@ def _get_message_from_args(args: dict[str, Any]) -> str:
 
 
 def _get_recipient_from_args(args: dict[str, Any]) -> dict[str, str | None]:
+    explicit_user_id = str(args.get("UserId") or args.get("user_id") or "").strip()
+    if explicit_user_id:
+        user = identity.get_user(explicit_user_id)
+        if isinstance(user, dict):
+            user_id = str(user.get("user_id") or "").strip()
+            if user_id:
+                return {"user_id": user_id, "target": None}
+        raise ValueError("unresolved_recipient")
     rendered = str(args.get("To") or args.get("to") or args.get("recipient") or "").strip()
     if not rendered:
         raise ValueError("missing_recipient")

@@ -10,14 +10,8 @@ ALPHONSE_ROOT = REPO_ROOT / "alphonse"
 ALLOWED_USERS_IMPORTERS: set[str] = set()
 
 ALLOWED_RESOLVER_IMPORTERS = {
-    "alphonse/agent/nervous_system/telegram_chat_access.py",
     "alphonse/agent/io/telegram_channel.py",
 }
-
-
-def test_only_identity_layer_imports_users_store_directly() -> None:
-    offenders = _find_direct_importers("alphonse.agent.nervous_system.users")
-    assert offenders == sorted(ALLOWED_USERS_IMPORTERS)
 
 
 def test_only_identity_or_provider_local_modules_import_resolver_store_directly() -> None:

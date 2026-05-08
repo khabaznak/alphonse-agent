@@ -4,7 +4,7 @@ from alphonse.agent import identity
 from alphonse.agent.actions.session_context import IncomingContext
 from alphonse.agent.identity.session import resolve_session_user_id
 from alphonse.agent.nervous_system import user_service_resolvers as resolvers
-from alphonse.agent.nervous_system import users as users_store
+from alphonse.agent import identity as users_store
 from alphonse.agent.nervous_system.migrate import apply_schema
 from alphonse.agent.cortex.task_mode.task_record import TaskRecord
 from alphonse.agent.tools.context_tools import GetUserDetailsTool

@@ -6,7 +6,7 @@ from alphonse.agent.nervous_system.migrate import apply_schema
 from alphonse.agent.cognition.memory import MemoryService
 from alphonse.agent.cognition.memory import record_after_tool_call
 from alphonse.agent.cortex.task_mode.task_record import TaskRecord
-from alphonse.agent.nervous_system import users as users_store
+from alphonse.agent import identity as users_store
 from alphonse.agent.tools.registry import build_default_tool_registry
 from alphonse.agent.tools.registry import planner_tool_schemas
 from alphonse.agent.tools.memory_tools import GetMissionTool

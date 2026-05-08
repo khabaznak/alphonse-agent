@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from alphonse.agent.nervous_system.migrate import apply_schema
-from alphonse.agent.nervous_system import users as users_store
+from alphonse.agent import identity as users_store
 from alphonse.agent.nervous_system import user_service_resolvers as resolvers
 from alphonse.agent.nervous_system.services import TELEGRAM_SERVICE_ID
 from alphonse.agent.tools.registry import build_default_tool_registry

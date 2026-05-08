@@ -392,7 +392,7 @@ def _execute_timed_tool_call(
             }
             resolved_args = {**resolved_args, "state": state}
     try:
-        definition.invoke(resolved_args)
+        result = definition.invoke(resolved_args)
     except Exception as exc:
         logger.warning(
             "HandleTimedSignalsAction timed_tool_call failed timed_signal_id=%s tool_name=%s error=%s",
@@ -401,6 +401,15 @@ def _execute_timed_tool_call(
             type(exc).__name__,
         )
     else:
+        exception = result.get("exception") if isinstance(result, dict) else None
+        if isinstance(exception, dict):
+            logger.warning(
+                "HandleTimedSignalsAction timed_tool_call tool_exception timed_signal_id=%s tool_name=%s code=%s",
+                payload.get("timed_signal_id"),
+                tool_name,
+                str(exception.get("code") or "").strip() or "unknown",
+            )
+            return ActionResult(intention_key="NOOP", payload={}, urgency=None)
         logger.info(
             "HandleTimedSignalsAction timed_tool_call executed timed_signal_id=%s tool_name=%s",
             payload.get("timed_signal_id"),

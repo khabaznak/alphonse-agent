@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from alphonse.agent.nervous_system import user_service_resolvers as resolvers
-from alphonse.agent.nervous_system import users as users_store
+from alphonse.agent import identity as users_store
 from alphonse.agent.nervous_system.senses.base import SignalSpec
 from alphonse.agent.nervous_system.senses.registry import all_senses
 from alphonse.agent.nervous_system.senses.registry import all_signal_specs

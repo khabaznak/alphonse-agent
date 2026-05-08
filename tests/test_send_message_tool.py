@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from alphonse.agent.nervous_system import users as users_store
+from alphonse.agent import identity as users_store
 from alphonse.agent.nervous_system.migrate import apply_schema
 from alphonse.agent.tools.registry import build_default_tool_registry
 from alphonse.agent.tools.registry import planner_canonical_tool_names
