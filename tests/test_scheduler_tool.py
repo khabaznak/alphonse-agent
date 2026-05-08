@@ -173,3 +173,33 @@ def test_create_reminder_resolves_named_user_to_canonical_user_id(tmp_path, monk
     args = tool_call.get("args")
     assert isinstance(args, dict)
     assert str(args.get("UserId") or "") == "u-alex"
+
+
+def test_execute_uses_channel_target_from_state(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def _capture_create_reminder(self, **kwargs):  # noqa: ANN001, ANN003
+        _ = self
+        captured.update(kwargs)
+        return {"reminder_id": "tsig_state_1", "fire_at": "2026-02-20T13:30:00+00:00"}
+
+    monkeypatch.setattr(scheduler_module.SchedulerTool, "create_reminder", _capture_create_reminder)
+    tool = SchedulerTool(llm_client=_FixedIsoLlm())
+
+    result = tool.execute(
+        state={
+            "channel_type": "telegram",
+            "channel_target": "8553589429",
+            "actor_person_id": "owner-1",
+            "incoming_user_id": "8553589429",
+        },
+        ForWhom="me",
+        Time="in 1 minute",
+        Message="Wind down",
+    )
+
+    assert result["exception"] is None
+    assert captured["origin_channel"] == "telegram"
+    assert captured["channel_target"] == "8553589429"
+    assert captured["user_id"] == "owner-1"
+    assert captured["provider_user_id_from"] == "8553589429"

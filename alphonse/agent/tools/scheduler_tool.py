@@ -73,6 +73,8 @@ class SchedulerTool:
             origin_channel_value = resolve_service_key_by_service_user_id(for_whom) or ""
 
         channel_target = args.get("channel_target")
+        if not str(channel_target or "").strip() and isinstance(state, dict):
+            channel_target = state.get("channel_target") or state.get("target")
         reminder = tool.create_reminder(
             for_whom=for_whom,
             time=time_value,
@@ -293,6 +295,7 @@ def _resolve_reminder_recipient(
         "service_key": origin_channel,
         "delivery_target": concrete_target,
     }
+
 
 def _normalize_time_expression_to_iso(*, expression: str, timezone_name: str, llm_client: Any | None = None) -> str:
     raw = str(expression or "").strip()

@@ -140,10 +140,7 @@ def _execute_tool_call(
             p.kind == inspect.Parameter.VAR_KEYWORD for p in signature.parameters.values()
         )
         if accepts_state:
-            call_args["state"] = {
-                "correlation_id": task_record.correlation_id or None,
-                "task_record": task_record,
-            }
+            call_args["state"] = _tool_state_from_task_record(task_record)
         raw_result = definition.invoke(call_args)
     except Exception as exc:
         as_payload = getattr(exc, "as_payload", None)
@@ -163,6 +160,69 @@ def _execute_tool_call(
             "metadata": {"tool": tool_name},
         }
     return _coerce_tool_result(tool_name=tool_name, raw_result=raw_result)
+
+
+def _tool_state_from_task_record(task_record: TaskRecord) -> dict[str, Any]:
+    facts = _facts_state(task_record.get_facts_md())
+    state: dict[str, Any] = {
+        "correlation_id": task_record.correlation_id or None,
+        "task_record": task_record,
+    }
+    for key in (
+        "channel_type",
+        "channel_target",
+        "message_id",
+        "provider_user_id_from",
+        "display_name",
+        "locale",
+        "timezone",
+        "service_id",
+        "service_key",
+        "chat_id",
+        "conversation_key",
+    ):
+        value = facts.get(key)
+        if str(value or "").strip():
+            state[key] = str(value).strip()
+    if task_record.user_id:
+        state["actor_person_id"] = task_record.user_id
+    elif str(facts.get("actor_person_id") or "").strip():
+        state["actor_person_id"] = str(facts.get("actor_person_id")).strip()
+    if str(facts.get("incoming_user_id") or "").strip():
+        state["incoming_user_id"] = str(facts.get("incoming_user_id")).strip()
+    elif str(facts.get("provider_user_id_from") or "").strip():
+        state["incoming_user_id"] = str(facts.get("provider_user_id_from")).strip()
+    if "channel_type" in state and "channel" not in state:
+        state["channel"] = state["channel_type"]
+    if "channel_target" in state and "target" not in state:
+        state["target"] = state["channel_target"]
+    return state
+
+
+def _facts_state(facts_md: str) -> dict[str, Any]:
+    parsed: dict[str, Any] = {}
+    for raw_line in str(facts_md or "").splitlines():
+        line = raw_line.strip()
+        if line.startswith("- "):
+            line = line[2:].strip()
+        if not line or line == "(none)" or ":" not in line:
+            continue
+        key, value = line.split(":", 1)
+        normalized_key = key.strip()
+        if not normalized_key:
+            continue
+        parsed[normalized_key] = _parse_fact_value(value)
+    return parsed
+
+
+def _parse_fact_value(value: str) -> Any:
+    rendered = str(value or "").strip()
+    if not rendered:
+        return ""
+    try:
+        return json.loads(rendered)
+    except json.JSONDecodeError:
+        return rendered
 
 
 def _append_tool_call_history_entry(

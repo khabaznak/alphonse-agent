@@ -422,6 +422,48 @@ def test_execute_step_accepts_canonical_send_message_from_planner(monkeypatch: p
     assert send.calls[0]["To"] == "8553589429"
 
 
+def test_execute_step_hydrates_tool_state_from_ingress_facts(monkeypatch: pytest.MonkeyPatch) -> None:
+    registry = ToolRegistry()
+    captured: dict[str, object] = {}
+
+    class _ReminderTool:
+        def execute(self, **kwargs: object):
+            captured.update(kwargs)
+            return {"output": {"reminder_id": "r1"}, "exception": None, "metadata": {"tool": "create_reminder"}}
+
+    _register_tool(registry, "create_reminder", _ReminderTool())
+    monkeypatch.setattr(execute_step_module, "_tool_registry", lambda: registry)
+    task_record = _task_record(
+        goal="remind me in one minute",
+        user_id="owner-1",
+        correlation_id="corr-reminder-telegram",
+        facts=[
+            "channel_type: telegram",
+            "channel_target: 8553589429",
+            "provider_user_id_from: 8553589429",
+            "message_id: 94",
+        ],
+    )
+    planner_output = {
+        "tool_call": {
+            "kind": "call_tool",
+            "tool_name": "create_reminder",
+            "args": {"ForWhom": "me", "Time": "in 1 minute", "Message": "Wind down"},
+        },
+        "planner_intent": "Scheduling the reminder.",
+    }
+
+    updated = execute_step_state_adapter({"task_record": task_record, "planner_output": planner_output})
+
+    assert isinstance(updated.get("task_record"), TaskRecord)
+    state = captured.get("state")
+    assert isinstance(state, dict)
+    assert state.get("channel_type") == "telegram"
+    assert state.get("channel_target") == "8553589429"
+    assert state.get("incoming_user_id") == "8553589429"
+    assert state.get("actor_person_id") == "owner-1"
+
+
 def test_non_canonical_top_level_planner_output_fails_in_do_node() -> None:
     task_record = _task_record(goal="do something")
     with pytest.raises(ValueError, match="missing tool_call"):
