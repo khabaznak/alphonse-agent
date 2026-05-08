@@ -274,3 +274,8 @@ def test_invite_request_does_not_register_attachments(
 
     assert calls == []
     assert get_invite("-123")
+    assert len(bus.emitted) == 1
+    payload = bus.emitted[0].payload
+    assert payload["contract_type"] == "canonical_inbound_event"
+    assert payload["event_kind"] == "invite"
+    assert payload["attachments"] == []

@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from alphonse.agent import identity
-from alphonse.agent.extremities.interfaces.integrations._contracts import CanonicalInboundMessage
+from alphonse.agent.extremities.interfaces.integrations._contracts import CanonicalInboundEvent
 from alphonse.agent.extremities.interfaces.integrations.telegram.telegram_adapter import TelegramAdapter
 from alphonse.agent.nervous_system.assets import register_uploaded_asset
 from alphonse.agent.nervous_system.services import TELEGRAM_SERVICE_ID
@@ -107,22 +107,21 @@ class TelegramSense(Sense):
         self._bus.emit(
             Signal(
                 type="sense.telegram.message.user.received",
-                payload=CanonicalInboundMessage(
-                    message_id=str(payload.get("message_id") or payload.get("update_id") or chat_id),
-                    correlation_id=str(chat_id),
-                    occurred_at=datetime.now(timezone.utc).isoformat(),
-                    service_id=TELEGRAM_SERVICE_ID,
+                payload=CanonicalInboundEvent(
                     service_key="telegram",
-                    channel_type="telegram",
+                    provider_user_id_from=str(from_user).strip() if from_user is not None else "telegram",
+                    provider_message_id=str(payload.get("message_id") or payload.get("update_id") or chat_id),
                     channel_target=str(chat_id),
-                    external_user_id=str(from_user).strip() if from_user is not None else None,
-                    display_name=str(from_user_name or "").strip() or None,
-                    resolved_user_id=_resolve_internal_telegram_user_id(
-                        str(from_user).strip() if from_user is not None else None
-                    ),
+                    occurred_at=datetime.now(timezone.utc).isoformat(),
+                    event_kind="invite",
+                    provider_raw_message=dict(payload),
                     text=str(text or "Telegram invite request").strip(),
                     attachments=[],
-                    metadata={
+                    dedupe_key=str(chat_id),
+                    display_name=str(from_user_name or "").strip() or None,
+                ).to_payload()
+                | {
+                    "metadata": {
                         "message_kind": "invite_request",
                         "invite": {
                             "chat_id": str(chat_id),
@@ -131,8 +130,8 @@ class TelegramSense(Sense):
                             "from_user_name": from_user_name,
                         },
                     },
-                ).to_payload(),
-                source="telegram",
+                },
+                source=_PROVIDER_KEY,
                 correlation_id=str(chat_id),
             )
         )
