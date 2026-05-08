@@ -50,13 +50,17 @@ def test_create_reminder_accepts_spanish_relative_time(monkeypatch) -> None:
     assert str(payload.get("user_id") or "") == "u-me"
     assert str(payload.get("service_key") or "") == "api"
     assert str(payload.get("delivery_target") or "") == "8553589429"
-    tool_call = payload.get("tool_call")
-    assert isinstance(tool_call, dict)
-    assert str(tool_call.get("tool_name") or "") == "communication.send_message"
-    args = tool_call.get("args")
-    assert isinstance(args, dict)
-    assert str(args.get("UserId") or "") == "u-me"
-    assert "To" not in args
+    assert payload.get("payload_type") == "prompt_to_brain"
+    assert payload.get("mind_layer") == "conscious"
+    assert payload.get("dispatch_mode") == "conscious"
+    assert "tool_call" not in payload
+    event_trigger = payload.get("event_trigger")
+    assert isinstance(event_trigger, dict)
+    assert event_trigger.get("type") == "time"
+    assert event_trigger.get("original_time_expression") == "mañana a las 7:30am"
+    prompt = str(payload.get("prompt_text") or "")
+    assert "At this time" in prompt
+    assert "originating channel" in prompt
 
 
 def test_create_reminder_raises_structured_error_on_missing_message() -> None:
@@ -98,7 +102,7 @@ def test_create_reminder_raises_structured_error_on_unresolvable_time() -> None:
         assert payload["retryable"] is True
 
 
-def test_create_reminder_preserves_quoted_message_as_verbatim(monkeypatch) -> None:
+def test_create_reminder_stores_agent_instruction_for_quoted_message(monkeypatch) -> None:
     captured: dict[str, object] = {}
 
     def _capture_schedule_event(self, **kwargs):  # noqa: ANN001, ANN003
@@ -119,15 +123,12 @@ def test_create_reminder_preserves_quoted_message_as_verbatim(monkeypatch) -> No
     assert result["reminder_id"] == "tsig_q1"
     payload = captured.get("payload")
     assert isinstance(payload, dict)
-    assert payload.get("message_mode") == "verbatim"
-    assert payload.get("message_text") == "Hi alex"
-    assert payload.get("message") == "Hi alex"
+    assert payload.get("payload_type") == "prompt_to_brain"
     assert payload.get("reminder_text_raw") == 'say "Hi alex"'
-    tool_call = payload.get("tool_call")
-    assert isinstance(tool_call, dict)
-    args = tool_call.get("args")
-    assert isinstance(args, dict)
-    assert str(args.get("Message") or "") == "Hi alex"
+    prompt = str(payload.get("prompt_text") or "")
+    assert "Hi alex" in prompt
+    assert "Phrase the reminder naturally" in prompt
+    assert "tool_call" not in payload
 
 
 def test_create_reminder_resolves_named_user_to_canonical_user_id(tmp_path, monkeypatch) -> None:
@@ -168,11 +169,40 @@ def test_create_reminder_resolves_named_user_to_canonical_user_id(tmp_path, monk
     assert str(payload.get("user_id") or "") == "u-alex"
     assert str(payload.get("provider_user_id_from") or "") == "8553589429"
     assert str(payload.get("service_key") or "") == "telegram"
-    tool_call = payload.get("tool_call")
-    assert isinstance(tool_call, dict)
-    args = tool_call.get("args")
-    assert isinstance(args, dict)
-    assert str(args.get("UserId") or "") == "u-alex"
+    assert payload.get("payload_type") == "prompt_to_brain"
+    prompt = str(payload.get("prompt_text") or "")
+    assert "Alex" in prompt
+
+
+def test_create_reminder_rewrites_first_person_as_agent_instruction(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def _capture_schedule_event(self, **kwargs):  # noqa: ANN001, ANN003
+        _ = self
+        captured.update(kwargs)
+        return "tsig_first_person"
+
+    monkeypatch.setattr(scheduler_module.SchedulerService, "schedule_event", _capture_schedule_event)
+    monkeypatch.setattr(scheduler_module, "create_prompt_artifact", lambda **_kwargs: "pa_test")
+    tool = SchedulerTool(llm_client=_FixedIsoLlm())
+    result = tool.create_reminder(
+        for_whom="me",
+        time="in 1 minute",
+        message="Remind me to take my medicine",
+        timezone_name="UTC",
+        channel_target="8553589429",
+        origin_channel="telegram",
+        provider_user_id_from="8553589429",
+    )
+
+    assert result["reminder_id"] == "tsig_first_person"
+    payload = captured.get("payload")
+    assert isinstance(payload, dict)
+    prompt = str(payload.get("prompt_text") or "")
+    assert "Remind me to take my medicine" in prompt
+    assert "second person" in prompt
+    assert "correcting first-person references" in prompt
+    assert str(payload.get("message") or "") == ""
 
 
 def test_execute_uses_channel_target_from_state(monkeypatch) -> None:

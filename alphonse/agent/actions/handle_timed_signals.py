@@ -10,6 +10,8 @@ from typing import Any
 from alphonse.agent.actions.base import Action
 from alphonse.agent.actions.models import ActionResult
 from alphonse.agent.cognition.memory import MemoryService
+from alphonse.agent.identity.service_resolvers import resolve_service_id_by_channel_type
+from alphonse.agent.identity.service_resolvers import resolve_service_key_by_service_user_id
 from alphonse.agent.nervous_system.paths import resolve_nervous_system_db_path
 from alphonse.agent.nervous_system.senses.bus import Signal as BusSignal
 from alphonse.agent.observability.log_manager import get_component_logger
@@ -50,10 +52,12 @@ class HandleTimedSignalsAction(Action):
         mind_layer = str(payload.get("mind_layer") or inner.get("mind_layer") or "subconscious").strip().lower()
         prompt = _extract_prompt_text(inner=inner)
         target = str(inner.get("chat_id") or payload.get("target") or inner.get("delivery_target") or "").strip()
-        user_id = str(inner.get("person_id") or target or "").strip()
-        channel_type = str(
+        canonical_user_id = str(inner.get("user_id") or inner.get("person_id") or "").strip()
+        provider_user_id = str(inner.get("provider_user_id_from") or target or canonical_user_id or "").strip()
+        channel_hint = str(
             inner.get("origin_channel") or payload.get("origin_channel") or payload.get("origin") or inner.get("origin") or "api"
         ).strip()
+        channel_type = _resolve_registered_service_key(channel_hint=channel_hint, target=target, user_id=provider_user_id)
         logger.info(
             "HandleTimedSignalsAction invoked signal_id=%s timed_signal_id=%s correlation_id=%s mind_layer=%s",
             getattr(signal, "id", None),
@@ -75,16 +79,16 @@ class HandleTimedSignalsAction(Action):
         routed_signal_type = "timed_signal.conscious_payload"
         routed_payload = _build_timed_conscious_canonical_payload(
             service_key=channel_type,
-            provider_user_id_from=user_id or target or channel_type,
+            provider_user_id_from=provider_user_id or target or channel_type,
             provider_message_id=str(payload.get("timed_signal_id") or _correlation_id(payload, signal) or "timed"),
-            channel_target=target or user_id or channel_type,
+            channel_target=target or provider_user_id or channel_type,
             text=prompt,
             correlation_id=_correlation_id(payload, signal),
             provider_raw_message={
                 "timed_signal": dict(payload) if isinstance(payload, dict) else {},
                 "routing": {
                     "mind_layer": mind_layer,
-                    "channel_hint": channel_type,
+                    "channel_hint": channel_hint,
                     "source": "timed_signal",
                 },
             },
@@ -166,9 +170,9 @@ def _correlation_id(payload: dict, signal: object | None) -> str | None:
 
 def _extract_prompt_text(*, inner: dict) -> str:
     text = str(
-        inner.get("prompt")
+        inner.get("prompt_text")
+        or inner.get("prompt")
         or inner.get("agent_internal_prompt")
-        or inner.get("prompt_text")
         or inner.get("message_text")
         or inner.get("message")
         or inner.get("reminder_text_raw")
@@ -429,13 +433,18 @@ def _emit_brain_payload_to_bus(
 ) -> None:
     if not hasattr(bus, "emit"):
         return
-    channel = str(
+    channel_hint = str(
         signal_payload.get("origin")
         or inner.get("origin_channel")
         or signal_payload.get("channel")
         or "api"
     ).strip() or "api"
     target = str(signal_payload.get("target") or inner.get("delivery_target") or user_id).strip() or user_id
+    channel = _resolve_registered_service_key(
+        channel_hint=channel_hint,
+        target=target,
+        user_id=user_id,
+    )
     correlation_id = _correlation_id(signal_payload, signal)
     nested = brain_payload.get("payload") if isinstance(brain_payload, dict) else {}
     nested_payload = nested if isinstance(nested, dict) else {}
@@ -487,6 +496,17 @@ def _emit_brain_payload_to_bus(
             correlation_id=correlation_id,
         )
     )
+
+
+def _resolve_registered_service_key(*, channel_hint: str, target: str | None, user_id: str | None) -> str:
+    normalized_hint = str(channel_hint or "").strip().lower()
+    if normalized_hint and resolve_service_id_by_channel_type(normalized_hint) is not None:
+        return normalized_hint
+    for candidate in (target, user_id):
+        resolved = resolve_service_key_by_service_user_id(str(candidate or "").strip())
+        if resolved:
+            return resolved
+    return "cli"
 
 
 def _extract_job_execution_prompt(payload: dict[str, Any] | None) -> str:

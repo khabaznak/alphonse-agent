@@ -42,7 +42,17 @@ class HandleConsciousMessageAction(Action):
         channel_type = channel_type_for_payload(payload)
         channel_target = channel_target_for_payload(payload)
         message_id = message_id_for_payload(payload) or None
-        user_id = resolved_user_id_for_payload(payload) or None
+        try:
+            user_id = resolved_user_id_for_payload(payload) or None
+        except ValueError as exc:
+            return _reject_invalid_payload(
+                reason=str(exc or "invalid_conscious_payload"),
+                payload=payload,
+                correlation_id=str(correlation_id),
+                channel_type=channel_type,
+                channel_target=channel_target,
+                message_id=message_id,
+            )
         if not channel_type:
             raise ValueError("invalid_conscious_payload: missing channel type")
         if not channel_target:
@@ -137,6 +147,33 @@ class HandleConsciousMessageAction(Action):
             payload={"task_id": task_id},
             urgency=None,
         )
+
+
+def _reject_invalid_payload(
+    *,
+    reason: str,
+    payload: dict[str, Any],
+    correlation_id: str,
+    channel_type: str | None,
+    channel_target: str | None,
+    message_id: str | None,
+) -> ActionResult:
+    _LOG.emit(
+        level="warning",
+        event="incoming_message.rejected",
+        component="actions.handle_conscious_message",
+        correlation_id=str(correlation_id or "").strip() or None,
+        channel=str(channel_type or "").strip() or None,
+        user_id=str(payload.get("alphonse_user_id") or "").strip() or None,
+        error_code="invalid_conscious_payload",
+        payload={
+            "reason": reason,
+            "address": str(channel_target or "").strip() or None,
+            "message_id": str(message_id or "").strip() or None,
+            "service_key": str(payload.get("service_key") or "").strip() or None,
+        },
+    )
+    return ActionResult(intention_key="NOOP", payload={}, urgency=None)
 
 
 def _build_task_record_from_payload(

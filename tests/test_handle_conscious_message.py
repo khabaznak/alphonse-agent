@@ -413,8 +413,13 @@ def test_handle_conscious_message_canonical_payload_with_unresolved_user_raises(
         action.execute({"signal": Signal(type="sense.telegram.message.user.received", payload=payload), "ctx": Bus()})
 
 
-def test_handle_conscious_message_mechanical_payload_with_unresolved_service_key_raises(monkeypatch) -> None:
+def test_handle_conscious_message_mechanical_payload_with_unresolved_service_key_rejects(monkeypatch) -> None:
     action = HandleConsciousMessageAction()
+    emitted: list[dict[str, object]] = []
+
+    class _FakeLog:
+        def emit(self, **kwargs: object) -> None:
+            emitted.append(dict(kwargs))
 
     monkeypatch.setattr(
         "alphonse.agent.actions.handle_conscious_message.is_pdca_slicing_enabled",
@@ -424,6 +429,7 @@ def test_handle_conscious_message_mechanical_payload_with_unresolved_service_key
         "alphonse.agent.actions.handle_conscious_message.emit_presence_phase_changed",
         lambda **_: None,
     )
+    monkeypatch.setattr("alphonse.agent.actions.handle_conscious_message._LOG", _FakeLog())
 
     payload = {
         "contract_type": "canonical_inbound_event",
@@ -438,8 +444,12 @@ def test_handle_conscious_message_mechanical_payload_with_unresolved_service_key
         "text": "Hello unresolved",
         "attachments": [],
     }
-    with pytest.raises(ValueError, match="unknown service_key"):
-        action.execute({"signal": Signal(type="sense.telegram.message.user.received", payload=payload), "ctx": Bus()})
+    result = action.execute({"signal": Signal(type="sense.telegram.message.user.received", payload=payload), "ctx": Bus()})
+
+    assert result.intention_key == "NOOP"
+    event = next((item for item in emitted if str(item.get("event") or "") == "incoming_message.rejected"), None)
+    assert isinstance(event, dict)
+    assert event.get("error_code") == "invalid_conscious_payload"
 
 
 def test_handle_conscious_message_mechanical_payload_missing_provider_message_id_raises(monkeypatch) -> None:

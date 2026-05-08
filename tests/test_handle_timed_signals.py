@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+from pathlib import Path
 import types
 
 from alphonse.agent.actions.handle_timed_signals import HandleTimedSignalsAction
 from alphonse.agent.actions.handle_timed_signals import _emit_brain_payload_to_bus
+from alphonse.agent.identity import upsert_user
+from alphonse.agent.identity.service_resolvers import upsert_service_resolver
+from alphonse.agent.nervous_system.migrate import apply_schema
 from alphonse.agent.nervous_system.senses.bus import Bus
 from alphonse.agent.nervous_system.senses.bus import Signal
 from alphonse.agent.tools.base import ToolDefinition
@@ -79,6 +83,52 @@ def test_conscious_reminder_dispatch_with_real_bus_contract() -> None:
     payload = emitted.payload if isinstance(emitted.payload, dict) else {}
     assert str(payload.get("contract_type") or "") == "canonical_inbound_event"
     assert str(payload.get("text") or "") == "Take a shower now."
+
+
+def test_conscious_reminder_prompt_to_brain_routes_to_pdca() -> None:
+    action = HandleTimedSignalsAction()
+    bus = _FakeBus()
+    signal = Signal(
+        type="timed_signal.fired",
+        payload={
+            "timed_signal_id": "tsig_prompt_reminder",
+            "mind_layer": "conscious",
+            "target": "8553589429",
+            "origin": "telegram",
+            "payload": {
+                "kind": "reminder",
+                "payload_type": "prompt_to_brain",
+                "mind_layer": "conscious",
+                "prompt_text": "At this time, remind Alex to take medicine.",
+                "delivery_target": "8553589429",
+                "origin_channel": "telegram",
+                "provider_user_id_from": "8553589429",
+                "user_id": "u-alex",
+                "event_trigger": {"type": "time", "time": "2026-02-20T13:30:00+00:00"},
+            },
+        },
+        source="timer",
+        correlation_id="corr-prompt-reminder",
+    )
+
+    result = action.execute({"signal": signal, "ctx": bus, "state": None, "outcome": None})
+
+    assert result.intention_key == "NOOP"
+    assert bus.events
+    emitted = bus.events[-1]
+    assert emitted.type == "timed_signal.conscious_payload"
+    payload = emitted.payload if isinstance(emitted.payload, dict) else {}
+    assert str(payload.get("service_key") or "") == "telegram"
+    assert str(payload.get("provider_user_id_from") or "") == "8553589429"
+    assert str(payload.get("channel_target") or "") == "8553589429"
+    assert str(payload.get("text") or "") == "At this time, remind Alex to take medicine."
+    raw = payload.get("provider_raw_message")
+    assert isinstance(raw, dict)
+    timed_signal = raw.get("timed_signal")
+    assert isinstance(timed_signal, dict)
+    inner = timed_signal.get("payload")
+    assert isinstance(inner, dict)
+    assert inner.get("event_trigger") == {"type": "time", "time": "2026-02-20T13:30:00+00:00"}
 
 
 def test_timer_fired_runs_jobs_reconcile_without_dispatch(monkeypatch) -> None:
@@ -224,6 +274,66 @@ def test_job_trigger_bus_prompt_uses_payload_text_not_setup_metadata() -> None:
     text = str(payload.get("text") or "")
     assert text == "Send voice note containing a stoic quote"
     assert "Create scheduled job" not in text
+
+
+def test_job_trigger_unknown_origin_resolves_service_from_target(tmp_path: Path, monkeypatch) -> None:
+    db_path = tmp_path / "nerve-db"
+    monkeypatch.setenv("NERVE_DB_PATH", str(db_path))
+    apply_schema(db_path)
+    upsert_user(
+        {
+            "user_id": "u-telegram",
+            "principal_id": "u-telegram",
+            "display_name": "Telegram User",
+            "is_active": True,
+        }
+    )
+    upsert_service_resolver(
+        user_id="u-telegram",
+        service_id=2,
+        service_user_id="8553589429",
+        is_active=True,
+    )
+    bus = _FakeBus()
+
+    _emit_brain_payload_to_bus(
+        bus=bus,
+        signal_payload={"target": "8553589429", "origin": "assistant"},
+        inner={},
+        user_id="8553589429",
+        signal=types.SimpleNamespace(correlation_id="corr-job-trigger-assistant"),
+        brain_payload={
+            "payload_type": "prompt_to_brain",
+            "job_id": "job_456",
+            "payload": {"prompt_text": "Run the scheduled task"},
+        },
+    )
+
+    assert bus.events
+    payload = bus.events[-1].payload if isinstance(bus.events[-1].payload, dict) else {}
+    assert str(payload.get("service_key") or "") == "telegram"
+    assert str(payload.get("channel_target") or "") == "8553589429"
+
+
+def test_job_trigger_unknown_origin_falls_back_to_cli() -> None:
+    bus = _FakeBus()
+
+    _emit_brain_payload_to_bus(
+        bus=bus,
+        signal_payload={"target": "unmapped-target", "origin": "assistant"},
+        inner={},
+        user_id="unmapped-target",
+        signal=types.SimpleNamespace(correlation_id="corr-job-trigger-cli"),
+        brain_payload={
+            "payload_type": "prompt_to_brain",
+            "job_id": "job_789",
+            "payload": {"prompt_text": "Run without mapped provider"},
+        },
+    )
+
+    assert bus.events
+    payload = bus.events[-1].payload if isinstance(bus.events[-1].payload, dict) else {}
+    assert str(payload.get("service_key") or "") == "cli"
 
 
 def test_timed_signal_executes_canonical_tool_call_payload(monkeypatch) -> None:

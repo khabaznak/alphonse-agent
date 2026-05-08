@@ -11,10 +11,8 @@ from alphonse.agent import identity
 from alphonse.agent.identity.service_resolvers import resolve_service_key_by_service_user_id
 from alphonse.agent.nervous_system.prompt_artifacts import create_prompt_artifact
 from alphonse.agent.services.scheduler_service import SchedulerService
-from alphonse.agent.services.automation_tool_call_contract import build_canonical_tool_call_payload
 from alphonse.agent.cognition.prompt_templates_runtime import (
     SCHEDULER_NORMALIZE_TIME_SYSTEM_PROMPT,
-    SCHEDULER_PARAPHRASE_SYSTEM_PROMPT,
 )
 from alphonse.config import settings
 
@@ -145,61 +143,47 @@ class SchedulerTool:
         preferred_service_key = recipient.get("service_key") or resolved_origin_channel
         trigger_time = fire_at
         source_instruction = str(reminder_message or "").strip()
-        message_mode, message_text = _build_reminder_message_payload(
-            llm_client=self.llm_client,
+        agent_prompt = _build_reminder_agent_prompt(
             source_instruction=source_instruction,
+            user_id=canonical_user_id,
+            for_whom=whom_raw,
+            trigger_time=trigger_time,
+            timezone_name=resolved_timezone,
         )
-        tool_args: dict[str, Any] = {
-            "Message": message_text,
-            "Channel": preferred_service_key,
-        }
-        if canonical_user_id:
-            tool_args["UserId"] = canonical_user_id
-        elif delivery_target:
-            tool_args["To"] = delivery_target
-        payload = build_canonical_tool_call_payload(
-            tool_name="communication.send_message",
-            args=tool_args,
-        )
-        payload.update(
-            {
-                "kind": "reminder_delivery",
-                "payload_type": "tool_call",
-                "mind_layer": "subconscious",
-                "dispatch_mode": "deterministic",
-                "message": message_text,
-                "message_text": message_text,
-                "message_mode": message_mode,
-                "reminder_text_raw": source_instruction,
-                "speaker": "alphonse",
-                "requested_by": canonical_user_id or delivery_target,
-                "origin_channel": preferred_service_key,
-                "user_id": canonical_user_id,
-                "provider_user_id_from": str(provider_user_id_from or "").strip() or None,
-                "service_key": preferred_service_key,
-                "created_at": datetime.now(dt_timezone.utc).isoformat(),
-                "trigger_at": trigger_time,
-                "fire_at": trigger_time,
-                "delivery_target": delivery_target,
-                "event_trigger": {
-                    "type": "time",
-                    "time": trigger_time,
-                    "original_time_expression": trigger_expr,
-                },
-            }
-        )
-        internal_prompt = message_text
         artifact_id = create_prompt_artifact(
             user_id=str(canonical_user_id or delivery_target or "default"),
             source_instruction=source_instruction,
-            agent_internal_prompt=internal_prompt,
+            agent_internal_prompt=agent_prompt,
             language=None,
             artifact_kind="reminder",
         )
-        payload["source_instruction"] = source_instruction
-        payload["agent_internal_prompt"] = internal_prompt
-        payload["prompt"] = internal_prompt
-        payload["prompt_artifact_id"] = artifact_id
+        payload = {
+            "kind": "reminder",
+            "payload_type": "prompt_to_brain",
+            "mind_layer": "conscious",
+            "dispatch_mode": "conscious",
+            "prompt_text": agent_prompt,
+            "agent_internal_prompt": agent_prompt,
+            "prompt": agent_prompt,
+            "source_instruction": source_instruction,
+            "reminder_text_raw": source_instruction,
+            "prompt_artifact_id": artifact_id,
+            "speaker": "alphonse",
+            "requested_by": canonical_user_id or delivery_target,
+            "origin_channel": preferred_service_key,
+            "user_id": canonical_user_id,
+            "provider_user_id_from": str(provider_user_id_from or "").strip() or None,
+            "service_key": preferred_service_key,
+            "created_at": datetime.now(dt_timezone.utc).isoformat(),
+            "trigger_at": trigger_time,
+            "fire_at": trigger_time,
+            "delivery_target": delivery_target,
+            "event_trigger": {
+                "type": "time",
+                "time": trigger_time,
+                "original_time_expression": trigger_expr,
+            },
+        }
         schedule_id = self._schedule_timed_signal(
             trigger_time=trigger_time,
             timezone_name=resolved_timezone,
@@ -323,32 +307,34 @@ def _normalize_time_expression_to_iso(*, expression: str, timezone_name: str, ll
     )
 
 
-def _build_reminder_message_payload(*, llm_client: Any | None, source_instruction: str) -> tuple[str, str]:
+def _build_reminder_agent_prompt(
+    *,
+    source_instruction: str,
+    user_id: str | None,
+    for_whom: str,
+    trigger_time: str,
+    timezone_name: str,
+) -> str:
     source = str(source_instruction or "").strip()
-    logger.info(
-        "scheduler_tool paraphrase input source=%r source_instructions=%r",
-        source,
-        source_instruction,
+    remembered = _extract_quoted_text(source) or source or "something important"
+    user_label = _reminder_user_label(user_id=user_id, for_whom=for_whom)
+    return (
+        f"At this time ({trigger_time}, timezone {timezone_name}), remind {user_label} about this remembered "
+        f"intention: {remembered}. Phrase the reminder naturally for the recipient in second person, correcting "
+        "first-person references from the original request when needed. Deliver it back through the originating "
+        "channel unless current context clearly requires otherwise."
     )
-    if not source:
-        logger.info(
-            "scheduler_tool paraphrase output mode=paraphrased prompt=%r",
-            "You just remembered something important.",
-        )
-        return "paraphrased", "You just remembered something important."
-    quoted = _extract_quoted_text(source)
-    if quoted:
-        logger.info(
-            "scheduler_tool paraphrase output mode=verbatim prompt=%r",
-            quoted,
-        )
-        return "verbatim", quoted
-    rewritten = _paraphrase_reminder_message(llm_client=llm_client, source_instruction=source)
-    logger.info(
-        "scheduler_tool paraphrase output mode=paraphrased prompt=%r",
-        rewritten or source,
-    )
-    return "paraphrased", rewritten or source
+
+
+def _reminder_user_label(*, user_id: str | None, for_whom: str) -> str:
+    user = identity.get_user(str(user_id or "").strip() or None)
+    display_name = str((user or {}).get("display_name") or "").strip() if isinstance(user, dict) else ""
+    if display_name:
+        return display_name
+    rendered = str(for_whom or "").strip()
+    if rendered.lower() in {"me", "yo", "current_conversation"}:
+        return "the user"
+    return rendered or "the user"
 
 
 def _extract_quoted_text(text: str) -> str:
@@ -360,33 +346,6 @@ def _extract_quoted_text(text: str) -> str:
         if value:
             return value
     return ""
-
-
-def _paraphrase_reminder_message(*, llm_client: Any | None, source_instruction: str) -> str:
-    source = str(source_instruction or "").strip()
-    if not source:
-        logger.info("scheduler_tool _paraphrase_reminder_message source=%r result=%r", source, "")
-        return ""
-    if llm_client is None:
-        logger.info(
-            "scheduler_tool _paraphrase_reminder_message source=%r result=%r",
-            source,
-            source,
-        )
-        return source
-    system_prompt = SCHEDULER_PARAPHRASE_SYSTEM_PROMPT
-    user_prompt = (
-        "Source reminder content:\n"
-        f"{source}\n\n"
-        "Rewrite only the reminder payload text."
-    )
-    rendered = _llm_complete_text(client=llm_client, system_prompt=system_prompt, user_prompt=user_prompt).strip()
-    logger.info(
-        "scheduler_tool _paraphrase_reminder_message source=%r result=%r",
-        source,
-        rendered or source,
-    )
-    return rendered or source
 
 
 def _try_parse_iso(raw: str, *, timezone_name: str) -> str | None:

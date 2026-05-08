@@ -81,10 +81,8 @@ def test_create_reminder_normalizes_fire_at_and_delivery_target(
     service_key = str(payload.get("service_key") or "")
     user_id = str(payload.get("user_id") or "")
     provider_user_id_from = str(payload.get("provider_user_id_from") or "")
-    tool_call = payload.get("tool_call")
-    assert isinstance(tool_call, dict)
-    args = tool_call.get("args")
-    assert isinstance(args, dict)
+    event_trigger = payload.get("event_trigger")
+    assert isinstance(event_trigger, dict)
 
     parsed_trigger = _parse_iso(trigger_at)
     parsed_fire = _parse_iso(fire_at)
@@ -95,7 +93,10 @@ def test_create_reminder_normalizes_fire_at_and_delivery_target(
     assert service_key == "telegram"
     assert user_id == "u-reminder"
     assert provider_user_id_from == "8553589429"
-    assert str(args.get("UserId") or "") == "u-reminder"
+    assert str(payload.get("payload_type") or "") == "prompt_to_brain"
+    assert str(payload.get("mind_layer") or "") == "conscious"
+    assert str(event_trigger.get("type") or "") == "time"
+    assert str(event_trigger.get("original_time_expression") or "") == "in 1 minute"
     assert parsed_trigger == parsed_fire
     assert now <= parsed_trigger <= now + timedelta(minutes=2)
 
@@ -130,15 +131,13 @@ def test_timer_dispatches_when_now_gte_fire_at(
         assert signal is not None
         assert signal.type == "timed_signal.fired"
         payload = signal.payload if isinstance(signal.payload, dict) else {}
-        assert str(payload.get("mind_layer") or "") == "subconscious"
+        assert str(payload.get("mind_layer") or "") == "conscious"
         assert str(payload.get("target") or "") == "8553589429"
         inner = payload.get("payload") if isinstance(payload.get("payload"), dict) else {}
-        tool_call = inner.get("tool_call")
-        assert isinstance(tool_call, dict)
-        assert str(tool_call.get("tool_name") or "") == "communication.send_message"
-        args = tool_call.get("args")
-        assert isinstance(args, dict)
-        assert str(args.get("UserId") or "") == "u-convo"
+        assert str(inner.get("payload_type") or "") == "prompt_to_brain"
+        assert str(inner.get("mind_layer") or "") == "conscious"
+        assert str(inner.get("user_id") or "") == "u-convo"
+        assert str(inner.get("prompt_text") or "")
     finally:
         timer.stop()
 
