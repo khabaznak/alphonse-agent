@@ -15,7 +15,6 @@ from alphonse.agent.nervous_system.seed import (
 from alphonse.agent.observability.log_manager import get_component_logger
 from alphonse.agent.nervous_system.senses.base import Sense, SignalSpec
 from alphonse.agent.nervous_system.senses.bus import Bus, Signal
-from alphonse.agent.io import CliSenseAdapter
 
 logger = get_component_logger("senses.cli")
 
@@ -35,42 +34,40 @@ def build_cli_user_message_signal(
         external_user_id=external_user_id,
         person_id=person_id,
     )
-    sense_adapter = CliSenseAdapter()
-    normalized = sense_adapter.normalize(
-        {
-            "text": str(text or "").strip(),
-            "origin": "cli",
-            "user_id": identity["external_user_id"],
-            "user_name": identity["display_name"],
-            "person_id": identity["person_id"],
-            "timestamp": time.time(),
-            "correlation_id": correlation_id or str(uuid.uuid4()),
-        }
-    )
-    occurred_at = datetime.fromtimestamp(float(normalized.timestamp), tz=timezone.utc).isoformat()
+    correlation = str(correlation_id or uuid.uuid4())
+    raw_payload = {
+        "text": str(text or "").strip(),
+        "origin": "cli",
+        "user_id": identity["external_user_id"],
+        "user_name": identity["display_name"],
+        "person_id": identity["person_id"],
+        "timestamp": time.time(),
+        "correlation_id": correlation,
+    }
+    occurred_at = datetime.fromtimestamp(float(raw_payload["timestamp"]), tz=timezone.utc).isoformat()
     payload = CanonicalInboundEvent(
         service_key="cli",
         provider_user_id_from=str(identity["external_user_id"] or "").strip() or BOOTSTRAP_CLI_SERVICE_USER_ID,
-        provider_message_id=str(normalized.correlation_id or normalized.timestamp),
-        channel_target=str(normalized.channel_target or channel_target),
+        provider_message_id=correlation,
+        channel_target=str(channel_target or "cli"),
         occurred_at=occurred_at,
         event_kind="message",
-        provider_raw_message=dict(normalized.metadata.get("raw") or {}) if isinstance(normalized.metadata, dict) else {},
-        text=normalized.text,
+        provider_raw_message=raw_payload,
+        text=str(text or "").strip(),
         attachments=[],
-        dedupe_key=normalized.correlation_id,
+        dedupe_key=correlation,
         display_name=str(identity["display_name"] or "").strip() or None,
     ).to_payload()
     payload["metadata"] = {
-        "normalized_metadata": normalized.metadata,
         "bootstrap_admin_user_id": identity["person_id"],
+        "raw": raw_payload,
         **dict(metadata or {}),
     }
     return Signal(
         type="sense.cli.message.user.received",
         payload=payload,
         source="cli",
-        correlation_id=normalized.correlation_id,
+        correlation_id=correlation,
     )
 
 
@@ -87,7 +84,6 @@ class CliSense(Sense):
         self._thread: threading.Thread | None = None
         self._stop_event = threading.Event()
         self._bus: Bus | None = None
-        self._sense_adapter = CliSenseAdapter()
 
     def start(self, bus: Bus) -> None:
         if self._thread and self._thread.is_alive():

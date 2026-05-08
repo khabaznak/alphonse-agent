@@ -1,35 +1,14 @@
 from __future__ import annotations
 
-import time
 from dataclasses import dataclass
 from typing import Any
 
-from alphonse.agent.io.adapters import ExtremityAdapter, SenseAdapter
-from alphonse.agent.io.contracts import NormalizedInboundMessage, NormalizedOutboundMessage
+from alphonse.agent.io.adapters import ExtremityAdapter
+from alphonse.agent.io.contracts import NormalizedOutboundMessage
 from alphonse.agent.observability.log_manager import get_component_logger
 from alphonse.integrations.domotics import ActionRequest, get_domotics_facade
 
 logger = get_component_logger("io.homeassistant_channel")
-
-
-@dataclass(frozen=True)
-class HomeAssistantSenseAdapter(SenseAdapter):
-    channel_type: str = "homeassistant"
-
-    def normalize(self, payload: dict[str, Any]) -> NormalizedInboundMessage:
-        entity_id = str(payload.get("entity_id") or "").strip() or None
-        new_state = payload.get("new_state")
-        text = f"{entity_id or 'unknown'} -> {new_state}" if new_state is not None else (entity_id or "homeassistant")
-        return NormalizedInboundMessage(
-            text=text,
-            channel_type=self.channel_type,
-            channel_target=entity_id,
-            user_id=None,
-            user_name="homeassistant",
-            timestamp=time.time(),
-            correlation_id=entity_id,
-            metadata=payload if isinstance(payload, dict) else {},
-        )
 
 
 class HomeAssistantExtremityAdapter(ExtremityAdapter):

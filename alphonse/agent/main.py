@@ -12,6 +12,7 @@ from alphonse.agent.nervous_system.ddfsm import DDFSM, DDFSMConfig
 from alphonse.agent.nervous_system.senses.bus import Bus, Signal
 from alphonse.agent.nervous_system.senses.manager import SenseManager
 from alphonse.agent.nervous_system.senses.registry import (
+    all_senses,
     register_senses,
     register_signals,
 )
@@ -67,7 +68,7 @@ def main() -> None:
     io_registry = get_io_registry()
     logging.info(
         "IO registry ready senses=%s extremities=%s",
-        ",".join(sorted(io_registry.senses.keys())),
+        ",".join(sorted(_registered_sense_keys())),
         ",".join(sorted(io_registry.extremities.keys())),
     )
 
@@ -118,6 +119,10 @@ def _emit_pdca_startup_mode(slicing_enabled: bool) -> None:
         error_code="pdca_slicing_disabled",
         payload={"ingress": ingress},
     )
+
+
+def _registered_sense_keys() -> list[str]:
+    return [str(sense_cls.key) for sense_cls in all_senses()]
 
 
 def _resolve_nerve_db_path() -> Path:

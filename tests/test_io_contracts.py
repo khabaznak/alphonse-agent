@@ -1,150 +1,32 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Any
-
-from alphonse.agent.io.api_channel import ApiSenseAdapter
-from alphonse.agent.io.cli_channel import CliSenseAdapter
-from alphonse.agent.io.telegram_channel import TelegramSenseAdapter
-from alphonse.agent.io.web_channel import WebSenseAdapter
-from alphonse.agent.io.contracts import NormalizedInboundMessage
 from alphonse.agent.nervous_system.senses.api import ApiSense, build_api_signal
 
 
 class FakeBus:
     def __init__(self) -> None:
-        self.emitted = []
+        self.emitted: list[object] = []
 
     def emit(self, signal: object) -> None:
         self.emitted.append(signal)
 
 
-@dataclass(frozen=True)
-class StubSenseAdapter:
-    channel_type: str = "webui"
-    normalized: NormalizedInboundMessage | None = None
-
-    def normalize(self, payload: dict[str, Any]) -> NormalizedInboundMessage:
-        if self.normalized is None:
-            raise RuntimeError("missing normalized payload")
-        return self.normalized
-
-
-def test_cli_sense_adapter_normalizes() -> None:
-    adapter = CliSenseAdapter()
-    result = adapter.normalize({"text": "hello", "user_name": "Alex", "timestamp": 123.0})
-    assert result.text == "hello"
-    assert result.channel_type == "cli"
-    assert result.channel_target == "cli"
-    assert result.user_name == "Alex"
-
-
-def test_telegram_sense_adapter_normalizes() -> None:
-    adapter = TelegramSenseAdapter()
-    result = adapter.normalize(
-        {
-            "text": "hi",
-            "chat_id": 42,
-            "from_user": "u1",
-            "from_user_name": "User",
-            "timestamp": 10.0,
-            "message_id": 7,
-            "update_id": 9,
-            "contact": {
-                "user_id": 123,
-                "first_name": "Maria",
-                "last_name": "Perez",
-            },
-        }
-    )
-    assert result.text == "hi"
-    assert result.channel_type == "telegram"
-    assert result.channel_target == "42"
-    assert result.user_id == "u1"
-    assert result.user_name == "User"
-    assert isinstance(result.attachments, list)
-    assert result.attachments
-    first = result.attachments[0]
-    assert str(first.get("kind") or "") == "contact"
-    assert str(first.get("contact_user_id") or "") == "123"
-
-
-def test_telegram_sense_adapter_normalizes_canonical_payload() -> None:
-    adapter = TelegramSenseAdapter()
-    result = adapter.normalize(
-        {
-            "text": "hi",
-            "channel": "telegram",
-            "target": "42",
-            "user_id": "u1",
-            "user_name": "User",
-            "timestamp": 10.0,
-            "correlation_id": "cid-1",
-            "attachments": [{"kind": "voice", "provider": "telegram", "file_id": "voice-1"}],
-            "metadata": {"message_id": 7, "update_id": 9},
-        }
-    )
-    assert result.channel_target == "42"
-    assert result.user_id == "u1"
-    assert result.user_name == "User"
-    assert result.correlation_id == "cid-1"
-    assert isinstance(result.attachments, list)
-    assert result.attachments
-    assert str(result.attachments[0].get("kind") or "") == "voice"
-    assert result.metadata["message_id"] == 7
-    assert result.metadata["update_id"] == 9
-
-
-def test_web_sense_adapter_normalizes() -> None:
-    adapter = WebSenseAdapter()
-    result = adapter.normalize({"text": "ping", "user_id": "u", "timestamp": 1.0})
-    assert result.text == "ping"
-    assert result.channel_type == "webui"
-    assert result.channel_target == "webui"
-
-
-def test_web_sense_adapter_normalizes_asset_message() -> None:
-    adapter = WebSenseAdapter()
-    result = adapter.normalize(
-        {
-            "channel": "webui",
-            "content": {
-                "type": "asset",
-                "assets": [{"asset_id": "asset-1", "kind": "audio"}],
-            },
-        }
-    )
-    assert result.text == "[audio asset message]"
-    assert result.channel_type == "webui"
-    assert result.channel_target == "webui"
-
-
-def test_api_sense_emits_normalized_payload(monkeypatch) -> None:
-    normalized = NormalizedInboundMessage(
-        text="ok",
-        channel_type="webui",
-        channel_target="webui",
-        user_id="u1",
-        user_name="User",
-        timestamp=1.0,
-        correlation_id="cid",
-        metadata={"raw": {"x": 1}},
-    )
-
-    stub_adapter = StubSenseAdapter(normalized=normalized)
-
-    class StubRegistry:
-        def get_sense(self, channel_type: str):
-            return stub_adapter
-
-    monkeypatch.setattr(
-        "alphonse.agent.nervous_system.senses.api.get_io_registry",
-        lambda: StubRegistry(),
-    )
-
+def test_api_sense_emits_canonical_event_from_text_payload() -> None:
     sense = ApiSense()
     bus = FakeBus()
-    signal = build_api_signal("sense.api.message.user.received", {"text": "hi", "channel": "webui"}, None)
+
+    signal = build_api_signal(
+        "sense.api.message.user.received",
+        {
+            "text": "hi",
+            "channel": "webui",
+            "target": "webui",
+            "user_id": "u1",
+            "user_name": "User",
+            "timestamp": 1.0,
+        },
+        None,
+    )
     sense.emit(bus, signal)
 
     assert len(bus.emitted) == 1
@@ -154,6 +36,55 @@ def test_api_sense_emits_normalized_payload(monkeypatch) -> None:
     assert payload["service_key"] == "webui"
     assert payload["provider_user_id_from"] == "u1"
     assert payload["channel_target"] == "webui"
-    assert payload["text"] == "ok"
+    assert payload["text"] == "hi"
     assert payload["display_name"] == "User"
-    assert payload["dedupe_key"] == "cid"
+
+
+def test_api_sense_emits_canonical_event_from_asset_payload() -> None:
+    sense = ApiSense()
+    bus = FakeBus()
+
+    signal = build_api_signal(
+        "sense.api.message.user.received",
+        {
+            "channel": "webui",
+            "target": "webui",
+            "content": {
+                "type": "asset",
+                "assets": [{"asset_id": "asset-1", "kind": "audio"}],
+            },
+        },
+        "cid-asset",
+    )
+    sense.emit(bus, signal)
+
+    payload = getattr(bus.emitted[0], "payload", {})
+    assert payload["contract_type"] == "canonical_inbound_event"
+    assert payload["service_key"] == "webui"
+    assert payload["channel_target"] == "webui"
+    assert payload["text"] == "[audio asset message]"
+    assert payload["attachments"] == [{"asset_id": "asset-1", "kind": "audio"}]
+    assert payload["dedupe_key"] == "cid-asset"
+
+
+def test_api_sense_passes_through_canonical_payload() -> None:
+    sense = ApiSense()
+    bus = FakeBus()
+    canonical_payload = {
+        "contract_type": "canonical_inbound_event",
+        "contract_version": "1.0",
+        "service_key": "api",
+        "provider_user_id_from": "u1",
+        "provider_message_id": "m-1",
+        "channel_target": "u1",
+        "occurred_at": "2026-05-07T00:00:00+00:00",
+        "event_kind": "message",
+        "provider_raw_message": {"x": 1},
+        "text": "hello",
+    }
+
+    signal = build_api_signal("sense.api.message.user.received", canonical_payload, "cid-pass")
+    sense.emit(bus, signal)
+
+    payload = getattr(bus.emitted[0], "payload", {})
+    assert payload == canonical_payload

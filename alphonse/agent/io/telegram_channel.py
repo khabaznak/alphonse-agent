@@ -1,14 +1,9 @@
 from __future__ import annotations
 
-import time
-from dataclasses import dataclass
 from typing import Any
 
-from alphonse.agent.io.contracts import (
-    NormalizedInboundMessage,
-    NormalizedOutboundMessage,
-)
-from alphonse.agent.io.adapters import SenseAdapter, ExtremityAdapter
+from alphonse.agent.io.contracts import NormalizedOutboundMessage
+from alphonse.agent.io.adapters import ExtremityAdapter
 from alphonse.agent.extremities.interfaces.integrations.telegram.telegram_adapter import TelegramAdapter
 from alphonse.agent.extremities.telegram_config import build_telegram_adapter_config
 from alphonse.agent.nervous_system.telegram_chat_access import can_deliver_to_chat
@@ -17,48 +12,6 @@ from alphonse.agent.nervous_system.user_service_resolvers import resolve_telegra
 from alphonse.agent.observability.log_manager import get_component_logger
 
 logger = get_component_logger("io.telegram_channel")
-
-
-@dataclass(frozen=True)
-class TelegramSenseAdapter(SenseAdapter):
-    channel_type: str = "telegram"
-
-    def normalize(self, payload: dict[str, Any]) -> NormalizedInboundMessage:
-        text = str(payload.get("text", "")).strip()
-        chat_id = payload.get("chat_id")
-        if chat_id is None:
-            chat_id = payload.get("target")
-        user_id = _as_optional_str(payload.get("from_user") or payload.get("user_id"))
-        user_name = _as_optional_str(payload.get("from_user_name") or payload.get("user_name")) or user_id
-        timestamp = _as_float(payload.get("timestamp"), default=time.time())
-        correlation_id = _as_optional_str(payload.get("correlation_id"))
-
-        metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
-        normalized_attachments = _normalize_inbound_attachments(payload)
-        metadata = {
-            "message_id": payload.get("message_id") or metadata.get("message_id"),
-            "update_id": payload.get("update_id") or metadata.get("update_id"),
-            "reply_to_user": payload.get("reply_to_user") or metadata.get("reply_to_user"),
-            "reply_to_user_name": payload.get("reply_to_user_name") or metadata.get("reply_to_user_name"),
-            "reply_to_message_id": payload.get("reply_to_message_id") or metadata.get("reply_to_message_id"),
-            "chat_type": payload.get("chat_type") or metadata.get("chat_type"),
-            "content_type": payload.get("content_type") or metadata.get("content_type"),
-            "contact": payload.get("contact") if isinstance(payload.get("contact"), dict) else metadata.get("contact"),
-            "attachments": normalized_attachments,
-            "raw": payload,
-        }
-
-        return NormalizedInboundMessage(
-            text=text,
-            channel_type=self.channel_type,
-            channel_target=_as_optional_str(chat_id),
-            user_id=user_id,
-            user_name=user_name,
-            timestamp=timestamp,
-            correlation_id=correlation_id,
-            metadata=metadata,
-            attachments=normalized_attachments,
-        )
 
 
 class TelegramExtremityAdapter(ExtremityAdapter):
@@ -203,43 +156,6 @@ class TelegramExtremityAdapter(ExtremityAdapter):
                 "target_integration_id": "telegram",
             }
         )
-
-def _as_optional_str(value: object | None) -> str | None:
-    if value is None:
-        return None
-    return str(value)
-
-
-def _as_float(value: object | None, *, default: float) -> float:
-    if value is None:
-        return default
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return default
-
-
-def _normalize_inbound_attachments(payload: dict[str, Any]) -> list[dict[str, Any]]:
-    attachments = payload.get("attachments")
-    normalized = [dict(item) for item in attachments if isinstance(item, dict)] if isinstance(attachments, list) else []
-    if normalized:
-        return normalized
-    contact_payload = payload.get("contact")
-    if not isinstance(contact_payload, dict):
-        return []
-    user_id = contact_payload.get("user_id")
-    return [
-        {
-            "kind": "contact",
-            "provider": "telegram",
-            "contact": dict(contact_payload),
-            "contact_user_id": str(user_id).strip() if user_id is not None else None,
-            "provider_event_ref": {
-                "message_id": _as_optional_str(payload.get("message_id")),
-                "field": "contact",
-            },
-        }
-    ]
 
 
 def _resolve_telegram_delivery_target(message: NormalizedOutboundMessage) -> str | None:
