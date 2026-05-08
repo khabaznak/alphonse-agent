@@ -21,7 +21,7 @@ class _FakeActionRuntime:
         self.calls.append({"action_key": action_key, "context": dict(context)})
 
 
-def test_build_cli_user_message_signal_matches_envelope_contract() -> None:
+def test_build_cli_user_message_signal_matches_canonical_contract() -> None:
     signal = build_cli_user_message_signal(
         text="hello from repl",
         correlation_id="corr-cli-1",
@@ -32,10 +32,11 @@ def test_build_cli_user_message_signal_matches_envelope_contract() -> None:
     assert signal.source == "cli"
     assert signal.correlation_id == "corr-cli-1"
     payload = signal.payload
-    assert payload["schema_version"] == "1.0"
-    assert payload["channel"]["type"] == "cli"
-    assert payload["channel"]["target"] == "cli"
-    assert payload["content"]["text"] == "hello from repl"
+    assert payload["contract_type"] == "canonical_inbound_event"
+    assert payload["service_key"] == "cli"
+    assert payload["provider_user_id_from"] == BOOTSTRAP_CLI_SERVICE_USER_ID
+    assert payload["channel_target"] == "cli"
+    assert payload["text"] == "hello from repl"
     assert payload["metadata"]["source"] == "test"
 
 
@@ -51,10 +52,10 @@ def test_build_cli_user_message_signal_includes_bootstrap_identity(tmp_path: Pat
         metadata={"source": "test"},
     )
 
-    actor = signal.payload["actor"]
-    assert actor["external_user_id"] == BOOTSTRAP_CLI_SERVICE_USER_ID
-    assert actor["user_id"] == BOOTSTRAP_ADMIN_USER_ID
-    assert actor["display_name"] == "Alex"
+    payload = signal.payload
+    assert payload["provider_user_id_from"] == BOOTSTRAP_CLI_SERVICE_USER_ID
+    assert payload["display_name"] == "Alex"
+    assert payload["metadata"]["bootstrap_admin_user_id"] == BOOTSTRAP_ADMIN_USER_ID
 
 
 def test_repl_message_command_emits_signal_and_invokes_runtime(capsys) -> None:
@@ -67,7 +68,7 @@ def test_repl_message_command_emits_signal_and_invokes_runtime(capsys) -> None:
     emitted = bus.get(timeout=0.01)
     assert emitted is not None
     assert emitted.type == "sense.cli.message.user.received"
-    assert emitted.payload["content"]["text"] == "hello world"
+    assert emitted.payload["text"] == "hello world"
     assert len(action_runtime.calls) == 1
     assert action_runtime.calls[0]["action_key"] == "handle_conscious_message"
     out = capsys.readouterr().out

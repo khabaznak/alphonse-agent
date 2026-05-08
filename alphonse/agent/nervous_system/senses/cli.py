@@ -6,7 +6,7 @@ import uuid
 from datetime import datetime, timezone
 
 from alphonse.agent import identity
-from alphonse.agent.actions.conscious_message_handler import build_incoming_message_envelope
+from alphonse.agent.extremities.interfaces.integrations._contracts import CanonicalInboundEvent
 from alphonse.agent.nervous_system.seed import (
     BOOTSTRAP_ADMIN_DISPLAY_NAME,
     BOOTSTRAP_ADMIN_USER_ID,
@@ -48,25 +48,24 @@ def build_cli_user_message_signal(
         }
     )
     occurred_at = datetime.fromtimestamp(float(normalized.timestamp), tz=timezone.utc).isoformat()
-    payload = build_incoming_message_envelope(
-        message_id=str(normalized.correlation_id or normalized.timestamp),
-        channel_type=normalized.channel_type,
+    payload = CanonicalInboundEvent(
+        service_key="cli",
+        provider_user_id_from=str(identity["external_user_id"] or "").strip() or BOOTSTRAP_CLI_SERVICE_USER_ID,
+        provider_message_id=str(normalized.correlation_id or normalized.timestamp),
         channel_target=str(normalized.channel_target or channel_target),
-        provider="cli",
-        text=normalized.text,
         occurred_at=occurred_at,
-        correlation_id=normalized.correlation_id,
-        actor_external_user_id=identity["external_user_id"],
-        actor_display_name=identity["display_name"],
-        actor_user_id=identity["person_id"],
-        metadata={
-            "normalized_metadata": normalized.metadata,
-            "service_key": "cli",
-            "service_user_id": identity["external_user_id"],
-            "bootstrap_admin_user_id": identity["person_id"],
-            **dict(metadata or {}),
-        },
-    )
+        event_kind="message",
+        provider_raw_message=dict(normalized.metadata.get("raw") or {}) if isinstance(normalized.metadata, dict) else {},
+        text=normalized.text,
+        attachments=[],
+        dedupe_key=normalized.correlation_id,
+        display_name=str(identity["display_name"] or "").strip() or None,
+    ).to_payload()
+    payload["metadata"] = {
+        "normalized_metadata": normalized.metadata,
+        "bootstrap_admin_user_id": identity["person_id"],
+        **dict(metadata or {}),
+    }
     return Signal(
         type="sense.cli.message.user.received",
         payload=payload,

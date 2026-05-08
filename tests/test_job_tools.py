@@ -166,13 +166,11 @@ def test_job_run_now_routes_prompt_jobs_to_bus_when_present(tmp_path: Path) -> N
     assert emitted.type == "sense.api.message.user.received"
     assert emitted.correlation_id == "corr-1"
     payload = emitted.payload or {}
-    channel = payload.get("channel") if isinstance(payload.get("channel"), dict) else {}
-    content = payload.get("content") if isinstance(payload.get("content"), dict) else {}
-    controls = payload.get("controls") if isinstance(payload.get("controls"), dict) else {}
-    assert str(channel.get("target") or "") == "8553589429"
-    assert str(content.get("text") or "") == "Send Alex the current USD to MXN exchange rate over Telegram"
-    assert bool(controls.get("force_new_task")) is True
-    assert "Create scheduled job" not in str(content.get("text") or "")
+    assert payload.get("contract_type") == "canonical_inbound_event"
+    assert str(payload.get("channel_target") or "") == "8553589429"
+    assert str(payload.get("text") or "") == "Send Alex the current USD to MXN exchange rate over Telegram"
+    assert bool(payload.get("force_new_task")) is True
+    assert "Create scheduled job" not in str(payload.get("text") or "")
 
 
 def test_job_run_now_fails_when_brain_sink_missing(tmp_path: Path) -> None:

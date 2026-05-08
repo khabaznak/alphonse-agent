@@ -150,10 +150,10 @@ def test_api_sense_emits_normalized_payload(monkeypatch) -> None:
     assert len(bus.emitted) == 1
     emitted = bus.emitted[0]
     payload = getattr(emitted, "payload", {})
-    assert payload["schema_version"] == "1.0"
-    assert payload["content"]["text"] == "ok"
-    assert payload["channel"]["type"] == "webui"
-    assert payload["channel"]["target"] == "webui"
-    assert payload["actor"]["external_user_id"] == "u1"
-    assert payload["actor"]["display_name"] == "User"
-    assert payload["correlation_id"] == "cid"
+    assert payload["contract_type"] == "canonical_inbound_event"
+    assert payload["service_key"] == "webui"
+    assert payload["provider_user_id_from"] == "u1"
+    assert payload["channel_target"] == "webui"
+    assert payload["text"] == "ok"
+    assert payload["display_name"] == "User"
+    assert payload["dedupe_key"] == "cid"

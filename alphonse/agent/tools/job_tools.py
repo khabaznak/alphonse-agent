@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any
 
-from alphonse.agent.actions.conscious_message_handler import build_incoming_message_envelope
 from alphonse.agent.cognition.prompt_templates_runtime import (
     JOBS_YOU_JUST_REMEMBERED_SYSTEM_PROMPT,
 )
+from alphonse.agent.extremities.interfaces.integrations._contracts import CanonicalInboundEvent
 from alphonse.agent.nervous_system.prompt_artifacts import create_prompt_artifact
 from alphonse.agent.services.job_runner import JobRunner
 from alphonse.agent.services.job_store import JobStore
@@ -342,20 +343,27 @@ def _brain_event_sink_from_state(
         bus.emit(
             Signal(
                 type="sense.api.message.user.received",
-                payload=build_incoming_message_envelope(
-                    message_id=str(correlation_id or payload.get("job_id") or "job-runner"),
-                    channel_type=channel,
+                payload=CanonicalInboundEvent(
+                    service_key=channel,
+                    provider_user_id_from=user_id or target or channel,
+                    provider_message_id=str(correlation_id or payload.get("job_id") or "job-runner"),
                     channel_target=target,
-                    provider=channel,
+                    occurred_at=datetime.now(timezone.utc).isoformat(),
+                    event_kind="message",
+                    provider_raw_message={"job": payload},
                     text=text,
-                    correlation_id=correlation_id,
-                    actor_external_user_id=user_id,
-                    controls={"force_new_task": True, "input_mode": "job_trigger"},
-                    metadata={
+                    attachments=[],
+                    dedupe_key=correlation_id,
+                ).to_payload()
+                | {
+                    "alphonse_user_id": user_id,
+                    "force_new_task": True,
+                    "metadata": {
                         "source": "job_runner",
                         "job": payload,
+                        "input_mode": "job_trigger",
                     },
-                ),
+                },
                 source="jobs",
                 correlation_id=correlation_id,
             )
