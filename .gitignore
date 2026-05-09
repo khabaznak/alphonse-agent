@@ -60,6 +60,10 @@ alphonse/agent/nervous_system/db/
 **/nerve-db*
 sessions/
 
+# Artifacts
+artifacts/
+
+
 # WhatsApp CLI store
 integrations/whatsapp/store/
 store/*
