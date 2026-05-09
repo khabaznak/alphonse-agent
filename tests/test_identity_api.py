@@ -32,6 +32,12 @@ def test_identity_facade_resolves_canonical_user_and_service_mapping(monkeypatch
     assert identity.resolve_user_id(service_id=2, service_user_id="8553589429") == "u-1"
     assert identity.resolve_service_user_id(user_id="u-1", service_id=2) == "8553589429"
     assert identity.resolve_delivery_target(user_id="u-1", service_id=2) == "8553589429"
+    assert identity.resolve_current_actor_user_id(
+        {"service_key": "telegram", "incoming_user_id": "8553589429"}
+    ) == "u-1"
+    assert identity.resolve_current_actor_user_id(
+        {"service_key": "telegram", "incoming_user_id": "999999"}
+    ) is None
 
 
 def test_identity_facade_resolves_session_user_from_service_mapping(monkeypatch, tmp_path) -> None:

@@ -46,6 +46,34 @@ def test_private_inbound_allowed_for_registered_user(tmp_path: Path, monkeypatch
     assert decision.reason == "registered_private"
 
 
+def test_private_inbound_allowed_for_registered_gabriela_uuid(tmp_path: Path, monkeypatch) -> None:
+    _prepare_db(tmp_path, monkeypatch)
+    users_store.upsert_user(
+        {
+            "user_id": "4a546b81-e416-4b22-99af-e0054b10171d",
+            "display_name": "Gabriela Villasana Rodríguez",
+            "relationship": "wife",
+            "is_active": True,
+        }
+    )
+    resolvers.upsert_service_resolver(
+        user_id="4a546b81-e416-4b22-99af-e0054b10171d",
+        service_id=2,
+        service_user_id="8593816828",
+        is_active=True,
+    )
+
+    decision = evaluate_inbound_access(
+        chat_id="8593816828",
+        chat_type="private",
+        from_user_id="8593816828",
+    )
+
+    assert decision.allowed is True
+    assert decision.reason == "registered_private"
+    assert can_deliver_to_chat("8593816828") is True
+
+
 def test_private_inbound_denied_for_unknown_user(tmp_path: Path, monkeypatch) -> None:
     _prepare_db(tmp_path, monkeypatch)
 

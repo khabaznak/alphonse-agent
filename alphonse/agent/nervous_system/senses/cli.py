@@ -9,7 +9,7 @@ from alphonse.agent import identity
 from alphonse.agent.extremities.interfaces.integrations._contracts import CanonicalInboundEvent
 from alphonse.agent.nervous_system.seed import (
     BOOTSTRAP_ADMIN_DISPLAY_NAME,
-    BOOTSTRAP_ADMIN_USER_ID,
+    BOOTSTRAP_CLI_SERVICE_ID,
     BOOTSTRAP_CLI_SERVICE_USER_ID,
 )
 from alphonse.agent.observability.log_manager import get_component_logger
@@ -124,19 +124,28 @@ def _resolve_cli_identity(
     external_user_id: str | None,
     person_id: str | None,
 ) -> dict[str, str | None]:
+    external_id = str(external_user_id or "").strip() or BOOTSTRAP_CLI_SERVICE_USER_ID
     try:
-        admin = identity.get_active_admin_user()
+        mapped_person_id = identity.resolve_user_id(
+            service_id=BOOTSTRAP_CLI_SERVICE_ID,
+            service_user_id=external_id,
+        )
+    except Exception:
+        mapped_person_id = None
+    try:
+        admin = identity.get_user(mapped_person_id) if mapped_person_id else identity.get_active_admin_user()
     except Exception:
         admin = None
     resolved_person_id = str(person_id or "").strip() or None
+    if resolved_person_id is None and mapped_person_id:
+        resolved_person_id = mapped_person_id
     if resolved_person_id is None and isinstance(admin, dict):
         resolved_person_id = str(admin.get("user_id") or "").strip() or None
     display_name = str(user_name or "").strip() or None
     if display_name is None and isinstance(admin, dict):
         display_name = str(admin.get("display_name") or "").strip() or None
-    external_id = str(external_user_id or "").strip() or BOOTSTRAP_CLI_SERVICE_USER_ID
     return {
         "external_user_id": external_id,
-        "person_id": resolved_person_id or BOOTSTRAP_ADMIN_USER_ID,
+        "person_id": resolved_person_id,
         "display_name": display_name or BOOTSTRAP_ADMIN_DISPLAY_NAME,
     }

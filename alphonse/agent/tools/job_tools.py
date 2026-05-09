@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
+from alphonse.agent import identity
 from alphonse.agent.cognition.prompt_templates_runtime import (
     JOBS_YOU_JUST_REMEMBERED_SYSTEM_PROMPT,
 )
@@ -302,12 +303,14 @@ def _resolve_user_id(*, user_id: str | None, state: dict[str, Any] | None, ctx: 
         return str(ctx.user_id)
     value = str(user_id or "").strip()
     if value:
+        resolved = identity.resolve_current_actor_user_id({**dict(state or {}), "user_id": value})
+        if resolved:
+            return resolved
         return value
     if isinstance(state, dict):
-        for key in ("actor_person_id", "incoming_user_id", "channel_target", "chat_id"):
-            candidate = str(state.get(key) or "").strip()
-            if candidate:
-                return candidate
+        resolved = identity.resolve_current_actor_user_id(state)
+        if resolved:
+            return resolved
     return "default"
 
 

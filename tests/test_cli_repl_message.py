@@ -5,7 +5,6 @@ from pathlib import Path
 from alphonse.agent.cli import _handle_repl_message_command
 from alphonse.agent.nervous_system.migrate import apply_schema
 from alphonse.agent.nervous_system.seed import (
-    BOOTSTRAP_ADMIN_USER_ID,
     BOOTSTRAP_CLI_SERVICE_USER_ID,
     apply_seed,
 )
@@ -55,7 +54,8 @@ def test_build_cli_user_message_signal_includes_bootstrap_identity(tmp_path: Pat
     payload = signal.payload
     assert payload["provider_user_id_from"] == BOOTSTRAP_CLI_SERVICE_USER_ID
     assert payload["display_name"] == "Alex"
-    assert payload["metadata"]["bootstrap_admin_user_id"] == BOOTSTRAP_ADMIN_USER_ID
+    assert payload["metadata"]["bootstrap_admin_user_id"]
+    assert payload["metadata"]["bootstrap_admin_user_id"] != "owner-1"
 
 
 def test_repl_message_command_emits_signal_and_invokes_runtime(capsys) -> None:
