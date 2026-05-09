@@ -32,6 +32,7 @@ def apply_schema(db_path: Path) -> None:
         _ensure_operational_facts_table(conn)
         _ensure_sandbox_directories(conn)
         _ensure_telegram_chat_access_table(conn)
+        _ensure_access_requests_table(conn)
         _ensure_telegram_pending_invites_table(conn)
         _ensure_telegram_invite_columns(conn)
 
@@ -705,6 +706,44 @@ def _ensure_telegram_chat_access_table(conn: sqlite3.Connection) -> None:
         """
         CREATE INDEX IF NOT EXISTS idx_telegram_chat_access_status
           ON telegram_chat_access (status, updated_at)
+        """
+    )
+
+
+def _ensure_access_requests_table(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS access_requests (
+          request_id          TEXT PRIMARY KEY,
+          kind                TEXT NOT NULL,
+          provider_key        TEXT NOT NULL,
+          provider_user_id    TEXT,
+          channel_target      TEXT,
+          display_name        TEXT,
+          status              TEXT NOT NULL DEFAULT 'pending',
+          created_by_user_id  TEXT,
+          claimed_user_id     TEXT,
+          reason              TEXT,
+          expires_at          TEXT,
+          claimed_at          TEXT,
+          metadata_json       TEXT NOT NULL DEFAULT '{}',
+          created_at          TEXT NOT NULL DEFAULT (datetime('now')),
+          updated_at          TEXT NOT NULL DEFAULT (datetime('now')),
+          CHECK (kind IN ('user', 'chat')),
+          CHECK (status IN ('pending', 'approved', 'denied', 'claimed'))
+        ) STRICT
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_access_requests_status_kind
+          ON access_requests (status, kind, updated_at)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_access_requests_provider
+          ON access_requests (provider_key, provider_user_id, channel_target)
         """
     )
 

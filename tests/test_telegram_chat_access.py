@@ -132,3 +132,26 @@ def test_can_deliver_to_chat_for_group_access(tmp_path: Path, monkeypatch) -> No
 
     revoke_chat_access("-100200", "owner_missing")
     assert can_deliver_to_chat("-100200") is False
+
+
+def test_group_requires_registered_sender_after_chat_approval(tmp_path: Path, monkeypatch) -> None:
+    _prepare_db(tmp_path, monkeypatch)
+    upsert_chat_access(
+        {
+            "chat_id": "-100300",
+            "chat_type": "group",
+            "status": "active",
+            "policy": "owner_managed_group",
+        }
+    )
+
+    decision = evaluate_inbound_access(
+        chat_id="-100300",
+        chat_type="group",
+        from_user_id="999",
+    )
+
+    assert decision.allowed is False
+    assert decision.reason == "group_active_unregistered_sender"
+    assert decision.emit_invite is True
+    assert decision.request_kind == "user"

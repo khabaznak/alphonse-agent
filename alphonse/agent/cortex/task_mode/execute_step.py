@@ -268,8 +268,8 @@ def _merge_stable_facts(*, task_record: TaskRecord, tool_name: str, output: Any)
         for key in ("locale", "tone", "address_style", "timezone", "channel_type"):
             if key in output:
                 task_record.append_fact(f"{key}: {_compact_json(output.get(key))}")
-    elif tool_name == "users.search":
-        task_record.append_fact(f"users.search.last_result: {_compact_json(output)}")
+    elif tool_name == "users.manage" and isinstance(output.get("users"), list):
+        task_record.append_fact(f"users.manage.last_search_result: {_compact_json(output)}")
 
 
 def _append_memory_fact(

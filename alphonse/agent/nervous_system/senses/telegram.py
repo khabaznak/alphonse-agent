@@ -102,6 +102,7 @@ class TelegramSense(Sense):
                 "from_user_name": from_user_name,
                 "last_message": text,
                 "status": "pending",
+                "request_kind": payload.get("request_kind"),
             }
         )
         self._bus.emit(
@@ -128,6 +129,8 @@ class TelegramSense(Sense):
                             "chat_type": payload.get("chat_type"),
                             "from_user": from_user,
                             "from_user_name": from_user_name,
+                            "request_kind": payload.get("request_kind"),
+                            "reason": payload.get("reason"),
                         },
                     },
                 },

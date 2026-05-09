@@ -6,7 +6,7 @@ from alphonse.agent.nervous_system import user_service_resolvers as resolvers
 from alphonse.agent.nervous_system.services import TELEGRAM_SERVICE_ID
 from alphonse.agent.tools.registry import build_default_tool_registry
 from alphonse.agent.tools.registry import planner_tool_schemas
-from alphonse.agent.tools.user_contact_tools import UserSearchTool
+from alphonse.agent.tools.user_management_tools import UsersManageTool
 
 
 def _seed_user(display_name: str, telegram_id: str) -> str:
@@ -26,15 +26,19 @@ def _seed_user(display_name: str, telegram_id: str) -> str:
     return user_id
 
 
-def test_user_search_tool_registered() -> None:
+def test_users_manage_tool_registered_and_legacy_tools_removed() -> None:
     runtime = build_default_tool_registry()
-    assert runtime.get("users.search") is not None
+    assert runtime.get("users.manage") is not None
+    assert runtime.get("users.search") is None
+    assert runtime.get("users.register_from_contact") is None
+    assert runtime.get("users.remove_from_contact") is None
     schema_names = {
         str(item.get("function", {}).get("name") or "")
         for item in planner_tool_schemas(runtime)
         if isinstance(item, dict)
     }
-    assert "users.search" in schema_names
+    assert "users.manage" in schema_names
+    assert "users.search" not in schema_names
 
 
 def test_user_search_returns_matches_with_telegram_ids(monkeypatch, tmp_path) -> None:
@@ -44,21 +48,19 @@ def test_user_search_returns_matches_with_telegram_ids(monkeypatch, tmp_path) ->
 
     _seed_user("Gabriela", "777001")
     _seed_user("Gabrielle", "777002")
-    tool = UserSearchTool()
-    result = tool.execute(query="gabr", limit=10, active_only=True)
+    tool = UsersManageTool()
+    result = tool.execute(action="search", query="gabr", limit=10, active_only=True)
     assert result["exception"] is None
     users = result["output"]["users"]
     assert len(users) >= 2
-    ids = {str(item.get("telegram_user_id") or "") for item in users}
-    assert "777001" in ids
-    assert "777002" in ids
+    assert all("telegram_user_id" not in item for item in users)
 
 
 def test_user_search_requires_query(monkeypatch, tmp_path) -> None:
     db_path = tmp_path / "nerve-db"
     monkeypatch.setenv("NERVE_DB_PATH", str(db_path))
     apply_schema(db_path)
-    tool = UserSearchTool()
-    failed = tool.execute(query="")
-    assert failed["exception"] is not None
-    assert str((failed.get("exception") or {}).get("code") or "") == "missing_query"
+    tool = UsersManageTool()
+    result = tool.execute(action="search", query="")
+    assert result["exception"] is None
+    assert isinstance(result["output"]["users"], list)

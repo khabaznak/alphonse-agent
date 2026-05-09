@@ -17,6 +17,7 @@ class TelegramInboundAccessDecision:
     emit_invite: bool = False
     leave_chat: bool = False
     access: dict[str, Any] | None = None
+    request_kind: str | None = None
 
 
 def upsert_chat_access(record: dict[str, Any]) -> dict[str, Any]:
@@ -150,6 +151,7 @@ def evaluate_inbound_access(
             allowed=False,
             reason="private_not_registered",
             emit_invite=True,
+            request_kind="user",
         )
 
     access = get_chat_access(normalized_chat_id)
@@ -158,6 +160,7 @@ def evaluate_inbound_access(
             allowed=False,
             reason="group_not_approved",
             emit_invite=True,
+            request_kind="chat",
         )
     if str(access.get("status") or "").strip().lower() != "active":
         return TelegramInboundAccessDecision(
@@ -165,7 +168,21 @@ def evaluate_inbound_access(
             reason="group_not_active",
             leave_chat=True,
             access=access,
+            request_kind="chat",
         )
+    if sender:
+        sender_user_id = resolve_user_id_by_service_user_id(
+            service_id=TELEGRAM_SERVICE_ID,
+            service_user_id=sender,
+        )
+        if not sender_user_id:
+            return TelegramInboundAccessDecision(
+                allowed=False,
+                reason="group_active_unregistered_sender",
+                emit_invite=True,
+                access=access,
+                request_kind="user",
+            )
     return TelegramInboundAccessDecision(
         allowed=True,
         reason="group_active",

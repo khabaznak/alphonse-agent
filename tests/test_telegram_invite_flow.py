@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from alphonse.agent.nervous_system.migrate import apply_schema
+from alphonse.agent.nervous_system.access_requests import get_access_request
 from alphonse.agent.nervous_system.telegram_invites import get_invite, list_invites
 from alphonse.agent.nervous_system.senses.telegram import TelegramSense
 from alphonse.agent.nervous_system.senses.bus import Signal
@@ -35,6 +36,8 @@ def test_invite_request_creates_pending_record(tmp_path: Path, monkeypatch: pyte
             type="external.telegram.invite_request",
             payload={
                 "chat_id": "-123",
+                "chat_type": "group",
+                "request_kind": "chat",
                 "from_user": "gaby",
                 "from_user_name": "Gaby",
                 "text": "hello",
@@ -47,6 +50,10 @@ def test_invite_request_creates_pending_record(tmp_path: Path, monkeypatch: pyte
     assert invite
     assert invite["status"] == "pending"
     assert invite["from_user_name"] == "Gaby"
+    request = get_access_request("chat:telegram:-123")
+    assert request
+    assert request["kind"] == "chat"
+    assert request["status"] == "pending"
     items = list_invites(status="pending")
     assert items
     assert len(bus.emitted) == 1

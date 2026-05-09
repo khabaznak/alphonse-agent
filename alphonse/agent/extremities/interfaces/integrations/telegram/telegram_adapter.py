@@ -322,7 +322,12 @@ class TelegramAdapter(IntegrationAdapter):
                 if chat_id_int is not None:
                     self._leave_chat_http(chat_id_int)
             if access.emit_invite and self._should_emit_invite(message):
-                self._emit_invite_signal(update, message)
+                self._emit_invite_signal(
+                    update,
+                    message,
+                    request_kind=getattr(access, "request_kind", None),
+                    reason=str(getattr(access, "reason", "") or ""),
+                )
             return
 
         if chat_type in {"group", "supergroup"} and isinstance(access.access, dict):
@@ -367,7 +372,12 @@ class TelegramAdapter(IntegrationAdapter):
                     chat_id,
                 )
                 if self._should_emit_invite(message):
-                    self._emit_invite_signal(update, message)
+                    self._emit_invite_signal(
+                        update,
+                        message,
+                        request_kind=getattr(access, "request_kind", None),
+                        reason=str(getattr(access, "reason", "") or "not_allowed"),
+                    )
                 return
 
         from_user = from_user_id
@@ -437,7 +447,14 @@ class TelegramAdapter(IntegrationAdapter):
         text = str(message.get("text") or "").strip()
         return bool(text)
 
-    def _emit_invite_signal(self, update: dict[str, Any], message: dict[str, Any]) -> None:
+    def _emit_invite_signal(
+        self,
+        update: dict[str, Any],
+        message: dict[str, Any],
+        *,
+        request_kind: str | None = None,
+        reason: str | None = None,
+    ) -> None:
         text = message.get("text") or ""
         chat = message.get("chat") if isinstance(message.get("chat"), dict) else {}
         chat_id = message.get("chat_id") or chat.get("id")
@@ -462,6 +479,8 @@ class TelegramAdapter(IntegrationAdapter):
                     "from_user_name": from_user_name,
                     "text": text,
                     "update_id": update_id,
+                    "request_kind": request_kind,
+                    "reason": reason,
                 },
                 source="telegram",
             )

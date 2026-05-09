@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from alphonse.agent.tools.access_request_tools import AccessRequestsTool
 from alphonse.agent.services import JobRunner, JobStore
 from alphonse.agent.tools.clock import ClockTool
 from alphonse.agent.tools.context_tools import GetMySettingsTool
@@ -38,9 +39,7 @@ from alphonse.agent.tools.telegram_files import TelegramDownloadFileTool
 from alphonse.agent.tools.telegram_files import TelegramGetFileMetaTool
 from alphonse.agent.tools.telegram_files import VisionAnalyzeImageTool
 from alphonse.agent.tools.telegram_files import VisionExtractTool
-from alphonse.agent.tools.user_contact_tools import UserRegisterFromContactTool
-from alphonse.agent.tools.user_contact_tools import UserRemoveFromContactTool
-from alphonse.agent.tools.user_contact_tools import UserSearchTool
+from alphonse.agent.tools.user_management_tools import UsersManageTool
 from alphonse.agent.tools.base import ToolDefinition, ToolProtocol
 from alphonse.agent.tools.spec import SafetyLevel, ToolSpec
 
@@ -161,9 +160,8 @@ def _build_runtime_executors(*, job_store: JobStore, job_runner: JobRunner) -> l
     jobs_resume = JobResumeTool(job_store)
     jobs_delete = JobDeleteTool(job_store)
     jobs_run_now = JobRunNowTool(job_runner)
-    users_register_from_contact = UserRegisterFromContactTool()
-    users_remove_from_contact = UserRemoveFromContactTool()
-    users_search = UserSearchTool()
+    users_manage = UsersManageTool()
+    access_requests = AccessRequestsTool()
     domotics_query = DomoticsQueryTool()
     domotics_execute = DomoticsExecuteTool()
     domotics_subscribe = DomoticsSubscribeTool()
@@ -197,9 +195,8 @@ def _build_runtime_executors(*, job_store: JobStore, job_runner: JobRunner) -> l
         jobs_resume,
         jobs_delete,
         jobs_run_now,
-        users_register_from_contact,
-        users_remove_from_contact,
-        users_search,
+        users_manage,
+        access_requests,
         domotics_query,
         domotics_execute,
         domotics_subscribe,
@@ -958,65 +955,59 @@ def _default_specs() -> list[ToolSpec]:
             examples=[{"job_id": "job_abc123"}, {"job_name": "Weekly chores digest"}],
         ),
         ToolSpec(
-            canonical_name="users.register_from_contact",
-            summary="Register or update a user from a shared Telegram contact with strict admin authorization.",
-            description="Register or update a user from a shared Telegram contact with strict admin authorization.",
-            when_to_use="Use when an admin asks to add/register a person and shares their contact.",
-            returns="registered user metadata and proactive intro signal id",
+            canonical_name="users.manage",
+            summary="Search, invite, register, deactivate, or reactivate users with provider-agnostic identity handling.",
+            description="Search, invite, register, deactivate, or reactivate users with provider-agnostic identity handling.",
+            when_to_use="Use when the user asks who is registered, asks to invite/register someone, or asks to deactivate/reactivate a user.",
+            returns="user lifecycle result or matching users",
             input_schema=_object_schema(
                 properties={
+                    "action": {
+                        "type": "string",
+                        "enum": ["search", "invite", "register_from_contact", "deactivate", "reactivate"],
+                    },
+                    "query": {"type": ["string", "null"]},
                     "display_name": {"type": ["string", "null"]},
                     "role": {"type": ["string", "null"]},
                     "relationship": {"type": ["string", "null"]},
-                    "contact_user_id": {"type": ["string", "integer", "null"]},
-                    "contact_first_name": {"type": ["string", "null"]},
-                    "contact_last_name": {"type": ["string", "null"]},
-                    "contact_phone": {"type": ["string", "null"]},
+                    "contact": {"type": ["object", "null"], "additionalProperties": True},
+                    "provider_key": {"type": ["string", "null"]},
+                    "provider_user_id": {"type": ["string", "integer", "null"]},
+                    "user_id": {"type": ["string", "null"]},
+                    "active_only": {"type": "boolean"},
+                    "limit": {"type": "integer"},
                 },
-                required=[],
+                required=["action"],
             ),
             output_schema=_permissive_output_schema(),
             domain_tags=["identity", "admin", "onboarding"],
-            safety_level=SafetyLevel.MEDIUM,
-            requires_confirmation=False,
-            examples=[{"display_name": "Maria Perez", "role": "family", "relationship": "sister"}],
+            safety_level=SafetyLevel.HIGH,
+            examples=[{"action": "invite", "display_name": "Maria Perez", "relationship": "sister"}],
         ),
         ToolSpec(
-            canonical_name="users.remove_from_contact",
-            summary="Deactivate a registered user from a shared Telegram contact with strict admin authorization.",
-            description="Deactivate a registered user from a shared Telegram contact with strict admin authorization.",
-            when_to_use="Use when an admin asks to remove a person and shares their contact.",
-            returns="deactivation status",
+            canonical_name="access.requests",
+            summary="List, show, approve, or deny pending user and chat access requests.",
+            description="List, show, approve, or deny pending user and chat access requests.",
+            when_to_use="Use when an admin asks who is waiting for access or asks to approve/deny a person or group chat.",
+            returns="access request metadata and approval/denial result",
             input_schema=_object_schema(
                 properties={
-                    "contact_user_id": {"type": ["string", "integer", "null"]},
+                    "action": {"type": "string", "enum": ["list", "show", "approve", "deny"]},
+                    "request_id": {"type": ["string", "null"]},
+                    "kind": {"type": ["string", "null"], "enum": ["user", "chat", None]},
+                    "status": {"type": ["string", "null"], "enum": ["pending", "approved", "denied", "claimed", None]},
+                    "provider_key": {"type": ["string", "null"]},
+                    "channel_target": {"type": ["string", "null"]},
+                    "limit": {"type": "integer"},
+                    "reason": {"type": ["string", "null"]},
                 },
-                required=[],
+                required=["action"],
             ),
             output_schema=_permissive_output_schema(),
             domain_tags=["identity", "admin", "access-control"],
             safety_level=SafetyLevel.HIGH,
             requires_confirmation=True,
-            examples=[{"contact_user_id": "8553589429"}],
-        ),
-        ToolSpec(
-            canonical_name="users.search",
-            summary="Search registered users by partial display name and include channel resolver identifiers.",
-            description="Search registered users by partial display name and include channel resolver identifiers.",
-            when_to_use="Use before sending messages when recipient identity is uncertain and needs read-only lookup.",
-            returns="matching users",
-            input_schema=_object_schema(
-                properties={
-                    "query": {"type": "string"},
-                    "limit": {"type": "integer"},
-                    "active_only": {"type": "boolean"},
-                },
-                required=["query"],
-            ),
-            output_schema=_permissive_output_schema(),
-            domain_tags=["identity", "users", "lookup"],
-            safety_level=SafetyLevel.LOW,
-            examples=[{"query": "Gab", "limit": 5, "active_only": True}],
+            examples=[{"action": "list", "status": "pending"}, {"action": "approve", "request_id": "chat:telegram:-100123"}],
         ),
         ToolSpec(
             canonical_name="execution.run_terminal",
