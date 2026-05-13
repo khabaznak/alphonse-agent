@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from functools import lru_cache
 from typing import Any, TypedDict
 
@@ -84,9 +83,7 @@ def _build_planner_user_prompt(*, task_record: TaskRecord) -> str:
         NEXT_STEP_USER_TEMPLATE,
         {
             "MCP_CAPABILITY_MENU": mcp_capability_menu,
-            "MCP_LIVE_TOOLS_MENU": "",
-            "INJECTED_GUIDANCE_BLOCK": "",
-            "TASK_RECORD_JSON": json.dumps(task_record.to_dict(), ensure_ascii=False),
+            "RECENT_CONVERSATION_SECTION": task_record.recent_conversation_md,
             "FACTS_SECTION": task_record.get_facts_md(),
             "PLAN_SECTION": task_record.get_plan_md(),
             "ACCEPTANCE_CRITERIA_SECTION": task_record.get_acceptance_criteria_md(),

@@ -295,7 +295,10 @@ def test_next_step_prompt_includes_recent_conversation_sentinel() -> None:
     )
     prompt = llm.last_user_prompt
     assert sentinel in prompt
-    assert "## Task Record" in prompt
+    assert "## Recent Conversation" in prompt
+    assert "## Task Record" not in prompt
+    assert "## MCP Live Tools" not in prompt
+    assert "INJECTED_GUIDANCE_BLOCK" not in prompt
     assert "## Output Contract" not in prompt
     assert "### 1. Minimal Output Rules" not in prompt
 
