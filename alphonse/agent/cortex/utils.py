@@ -13,7 +13,6 @@ def build_cognition_state(state: dict[str, Any]) -> dict[str, Any]:
         "autonomy_level": state.get("autonomy_level"),
         "intent_category": state.get("intent_category"),
         "route_decision": state.get("route_decision"),
-        "pending_interaction": state.get("pending_interaction"),
         "ability_state": state.get("ability_state"),
         "task_record": state.get("task_record").to_dict() if hasattr(state.get("task_record"), "to_dict") else None,
         "planning_context": state.get("planning_context"),

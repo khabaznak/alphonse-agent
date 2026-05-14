@@ -47,7 +47,6 @@ def test_session_state_persists_rev_and_working_set(tmp_path: Path) -> None:
         user_message="Please run get_time again",
         assistant_message="It is 11:00 now.",
         task_record=None,
-        pending_interaction=None,
     )
     commit_session_state(updated, root_dir=tmp_path)
 
@@ -128,7 +127,6 @@ def test_session_last_action_can_come_from_task_record_history() -> None:
         user_message="otra vez",
         assistant_message="Listo",
         task_record=task_record,
-        pending_interaction=None,
     )
     assert isinstance(updated.get("last_action"), dict)
     assert updated["last_action"]["tool"] == "audio.speak_local"
@@ -200,7 +198,6 @@ def test_day_state_persists_full_transcript_text_without_capping(tmp_path: Path)
         user_message=long_user,
         assistant_message=long_assistant,
         task_record=None,
-        pending_interaction=None,
     )
     commit_session_state(updated, root_dir=tmp_path)
     reloaded = resolve_day_session(
@@ -235,7 +232,6 @@ def test_day_state_does_not_duplicate_user_when_assistant_is_appended_later() ->
         user_message="hello",
         assistant_message="",
         task_record=None,
-        pending_interaction=None,
     )
     second = build_next_session_state(
         previous=first,
@@ -243,7 +239,6 @@ def test_day_state_does_not_duplicate_user_when_assistant_is_appended_later() ->
         user_message="",
         assistant_message="done",
         task_record=None,
-        pending_interaction=None,
     )
     events = second.get("conversation_events")
     assert isinstance(events, list)

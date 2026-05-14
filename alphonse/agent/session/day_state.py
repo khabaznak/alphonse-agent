@@ -112,7 +112,6 @@ def build_next_session_state(
     user_message: str,
     assistant_message: str,
     task_record: dict[str, Any] | None,
-    pending_interaction: dict[str, Any] | None,
     assistant_visibility: str = "public",
     user_event_meta: dict[str, Any] | None = None,
     assistant_event_meta: dict[str, Any] | None = None,
@@ -142,17 +141,6 @@ def build_next_session_state(
         if len(working_set) >= _MAX_WORKING_SET:
             break
 
-    open_loops: list[str] = []
-    if isinstance(pending_interaction, dict):
-        pending_key = _sanitize_line(str(pending_interaction.get("key") or ""), max_len=60)
-        pending_type = _sanitize_line(str(pending_interaction.get("type") or ""), max_len=40)
-        if pending_key:
-            open_loops.append(f"Waiting for user input ({pending_key}).")
-        elif pending_type:
-            open_loops.append(f"Waiting for user input ({pending_type}).")
-        else:
-            open_loops.append("Waiting for user input.")
-
     state["channels_seen"] = _merge_channels(state.get("channels_seen"), channel)
     state["conversation_events"] = _append_conversation_events(
         existing=state.get("conversation_events"),
@@ -163,7 +151,7 @@ def build_next_session_state(
         assistant_event_meta=assistant_event_meta,
     )
     state["working_set"] = working_set[:_MAX_WORKING_SET]
-    state["open_loops"] = open_loops[:_MAX_OPEN_LOOPS]
+    state["open_loops"] = []
     state["last_action"] = last_action
     state["rev"] = int(state.get("rev") or 0) + 1
     return state

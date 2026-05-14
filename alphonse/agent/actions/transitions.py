@@ -2,9 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from alphonse.agent.observability.log_manager import get_component_logger
-from typing import Any, Callable
-
-from alphonse.agent.actions.session_context import IncomingContext
+from typing import Any
 
 logger = get_component_logger("actions.transitions")
 
@@ -21,30 +19,6 @@ _ALLOWED_FAMILY_PHASES: dict[str, set[str]] = {
     _PRESENCE_FAILED: {"failed"},
     _PRESENCE_PHASE_CHANGED: {"acknowledged", "thinking", "executing"},
 }
-
-
-def emit_agent_transitions_from_meta(
-    *,
-    incoming: IncomingContext,
-    meta: dict[str, Any],
-    emit_presence_event: Callable[[IncomingContext, dict[str, Any]], None],
-    skip_phases: set[str] | None = None,
-) -> None:
-    phases_to_skip = {str(item).lower() for item in (skip_phases or set())}
-    events = meta.get("events")
-    if not isinstance(events, list):
-        return
-    for event in events:
-        if not isinstance(event, dict):
-            continue
-        if str(event.get("type") or "") != "agent.transition":
-            continue
-        phase = str(event.get("phase") or "").strip()
-        if not phase:
-            continue
-        if phase.lower() in phases_to_skip:
-            continue
-        emit_presence_event(incoming, event)
 
 
 def chat_action_for_phase(phase: str) -> str | None:
@@ -72,17 +46,6 @@ def phase_from_transition_event(event: dict[str, Any]) -> str | None:
     phase = str(event.get("phase") or "").strip().lower()
     if phase in {"acknowledged", "thinking", "executing", "waiting_user", "done", "failed"}:
         return phase
-    if phase != "cortex.state":
-        return None
-    detail = event.get("detail") if isinstance(event.get("detail"), dict) else {}
-    stage = str(detail.get("stage") or "").strip().lower()
-    node = str(detail.get("node") or "").strip().lower()
-    has_pending = bool(detail.get("has_pending_interaction"))
-    if stage == "start":
-        if node in {"next_step_node", "act_node"}:
-            return "thinking"
-    if stage == "done" and has_pending:
-        return "waiting_user"
     return None
 
 

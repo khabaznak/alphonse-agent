@@ -656,9 +656,6 @@ def _update_day_session_memory(
             user_message="",
             assistant_message=assistant_message,
             task_record=task_record if isinstance(task_record, dict) else None,
-            pending_interaction=merged_state.get("pending_interaction")
-            if isinstance(merged_state.get("pending_interaction"), dict)
-            else None,
             assistant_event_meta={
                 "correlation_id": str(merged_state.get("correlation_id") or "").strip() or None,
                 "channel": channel,
@@ -729,29 +726,6 @@ def _render_attachment_summary(attachments: list[Any]) -> str:
             continue
         parts.append(kind)
     return f"[attachments: {', '.join(parts)}]"
-
-
-def _sanitize_loaded_state_for_new_task(
-    loaded: dict[str, Any],
-    *,
-    preserve_pending_interaction: bool = False,
-) -> tuple[dict[str, Any], list[str]]:
-    sanitized = dict(loaded)
-    removed_keys: list[str] = []
-    for key in (
-        "pending_interaction",
-        "response_text",
-        "events",
-        "utterance",
-        "render_error",
-    ):
-        if key == "pending_interaction" and preserve_pending_interaction:
-            continue
-        if key in sanitized:
-            removed_keys.append(key)
-            sanitized.pop(key, None)
-    return sanitized, removed_keys
-
 
 def _should_preempt_after_step(*, task_id: str, slice_started_at: datetime) -> bool:
     latest = get_pdca_task(task_id)

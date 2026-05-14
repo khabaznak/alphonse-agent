@@ -31,7 +31,6 @@ class CortexState(TypedDict, total=False):
     correlation_id: str | None
     locale: str | None
     events: list[dict[str, Any]]
-    pending_interaction: dict[str, Any] | None
     task_record: TaskRecord | None
     check_result: dict[str, Any] | None
     planner_output: PlannerOutput | None
