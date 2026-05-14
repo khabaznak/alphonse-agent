@@ -140,3 +140,27 @@ def test_presence_progress_intent_update_dedupes_same_tool(monkeypatch: pytest.M
     projection.project_presence_event(presence_event=event, **_routing())
 
     assert len(adapter.intent_updates) == 1
+
+
+def test_executing_phase_uses_distinct_reaction(monkeypatch: pytest.MonkeyPatch) -> None:
+    adapter = _FakeAdapter()
+    monkeypatch.setattr(projection, "get_io_registry", lambda: _FakeRegistry(adapter))
+
+    projection.project_presence_event(
+        presence_event={
+            "event_family": "presence.phase_changed",
+            "correlation_id": "cid-intent-1",
+            "ts": "2026-03-16T20:00:00+00:00",
+            "phase": "executing",
+        },
+        **_routing(),
+    )
+
+    assert adapter.reactions == [
+        {
+            "channel_target": "8553589429",
+            "message_id": "msg-1",
+            "emoji": "⚡",
+            "correlation_id": "cid-intent-1",
+        }
+    ]

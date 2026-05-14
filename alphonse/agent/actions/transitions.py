@@ -34,7 +34,7 @@ def reaction_for_phase(phase: str) -> str | None:
     mapped = {
         "acknowledged": "👀",
         "thinking": "🤔",
-        "executing": "🤔",
+        "executing": "⚡",
         "waiting_user": "❓",
         "done": "👍",
         "failed": "👎",
