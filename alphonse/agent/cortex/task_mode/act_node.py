@@ -118,6 +118,9 @@ def _log_act_result(
 
 
 def _summarize_failure_for_user(*, task_record: TaskRecord, logger: Any) -> str:
+    existing = _existing_failure_response_text(task_record)
+    if existing:
+        return existing
     fallback = _deterministic_failure_summary(task_record)
     try:
         llm_client = build_text_completion_provider()
@@ -138,6 +141,15 @@ def _summarize_failure_for_user(*, task_record: TaskRecord, logger: Any) -> str:
         if rendered.lower().startswith("text"):
             rendered = rendered[4:].strip()
     return _clip_summary(rendered or fallback)
+
+
+def _existing_failure_response_text(task_record: TaskRecord) -> str | None:
+    outcome = task_record.outcome if isinstance(task_record.outcome, dict) else {}
+    for key in ("final_text",):
+        rendered = str(outcome.get(key) or "").strip()
+        if rendered:
+            return _clip_summary(rendered)
+    return None
 
 
 def _success_response_for_user(task_record: TaskRecord) -> str | None:

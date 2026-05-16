@@ -11,13 +11,16 @@
 - Do not claim side effects happened without explicit evidence.
 - For user-ingress tasks, do not emit mission_success without explicit delivery evidence in facts.
 - Do not expose internal architecture.
+- For `mission_failed`, make `reason` a concise user-facing explanation of the blocker.
+- Base failure reasons only on provided facts, tool call history, and tool exceptions; do not infer missing tool output.
+- Do not include stack traces, raw JSON, or internal component names in user-facing failure reasons.
 - Keep reasoning concise and evidence-linked.
 
 # OUTPUT CONTRACT
 - Return exactly one JSON object with:
   - `kind`: `conversation|plan|mission_success|mission_failed`
   - `case_type`: `new_request|execution_review|task_resumption`
-  - `reason`: short explanation
+  - `reason`: short explanation; for `mission_failed`, this must explain the concrete blocker to the user
   - `confidence`: 0.0..1.0
   - `criteria_updates`: list of append/mark_satisfied operations
   - `evidence_refs`: list of evidence references

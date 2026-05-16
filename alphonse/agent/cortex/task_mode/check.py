@@ -242,10 +242,12 @@ def _apply_terminal_result(*, task_record: TaskRecord, verdict: str, judge_resul
             "final_text": reason or "Mission completed successfully.",
         }
     elif verdict == "mission_failed":
+        failure_text = reason or "Mission failed."
         task_record.status = "failed"
         task_record.outcome = {
             "kind": "task_failed",
-            "summary": reason or "Mission failed.",
+            "summary": failure_text,
+            "final_text": failure_text,
             "failure_class": str(judge_result.get("failure_class") or "mission_failed").strip() or "mission_failed",
         }
     else:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 
 import alphonse.agent.cortex.task_mode.check as check_module
@@ -157,6 +158,48 @@ def test_execution_review_reaches_success() -> None:
     assert task_record.status == "done"
     assert isinstance(check_result, dict)
     assert check_result.get("verdict") == "mission_success"
+
+
+def test_execution_review_failure_preserves_reason_as_final_text() -> None:
+    reason = 'I could not find the "AC" entity.'
+    _QueuedLlm(
+        [
+            json.dumps(
+                {
+                    "kind": "mission_failed",
+                    "case_type": "execution_review",
+                    "reason": reason,
+                    "confidence": 0.92,
+                    "criteria_updates": [],
+                    "evidence_refs": ["tool:domotics.query"],
+                    "failure_class": "entity_not_found",
+                }
+            )
+        ]
+    )
+    out = check_node_state_adapter(
+        {
+            "correlation_id": "corr-exec-failure-reason",
+            "task_record": _task_record(
+                correlation_id="corr-exec-failure-reason",
+                goal="turn on the AC",
+                criteria=["Turn on the AC"],
+                tool_history=[
+                    'domotics.query args={"kind":"state","entity_id":"AC"} output=null exception={"code":"entity_not_found","message":"AC was not found"}'
+                ],
+            ),
+            "check_provenance": "do",
+        }
+    )
+    task_record = out.get("task_record")
+    check_result = out.get("check_result")
+    assert isinstance(task_record, TaskRecord)
+    assert task_record.status == "failed"
+    assert isinstance(task_record.outcome, dict)
+    assert task_record.outcome["summary"] == reason
+    assert task_record.outcome["final_text"] == reason
+    assert isinstance(check_result, dict)
+    assert check_result.get("verdict") == "mission_failed"
 
 
 def test_check_judge_prompt_renders_from_task_record_sections() -> None:

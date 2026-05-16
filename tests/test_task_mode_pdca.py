@@ -529,6 +529,24 @@ def test_act_failed_routes_to_end_with_llm_failure_summary() -> None:
     assert task_record.outcome["final_text"] == rendered["response_text"]
 
 
+def test_act_failed_prefers_existing_final_text_without_llm_summary() -> None:
+    _ExplodingLlm()
+    task_record = _task_record(status="failed", goal="turn on the AC")
+    task_record.outcome = {
+        "kind": "task_failed",
+        "summary": "entity lookup failed",
+        "final_text": 'I could not find the "AC" entity.',
+    }
+    state = {
+        "task_record": task_record,
+        "check_result": {"verdict": "mission_failed"},
+    }
+    rendered = act_node_state_adapter(state)
+    assert route_after_act(rendered["act_result"]) == "end"
+    assert rendered["response_text"] == 'I could not find the "AC" entity.'
+    assert task_record.outcome["final_text"] == rendered["response_text"]
+
+
 def test_act_failed_falls_back_when_llm_summary_fails() -> None:
     _ExplodingLlm()
     task_record = _task_record(status="failed", goal="schedule a reminder")
