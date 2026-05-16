@@ -50,48 +50,64 @@ def test_voice_selection_precedence_explicit_override(monkeypatch) -> None:
 
 def test_qwen_failure_falls_back_to_say_for_speak(monkeypatch) -> None:
     monkeypatch.setenv("ALPHONSE_TTS_BACKEND", "qwen")
+    captured: dict[str, object] = {}
     monkeypatch.setattr(
         lao._QwenBackend,
         "speak",
         lambda self, *, text, voice, blocking, volume: lao._failed("qwen_generate_failed", "boom"),
     )
+
+    def _fake_say_speak(self, *, text, voice, blocking, volume):  # noqa: ANN001
+        captured["voice"] = voice
+        _ = (self, text, blocking, volume)
+        return lao._ok({"backend": "say", "mode": "blocking"})
+
     monkeypatch.setattr(
         lao._SayBackend,
         "speak",
-        lambda self, *, text, voice, blocking, volume: lao._ok({"backend": "say", "mode": "blocking"}),
+        _fake_say_speak,
     )
 
     tool = LocalAudioOutputSpeakTool()
-    result = tool.execute(text="Hola", blocking=True)
+    result = tool.execute(text="Hola", voice="Ryan", blocking=True)
     assert result["exception"] is None
     payload = result.get("output") or {}
     assert payload.get("backend") == "say"
     assert payload.get("fallback_from") == "qwen"
     assert payload.get("fallback_reason_code") == "qwen_generate_failed"
+    assert captured["voice"] == "default"
 
 
 def test_qwen_failure_falls_back_to_say_for_render(monkeypatch) -> None:
     monkeypatch.setenv("ALPHONSE_TTS_BACKEND", "qwen")
+    captured: dict[str, object] = {}
     monkeypatch.setattr(
         lao._QwenBackend,
         "render",
         lambda self, *, text, voice, output_dir, filename_prefix, format: lao._failed("qwen_generate_failed", "boom"),
     )
+
+    def _fake_say_render(self, *, text, voice, output_dir, filename_prefix, format):  # noqa: ANN001
+        captured["voice"] = voice
+        _ = (self, text, output_dir, filename_prefix, format)
+        return lao._ok(
+            {"backend": "say", "file_path": "/tmp/fallback.m4a", "format": "m4a", "mime_type": "audio/mp4"},
+            tool="audio.render_local",
+        )
+
     monkeypatch.setattr(
         lao._SayBackend,
         "render",
-        lambda self, *, text, voice, output_dir, filename_prefix, format: lao._ok(
-            {"backend": "say", "file_path": "/tmp/fallback.m4a", "format": "m4a", "mime_type": "audio/mp4"},
-            tool="audio.render_local",
-        ),
+        _fake_say_render,
     )
 
     tool = LocalAudioOutputRenderTool()
-    result = tool.execute(text="Hola", format="m4a")
+    result = tool.execute(text="Hola", voice="Ryan", format="m4a")
     assert result["exception"] is None
     payload = result.get("output") or {}
     assert payload.get("backend") == "say"
     assert payload.get("fallback_from") == "qwen"
+    assert captured["voice"] == "default"
 
 
 def test_qwen_generate_custom_voice_uses_reference_sample_when_supported(tmp_path, monkeypatch) -> None:

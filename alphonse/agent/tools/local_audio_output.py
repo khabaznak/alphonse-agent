@@ -576,11 +576,8 @@ def _resolve_qwen_speaker(voice: str) -> str:
 
 
 def _resolve_say_fallback_voice(*, requested_voice: str) -> str:
-    requested = str(requested_voice or "default").strip() or "default"
-    if requested.lower() != "default":
-        if resolve_voice_profile(requested) is None:
-            return requested
-    return str(os.getenv("ALPHONSE_SAY_VOICE") or "default").strip() or "default"
+    _ = requested_voice
+    return "default"
 
 
 def _with_fallback_metadata(result: dict[str, Any], *, code: str) -> dict[str, Any]:
