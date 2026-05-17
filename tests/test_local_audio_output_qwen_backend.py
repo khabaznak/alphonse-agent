@@ -10,7 +10,7 @@ from alphonse.agent.tools.local_audio_output import LocalAudioOutputSpeakTool
 
 def test_qwen_backend_render_reports_missing_dependencies(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("ALPHONSE_TTS_BACKEND", "qwen")
-    monkeypatch.setattr(lao._QwenBackend, "_ensure_deps", lambda self: "deps missing")
+    monkeypatch.setattr(lao._QwenBackend, "_ensure_qwen_runtime", lambda self: "deps missing")
     monkeypatch.setattr(
         lao._SayBackend,
         "render",

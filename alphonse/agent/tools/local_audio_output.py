@@ -283,7 +283,7 @@ class _QwenBackend(_TTSBackend):
         rendered = self.render(
             text=spoken_text,
             voice=voice,
-            output_dir=None,
+            output_dir=None, # TODO: This cannot be None, need to use an environment variable or default path here. For now, this will cause the render to fail and trigger the fallback, which is better than crashing.
             filename_prefix="local-speak",
             format="m4a",
         )
@@ -341,7 +341,7 @@ class _QwenBackend(_TTSBackend):
                 tool="audio.render_local",
             )
 
-        deps = self._ensure_deps()
+        deps = self._ensure_qwen_runtime()
         if deps is not None:
             return _failed("qwen_backend_unavailable", deps, tool="audio.render_local")
 
@@ -410,7 +410,7 @@ class _QwenBackend(_TTSBackend):
             payload["voice_profile_name"] = selection.profile_name
         return _ok(payload, tool="audio.render_local")
 
-    def _ensure_deps(self) -> str | None:
+    def _ensure_qwen_runtime(self) -> str | None:
         if self._soundfile is not None:
             return None
         try:
