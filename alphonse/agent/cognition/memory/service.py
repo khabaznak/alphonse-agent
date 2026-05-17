@@ -10,10 +10,11 @@ import shutil
 import subprocess
 import time
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+from alphonse.agent import identity
 from alphonse.agent.cortex.task_mode.task_record import TaskRecord
 from alphonse.agent.cognition.memory.paths import resolve_memory_root
 from alphonse.agent.cognition.memory.paths import sanitize_segment
@@ -242,6 +243,55 @@ class MemoryService:
             rows.append(parsed)
             if len(rows) >= max(1, int(limit)):
                 break
+        return rows
+
+    def search_summaries(
+        self,
+        user_id: str,
+        query: str,
+        *,
+        period_kind: str | None = None,
+        start_date: str | date | None = None,
+        end_date: str | date | None = None,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        q = str(query or "").strip()
+        if not q:
+            return []
+        normalized_kind = str(period_kind or "any").strip().lower() or "any"
+        if normalized_kind not in {"daily", "weekly", "monthly", "any"}:
+            normalized_kind = "any"
+        start = _coerce_summary_date(start_date)
+        end = _coerce_summary_date(end_date)
+        rows: list[dict[str, Any]] = []
+        for file in self._summary_files_for_kind(user_id=user_id, period_kind=normalized_kind):
+            meta = _summary_file_metadata(file)
+            if not meta:
+                continue
+            range_start = meta.get("start")
+            range_end = meta.get("end")
+            if start and isinstance(range_end, date) and range_end < start:
+                continue
+            if end and isinstance(range_start, date) and range_start > end:
+                continue
+            matches = _summary_matches(file=file, query=q)
+            if _summary_metadata_matches(file=file, meta=meta, query=q) and not matches:
+                matches = [{"line": 0, "excerpt": _summary_excerpt(file)}]
+            for match in matches:
+                rows.append(
+                    {
+                        "period_kind": meta["period_kind"],
+                        "path": str(file),
+                        "date_range": {
+                            "start": range_start.isoformat() if isinstance(range_start, date) else None,
+                            "end": range_end.isoformat() if isinstance(range_end, date) else None,
+                        },
+                        "line": match["line"],
+                        "excerpt": match["excerpt"],
+                    }
+                )
+                if len(rows) >= max(1, int(limit)):
+                    return rows
         return rows
 
     def get_mission(self, user_id: str, mission_id: str) -> dict[str, Any] | None:
@@ -690,6 +740,21 @@ class MemoryService:
             return []
         return sorted(root.glob("*/*.md"))
 
+    def _summary_files_for_kind(self, *, user_id: str, period_kind: str) -> list[Path]:
+        if period_kind == "daily":
+            return self._all_daily_summary_files(user_id=user_id)
+        if period_kind == "weekly":
+            return self._all_weekly_summary_files(user_id=user_id)
+        if period_kind == "monthly":
+            return self._all_monthly_summary_files(user_id=user_id)
+        return sorted(
+            [
+                *self._all_daily_summary_files(user_id=user_id),
+                *self._all_weekly_summary_files(user_id=user_id),
+                *self._all_monthly_summary_files(user_id=user_id),
+            ]
+        )
+
     def _episodic_files_for_range(
         self,
         *,
@@ -939,7 +1004,8 @@ def remove_operational_fact(
     return MemoryService().remove_operational_fact(created_by=created_by, fact_id=fact_id, key=key)
 
 def record_after_tool_call(
-    *,   
+    *,
+    state: dict[str, Any] | None = None,
     task_record: TaskRecord,
     current: dict[str, Any] | None,
     tool_name: str,
@@ -949,6 +1015,7 @@ def record_after_tool_call(
 ) -> None:
     if str(tool_name or "").strip() in {
         "memory.search_episodes",
+        "memory.search_summaries",
         "memory.get_mission",
         "memory.list_active_missions",
         "memory.get_workspace",
@@ -958,7 +1025,7 @@ def record_after_tool_call(
     }:
         return
     try:
-        user_id = task_record.user_id
+        user_id = _canonical_memory_user_id(task_record, state=state)
         mission_id = _memory_mission_id(task_record=task_record, correlation_id=correlation_id)
         artifacts = _memory_artifacts_from_result(
             mission_id=mission_id,
@@ -1013,13 +1080,14 @@ def record_after_tool_call(
 
 def record_plan_step_completion(
     *,
+    state: dict[str, Any] | None = None,
     task_record: TaskRecord,
     current: dict[str, Any] | None,
     proposal: dict[str, Any],
     correlation_id: str | None,
 ) -> None:
     try:
-        user_id = task_record.user_id
+        user_id = _canonical_memory_user_id(task_record, state=state)
     except ValueError as exc:
         if str(exc) != "missing_user_id":
             raise
@@ -1085,6 +1153,69 @@ def _memory_mission_id(*, task_record: TaskRecord, correlation_id: str | None) -
     if corr:
         return f"corr_{corr}"
     return "ad_hoc"
+
+
+def _canonical_memory_user_id(task_record: TaskRecord, *, state: dict[str, Any] | None = None) -> str:
+    facts = _facts_from_markdown(task_record.get_facts_md())
+    if isinstance(state, dict):
+        for key in (
+            "service_id",
+            "service_key",
+            "channel_type",
+            "channel",
+            "provider_user_id_from",
+            "channel_target",
+            "target",
+            "service_user_id",
+            "chat_id",
+        ):
+            value = str(state.get(key) or "").strip()
+            if value and key not in facts:
+                facts[key] = value
+    service_id = _service_id_from_facts(facts)
+    if service_id is not None:
+        for key in ("provider_user_id_from", "channel_target", "target", "service_user_id", "chat_id"):
+            candidate = str(facts.get(key) or "").strip()
+            if not candidate:
+                continue
+            resolved = identity.resolve_user_id(service_id=service_id, service_user_id=candidate)
+            if resolved:
+                return resolved
+    for direct in (
+        str(task_record.user_id or "").strip(),
+        str((state or {}).get("actor_person_id") or "").strip() if isinstance(state, dict) else "",
+        str((state or {}).get("user_id") or "").strip() if isinstance(state, dict) else "",
+        str((state or {}).get("owner_id") or "").strip() if isinstance(state, dict) else "",
+    ):
+        if direct and direct != "owner-1" and identity.get_user(direct):
+            return direct
+    raise ValueError("missing_user_id")
+
+
+def _service_id_from_facts(facts: dict[str, str]) -> int | None:
+    for key in ("service_id", "service_key", "channel_type", "channel"):
+        value = str(facts.get(key) or "").strip()
+        if not value:
+            continue
+        resolved = identity.resolve_service_id(value)
+        if resolved is not None:
+            return int(resolved)
+    return None
+
+
+def _facts_from_markdown(facts_md: str) -> dict[str, str]:
+    out: dict[str, str] = {}
+    for raw_line in str(facts_md or "").splitlines():
+        line = raw_line.strip()
+        if line.startswith("- "):
+            line = line[2:].strip()
+        if not line or line == "(none)" or ":" not in line:
+            continue
+        key, value = line.split(":", 1)
+        rendered = value.strip().strip('"')
+        if key.strip() and rendered:
+            out[key.strip()] = rendered
+    return out
 
 
 def _memory_next_hint(*, task_record: TaskRecord, current: dict[str, Any] | None) -> str:
@@ -1552,6 +1683,81 @@ def _month_start_from_summary_filename(filename: str) -> datetime.date | None:
     except ValueError:
         return None
     return parsed.date().replace(day=1)
+
+
+def _coerce_summary_date(value: str | date | None) -> date | None:
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    rendered = str(value or "").strip()
+    if not rendered:
+        return None
+    try:
+        return datetime.fromisoformat(rendered).date()
+    except ValueError:
+        try:
+            return datetime.strptime(rendered[:10], _ISO_DATE_FMT).date()
+        except ValueError:
+            return None
+
+
+def _summary_file_metadata(file: Path) -> dict[str, Any] | None:
+    parent = file.parent.parent.name if file.parent.parent else ""
+    if parent == "daily":
+        day = _day_from_daily_summary_filename(file.name)
+        if not day:
+            return None
+        return {"period_kind": "daily", "start": day, "end": day}
+    if parent == "weekly":
+        week_start = _week_start_from_summary_filename(file.name)
+        if not week_start:
+            return None
+        return {"period_kind": "weekly", "start": week_start, "end": week_start + timedelta(days=6)}
+    if parent == "monthly":
+        month_start = _month_start_from_summary_filename(file.name)
+        if not month_start:
+            return None
+        next_month = (month_start + timedelta(days=32)).replace(day=1)
+        return {"period_kind": "monthly", "start": month_start, "end": next_month - timedelta(days=1)}
+    return None
+
+
+def _summary_matches(*, file: Path, query: str) -> list[dict[str, Any]]:
+    needle = str(query or "").strip().lower()
+    if not needle:
+        return []
+    out: list[dict[str, Any]] = []
+    for idx, text in enumerate(_read_lines(file), start=1):
+        stripped = text.strip()
+        if needle in stripped.lower():
+            out.append({"line": idx, "excerpt": stripped[:500]})
+    return out
+
+
+def _summary_metadata_matches(*, file: Path, meta: dict[str, Any], query: str) -> bool:
+    needle = str(query or "").strip().lower()
+    if not needle:
+        return False
+    start = meta.get("start")
+    end = meta.get("end")
+    parts = [
+        file.name,
+        str(meta.get("period_kind") or ""),
+        start.isoformat() if isinstance(start, date) else "",
+        end.isoformat() if isinstance(end, date) else "",
+        start.strftime("%B") if isinstance(start, date) else "",
+        start.strftime("%b") if isinstance(start, date) else "",
+    ]
+    return any(needle in part.lower() for part in parts if part)
+
+
+def _summary_excerpt(file: Path) -> str:
+    for line in _read_lines(file):
+        stripped = line.strip()
+        if stripped:
+            return stripped[:500]
+    return file.name
 
 
 def _env_int(name: str, default: int) -> int:

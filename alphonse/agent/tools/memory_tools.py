@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
+from alphonse.agent import identity
 from alphonse.agent.cognition.memory import MemoryService
 from alphonse.agent.cognition.memory import TimeRange
 from alphonse.agent.cortex.task_mode.task_record import TaskRecord
@@ -31,9 +32,12 @@ class SearchEpisodesTool:
         start_time: str | None = None,
         end_time: str | None = None,
         limit: int | None = None,        
+        state: dict[str, Any] | None = None,
         **_: Any,
     ) -> dict[str, Any]:        
-           
+        owner = _resolve_memory_user_id(user_id=user_id, state=state)
+        if not owner:
+            return _missing_user_result("memory.search_episodes")
         service = MemoryService()
         time_range = None
         if str(start_time or "").strip() or str(end_time or "").strip():
@@ -41,14 +45,14 @@ class SearchEpisodesTool:
         query_text = str(query or "")
         normalized_limit = max(1, int(limit or 100))
         rows = service.search_episodes(
-            user_id,
+            owner,
             query_text,
             mission_id=mission_id,
             time_range=time_range,
             limit=normalized_limit,
         )
         output_payload: dict[str, Any] = {
-            "user_id": user_id,
+            "user_id": owner,
             "hits": rows,
             "count": len(rows),
         }
@@ -56,6 +60,42 @@ class SearchEpisodesTool:
             "output": output_payload,
             "exception": None,
             "metadata": {"tool": "memory.search_episodes"},
+        }
+
+
+class SearchSummariesTool:
+    canonical_name: str = "memory.search_summaries"
+    capability: str = "memory"
+
+    def execute(
+        self,
+        *,
+        query: str,
+        period_kind: str | None = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        limit: int | None = None,
+        user_id: str | None = None,
+        state: dict[str, Any] | None = None,
+        **_: Any,
+    ) -> dict[str, Any]:
+        owner = _resolve_memory_user_id(user_id=user_id, state=state)
+        if not owner:
+            return _missing_user_result("memory.search_summaries")
+        service = MemoryService()
+        normalized_limit = max(1, int(limit or 100))
+        rows = service.search_summaries(
+            owner,
+            str(query or ""),
+            period_kind=period_kind,
+            start_date=start_date,
+            end_date=end_date,
+            limit=normalized_limit,
+        )
+        return {
+            "output": {"user_id": owner, "hits": rows, "count": len(rows)},
+            "exception": None,
+            "metadata": {"tool": "memory.search_summaries"},
         }
 
 
@@ -68,14 +108,17 @@ class GetMissionTool:
         *,
         mission_id: str,
         user_id: str | None = None,
-        task_record: TaskRecord,
+        task_record: TaskRecord | None = None,
+        state: dict[str, Any] | None = None,
         **_: Any,
     ) -> dict[str, Any]:
-                
+        owner = _resolve_memory_user_id(user_id=user_id, state=state, task_record=task_record)
+        if not owner:
+            return _missing_user_result("memory.get_mission")
         service = MemoryService()
-        mission = service.get_mission(task_record.user_id, str(mission_id or ""))
+        mission = service.get_mission(owner, str(mission_id or ""))
         return {
-            "output": {"user_id": task_record.user_id, "mission": mission},
+            "output": {"user_id": owner, "mission": mission},
             "exception": None,
             "metadata": {"tool": "memory.get_mission"},
         }
@@ -89,14 +132,16 @@ class ListActiveMissionsTool:
         self,
         *,
         user_id: str | None = None,
-        
+        state: dict[str, Any] | None = None,
         **_: Any,
     ) -> dict[str, Any]:
-       
+        owner = _resolve_memory_user_id(user_id=user_id, state=state)
+        if not owner:
+            return _missing_user_result("memory.list_active_missions")
         service = MemoryService()
-        rows = service.list_active_missions(user_id)
+        rows = service.list_active_missions(owner)
         return {
-            "output": {"user_id": user_id, "missions": rows, "count": len(rows)},
+            "output": {"user_id": owner, "missions": rows, "count": len(rows)},
             "exception": None,
             "metadata": {"tool": "memory.list_active_missions"},
         }
@@ -110,14 +155,17 @@ class GetWorkspacePointerTool:
         self,
         *,
         key: str,
-        user_id: str | None = None,        
+        user_id: str | None = None,
+        state: dict[str, Any] | None = None,
         **_: Any,
     ) -> dict[str, Any]:
-        
+        owner = _resolve_memory_user_id(user_id=user_id, state=state)
+        if not owner:
+            return _missing_user_result("memory.get_workspace")
         service = MemoryService()
-        value = service.get_workspace_pointer(user_id, str(key or ""))
+        value = service.get_workspace_pointer(owner, str(key or ""))
         return {
-            "output": {"user_id": user_id, "key": str(key or ""), "value": value},
+            "output": {"user_id": owner, "key": str(key or ""), "value": value},
             "exception": None,
             "metadata": {"tool": "memory.get_workspace"},
         }
@@ -143,11 +191,13 @@ class UpsertOperationalFactTool:
         scope: str = "private",
         last_verified_at: str | None = None,
         confidence: float | None = None,        
-        user_id: str | None = None,      
+        user_id: str | None = None,
+        state: dict[str, Any] | None = None,
         **_: Any,
     ) -> dict[str, Any]:
-       
-        owner = user_id
+        owner = _resolve_memory_user_id(user_id=user_id, state=state)
+        if not owner:
+            return _missing_user_result("memory.upsert_operational_fact")
         
         service = MemoryService()
         fact = service.upsert_operational_fact(
@@ -189,10 +239,13 @@ class SearchOperationalFactsTool:
         scope: str | None = None,
         limit: int = 50,
         offset: int = 0,        
-        user_id: str | None = None,        
+        user_id: str | None = None,
+        state: dict[str, Any] | None = None,
         **_: Any,
     ) -> dict[str, Any]:
-        owner = user_id
+        owner = _resolve_memory_user_id(user_id=user_id, state=state)
+        if not owner:
+            return _missing_user_result("memory.search_operational_facts")
         service = MemoryService()
         normalized_limit = max(1, min(int(limit), 200))
         normalized_offset = max(0, int(offset))
@@ -226,10 +279,17 @@ class RemoveOperationalFactTool:
         key: str | None = None,
         created_by: str | None = None,
         user_id: str | None = None,
-        task_record: TaskRecord,
+        task_record: TaskRecord | None = None,
+        state: dict[str, Any] | None = None,
         **_: Any,
     ) -> dict[str, Any]:
-        owner = user_id        
+        owner = _resolve_memory_user_id(
+            user_id=user_id or created_by,
+            state=state,
+            task_record=task_record,
+        )
+        if not owner:
+            return _missing_user_result("memory.remove_operational_fact")
         service = MemoryService()
         deleted = service.remove_operational_fact(
             created_by=owner,
@@ -238,14 +298,85 @@ class RemoveOperationalFactTool:
         )
         return {
             "output": {
-                "created_by": owner, 
-                "deleted": bool(deleted), 
-                "fact_id": str(fact_id or "").strip() or None, 
-                "key": str(key or "").strip() or None
-                },
+                "created_by": owner,
+                "deleted": bool(deleted),
+                "fact_id": str(fact_id or "").strip() or None,
+                "key": str(key or "").strip() or None,
+            },
             "exception": None,
             "metadata": {"tool": "memory.remove_operational_fact"},
         }
+
+
+def _resolve_memory_user_id(
+    *,
+    user_id: str | None = None,
+    state: dict[str, Any] | None = None,
+    task_record: TaskRecord | None = None,
+) -> str | None:
+    payload = state if isinstance(state, dict) else {}
+    channel_user = _resolve_user_from_channel(payload)
+    if channel_user:
+        return channel_user
+    for candidate in (
+        getattr(task_record, "user_id", None),
+        payload.get("actor_person_id"),
+        payload.get("user_id"),
+        user_id,
+    ):
+        resolved = _validated_user_id(candidate)
+        if resolved:
+            return resolved
+    return None
+
+
+def _resolve_user_from_channel(state: dict[str, Any]) -> str | None:
+    service_id = _state_service_id(state)
+    if service_id is None:
+        return None
+    for candidate in (
+        state.get("provider_user_id_from"),
+        state.get("channel_target"),
+        state.get("target"),
+        state.get("service_user_id"),
+        state.get("chat_id"),
+    ):
+        rendered = str(candidate or "").strip()
+        if not rendered:
+            continue
+        resolved = identity.resolve_user_id(service_id=service_id, service_user_id=rendered)
+        if resolved:
+            return resolved
+    return None
+
+
+def _state_service_id(state: dict[str, Any]) -> int | None:
+    for key in ("service_id", "service_key", "channel_type", "channel"):
+        value = str(state.get(key) or "").strip()
+        if not value:
+            continue
+        resolved = identity.resolve_service_id(value)
+        if resolved is not None:
+            return int(resolved)
+    return None
+
+
+def _validated_user_id(value: object | None) -> str | None:
+    rendered = str(value or "").strip()
+    if not rendered:
+        return None
+    if rendered == "owner-1":
+        return None
+    user = identity.get_user(rendered)
+    return str((user or {}).get("user_id") or "").strip() or None
+
+
+def _missing_user_result(tool_name: str) -> dict[str, Any]:
+    return {
+        "output": None,
+        "exception": {"code": "missing_user_id", "message": "Could not resolve a canonical memory user."},
+        "metadata": {"tool": tool_name},
+    }
 
 
 def _failed(tool_name: str, code: str) -> dict[str, Any]:

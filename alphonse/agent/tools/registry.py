@@ -27,6 +27,7 @@ from alphonse.agent.tools.memory_tools import GetWorkspacePointerTool
 from alphonse.agent.tools.memory_tools import ListActiveMissionsTool
 from alphonse.agent.tools.memory_tools import SearchEpisodesTool
 from alphonse.agent.tools.memory_tools import SearchOperationalFactsTool
+from alphonse.agent.tools.memory_tools import SearchSummariesTool
 from alphonse.agent.tools.memory_tools import UpsertOperationalFactTool
 from alphonse.agent.tools.mcp_call_tool import McpCallTool
 from alphonse.agent.tools.scheduler_tool import SchedulerTool
@@ -135,6 +136,7 @@ def _build_runtime_executors(*, job_store: JobStore, job_runner: JobRunner) -> l
     context_get_my_settings = GetMySettingsTool()
     context_get_user_details = GetUserDetailsTool()
     memory_search_episodes = SearchEpisodesTool()
+    memory_search_summaries = SearchSummariesTool()
     memory_get_mission = GetMissionTool()
     memory_list_active_missions = ListActiveMissionsTool()
     memory_get_workspace = GetWorkspacePointerTool()
@@ -170,6 +172,7 @@ def _build_runtime_executors(*, job_store: JobStore, job_runner: JobRunner) -> l
         context_get_my_settings,
         context_get_user_details,
         memory_search_episodes,
+        memory_search_summaries,
         memory_get_mission,
         memory_list_active_missions,
         memory_get_workspace,
@@ -573,7 +576,6 @@ def _default_specs() -> list[ToolSpec]:
             input_schema=_object_schema(
                 properties={
                     "query": {"type": "string"},
-                    "user_id": {"type": "string"},
                     "mission_id": {"type": "string"},
                     "start_time": {"type": "string"},
                     "end_time": {"type": "string"},
@@ -587,6 +589,27 @@ def _default_specs() -> list[ToolSpec]:
             examples=[{"query": "medicine", "limit": 10}],
         ),
         ToolSpec(
+            canonical_name="memory.search_summaries",
+            summary="Search daily, weekly, and monthly memory summaries for the current user.",
+            description="Search daily, weekly, and monthly memory summaries for the current user.",
+            when_to_use="Use when retrieving higher-level memory context or checking whether period summaries exist.",
+            returns="matching memory summaries",
+            input_schema=_object_schema(
+                properties={
+                    "query": {"type": "string"},
+                    "period_kind": {"type": "string", "enum": ["daily", "weekly", "monthly", "any"]},
+                    "start_date": {"type": "string"},
+                    "end_date": {"type": "string"},
+                    "limit": {"type": "integer"},
+                },
+                required=["query"],
+            ),
+            output_schema=_permissive_output_schema(),
+            domain_tags=["memory", "summaries", "search"],
+            safety_level=SafetyLevel.LOW,
+            examples=[{"query": "April", "period_kind": "monthly", "limit": 5}],
+        ),
+        ToolSpec(
             canonical_name="memory.get_mission",
             summary="Get mission details from memory by mission_id.",
             description="Get mission details from memory by mission_id.",
@@ -595,7 +618,6 @@ def _default_specs() -> list[ToolSpec]:
             input_schema=_object_schema(
                 properties={
                     "mission_id": {"type": "string"},
-                    "user_id": {"type": "string"},
                 },
                 required=["mission_id"],
             ),
@@ -611,7 +633,7 @@ def _default_specs() -> list[ToolSpec]:
             when_to_use="Use for a quick view of currently active user missions.",
             returns="active missions list",
             input_schema=_object_schema(
-                properties={"user_id": {"type": "string"}},
+                properties={},
                 required=[],
             ),
             output_schema=_permissive_output_schema(),
@@ -628,7 +650,6 @@ def _default_specs() -> list[ToolSpec]:
             input_schema=_object_schema(
                 properties={
                     "key": {"type": "string"},
-                    "user_id": {"type": "string"},
                 },
                 required=["key"],
             ),
@@ -668,8 +689,6 @@ def _default_specs() -> list[ToolSpec]:
                     "scope": {"type": "string", "enum": ["private", "global"]},
                     "last_verified_at": {"type": "string"},
                     "confidence": {"type": "number", "minimum": 0.0, "maximum": 1.0},
-                    "created_by": {"type": "string"},
-                    "user_id": {"type": "string"},
                 },
                 required=["key", "title", "fact_type"],
             ),
@@ -713,8 +732,6 @@ def _default_specs() -> list[ToolSpec]:
                     "scope": {"type": "string", "enum": ["private", "global"]},
                     "limit": {"type": "integer", "minimum": 1, "maximum": 200},
                     "offset": {"type": "integer", "minimum": 0},
-                    "created_by": {"type": "string"},
-                    "user_id": {"type": "string"},
                 },
                 required=[],
             ),
@@ -740,8 +757,6 @@ def _default_specs() -> list[ToolSpec]:
                 properties={
                     "fact_id": {"type": "string"},
                     "key": {"type": "string"},
-                    "created_by": {"type": "string"},
-                    "user_id": {"type": "string"},
                 },
                 required=[],
             ),
