@@ -203,3 +203,106 @@ def test_telegram_adapter_marks_edited_message_as_edit(monkeypatch) -> None:
     assert payload.get("contract_type") == "canonical_inbound_event"
     assert str(payload.get("provider_message_id")) == "4"
     assert str(payload.get("event_kind")) == "edit"
+
+
+def test_telegram_adapter_emits_message_reaction_update(monkeypatch) -> None:
+    adapter = telegram_module.TelegramAdapter(
+        {
+            "bot_token": "fake-token",
+            "poll_interval_sec": 0.0,
+            "allowed_chat_ids": [8593816828],
+        }
+    )
+    emitted: list[object] = []
+    adapter.on_signal(lambda signal: emitted.append(signal))
+
+    monkeypatch.setattr(telegram_module, "mark_update_processed", lambda _update_id, _chat_id: True)
+    monkeypatch.setattr(
+        telegram_module,
+        "evaluate_inbound_access",
+        lambda **_: SimpleNamespace(
+            allowed=True,
+            reason="registered_private",
+            emit_invite=False,
+            leave_chat=False,
+            access=None,
+        ),
+    )
+
+    update = {
+        "update_id": 31223567,
+        "message_reaction": {
+            "chat": {"id": 8593816828, "type": "private"},
+            "message_id": 42,
+            "user": {"id": 8593816828, "first_name": "Gabriela", "username": "gaby"},
+            "date": 1779050000,
+            "old_reaction": [],
+            "new_reaction": [{"type": "emoji", "emoji": "👍"}],
+        },
+    }
+
+    adapter._handle_update(update)
+
+    assert len(emitted) == 1
+    signal = emitted[0]
+    assert getattr(signal, "type", "") == "external.telegram.message"
+    payload = getattr(signal, "payload", {}) or {}
+    assert payload.get("contract_type") == "canonical_inbound_event"
+    assert str(payload.get("channel_target")) == "8593816828"
+    assert str(payload.get("service_key")) == "telegram"
+    assert str(payload.get("provider_user_id_from")) == "8593816828"
+    assert str(payload.get("provider_message_id")) == "42"
+    assert str(payload.get("event_kind")) == "reaction"
+    assert str(payload.get("dedupe_key")) == "31223567"
+    assert payload.get("text") is None
+    raw = payload.get("provider_raw_message")
+    assert isinstance(raw, dict)
+    reaction = raw.get("message_reaction") if isinstance(raw.get("message_reaction"), dict) else {}
+    assert reaction.get("new_reaction") == [{"type": "emoji", "emoji": "👍"}]
+
+
+def test_telegram_adapter_emits_message_reaction_count_update(monkeypatch) -> None:
+    adapter = telegram_module.TelegramAdapter(
+        {
+            "bot_token": "fake-token",
+            "poll_interval_sec": 0.0,
+            "allowed_chat_ids": [8593816828],
+        }
+    )
+    emitted: list[object] = []
+    adapter.on_signal(lambda signal: emitted.append(signal))
+
+    monkeypatch.setattr(telegram_module, "mark_update_processed", lambda _update_id, _chat_id: True)
+    monkeypatch.setattr(
+        telegram_module,
+        "evaluate_inbound_access",
+        lambda **_: SimpleNamespace(
+            allowed=True,
+            reason="registered_private",
+            emit_invite=False,
+            leave_chat=False,
+            access=None,
+        ),
+    )
+
+    update = {
+        "update_id": 31223568,
+        "message_reaction_count": {
+            "chat": {"id": 8593816828, "type": "private"},
+            "message_id": 43,
+            "date": 1779050001,
+            "reactions": [{"type": {"type": "emoji", "emoji": "👎"}, "total_count": 1}],
+        },
+    }
+
+    adapter._handle_update(update)
+
+    assert len(emitted) == 1
+    payload = getattr(emitted[0], "payload", {}) or {}
+    assert str(payload.get("provider_message_id")) == "43"
+    assert str(payload.get("event_kind")) == "reaction"
+    assert str(payload.get("provider_user_id_from")) == ""
+    raw = payload.get("provider_raw_message")
+    assert isinstance(raw, dict)
+    reaction_count = raw.get("message_reaction_count") if isinstance(raw.get("message_reaction_count"), dict) else {}
+    assert reaction_count.get("reactions") == [{"type": {"type": "emoji", "emoji": "👎"}, "total_count": 1}]

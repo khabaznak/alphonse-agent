@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import logging
+from urllib import parse
 from urllib.error import HTTPError
 
 from alphonse.agent.extremities.interfaces.integrations.telegram.telegram_adapter import TelegramAdapter
@@ -82,3 +84,32 @@ def test_telegram_http_409_conflict_logs_warning_once_and_backs_off(caplog, monk
     warnings = [r for r in caplog.records if r.levelno == logging.WARNING and "conflict (409)" in r.message]
     assert len(warnings) == 1
     assert adapter._poll_conflict_backoff_until > 0
+
+
+def test_telegram_fetch_updates_requests_reaction_updates(monkeypatch) -> None:
+    adapter = TelegramAdapter({"bot_token": "fake-token", "poll_interval_sec": 0.0})
+    captured: dict[str, object] = {}
+
+    class _Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def read(self) -> bytes:
+            return b'{"ok": true, "result": []}'
+
+    def _urlopen(req, timeout):
+        captured["data"] = getattr(req, "data", b"")
+        captured["timeout"] = timeout
+        return _Response()
+
+    monkeypatch.setattr(telegram_module.request, "urlopen", _urlopen)
+
+    assert adapter._fetch_updates(offset=7) == []
+    data = parse.parse_qs(bytes(captured["data"]).decode("utf-8"))
+    allowed_updates = json.loads(data["allowed_updates"][0])
+    assert data["offset"] == ["7"]
+    assert "message_reaction" in allowed_updates
+    assert "message_reaction_count" in allowed_updates

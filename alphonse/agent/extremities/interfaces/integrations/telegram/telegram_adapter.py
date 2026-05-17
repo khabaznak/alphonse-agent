@@ -25,6 +25,13 @@ from alphonse.agent.nervous_system.telegram_updates_store import mark_update_pro
 
 logger = get_component_logger("integrations.telegram_adapter")
 _SNIPPET_LIMIT = 80
+_TELEGRAM_ALLOWED_UPDATES = [
+    "message",
+    "edited_message",
+    "callback_query",
+    "message_reaction",
+    "message_reaction_count",
+]
 
 
 class TelegramAdapter(IntegrationAdapter):
@@ -234,7 +241,13 @@ class TelegramAdapter(IntegrationAdapter):
     def _fetch_updates(self, offset: int) -> list[dict[str, Any]] | None:
         endpoint = "getUpdates"
         url = f"https://api.telegram.org/bot{self._bot_token}/{endpoint}"
-        data = parse.urlencode({"timeout": 0, "offset": offset}).encode("utf-8")
+        data = parse.urlencode(
+            {
+                "timeout": 0,
+                "offset": offset,
+                "allowed_updates": json.dumps(_TELEGRAM_ALLOWED_UPDATES),
+            }
+        ).encode("utf-8")
         req = request.Request(url, data=data, method="POST")
         try:
             with request.urlopen(req, timeout=10) as response:
@@ -284,6 +297,10 @@ class TelegramAdapter(IntegrationAdapter):
             logger.info("TelegramAdapter duplicate update_id=%s skipped", update_id)
             return
         self._seen_update_ids.add(update_id)
+
+        if _telegram_event_kind(update) == "reaction":
+            self._handle_reaction_update(update)
+            return
 
         message = _telegram_message_payload(update)
         if not isinstance(message, dict):
@@ -411,6 +428,77 @@ class TelegramAdapter(IntegrationAdapter):
         )
         logger.info(
             "TelegramAdapter emitting external signal update_id=%s chat_id=%s",
+            update_id,
+            chat_id,
+        )
+        self.emit_signal(signal)  # type: ignore[arg-type]
+
+    def _handle_reaction_update(self, update: dict[str, Any]) -> None:
+        update_id = update.get("update_id")
+        if not isinstance(update_id, int):
+            return
+        reaction = _telegram_reaction_payload(update)
+        if not isinstance(reaction, dict):
+            return
+        chat = reaction.get("chat") if isinstance(reaction.get("chat"), dict) else {}
+        chat_type = str(chat.get("type") or "private")
+        chat_id = chat.get("id")
+        if chat_id is None:
+            return
+        if not mark_update_processed(update_id, str(chat_id)):
+            logger.info("TelegramAdapter duplicate reaction update_id=%s skipped (db)", update_id)
+            return
+
+        from_user_payload = reaction.get("user") if isinstance(reaction.get("user"), dict) else {}
+        from_user_id = from_user_payload.get("id")
+        from_user_name = from_user_payload.get("first_name") or from_user_payload.get("username")
+        access = evaluate_inbound_access(
+            chat_id=str(chat_id),
+            chat_type=chat_type,
+            from_user_id=str(from_user_id) if from_user_id is not None else None,
+        )
+        if not access.allowed:
+            logger.info(
+                "TelegramAdapter rejected reaction update_id=%s chat_id=%s reason=%s",
+                update_id,
+                chat_id,
+                access.reason,
+            )
+            return
+
+        if self._allowed_chat_ids is not None:
+            chat_id_int = _to_int(chat_id)
+            if chat_id_int not in self._allowed_chat_ids and not (
+                access.allowed and str(access.reason or "").strip() == "registered_private"
+            ):
+                logger.info(
+                    "TelegramAdapter rejected reaction update_id=%s chat_id=%s reason=not_allowed",
+                    update_id,
+                    chat_id,
+                )
+                return
+
+        logger.info(
+            "TelegramAdapter accepted reaction update_id=%s chat_id=%s from=%s message_id=%s",
+            update_id,
+            chat_id,
+            from_user_id,
+            reaction.get("message_id"),
+        )
+
+        signal = BusSignal(
+            type="external.telegram.message",
+            payload=_build_canonical_telegram_reaction_payload(
+                reaction=reaction,
+                update=update,
+                chat_id=chat_id,
+                from_user=from_user_id,
+                from_user_name=from_user_name,
+            ),
+            source="telegram",
+        )
+        logger.info(
+            "TelegramAdapter emitting reaction external signal update_id=%s chat_id=%s",
             update_id,
             chat_id,
         )
@@ -720,6 +808,32 @@ def _build_canonical_telegram_inbound_payload(
     ).to_payload()
 
 
+def _build_canonical_telegram_reaction_payload(
+    *,
+    reaction: dict[str, Any],
+    update: dict[str, Any],
+    chat_id: Any,
+    from_user: Any,
+    from_user_name: Any,
+) -> dict[str, Any]:
+    provider_message_id = str(reaction.get("message_id") or update.get("update_id") or chat_id or "").strip()
+    provider_user_id_from = str(from_user).strip() if from_user is not None else ""
+    return CanonicalInboundEvent(
+        service_key="telegram",
+        provider_user_id_from=provider_user_id_from,
+        provider_message_id=provider_message_id,
+        channel_target=str(chat_id or "").strip(),
+        occurred_at=_occurred_at_for_message(reaction),
+        event_kind="reaction",
+        provider_raw_message=dict(update),
+        text=None,
+        attachments=[],
+        reply_to_provider_message_id=None,
+        dedupe_key=str(update.get("update_id") or provider_message_id or "").strip() or None,
+        display_name=str(from_user_name or "").strip() or None,
+    ).to_payload()
+
+
 def _occurred_at_for_message(message: dict[str, Any]) -> str:
     raw = message.get("date")
     try:
@@ -754,6 +868,14 @@ def _resolve_content_type(*, text: str, contact_payload: dict[str, Any] | None, 
 
 def _telegram_message_payload(update: dict[str, Any]) -> dict[str, Any] | None:
     for key in ("message", "edited_message"):
+        candidate = update.get(key)
+        if isinstance(candidate, dict):
+            return candidate
+    return None
+
+
+def _telegram_reaction_payload(update: dict[str, Any]) -> dict[str, Any] | None:
+    for key in ("message_reaction", "message_reaction_count"):
         candidate = update.get(key)
         if isinstance(candidate, dict):
             return candidate
