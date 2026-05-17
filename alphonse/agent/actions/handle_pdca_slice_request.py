@@ -1048,6 +1048,7 @@ def _emit_dispatch_kick_signal(
 def _classify_failure_code(exc: Exception) -> str:
     rendered = str(exc or "").strip().lower()
     matchers = (
+        "inference engine failure",
         "connection refused",
         "failed to establish a new connection",
         "max retries exceeded",

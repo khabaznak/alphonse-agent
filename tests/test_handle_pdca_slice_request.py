@@ -1252,6 +1252,45 @@ def test_handle_pdca_slice_request_classifies_engine_unavailable_failure(
     assert emitted.payload.get("user_notice_required") is True
 
 
+def test_handle_pdca_slice_request_classifies_inference_engine_failure_notice(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db_path = tmp_path / "nerve-db"
+    monkeypatch.setenv("NERVE_DB_PATH", str(db_path))
+    apply_schema(db_path)
+    task_id = upsert_pdca_task(
+        {
+            "owner_id": "owner-1",
+            "conversation_key": "telegram:8553589429",
+            "status": "queued",
+            "metadata": {"pending_user_text": "hello"},
+        }
+    )
+
+    class _InferenceFailureGraph:
+        def invoke(self, state, text, *, llm_client=None):  # noqa: ANN001
+            _ = (state, text, llm_client)
+            raise RuntimeError("Inference engine failure")
+
+    monkeypatch.setattr(hpsr, "_CORTEX_GRAPH", _InferenceFailureGraph())
+    monkeypatch.setattr(hpsr, "build_llm_client", lambda: None)
+    bus = Bus()
+    signal = Signal(
+        type="pdca.slice.requested",
+        payload={"task_id": task_id, "correlation_id": "cid-inference-fail"},
+        source="pdca_queue_runner",
+    )
+    action = HandlePdcaSliceRequestAction()
+    _ = action.execute({"signal": signal, "ctx": bus})
+
+    emitted = bus.get(timeout=0.05)
+    assert emitted is not None
+    assert emitted.type == "pdca.failed"
+    assert emitted.payload.get("failure_code") == "engine_unavailable"
+    assert emitted.payload.get("user_notice_required") is True
+
+
 def test_handle_pdca_slice_request_classifies_generic_failure_without_notice(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
