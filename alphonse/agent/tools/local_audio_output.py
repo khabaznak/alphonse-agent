@@ -8,6 +8,7 @@ from pathlib import Path
 import shutil
 from alphonse.agent.observability.log_manager import get_component_logger
 import platform
+import sys
 import subprocess
 import threading
 from typing import Any
@@ -420,7 +421,13 @@ class _QwenBackend(_TTSBackend):
             self._soundfile = sf
             self._model_cls = Qwen3TTSModel
             return None
-        except Exception:
+        except Exception as exc:
+            logger.warning(
+                "local_audio_output_qwen runtime_unavailable python=%s error_type=%s error=%s",
+                sys.executable,
+                type(exc).__name__,
+                str(exc),
+            )
             return (
                 "Qwen backend dependencies are unavailable. Install with: pip install -U qwen-tts soundfile"
             )
