@@ -94,4 +94,7 @@ class IntegrationAdapter(ABC):
         """Handle an internal action by producing an external effect."""
 
 
-__all__ = ["IntegrationAdapter", "Signal", "Action", "CanonicalInboundEvent"]
+from .canonical_sense_event import CanonicalSenseEvent
+
+
+__all__ = ["IntegrationAdapter", "Signal", "Action", "CanonicalInboundEvent", "CanonicalSenseEvent"]

@@ -72,6 +72,57 @@ def test_handle_conscious_message_enqueues_pdca_slice(monkeypatch) -> None:
     assert presence.get("message_id") == "m-1"
 
 
+def test_handle_conscious_message_accepts_canonical_sense_event(monkeypatch) -> None:
+    action = HandleConsciousMessageAction()
+    called: dict[str, object] = {}
+    presence: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        "alphonse.agent.actions.handle_conscious_message.enqueue_pdca_slice",
+        lambda **kwargs: called.update(kwargs) or "task-sense-1",
+    )
+    monkeypatch.setattr(
+        "alphonse.agent.actions.handle_conscious_message.is_pdca_slicing_enabled",
+        lambda: True,
+    )
+    monkeypatch.setattr(
+        "alphonse.agent.actions.handle_conscious_message.emit_presence_phase_changed",
+        lambda **kwargs: presence.update(kwargs),
+    )
+
+    payload = {
+        "contract_type": "canonical_sense_event",
+        "contract_version": "1.0",
+        "source_key": "front_door_camera",
+        "provider": "homeassistant",
+        "event_id": "evt-1",
+        "event_kind": "person_detected",
+        "occurred_at": "2026-05-22T12:00:00+00:00",
+        "subject": {"kind": "camera", "id": "camera.front_door", "label": "Front door"},
+        "summary": "A person was detected at the front door.",
+        "data": {"confidence": 0.91},
+        "raw_event": {"entity_id": "camera.front_door"},
+        "dedupe_key": "front-door-person-1",
+    }
+
+    result = action.execute({"signal": Signal(type="sense.api.event.received", payload=payload), "ctx": Bus()})
+
+    assert result.payload.get("task_id") == "task-sense-1"
+    task_record = called.get("task_record")
+    assert isinstance(task_record, TaskRecord)
+    assert task_record.user_id is None
+    assert task_record.correlation_id == "front-door-person-1"
+    assert "A person was detected at the front door." in task_record.goal
+    assert "event_kind=person_detected" in task_record.goal
+    assert "source_key: front_door_camera" in task_record.facts_md
+    buffered_input = called.get("buffered_input")
+    assert isinstance(buffered_input, BufferedTaskInput)
+    assert buffered_input.message_id == "evt-1"
+    assert buffered_input.channel_type == "sense"
+    assert buffered_input.channel_target == "front_door_camera"
+    assert presence == {}
+
+
 def test_handle_conscious_message_does_not_parse_control_intent(monkeypatch) -> None:
     action = HandleConsciousMessageAction()
     captured: dict[str, object] = {}

@@ -41,3 +41,15 @@ def test_bus_accepts_timed_conscious_payload_for_timer_source() -> None:
             correlation_id="c-2",
         )
     )
+
+
+def test_bus_accepts_canonical_sense_event_api_signal() -> None:
+    bus = Bus()
+    bus.emit(
+        Signal(
+            type="sense.api.event.received",
+            payload={"contract_type": "canonical_sense_event"},
+            source="canonical_sense_event_api",
+            correlation_id="c-3",
+        )
+    )

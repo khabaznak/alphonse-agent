@@ -32,10 +32,11 @@ class HandleConsciousMessageAction(Action):
             raise ValueError("invalid_envelope: payload must be an object")
 
         payload = dict(raw_payload)
-        _validate_canonical_inbound_event_payload(payload)
+        _validate_conscious_payload(payload)
         correlation_id = (
             str(payload.get(_SIGNAL_CORRELATION_KEY) or "").strip()
             or str(payload.get("dedupe_key") or "").strip()
+            or str(payload.get("event_id") or "").strip()
             or str(getattr(signal, _SIGNAL_CORRELATION_KEY, "") or "").strip()
             or str(uuid.uuid4())
         )
@@ -69,14 +70,15 @@ class HandleConsciousMessageAction(Action):
                 "message_id": message_id,
             },
         )
-        emit_presence_phase_changed(
-            channel_type=channel_type,
-            channel_target=channel_target,
-            user_id=user_id,
-            message_id=message_id,
-            phase="acknowledged",
-            correlation_id=str(correlation_id),
-        )
+        if _is_canonical_inbound_event(payload):
+            emit_presence_phase_changed(
+                channel_type=channel_type,
+                channel_target=channel_target,
+                user_id=user_id,
+                message_id=message_id,
+                phase="acknowledged",
+                correlation_id=str(correlation_id),
+            )
 
         if not is_pdca_slicing_enabled():
             _LOG.emit(
@@ -188,15 +190,20 @@ def _build_task_record_from_payload(
         goal=_message_text_for_payload(payload),
         status="running",
     )
-    for key, value in (
-        ("channel_type", channel_type_for_payload(payload)),
-        ("channel_target", channel_target_for_payload(payload)),
-        ("message_id", message_id_for_payload(payload)),
-        ("provider_user_id_from", provider_user_id_from_for_payload(payload)),
-        ("display_name", display_name_for_payload(payload)),
-        ("locale", locale_for_payload(payload)),
-        ("timezone", timezone_for_payload(payload)),
-    ):
+    facts = (
+        _sense_event_facts(payload)
+        if _is_canonical_sense_event(payload)
+        else (
+            ("channel_type", channel_type_for_payload(payload)),
+            ("channel_target", channel_target_for_payload(payload)),
+            ("message_id", message_id_for_payload(payload)),
+            ("provider_user_id_from", provider_user_id_from_for_payload(payload)),
+            ("display_name", display_name_for_payload(payload)),
+            ("locale", locale_for_payload(payload)),
+            ("timezone", timezone_for_payload(payload)),
+        )
+    )
+    for key, value in facts:
         rendered = str(value or "").strip()
         if rendered:
             record.append_fact(f"{key}: {rendered}")
@@ -223,6 +230,8 @@ def _build_buffered_input_from_payload(
 
 
 def _message_text_for_payload(payload: dict[str, Any]) -> str:
+    if _is_canonical_sense_event(payload):
+        return _sense_event_text_for_payload(payload)
     text = text_for_payload(payload)
     if text:
         return text
@@ -248,14 +257,20 @@ def _message_text_for_payload(payload: dict[str, Any]) -> str:
 
 
 def channel_type_for_payload(payload: dict[str, Any]) -> str:
+    if _is_canonical_sense_event(payload):
+        return "sense"
     return service_key_for_payload(payload)
 
 
 def channel_target_for_payload(payload: dict[str, Any]) -> str:
+    if _is_canonical_sense_event(payload):
+        return _required_str_field(payload, "source_key")
     return _required_str_field(payload, "channel_target")
 
 
 def message_id_for_payload(payload: dict[str, Any]) -> str:
+    if _is_canonical_sense_event(payload):
+        return _required_str_field(payload, "event_id")
     return _required_str_field(payload, "provider_message_id")
 
 
@@ -265,6 +280,8 @@ def attachments_for_payload(payload: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def provider_user_id_from_for_payload(payload: dict[str, Any]) -> str:
+    if _is_canonical_sense_event(payload):
+        return ""
     return _required_str_field(payload, "provider_user_id_from")
 
 
@@ -298,6 +315,8 @@ def resolved_user_id_for_payload(payload: dict[str, Any]) -> str:
     direct = str(payload.get("alphonse_user_id") or "").strip()
     if direct:
         return direct
+    if _is_canonical_sense_event(payload):
+        return ""
     service_id = service_id_for_payload(payload)
     if service_id is None:
         raise ValueError("invalid_conscious_payload: unknown service_key")
@@ -313,12 +332,28 @@ def resolved_user_id_for_payload(payload: dict[str, Any]) -> str:
 
 
 def service_id_for_payload(payload: dict[str, Any]) -> int | None:
+    if _is_canonical_sense_event(payload):
+        return None
     resolved = resolve_service_id_by_channel_type(service_key_for_payload(payload))
     return int(resolved) if resolved is not None else None
 
 
 def _is_canonical_inbound_event(payload: dict[str, Any]) -> bool:
     return str(payload.get("contract_type") or "").strip() == "canonical_inbound_event"
+
+
+def _is_canonical_sense_event(payload: dict[str, Any]) -> bool:
+    return str(payload.get("contract_type") or "").strip() == "canonical_sense_event"
+
+
+def _validate_conscious_payload(payload: dict[str, Any]) -> None:
+    if _is_canonical_inbound_event(payload):
+        _validate_canonical_inbound_event_payload(payload)
+        return
+    if _is_canonical_sense_event(payload):
+        _validate_canonical_sense_event_payload(payload)
+        return
+    raise ValueError("invalid_conscious_payload: unsupported contract_type")
 
 
 def _validate_canonical_inbound_event_payload(payload: dict[str, Any]) -> None:
@@ -340,6 +375,52 @@ def _validate_canonical_inbound_event_payload(payload: dict[str, Any]) -> None:
         raise ValueError("invalid_conscious_payload: provider_raw_message must be an object")
 
 
+def _validate_canonical_sense_event_payload(payload: dict[str, Any]) -> None:
+    for field_name in (
+        "source_key",
+        "provider",
+        "event_id",
+        "event_kind",
+        "occurred_at",
+        "summary",
+    ):
+        _required_str_field(payload, field_name)
+    if not isinstance(payload.get("subject"), dict):
+        raise ValueError("invalid_conscious_payload: subject must be an object")
+    if not isinstance(payload.get("data"), dict):
+        raise ValueError("invalid_conscious_payload: data must be an object")
+    if not isinstance(payload.get("raw_event"), dict):
+        raise ValueError("invalid_conscious_payload: raw_event must be an object")
+
+
+def _sense_event_text_for_payload(payload: dict[str, Any]) -> str:
+    summary = _required_str_field(payload, "summary")
+    event_kind = _required_str_field(payload, "event_kind")
+    subject = payload.get("subject") if isinstance(payload.get("subject"), dict) else {}
+    data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+    subject_label = str(subject.get("label") or subject.get("id") or subject.get("kind") or "").strip()
+    parts = [f"Sense event: {summary}", f"event_kind={event_kind}"]
+    if subject_label:
+        parts.append(f"subject={subject_label}")
+    if data:
+        parts.append(f"data={data}")
+    return ". ".join(parts)
+
+
+def _sense_event_facts(payload: dict[str, Any]) -> tuple[tuple[str, Any], ...]:
+    subject = payload.get("subject") if isinstance(payload.get("subject"), dict) else {}
+    data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+    return (
+        ("source_key", payload.get("source_key")),
+        ("provider", payload.get("provider")),
+        ("event_id", payload.get("event_id")),
+        ("event_kind", payload.get("event_kind")),
+        ("occurred_at", payload.get("occurred_at")),
+        ("subject", subject),
+        ("data", data),
+    )
+
+
 def _required_str_field(payload: dict[str, Any], field_name: str) -> str:
     rendered = str(payload.get(field_name) or "").strip()
     if not rendered:
@@ -348,6 +429,8 @@ def _required_str_field(payload: dict[str, Any], field_name: str) -> str:
 
 
 def service_key_for_payload(payload: dict[str, Any]) -> str:
+    if _is_canonical_sense_event(payload):
+        return "sense"
     return _required_str_field(payload, "service_key")
 
 

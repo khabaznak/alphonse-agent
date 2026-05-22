@@ -1,5 +1,6 @@
 """Contracts for integration adapters."""
 
+from .canonical_sense_event import CanonicalSenseEvent
 from .integration_adapter import (
     Action,
     CanonicalInboundEvent,
@@ -7,4 +8,4 @@ from .integration_adapter import (
     Signal,
 )
 
-__all__ = ["Action", "CanonicalInboundEvent", "IntegrationAdapter", "Signal"]
+__all__ = ["Action", "CanonicalInboundEvent", "CanonicalSenseEvent", "IntegrationAdapter", "Signal"]
