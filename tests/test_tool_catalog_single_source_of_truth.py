@@ -33,3 +33,16 @@ def test_vision_tools_surface_matches_expected_contract() -> None:
     assert "vision.analyze_image" in names
     assert "vision.extract_text" in names
     assert "analyze_telegram_image" not in names
+
+
+def test_reminder_management_tools_are_visible_to_planner() -> None:
+    registry = build_default_tool_registry()
+    names = set(planner_canonical_tool_names(registry))
+    schemas = {
+        str(item.get("function", {}).get("name") or ""): item
+        for item in planner_tool_schemas(registry)
+        if isinstance(item, dict)
+    }
+    assert "reminders.list" in names
+    assert "reminders.cancel" in names
+    assert "reminder_id" in schemas["reminders.cancel"]["function"]["parameters"]["properties"]

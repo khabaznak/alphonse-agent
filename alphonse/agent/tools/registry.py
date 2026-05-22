@@ -30,6 +30,8 @@ from alphonse.agent.tools.memory_tools import SearchOperationalFactsTool
 from alphonse.agent.tools.memory_tools import SearchSummariesTool
 from alphonse.agent.tools.memory_tools import UpsertOperationalFactTool
 from alphonse.agent.tools.mcp_call_tool import McpCallTool
+from alphonse.agent.tools.reminder_tools import ReminderCancelTool
+from alphonse.agent.tools.reminder_tools import ReminderListTool
 from alphonse.agent.tools.scheduler_tool import SchedulerTool
 from alphonse.agent.tools.send_message_tool import SendMessageTool
 from alphonse.agent.tools.send_message_tool import SendVoiceNoteTool
@@ -156,6 +158,8 @@ def _build_runtime_executors(*, job_store: JobStore, job_runner: JobRunner) -> l
     execution_call_mcp = McpCallTool()
     execution_run_ssh = SshTerminalTool()
     scheduler = SchedulerTool()
+    reminders_list = ReminderListTool()
+    reminders_cancel = ReminderCancelTool()
     jobs_create = JobCreateTool(job_store)
     jobs_list = JobListTool(job_store)
     jobs_pause = JobPauseTool(job_store)
@@ -192,6 +196,8 @@ def _build_runtime_executors(*, job_store: JobStore, job_runner: JobRunner) -> l
         execution_call_mcp,
         execution_run_ssh,
         scheduler,
+        reminders_list,
+        reminders_cancel,
         jobs_create,
         jobs_list,
         jobs_pause,
@@ -324,9 +330,9 @@ def _default_specs() -> list[ToolSpec]:
         ),
         ToolSpec(
             canonical_name="create_reminder",
-            summary="Create a reminder for someone at a specific time.",
-            description="Create a reminder for someone at a specific time.",
-            when_to_use="Use when the user asks to be reminded.",
+            summary="Create a one-shot reminder for someone at a specific time.",
+            description="Create a one-shot reminder backed by timed_signals, not a recurring scheduled job.",
+            when_to_use="Use when the user asks to be reminded once at a specific time.",
             returns="scheduled_reminder_id",
             input_schema=_object_schema(
                 properties={
@@ -341,6 +347,54 @@ def _default_specs() -> list[ToolSpec]:
             aliases=["createReminder"],
             safety_level=SafetyLevel.MEDIUM,
             examples=[{"ForWhom": "me", "Time": "tomorrow 8am", "Message": "take medicine"}],
+        ),
+        ToolSpec(
+            canonical_name="reminders.list",
+            summary="List one-shot reminders from timed_signals with filters for owner, channel, time window, text, and status.",
+            description="List one-shot reminders backed by timed_signals. Use this for normal reminders, not jobs.list.",
+            when_to_use="Use before cancelling or reviewing one-shot reminders.",
+            returns="reminders list with ids, trigger time, timezone, status, raw text, origin, and target",
+            input_schema=_object_schema(
+                properties={
+                    "owner_id": {"type": ["string", "null"]},
+                    "channel": {"type": ["string", "null"]},
+                    "target": {"type": ["string", "null"]},
+                    "text": {"type": ["string", "null"]},
+                    "start_at": {"type": ["string", "null"]},
+                    "end_at": {"type": ["string", "null"]},
+                    "status": {"type": ["string", "null"]},
+                    "limit": {"type": "integer"},
+                },
+                required=[],
+            ),
+            output_schema=_permissive_output_schema(),
+            domain_tags=["time", "reminders", "control"],
+            safety_level=SafetyLevel.LOW,
+            examples=[{"status": "pending", "start_at": "2026-05-21T00:00:00-06:00", "end_at": "2026-05-21T23:59:59-06:00", "text": "meeting"}],
+        ),
+        ToolSpec(
+            canonical_name="reminders.cancel",
+            summary="Cancel one pending one-shot reminder from timed_signals.",
+            description="Cancel a one-shot reminder by id, or by filters only when they match exactly one pending reminder. Does not manage recurring jobs.",
+            when_to_use="Use when the user asks to cancel, remove, or delete a normal one-shot reminder.",
+            returns="cancelled reminder id and prior status",
+            input_schema=_object_schema(
+                properties={
+                    "reminder_id": {"type": ["string", "null"]},
+                    "owner_id": {"type": ["string", "null"]},
+                    "channel": {"type": ["string", "null"]},
+                    "target": {"type": ["string", "null"]},
+                    "text": {"type": ["string", "null"]},
+                    "start_at": {"type": ["string", "null"]},
+                    "end_at": {"type": ["string", "null"]},
+                },
+                required=[],
+            ),
+            output_schema=_permissive_output_schema(),
+            domain_tags=["time", "reminders", "control"],
+            safety_level=SafetyLevel.HIGH,
+            requires_confirmation=True,
+            examples=[{"reminder_id": "e8bdb231-fd98-407f-ac78-ab2b0bbe00b5"}],
         ),
         ToolSpec(
             canonical_name="communication.send_message",
@@ -887,9 +941,9 @@ def _default_specs() -> list[ToolSpec]:
         ),
         ToolSpec(
             canonical_name="jobs.list",
-            summary="List scheduled jobs with filtering by enabled state and domain tag.",
-            description="List scheduled jobs with filtering by enabled state and domain tag.",
-            when_to_use="Use to review configured jobs before editing/running/deleting.",
+            summary="List recurring/conscious scheduled jobs, not one-shot reminders.",
+            description="List scheduled_jobs entries with filtering by enabled state and domain tag. Use reminders.list for one-shot reminders backed by timed_signals.",
+            when_to_use="Use to review configured recurring automations/jobs before editing/running/deleting.",
             returns="jobs summary list",
             input_schema=_object_schema(
                 properties={
@@ -906,9 +960,9 @@ def _default_specs() -> list[ToolSpec]:
         ),
         ToolSpec(
             canonical_name="jobs.pause",
-            summary="Pause a scheduled job so it no longer auto-triggers.",
-            description="Pause a scheduled job so it no longer auto-triggers.",
-            when_to_use="Use when the user wants to temporarily disable an automation.",
+            summary="Pause a recurring/conscious scheduled job so it no longer auto-triggers.",
+            description="Pause a scheduled_jobs entry. Use reminders.cancel for one-shot reminders backed by timed_signals.",
+            when_to_use="Use when the user wants to temporarily disable a recurring automation/job.",
             returns="job enabled state and next_run_at",
             input_schema=_object_schema(
                 properties={"job_id": {"type": "string"}},
@@ -936,9 +990,9 @@ def _default_specs() -> list[ToolSpec]:
         ),
         ToolSpec(
             canonical_name="jobs.delete",
-            summary="Delete a job definition permanently.",
-            description="Delete a job definition permanently.",
-            when_to_use="Use when the user asks to remove an automation.",
+            summary="Delete a recurring/conscious scheduled job definition permanently.",
+            description="Delete a scheduled_jobs entry. Use reminders.cancel for one-shot reminders backed by timed_signals.",
+            when_to_use="Use when the user asks to remove a recurring automation/job.",
             returns="deletion status",
             input_schema=_object_schema(
                 properties={"job_id": {"type": "string"}},

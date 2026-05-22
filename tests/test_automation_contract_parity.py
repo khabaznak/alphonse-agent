@@ -5,7 +5,6 @@ from pathlib import Path
 
 import pytest
 import alphonse.agent.tools.scheduler_tool as scheduler_module
-from alphonse.agent.services.automation_tool_call_contract import is_canonical_tool_call
 from alphonse.agent.services.job_store import JobStore
 from alphonse.agent.tools.scheduler_tool import SchedulerTool
 
@@ -16,7 +15,7 @@ class _FixedIsoLlm:
         return "2026-02-20T13:30:00+00:00"
 
 
-def test_jobs_are_conscious_only_while_reminders_use_canonical_tool_call(tmp_path: Path, monkeypatch) -> None:
+def test_jobs_and_reminders_are_conscious_prompt_payloads(tmp_path: Path, monkeypatch) -> None:
     store = JobStore(root=tmp_path / "jobs")
     with pytest.raises(ValueError, match="jobs_conscious_only_payload_type"):
         store.create_job(
@@ -60,4 +59,6 @@ def test_jobs_are_conscious_only_while_reminders_use_canonical_tool_call(tmp_pat
     )
     payload = captured.get("payload")
     assert isinstance(payload, dict)
-    assert is_canonical_tool_call(payload) is True
+    assert payload.get("payload_type") == "prompt_to_brain"
+    assert payload.get("kind") == "reminder"
+    assert "tool_call" not in payload
