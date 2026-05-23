@@ -5,6 +5,7 @@ from typing import Any, Mapping
 
 from jinja2 import Environment
 from alphonse.agent.cognition.template_loader import load_template_or_fallback
+from alphonse.config.prompt_context import load_boot_prompt_context
 
 PROMPT_SEEDS_DIR = Path(__file__).resolve().parent / "prompt_seeds"
 
@@ -53,7 +54,20 @@ def get_prompt_seed_template(template_id: str) -> dict[str, Any] | None:
         "source": "file_seed",
     }
 
-CHECK_JUDGE_SYSTEM_PROMPT_TEMPLATE = _seed_text(
+
+def render_prompt_template(template: str, variables: Mapping[str, Any]) -> str:
+    env = Environment(autoescape=False, trim_blocks=False, lstrip_blocks=False)
+    rendered = env.from_string(template).render(**dict(variables))
+    for name, value in variables.items():
+        rendered = rendered.replace("{" + str(name) + "}", str(value))
+    return rendered
+
+
+def _seed_text_with_boot_context(filename: str) -> str:
+    return render_prompt_template(_seed_text(filename), load_boot_prompt_context()).strip()
+
+
+CHECK_JUDGE_SYSTEM_PROMPT_TEMPLATE = _seed_text_with_boot_context(
     "pdca.check.judge.system.j2",
 )
 
@@ -67,11 +81,3 @@ JOBS_YOU_JUST_REMEMBERED_SYSTEM_PROMPT = _seed_text("jobs.you_just_remembered.sy
 RENDERER_UTTERANCE_SYSTEM_PROMPT = _seed_text("renderer.utterance.system.j2")
 MEMORY_SUMMARY_SYSTEM_PROMPT = _seed_text("memory.summary.system.j2")
 MEMORY_SUMMARY_USER_TEMPLATE = _seed_text("memory.summary.user.j2")
-
-
-def render_prompt_template(template: str, variables: Mapping[str, Any]) -> str:
-    env = Environment(autoescape=False, trim_blocks=False, lstrip_blocks=False)
-    rendered = env.from_string(template).render(**dict(variables))
-    for name, value in variables.items():
-        rendered = rendered.replace("{" + str(name) + "}", str(value))
-    return rendered

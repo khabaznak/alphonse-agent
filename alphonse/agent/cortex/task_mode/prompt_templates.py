@@ -3,6 +3,7 @@ from __future__ import annotations
 from alphonse.agent.cognition.prompt_templates_runtime import PROMPT_SEEDS_DIR
 from alphonse.agent.cognition.prompt_templates_runtime import render_prompt_template
 from alphonse.agent.cognition.template_loader import load_template_or_fallback
+from alphonse.config.prompt_context import load_boot_prompt_context
 
 
 def _load_template(filename: str) -> str:
@@ -10,7 +11,14 @@ def _load_template(filename: str) -> str:
     return load_template_or_fallback(path)
 
 
-NEXT_STEP_SYSTEM_PROMPT = _load_template("pdca.next_step.system.j2")
+def _load_next_step_system_prompt() -> str:
+    return render_prompt_template(
+        _load_template("pdca.next_step.system.j2"),
+        load_boot_prompt_context(),
+    ).strip()
+
+
+NEXT_STEP_SYSTEM_PROMPT = _load_next_step_system_prompt()
 NEXT_STEP_USER_TEMPLATE = _load_template("pdca.next_step.user.j2")
 
 
