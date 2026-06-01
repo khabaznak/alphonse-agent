@@ -11,6 +11,7 @@ import shlex
 import signal
 import subprocess
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 from datetime import datetime, timezone
 
@@ -93,7 +94,7 @@ from alphonse.agent.tools.local_audio_output import LocalAudioOutputRenderTool
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="alphonse cli")
-    parser.add_argument("--log-level", default=os.getenv("ALPHONSE_LOG_LEVEL", "INFO"))
+    parser.add_argument("--log-level", default=_default_cli_log_level())
     sub = parser.add_subparsers(dest="command", required=True)
 
     say_parser = sub.add_parser(
@@ -437,10 +438,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> None:
+    _load_env()
     parser = build_parser()
     args = parser.parse_args()
     _configure_logging(args.log_level)
-    _load_env()
     db_path = resolve_nervous_system_db_path()
     logging.info("Nerve DB path=%s exists=%s", db_path, db_path.exists())
     apply_schema(db_path)
@@ -613,6 +614,8 @@ def _command_repl(parser: argparse.ArgumentParser, db_path: Path) -> None:
         if raw in {"help", "?"}:
             parser.print_help()
             continue
+        if _handle_repl_logs_command(raw):
+            continue
         if _handle_repl_message_command(raw, bus=repl_bus, action_runtime=repl_action_runtime):
             continue
         try:
@@ -654,6 +657,50 @@ def _handle_repl_message_command(raw: str, *, bus: Bus | None, action_runtime: o
         },
     )
     return True
+
+
+def _handle_repl_logs_command(raw: str) -> bool:
+    parts = str(raw or "").split()
+    if not parts or parts[0] not in {"log", "logs"}:
+        return False
+    if len(parts) < 2:
+        _print_logs_usage()
+        return True
+    command = parts[1].strip().lower()
+    if command == "off":
+        _set_cli_log_destination("none")
+        _configure_logging(_default_cli_log_level())
+        print("CLI logs disabled for this REPL session.")
+        return True
+    if command == "file":
+        _set_cli_log_destination("file")
+        _configure_logging(_default_cli_log_level())
+        logging.info("CLI logs enabled for REPL session")
+        print(f"CLI logs enabled: file {_active_cli_log_file()}")
+        return True
+    if command == "stderr":
+        _set_cli_log_destination("stderr")
+        _configure_logging(_default_cli_log_level())
+        print("CLI logs enabled: stderr")
+        return True
+    if command == "path":
+        print(f"CLI log file: {_active_cli_log_file()}")
+        return True
+    if command == "status":
+        state = _get_cli_logging_state()
+        if state.enabled and state.destination == "file":
+            print(f"CLI logs: file {_active_cli_log_file()}")
+        elif state.enabled and state.destination == "stderr":
+            print("CLI logs: stderr")
+        else:
+            print("CLI logs: off")
+        return True
+    _print_logs_usage()
+    return True
+
+
+def _print_logs_usage() -> None:
+    print("Usage: logs off|file|stderr|path|status")
 
 
 def _command_run_scheduler(args: argparse.Namespace, db_path: Path) -> None:
@@ -967,14 +1014,22 @@ def _print_agent_flush_result(*, counts: dict[str, int], dry_run: bool) -> None:
 class AgentSupervisor:
     def __init__(self) -> None:
         self._process: subprocess.Popen[str] | None = None
+        self._log_handle = None
 
     def start(self) -> None:
         if self.is_running():
             print(f"Agent already running (pid={self._process.pid}).")
             return
         cmd = [sys.executable, "-m", "alphonse.agent.main"]
-        self._process = subprocess.Popen(cmd)
-        print(f"Agent started (pid={self._process.pid}).")
+        stdout, stderr = _agent_subprocess_streams()
+        if stdout is not None and stdout is stderr:
+            self._log_handle = stdout
+        self._process = subprocess.Popen(cmd, stdout=stdout, stderr=stderr, text=True)
+        message = f"Agent started (pid={self._process.pid})."
+        state = _get_cli_logging_state()
+        if state.destination == "file" and state.enabled:
+            message = f"{message} Logs: {state.log_file}"
+        print(message)
 
     def stop(self) -> None:
         if not self.is_running():
@@ -993,6 +1048,7 @@ class AgentSupervisor:
                 self._process.wait(timeout=5)
         print("Agent stopped.")
         self._process = None
+        self._close_log_handle()
 
     def restart(self) -> None:
         if self.is_running():
@@ -1009,7 +1065,30 @@ class AgentSupervisor:
     def is_running(self) -> bool:
         if self._process is None:
             return False
-        return self._process.poll() is None
+        running = self._process.poll() is None
+        if not running:
+            self._close_log_handle()
+        return running
+
+    def _close_log_handle(self) -> None:
+        handle = self._log_handle
+        self._log_handle = None
+        if handle is not None:
+            try:
+                handle.close()
+            except Exception:
+                pass
+
+
+def _agent_subprocess_streams():
+    state = _get_cli_logging_state()
+    if not state.enabled or state.destination == "none":
+        return (subprocess.DEVNULL, subprocess.DEVNULL)
+    if state.destination == "file":
+        state.log_file.parent.mkdir(parents=True, exist_ok=True)
+        handle = state.log_file.open("a", encoding="utf-8")
+        return (handle, handle)
+    return (None, None)
 
 
 def _load_env() -> None:
@@ -1649,8 +1728,99 @@ def _conversation_key_from_args(channel_type: str, channel_id: str) -> str:
     return f"{channel_type}:{channel_id or channel_type}"
 
 
-def _configure_logging(level_name: str) -> None:
-    logging.basicConfig(level=getattr(logging, level_name.upper(), logging.INFO))
+@dataclass
+class _CliLoggingState:
+    enabled: bool
+    destination: str
+    log_file: Path
+    level_name: str
+
+
+_CLI_LOG_DESTINATION_OVERRIDE: str | None = None
+_CLI_LOG_ENABLED_OVERRIDE: bool | None = None
+
+
+def _configure_logging(level_name: str | None = None) -> None:
+    state = _get_cli_logging_state(level_name=level_name)
+    root = logging.getLogger()
+    for handler in list(root.handlers):
+        root.removeHandler(handler)
+        try:
+            handler.close()
+        except Exception:
+            pass
+    root.setLevel(_log_level(state.level_name))
+    if not state.enabled or state.destination == "none":
+        root.addHandler(logging.NullHandler())
+        return
+    formatter = logging.Formatter("%(levelname)s:%(name)s:%(message)s")
+    if state.destination == "file":
+        state.log_file.parent.mkdir(parents=True, exist_ok=True)
+        handler: logging.Handler = logging.FileHandler(state.log_file)
+    else:
+        handler = logging.StreamHandler()
+    handler.setLevel(_log_level(state.level_name))
+    handler.setFormatter(formatter)
+    root.addHandler(handler)
+
+
+def _get_cli_logging_state(level_name: str | None = None) -> _CliLoggingState:
+    enabled = _CLI_LOG_ENABLED_OVERRIDE
+    if enabled is None:
+        enabled = _env_bool("ALPHONSE_CLI_LOG_ENABLED", default=True)
+    destination = (_CLI_LOG_DESTINATION_OVERRIDE or os.getenv("ALPHONSE_CLI_LOG_DESTINATION") or "file").strip().lower()
+    if destination not in {"file", "stderr", "none"}:
+        destination = "file"
+    if not enabled:
+        destination = "none"
+    return _CliLoggingState(
+        enabled=enabled and destination != "none",
+        destination=destination,
+        log_file=_resolve_cli_log_file(),
+        level_name=str(level_name or _default_cli_log_level()).strip() or "INFO",
+    )
+
+
+def _set_cli_log_destination(destination: str) -> None:
+    global _CLI_LOG_DESTINATION_OVERRIDE, _CLI_LOG_ENABLED_OVERRIDE
+    normalized = str(destination or "").strip().lower()
+    _CLI_LOG_DESTINATION_OVERRIDE = normalized if normalized in {"file", "stderr", "none"} else "file"
+    _CLI_LOG_ENABLED_OVERRIDE = _CLI_LOG_DESTINATION_OVERRIDE != "none"
+
+
+def _active_cli_log_file() -> Path:
+    return _get_cli_logging_state().log_file
+
+
+def _resolve_cli_log_file() -> Path:
+    raw = str(os.getenv("ALPHONSE_CLI_LOG_FILE") or "agent/logs/cli.log").strip()
+    path = Path(raw).expanduser()
+    if path.is_absolute():
+        return path
+    alphonse_root = Path(__file__).resolve().parents[1]
+    relative_parts = [part for part in path.parts if part not in ("..", ".")]
+    normalized_relative = Path(*relative_parts) if relative_parts else path
+    return (alphonse_root / normalized_relative).resolve()
+
+
+def _default_cli_log_level() -> str:
+    return str(os.getenv("ALPHONSE_CLI_LOG_LEVEL") or os.getenv("ALPHONSE_LOG_LEVEL") or "INFO").strip() or "INFO"
+
+
+def _log_level(level_name: str) -> int:
+    return int(getattr(logging, str(level_name or "INFO").upper(), logging.INFO))
+
+
+def _env_bool(name: str, *, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    value = str(raw).strip().lower()
+    if value in {"1", "true", "yes", "on"}:
+        return True
+    if value in {"0", "false", "no", "off"}:
+        return False
+    return default
 
 
 if __name__ == "__main__":

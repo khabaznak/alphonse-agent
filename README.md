@@ -140,6 +140,31 @@ alphonse> agent restart
 alphonse> agent stop
 ```
 
+### CLI logs
+
+The CLI keeps user-facing REPL output separate from runtime logs. By default, CLI logs are written to `alphonse/agent/logs/cli.log`; this includes output from a managed agent started with `alphonse> agent start`.
+
+Useful REPL commands:
+
+```text
+alphonse> logs status
+alphonse> logs path
+alphonse> logs off
+alphonse> logs file
+alphonse> logs stderr
+```
+
+The singular form also works, for example `log status`.
+
+Persistent defaults live in `alphonse/agent/.env`:
+
+```dotenv
+ALPHONSE_CLI_LOG_ENABLED=true
+ALPHONSE_CLI_LOG_DESTINATION=file
+ALPHONSE_CLI_LOG_FILE=agent/logs/cli.log
+ALPHONSE_CLI_LOG_LEVEL=INFO
+```
+
 Run the dispatcher loop (separate process):
 
 ```bash
