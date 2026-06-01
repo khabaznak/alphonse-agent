@@ -10,6 +10,7 @@ from alphonse.agent.observability.log_manager import get_component_logger
 import platform
 import sys
 import subprocess
+import tempfile
 import threading
 from typing import Any
 from dataclasses import dataclass
@@ -290,7 +291,7 @@ class _QwenBackend(_TTSBackend):
         rendered = self.render(
             text=spoken_text,
             voice=voice,
-            output_dir=None, # TODO: This cannot be None, need to use an environment variable or default path here. For now, this will cause the render to fail and trigger the fallback, which is better than crashing.
+            output_dir=None,
             filename_prefix="local-speak",
             format="m4a",
             instruct=instruct,
@@ -385,7 +386,7 @@ class _QwenBackend(_TTSBackend):
             return _failed(
                 "qwen_generate_failed",
                 "Qwen TTS synthesis failed",
-                details={"error": str(exc)},
+                details={"error": str(exc), "path": str(wav_path)},
                 tool="audio.render_local",
             )
 
@@ -850,14 +851,39 @@ def _resolve_render_output_dir(output_dir: str | None) -> Path:
     rendered = str(output_dir or "").strip()
     if rendered:
         return Path(rendered).expanduser().resolve()
+    configured = str(os.getenv("ALPHONSE_AUDIO_OUTPUT_DIR") or "").strip()
+    if configured:
+        return Path(configured).expanduser().resolve()
+    candidates: list[Path] = []
     for alias in PRIMARY_WORKDIR_ALIASES:
         record = get_sandbox_alias(alias)
         if not isinstance(record, dict) or not bool(record.get("enabled")):
             continue
         base_path = str(record.get("base_path") or "").strip()
         if base_path:
-            return (Path(base_path).expanduser().resolve() / "audio_output").resolve()
-    return (default_sandbox_root() / "audio_output").resolve()
+            candidates.append((Path(base_path).expanduser().resolve() / "audio_output").resolve())
+    candidates.extend(
+        [
+            (default_sandbox_root() / "audio_output").resolve(),
+            (Path(__file__).resolve().parents[3] / "audio_output").resolve(),
+            (Path(tempfile.gettempdir()) / "alphonse-audio-output").resolve(),
+        ]
+    )
+    for candidate in candidates:
+        if _is_writable_directory(candidate):
+            return candidate
+    return candidates[-1]
+
+
+def _is_writable_directory(path: Path) -> bool:
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+        probe = path / ".alphonse-write-test"
+        probe.write_text("ok", encoding="utf-8")
+        probe.unlink(missing_ok=True)
+        return True
+    except Exception:
+        return False
 
 
 def _cleanup_rendered_audio(*, root: Path, keep_path: Path) -> dict[str, int]:

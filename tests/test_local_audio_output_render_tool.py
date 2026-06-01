@@ -128,6 +128,34 @@ def test_local_audio_output_render_defaults_to_authorized_workdir(monkeypatch, t
     assert rendered_path.parent == (tmp_path / "main-workdir" / "audio_output").resolve()
 
 
+def test_local_audio_output_render_uses_configured_output_dir(monkeypatch, tmp_path: Path) -> None:
+    configured = tmp_path / "configured-audio"
+    monkeypatch.setenv("ALPHONSE_AUDIO_OUTPUT_DIR", str(configured))
+
+    assert lao._resolve_render_output_dir(None) == configured.resolve()
+
+
+def test_local_audio_output_render_skips_unwritable_default_candidate(monkeypatch, tmp_path: Path) -> None:
+    blocked = tmp_path / "blocked"
+    fallback = tmp_path / "fallback"
+    monkeypatch.delenv("ALPHONSE_AUDIO_OUTPUT_DIR", raising=False)
+    monkeypatch.setattr(lao, "PRIMARY_WORKDIR_ALIASES", ("main",))
+    monkeypatch.setattr(
+        lao,
+        "get_sandbox_alias",
+        lambda alias: {"alias": alias, "enabled": True, "base_path": str(blocked)},
+    )
+    monkeypatch.setattr(lao, "default_sandbox_root", lambda: blocked)
+    monkeypatch.setattr(lao.tempfile, "gettempdir", lambda: str(fallback))
+
+    def _fake_writable(path: Path) -> bool:
+        return path == (fallback / "alphonse-audio-output").resolve()
+
+    monkeypatch.setattr(lao, "_is_writable_directory", _fake_writable)
+
+    assert lao._resolve_render_output_dir(None) == (fallback / "alphonse-audio-output").resolve()
+
+
 def test_local_audio_output_render_prunes_old_and_excess_files(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(lao.platform, "system", lambda: "Darwin")
     monkeypatch.setenv("ALPHONSE_AUDIO_MAX_FILES", "2")
