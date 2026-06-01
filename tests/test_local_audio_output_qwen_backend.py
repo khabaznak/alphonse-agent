@@ -61,3 +61,80 @@ def test_qwen_backend_speak_uses_player_on_non_macos(monkeypatch, tmp_path: Path
     assert payload.get("backend") == "qwen"
     assert payload.get("player") == "fake-player"
     assert calls and calls[0][0] == "fake-player"
+
+
+def test_qwen_model_load_uses_cached_snapshot_by_default(monkeypatch, tmp_path: Path) -> None:
+    snapshot = tmp_path / "snapshot"
+    snapshot.mkdir()
+    captured: dict[str, object] = {}
+
+    def _fake_snapshot_download(model_id: str, *, local_files_only: bool) -> str:
+        captured["snapshot_model_id"] = model_id
+        captured["snapshot_local_only"] = local_files_only
+        return str(snapshot)
+
+    class _FakeHub:
+        @staticmethod
+        def snapshot_download(model_id: str, *, local_files_only: bool) -> str:
+            return _fake_snapshot_download(model_id, local_files_only=local_files_only)
+
+    class _FakeModel:
+        @classmethod
+        def from_pretrained(cls, source: str, **kwargs):  # noqa: ANN001
+            captured["source"] = source
+            captured["kwargs"] = dict(kwargs)
+            return object()
+
+    monkeypatch.setitem(__import__("sys").modules, "huggingface_hub", _FakeHub)
+    monkeypatch.setenv("ALPHONSE_QWEN_TTS_MODEL", "Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice")
+    backend = lao._QwenBackend()
+    backend._model_cls = _FakeModel
+
+    assert backend._load_model() is not None
+
+    assert captured["snapshot_model_id"] == "Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice"
+    assert captured["snapshot_local_only"] is True
+    assert captured["source"] == str(snapshot)
+    assert (captured["kwargs"] or {}).get("local_files_only") is True
+
+
+def test_qwen_model_load_can_allow_online_repo_resolution(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    class _FakeModel:
+        @classmethod
+        def from_pretrained(cls, source: str, **kwargs):  # noqa: ANN001
+            captured["source"] = source
+            captured["kwargs"] = dict(kwargs)
+            return object()
+
+    monkeypatch.setenv("ALPHONSE_QWEN_TTS_MODEL", "Qwen/model")
+    monkeypatch.setenv("ALPHONSE_QWEN_TTS_LOCAL_FILES_ONLY", "false")
+    backend = lao._QwenBackend()
+    backend._model_cls = _FakeModel
+
+    assert backend._load_model() is not None
+
+    assert captured["source"] == "Qwen/model"
+    assert "local_files_only" not in (captured["kwargs"] or {})
+
+
+def test_qwen_wav_to_m4a_prefers_ffmpeg(monkeypatch, tmp_path: Path) -> None:
+    source = tmp_path / "sample.wav"
+    source.write_bytes(b"wav")
+    calls: list[list[str]] = []
+
+    def _fake_run(cmd, stdout, stderr, text, check):  # noqa: ANN001
+        calls.append(list(cmd))
+        _ = (stdout, stderr, text, check)
+        Path(cmd[-1]).write_bytes(b"m4a")
+        return SimpleNamespace(returncode=0, stderr="")
+
+    monkeypatch.setattr(lao.shutil, "which", lambda name: "/usr/local/bin/ffmpeg" if name == "ffmpeg" else None)
+    monkeypatch.setattr(lao.subprocess, "run", _fake_run)
+
+    result = lao._convert_from_wav(source_path=source, target_format="m4a")
+
+    assert result["exception"] is None
+    assert calls[0][:2] == ["/usr/local/bin/ffmpeg", "-y"]
+    assert (result.get("output") or {}).get("format") == "m4a"

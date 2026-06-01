@@ -436,9 +436,13 @@ class _QwenBackend(_TTSBackend):
         if self._model is not None:
             return self._model
         model_id = str(os.getenv("ALPHONSE_QWEN_TTS_MODEL") or "Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice").strip()
+        local_files_only = _env_bool("ALPHONSE_QWEN_TTS_LOCAL_FILES_ONLY", default=True)
+        model_source = _resolve_qwen_model_source(model_id, local_files_only=local_files_only)
         kwargs: dict[str, Any] = {
             "device_map": str(os.getenv("ALPHONSE_QWEN_TTS_DEVICE_MAP") or "auto").strip() or "auto",
         }
+        if local_files_only:
+            kwargs["local_files_only"] = True
         attn = str(os.getenv("ALPHONSE_QWEN_TTS_ATTN_IMPLEMENTATION") or "").strip()
         if attn:
             kwargs["attn_implementation"] = attn
@@ -451,11 +455,51 @@ class _QwenBackend(_TTSBackend):
             except Exception:
                 pass
         try:
-            self._model = self._model_cls.from_pretrained(model_id, **kwargs)
+            self._model = self._model_cls.from_pretrained(model_source, **kwargs)
             return self._model
         except Exception as exc:
-            logger.error("local_audio_output_qwen model_load_failed model=%s error=%s", model_id, str(exc))
+            logger.error(
+                "local_audio_output_qwen model_load_failed model=%s source=%s local_files_only=%s error=%s",
+                model_id,
+                model_source,
+                local_files_only,
+                str(exc),
+            )
             return None
+
+
+def _resolve_qwen_model_source(model_id: str, *, local_files_only: bool) -> str:
+    rendered = str(model_id or "").strip()
+    if not rendered:
+        return "Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice"
+    if Path(rendered).expanduser().exists():
+        return str(Path(rendered).expanduser())
+    if not local_files_only:
+        return rendered
+    try:
+        from huggingface_hub import snapshot_download
+
+        return str(snapshot_download(rendered, local_files_only=True))
+    except Exception as exc:
+        logger.warning(
+            "local_audio_output_qwen cached_snapshot_unavailable model=%s error_type=%s error=%s",
+            rendered,
+            type(exc).__name__,
+            str(exc),
+        )
+        return rendered
+
+
+def _env_bool(name: str, *, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    value = str(raw).strip().lower()
+    if value in {"1", "true", "yes", "on"}:
+        return True
+    if value in {"0", "false", "no", "off"}:
+        return False
+    return default
 
 
 class LocalAudioOutputSpeakTool:
@@ -709,17 +753,17 @@ def _convert_from_wav(*, source_path: Path, target_format: str) -> dict[str, Any
 
     if target_format == "m4a":
         target_path = source_path.with_suffix(".m4a")
-        if platform.system() == "Darwin":
+        ffmpeg_bin = shutil.which("ffmpeg")
+        if ffmpeg_bin:
+            cmd = [ffmpeg_bin, "-y", "-i", str(source_path), "-c:a", "aac", str(target_path)]
+        elif platform.system() == "Darwin":
             cmd = ["afconvert", "-f", "m4af", "-d", "aac", str(source_path), str(target_path)]
         else:
-            ffmpeg_bin = shutil.which("ffmpeg")
-            if not ffmpeg_bin:
-                return _failed(
-                    "ffmpeg_not_installed",
-                    "ffmpeg is required to convert audio to m4a on non-macOS",
-                    tool="audio.render_local",
-                )
-            cmd = [ffmpeg_bin, "-y", "-i", str(source_path), "-c:a", "aac", str(target_path)]
+            return _failed(
+                "ffmpeg_not_installed",
+                "ffmpeg is required to convert audio to m4a on non-macOS",
+                tool="audio.render_local",
+            )
         converted = subprocess.run(
             cmd,
             stdout=subprocess.DEVNULL,
