@@ -117,6 +117,23 @@ class TelegramAdapter(IntegrationAdapter):
             )
             self._send_audio_http(chat_id=chat_id, file_path=file_path, caption=caption, as_voice=as_voice)
             return
+        if action_type == "send_photo":
+            payload = action.get("payload") or {}
+            correlation_id = str(payload.get("correlation_id") or "").strip() or None
+            chat_id = payload.get("chat_id")
+            file_path = str(payload.get("file_path") or "").strip()
+            caption = payload.get("caption")
+            if chat_id is None or not file_path:
+                logger.warning("TelegramAdapter missing chat_id/file_path in send_photo payload")
+                return
+            logger.info(
+                "TelegramAdapter sending photo to %s path=%s",
+                chat_id,
+                file_path,
+                extra={"correlation_id": correlation_id},
+            )
+            self._send_photo_http(chat_id=chat_id, file_path=file_path, caption=caption)
+            return
         if action_type == "set_message_reaction":
             payload = action.get("payload") or {}
             correlation_id = str(payload.get("correlation_id") or "").strip() or None
@@ -689,6 +706,50 @@ class TelegramAdapter(IntegrationAdapter):
                     **({"caption": str(caption)} if str(caption or "").strip() else {}),
                 },
                 file_field=media_field,
+                filename=source.name,
+                file_bytes=handle.read(),
+                mime_type=_guess_mime_type(source),
+            )
+        req = request.Request(url, data=body, method="POST")
+        req.add_header("Content-Type", content_type)
+        try:
+            with request.urlopen(req, timeout=30) as response:
+                body_text = response.read().decode("utf-8", errors="ignore")
+                logger.info(
+                    "TelegramAdapter %s status=%s chat_id=%s body=%s",
+                    endpoint,
+                    response.status,
+                    chat_id,
+                    _snippet(body_text),
+                )
+                parsed = _parse_json(body_text)
+                if not isinstance(parsed, dict) or not bool(parsed.get("ok")):
+                    error_code = parsed.get("error_code") if isinstance(parsed, dict) else None
+                    description = parsed.get("description") if isinstance(parsed, dict) else None
+                    raise RuntimeError(f"TelegramAdapter {endpoint} failed: {error_code} {description}")
+        except Exception as exc:
+            logger.error("TelegramAdapter %s failed: %s", endpoint, exc)
+            raise
+
+    def _send_photo_http(
+        self,
+        *,
+        chat_id: int | str,
+        file_path: str,
+        caption: Any | None,
+    ) -> None:
+        source = Path(str(file_path)).expanduser().resolve()
+        if not source.exists() or not source.is_file():
+            raise RuntimeError(f"image_file_not_found:{source}")
+        endpoint = "sendPhoto"
+        url = f"https://api.telegram.org/bot{self._bot_token}/{endpoint}"
+        with source.open("rb") as handle:
+            body, content_type = _build_multipart_request(
+                fields={
+                    "chat_id": str(chat_id),
+                    **({"caption": str(caption)} if str(caption or "").strip() else {}),
+                },
+                file_field="photo",
                 filename=source.name,
                 file_bytes=handle.read(),
                 mime_type=_guess_mime_type(source),

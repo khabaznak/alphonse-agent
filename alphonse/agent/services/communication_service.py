@@ -85,7 +85,7 @@ class CommunicationService:
         if isinstance(payload_dict, dict) and payload_dict.get("locale"):
             payload["locale"] = payload_dict.get("locale")
         if isinstance(payload_dict, dict):
-            for key in ("delivery_mode", "audio_file_path", "as_voice", "caption"):
+            for key in ("delivery_mode", "audio_file_path", "image_file_path", "as_voice", "caption"):
                 if key in payload_dict:
                     payload[key] = payload_dict.get(key)
         action = ActionResult(

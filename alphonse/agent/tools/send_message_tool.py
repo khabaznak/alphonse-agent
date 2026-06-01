@@ -40,6 +40,7 @@ class SendMessageTool:
             )
             delivery_mode = _get_delivery_mode_from_args(args)
             audio_file_path = _get_audio_file_path_from_args(args, delivery_mode=delivery_mode)
+            image_file_path = _get_image_file_path_from_args(args, delivery_mode=delivery_mode)
             as_voice = _get_as_voice_from_args(args)
             caption = _get_caption_from_args(args)
         except ValueError as exc:
@@ -50,6 +51,8 @@ class SendMessageTool:
                 return _failed(code="missing_recipient", message="recipient is required")
             if code == "missing_audio_file_path":
                 return _failed(code="missing_audio_file_path", message="audio file path is required for audio delivery mode")
+            if code == "missing_image_file_path":
+                return _failed(code="missing_image_file_path", message="image file path is required for image delivery mode")
             if code == "unresolved_recipient":
                 return _failed(code="unresolved_recipient", message="recipient could not be resolved")
             raise
@@ -99,6 +102,15 @@ class SendMessageTool:
                         "caption": caption,
                     }
                     if delivery_mode == "audio"
+                    else {}
+                ),
+                **(
+                    {
+                        "delivery_mode": delivery_mode,
+                        "image_file_path": image_file_path,
+                        "caption": caption,
+                    }
+                    if delivery_mode == "image"
                     else {}
                 ),
             },
@@ -238,6 +250,13 @@ def _get_audio_file_path_from_args(args: dict[str, Any], *, delivery_mode: str) 
     return audio_file_path
 
 
+def _get_image_file_path_from_args(args: dict[str, Any], *, delivery_mode: str) -> str | None:
+    image_file_path = str(args.get("ImageFilePath") or args.get("image_file_path") or "").strip() or None
+    if delivery_mode == "image" and not image_file_path:
+        raise ValueError("missing_image_file_path")
+    return image_file_path
+
+
 def _get_as_voice_from_args(args: dict[str, Any]) -> bool:
     return bool(args.get("AsVoice") if args.get("AsVoice") is not None else args.get("as_voice", True))
 
@@ -275,10 +294,16 @@ def _map_send_error(exc: Exception) -> dict[str, Any]:
         return _failed(code="missing_target", message="message target could not be resolved")
     if code == "missing_audio_file_path":
         return _failed(code="missing_audio_file_path", message="audio file path is required for audio delivery mode")
+    if code == "missing_image_file_path":
+        return _failed(code="missing_image_file_path", message="image file path is required for image delivery mode")
     if code.startswith("audio_file_not_found:"):
         missing_path = rendered.split(":", 1)[1] if ":" in rendered else ""
         message = f"audio file not found: {missing_path}" if missing_path else "audio file not found"
         return _failed(code="audio_file_not_found", message=message)
+    if code.startswith("image_file_not_found:"):
+        missing_path = rendered.split(":", 1)[1] if ":" in rendered else ""
+        message = f"image file not found: {missing_path}" if missing_path else "image file not found"
+        return _failed(code="image_file_not_found", message=message)
     if code.startswith("missing_extremity_adapter:"):
         channel = rendered.split(":", 1)[1] if ":" in rendered else ""
         message = f"no outbound adapter registered for channel: {channel}" if channel else "no outbound adapter registered"

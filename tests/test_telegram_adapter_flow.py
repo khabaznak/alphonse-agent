@@ -97,6 +97,52 @@ def test_telegram_extremity_adapter_deliver_emits_send_audio(monkeypatch) -> Non
     assert captured[0]["payload"]["caption"] == "Hola por audio"
 
 
+def test_telegram_extremity_adapter_deliver_emits_send_photo(monkeypatch) -> None:
+    captured: list[dict] = []
+
+    class FakeTelegramAdapter:
+        def __init__(self, config: dict) -> None:
+            self.config = config
+
+        def handle_action(self, action: dict) -> None:
+            captured.append(action)
+
+    monkeypatch.setattr(
+        telegram_channel,
+        "build_telegram_adapter_config",
+        lambda: {"bot_token": "fake-token", "poll_interval_sec": 1.0},
+    )
+    monkeypatch.setattr(telegram_channel, "TelegramAdapter", FakeTelegramAdapter)
+    monkeypatch.setattr(
+        telegram_channel,
+        "resolve_telegram_chat_id_for_user",
+        lambda _: None,
+    )
+    monkeypatch.setattr(telegram_channel, "can_deliver_to_chat", lambda _chat_id: True)
+
+    adapter = telegram_channel.TelegramExtremityAdapter()
+    adapter.deliver(
+        NormalizedOutboundMessage(
+            message="foto",
+            channel_type="telegram",
+            channel_target="12345",
+            audience={"kind": "system", "id": "system"},
+            correlation_id="cid-image-1",
+            metadata={
+                "delivery_mode": "image",
+                "image_file_path": "/tmp/alphonse-camera/snapshot.jpg",
+                "caption": "Snapshot actual",
+            },
+        )
+    )
+
+    assert len(captured) == 1
+    assert captured[0]["type"] == "send_photo"
+    assert captured[0]["payload"]["chat_id"] == "12345"
+    assert captured[0]["payload"]["file_path"] == "/tmp/alphonse-camera/snapshot.jpg"
+    assert captured[0]["payload"]["caption"] == "Snapshot actual"
+
+
 def test_telegram_extremity_adapter_audio_without_file_path_raises(monkeypatch) -> None:
     class FakeTelegramAdapter:
         def __init__(self, config: dict) -> None:
@@ -123,6 +169,36 @@ def test_telegram_extremity_adapter_audio_without_file_path_raises(monkeypatch) 
                 audience={"kind": "system", "id": "system"},
                 correlation_id="cid-audio-missing",
                 metadata={"delivery_mode": "audio"},
+            )
+        )
+
+
+def test_telegram_extremity_adapter_image_without_file_path_raises(monkeypatch) -> None:
+    class FakeTelegramAdapter:
+        def __init__(self, config: dict) -> None:
+            self.config = config
+
+        def handle_action(self, action: dict) -> None:
+            _ = action
+
+    monkeypatch.setattr(
+        telegram_channel,
+        "build_telegram_adapter_config",
+        lambda: {"bot_token": "fake-token", "poll_interval_sec": 1.0},
+    )
+    monkeypatch.setattr(telegram_channel, "TelegramAdapter", FakeTelegramAdapter)
+    monkeypatch.setattr(telegram_channel, "can_deliver_to_chat", lambda _chat_id: True)
+
+    adapter = telegram_channel.TelegramExtremityAdapter()
+    with pytest.raises(ValueError, match="missing_image_file_path"):
+        adapter.deliver(
+            NormalizedOutboundMessage(
+                message="foto",
+                channel_type="telegram",
+                channel_target="12345",
+                audience={"kind": "system", "id": "system"},
+                correlation_id="cid-image-missing",
+                metadata={"delivery_mode": "image"},
             )
         )
 

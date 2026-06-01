@@ -64,6 +64,23 @@ class TelegramExtremityAdapter(ExtremityAdapter):
                 }
             )
             return
+        if delivery_mode == "image":
+            image_file_path = str(meta.get("image_file_path") or "").strip()
+            if not image_file_path:
+                raise ValueError("missing_image_file_path")
+            self._adapter.handle_action(
+                {
+                    "type": "send_photo",
+                    "payload": {
+                        "chat_id": chat_id,
+                        "file_path": image_file_path,
+                        "caption": str(meta.get("caption") or message.message or "").strip() or None,
+                        "correlation_id": message.correlation_id,
+                    },
+                    "target_integration_id": "telegram",
+                }
+            )
+            return
         self._adapter.handle_action(
             {
                 "type": "send_message",

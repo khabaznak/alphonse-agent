@@ -399,7 +399,7 @@ def _default_specs() -> list[ToolSpec]:
         ToolSpec(
             canonical_name="communication.send_message",
             summary="Send a message to a recipient through a communication channel (for example Telegram).",
-            description="Send a message to a recipient through a communication channel (for example Telegram).",
+            description="Send a text, audio, or image message to a recipient through a communication channel (for example Telegram).",
             when_to_use="Use when the user asks Alphonse to deliver a direct message to someone.",
             returns="delivery_status",
             input_schema=_object_schema(
@@ -408,8 +408,9 @@ def _default_specs() -> list[ToolSpec]:
                     "Message": {"type": "string"},
                     "Channel": {"type": "string"},
                     "Urgency": {"type": "string"},
-                    "DeliveryMode": {"type": "string", "enum": ["text", "audio"]},
+                    "DeliveryMode": {"type": "string", "enum": ["text", "audio", "image"]},
                     "AudioFilePath": {"type": "string"},
+                    "ImageFilePath": {"type": "string"},
                     "AsVoice": {"type": "boolean"},
                     "Caption": {"type": "string"},
                 },

@@ -113,3 +113,53 @@ def test_telegram_fetch_updates_requests_reaction_updates(monkeypatch) -> None:
     assert data["offset"] == ["7"]
     assert "message_reaction" in allowed_updates
     assert "message_reaction_count" in allowed_updates
+
+
+def test_telegram_send_photo_posts_multipart(monkeypatch, tmp_path) -> None:
+    adapter = TelegramAdapter({"bot_token": "fake-token", "poll_interval_sec": 0.0})
+    image_path = tmp_path / "snapshot.jpg"
+    image_path.write_bytes(b"\xff\xd8\xff")
+    captured: dict[str, object] = {}
+
+    class _Response:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def read(self) -> bytes:
+            return b'{"ok": true, "result": {"message_id": 123}}'
+
+    def _urlopen(req, timeout):
+        captured["url"] = req.full_url
+        captured["data"] = getattr(req, "data", b"")
+        captured["content_type"] = req.headers.get("Content-type")
+        captured["timeout"] = timeout
+        return _Response()
+
+    monkeypatch.setattr(telegram_module.request, "urlopen", _urlopen)
+
+    adapter.handle_action(
+        {
+            "type": "send_photo",
+            "payload": {
+                "chat_id": "12345",
+                "file_path": str(image_path),
+                "caption": "Snapshot actual",
+                "correlation_id": "cid-photo",
+            },
+        }
+    )
+
+    body = bytes(captured["data"])
+    assert str(captured["url"]).endswith("/sendPhoto")
+    assert captured["timeout"] == 30
+    assert "multipart/form-data" in str(captured["content_type"])
+    assert b'name="chat_id"' in body
+    assert b"12345" in body
+    assert b'name="caption"' in body
+    assert b"Snapshot actual" in body
+    assert b'name="photo"; filename="snapshot.jpg"' in body

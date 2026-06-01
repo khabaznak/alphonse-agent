@@ -35,6 +35,16 @@ def test_send_message_registered_in_runtime_registry() -> None:
     assert registry.get("communication.send_message") is not None
 
 
+def test_send_message_schema_exposes_image_delivery_mode() -> None:
+    registry = build_default_tool_registry()
+    definition = registry.get("communication.send_message")
+    assert definition is not None
+    spec = definition.spec
+    properties = spec.input_schema.get("properties", {})
+    assert "image" in properties["DeliveryMode"]["enum"]
+    assert "ImageFilePath" in properties
+
+
 def test_send_voice_note_exposed_in_planner_surface() -> None:
     registry = build_default_tool_registry()
     assert "communication.send_voice_note" in set(planner_canonical_tool_names(registry))
@@ -221,6 +231,38 @@ def test_send_message_audio_payload_is_added_to_plan() -> None:
     assert payload.get("caption") == "Hola por audio"
 
 
+def test_send_message_image_requires_image_file_path() -> None:
+    tool = SendMessageTool(_communication=_FakeCommunication())
+    result = tool.execute(
+        state={"channel_type": "telegram", "channel_target": "8553589429"},
+        To="8553589429",
+        Message="Foto actual",
+        DeliveryMode="image",
+    )
+    assert result["exception"] is not None
+    assert str((result.get("exception") or {}).get("code") or "") == "missing_image_file_path"
+
+
+def test_send_message_image_payload_is_added_to_plan() -> None:
+    fake = _FakeCommunication()
+    tool = SendMessageTool(_communication=fake)
+    result = tool.execute(
+        state={"channel_type": "telegram", "channel_target": "8553589429", "correlation_id": "cid-img"},
+        To="8553589429",
+        Message="Foto actual",
+        Channel="telegram",
+        DeliveryMode="image",
+        ImageFilePath="/tmp/alphonse-camera/snapshot.jpg",
+        Caption="Snapshot actual",
+    )
+    assert result["exception"] is None
+    assert fake.called is True
+    payload = dict(getattr(fake.plan, "payload", {}) or {})
+    assert payload.get("delivery_mode") == "image"
+    assert payload.get("image_file_path") == "/tmp/alphonse-camera/snapshot.jpg"
+    assert payload.get("caption") == "Snapshot actual"
+
+
 def test_send_message_tool_maps_audio_file_not_found_error() -> None:
     tool = SendMessageTool(_communication=_FailingCommunication(code="audio_file_not_found:/tmp/missing.m4a"))
     result = tool.execute(
@@ -231,6 +273,18 @@ def test_send_message_tool_maps_audio_file_not_found_error() -> None:
     )
     assert result["exception"] is not None
     assert str((result.get("exception") or {}).get("code") or "") == "audio_file_not_found"
+
+
+def test_send_message_tool_maps_image_file_not_found_error() -> None:
+    tool = SendMessageTool(_communication=_FailingCommunication(code="image_file_not_found:/tmp/missing.jpg"))
+    result = tool.execute(
+        state={"channel_type": "telegram", "channel_target": "8553589429"},
+        To="8553589429",
+        Message="Foto actual",
+        Channel="telegram",
+    )
+    assert result["exception"] is not None
+    assert str((result.get("exception") or {}).get("code") or "") == "image_file_not_found"
 
 
 def test_send_message_tool_maps_missing_extremity_adapter_error() -> None:
