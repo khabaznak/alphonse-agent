@@ -46,6 +46,7 @@ class _TTSBackend:
         voice: str,
         blocking: bool,
         volume: float | None,
+        instruct: str | None = None,
     ) -> dict[str, Any]:
         raise NotImplementedError
 
@@ -57,6 +58,7 @@ class _TTSBackend:
         output_dir: str | None,
         filename_prefix: str,
         format: str,
+        instruct: str | None = None,
     ) -> dict[str, Any]:
         raise NotImplementedError
 
@@ -69,8 +71,9 @@ class _SayBackend(_TTSBackend):
         voice: str,
         blocking: bool,
         volume: float | None,
+        instruct: str | None = None,
     ) -> dict[str, Any]:
-        _ = volume
+        _ = (volume, instruct)
         spoken_text = str(text or "").strip()
         selected_voice = str(voice or "default").strip() or "default"
         is_blocking = bool(blocking)
@@ -135,7 +138,9 @@ class _SayBackend(_TTSBackend):
         output_dir: str | None,
         filename_prefix: str,
         format: str,
+        instruct: str | None = None,
     ) -> dict[str, Any]:
+        _ = instruct
         spoken_text = str(text or "").strip()
         if not spoken_text:
             return _failed("text_required", "text is required", tool="audio.render_local")
@@ -276,6 +281,7 @@ class _QwenBackend(_TTSBackend):
         voice: str,
         blocking: bool,
         volume: float | None,
+        instruct: str | None = None,
     ) -> dict[str, Any]:
         _ = volume
         spoken_text = str(text or "").strip()
@@ -287,6 +293,7 @@ class _QwenBackend(_TTSBackend):
             output_dir=None, # TODO: This cannot be None, need to use an environment variable or default path here. For now, this will cause the render to fail and trigger the fallback, which is better than crashing.
             filename_prefix="local-speak",
             format="m4a",
+            instruct=instruct,
         )
         if rendered.get("exception") is not None:
             return rendered
@@ -329,6 +336,7 @@ class _QwenBackend(_TTSBackend):
         output_dir: str | None,
         filename_prefix: str,
         format: str,
+        instruct: str | None = None,
     ) -> dict[str, Any]:
         spoken_text = str(text or "").strip()
         if not spoken_text:
@@ -362,6 +370,7 @@ class _QwenBackend(_TTSBackend):
 
         language = str(os.getenv("ALPHONSE_QWEN_TTS_LANGUAGE") or "Auto").strip() or "Auto"
         selection = _resolve_voice_selection(voice)
+        effective_instruct = _resolve_qwen_instruct(instruct, selection=selection)
 
         try:
             wavs, sample_rate = _generate_qwen_custom_voice(
@@ -369,7 +378,7 @@ class _QwenBackend(_TTSBackend):
                 text=spoken_text,
                 language=language,
                 speaker=selection.speaker,
-                instruct=selection.instruct,
+                instruct=effective_instruct,
                 sample_path=selection.sample_path,
             )
         except Exception as exc:
@@ -514,9 +523,10 @@ class LocalAudioOutputSpeakTool:
         voice: str = "default",
         blocking: bool = False,
         volume: float | None = None,
+        instruct: str | None = None,
     ) -> dict[str, Any]:
         backend = _resolve_tts_backend()
-        result = backend.speak(text=text, voice=voice, blocking=blocking, volume=volume)
+        result = backend.speak(text=text, voice=voice, blocking=blocking, volume=volume, instruct=instruct)
         if not isinstance(backend, _QwenBackend):
             return result
         if not isinstance(result.get("exception"), dict):
@@ -529,7 +539,7 @@ class LocalAudioOutputSpeakTool:
             str(voice or "default"),
             fallback_voice,
         )
-        fallback = _SayBackend().speak(text=text, voice=fallback_voice, blocking=blocking, volume=volume)
+        fallback = _SayBackend().speak(text=text, voice=fallback_voice, blocking=blocking, volume=volume, instruct=instruct)
         return _with_fallback_metadata(fallback, code=code)
 
 
@@ -546,6 +556,7 @@ class LocalAudioOutputRenderTool:
         output_dir: str | None = None,
         filename_prefix: str = "response",
         format: str = "m4a",
+        instruct: str | None = None,
     ) -> dict[str, Any]:
         backend = _resolve_tts_backend()
         result = backend.render(
@@ -554,6 +565,7 @@ class LocalAudioOutputRenderTool:
             output_dir=output_dir,
             filename_prefix=filename_prefix,
             format=format,
+            instruct=instruct,
         )
         if not isinstance(backend, _QwenBackend):
             return result
@@ -573,6 +585,7 @@ class LocalAudioOutputRenderTool:
             output_dir=output_dir,
             filename_prefix=filename_prefix,
             format=format,
+            instruct=instruct,
         )
         return _with_fallback_metadata(fallback, code=code)
 
@@ -617,6 +630,16 @@ def _selection_from_profile(profile: dict[str, Any], *, requested_voice: str) ->
         profile_name=profile_name or None,
         is_profile=True,
     )
+
+
+def _resolve_qwen_instruct(instruct: str | None, *, selection: _VoiceSelection) -> str | None:
+    per_call = str(instruct or "").strip()
+    if per_call:
+        return per_call
+    profile_instruct = str(selection.instruct or "").strip()
+    if profile_instruct:
+        return profile_instruct
+    return str(os.getenv("ALPHONSE_QWEN_TTS_INSTRUCT") or "").strip() or None
 
 
 def _resolve_qwen_speaker(voice: str) -> str:

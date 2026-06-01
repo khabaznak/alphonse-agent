@@ -48,17 +48,49 @@ def test_voice_selection_precedence_explicit_override(monkeypatch) -> None:
     assert selection.profile_id is None
 
 
+def test_qwen_instruct_precedence_prefers_per_call(monkeypatch) -> None:
+    monkeypatch.setenv("ALPHONSE_QWEN_TTS_INSTRUCT", "env calm")
+    selection = lao._VoiceSelection(
+        requested_voice="default",
+        speaker="CustomSpeaker",
+        instruct="profile calm",
+        is_profile=True,
+    )
+
+    assert lao._resolve_qwen_instruct("per-call clear", selection=selection) == "per-call clear"
+
+
+def test_qwen_instruct_precedence_falls_back_to_profile_then_env(monkeypatch) -> None:
+    monkeypatch.setenv("ALPHONSE_QWEN_TTS_INSTRUCT", "env calm")
+    selection_with_profile = lao._VoiceSelection(
+        requested_voice="default",
+        speaker="CustomSpeaker",
+        instruct="profile calm",
+        is_profile=True,
+    )
+    selection_without_profile = lao._VoiceSelection(
+        requested_voice="default",
+        speaker="Ryan",
+        instruct=None,
+        is_profile=False,
+    )
+
+    assert lao._resolve_qwen_instruct(None, selection=selection_with_profile) == "profile calm"
+    assert lao._resolve_qwen_instruct(None, selection=selection_without_profile) == "env calm"
+
+
 def test_qwen_failure_falls_back_to_say_for_speak(monkeypatch) -> None:
     monkeypatch.setenv("ALPHONSE_TTS_BACKEND", "qwen")
     captured: dict[str, object] = {}
     monkeypatch.setattr(
         lao._QwenBackend,
         "speak",
-        lambda self, *, text, voice, blocking, volume: lao._failed("qwen_generate_failed", "boom"),
+        lambda self, *, text, voice, blocking, volume, instruct=None: lao._failed("qwen_generate_failed", "boom"),
     )
 
-    def _fake_say_speak(self, *, text, voice, blocking, volume):  # noqa: ANN001
+    def _fake_say_speak(self, *, text, voice, blocking, volume, instruct=None):  # noqa: ANN001
         captured["voice"] = voice
+        captured["instruct"] = instruct
         _ = (self, text, blocking, volume)
         return lao._ok({"backend": "say", "mode": "blocking"})
 
@@ -76,6 +108,7 @@ def test_qwen_failure_falls_back_to_say_for_speak(monkeypatch) -> None:
     assert payload.get("fallback_from") == "qwen"
     assert payload.get("fallback_reason_code") == "qwen_generate_failed"
     assert captured["voice"] == "default"
+    assert captured["instruct"] is None
 
 
 def test_qwen_failure_falls_back_to_say_for_render(monkeypatch) -> None:
@@ -84,11 +117,12 @@ def test_qwen_failure_falls_back_to_say_for_render(monkeypatch) -> None:
     monkeypatch.setattr(
         lao._QwenBackend,
         "render",
-        lambda self, *, text, voice, output_dir, filename_prefix, format: lao._failed("qwen_generate_failed", "boom"),
+        lambda self, *, text, voice, output_dir, filename_prefix, format, instruct=None: lao._failed("qwen_generate_failed", "boom"),
     )
 
-    def _fake_say_render(self, *, text, voice, output_dir, filename_prefix, format):  # noqa: ANN001
+    def _fake_say_render(self, *, text, voice, output_dir, filename_prefix, format, instruct=None):  # noqa: ANN001
         captured["voice"] = voice
+        captured["instruct"] = instruct
         _ = (self, text, output_dir, filename_prefix, format)
         return lao._ok(
             {"backend": "say", "file_path": "/tmp/fallback.m4a", "format": "m4a", "mime_type": "audio/mp4"},
@@ -102,12 +136,13 @@ def test_qwen_failure_falls_back_to_say_for_render(monkeypatch) -> None:
     )
 
     tool = LocalAudioOutputRenderTool()
-    result = tool.execute(text="Hola", voice="Ryan", format="m4a")
+    result = tool.execute(text="Hola", voice="Ryan", format="m4a", instruct="per-call clear")
     assert result["exception"] is None
     payload = result.get("output") or {}
     assert payload.get("backend") == "say"
     assert payload.get("fallback_from") == "qwen"
     assert captured["voice"] == "default"
+    assert captured["instruct"] == "per-call clear"
 
 
 def test_qwen_generate_custom_voice_uses_reference_sample_when_supported(tmp_path, monkeypatch) -> None:

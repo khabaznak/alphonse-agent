@@ -5,7 +5,18 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import alphonse.agent.tools.local_audio_output as lao
+from alphonse.agent.tools.registry import build_default_tool_registry
 from alphonse.agent.tools.local_audio_output import LocalAudioOutputRenderTool
+
+
+def test_audio_tool_schemas_expose_instruct() -> None:
+    registry = build_default_tool_registry()
+    speak = registry.get("audio.speak_local")
+    render = registry.get("audio.render_local")
+    assert speak is not None
+    assert render is not None
+    assert "instruct" in speak.spec.input_schema.get("properties", {})
+    assert "instruct" in render.spec.input_schema.get("properties", {})
 
 
 def test_local_audio_output_render_m4a_on_macos(monkeypatch, tmp_path: Path) -> None:
