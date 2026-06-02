@@ -50,6 +50,7 @@ dist/
 .env.*
 !alphonse/agent/.env.example
 alphonse.log
+alphonse/agent/logs/
 alphonse/agent/nervous_system/db/
 
 # Local prompt context files may contain private user or household data.
