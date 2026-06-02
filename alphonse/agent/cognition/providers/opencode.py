@@ -88,6 +88,7 @@ class OpenCodeClient:
             "OpenCode session tool-call message failed",
         )
         body = _read_json_response(response)
+        _raise_for_embedded_error(body, "OpenCode session tool-call message failed")
         content, tool_call = _extract_session_tool_payload(body)
         planner_intent: str | None = None
         if content:
@@ -131,6 +132,7 @@ class OpenCodeClient:
             "OpenCode session message failed",
         )
         body = _read_json_response(response)
+        _raise_for_embedded_error(body, "OpenCode session message failed")
         content = _extract_session_message_content(body) or _extract_message_content(body)
         if not content:
             raise ValueError("OpenCode session response missing assistant content")
@@ -183,6 +185,20 @@ def _raise_for_status_with_body(response: requests.Response, prefix: str) -> Non
         raise ValueError(
             f"{prefix}. status={response.status_code} body={snippet!r}"
         ) from exc
+
+
+def _raise_for_embedded_error(body: dict[str, Any], prefix: str) -> None:
+    info = body.get("info")
+    if not isinstance(info, dict):
+        return
+    error = info.get("error")
+    if not isinstance(error, dict):
+        return
+    data = error.get("data") if isinstance(error.get("data"), dict) else {}
+    message = data.get("message") if isinstance(data, dict) else None
+    if not isinstance(message, str) or not message.strip():
+        message = error.get("name") if isinstance(error.get("name"), str) else "unknown OpenCode error"
+    raise ValueError(f"{prefix}. embedded_error={message.strip()!r}")
 
 
 def _read_json_response(response: requests.Response) -> dict[str, Any]:

@@ -4,6 +4,7 @@ from alphonse.agent.cognition.providers.opencode import (
     OpenCodeClient,
     _extract_canonical_from_text_content,
     _extract_session_tool_payload,
+    _raise_for_embedded_error,
     _render_session_transport_payload_text,
     _try_parse_json_object,
 )
@@ -212,3 +213,28 @@ def test_complete_always_uses_session_api(monkeypatch) -> None:
     output = client.complete("sys", "user")
     assert output == "ok"
     assert called["session"] == 1
+
+
+def test_raise_for_embedded_error_reports_opencode_api_message() -> None:
+    body = {
+        "info": {
+            "error": {
+                "name": "APIError",
+                "data": {
+                    "message": "Bad Request: unsupported model",
+                    "responseHeaders": {"set-cookie": "secret"},
+                },
+            }
+        },
+        "parts": [],
+    }
+
+    try:
+        _raise_for_embedded_error(body, "OpenCode session message failed")
+    except ValueError as exc:
+        rendered = str(exc)
+        assert "OpenCode session message failed" in rendered
+        assert "unsupported model" in rendered
+        assert "set-cookie" not in rendered
+    else:
+        raise AssertionError("expected embedded OpenCode error")
