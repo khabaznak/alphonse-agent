@@ -8,6 +8,7 @@ from alphonse.agent.tools.local_audio_output import LocalAudioOutputSpeakTool
 
 
 def test_voice_selection_precedence_default_profile(monkeypatch) -> None:
+    monkeypatch.setenv("ALPHONSE_QWEN_TTS_SPEAKER", "Ryan")
     monkeypatch.setattr(
         lao,
         "get_default_voice_profile",
@@ -24,11 +25,12 @@ def test_voice_selection_precedence_default_profile(monkeypatch) -> None:
     selection = lao._resolve_voice_selection("default")
     assert selection.is_profile is True
     assert selection.profile_id == "vp-1"
-    assert selection.speaker == "CustomSpeaker"
+    assert selection.speaker == "Ryan"
     assert selection.instruct == "calm"
 
 
 def test_voice_selection_precedence_explicit_override(monkeypatch) -> None:
+    monkeypatch.setenv("ALPHONSE_QWEN_TTS_SPEAKER", "Ryan")
     monkeypatch.setattr(
         lao,
         "get_default_voice_profile",
@@ -44,8 +46,31 @@ def test_voice_selection_precedence_explicit_override(monkeypatch) -> None:
 
     selection = lao._resolve_voice_selection("WitchVoice")
     assert selection.is_profile is False
-    assert selection.speaker == "WitchVoice"
+    assert selection.speaker == "Ryan"
     assert selection.profile_id is None
+
+
+def test_voice_selection_named_profile_uses_env_speaker(monkeypatch) -> None:
+    monkeypatch.setenv("ALPHONSE_QWEN_TTS_SPEAKER", "Ryan")
+    monkeypatch.setattr(lao, "get_default_voice_profile", lambda: None)
+    monkeypatch.setattr(
+        lao,
+        "resolve_voice_profile",
+        lambda _ref: {
+            "profile_id": "vp-samantha",
+            "name": "Samantha",
+            "speaker_hint": "Samantha",
+            "instruct": "warm",
+            "source_sample_path": "/tmp/samantha.wav",
+        },
+    )
+
+    selection = lao._resolve_voice_selection("Samantha")
+    assert selection.is_profile is True
+    assert selection.profile_id == "vp-samantha"
+    assert selection.profile_name == "Samantha"
+    assert selection.speaker == "Ryan"
+    assert selection.instruct == "warm"
 
 
 def test_qwen_instruct_precedence_prefers_per_call(monkeypatch) -> None:

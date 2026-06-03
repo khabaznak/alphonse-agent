@@ -66,6 +66,38 @@ def test_qwen_backend_speak_uses_player_on_non_macos(monkeypatch, tmp_path: Path
     assert captured["instruct"] == "Speak clearly."
 
 
+def test_qwen_backend_speak_keeps_qwen_speaker_env_owned(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("ALPHONSE_TTS_BACKEND", "qwen")
+    monkeypatch.setenv("ALPHONSE_QWEN_TTS_SPEAKER", "Ryan")
+    monkeypatch.setattr(lao.platform, "system", lambda: "Linux")
+
+    output_file = tmp_path / "sample.m4a"
+    output_file.write_bytes(b"audio")
+    captured: dict[str, object] = {}
+
+    def _fake_render(self, *, text, voice, output_dir, filename_prefix, format, instruct=None):  # noqa: ANN001
+        _ = (self, text, output_dir, filename_prefix, format, instruct)
+        selection = lao._resolve_voice_selection(voice)
+        captured["requested_voice"] = selection.requested_voice
+        captured["speaker"] = selection.speaker
+        return lao._ok({"file_path": str(output_file), "format": "m4a", "mime_type": "audio/mp4"})
+
+    monkeypatch.setattr(lao._QwenBackend, "render", _fake_render)
+    monkeypatch.setattr(lao, "_resolve_audio_player", lambda _path: (["fake-player", str(output_file)], "fake-player"))
+    monkeypatch.setattr(
+        lao.subprocess,
+        "run",
+        lambda cmd, stdout, stderr, text, check: SimpleNamespace(returncode=0, stderr=""),
+    )
+
+    tool = LocalAudioOutputSpeakTool()
+    result = tool.execute(text="Hello", voice="Samantha", blocking=True)
+
+    assert result["exception"] is None
+    assert captured["requested_voice"] == "Samantha"
+    assert captured["speaker"] == "Ryan"
+
+
 def test_qwen_backend_render_uses_per_call_instruct(monkeypatch, tmp_path: Path) -> None:
     captured: dict[str, object] = {}
 
@@ -110,6 +142,50 @@ def test_qwen_backend_render_uses_per_call_instruct(monkeypatch, tmp_path: Path)
     assert result["exception"] is None
     assert captured["speaker"] == "Ryan"
     assert captured["instruct"] == "Speak slowly and clearly."
+
+
+def test_qwen_backend_render_ignores_requested_voice_for_speaker(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("ALPHONSE_QWEN_TTS_SPEAKER", "Ryan")
+    monkeypatch.setattr(lao, "resolve_voice_profile", lambda _ref: None)
+    monkeypatch.setattr(lao, "get_default_voice_profile", lambda: None)
+    captured: dict[str, object] = {}
+
+    class _FakeSoundFile:
+        @staticmethod
+        def write(path: str, wav, sample_rate: int) -> None:  # noqa: ANN001
+            captured["write"] = (path, wav, sample_rate)
+            Path(path).write_bytes(b"wav")
+
+    def _fake_generate_qwen_custom_voice(*, model, text, language, speaker, instruct, sample_path):  # noqa: ANN001
+        _ = (model, text, language, instruct, sample_path)
+        captured["speaker"] = speaker
+        return (["wav-frame"], 24000)
+
+    monkeypatch.setattr(lao._QwenBackend, "_ensure_qwen_runtime", lambda self: None)
+    monkeypatch.setattr(lao._QwenBackend, "_load_model", lambda self: object())
+    monkeypatch.setattr(lao, "_generate_qwen_custom_voice", _fake_generate_qwen_custom_voice)
+    monkeypatch.setattr(
+        lao,
+        "_convert_from_wav",
+        lambda *, source_path, target_format: lao._ok(
+            {"file_path": str(source_path), "format": target_format, "mime_type": "audio/wav"},
+            tool="audio.render_local",
+        ),
+    )
+    monkeypatch.setattr(lao, "_cleanup_rendered_audio", lambda *, root, keep_path: {"removed_by_age": 0, "removed_by_count": 0})
+
+    backend = lao._QwenBackend()
+    backend._soundfile = _FakeSoundFile
+    result = backend.render(
+        text="Hola",
+        voice="Samantha",
+        output_dir=str(tmp_path),
+        filename_prefix="test",
+        format="m4a",
+    )
+
+    assert result["exception"] is None
+    assert captured["speaker"] == "Ryan"
 
 
 def test_qwen_model_load_uses_cached_snapshot_by_default(monkeypatch, tmp_path: Path) -> None:

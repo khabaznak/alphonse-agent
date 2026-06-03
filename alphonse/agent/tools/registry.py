@@ -455,8 +455,8 @@ def _default_specs() -> list[ToolSpec]:
         ToolSpec(
             canonical_name="audio.speak_local",
             summary="Speak text out loud on the local computer using OS-native TTS.",
-            description="Speak text out loud on the local computer using OS-native TTS.",
-            when_to_use="Use for local spoken output when requested.",
+            description="Speak text out loud on the local computer using local TTS. With the Qwen backend, the speaker is controlled only by ALPHONSE_QWEN_TTS_SPEAKER; do not request named voices.",
+            when_to_use="Use for local spoken output when requested. For Qwen, omit voice or use default.",
             returns="local_audio_output_status",
             input_schema=_object_schema(
                 properties={
@@ -476,8 +476,8 @@ def _default_specs() -> list[ToolSpec]:
         ToolSpec(
             canonical_name="audio.render_local",
             summary="Render text to an audio file on the local machine for downstream delivery integrations.",
-            description="Render text to an audio file on the local machine for downstream delivery integrations.",
-            when_to_use="Use when you need a reusable audio artifact (use format='ogg' for Telegram voice notes).",
+            description="Render text to an audio file on the local machine for downstream delivery integrations. With the Qwen backend, the speaker is controlled only by ALPHONSE_QWEN_TTS_SPEAKER; do not request named voices.",
+            when_to_use="Use when you need a reusable audio artifact (use format='ogg' for Telegram voice notes). For Qwen, omit voice or use default.",
             returns="audio file path and format metadata",
             input_schema=_object_schema(
                 properties={

@@ -606,7 +606,7 @@ def _resolve_voice_selection(voice: str) -> _VoiceSelection:
             return _selection_from_profile(profile, requested_voice=requested)
         return _VoiceSelection(
             requested_voice=requested,
-            speaker=requested,
+            speaker=_resolve_qwen_speaker(),
             instruct=str(os.getenv("ALPHONSE_QWEN_TTS_INSTRUCT") or "").strip() or None,
         )
     profile = get_default_voice_profile()
@@ -614,17 +614,16 @@ def _resolve_voice_selection(voice: str) -> _VoiceSelection:
         return _selection_from_profile(profile, requested_voice="default")
     return _VoiceSelection(
         requested_voice="default",
-        speaker=_resolve_qwen_speaker("default"),
+        speaker=_resolve_qwen_speaker(),
         instruct=str(os.getenv("ALPHONSE_QWEN_TTS_INSTRUCT") or "").strip() or None,
     )
 
 
 def _selection_from_profile(profile: dict[str, Any], *, requested_voice: str) -> _VoiceSelection:
-    speaker_hint = str(profile.get("speaker_hint") or "").strip()
     profile_name = str(profile.get("name") or "").strip()
     return _VoiceSelection(
         requested_voice=requested_voice,
-        speaker=speaker_hint or profile_name or _resolve_qwen_speaker("default"),
+        speaker=_resolve_qwen_speaker(),
         instruct=str(profile.get("instruct") or "").strip() or None,
         sample_path=str(profile.get("source_sample_path") or "").strip() or None,
         profile_id=str(profile.get("profile_id") or "").strip() or None,
@@ -643,10 +642,7 @@ def _resolve_qwen_instruct(instruct: str | None, *, selection: _VoiceSelection) 
     return str(os.getenv("ALPHONSE_QWEN_TTS_INSTRUCT") or "").strip() or None
 
 
-def _resolve_qwen_speaker(voice: str) -> str:
-    requested = str(voice or "").strip()
-    if requested and requested.lower() != "default":
-        return requested
+def _resolve_qwen_speaker() -> str:
     return str(os.getenv("ALPHONSE_QWEN_TTS_SPEAKER") or "Ryan").strip() or "Ryan"
 
 
