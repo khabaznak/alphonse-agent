@@ -290,6 +290,84 @@ def test_job_store_backfill_deletes_legacy_non_conscious_jobs(tmp_path: Path, mo
     assert timed is None
 
 
+def test_job_store_backfill_migrates_legacy_channel_owner_to_canonical_user(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    db_path = tmp_path / "nerve-db"
+    apply_schema(db_path)
+    monkeypatch.setenv("NERVE_DB_PATH", str(db_path))
+    legacy_user_id = "8553589429"
+    canonical_user_id = "e64b2111-35ba-41b1-a295-4ff04fd4cf58"
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO users (user_id, display_name, role, relationship, is_admin, is_active)
+            VALUES (?, 'Alex', 'owner', 'self', 1, 1)
+            """,
+            (canonical_user_id,),
+        )
+        channel = conn.execute("SELECT channel_id FROM channels WHERE channel_key = 'telegram'").fetchone()
+        assert channel is not None
+        conn.execute(
+            """
+            INSERT INTO channels_users (mapping_id, user_id, channel_id, channel_user_id, is_active)
+            VALUES ('map_alex_telegram', ?, ?, ?, 1)
+            """,
+            (canonical_user_id, int(channel[0]), legacy_user_id),
+        )
+        conn.commit()
+    store = JobStore(root=tmp_path / "data" / "jobs")
+    legacy_dir = tmp_path / "data" / "jobs" / legacy_user_id
+    legacy_dir.mkdir(parents=True, exist_ok=True)
+    job_id = "job_legacy_owner_1"
+    raw = {
+        "jobs": {
+            job_id: {
+                "job_id": job_id,
+                "name": "Daily FX",
+                "description": "USD/MXN update",
+                "enabled": True,
+                "schedule": {
+                    "type": "rrule",
+                    "dtstart": (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat(),
+                    "rrule": "FREQ=DAILY;BYHOUR=7;BYMINUTE=0",
+                },
+                "timezone": "UTC",
+                "payload_type": "prompt_to_brain",
+                "payload": {"prompt_text": "Send FX update."},
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }
+        }
+    }
+    (legacy_dir / "jobs.json").write_text(json.dumps(raw), encoding="utf-8")
+
+    summary = store.backfill_and_sync_jobs(user_id=canonical_user_id)
+
+    assert int(summary.get("legacy_owner_dirs_migrated") or 0) == 1
+    assert int(summary.get("legacy_owner_jobs_migrated") or 0) == 1
+    assert store.list_jobs(user_id=legacy_user_id, enabled=True) == []
+    canonical_jobs = store.list_jobs(user_id=canonical_user_id, enabled=True)
+    assert [job.job_id for job in canonical_jobs] == [job_id]
+    assert canonical_jobs[0].payload.get("delivery_target") == legacy_user_id
+    with sqlite3.connect(db_path) as conn:
+        scheduled = conn.execute(
+            "SELECT owner_id, status FROM scheduled_jobs WHERE id = ?",
+            (job_id,),
+        ).fetchone()
+        timed = conn.execute(
+            "SELECT target, payload FROM timed_signals WHERE id = ?",
+            (f"job_trigger:{job_id}",),
+        ).fetchone()
+    assert scheduled == (canonical_user_id, "active")
+    assert timed is not None
+    assert timed[0] == legacy_user_id
+    timed_payload = json.loads(timed[1])
+    assert timed_payload["user_id"] == canonical_user_id
+    assert timed_payload["payload"]["delivery_target"] == legacy_user_id
+
+
 def test_job_runner_reschedules_job_trigger_timed_signal_after_run(tmp_path: Path, monkeypatch) -> None:
     db_path = tmp_path / "nerve-db"
     apply_schema(db_path)

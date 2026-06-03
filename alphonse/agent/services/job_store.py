@@ -157,7 +157,14 @@ class JobStore:
         return job
 
     def backfill_and_sync_jobs(self, *, user_id: str | None = None) -> dict[str, int]:
-        user_ids = [str(user_id)] if user_id else self.list_user_ids()
+        owner_migration = self.migrate_legacy_channel_user_job_dirs(user_id=user_id)
+        migrated_users = {
+            str(item).strip()
+            for item in owner_migration.get("canonical_user_ids", [])
+            if str(item).strip()
+        }
+        requested_user = str(user_id or "").strip()
+        user_ids = sorted({requested_user, *migrated_users}) if requested_user else self.list_user_ids()
         scanned = 0
         updated = 0
         deleted = 0
@@ -227,7 +234,68 @@ class JobStore:
                     )
             if user_changed:
                 self._write_jobs(uid, data)
-        return {"scanned": scanned, "updated": updated, "deleted": deleted, "deleted_sample_count": len(deleted_ids[:10])}
+        return {
+            "scanned": scanned,
+            "updated": updated,
+            "deleted": deleted,
+            "deleted_sample_count": len(deleted_ids[:10]),
+            "legacy_owner_dirs_migrated": int(owner_migration.get("dirs_migrated") or 0),
+            "legacy_owner_jobs_migrated": int(owner_migration.get("jobs_migrated") or 0),
+            "legacy_owner_jobs_merged": int(owner_migration.get("jobs_merged") or 0),
+        }
+
+    def migrate_legacy_channel_user_job_dirs(self, *, user_id: str | None = None) -> dict[str, Any]:
+        mappings = self._legacy_channel_user_job_dir_mappings(user_id=user_id)
+        dirs_migrated = 0
+        jobs_migrated = 0
+        jobs_merged = 0
+        canonical_user_ids: set[str] = set()
+        for legacy_user_id, canonical_user_id in mappings.items():
+            legacy_data = self._read_jobs(legacy_user_id)
+            legacy_jobs = legacy_data.get("jobs")
+            if not isinstance(legacy_jobs, dict) or not legacy_jobs:
+                continue
+            canonical_data = self._read_jobs(canonical_user_id)
+            canonical_jobs = canonical_data.get("jobs")
+            if not isinstance(canonical_jobs, dict):
+                canonical_jobs = {}
+                canonical_data["jobs"] = canonical_jobs
+            legacy_changed = False
+            canonical_changed = False
+            for job_id, payload in list(legacy_jobs.items()):
+                rendered_job_id = str(job_id or "").strip()
+                if not rendered_job_id or not isinstance(payload, dict):
+                    continue
+                if rendered_job_id not in canonical_jobs:
+                    canonical_jobs[rendered_job_id] = _job_payload_with_delivery_target(
+                        payload=payload,
+                        delivery_target=legacy_user_id,
+                    )
+                    jobs_migrated += 1
+                    canonical_changed = True
+                else:
+                    jobs_merged += 1
+                legacy_jobs.pop(job_id, None)
+                legacy_changed = True
+            if canonical_changed:
+                self._write_jobs(canonical_user_id, canonical_data)
+            if legacy_changed:
+                self._write_jobs(legacy_user_id, legacy_data)
+                dirs_migrated += 1
+                canonical_user_ids.add(canonical_user_id)
+                logger.info(
+                    "JobStore migrated_legacy_owner_jobs legacy_user_id=%s canonical_user_id=%s migrated=%s merged=%s",
+                    legacy_user_id,
+                    canonical_user_id,
+                    jobs_migrated,
+                    jobs_merged,
+                )
+        return {
+            "dirs_migrated": dirs_migrated,
+            "jobs_migrated": jobs_migrated,
+            "jobs_merged": jobs_merged,
+            "canonical_user_ids": sorted(canonical_user_ids),
+        }
 
     def migration_report_tool_call_contract(
         self,
@@ -369,6 +437,42 @@ class JobStore:
 
     def _write_executions(self, user_id: str, payload: dict[str, Any]) -> None:
         self._write_json_atomic(self._executions_path(user_id), payload)
+
+    def _legacy_channel_user_job_dir_mappings(self, *, user_id: str | None = None) -> dict[str, str]:
+        existing_user_dirs = set(self.list_user_ids())
+        if not existing_user_dirs:
+            return {}
+        requested_user = str(user_id or "").strip()
+        db_path = resolve_nervous_system_db_path()
+        try:
+            with sqlite3.connect(db_path) as conn:
+                rows = conn.execute(
+                    """
+                    SELECT cu.channel_user_id, cu.user_id
+                    FROM channels_users cu
+                    JOIN users u ON u.user_id = cu.user_id
+                    WHERE cu.is_active = 1
+                      AND u.is_active = 1
+                    ORDER BY cu.updated_at DESC
+                    """
+                ).fetchall()
+        except sqlite3.Error as exc:
+            logger.warning("JobStore legacy_owner_mapping_failed error=%s", type(exc).__name__)
+            return {}
+        mappings: dict[str, str] = {}
+        for row in rows:
+            legacy_user_id = str(row[0] or "").strip()
+            canonical_user_id = str(row[1] or "").strip()
+            if not legacy_user_id or not canonical_user_id:
+                continue
+            if legacy_user_id == canonical_user_id:
+                continue
+            if legacy_user_id not in existing_user_dirs:
+                continue
+            if requested_user and requested_user not in {legacy_user_id, canonical_user_id}:
+                continue
+            mappings[legacy_user_id] = canonical_user_id
+        return mappings
 
     def _write_json_atomic(self, path: Path, payload: dict[str, Any]) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -618,6 +722,20 @@ def _job_trigger_payload(*, job: JobSpec, user_id: str) -> dict[str, Any]:
         "payload": payload,
         "mind_layer": "conscious",
     }
+
+
+def _job_payload_with_delivery_target(*, payload: dict[str, Any], delivery_target: str) -> dict[str, Any]:
+    copied = dict(payload)
+    rendered_target = str(delivery_target or "").strip()
+    if not rendered_target:
+        return copied
+    inner = copied.get("payload")
+    if not isinstance(inner, dict):
+        return copied
+    copied_inner = dict(inner)
+    copied_inner.setdefault("delivery_target", rendered_target)
+    copied["payload"] = copied_inner
+    return copied
 
 
 def compute_retry_time(*, now: datetime, backoff_seconds: int) -> str:
