@@ -236,7 +236,6 @@ def test_handle_pdca_slice_request_executes_and_persists_checkpoint(
     assert "check_result" not in checkpoint_state
     assert "events" not in checkpoint_state
     assert "_transition_sink" not in checkpoint_state
-
     events = list_pdca_events(task_id=task_id, limit=20)
     assert any(item["event_type"] == "slice.request.signal_received" for item in events)
     assert any(item["event_type"] == "slice.completed.queued" for item in events)
@@ -246,6 +245,82 @@ def test_handle_pdca_slice_request_executes_and_persists_checkpoint(
     }
     assert "presence.phase_changed" in families
     assert "presence.progress" in families
+
+
+def test_handle_pdca_slice_request_persists_check_failure_reason(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db_path = tmp_path / "nerve-db"
+    monkeypatch.setenv("NERVE_DB_PATH", str(db_path))
+    apply_schema(db_path)
+    reason = 'I could not find the "AC" entity.'
+    task_id = upsert_pdca_task(
+        {
+            "owner_id": "owner-1",
+            "conversation_key": "telegram:8553589429",
+            "status": "queued",
+            "metadata": {
+                "pending_user_text": "Turn on the AC",
+                "last_user_channel": "telegram",
+                "last_user_target": "8553589429",
+            },
+        }
+    )
+    failed_record = _task_record_payload(
+        task_id=task_id,
+        correlation_id="cid-check-failed",
+        goal="Turn on the AC",
+        status="failed",
+    )
+    failed_record["outcome"] = {
+        "kind": "task_failed",
+        "summary": reason,
+        "final_text": reason,
+        "failure_class": "entity_not_found",
+    }
+
+    class _FakeResult:
+        reply_text = reason
+        plans = []
+        cognition_state = _cognition_state(
+            task_record=failed_record,
+            check_result={"verdict": "mission_failed"},
+            check_provenance="do",
+        )
+        meta = {}
+
+    class _FakeGraph:
+        def invoke(self, state, text, *, llm_client=None):  # noqa: ANN001
+            _ = (state, text, llm_client)
+            return _FakeResult()
+
+    monkeypatch.setattr(hpsr, "_CORTEX_GRAPH", _FakeGraph())
+    monkeypatch.setattr(hpsr, "build_llm_client", lambda: None)
+    bus = Bus()
+    action = HandlePdcaSliceRequestAction()
+    signal = Signal(
+        type="pdca.slice.requested",
+        payload={"task_id": task_id, "correlation_id": "cid-check-failed"},
+        source="pdca_queue_runner",
+    )
+    _ = action.execute({"signal": signal, "ctx": bus})
+
+    task = get_pdca_task(task_id)
+    assert task is not None
+    assert task["status"] == "failed"
+    assert task["last_error"] == reason
+    emitted = bus.get(timeout=0.05)
+    assert emitted is not None
+    assert emitted.type == "pdca.failed"
+    assert emitted.payload.get("failure_reason") == reason
+    assert emitted.payload.get("failure_message") == reason
+
+    events = list_pdca_events(task_id=task_id, limit=20)
+    assert any(item["event_type"] == "slice.request.signal_received" for item in events)
+    failed = [item for item in events if item["event_type"] == "slice.completed.failed"]
+    assert failed
+    assert failed[-1]["payload"].get("reply_text") == reason
 
 
 def test_handle_pdca_slice_request_does_not_dequeue_buffered_inputs_before_graph(

@@ -435,7 +435,14 @@ def _run_slice_invoke_job(
                 phase="failed",
                 correlation_id=correlation_id,
             )
-        _upsert_task_after_slice(task=task, status=next_status, request_text=text, reply_text=effective_reply_text)
+        failure_reason = _failure_reason_from_cognition_state(cognition_state) if next_status == "failed" else None
+        _upsert_task_after_slice(
+            task=task,
+            status=next_status,
+            request_text=text,
+            reply_text=effective_reply_text,
+            last_error=failure_reason,
+        )
         if next_status == "queued":
             _emit_dispatch_kick_signal(context=context, task_id=task_id, correlation_id=correlation_id, reason="slice_completed_queued")
         append_pdca_event(
@@ -452,6 +459,7 @@ def _run_slice_invoke_job(
             event_type=_status_signal(next_status),
             task_id=task_id,
             correlation_id=correlation_id,
+            extra_payload=_failure_signal_payload(failure_reason) if next_status == "failed" else None,
         )
         logger.info(
             "HandlePdcaSliceRequestAction completed task_id=%s status=%s correlation_id=%s",
@@ -810,6 +818,26 @@ def _next_status(*, cognition_state: dict[str, Any], reply_text: str) -> str:
     return "queued"
 
 
+def _failure_reason_from_cognition_state(cognition_state: dict[str, Any]) -> str | None:
+    task_record = _task_record_dict(cognition_state.get("task_record")) or {}
+    outcome = task_record.get("outcome") if isinstance(task_record.get("outcome"), dict) else {}
+    for key in ("final_text", "summary", "failure_class"):
+        rendered = str(outcome.get(key) or "").strip()
+        if rendered:
+            return rendered
+    return None
+
+
+def _failure_signal_payload(failure_reason: str | None) -> dict[str, Any] | None:
+    rendered = str(failure_reason or "").strip()
+    if not rendered:
+        return None
+    return {
+        "failure_reason": rendered,
+        "failure_message": rendered,
+    }
+
+
 def _task_record_dict(task_record_value: Any) -> dict[str, Any] | None:
     if isinstance(task_record_value, dict):
         return dict(task_record_value)
@@ -820,7 +848,14 @@ def _task_record_dict(task_record_value: Any) -> dict[str, Any] | None:
     return None
 
 
-def _upsert_task_after_slice(*, task: dict[str, Any], status: str, request_text: str, reply_text: str) -> None:
+def _upsert_task_after_slice(
+    *,
+    task: dict[str, Any],
+    status: str,
+    request_text: str,
+    reply_text: str,
+    last_error: str | None = None,
+) -> None:
     task_id = str(task.get("task_id") or "").strip()
     latest = get_pdca_task(task_id) if task_id else None
     base_task = latest if isinstance(latest, dict) else task
@@ -851,7 +886,7 @@ def _upsert_task_after_slice(*, task: dict[str, Any], status: str, request_text:
             "max_runtime_seconds": base_task.get("max_runtime_seconds"),
             "token_budget_remaining": next_token_budget,
             "failure_streak": failure_streak,
-            "last_error": base_task.get("last_error"),
+            "last_error": str(last_error or "").strip() or base_task.get("last_error"),
             "metadata": base_task.get("metadata") if isinstance(base_task.get("metadata"), dict) else {},
             "created_at": base_task.get("created_at"),
         }

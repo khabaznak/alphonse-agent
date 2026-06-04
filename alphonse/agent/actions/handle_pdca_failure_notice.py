@@ -7,6 +7,7 @@ from alphonse.agent.actions.models import ActionResult
 from alphonse.agent.nervous_system.pdca_queue_store import append_pdca_event
 from alphonse.agent.nervous_system.pdca_queue_store import get_pdca_task
 from alphonse.agent.nervous_system.pdca_queue_store import has_pdca_event
+from alphonse.agent.nervous_system.pdca_queue_store import load_pdca_checkpoint
 from alphonse.agent.observability.log_manager import get_component_logger
 from alphonse.agent.observability.log_manager import get_log_manager
 
@@ -71,6 +72,7 @@ class HandlePdcaFailureNoticeAction(Action):
             )
             return ActionResult(intention_key="NOOP", payload={}, urgency=None)
 
+        notice_text = _resolve_failure_notice_text(payload=payload, task=task)
         channel_type, channel_target = _resolve_channel(task=task)
         if not channel_type or not channel_target:
             _emit_notice_event(
@@ -89,6 +91,7 @@ class HandlePdcaFailureNoticeAction(Action):
                 "failure_code": failure_code,
                 "channel_type": channel_type,
                 "channel_target": channel_target,
+                "message": notice_text,
             },
             correlation_id=correlation_id,
         )
@@ -108,14 +111,14 @@ class HandlePdcaFailureNoticeAction(Action):
         return ActionResult(
             intention_key="MESSAGE_READY",
             payload={
-                "message": _ENGINE_UNAVAILABLE_MESSAGE,
+                "message": notice_text,
                 "channel_hint": channel_type,
                 "target": channel_target,
                 "correlation_id": correlation_id,
                 "direct_reply": {
                     "channel_type": channel_type,
                     "target": channel_target,
-                    "text": _ENGINE_UNAVAILABLE_MESSAGE,
+                    "text": notice_text,
                     "correlation_id": correlation_id,
                 },
             },
@@ -157,6 +160,33 @@ def _resolve_channel(*, task: dict[str, Any]) -> tuple[str | None, str | None]:
         if not channel_target:
             channel_target = str(inferred_target or "").strip() or None
     return channel_type, channel_target
+
+
+def _resolve_failure_notice_text(*, payload: dict[str, Any], task: dict[str, Any]) -> str:
+    for value in (
+        payload.get("failure_message"),
+        payload.get("failure_reason"),
+        task.get("last_error"),
+        _checkpoint_failure_text(str(task.get("task_id") or "").strip()),
+    ):
+        rendered = str(value or "").strip()
+        if rendered:
+            return rendered
+    return _ENGINE_UNAVAILABLE_MESSAGE
+
+
+def _checkpoint_failure_text(task_id: str) -> str | None:
+    if not task_id:
+        return None
+    checkpoint = load_pdca_checkpoint(task_id)
+    state = checkpoint.get("state") if isinstance(checkpoint, dict) and isinstance(checkpoint.get("state"), dict) else {}
+    task_record = state.get("task_record") if isinstance(state.get("task_record"), dict) else {}
+    outcome = task_record.get("outcome") if isinstance(task_record.get("outcome"), dict) else {}
+    for key in ("final_text", "summary", "failure_class"):
+        rendered = str(outcome.get(key) or "").strip()
+        if rendered:
+            return rendered
+    return None
 
 
 def _emit_notice_event(
