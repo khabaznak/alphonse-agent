@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from pathlib import Path
 import types
 
+import pytest
+
 from alphonse.agent.actions.handle_timed_signals import HandleTimedSignalsAction
 from alphonse.agent.actions.handle_timed_signals import _emit_brain_payload_to_bus
+from alphonse.agent.actions.handle_conscious_message import HandleConsciousMessageAction
 from alphonse.agent.identity import upsert_user
 from alphonse.agent.identity.service_resolvers import upsert_service_resolver
 from alphonse.agent.nervous_system.migrate import apply_schema
@@ -12,6 +16,7 @@ from alphonse.agent.nervous_system.senses.bus import Bus
 from alphonse.agent.nervous_system.senses.bus import Signal
 from alphonse.agent.tools.base import ToolDefinition
 from alphonse.agent.tools.spec import ToolSpec
+from alphonse.agent.services.job_store import JobStore
 
 
 class _FakeBus:
@@ -243,17 +248,35 @@ def test_memory_maintenance_timed_signal_runs_maintenance(monkeypatch) -> None:
     assert bus.events == []
 
 
-def test_job_trigger_bus_prompt_uses_payload_text_not_setup_metadata() -> None:
+def test_job_trigger_bus_prompt_uses_payload_text_not_setup_metadata(tmp_path: Path, monkeypatch) -> None:
+    db_path = tmp_path / "nerve-db"
+    monkeypatch.setenv("NERVE_DB_PATH", str(db_path))
+    apply_schema(db_path)
+    upsert_user(
+        {
+            "user_id": "u-canonical",
+            "principal_id": "u-canonical",
+            "display_name": "Canonical User",
+            "is_active": True,
+        }
+    )
+    upsert_service_resolver(
+        user_id="u-canonical",
+        service_id=2,
+        service_user_id="u-provider",
+        is_active=True,
+    )
     bus = _FakeBus()
     _emit_brain_payload_to_bus(
         bus=bus,
-        signal_payload={"target": "u1", "origin": "telegram"},
+        signal_payload={"target": "u-provider", "origin": "telegram"},
         inner={},
-        user_id="u1",
+        user_id="u-canonical",
         signal=types.SimpleNamespace(correlation_id="corr-job-trigger"),
         brain_payload={
             "payload_type": "prompt_to_brain",
             "job_id": "job_123",
+            "execution_id": "exec_123",
             "payload": {
                 "prompt_text": "Send voice note containing a stoic quote",
                 "agent_internal_prompt": "Create scheduled job daily...",
@@ -266,11 +289,18 @@ def test_job_trigger_bus_prompt_uses_payload_text_not_setup_metadata() -> None:
     payload = emitted.payload if isinstance(emitted.payload, dict) else {}
     assert str(payload.get("contract_type") or "") == "canonical_inbound_event"
     assert str(payload.get("service_key") or "") == "telegram"
-    assert str(payload.get("provider_user_id_from") or "") == "u1"
+    assert str(payload.get("alphonse_user_id") or "") == "u-canonical"
+    assert str(payload.get("provider_user_id_from") or "") == "u-provider"
+    assert str(payload.get("channel_target") or "") == "u-provider"
     assert isinstance(payload.get("provider_raw_message"), dict)
     metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
     assert metadata.get("force_new_task") is True
     assert metadata.get("input_mode") == "job_trigger"
+    assert metadata.get("job_execution") == {
+        "execution_id": "exec_123",
+        "job_id": "job_123",
+        "user_id": "u-canonical",
+    }
     text = str(payload.get("text") or "")
     assert text == "Send voice note containing a stoic quote"
     assert "Create scheduled job" not in text
@@ -312,28 +342,178 @@ def test_job_trigger_unknown_origin_resolves_service_from_target(tmp_path: Path,
     assert bus.events
     payload = bus.events[-1].payload if isinstance(bus.events[-1].payload, dict) else {}
     assert str(payload.get("service_key") or "") == "telegram"
+    assert str(payload.get("alphonse_user_id") or "") == "u-telegram"
+    assert str(payload.get("provider_user_id_from") or "") == "8553589429"
     assert str(payload.get("channel_target") or "") == "8553589429"
 
 
-def test_job_trigger_unknown_origin_falls_back_to_cli() -> None:
+def test_job_trigger_without_provider_mapping_is_rejected() -> None:
     bus = _FakeBus()
 
-    _emit_brain_payload_to_bus(
-        bus=bus,
-        signal_payload={"target": "unmapped-target", "origin": "assistant"},
-        inner={},
-        user_id="unmapped-target",
-        signal=types.SimpleNamespace(correlation_id="corr-job-trigger-cli"),
-        brain_payload={
+    with pytest.raises(ValueError, match="job_identity_routing_failed: provider_user_id_unresolved"):
+        _emit_brain_payload_to_bus(
+            bus=bus,
+            signal_payload={"target": "unmapped-target", "origin": "assistant"},
+            inner={},
+            user_id="unmapped-target",
+            signal=types.SimpleNamespace(correlation_id="corr-job-trigger-cli"),
+            brain_payload={
+                "payload_type": "prompt_to_brain",
+                "job_id": "job_789",
+                "payload": {"prompt_text": "Run without mapped provider"},
+            },
+        )
+    assert bus.events == []
+
+
+def test_job_trigger_with_canonical_owner_reaches_conscious_enqueue(tmp_path: Path, monkeypatch) -> None:
+    db_path = tmp_path / "nerve-db"
+    jobs_root = tmp_path / "jobs"
+    monkeypatch.setenv("NERVE_DB_PATH", str(db_path))
+    monkeypatch.setenv("ALPHONSE_JOBS_ROOT", str(jobs_root))
+    apply_schema(db_path)
+    upsert_user(
+        {
+            "user_id": "u-canonical",
+            "principal_id": "u-canonical",
+            "display_name": "Canonical User",
+            "is_active": True,
+        }
+    )
+    upsert_service_resolver(
+        user_id="u-canonical",
+        service_id=2,
+        service_user_id="8553589429",
+        is_active=True,
+    )
+    store = JobStore(root=jobs_root)
+    job = store.create_job(
+        user_id="u-canonical",
+        payload={
+            "name": "Canonical identity job",
+            "description": "Exercise timed conscious ingress",
+            "schedule": {
+                "type": "rrule",
+                "dtstart": datetime.now(timezone.utc).isoformat(),
+                "rrule": "FREQ=DAILY",
+            },
+            "timezone": "UTC",
             "payload_type": "prompt_to_brain",
-            "job_id": "job_789",
-            "payload": {"prompt_text": "Run without mapped provider"},
+            "payload": {
+                "prompt_text": "Send the scheduled update.",
+                "origin_channel": "telegram",
+                "delivery_target": "8553589429",
+            },
         },
     )
+    bus = _FakeBus()
+    HandleTimedSignalsAction().execute(
+        {
+            "signal": Signal(
+                type="timed_signal.fired",
+                payload={
+                    "timed_signal_id": f"job_trigger:{job.job_id}",
+                    "target": "8553589429",
+                    "origin": "telegram",
+                    "payload": {
+                        "kind": "job_trigger",
+                        "job_id": job.job_id,
+                        "user_id": "u-canonical",
+                        "payload_type": "prompt_to_brain",
+                        "payload": dict(job.payload),
+                        "mind_layer": "conscious",
+                    },
+                },
+                source="timer",
+                correlation_id="corr-canonical-job",
+            ),
+            "ctx": bus,
+        }
+    )
+    assert len(bus.events) == 1
+    routed = bus.events[0]
+    routed_payload = routed.payload if isinstance(routed.payload, dict) else {}
+    assert routed_payload.get("alphonse_user_id") == "u-canonical"
+    assert routed_payload.get("provider_user_id_from") == "8553589429"
 
-    assert bus.events
-    payload = bus.events[-1].payload if isinstance(bus.events[-1].payload, dict) else {}
-    assert str(payload.get("service_key") or "") == "cli"
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(
+        "alphonse.agent.actions.handle_conscious_message.enqueue_pdca_slice",
+        lambda **kwargs: captured.update(kwargs) or "task-canonical-job",
+    )
+    monkeypatch.setattr(
+        "alphonse.agent.actions.handle_conscious_message.is_pdca_slicing_enabled",
+        lambda: True,
+    )
+    monkeypatch.setattr(
+        "alphonse.agent.actions.handle_conscious_message.emit_presence_phase_changed",
+        lambda **_: None,
+    )
+    result = HandleConsciousMessageAction().execute({"signal": routed, "ctx": Bus()})
+
+    assert result.payload.get("task_id") == "task-canonical-job"
+    executions = store.list_executions(user_id="u-canonical", job_id=job.job_id, limit=1)
+    assert executions[0].status == "ok"
+    assert executions[0].metadata.get("task_id") == "task-canonical-job"
+
+
+def test_job_trigger_missing_provider_mapping_records_execution_error(tmp_path: Path, monkeypatch) -> None:
+    db_path = tmp_path / "nerve-db"
+    jobs_root = tmp_path / "jobs"
+    monkeypatch.setenv("NERVE_DB_PATH", str(db_path))
+    monkeypatch.setenv("ALPHONSE_JOBS_ROOT", str(jobs_root))
+    apply_schema(db_path)
+    store = JobStore(root=jobs_root)
+    job = store.create_job(
+        user_id="u-unmapped",
+        payload={
+            "name": "Unmapped identity job",
+            "description": "Must fail before conscious ingress",
+            "schedule": {
+                "type": "rrule",
+                "dtstart": datetime.now(timezone.utc).isoformat(),
+                "rrule": "FREQ=DAILY",
+            },
+            "timezone": "UTC",
+            "payload_type": "prompt_to_brain",
+            "payload": {
+                "prompt_text": "Send the scheduled update.",
+                "origin_channel": "telegram",
+                "delivery_target": "unmapped-target",
+            },
+        },
+    )
+    bus = _FakeBus()
+    HandleTimedSignalsAction().execute(
+        {
+            "signal": Signal(
+                type="timed_signal.fired",
+                payload={
+                    "timed_signal_id": f"job_trigger:{job.job_id}",
+                    "target": "unmapped-target",
+                    "origin": "telegram",
+                    "payload": {
+                        "kind": "job_trigger",
+                        "job_id": job.job_id,
+                        "user_id": "u-unmapped",
+                        "payload_type": "prompt_to_brain",
+                        "payload": dict(job.payload),
+                        "mind_layer": "conscious",
+                    },
+                },
+                source="timer",
+                correlation_id="corr-unmapped-job",
+            ),
+            "ctx": bus,
+        }
+    )
+
+    assert bus.events == []
+    executions = store.list_executions(user_id="u-unmapped", job_id=job.job_id, limit=1)
+    assert executions[0].status == "error"
+    assert "job_identity_routing_failed" in str(executions[0].output_summary or "")
+    assert isinstance(executions[0].error, dict)
+    assert executions[0].error.get("code") == "job_identity_routing_failed"
 
 
 def test_timed_signal_executes_canonical_tool_call_payload(monkeypatch) -> None:

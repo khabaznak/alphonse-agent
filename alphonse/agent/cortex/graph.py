@@ -156,7 +156,11 @@ def execute_step_state_adapter(state: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("execute_step_state_adapter.missing_task_record")
     if not isinstance(planner_output, dict):
         raise ValueError("execute_step_state_adapter.missing_planner_output")
-    result = execute_step_node(task_record, planner_output)
+    result = execute_step_node(
+        task_record,
+        planner_output,
+        runtime_state=state,
+    )
     updated_task_record = result["task_record"]
     return {
         "task_record": updated_task_record,

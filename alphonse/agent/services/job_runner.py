@@ -93,49 +93,90 @@ class JobRunner:
             self._update_job_after_execution(user_id=user_id, job=job, now=current, success=True, retried=False)
             return {"execution_id": execution.execution_id, "status": execution.status, "route": route.route}
 
-        status = "ok"
-        error: dict[str, Any] | None = None
-        output_summary = ""
         retried = False
         try:
             _ensure_conscious_job(job)
             if route.route == "needs_confirmation":
-                status = "needs_confirmation"
-                output_summary = "blocked: confirmation required"
+                ended_at = datetime.now(timezone.utc)
+                execution = JobExecution(
+                    execution_id=execution_id,
+                    job_id=job.job_id,
+                    user_id=user_id,
+                    status="needs_confirmation",
+                    route=route.route,
+                    started_at=started_at.isoformat(),
+                    ended_at=ended_at.isoformat(),
+                    duration_ms=max(int((ended_at - started_at).total_seconds() * 1000), 0),
+                    output_summary="blocked: confirmation required",
+                    input_hash=input_hash,
+                    metadata={"reason": route.reason},
+                )
+                self._job_store.append_execution(user_id=user_id, execution=execution)
             elif route.route == "brain":
-                payload = _brain_payload(job=job, user_id=user_id, current=current)
                 sink = brain_event_sink if callable(brain_event_sink) else self._brain_event_sink
                 if not callable(sink):
                     raise ValueError("missing_brain_sink")
+                execution = JobExecution(
+                    execution_id=execution_id,
+                    job_id=job.job_id,
+                    user_id=user_id,
+                    status="dispatched",
+                    route=route.route,
+                    started_at=started_at.isoformat(),
+                    ended_at=None,
+                    duration_ms=None,
+                    output_summary="dispatched_to_brain",
+                    input_hash=input_hash,
+                    metadata={"reason": route.reason},
+                )
+                self._job_store.append_execution(user_id=user_id, execution=execution)
+                payload = _brain_payload(
+                    job=job,
+                    user_id=user_id,
+                    execution_id=execution_id,
+                    current=current,
+                )
                 sink(payload)
-                output_summary = "queued_to_brain"
             else:
                 raise ValueError("jobs_conscious_only_policy_violation")
         except Exception as exc:
-            status = "error"
             error = {"type": type(exc).__name__, "message": str(exc)}
-            output_summary = str(exc)
-
-        ended_at = datetime.now(timezone.utc)
-        execution = JobExecution(
-            execution_id=execution_id,
-            job_id=job.job_id,
-            user_id=user_id,
-            status=status,
-            route=route.route,
-            started_at=started_at.isoformat(),
-            ended_at=ended_at.isoformat(),
-            duration_ms=max(int((ended_at - started_at).total_seconds() * 1000), 0),
-            error=error,
-            output_summary=output_summary,
-            input_hash=input_hash,
-            metadata={"reason": route.reason},
-        )
-        self._job_store.append_execution(user_id=user_id, execution=execution)
-        if status == "error":
+            if str(exc).startswith("job_identity_routing_failed:"):
+                error["code"] = "job_identity_routing_failed"
+            try:
+                execution = self._job_store.finalize_execution(
+                    user_id=user_id,
+                    execution_id=execution_id,
+                    status="error",
+                    output_summary=str(exc),
+                    error=error,
+                )
+            except ValueError:
+                ended_at = datetime.now(timezone.utc)
+                execution = JobExecution(
+                    execution_id=execution_id,
+                    job_id=job.job_id,
+                    user_id=user_id,
+                    status="error",
+                    route=route.route,
+                    started_at=started_at.isoformat(),
+                    ended_at=ended_at.isoformat(),
+                    duration_ms=max(int((ended_at - started_at).total_seconds() * 1000), 0),
+                    error=error,
+                    output_summary=str(exc),
+                    input_hash=input_hash,
+                    metadata={"reason": route.reason},
+                )
+                self._job_store.append_execution(user_id=user_id, execution=execution)
             retried = self._apply_retry(user_id=user_id, job=job, now=current)
         try:
-            self._update_job_after_execution(user_id=user_id, job=job, now=current, success=(status != "error"), retried=retried)
+            self._update_job_after_execution(
+                user_id=user_id,
+                job=job,
+                now=current,
+                success=(execution.status != "error"),
+                retried=retried,
+            )
         except ValueError as exc:
             if str(exc) == "jobs_conscious_only_payload_type":
                 logger.warning(
@@ -218,11 +259,12 @@ def route_job(*, job: JobSpec, auto_execute_high_risk: bool = False) -> JobRoute
     return JobRouteDecision(route="brain", reason="jobs_conscious_only")
 
 
-def _brain_payload(*, job: JobSpec, user_id: str, current: datetime) -> dict[str, Any]:
+def _brain_payload(*, job: JobSpec, user_id: str, execution_id: str, current: datetime) -> dict[str, Any]:
     return {
         "type": "SYSTEM_EVENT",
         "message": f"Scheduled job fired (job_id={job.job_id}, name={job.name})",
         "job_id": job.job_id,
+        "execution_id": execution_id,
         "job_name": job.name,
         "user_id": user_id,
         "payload_type": job.payload_type,

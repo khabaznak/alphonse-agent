@@ -489,6 +489,55 @@ def test_execute_step_hydrates_tool_state_from_ingress_facts(monkeypatch: pytest
     assert state.get("actor_person_id") == "owner-1"
 
 
+def test_execute_step_preserves_runtime_bus_for_stateful_tools(monkeypatch: pytest.MonkeyPatch) -> None:
+    registry = ToolRegistry()
+    captured: dict[str, object] = {}
+
+    class _RunNowTool:
+        def execute(self, **kwargs: object):
+            captured.update(kwargs)
+            return {"output": {"status": "dispatched"}, "exception": None, "metadata": {"tool": "jobs.run_now"}}
+
+    class _FakeBus:
+        def emit(self, _signal: object) -> None:
+            return None
+
+    bus = _FakeBus()
+    _register_tool(registry, "jobs.run_now", _RunNowTool())
+    monkeypatch.setattr(execute_step_module, "_tool_registry", lambda: registry)
+    task_record = _task_record(
+        goal="run the job now",
+        user_id="owner-1",
+        correlation_id="corr-run-now",
+        facts=[
+            "channel_type: telegram",
+            "channel_target: 8553589429",
+            "provider_user_id_from: 8553589429",
+        ],
+    )
+    planner_output = {
+        "tool_call": {
+            "kind": "call_tool",
+            "tool_name": "jobs.run_now",
+            "args": {"job_id": "job-1"},
+        },
+        "planner_intent": "Run the selected scheduled job now.",
+    }
+
+    updated = execute_step_state_adapter(
+        {
+            "task_record": task_record,
+            "planner_output": planner_output,
+            "_bus": bus,
+        }
+    )
+
+    assert isinstance(updated.get("task_record"), TaskRecord)
+    state = captured.get("state")
+    assert isinstance(state, dict)
+    assert state.get("_bus") is bus
+
+
 def test_non_canonical_top_level_planner_output_fails_in_do_node() -> None:
     task_record = _task_record(goal="do something")
     with pytest.raises(ValueError, match="missing tool_call"):

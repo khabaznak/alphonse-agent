@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import uuid
 from typing import Any
 
@@ -14,6 +15,7 @@ from alphonse.agent.services.pdca_ingress import BufferedTaskInput
 from alphonse.agent.services.pdca_ingress import enqueue_pdca_slice
 from alphonse.agent.services.pdca_ingress import normalize_buffered_attachments
 from alphonse.agent.services.pdca_queue_runner import is_pdca_slicing_enabled
+from alphonse.agent.services.job_store import JobStore
 
 logger = get_component_logger("actions.handle_conscious_message")
 _LOG = get_log_manager()
@@ -32,7 +34,6 @@ class HandleConsciousMessageAction(Action):
             raise ValueError("invalid_envelope: payload must be an object")
 
         payload = dict(raw_payload)
-        _validate_conscious_payload(payload)
         correlation_id = (
             str(payload.get(_SIGNAL_CORRELATION_KEY) or "").strip()
             or str(payload.get("dedupe_key") or "").strip()
@@ -40,6 +41,19 @@ class HandleConsciousMessageAction(Action):
             or str(getattr(signal, _SIGNAL_CORRELATION_KEY, "") or "").strip()
             or str(uuid.uuid4())
         )
+        try:
+            _validate_conscious_payload(payload)
+        except ValueError as exc:
+            if _job_execution_reference(payload) is None:
+                raise
+            return _reject_invalid_payload(
+                reason=str(exc or "invalid_conscious_payload"),
+                payload=payload,
+                correlation_id=str(correlation_id),
+                channel_type=str(payload.get("service_key") or "").strip() or None,
+                channel_target=str(payload.get("channel_target") or "").strip() or None,
+                message_id=str(payload.get("provider_message_id") or "").strip() or None,
+            )
         channel_type = channel_type_for_payload(payload)
         channel_target = channel_target_for_payload(payload)
         message_id = message_id_for_payload(payload) or None
@@ -81,6 +95,16 @@ class HandleConsciousMessageAction(Action):
             )
 
         if not is_pdca_slicing_enabled():
+            _finalize_job_execution(
+                payload=payload,
+                status="error",
+                output_summary="pdca_slicing_disabled",
+                error={
+                    "type": "RuntimeError",
+                    "message": "pdca_slicing_disabled",
+                    "code": "pdca_slicing_disabled",
+                },
+            )
             _LOG.emit(
                 level="warning",
                 event="incoming_message.rejected",
@@ -124,11 +148,30 @@ class HandleConsciousMessageAction(Action):
             correlation_id=str(correlation_id),
         )
 
-        task_id = enqueue_pdca_slice(
-            task_record=task_record,
-            buffered_input=buffered_input,
-            bus=context.get("ctx") if isinstance(context, dict) else None,
-            force_new_task=_force_new_task_for_payload(payload),
+        try:
+            task_id = enqueue_pdca_slice(
+                task_record=task_record,
+                buffered_input=buffered_input,
+                bus=context.get("ctx") if isinstance(context, dict) else None,
+                force_new_task=_force_new_task_for_payload(payload),
+            )
+        except Exception as exc:
+            _finalize_job_execution(
+                payload=payload,
+                status="error",
+                output_summary="pdca_enqueue_failed",
+                error={
+                    "type": type(exc).__name__,
+                    "message": str(exc),
+                    "code": "pdca_enqueue_failed",
+                },
+            )
+            raise
+        _finalize_job_execution(
+            payload=payload,
+            status="ok",
+            output_summary="queued_to_brain",
+            metadata={"task_id": task_id},
         )
         logger.info(
             "HandleConsciousMessageAction enqueued task_id=%s channel=%s target=%s",
@@ -160,6 +203,16 @@ def _reject_invalid_payload(
     channel_target: str | None,
     message_id: str | None,
 ) -> ActionResult:
+    _finalize_job_execution(
+        payload=payload,
+        status="error",
+        output_summary="invalid_conscious_payload",
+        error={
+            "type": "ValueError",
+            "message": reason,
+            "code": "invalid_conscious_payload",
+        },
+    )
     _LOG.emit(
         level="warning",
         event="incoming_message.rejected",
@@ -176,6 +229,52 @@ def _reject_invalid_payload(
         },
     )
     return ActionResult(intention_key="NOOP", payload={}, urgency=None)
+
+
+def _job_execution_reference(payload: dict[str, Any]) -> dict[str, str] | None:
+    metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
+    reference = metadata.get("job_execution") if isinstance(metadata.get("job_execution"), dict) else {}
+    execution_id = str(reference.get("execution_id") or "").strip()
+    user_id = str(reference.get("user_id") or payload.get("alphonse_user_id") or "").strip()
+    if not execution_id or not user_id:
+        return None
+    return {
+        "execution_id": execution_id,
+        "user_id": user_id,
+        "job_id": str(reference.get("job_id") or "").strip(),
+    }
+
+
+def _finalize_job_execution(
+    *,
+    payload: dict[str, Any],
+    status: str,
+    output_summary: str,
+    error: dict[str, Any] | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> None:
+    reference = _job_execution_reference(payload)
+    if reference is None:
+        return
+    store_root = str(os.getenv("ALPHONSE_JOBS_ROOT") or "").strip() or None
+    try:
+        JobStore(root=store_root).finalize_execution(
+            user_id=reference["user_id"],
+            execution_id=reference["execution_id"],
+            status=status,
+            output_summary=output_summary,
+            error=error,
+            metadata={
+                "ingress_status": status,
+                **dict(metadata or {}),
+            },
+        )
+    except Exception as exc:
+        logger.warning(
+            "HandleConsciousMessageAction job_execution_finalize_failed execution_id=%s error=%s",
+            reference["execution_id"],
+            type(exc).__name__,
+        )
 
 
 def _build_task_record_from_payload(

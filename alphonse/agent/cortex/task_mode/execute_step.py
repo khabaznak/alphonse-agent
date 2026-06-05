@@ -28,6 +28,7 @@ def execute_step_node_impl(
     *,
     logger: Any,
     log_task_event: Any,
+    runtime_state: dict[str, Any] | None = None,
 ) -> DoResult:
     tool_call = _require_canonical_tool_call(planner_output)
     planner_intent = str(planner_output.get("planner_intent") or "").strip()[:_PLANNER_INTENT_MAX_LENGTH]
@@ -40,6 +41,7 @@ def execute_step_node_impl(
         task_record=task_record,
         tool_name=str(tool_call["tool_name"]),
         args=dict(tool_call["args"]),
+        runtime_state=runtime_state,
     )
     output_payload = _serialize_result(result.get("output"))
     exception_payload = _serialize_result(result.get("exception"))
@@ -126,6 +128,7 @@ def _execute_tool_call(
     task_record: TaskRecord,
     tool_name: str,
     args: dict[str, Any],
+    runtime_state: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     definition = _tool_registry().get(tool_name)
     if definition is None:
@@ -140,7 +143,10 @@ def _execute_tool_call(
             p.kind == inspect.Parameter.VAR_KEYWORD for p in signature.parameters.values()
         )
         if accepts_state:
-            call_args["state"] = _tool_state_from_task_record(task_record)
+            call_args["state"] = _tool_state_from_task_record(
+                task_record,
+                runtime_state=runtime_state,
+            )
         raw_result = definition.invoke(call_args)
     except Exception as exc:
         as_payload = getattr(exc, "as_payload", None)
@@ -162,7 +168,11 @@ def _execute_tool_call(
     return _coerce_tool_result(tool_name=tool_name, raw_result=raw_result)
 
 
-def _tool_state_from_task_record(task_record: TaskRecord) -> dict[str, Any]:
+def _tool_state_from_task_record(
+    task_record: TaskRecord,
+    *,
+    runtime_state: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     facts = _facts_state(task_record.get_facts_md())
     state: dict[str, Any] = {
         "correlation_id": task_record.correlation_id or None,
@@ -196,6 +206,9 @@ def _tool_state_from_task_record(task_record: TaskRecord) -> dict[str, Any]:
         state["channel"] = state["channel_type"]
     if "channel_target" in state and "target" not in state:
         state["target"] = state["channel_target"]
+    runtime_bus = (runtime_state or {}).get("_bus")
+    if hasattr(runtime_bus, "emit"):
+        state["_bus"] = runtime_bus
     return state
 
 

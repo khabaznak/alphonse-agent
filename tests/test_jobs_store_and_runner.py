@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from alphonse.agent.nervous_system.migrate import apply_schema
-from alphonse.agent.services.job_models import JobSpec
+from alphonse.agent.services.job_models import JobExecution, JobSpec
 from alphonse.agent.services.job_runner import JobRunner, route_job
 from alphonse.agent.services.job_store import JobStore, compute_next_run_at
 
@@ -78,10 +78,13 @@ def test_runner_executes_due_job(tmp_path: Path) -> None:
         job_id=created.job_id,
         brain_event_sink=lambda payload: events.append(payload),
     )
-    assert outcome["status"] == "ok"
+    assert outcome["status"] == "dispatched"
     assert events
+    assert str(events[0].get("execution_id") or "") == str(outcome["execution_id"])
     executions = store.list_executions(user_id="u1", job_id=created.job_id, limit=5)
     assert executions
+    assert executions[0].status == "dispatched"
+    assert executions[0].ended_at is None
 
 
 def test_runner_rejects_non_conscious_job_payload_type(tmp_path: Path) -> None:
@@ -401,7 +404,7 @@ def test_job_runner_reschedules_job_trigger_timed_signal_after_run(tmp_path: Pat
         job_id=created.job_id,
         brain_event_sink=lambda payload: events.append(payload),
     )
-    assert outcome["status"] == "ok"
+    assert outcome["status"] == "dispatched"
     assert events
     with sqlite3.connect(db_path) as conn:
         row = conn.execute(
@@ -412,3 +415,33 @@ def test_job_runner_reschedules_job_trigger_timed_signal_after_run(tmp_path: Pat
     assert str(row[0]) == "pending"
     assert str(row[1]).strip()
     assert row[2] is None
+
+
+def test_job_store_finalizes_dispatched_execution(tmp_path: Path) -> None:
+    store = JobStore(root=tmp_path / "data" / "jobs")
+    execution = JobExecution(
+        execution_id="exec-finalize-1",
+        job_id="job-finalize-1",
+        user_id="u1",
+        status="dispatched",
+        route="brain",
+        started_at=datetime.now(timezone.utc).isoformat(),
+        ended_at=None,
+        duration_ms=None,
+        output_summary="dispatched_to_brain",
+    )
+    store.append_execution(user_id="u1", execution=execution)
+
+    finalized = store.finalize_execution(
+        user_id="u1",
+        execution_id="exec-finalize-1",
+        status="ok",
+        output_summary="queued_to_brain",
+        metadata={"task_id": "task-1"},
+    )
+
+    assert finalized.status == "ok"
+    assert finalized.output_summary == "queued_to_brain"
+    assert finalized.ended_at
+    assert finalized.duration_ms is not None
+    assert finalized.metadata.get("task_id") == "task-1"

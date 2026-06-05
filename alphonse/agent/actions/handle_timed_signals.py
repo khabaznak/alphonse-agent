@@ -12,6 +12,8 @@ from alphonse.agent.actions.models import ActionResult
 from alphonse.agent.cognition.memory import MemoryService
 from alphonse.agent.identity.service_resolvers import resolve_service_id_by_channel_type
 from alphonse.agent.identity.service_resolvers import resolve_service_key_by_service_user_id
+from alphonse.agent.identity.service_resolvers import resolve_service_user_id
+from alphonse.agent.identity.service_resolvers import resolve_user_id_by_service_user_id
 from alphonse.agent.nervous_system.paths import resolve_nervous_system_db_path
 from alphonse.agent.nervous_system.senses.bus import Signal as BusSignal
 from alphonse.agent.observability.log_manager import get_component_logger
@@ -322,7 +324,7 @@ def _execute_job_trigger(*, context: dict[str, Any], payload: dict[str, Any], in
         )
 
     try:
-        runner.run_job_now(
+        outcome = runner.run_job_now(
             user_id=user_id,
             job_id=job_id,
             now=datetime.now(timezone.utc),
@@ -336,6 +338,14 @@ def _execute_job_trigger(*, context: dict[str, Any], payload: dict[str, Any], in
             type(exc).__name__,
         )
     else:
+        if str(outcome.get("status") or "").strip().lower() == "error":
+            logger.warning(
+                "HandleTimedSignalsAction job_trigger rejected job_id=%s user_id=%s execution_id=%s",
+                job_id,
+                user_id,
+                str(outcome.get("execution_id") or "").strip() or None,
+            )
+            return ActionResult(intention_key="NOOP", payload={}, urgency=None)
         logger.info("HandleTimedSignalsAction executed job_trigger job_id=%s user_id=%s", job_id, user_id)
     return ActionResult(intention_key="NOOP", payload={}, urgency=None)
 
@@ -445,6 +455,11 @@ def _emit_brain_payload_to_bus(
         target=target,
         user_id=user_id,
     )
+    canonical_user_id, provider_user_id = _resolve_job_identity(
+        service_key=channel,
+        owner_user_id=user_id,
+        delivery_target=target,
+    )
     correlation_id = _correlation_id(signal_payload, signal)
     nested = brain_payload.get("payload") if isinstance(brain_payload, dict) else {}
     nested_payload = nested if isinstance(nested, dict) else {}
@@ -462,14 +477,22 @@ def _emit_brain_payload_to_bus(
         "source": "job_trigger" if signal_payload else "jobs_reconcile",
     }
     job_id = str((brain_payload or {}).get("job_id") or "").strip()
+    execution_id = str((brain_payload or {}).get("execution_id") or "").strip()
     if job_id:
         metadata["job_id"] = job_id
+    if execution_id:
+        metadata["job_execution"] = {
+            "execution_id": execution_id,
+            "job_id": job_id or None,
+            "user_id": canonical_user_id,
+        }
     bus.emit(
         BusSignal(
             type="timed_signal.conscious_payload",
             payload=_build_timed_conscious_canonical_payload(
                 service_key=channel,
-                provider_user_id_from=user_id or target or channel,
+                alphonse_user_id=canonical_user_id,
+                provider_user_id_from=provider_user_id,
                 provider_message_id=str(
                     (signal_payload or {}).get("timed_signal_id")
                     or (signal_payload or {}).get("message_id")
@@ -509,6 +532,50 @@ def _resolve_registered_service_key(*, channel_hint: str, target: str | None, us
     return "cli"
 
 
+def _resolve_job_identity(
+    *,
+    service_key: str,
+    owner_user_id: str,
+    delivery_target: str | None,
+) -> tuple[str, str]:
+    service_id = resolve_service_id_by_channel_type(service_key)
+    if service_id is None:
+        raise ValueError("job_identity_routing_failed: unknown_service")
+    owner = str(owner_user_id or "").strip()
+    target = str(delivery_target or "").strip()
+    provider_for_owner = resolve_service_user_id(
+        user_id=owner,
+        service_id=service_id,
+    )
+    canonical_from_legacy_owner = resolve_user_id_by_service_user_id(
+        service_id=service_id,
+        service_user_id=owner,
+    )
+    canonical_user_id = owner if provider_for_owner else str(canonical_from_legacy_owner or "").strip()
+
+    if target:
+        target_owner = resolve_user_id_by_service_user_id(
+            service_id=service_id,
+            service_user_id=target,
+        )
+        if target_owner:
+            normalized_target_owner = str(target_owner).strip()
+            if canonical_user_id and normalized_target_owner != canonical_user_id:
+                raise ValueError("job_identity_routing_failed: owner_target_mismatch")
+            return normalized_target_owner, target
+
+    if canonical_user_id and provider_for_owner:
+        return canonical_user_id, str(provider_for_owner).strip()
+    if canonical_user_id:
+        provider_from_canonical = resolve_service_user_id(
+            user_id=canonical_user_id,
+            service_id=service_id,
+        )
+        if provider_from_canonical:
+            return canonical_user_id, str(provider_from_canonical).strip()
+    raise ValueError("job_identity_routing_failed: provider_user_id_unresolved")
+
+
 def _extract_job_execution_prompt(payload: dict[str, Any] | None) -> str:
     rows = payload if isinstance(payload, dict) else {}
     for key in ("prompt_text", "text", "message", "prompt"):
@@ -527,6 +594,7 @@ def _build_timed_conscious_canonical_payload(
     text: str,
     correlation_id: str | None,
     provider_raw_message: dict[str, Any],
+    alphonse_user_id: str | None = None,
     metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     normalized_service_key = str(service_key or "").strip() or "api"
@@ -538,6 +606,7 @@ def _build_timed_conscious_canonical_payload(
         "contract_type": "canonical_inbound_event",
         "contract_version": "1.0",
         "service_key": normalized_service_key,
+        "alphonse_user_id": str(alphonse_user_id or "").strip() or None,
         "provider_user_id_from": normalized_provider_user_id,
         "provider_message_id": normalized_message_id,
         "channel_target": normalized_target,

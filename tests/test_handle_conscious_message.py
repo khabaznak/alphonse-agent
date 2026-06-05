@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 import pytest
 
 from alphonse.agent.actions.handle_conscious_message import HandleConsciousMessageAction
 from alphonse.agent.cortex.task_mode.task_record import TaskRecord
 from alphonse.agent.nervous_system.senses.bus import Bus, Signal
 from alphonse.agent.services.pdca_ingress import BufferedTaskInput
+from alphonse.agent.services.job_models import JobExecution
+from alphonse.agent.services.job_store import JobStore
 
 
 def test_handle_conscious_message_enqueues_pdca_slice(monkeypatch) -> None:
@@ -262,9 +266,26 @@ def test_handle_conscious_message_uses_signal_correlation_fallback(monkeypatch) 
     assert buffered_input.correlation_id == "signal-correlation"
 
 
-def test_handle_conscious_message_accepts_canonical_timed_conscious_payload(monkeypatch) -> None:
+def test_handle_conscious_message_accepts_canonical_timed_conscious_payload(tmp_path, monkeypatch) -> None:
     action = HandleConsciousMessageAction()
     captured: dict[str, object] = {}
+    jobs_root = tmp_path / "jobs"
+    monkeypatch.setenv("ALPHONSE_JOBS_ROOT", str(jobs_root))
+    store = JobStore(root=jobs_root)
+    store.append_execution(
+        user_id="u-1",
+        execution=JobExecution(
+            execution_id="exec-timed-1",
+            job_id="job-timed-1",
+            user_id="u-1",
+            status="dispatched",
+            route="brain",
+            started_at=datetime.now(timezone.utc).isoformat(),
+            ended_at=None,
+            duration_ms=None,
+            output_summary="dispatched_to_brain",
+        ),
+    )
 
     monkeypatch.setattr(
         "alphonse.agent.actions.handle_conscious_message.enqueue_pdca_slice",
@@ -291,6 +312,7 @@ def test_handle_conscious_message_accepts_canonical_timed_conscious_payload(monk
         "contract_type": "canonical_inbound_event",
         "contract_version": "1.0",
         "service_key": "api",
+        "alphonse_user_id": "u-1",
         "provider_user_id_from": "me",
         "provider_message_id": "tsig_1",
         "channel_target": "me",
@@ -300,7 +322,14 @@ def test_handle_conscious_message_accepts_canonical_timed_conscious_payload(monk
         "text": "Take a shower now.",
         "attachments": [],
         "dedupe_key": "corr-timed-1",
-        "metadata": {"mind_layer": "conscious"},
+        "metadata": {
+            "mind_layer": "conscious",
+            "job_execution": {
+                "execution_id": "exec-timed-1",
+                "job_id": "job-timed-1",
+                "user_id": "u-1",
+            },
+        },
     }
     result = action.execute({"signal": Signal(type="timed_signal.conscious_payload", payload=payload), "ctx": Bus()})
     assert result.intention_key == "NOOP"
@@ -314,6 +343,10 @@ def test_handle_conscious_message_accepts_canonical_timed_conscious_payload(monk
     assert buffered_input.channel_type == "api"
     assert buffered_input.channel_target == "me"
     assert buffered_input.text == "Take a shower now."
+    execution = store.list_executions(user_id="u-1", job_id="job-timed-1", limit=1)[0]
+    assert execution.status == "ok"
+    assert execution.output_summary == "queued_to_brain"
+    assert execution.metadata.get("task_id") == "task-timed-1"
 
 
 def test_handle_conscious_message_preserves_attachment_only_payload(monkeypatch) -> None:
@@ -464,9 +497,26 @@ def test_handle_conscious_message_canonical_payload_with_unresolved_user_raises(
         action.execute({"signal": Signal(type="sense.telegram.message.user.received", payload=payload), "ctx": Bus()})
 
 
-def test_handle_conscious_message_mechanical_payload_with_unresolved_service_key_rejects(monkeypatch) -> None:
+def test_handle_conscious_message_mechanical_payload_with_unresolved_service_key_rejects(tmp_path, monkeypatch) -> None:
     action = HandleConsciousMessageAction()
     emitted: list[dict[str, object]] = []
+    jobs_root = tmp_path / "jobs"
+    monkeypatch.setenv("ALPHONSE_JOBS_ROOT", str(jobs_root))
+    store = JobStore(root=jobs_root)
+    store.append_execution(
+        user_id="u-owner",
+        execution=JobExecution(
+            execution_id="exec-rejected-1",
+            job_id="job-rejected-1",
+            user_id="u-owner",
+            status="dispatched",
+            route="brain",
+            started_at=datetime.now(timezone.utc).isoformat(),
+            ended_at=None,
+            duration_ms=None,
+            output_summary="dispatched_to_brain",
+        ),
+    )
 
     class _FakeLog:
         def emit(self, **kwargs: object) -> None:
@@ -494,6 +544,13 @@ def test_handle_conscious_message_mechanical_payload_with_unresolved_service_key
         "provider_raw_message": {},
         "text": "Hello unresolved",
         "attachments": [],
+        "metadata": {
+            "job_execution": {
+                "execution_id": "exec-rejected-1",
+                "job_id": "job-rejected-1",
+                "user_id": "u-owner",
+            }
+        },
     }
     result = action.execute({"signal": Signal(type="sense.telegram.message.user.received", payload=payload), "ctx": Bus()})
 
@@ -501,6 +558,11 @@ def test_handle_conscious_message_mechanical_payload_with_unresolved_service_key
     event = next((item for item in emitted if str(item.get("event") or "") == "incoming_message.rejected"), None)
     assert isinstance(event, dict)
     assert event.get("error_code") == "invalid_conscious_payload"
+    execution = store.list_executions(user_id="u-owner", job_id="job-rejected-1", limit=1)[0]
+    assert execution.status == "error"
+    assert execution.output_summary == "invalid_conscious_payload"
+    assert isinstance(execution.error, dict)
+    assert execution.error.get("code") == "invalid_conscious_payload"
 
 
 def test_handle_conscious_message_mechanical_payload_missing_provider_message_id_raises(monkeypatch) -> None:

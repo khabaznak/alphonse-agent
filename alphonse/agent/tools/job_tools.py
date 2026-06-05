@@ -325,7 +325,7 @@ def _brain_event_sink_from_state(
         return None
     channel = str(state_payload.get("channel_type") or "api").strip() or "api"
     target = str(state_payload.get("channel_target") or fallback_user_id).strip() or fallback_user_id
-    user_id = _resolve_user_id(user_id=None, state=state_payload, ctx=None)
+    user_id = str(fallback_user_id or "").strip()
     correlation_id = str(state_payload.get("correlation_id") or "").strip() or None
 
     def _sink(payload: dict[str, Any]) -> None:
@@ -348,7 +348,7 @@ def _brain_event_sink_from_state(
                 type="sense.api.message.user.received",
                 payload=CanonicalInboundEvent(
                     service_key=channel,
-                    provider_user_id_from=user_id or target or channel,
+                    provider_user_id_from=target or user_id or channel,
                     provider_message_id=str(correlation_id or payload.get("job_id") or "job-runner"),
                     channel_target=target,
                     occurred_at=datetime.now(timezone.utc).isoformat(),
@@ -365,6 +365,11 @@ def _brain_event_sink_from_state(
                         "source": "job_runner",
                         "job": payload,
                         "input_mode": "job_trigger",
+                        "job_execution": {
+                            "execution_id": str(payload.get("execution_id") or "").strip() or None,
+                            "job_id": str(payload.get("job_id") or "").strip() or None,
+                            "user_id": user_id,
+                        },
                     },
                 },
                 source="jobs",

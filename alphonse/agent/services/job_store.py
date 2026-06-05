@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import secrets
+import threading
 from alphonse.agent.observability.log_manager import get_component_logger
 import sqlite3
 from datetime import datetime, timedelta, timezone
@@ -19,6 +20,7 @@ from alphonse.agent.services.job_models import JobExecution, JobSpec
 
 logger = get_component_logger("services.job_store")
 VALID_PAYLOAD_TYPES = {"prompt_to_brain"}
+_EXECUTION_FILE_LOCK = threading.RLock()
 
 
 class JobStore:
@@ -388,15 +390,65 @@ class JobStore:
         return executions[: max(1, min(int(limit), 2000))]
 
     def append_execution(self, *, user_id: str, execution: JobExecution) -> JobExecution:
-        data = self._read_executions(user_id)
-        rows = data.get("executions")
-        if not isinstance(rows, list):
-            rows = []
-            data["executions"] = rows
-        rows.append(execution.to_dict())
-        data["executions"] = rows[-5000:]
-        self._write_executions(user_id, data)
+        with _EXECUTION_FILE_LOCK:
+            data = self._read_executions(user_id)
+            rows = data.get("executions")
+            if not isinstance(rows, list):
+                rows = []
+                data["executions"] = rows
+            rows.append(execution.to_dict())
+            data["executions"] = rows[-5000:]
+            self._write_executions(user_id, data)
         return execution
+
+    def finalize_execution(
+        self,
+        *,
+        user_id: str,
+        execution_id: str,
+        status: str,
+        output_summary: str,
+        error: dict[str, Any] | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> JobExecution:
+        normalized_execution_id = str(execution_id or "").strip()
+        if not normalized_execution_id:
+            raise ValueError("execution_id is required")
+        ended_at = _now_utc()
+        with _EXECUTION_FILE_LOCK:
+            data = self._read_executions(user_id)
+            rows = data.get("executions")
+            if not isinstance(rows, list):
+                raise ValueError("execution_not_found")
+            for index in range(len(rows) - 1, -1, -1):
+                item = rows[index]
+                if not isinstance(item, dict):
+                    continue
+                if str(item.get("execution_id") or "").strip() != normalized_execution_id:
+                    continue
+                execution = JobExecution.from_dict(item)
+                try:
+                    started_at = datetime.fromisoformat(execution.started_at)
+                except Exception:
+                    started_at = ended_at
+                if started_at.tzinfo is None:
+                    started_at = started_at.replace(tzinfo=timezone.utc)
+                execution.status = str(status or "").strip() or "error"
+                execution.ended_at = ended_at.isoformat()
+                execution.duration_ms = max(
+                    int((ended_at - started_at.astimezone(timezone.utc)).total_seconds() * 1000),
+                    0,
+                )
+                execution.error = dict(error) if isinstance(error, dict) else None
+                execution.output_summary = str(output_summary or "").strip() or None
+                execution.metadata = {
+                    **dict(execution.metadata or {}),
+                    **dict(metadata or {}),
+                }
+                rows[index] = execution.to_dict()
+                self._write_executions(user_id, data)
+                return execution
+        raise ValueError("execution_not_found")
 
     def payload_hash(self, payload: dict[str, Any]) -> str:
         text = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))

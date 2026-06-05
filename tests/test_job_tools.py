@@ -167,9 +167,15 @@ def test_job_run_now_routes_prompt_jobs_to_bus_when_present(tmp_path: Path) -> N
     assert emitted.correlation_id == "corr-1"
     payload = emitted.payload or {}
     assert payload.get("contract_type") == "canonical_inbound_event"
+    assert str(payload.get("provider_user_id_from") or "") == "8553589429"
     assert str(payload.get("channel_target") or "") == "8553589429"
     assert str(payload.get("text") or "") == "Send Alex the current USD to MXN exchange rate over Telegram"
     assert bool(payload.get("force_new_task")) is True
+    metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
+    execution = metadata.get("job_execution") if isinstance(metadata.get("job_execution"), dict) else {}
+    assert str(execution.get("execution_id") or "") == str(run["output"]["execution_id"])
+    assert str(execution.get("job_id") or "") == str(created["output"]["job_id"])
+    assert str(execution.get("user_id") or "") == "u1"
     assert "Create scheduled job" not in str(payload.get("text") or "")
 
 

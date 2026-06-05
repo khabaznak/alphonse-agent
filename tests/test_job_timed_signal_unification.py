@@ -4,6 +4,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from alphonse.agent.actions.handle_timed_signals import HandleTimedSignalsAction
+from alphonse.agent.identity import upsert_user
+from alphonse.agent.identity.service_resolvers import upsert_service_resolver
 from alphonse.agent.nervous_system.migrate import apply_schema
 from alphonse.agent.nervous_system.senses.bus import Signal
 from alphonse.agent.services.job_store import JobStore
@@ -56,6 +58,20 @@ def test_timer_fired_job_trigger_emits_conscious_message_event(tmp_path: Path, m
     jobs_root = tmp_path / "jobs_store"
     monkeypatch.setenv("ALPHONSE_JOBS_ROOT", str(jobs_root))
     apply_schema(db_path)
+    upsert_user(
+        {
+            "user_id": "u1",
+            "principal_id": "u1",
+            "display_name": "User One",
+            "is_active": True,
+        }
+    )
+    upsert_service_resolver(
+        user_id="u1",
+        service_id=2,
+        service_user_id="provider-u1",
+        is_active=True,
+    )
     store = JobStore(root=jobs_root)
     created = store.create_job(
         user_id="u1",
@@ -68,7 +84,11 @@ def test_timer_fired_job_trigger_emits_conscious_message_event(tmp_path: Path, m
                 "rrule": "FREQ=DAILY;BYHOUR=7;BYMINUTE=0",
             },
             "payload_type": "prompt_to_brain",
-            "payload": {"prompt_text": "Share USD to MXN update"},
+            "payload": {
+                "prompt_text": "Share USD to MXN update",
+                "origin_channel": "telegram",
+                "delivery_target": "provider-u1",
+            },
             "timezone": "UTC",
         },
     )
@@ -82,7 +102,8 @@ def test_timer_fired_job_trigger_emits_conscious_message_event(tmp_path: Path, m
             "mind_layer": "subconscious",
             "dispatch_mode": "deterministic",
             "job_id": created.job_id,
-            "target": "u1",
+            "target": "provider-u1",
+            "origin": "telegram",
             "payload": {"job_id": created.job_id, "user_id": "u1"},
         },
         source="timer",
@@ -93,9 +114,9 @@ def test_timer_fired_job_trigger_emits_conscious_message_event(tmp_path: Path, m
     emitted = bus.events[-1]
     assert emitted.type == "timed_signal.conscious_payload"
     payload = emitted.payload or {}
-    actor = payload.get("actor") if isinstance(payload.get("actor"), dict) else {}
-    content = payload.get("content") if isinstance(payload.get("content"), dict) else {}
-    assert str(actor.get("external_user_id") or "") == "u1"
-    text = str(content.get("text") or "")
+    assert str(payload.get("alphonse_user_id") or "") == "u1"
+    assert str(payload.get("provider_user_id_from") or "") == "provider-u1"
+    assert str(payload.get("channel_target") or "") == "provider-u1"
+    text = str(payload.get("text") or "")
     assert text == "Share USD to MXN update"
     assert "Create scheduled job" not in text

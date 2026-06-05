@@ -50,13 +50,19 @@ def route_after_next_step(planner_output: Any) -> str:
     return "execute_step_node"
 
 
-def execute_step_node(task_record: TaskRecord, planner_output: PlannerOutput) -> DoResult:
+def execute_step_node(
+    task_record: TaskRecord,
+    planner_output: PlannerOutput,
+    *,
+    runtime_state: dict[str, Any] | None = None,
+) -> DoResult:
     _emit_transition_event_for_task_record(task_record, _TRANSITION_EVENT_EXECUTING)
     return execute_step_node_impl(
         task_record,
         planner_output,
         logger=logger,
         log_task_event=log_task_event,
+        runtime_state=runtime_state,
     )
 
 
