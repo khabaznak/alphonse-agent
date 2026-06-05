@@ -4,12 +4,16 @@ from alphonse.agent.cognition.providers.llamafarm import LlamaFarmClient
 from alphonse.agent.cognition.providers.ollama import OllamaClient
 from alphonse.agent.cognition.providers.opencode import OpenCodeClient
 from alphonse.agent.cognition.providers.openai import OpenAIClient
+from alphonse.agent.cognition.providers.openai_codex import OpenAICodexClient
+from alphonse.agent.cognition.providers.github_copilot import GitHubCopilotClient
 
 __all__ = [
     "build_llm_client",
+    "GitHubCopilotClient",
     "LocalAIClient",
     "LlamaFarmClient",
     "OllamaClient",
+    "OpenAICodexClient",
     "OpenAIClient",
     "OpenCodeClient",
 ]

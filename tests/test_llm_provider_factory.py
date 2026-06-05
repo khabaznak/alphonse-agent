@@ -8,6 +8,9 @@ from alphonse.agent.cognition.providers.factory import build_tool_calling_provid
 from alphonse.agent.cognition.providers.llamafarm import LlamaFarmClient
 from alphonse.agent.cognition.providers.ollama import OllamaClient
 from alphonse.agent.cognition.providers.opencode import OpenCodeClient
+from alphonse.agent.cognition.providers.openai import OpenAIClient
+from alphonse.agent.cognition.providers.openai_codex import OpenAICodexClient
+from alphonse.agent.cognition.providers.github_copilot import GitHubCopilotClient
 import alphonse.agent.cognition.providers.factory as factory_module
 
 
@@ -39,6 +42,36 @@ def test_build_llm_client_supports_llamafarm(
     monkeypatch.setenv("ALPHONSE_LLM_PROVIDER", provider)
     client = build_llm_client()
     assert isinstance(client, LlamaFarmClient)
+
+
+@pytest.mark.parametrize("provider", ["openai", "OPENAI"])
+def test_build_llm_client_supports_openai(
+    monkeypatch: pytest.MonkeyPatch,
+    provider: str,
+) -> None:
+    monkeypatch.setenv("ALPHONSE_LLM_PROVIDER", provider)
+    client = build_llm_client()
+    assert isinstance(client, OpenAIClient)
+
+
+@pytest.mark.parametrize("provider", ["openai_codex", "openai-codex", "codex"])
+def test_build_llm_client_supports_openai_codex(
+    monkeypatch: pytest.MonkeyPatch,
+    provider: str,
+) -> None:
+    monkeypatch.setenv("ALPHONSE_LLM_PROVIDER", provider)
+    client = build_llm_client()
+    assert isinstance(client, OpenAICodexClient)
+
+
+@pytest.mark.parametrize("provider", ["github_copilot", "github-copilot", "copilot"])
+def test_build_llm_client_supports_github_copilot(
+    monkeypatch: pytest.MonkeyPatch,
+    provider: str,
+) -> None:
+    monkeypatch.setenv("ALPHONSE_LLM_PROVIDER", provider)
+    client = build_llm_client()
+    assert isinstance(client, GitHubCopilotClient)
 
 
 def test_build_llm_client_rejects_provider_without_complete_contract(
@@ -79,3 +112,27 @@ def test_build_text_completion_provider_reuses_cached_instance(
     second = build_text_completion_provider()
     assert first is sentinel
     assert second is sentinel
+
+
+def test_openai_cache_key_includes_project_header_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ALPHONSE_LLM_PROVIDER", "openai")
+    monkeypatch.setenv("OPENAI_PROJECT_ID", "proj_a")
+    factory_module._CLIENT_CACHE.clear()
+    first = build_text_completion_provider()
+    monkeypatch.setenv("OPENAI_PROJECT_ID", "proj_b")
+    second = build_text_completion_provider()
+    assert first is not second
+
+
+def test_codex_cache_key_includes_cli_bin(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ALPHONSE_LLM_PROVIDER", "openai_codex")
+    monkeypatch.setenv("OPENAI_CODEX_CLI_BIN", "codex-a")
+    factory_module._CLIENT_CACHE.clear()
+    first = build_text_completion_provider()
+    monkeypatch.setenv("OPENAI_CODEX_CLI_BIN", "codex-b")
+    second = build_text_completion_provider()
+    assert first is not second

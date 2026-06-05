@@ -11,11 +11,15 @@ class OpenAIClient:
         base_url="https://api.openai.com/v1",
         model="gpt-4o-mini",
         api_key_env="OPENAI_API_KEY",
+        project_env="OPENAI_PROJECT_ID",
+        organization_env="OPENAI_ORGANIZATION_ID",
         timeout=60,
     ):
         self.base_url = base_url
         self.model = model
         self.api_key_env = api_key_env
+        self.project_env = project_env
+        self.organization_env = organization_env
         self.timeout = timeout
         self.supports_tool_calls = True
         self.tool_result_message_style = "openai"
@@ -35,7 +39,7 @@ class OpenAIClient:
 
         response = requests.post(
             f"{self.base_url}/chat/completions",
-            headers={"Authorization": f"Bearer {api_key}"},
+            headers=self._headers(api_key),
             json=payload,
             timeout=self.timeout,
         )
@@ -62,7 +66,7 @@ class OpenAIClient:
         }
         response = requests.post(
             f"{self.base_url}/chat/completions",
-            headers={"Authorization": f"Bearer {api_key}"},
+            headers=self._headers(api_key),
             json=payload,
             timeout=self.timeout,
         )
@@ -129,3 +133,13 @@ class OpenAIClient:
         if assistant_tool_calls:
             assistant_message["tool_calls"] = assistant_tool_calls
         return {"content": content, "tool_calls": tool_calls, "assistant_message": assistant_message}
+
+    def _headers(self, api_key: str) -> dict[str, str]:
+        headers = {"Authorization": f"Bearer {api_key}"}
+        project_id = os.getenv(self.project_env)
+        if project_id:
+            headers["OpenAI-Project"] = project_id
+        organization_id = os.getenv(self.organization_env)
+        if organization_id:
+            headers["OpenAI-Organization"] = organization_id
+        return headers

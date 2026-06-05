@@ -8,6 +8,7 @@ import sqlite3
 import time
 import uuid
 import shlex
+import shutil
 import signal
 import subprocess
 import sys
@@ -91,6 +92,15 @@ from alphonse.agent.nervous_system.voice_profiles import (
 )
 from alphonse.agent.tools.local_audio_output import LocalAudioOutputRenderTool
 
+_LLM_AUTH_PROVIDER_IDS = (
+    "openai",
+    "openai_codex",
+    "github_copilot",
+    "opencode",
+    "ollama",
+    "llamafarm",
+)
+
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="alphonse cli")
@@ -147,6 +157,48 @@ def build_parser() -> argparse.ArgumentParser:
     debug_sub = debug_parser.add_subparsers(dest="debug_command", required=True)
     debug_wiring = debug_sub.add_parser(
         "wiring", help="Show DB path and timed signals API status"
+    )
+
+    llm_auth_parser = sub.add_parser(
+        "llm-auth",
+        help="Admin LLM provider auth setup",
+    )
+    llm_auth_sub = llm_auth_parser.add_subparsers(
+        dest="llm_auth_command",
+        required=True,
+    )
+    llm_auth_sub.add_parser(
+        "list",
+        help="Show provider auth status with secrets redacted",
+    )
+    llm_auth_select = llm_auth_sub.add_parser(
+        "select",
+        help="Print env needed to make a provider active",
+    )
+    llm_auth_select.add_argument(
+        "--provider",
+        required=True,
+        choices=_LLM_AUTH_PROVIDER_IDS,
+    )
+    llm_auth_smoke = llm_auth_sub.add_parser(
+        "smoke",
+        help="Validate provider auth with a minimal completion",
+    )
+    llm_auth_smoke.add_argument(
+        "--provider",
+        required=True,
+        choices=_LLM_AUTH_PROVIDER_IDS,
+    )
+    llm_auth_smoke.add_argument(
+        "--text",
+        default="Reply with ok.",
+        help="Smoke-test prompt text",
+    )
+    llm_auth_smoke.add_argument(
+        "--timeout-seconds",
+        type=float,
+        default=None,
+        help="Override smoke timeout for providers that support it",
     )
 
     trace_parser = sub.add_parser("trace", help="Inspect observability traces")
@@ -558,6 +610,9 @@ def _dispatch_command(
     if args.command == "debug":
         _command_debug(args)
         return
+    if args.command == "llm-auth":
+        _command_llm_auth(args)
+        return
     if args.command == "trace":
         _command_trace(args)
         return
@@ -701,6 +756,232 @@ def _handle_repl_logs_command(raw: str) -> bool:
 
 def _print_logs_usage() -> None:
     print("Usage: logs off|file|stderr|path|status")
+
+
+def _command_llm_auth(args: argparse.Namespace) -> None:
+    command = args.llm_auth_command
+    if command == "list":
+        active = _canonical_llm_provider(os.getenv("ALPHONSE_LLM_PROVIDER", "ollama"))
+        for provider in _LLM_AUTH_PROVIDER_IDS:
+            status = _llm_auth_status(provider, active_provider=active)
+            print(
+                f"- {provider} active={str(status['active']).lower()} "
+                f"configured={status['configured']} auth={status['auth']} "
+                f"model={status['model']}"
+            )
+        return
+
+    provider = _canonical_llm_provider(args.provider)
+    if command == "select":
+        print(f"ALPHONSE_LLM_PROVIDER={provider}")
+        for line in _llm_auth_select_lines(provider):
+            print(line)
+        print("# Restart Alphonse after updating the environment.")
+        return
+
+    if command == "smoke":
+        previous_provider = os.environ.get("ALPHONSE_LLM_PROVIDER")
+        timeout_env_updates = _llm_auth_timeout_env(provider, args.timeout_seconds)
+        previous_timeouts = {key: os.environ.get(key) for key in timeout_env_updates}
+        try:
+            os.environ["ALPHONSE_LLM_PROVIDER"] = provider
+            for key, value in timeout_env_updates.items():
+                os.environ[key] = value
+            from alphonse.agent.cognition.providers.factory import (
+                build_text_completion_provider,
+            )
+
+            client = build_text_completion_provider()
+            output = client.complete(
+                "You are an Alphonse LLM provider smoke test.",
+                args.text,
+            )
+            print(
+                json.dumps(
+                    {
+                        "provider": provider,
+                        "status": "ok",
+                        "output_preview": str(output or "")[:120],
+                    },
+                    ensure_ascii=True,
+                )
+            )
+        except Exception as exc:
+            print(
+                json.dumps(
+                    {
+                        "provider": provider,
+                        "status": "error",
+                        "code": _llm_auth_exception_code(exc),
+                        "message": _redact_secret_text(str(exc))[:300],
+                    },
+                    ensure_ascii=True,
+                )
+            )
+        finally:
+            if previous_provider is None:
+                os.environ.pop("ALPHONSE_LLM_PROVIDER", None)
+            else:
+                os.environ["ALPHONSE_LLM_PROVIDER"] = previous_provider
+            for key, previous in previous_timeouts.items():
+                if previous is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = previous
+        return
+
+    print(f"Unknown llm-auth command: {command}")
+
+
+def _llm_auth_status(provider: str, *, active_provider: str) -> dict[str, str | bool]:
+    provider = _canonical_llm_provider(provider)
+    model = _llm_auth_model(provider)
+    if provider == "openai":
+        configured = _env_state("OPENAI_API_KEY")
+        auth = "api_key_set" if os.getenv("OPENAI_API_KEY") else "missing_api_key"
+    elif provider == "openai_codex":
+        cli_bin = os.getenv("OPENAI_CODEX_CLI_BIN", "codex")
+        installed = shutil.which(cli_bin) is not None
+        configured = f"cli={'installed' if installed else 'missing'}"
+        auth = "codex_cli_session_required"
+    elif provider == "github_copilot":
+        configured = _env_state("COPILOT_GITHUB_TOKEN")
+        auth = "token_set" if os.getenv("COPILOT_GITHUB_TOKEN") else "missing_token"
+    elif provider == "opencode":
+        configured = f"base_url={_redact_secret_text(os.getenv('OPENCODE_BASE_URL', 'http://127.0.0.1:4096'))}"
+        auth = "api_key_or_basic_optional"
+    elif provider == "llamafarm":
+        configured = f"base_url={_redact_secret_text(os.getenv('LLAMAFARM_BASE_URL', 'http://127.0.0.1:8002/v1'))}"
+        auth = "api_key_set" if os.getenv("LLAMAFARM_API_KEY") else "api_key_optional_or_missing"
+    else:
+        configured = f"base_url={_redact_secret_text(os.getenv('OLLAMA_BASE_URL', 'http://localhost:11434'))}"
+        auth = "local_service_required"
+    return {
+        "active": provider == active_provider,
+        "configured": configured,
+        "auth": auth,
+        "model": model,
+    }
+
+
+def _llm_auth_select_lines(provider: str) -> list[str]:
+    provider = _canonical_llm_provider(provider)
+    if provider == "openai":
+        return [
+            "OPENAI_API_KEY=<set in ignored env>",
+            f"OPENAI_MODEL={os.getenv('OPENAI_MODEL', 'gpt-4o-mini')}",
+            "OPENAI_PROJECT_ID=",
+            "OPENAI_ORGANIZATION_ID=",
+        ]
+    if provider == "openai_codex":
+        return [
+            f"OPENAI_CODEX_CLI_BIN={os.getenv('OPENAI_CODEX_CLI_BIN', 'codex')}",
+            f"OPENAI_CODEX_MODEL={os.getenv('OPENAI_CODEX_MODEL', '')}",
+            f"OPENAI_CODEX_TIMEOUT_SECONDS={os.getenv('OPENAI_CODEX_TIMEOUT_SECONDS', '120')}",
+            "# Authenticate once as the admin with: codex login --device-auth",
+        ]
+    if provider == "github_copilot":
+        return [
+            "GITHUB_COPILOT_CLIENT_ID=<set GitHub OAuth app client id>",
+            "COPILOT_GITHUB_TOKEN=<set in ignored env after device auth>",
+            f"COPILOT_MODEL={os.getenv('COPILOT_MODEL', '')}",
+        ]
+    if provider == "opencode":
+        return [
+            f"OPENCODE_BASE_URL={os.getenv('OPENCODE_BASE_URL', 'http://127.0.0.1:4096')}",
+            f"OPENCODE_MODEL={os.getenv('OPENCODE_MODEL', 'ollama/mistral:7b-instruct')}",
+            "OPENCODE_API_KEY=<optional, set in ignored env>",
+        ]
+    if provider == "llamafarm":
+        return [
+            f"LLAMAFARM_BASE_URL={os.getenv('LLAMAFARM_BASE_URL', 'http://127.0.0.1:8002/v1')}",
+            f"LLAMAFARM_MODEL={os.getenv('LLAMAFARM_MODEL', os.getenv('LOCAL_LLM_MODEL', 'mistral:7b-instruct'))}",
+            "LLAMAFARM_API_KEY=<optional, set in ignored env>",
+        ]
+    return [
+        f"OLLAMA_BASE_URL={os.getenv('OLLAMA_BASE_URL', 'http://localhost:11434')}",
+        f"LOCAL_LLM_MODEL={os.getenv('LOCAL_LLM_MODEL', 'mistral:7b-instruct')}",
+    ]
+
+
+def _llm_auth_timeout_env(provider: str, timeout_seconds: float | None) -> dict[str, str]:
+    if timeout_seconds is None:
+        return {}
+    value = str(timeout_seconds)
+    if provider == "openai":
+        return {"OPENAI_TIMEOUT_SECONDS": value}
+    if provider == "openai_codex":
+        return {"OPENAI_CODEX_TIMEOUT_SECONDS": value}
+    if provider == "github_copilot":
+        return {"COPILOT_TIMEOUT_SECONDS": value}
+    if provider == "opencode":
+        return {"OPENCODE_TIMEOUT_SECONDS": value}
+    if provider == "llamafarm":
+        return {"LLAMAFARM_TIMEOUT_SECONDS": value}
+    return {"LOCAL_LLM_TIMEOUT_SECONDS": value}
+
+
+def _canonical_llm_provider(provider: str) -> str:
+    value = str(provider or "").strip().lower().replace("-", "_")
+    if value == "codex":
+        return "openai_codex"
+    if value == "copilot":
+        return "github_copilot"
+    if value == "llama_farm":
+        return "llamafarm"
+    return value or "ollama"
+
+
+def _llm_auth_model(provider: str) -> str:
+    if provider == "openai":
+        return os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+    if provider == "openai_codex":
+        return os.getenv("OPENAI_CODEX_MODEL", "<codex default>")
+    if provider == "github_copilot":
+        return os.getenv("COPILOT_MODEL", "<copilot default>")
+    if provider == "opencode":
+        return os.getenv("OPENCODE_MODEL") or os.getenv("LOCAL_LLM_MODEL", "openai/gpt-5.1-codex")
+    if provider == "llamafarm":
+        return os.getenv("LLAMAFARM_MODEL") or os.getenv("LOCAL_LLM_MODEL", "mistral:7b-instruct")
+    return os.getenv("LOCAL_LLM_MODEL", "mistral:7b-instruct")
+
+
+def _env_state(name: str) -> str:
+    return f"{name}=<set>" if os.getenv(name) else f"{name}=<missing>"
+
+
+def _llm_auth_exception_code(exc: Exception) -> str:
+    message = str(exc)
+    code = message.split(":", 1)[0].strip()
+    known_prefixes = (
+        "openai_codex_",
+        "github_copilot_",
+        "provider_contract_error",
+    )
+    if code.startswith(known_prefixes):
+        return code
+    if "Missing API key" in message:
+        return "openai_api_key_missing"
+    if "timeout" in message.lower():
+        return "llm_auth_timeout"
+    if "unauthorized" in message.lower() or "forbidden" in message.lower():
+        return "llm_auth_auth_failed"
+    return "llm_auth_smoke_failed"
+
+
+def _redact_secret_text(text: str) -> str:
+    redacted = str(text or "")
+    for name in (
+        "OPENAI_API_KEY",
+        "COPILOT_GITHUB_TOKEN",
+        "LLAMAFARM_API_KEY",
+        "OPENCODE_API_KEY",
+        "OPENCODE_SERVER_PASSWORD",
+    ):
+        value = os.getenv(name)
+        if value:
+            redacted = redacted.replace(value, "<redacted>")
+    return redacted
 
 
 def _command_run_scheduler(args: argparse.Namespace, db_path: Path) -> None:

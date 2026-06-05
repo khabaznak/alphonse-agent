@@ -65,7 +65,7 @@ Key files:
 Configuration is driven by environment variables in `alphonse/agent/.env`.
 Provider routing is controlled by:
 
-- `ALPHONSE_LLM_PROVIDER` (`opencode`, `ollama`, `openai`, `llamafarm`)
+- `ALPHONSE_LLM_PROVIDER` (`openai`, `openai_codex`, `github_copilot`, `opencode`, `ollama`, `llamafarm`)
 - provider-specific base URL/model/auth environment variables
 
 Code will be introduced incrementally once identity and boundaries are clearly defined.
@@ -164,6 +164,72 @@ ALPHONSE_CLI_LOG_DESTINATION=file
 ALPHONSE_CLI_LOG_FILE=agent/logs/cli.log
 ALPHONSE_CLI_LOG_LEVEL=INFO
 ```
+
+### Admin LLM Provider Auth
+
+Alphonse supports several LLM provider auth paths. V1 uses exactly one active
+provider selected by `ALPHONSE_LLM_PROVIDER`; it does not automatically fall
+back between providers.
+
+Supported provider IDs:
+
+- `openai` — OpenAI REST API with `OPENAI_API_KEY`
+- `openai_codex` — ChatGPT/Codex subscription access through the official Codex CLI session
+- `github_copilot` — GitHub Copilot access through GitHub OAuth/device auth and `COPILOT_GITHUB_TOKEN`
+- `opencode`
+- `ollama`
+- `llamafarm`
+
+List current auth status with secrets redacted:
+
+```bash
+python -m alphonse.agent.cli llm-auth list
+```
+
+Print the exact env lines needed to select a provider:
+
+```bash
+python -m alphonse.agent.cli llm-auth select --provider openai
+python -m alphonse.agent.cli llm-auth select --provider openai_codex
+python -m alphonse.agent.cli llm-auth select --provider github_copilot
+```
+
+Smoke test a configured provider:
+
+```bash
+python -m alphonse.agent.cli llm-auth smoke --provider openai
+python -m alphonse.agent.cli llm-auth smoke --provider openai_codex
+python -m alphonse.agent.cli llm-auth smoke --provider github_copilot
+```
+
+The same commands are available inside the interactive REPL:
+
+```text
+alphonse> llm-auth list
+alphonse> llm-auth select --provider openai_codex
+alphonse> llm-auth smoke --provider openai_codex
+```
+
+`llm-auth select` prints dotenv lines; it does not edit `.env` automatically.
+Apply the selected env values in `alphonse/agent/.env`, then restart the running
+Alphonse process or the managed REPL agent:
+
+```text
+alphonse> agent restart
+```
+
+For `openai_codex`, install the official Codex CLI and authenticate once as the
+admin before selecting the provider:
+
+```bash
+codex login
+# or
+codex login --device-auth
+```
+
+For `github_copilot`, complete the GitHub OAuth/device auth flow and put the
+resulting token in ignored env as `COPILOT_GITHUB_TOKEN`. Do not store OpenAI,
+Codex, or Copilot credentials in SQLite or tool configs.
 
 Run the dispatcher loop (separate process):
 

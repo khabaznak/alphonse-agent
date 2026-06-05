@@ -11,6 +11,10 @@ from alphonse.agent.cognition.providers.llamafarm import LlamaFarmClient
 from alphonse.agent.cognition.providers.ollama import OllamaClient
 from alphonse.agent.cognition.providers.opencode import OpenCodeClient
 from alphonse.agent.cognition.providers.openai import OpenAIClient
+from alphonse.agent.cognition.providers.openai_codex import OpenAICodexClient
+from alphonse.agent.cognition.providers.openai_codex import build_openai_codex_client_from_env
+from alphonse.agent.cognition.providers.github_copilot import GitHubCopilotClient
+from alphonse.agent.cognition.providers.github_copilot import build_github_copilot_client_from_env
 
 _CLIENT_CACHE: dict[tuple[str, tuple[str | None, ...]], Any] = {}
 
@@ -41,6 +45,10 @@ def _build_cached_provider(provider: str) -> Any:
 def _build_provider(provider: str) -> Any:
     if provider == "openai":
         return _build_openai_client()
+    if provider in {"openai_codex", "openai-codex", "codex"}:
+        return _build_openai_codex_client()
+    if provider in {"github_copilot", "github-copilot", "copilot"}:
+        return _build_github_copilot_client()
     if provider == "opencode":
         return _build_opencode_client()
     if provider in {"llamafarm", "llama_farm"}:
@@ -55,6 +63,24 @@ def _provider_config_key(provider: str) -> tuple[str | None, ...]:
             "OPENAI_MODEL",
             "OPENAI_TIMEOUT_SECONDS",
             "OPENAI_API_KEY_ENV",
+            "OPENAI_PROJECT_ID",
+            "OPENAI_ORGANIZATION_ID",
+        )
+    elif provider in {"openai_codex", "openai-codex", "codex"}:
+        names = (
+            "OPENAI_CODEX_CLI_BIN",
+            "OPENAI_CODEX_MODEL",
+            "OPENAI_CODEX_TIMEOUT_SECONDS",
+        )
+    elif provider in {"github_copilot", "github-copilot", "copilot"}:
+        names = (
+            "GITHUB_COPILOT_CLIENT_ID",
+            "GITHUB_COPILOT_CLIENT_ID_ENV",
+            "COPILOT_GITHUB_TOKEN_ENV",
+            "COPILOT_GITHUB_TOKEN",
+            "COPILOT_MODEL",
+            "COPILOT_TIMEOUT_SECONDS",
+            "GITHUB_COPILOT_NODE_BIN",
         )
     elif provider == "opencode":
         names = (
@@ -107,8 +133,18 @@ def _build_openai_client() -> OpenAIClient:
         base_url=base_url,
         model=model,
         api_key_env=os.getenv("OPENAI_API_KEY_ENV", "OPENAI_API_KEY"),
+        project_env="OPENAI_PROJECT_ID",
+        organization_env="OPENAI_ORGANIZATION_ID",
         timeout=timeout_seconds,
     )
+
+
+def _build_openai_codex_client() -> OpenAICodexClient:
+    return build_openai_codex_client_from_env()
+
+
+def _build_github_copilot_client() -> GitHubCopilotClient:
+    return build_github_copilot_client_from_env()
 
 
 def _build_opencode_client() -> OpenCodeClient:
