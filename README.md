@@ -434,6 +434,64 @@ If you want to normalize addresses into lat/lng, set:
 
 The geocoder tool is registered as `geocoder` and uses the Google Maps Geocoding API.
 
+### SearXNG Web Search (optional)
+
+Alphonse includes two read-only web tools:
+
+- `web.search` performs structured search through the SearXNG HTTP Search API.
+- `web.fetch` retrieves readable text from a specific `http` or `https` URL.
+
+`web.search` is a client only. It does not start or install SearXNG. You must run a
+SearXNG service separately and point Alphonse at it. For a local Docker Desktop
+setup, the expected endpoint is usually `http://127.0.0.1:8080`.
+
+Configure the Alphonse process environment, usually in `alphonse/agent/.env`, then
+restart Alphonse so the running process loads the values:
+
+```dotenv
+SEARXNG_BASE_URL=http://127.0.0.1:8080
+SEARXNG_TIMEOUT_SECONDS=10
+ALPHONSE_WEB_FETCH_TIMEOUT_SECONDS=10
+ALPHONSE_WEB_FETCH_MAX_CHARS=12000
+```
+
+The SearXNG instance must also allow JSON output, because `web.search` always calls
+SearXNG with `format=json`. In the SearXNG `settings.yml`, include `json` under
+`search.formats`:
+
+```yaml
+search:
+  formats:
+    - html
+    - json
+```
+
+For a local SearXNG Docker compose setup, define the host expected by the compose
+file in the SearXNG project's own `.env`:
+
+```dotenv
+SEARXNG_HOST=127.0.0.1
+```
+
+Then start or restart SearXNG from that SearXNG project directory:
+
+```bash
+docker compose up -d
+```
+
+Validate the service before retrying Alphonse:
+
+```bash
+curl 'http://127.0.0.1:8080/search?q=stoic&format=json'
+```
+
+Common failure meanings:
+
+- `searxng_base_url_missing`: the running Alphonse process did not load `SEARXNG_BASE_URL`.
+- Connection refused from `127.0.0.1:8080`: SearXNG is not running, Docker Desktop is not running, or the service is on a different port.
+- `403 Forbidden` from the curl command: SearXNG is running, but JSON output is not enabled.
+- Docker `Cannot connect to the Docker daemon`: Docker Desktop is not running. On macOS, ignore Linux-only `usermod` instructions.
+
 ### CLI Commands
 
 Onboarding profile CRUD:

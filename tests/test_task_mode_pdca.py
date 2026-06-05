@@ -97,11 +97,12 @@ class _ExplodingLlm:
 class _PromptCaptureLlm:
     def __init__(self, response: str) -> None:
         self._response = response
+        self.last_system_prompt = ""
         self.last_user_prompt = ""
         _set_current_test_provider(self)
 
     def complete(self, system_prompt: str, user_prompt: str) -> str:
-        _ = system_prompt
+        self.last_system_prompt = system_prompt
         self.last_user_prompt = user_prompt
         return self._response
 
@@ -113,6 +114,7 @@ class _PromptCaptureLlm:
         tool_choice: str = "auto",
     ) -> dict[str, object]:
         _ = (tools, tool_choice)
+        self.last_system_prompt = str(messages[0].get("content") or "")
         self.last_user_prompt = str(messages[-1].get("content") or "")
         return {"tool_call": {"kind": "call_tool", "tool_name": "get_time", "args": {}}}
 
@@ -341,6 +343,26 @@ def test_next_step_prompt_includes_mcp_capabilities(tmp_path: Path, monkeypatch)
     assert "profile `chrome`" in prompt
     assert "operation `web_search`" in prompt
     assert "capability_model `interactive_browser`" in prompt
+    assert "browser use/control only" in prompt
+    assert "not a `web.search` fallback" in prompt
+
+
+def test_next_step_prompt_says_searxng_failures_are_not_browser_mcp_fallback() -> None:
+    next_step = build_next_step_node(tool_registry=build_default_tool_registry())
+    llm = _PromptCaptureLlm('{"tool_call":{"kind":"call_tool","tool_name":"communication.send_message","args":{"To":"u1","Message":"Search is unavailable."}}}')
+    _ = next_step(
+        _task_record(
+            goal="search for a stoic quote",
+            tool_history=[
+                'web.search args={"query":"stoic quote"} output=null exception={"code":"searxng_http_error","message":"connection refused"}'
+            ],
+            facts=["channel_type: telegram", "channel_target: 8553589429"],
+        )
+    )
+    prompt = llm.last_system_prompt
+    assert "Browser MCP is browser use/control" in prompt
+    assert "searxng_http_error" in prompt
+    assert "do not switch to browser MCP as fallback" in prompt
 
 
 def test_tool_call_schema_includes_context_tools_when_runtime_registered() -> None:

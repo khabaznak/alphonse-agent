@@ -35,6 +35,8 @@ from alphonse.agent.tools.reminder_tools import ReminderListTool
 from alphonse.agent.tools.scheduler_tool import SchedulerTool
 from alphonse.agent.tools.send_message_tool import SendMessageTool
 from alphonse.agent.tools.send_message_tool import SendVoiceNoteTool
+from alphonse.agent.tools.searxng_search import SearxngSearchTool
+from alphonse.agent.tools.searxng_search import WebFetchTool
 from alphonse.agent.tools.ssh_terminal_tool import SshTerminalTool
 from alphonse.agent.tools.stt_transcribe import SttTranscribeTool
 from alphonse.agent.tools.terminal_execute_tool import TerminalExecuteTool
@@ -157,6 +159,8 @@ def _build_runtime_executors(*, job_store: JobStore, job_runner: JobRunner) -> l
     execution_run_terminal = TerminalExecuteTool()
     execution_call_mcp = McpCallTool()
     execution_run_ssh = SshTerminalTool()
+    web_search = SearxngSearchTool()
+    web_fetch = WebFetchTool()
     scheduler = SchedulerTool()
     reminders_list = ReminderListTool()
     reminders_cancel = ReminderCancelTool()
@@ -195,6 +199,8 @@ def _build_runtime_executors(*, job_store: JobStore, job_runner: JobRunner) -> l
         execution_run_terminal,
         execution_call_mcp,
         execution_run_ssh,
+        web_search,
+        web_fetch,
         scheduler,
         reminders_list,
         reminders_cancel,
@@ -1082,6 +1088,54 @@ def _default_specs() -> list[ToolSpec]:
             examples=[{"action": "list", "status": "pending"}, {"action": "approve", "request_id": "chat:telegram:-100123"}],
         ),
         ToolSpec(
+            canonical_name="web.search",
+            summary="Search the web through the configured SearXNG instance and return normalized results.",
+            description="Search the web through SearXNG using its JSON Search API.",
+            when_to_use="Use when current or external web information is needed before answering or acting.",
+            returns="normalized search results plus SearXNG answers, infoboxes, corrections, and suggestions",
+            input_schema=_object_schema(
+                properties={
+                    "query": {"type": "string"},
+                    "limit": {"type": "integer"},
+                    "categories": {
+                        "type": ["string", "array", "null"],
+                        "items": {"type": "string"},
+                    },
+                    "engines": {
+                        "type": ["string", "array", "null"],
+                        "items": {"type": "string"},
+                    },
+                    "language": {"type": ["string", "null"]},
+                    "pageno": {"type": "integer"},
+                    "time_range": {"type": ["string", "null"], "enum": ["day", "month", "year", None]},
+                    "safesearch": {"type": ["integer", "string", "null"]},
+                },
+                required=["query"],
+            ),
+            output_schema=_permissive_output_schema(),
+            domain_tags=["web", "search", "research"],
+            safety_level=SafetyLevel.LOW,
+            examples=[{"query": "SearXNG Search API format json", "limit": 5}],
+        ),
+        ToolSpec(
+            canonical_name="web.fetch",
+            summary="Fetch a single HTTP(S) page and return readable text for a known URL.",
+            description="Fetch a single HTTP(S) page and extract readable text using standard-library HTML parsing.",
+            when_to_use="Use after web.search when a result URL needs more detail than its snippet.",
+            returns="page URL, final URL, status, content type, title, readable text, and truncation flag",
+            input_schema=_object_schema(
+                properties={
+                    "url": {"type": "string"},
+                    "max_chars": {"type": "integer"},
+                },
+                required=["url"],
+            ),
+            output_schema=_permissive_output_schema(),
+            domain_tags=["web", "fetch", "research"],
+            safety_level=SafetyLevel.LOW,
+            examples=[{"url": "https://docs.searxng.org/dev/search_api.html", "max_chars": 8000}],
+        ),
+        ToolSpec(
             canonical_name="execution.run_terminal",
             summary="Execute terminal commands under global Alphonse execution mode and sandbox policy.",
             description="Execute terminal commands under global Alphonse execution mode and sandbox policy.",
@@ -1103,9 +1157,10 @@ def _default_specs() -> list[ToolSpec]:
         ),
         ToolSpec(
             canonical_name="execution.call_mcp",
-            summary="Execute a named operation via an MCP profile through a controlled connector and policy envelope.",
-            description="Execute a named operation via an MCP profile through a controlled connector and policy envelope.",
-            when_to_use="Use this for MCP-backed capabilities (for example Chrome MCP web search); do not call MCP binaries via terminal tools.",
+            summary="Control an MCP-backed browser or execute another MCP profile operation.",
+            description="Control an MCP-backed browser or execute another MCP profile operation through a controlled connector and policy envelope.",
+            when_to_use="Use for explicit browser control, page inspection, interaction, screenshots/snapshots, or user-requested MCP work. Do not use as an automatic fallback for web.search; report SearXNG failures instead.",
+            when_not_to_use="Do not use as a replacement for structured web.search after SearXNG config, connection, or JSON-output failures unless the user explicitly requests browser/MCP browsing.",
             returns="mcp operation status, stdout/stderr, and policy envelope metadata",
             input_schema=_object_schema(
                 properties={
@@ -1125,8 +1180,8 @@ def _default_specs() -> list[ToolSpec]:
             examples=[
                 {
                     "profile": "chrome",
-                    "operation": "web_search",
-                    "arguments": {"query": "Veloswim company profile"},
+                    "operation": "new_page",
+                    "arguments": {"url": "https://example.com"},
                     "cwd": ".",
                 }
             ],

@@ -160,8 +160,13 @@ def _build_mcp_capability_menu() -> tuple[str, dict[str, Any]]:
         category = str((profile.metadata or {}).get("category") or "").strip().lower()
         if category == "browser":
             lines.append(
-                "  - capability_model `interactive_browser`: use this like a normal browser for agent tasks "
-                "(open search engines, navigate websites, and read/extract page information)."
+                "  - capability_model `interactive_browser`: browser use/control only "
+                "(open URLs, navigate pages, inspect snapshots, click/type/fill, and capture screenshots)."
+            )
+            lines.append(
+                "  - not a `web.search` fallback: do not replace structured SearXNG search with browser MCP "
+                "after web.search config, connection, or JSON-output failures unless the user explicitly asks "
+                "for browser/MCP browsing."
             )
         if supports_native:
             lines.append(
