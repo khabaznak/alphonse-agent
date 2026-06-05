@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import shutil
+import subprocess
 from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import Any, ClassVar
@@ -157,12 +159,10 @@ class SendVoiceNoteTool:
         caption = str(args.get("Caption") or args.get("caption") or "").strip()
         as_voice = bool(args.get("AsVoice") if args.get("AsVoice") is not None else args.get("as_voice", True))
         if as_voice and audio_file_path:
-            suffix = Path(audio_file_path).suffix.lower()
-            if suffix not in {".ogg", ".oga"}:
-                return _failed(
-                    code="voice_note_requires_ogg",
-                    message="voice notes require .ogg or .oga audio file paths",
-                )
+            converted = _ensure_voice_note_audio_path(audio_file_path)
+            if isinstance(converted, dict):
+                return converted
+            audio_file_path = converted
         message = str(args.get("Message") or args.get("message") or "").strip()
         if not message:
             message = caption or "Voice note"
@@ -178,6 +178,44 @@ class SendVoiceNoteTool:
             Caption=caption or None,
             correlation_id=args.get("correlation_id"),
         )
+
+
+def _ensure_voice_note_audio_path(audio_file_path: str) -> str | dict[str, Any]:
+    path = Path(str(audio_file_path or "").strip())
+    if path.suffix.lower() in {".ogg", ".oga"}:
+        return str(path)
+    ffmpeg_bin = shutil.which("ffmpeg")
+    if not ffmpeg_bin:
+        return _failed(
+            code="voice_note_conversion_unavailable",
+            message="ffmpeg is required to convert audio files to .ogg for Telegram voice notes",
+        )
+    target_path = path.with_name(f"{path.stem}-voice.ogg")
+    converted = subprocess.run(
+        [
+            ffmpeg_bin,
+            "-y",
+            "-i",
+            str(path),
+            "-c:a",
+            "libopus",
+            "-b:a",
+            "32k",
+            str(target_path),
+        ],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        text=True,
+        check=False,
+    )
+    if converted.returncode != 0:
+        return _failed(
+            code="voice_note_conversion_failed",
+            message="failed converting audio file to .ogg for Telegram voice note",
+            details={"stderr": str(converted.stderr or "").strip()},
+        )
+    return str(target_path)
+
 
 def _get_message_from_args(args: dict[str, Any]) -> str:
     message = str(args.get("Message") or args.get("message") or "").strip()

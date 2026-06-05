@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -317,9 +318,39 @@ def test_send_voice_note_tool_enforces_audio_delivery_mode() -> None:
     assert payload.get("as_voice") is True
 
 
-def test_send_voice_note_tool_rejects_non_ogg_for_voice_notes() -> None:
+def test_send_voice_note_tool_converts_non_ogg_for_voice_notes(monkeypatch: Any) -> None:
     fake = _FakeCommunication()
     tool = SendVoiceNoteTool(_send_message_tool=SendMessageTool(_communication=fake))
+    monkeypatch.setattr("alphonse.agent.tools.send_message_tool.shutil.which", lambda name: "/usr/bin/ffmpeg" if name == "ffmpeg" else None)
+
+    captured: dict[str, Any] = {}
+
+    def fake_run(cmd: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        captured["cmd"] = cmd
+        captured["kwargs"] = kwargs
+        return subprocess.CompletedProcess(cmd, 0, stderr="")
+
+    monkeypatch.setattr("alphonse.agent.tools.send_message_tool.subprocess.run", fake_run)
+
+    result = tool.execute(
+        state={"channel_type": "telegram", "channel_target": "8553589429", "correlation_id": "cid-voice-bad"},
+        To="8553589429",
+        AudioFilePath="/tmp/alphonse-audio/voice-1.m4a",
+        Channel="telegram",
+        AsVoice=True,
+    )
+    assert result["exception"] is None
+    assert fake.called is True
+    payload = dict(getattr(fake.plan, "payload", {}) or {})
+    assert payload.get("audio_file_path") == "/tmp/alphonse-audio/voice-1-voice.ogg"
+    assert captured["cmd"][-1] == "/tmp/alphonse-audio/voice-1-voice.ogg"
+
+
+def test_send_voice_note_tool_reports_missing_converter_for_non_ogg(monkeypatch: Any) -> None:
+    fake = _FakeCommunication()
+    tool = SendVoiceNoteTool(_send_message_tool=SendMessageTool(_communication=fake))
+    monkeypatch.setattr("alphonse.agent.tools.send_message_tool.shutil.which", lambda name: None)
+
     result = tool.execute(
         state={"channel_type": "telegram", "channel_target": "8553589429", "correlation_id": "cid-voice-bad"},
         To="8553589429",
@@ -328,5 +359,5 @@ def test_send_voice_note_tool_rejects_non_ogg_for_voice_notes() -> None:
         AsVoice=True,
     )
     assert result["exception"] is not None
-    assert str((result.get("exception") or {}).get("code") or "") == "voice_note_requires_ogg"
+    assert str((result.get("exception") or {}).get("code") or "") == "voice_note_conversion_unavailable"
     assert fake.called is False
