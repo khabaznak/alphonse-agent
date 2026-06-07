@@ -83,6 +83,7 @@ def _build_planner_user_prompt(*, task_record: TaskRecord) -> str:
         NEXT_STEP_USER_TEMPLATE,
         {
             "MCP_CAPABILITY_MENU": mcp_capability_menu,
+            "GOAL_SECTION": task_record.goal or "- (none)",
             "RECENT_CONVERSATION_SECTION": task_record.recent_conversation_md,
             "FACTS_SECTION": task_record.get_facts_md(),
             "PLAN_SECTION": task_record.get_plan_md(),

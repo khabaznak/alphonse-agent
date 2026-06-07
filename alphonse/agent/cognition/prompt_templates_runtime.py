@@ -75,6 +75,14 @@ CHECK_JUDGE_USER_PROMPT_TEMPLATE = _seed_text(
     "pdca.check.judge.user.j2",
 )
 
+ACT_CRITERIA_SYSTEM_PROMPT_TEMPLATE = _seed_text_with_boot_context(
+    "pdca.act.criteria.system.j2",
+)
+
+ACT_CRITERIA_USER_PROMPT_TEMPLATE = _seed_text(
+    "pdca.act.criteria.user.j2",
+)
+
 SCHEDULER_PARAPHRASE_SYSTEM_PROMPT = _seed_text("scheduler.paraphrase.system.j2")
 SCHEDULER_NORMALIZE_TIME_SYSTEM_PROMPT = _seed_text("scheduler.normalize_time.system.j2")
 JOBS_YOU_JUST_REMEMBERED_SYSTEM_PROMPT = _seed_text("jobs.you_just_remembered.system.j2")

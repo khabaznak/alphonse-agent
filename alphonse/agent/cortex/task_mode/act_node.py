@@ -4,10 +4,15 @@ import json
 from typing import Any, Literal, TypedDict
 
 from alphonse.agent.cognition.providers.factory import build_text_completion_provider
+from alphonse.agent.cognition.prompt_templates_runtime import ACT_CRITERIA_SYSTEM_PROMPT_TEMPLATE
+from alphonse.agent.cognition.prompt_templates_runtime import ACT_CRITERIA_USER_PROMPT_TEMPLATE
+from alphonse.agent.cognition.prompt_templates_runtime import render_prompt_template
 from alphonse.agent.cortex.task_mode.task_record import TaskRecord
 from alphonse.agent.cortex.transitions import emit_presence_transition_event
 
-_VERDICT_PLAN = "plan"
+_VERDICT_NEW = "new"
+_VERDICT_STEER = "steer"
+_VERDICT_WIP = "wip"
 _VERDICT_MISSION_SUCCESS = "mission_success"
 _VERDICT_MISSION_FAILED = "mission_failed"
 _ACT_ROUTE_NEXT_STEP = "next_step_node"
@@ -27,25 +32,49 @@ def act_node_impl(
     logger: Any,
     log_task_event: Any,
 ) -> ActResult:
-    normalized_verdict = _verdict_from_task_record(task_record)
-    if normalized_verdict is None:
-        raise ValueError(
-            "act_node.invalid_task_record_status: status must imply one of plan|mission_success|mission_failed"
-        )
+    verdict = str(task_record.check_verdict or "").strip().lower()
+    if verdict not in {
+        _VERDICT_NEW,
+        _VERDICT_STEER,
+        _VERDICT_WIP,
+        _VERDICT_MISSION_SUCCESS,
+        _VERDICT_MISSION_FAILED,
+    }:
+        raise ValueError(f"act_node.invalid_check_verdict: {verdict or '(missing)'}")
 
-    route = _ACT_ROUTE_NEXT_STEP if normalized_verdict == _VERDICT_PLAN else _ACT_ROUTE_END
     response_text = None
-    if normalized_verdict == _VERDICT_MISSION_SUCCESS:
+    if verdict == _VERDICT_NEW:
+        _replace_acceptance_criteria(task_record, _generate_acceptance_criteria(task_record=task_record, mode="new"))
+        task_record.status = "running"
+        task_record.outcome = None
+        route = _ACT_ROUTE_NEXT_STEP
+    elif verdict == _VERDICT_STEER:
+        _replace_acceptance_criteria(task_record, _generate_acceptance_criteria(task_record=task_record, mode="steer"))
+        task_record.status = "running"
+        task_record.outcome = None
+        route = _ACT_ROUTE_NEXT_STEP
+    elif verdict == _VERDICT_WIP:
+        # TODO: enforce future WIP policies such as max attempts, max runtime, and token budgets here.
+        task_record.pdca_cycle_count += 1
+        task_record.status = "running"
+        task_record.outcome = None
+        route = _ACT_ROUTE_NEXT_STEP
+    elif verdict == _VERDICT_MISSION_SUCCESS:
+        _apply_mission_success(task_record)
         response_text = _success_response_for_user(task_record)
-    elif normalized_verdict == _VERDICT_MISSION_FAILED:
+        route = _ACT_ROUTE_END
+    else:
+        _apply_mission_failed(task_record)
         response_text = _summarize_failure_for_user(task_record=task_record, logger=logger)
         if response_text:
             outcome = dict(task_record.outcome or {})
             outcome["final_text"] = response_text
             task_record.outcome = outcome
-    _emit_terminal_transition_if_needed(task_record=task_record, verdict=normalized_verdict)
+        route = _ACT_ROUTE_END
+
+    _emit_terminal_transition_if_needed(task_record=task_record, verdict=verdict)
     _log_act_result(
-        verdict=normalized_verdict,
+        verdict=verdict,
         route=route,
         task_record=task_record,
         logger=logger,
@@ -58,19 +87,79 @@ def act_node_impl(
     }
 
 
-def _verdict_from_task_record(task_record: TaskRecord) -> str | None:
-    status = str(task_record.status or "").strip().lower()
-    if status == "running":
-        return _VERDICT_PLAN
-    if status == "done":
-        return _VERDICT_MISSION_SUCCESS
-    if status == "failed":
-        return _VERDICT_MISSION_FAILED
-    return None
+def _generate_acceptance_criteria(*, task_record: TaskRecord, mode: Literal["new", "steer"]) -> list[str]:
+    llm_client = build_text_completion_provider()
+    prompt = render_prompt_template(
+        ACT_CRITERIA_USER_PROMPT_TEMPLATE,
+        {
+            "CHECK_VERDICT": mode,
+            "CHECK_REASON": task_record.check_reason,
+            "GOAL": task_record.goal,
+            "RECENT_CONVERSATION": task_record.recent_conversation_md,
+            "ACCEPTANCE_CRITERIA": task_record.get_acceptance_criteria_md(),
+            "FACTS_SECTION": task_record.get_facts_md(),
+            "TOOL_CALL_HISTORY_SECTION": task_record.get_tool_call_history_md(),
+        },
+    )
+    raw = llm_client.complete(
+        system_prompt=ACT_CRITERIA_SYSTEM_PROMPT_TEMPLATE,
+        user_prompt=prompt,
+    )
+    criteria = _parse_criteria_response(raw)
+    if not criteria:
+        raise ValueError("act_criteria_empty")
+    return criteria
+
+
+def _parse_criteria_response(raw: Any) -> list[str]:
+    parsed = _parse_json_object(raw)
+    if not isinstance(parsed, dict):
+        raise ValueError("act_criteria_invalid_json")
+    raw_criteria = parsed.get("criteria")
+    if not isinstance(raw_criteria, list):
+        raise ValueError("act_criteria_missing_criteria")
+    return [str(item).strip() for item in raw_criteria if str(item).strip()][:24]
+
+
+def _replace_acceptance_criteria(task_record: TaskRecord, criteria: list[str]) -> None:
+    task_record.acceptance_criteria_md = "- (none)"
+    for criterion in criteria:
+        task_record.append_acceptance_criterion(criterion)
+
+
+def _apply_mission_success(task_record: TaskRecord) -> None:
+    reason = str(task_record.check_reason or "").strip() or "Mission completed successfully."
+    task_record.status = "done"
+    task_record.outcome = {
+        "kind": "task_completed",
+        "summary": reason,
+        "final_text": reason,
+    }
+
+
+def _apply_mission_failed(task_record: TaskRecord) -> None:
+    reason = str(task_record.check_reason or "").strip() or "Mission failed."
+    failure_class = "mission_failed"
+    task_record.status = "failed"
+    task_record.outcome = {
+        "kind": "task_failed",
+        "summary": reason,
+        "final_text": reason,
+        "failure_class": failure_class,
+    }
+
+
+def route_after_act(act_result: Any) -> str:
+    route = ""
+    if isinstance(act_result, dict):
+        route = str(act_result.get("route") or "").strip()
+    if route in {_ACT_ROUTE_NEXT_STEP, _ACT_ROUTE_END}:
+        return route
+    raise ValueError("route_after_act.invalid_result: missing semantic act route")
 
 
 def _emit_terminal_transition_if_needed(*, task_record: TaskRecord, verdict: str) -> None:
-    if verdict == _VERDICT_PLAN:
+    if verdict not in {_VERDICT_MISSION_SUCCESS, _VERDICT_MISSION_FAILED}:
         return
     phase = "done" if verdict == _VERDICT_MISSION_SUCCESS else "failed"
     emit_presence_transition_event(
@@ -111,7 +200,7 @@ def _log_act_result(
         node="act_node",
         event="graph.act.routed",
         task_record=task_record,
-        cycle_index=0,
+        cycle_index=task_record.pdca_cycle_count,
         verdict=verdict,
         route=route,
     )
@@ -209,3 +298,20 @@ def _clip_summary(value: str) -> str:
     if len(rendered) <= _FAILURE_SUMMARY_MAX_CHARS:
         return rendered
     return rendered[: _FAILURE_SUMMARY_MAX_CHARS - 3].rstrip() + "..."
+
+
+def _parse_json_object(raw: Any) -> dict[str, Any] | None:
+    if isinstance(raw, dict):
+        return raw
+    value = str(raw or "").strip()
+    if not value:
+        return None
+    if value.startswith("```"):
+        value = value.strip("`").strip()
+        if value.lower().startswith("json"):
+            value = value[4:].strip()
+    try:
+        parsed = json.loads(value)
+    except ValueError:
+        return None
+    return parsed if isinstance(parsed, dict) else None

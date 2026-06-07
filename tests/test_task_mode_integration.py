@@ -86,17 +86,13 @@ def test_task_route_initializes_task_record() -> None:
 
 
 def test_chat_route_now_starts_check_first_even_for_greetings() -> None:
-    _FakeLlm(
-        '{"kind":"plan","case_type":"new_request","reason":"baseline plan first",'
-        '"confidence":0.8,"criteria_updates":[{"op":"append","text":"Maintain general conversation context"}],'
-        '"evidence_refs":[],"failure_class":null}'
-    )
+    _FakeLlm("unused")
     state = _task_record_state(goal="Hi", correlation_id="corr-chat-route")
     state.update(task_record_entry_node(state))
     state.update(check_node_state_adapter(state))
     check_result = state.get("check_result")
     assert isinstance(check_result, dict)
-    assert check_result.get("verdict") == "plan"
+    assert check_result.get("verdict") == "new"
 
 
 def test_task_mode_entry_extracts_goal_from_incoming_payload_not_raw_blob() -> None:

@@ -545,35 +545,24 @@ def test_non_canonical_top_level_planner_output_fails_in_do_node() -> None:
 
 
 def test_act_success_routes_to_end_with_outcome_response_text() -> None:
-    task_record = _task_record(goal="list jobs", status="done")
-    task_record.outcome = {
-        "kind": "task_completed",
-        "summary": "I found your jobs.",
-        "final_text": "Here are your jobs.",
-    }
-    state = {
-        "task_record": task_record,
-        "check_result": {"verdict": "mission_success"},
-    }
+    task_record = _task_record(goal="list jobs")
+    task_record.set_check_result(verdict="mission_success", reason="Here are your jobs.")
+    state = {"task_record": task_record, "check_result": {"verdict": "mission_success"}}
     rendered = act_node_state_adapter(state)
     assert route_after_act(rendered["act_result"]) == "end"
     assert rendered["act_result"]["response_text"] == "Here are your jobs."
     assert rendered["response_text"] == "Here are your jobs."
+    assert task_record.status == "done"
 
 
 def test_act_success_suppresses_response_after_public_send() -> None:
     task_record = _task_record(
         goal="say hello",
-        status="done",
         tool_history=[
             'step_1 communication.send_message args={"To":"123"} output={"message_id":"m-1"} exception=null'
         ],
     )
-    task_record.outcome = {
-        "kind": "task_completed",
-        "summary": "Message sent.",
-        "final_text": "Hello!",
-    }
+    task_record.set_check_result(verdict="mission_success", reason="Message sent.")
     rendered = act_node_state_adapter(
         {
             "task_record": task_record,
@@ -585,64 +574,67 @@ def test_act_success_suppresses_response_after_public_send() -> None:
     assert "response_text" not in rendered
 
 
-def test_act_failed_routes_to_end_with_llm_failure_summary() -> None:
-    _QueuedLlm(["I could not complete the task because the scheduler service failed."])
-    task_record = _task_record(status="failed", goal="schedule a reminder")
-    task_record.outcome = {"kind": "task_failed", "summary": "scheduler exploded"}
+def test_act_failed_routes_to_end_with_check_reason() -> None:
+    task_record = _task_record(goal="schedule a reminder")
+    task_record.set_check_result(verdict="mission_failed", reason="The scheduler service failed.")
     state = {
         "task_record": task_record,
         "check_result": {"verdict": "mission_failed"},
     }
     rendered = act_node_state_adapter(state)
     assert route_after_act(rendered["act_result"]) == "end"
-    assert rendered["response_text"] == "I could not complete the task because the scheduler service failed."
+    assert rendered["response_text"] == "The scheduler service failed."
     assert len(rendered["response_text"]) <= 256
     assert task_record.outcome["final_text"] == rendered["response_text"]
+    assert task_record.status == "failed"
 
 
-def test_act_failed_prefers_existing_final_text_without_llm_summary() -> None:
-    _ExplodingLlm()
-    task_record = _task_record(status="failed", goal="turn on the AC")
-    task_record.outcome = {
-        "kind": "task_failed",
-        "summary": "entity lookup failed",
-        "final_text": 'I could not find the "AC" entity.',
-    }
+def test_act_wip_increments_cycle_and_routes_to_plan() -> None:
+    task_record = _task_record(goal="turn on the AC", criteria=["The AC was turned on."])
+    task_record.pdca_cycle_count = 2
+    task_record.set_check_result(verdict="wip", reason="The task is still in progress.")
     state = {
         "task_record": task_record,
-        "check_result": {"verdict": "mission_failed"},
+        "check_result": {"verdict": "wip"},
     }
     rendered = act_node_state_adapter(state)
-    assert route_after_act(rendered["act_result"]) == "end"
-    assert rendered["response_text"] == 'I could not find the "AC" entity.'
-    assert task_record.outcome["final_text"] == rendered["response_text"]
+    assert route_after_act(rendered["act_result"]) == "next_step_node"
+    assert task_record.pdca_cycle_count == 3
+    assert task_record.status == "running"
+    assert task_record.outcome is None
 
 
-def test_act_failed_falls_back_when_llm_summary_fails() -> None:
-    _ExplodingLlm()
-    task_record = _task_record(status="failed", goal="schedule a reminder")
-    task_record.outcome = {"kind": "task_failed", "summary": "scheduler exploded"}
+def test_act_steer_refines_acceptance_criteria_and_routes_to_plan() -> None:
+    _QueuedLlm(['{"criteria":["Use domotics to find the Aire entity.","Send the current temperature to Alex."]}'])
+    task_record = _task_record(
+        goal="check temperature",
+        recent_conversation_md="- User: check temperature\n- User: use Aire",
+        criteria=["Answer the user."],
+    )
+    task_record.set_check_result(verdict="steer", reason="User added steering.")
     state = {
         "task_record": task_record,
-        "check_result": {"verdict": "mission_failed"},
+        "check_result": {"verdict": "steer"},
     }
     rendered = act_node_state_adapter(state)
-    assert route_after_act(rendered["act_result"]) == "end"
-    assert rendered["response_text"] == "scheduler exploded"
-    assert len(rendered["response_text"]) <= 256
+    assert route_after_act(rendered["act_result"]) == "next_step_node"
+    assert "Use domotics to find the Aire entity." in task_record.get_acceptance_criteria_md()
+    assert "Send the current temperature to Alex." in task_record.get_acceptance_criteria_md()
 
 
 def test_check_act_plan_route_stays_native() -> None:
     _QueuedLlm(
-        ['{"kind":"plan","case_type":"new_request","reason":"continue","confidence":0.8,"criteria_updates":[],"evidence_refs":[],"failure_class":null}']
+        ['{"criteria":["Complete the user request.","Inform the user on the active channel."]}']
     )
     state = {
         "task_record": _task_record(goal="do something", recent_conversation_md="- User: do something"),
         "check_provenance": "entry",
     }
     state.update(check_node_state_adapter(state))
+    assert state["check_result"]["verdict"] == "new"
     state.update(act_node_state_adapter(state))
     assert route_after_act(state["act_result"]) == "next_step_node"
+    assert "Complete the user request." in state["task_record"].get_acceptance_criteria_md()
 
 
 def test_fresh_persisted_task_defaults_to_entry_provenance_even_with_task_id() -> None:
