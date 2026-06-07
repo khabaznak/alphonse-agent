@@ -28,8 +28,7 @@ class OpenAICodexClient:
     def complete(self, system_prompt: str, user_prompt: str) -> str:
         prompt = (
             f"{system_prompt.strip()}\n\n"
-            f"{user_prompt.strip()}\n\n"
-            "Return only the final answer text."
+            f"{user_prompt.strip()}"
         ).strip()
         output = self._run_codex(prompt)
         if not output:
@@ -48,13 +47,7 @@ class OpenAICodexClient:
             "tools": list(tools) if isinstance(tools, list) else [],
             "messages": list(messages) if isinstance(messages, list) else [],
         }
-        prompt = (
-            "You are selecting exactly one tool call for Alphonse. "
-            "Return one JSON object and no prose. The schema is "
-            '{"content":"optional text","planner_intent":"short reason",'
-            '"tool_call":{"kind":"call_tool","tool_name":"name","args":{}}}.\n\n'
-            f"{json.dumps(envelope, ensure_ascii=False, sort_keys=True)}"
-        )
+        prompt = json.dumps(envelope, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
         output = self._run_codex(prompt)
         parsed = _try_parse_json_object(output)
         if not isinstance(parsed, dict):

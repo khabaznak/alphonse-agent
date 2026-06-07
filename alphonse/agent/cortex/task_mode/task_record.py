@@ -4,6 +4,9 @@ from dataclasses import dataclass
 from typing import Any
 
 
+CHECK_VERDICTS = {"new", "steer", "wip", "mission_success", "mission_failed"}
+
+
 @dataclass
 class TaskRecord:
     task_id: str | None = None
@@ -18,10 +21,17 @@ class TaskRecord:
     tool_call_history_md: str = "- (none)"
     status: str = "running"
     outcome: dict[str, Any] | None = None
+    check_verdict: str | None = None
+    check_reason: str = ""
+    check_confidence: float = 0.0
+    check_evidence_refs: list[str] | None = None
+    check_new_message_count: int = 0
+    pdca_cycle_count: int = 0
 
     @classmethod
     def from_dict(cls, value: dict[str, Any]) -> "TaskRecord":
         outcome = value.get("outcome")
+        refs = value.get("check_evidence_refs")
         return cls(
             task_id=str(value.get("task_id") or "").strip() or None,
             user_id=str(value.get("user_id") or "").strip() or None,
@@ -35,6 +45,12 @@ class TaskRecord:
             tool_call_history_md=str(value.get("tool_call_history_md") or "").strip() or "- (none)",
             status=str(value.get("status") or "").strip() or "running",
             outcome=dict(outcome) if isinstance(outcome, dict) else None,
+            check_verdict=_normalize_check_verdict(value.get("check_verdict")),
+            check_reason=str(value.get("check_reason") or "").strip(),
+            check_confidence=_coerce_float(value.get("check_confidence")),
+            check_evidence_refs=[str(item).strip() for item in refs if str(item).strip()] if isinstance(refs, list) else [],
+            check_new_message_count=max(0, _coerce_int(value.get("check_new_message_count"))),
+            pdca_cycle_count=max(0, _coerce_int(value.get("pdca_cycle_count"))),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -51,6 +67,12 @@ class TaskRecord:
             "tool_call_history_md": self.tool_call_history_md,
             "status": self.status,
             "outcome": dict(self.outcome) if isinstance(self.outcome, dict) else None,
+            "check_verdict": self.check_verdict,
+            "check_reason": self.check_reason,
+            "check_confidence": self.check_confidence,
+            "check_evidence_refs": list(self.check_evidence_refs or []),
+            "check_new_message_count": self.check_new_message_count,
+            "pdca_cycle_count": self.pdca_cycle_count,
         }
 
     def append_fact(self, fact: str) -> None:
@@ -101,6 +123,24 @@ class TaskRecord:
         self.status = "running"
         self.outcome = None
 
+    def set_check_result(
+        self,
+        *,
+        verdict: str,
+        reason: str = "",
+        confidence: float = 0.0,
+        evidence_refs: list[str] | None = None,
+        new_message_count: int = 0,
+    ) -> None:
+        normalized = _normalize_check_verdict(verdict)
+        if normalized is None:
+            raise ValueError(f"invalid_check_verdict: {verdict}")
+        self.check_verdict = normalized
+        self.check_reason = str(reason or "").strip()
+        self.check_confidence = max(0.0, min(1.0, _coerce_float(confidence)))
+        self.check_evidence_refs = [str(item).strip() for item in evidence_refs or [] if str(item).strip()]
+        self.check_new_message_count = max(0, int(new_message_count or 0))
+
 
 def _append_markdown_line(current: str, value: str) -> str:
     rendered = str(value or "").strip()
@@ -111,3 +151,22 @@ def _append_markdown_line(current: str, value: str) -> str:
     if not existing or existing == "- (none)":
         return line
     return f"{existing}\n{line}"
+
+
+def _normalize_check_verdict(value: Any) -> str | None:
+    rendered = str(value or "").strip().lower()
+    return rendered if rendered in CHECK_VERDICTS else None
+
+
+def _coerce_float(value: Any) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _coerce_int(value: Any) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0

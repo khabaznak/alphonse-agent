@@ -205,10 +205,9 @@ def _append_check_criteria_snapshot_event(task_record: TaskRecord, judge_result:
         text = rendered[4:].strip() if rendered.startswith(("[x] ", "[ ] ")) else rendered
         criteria.append({"id": f"ac_{index}", "text": text, "status": status})
     payload = {
-        "case_type": str(judge_result.get("case_type") or "").strip(),
         "acceptance_criteria": criteria,
         "verdict": {
-            "kind": str(judge_result.get("kind") or "").strip(),
+            "kind": str(judge_result.get("verdict") or "").strip(),
             "confidence": float(judge_result.get("confidence") or 0.0),
         },
     }
