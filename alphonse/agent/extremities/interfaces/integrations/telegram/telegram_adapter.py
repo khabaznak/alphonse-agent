@@ -96,7 +96,7 @@ class TelegramAdapter(IntegrationAdapter):
         if self._thread and self._thread.is_alive():
             self._thread.join(timeout=5)
 
-    def handle_action(self, action: dict[str, Any]) -> None:
+    def handle_action(self, action: dict[str, Any]) -> dict[str, Any] | None:
         action_type = action.get("type")
         if action_type == "send_audio":
             payload = action.get("payload") or {}
@@ -198,7 +198,8 @@ class TelegramAdapter(IntegrationAdapter):
 
         logger.info("TelegramAdapter sending message to %s", chat_id, extra={"correlation_id": correlation_id})
 
-        self._send_message_http(chat_id, text)
+        message_id = self._send_message_http(chat_id, text)
+        return {"provider_message_id": str(message_id)} if message_id is not None else None
 
     def _run_polling(self) -> None:
         while self._running:
@@ -643,7 +644,7 @@ class TelegramAdapter(IntegrationAdapter):
         except Exception as exc:
             logger.error("TelegramAdapter %s failed chat_id=%s error=%s", endpoint, chat_id, exc)
 
-    def _send_message_http(self, chat_id: int, text: str) -> None:
+    def _send_message_http(self, chat_id: int, text: str) -> int | None:
         endpoint = "sendMessage"
         url = f"https://api.telegram.org/bot{self._bot_token}/{endpoint}"
         data = parse.urlencode({"chat_id": chat_id, "text": text}).encode("utf-8")
@@ -672,7 +673,7 @@ class TelegramAdapter(IntegrationAdapter):
                         endpoint,
                         message_id,
                     )
-                    return
+                    return int(message_id) if message_id is not None else None
                 error_code = parsed.get("error_code")
                 description = parsed.get("description")
                 logger.error(

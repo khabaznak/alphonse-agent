@@ -53,7 +53,12 @@ def release_pdca_task_lease(*, task_id: str, worker_id: str) -> bool:
 
 
 def update_pdca_task_status(*, task_id: str, status: str, last_error: str | None = None) -> bool:
-    return get_pdca_runtime().update_task_status(task_id=task_id, status=status, last_error=last_error)
+    updated = get_pdca_runtime().update_task_status(task_id=task_id, status=status, last_error=last_error)
+    if updated and str(status or "").strip().lower() == "cancelled":
+        from alphonse.agent.nervous_system.pending_questions import cancel_questions_for_task
+
+        cancel_questions_for_task(task_id)
+    return updated
 
 
 def update_pdca_task_metadata(*, task_id: str, metadata: dict[str, Any]) -> bool:

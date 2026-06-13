@@ -25,6 +25,7 @@ from alphonse.agent.services.automation_tool_call_contract import (
     extract_canonical_call,
     is_canonical_tool_call,
 )
+from alphonse.agent.services.question_answer_service import process_expired_questions
 
 
 logger = get_component_logger("actions.handle_timed_signals")
@@ -141,6 +142,7 @@ def _handle_timer_reconcile_tick(*, context: dict[str, Any]) -> ActionResult:
     summary = ScheduledJobsReconciler().reconcile(
         brain_event_sink=_brain_sink if hasattr(bus, "emit") else None
     )
+    process_expired_questions()
     logger.info(
         "HandleTimedSignalsAction jobs_reconciled scanned=%s updated=%s deleted_non_conscious=%s stale_removed=%s executed=%s advanced_without_run=%s failed=%s overdue_active=%s due_pending_signals=%s",
         int(summary.get("scanned") or 0),

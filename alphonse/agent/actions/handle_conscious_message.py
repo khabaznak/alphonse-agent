@@ -16,6 +16,7 @@ from alphonse.agent.services.pdca_ingress import enqueue_pdca_slice
 from alphonse.agent.services.pdca_ingress import normalize_buffered_attachments
 from alphonse.agent.services.pdca_queue_runner import is_pdca_slicing_enabled
 from alphonse.agent.services.job_store import JobStore
+from alphonse.agent.services.question_answer_service import route_inbound_question_answer
 
 logger = get_component_logger("actions.handle_conscious_message")
 _LOG = get_log_manager()
@@ -72,6 +73,38 @@ class HandleConsciousMessageAction(Action):
             raise ValueError("invalid_conscious_payload: missing channel type")
         if not channel_target:
             raise ValueError("invalid_conscious_payload: missing channel target")
+
+        question_route = route_inbound_question_answer(
+            payload=payload,
+            respondent_user_id=user_id,
+            correlation_id=str(correlation_id),
+            bus=context.get("ctx") if isinstance(context, dict) else None,
+        )
+        if question_route.get("handled"):
+            if question_route.get("ambiguous"):
+                text = str(question_route.get("message") or "Please reply directly to the question you are answering.")
+                return ActionResult(
+                    intention_key="MESSAGE_READY",
+                    payload={
+                        "message": text,
+                        "channel_hint": channel_type,
+                        "target": channel_target,
+                        "correlation_id": str(correlation_id),
+                        "direct_reply": {
+                            "channel_type": channel_type,
+                            "target": channel_target,
+                            "text": text,
+                            "correlation_id": str(correlation_id),
+                        },
+                    },
+                    urgency="normal",
+                    delivers_message=True,
+                )
+            return ActionResult(
+                intention_key="NOOP",
+                payload={"task_id": question_route.get("task_id"), "question_id": question_route.get("question_id")},
+                urgency=None,
+            )
 
         _LOG.emit(
             event="incoming_message.accepted",

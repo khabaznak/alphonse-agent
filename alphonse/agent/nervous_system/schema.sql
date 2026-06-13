@@ -727,3 +727,31 @@ CREATE TABLE IF NOT EXISTS pdca_events (
 
 CREATE INDEX IF NOT EXISTS idx_pdca_events_task_created
   ON pdca_events (task_id, created_at);
+
+CREATE TABLE IF NOT EXISTS pending_questions (
+  question_id                  TEXT PRIMARY KEY,
+  task_id                      TEXT NOT NULL,
+  originator_user_id           TEXT NOT NULL,
+  originator_conversation_key  TEXT NOT NULL,
+  respondent_user_id           TEXT NOT NULL,
+  respondent_conversation_key  TEXT NOT NULL,
+  question_text                TEXT NOT NULL,
+  status                       TEXT NOT NULL DEFAULT 'pending',
+  outbound_provider_message_id TEXT,
+  answer_text                  TEXT,
+  inbound_provider_message_id  TEXT,
+  created_at                   TEXT NOT NULL,
+  answered_at                  TEXT,
+  expires_at                   TEXT NOT NULL,
+  updated_at                   TEXT NOT NULL,
+  CHECK (status IN ('pending', 'answered', 'expired', 'cancelled'))
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_pending_questions_respondent
+  ON pending_questions (respondent_user_id, status, created_at);
+
+CREATE INDEX IF NOT EXISTS idx_pending_questions_reply
+  ON pending_questions (respondent_user_id, outbound_provider_message_id, status);
+
+CREATE INDEX IF NOT EXISTS idx_pending_questions_task
+  ON pending_questions (task_id, status);

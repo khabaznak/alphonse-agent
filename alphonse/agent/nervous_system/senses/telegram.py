@@ -202,6 +202,9 @@ class TelegramSense(Sense):
                     "attachments": normalized_attachments,
                     "dedupe_key": str(payload.get("dedupe_key") or "").strip() or None,
                     "display_name": str(payload.get("display_name") or "").strip() or None,
+                    "reply_to_provider_message_id": str(
+                        payload.get("reply_to_provider_message_id") or ""
+                    ).strip() or None,
                     "metadata": enriched_metadata,
                 },
                 source=_PROVIDER_KEY,

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Protocol
+from typing import Any, Protocol
 
 from alphonse.agent.io.contracts import NormalizedOutboundMessage
 
@@ -9,7 +9,7 @@ from alphonse.agent.io.contracts import NormalizedOutboundMessage
 class ExtremityAdapter(Protocol):
     channel_type: str
 
-    def deliver(self, message: NormalizedOutboundMessage) -> None:
+    def deliver(self, message: NormalizedOutboundMessage) -> dict[str, Any] | None:
         ...
 
     # Optional channel primitives used by orchestration for transition UX.

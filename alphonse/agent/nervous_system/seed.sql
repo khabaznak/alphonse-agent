@@ -640,7 +640,7 @@ SELECT
   'task waiting for user while rehydrating'
 FROM states s1
 JOIN signals sig ON sig.key = 'pdca.waiting_user'
-JOIN states s2 ON s2.key = 'waiting_user'
+JOIN states s2 ON s2.key = 'idle'
 WHERE s1.key = 'rehydrating_slice';
 
 INSERT OR IGNORE INTO transitions (
@@ -822,8 +822,14 @@ SELECT
   'task waiting for user'
 FROM states s1
 JOIN signals sig ON sig.key = 'pdca.waiting_user'
-JOIN states s2 ON s2.key = 'waiting_user'
+JOIN states s2 ON s2.key = 'idle'
 WHERE s1.key = 'executing';
+
+-- Waiting is a PDCA task status, not a global Heart state. Existing databases
+-- return to idle after a task parks so unrelated work can continue dispatching.
+UPDATE transitions
+SET next_state_id = (SELECT id FROM states WHERE key = 'idle')
+WHERE signal_id = (SELECT id FROM signals WHERE key = 'pdca.waiting_user');
 
 INSERT OR IGNORE INTO transitions (
   state_id,

@@ -31,6 +31,9 @@ class BufferedTaskInput:
     received_at: str | None = None
     timezone: str | None = None
     locale: str | None = None
+    input_kind: str | None = None
+    question_id: str | None = None
+    respondent_user_id: str | None = None
 
     def normalized_text(self) -> str:
         text = str(self.text or "").strip()
@@ -63,6 +66,9 @@ def _normalize_inputs(metadata: dict[str, Any]) -> list[dict[str, Any]]:
             "received_at": str(item.get("received_at") or "").strip(),
             "consumed_at": str(item.get("consumed_at") or "").strip() or None,
             "sequence": int(item.get("sequence") or 0),
+            "input_kind": str(item.get("input_kind") or "").strip() or None,
+            "question_id": str(item.get("question_id") or "").strip() or None,
+            "respondent_user_id": str(item.get("respondent_user_id") or "").strip() or None,
         }
         if not record["text"] and not record["attachments"]:
             continue
@@ -196,6 +202,9 @@ def _append_input_record(
     attachments: list[dict[str, Any]],
     actor_id: str | None,
     now: str,
+    input_kind: str | None = None,
+    question_id: str | None = None,
+    respondent_user_id: str | None = None,
 ) -> tuple[dict[str, Any], int]:
     inputs = _normalize_inputs(metadata)
     message_id = str(message_id or "").strip()
@@ -221,6 +230,9 @@ def _append_input_record(
                 "received_at": now,
                 "consumed_at": None,
                 "sequence": max_seq + 1,
+                "input_kind": str(input_kind or "").strip() or None,
+                "question_id": str(question_id or "").strip() or None,
+                "respondent_user_id": str(respondent_user_id or "").strip() or None,
             }
         )
     metadata["inputs"] = inputs
@@ -414,6 +426,9 @@ def _build_ingress_metadata(
             attachments=attachments,
             actor_id=actor_id,
             now=now,
+            input_kind=buffered_input.input_kind,
+            question_id=buffered_input.question_id,
+            respondent_user_id=buffered_input.respondent_user_id,
         )
         metadata["last_enqueued_at"] = now
         existing_state = metadata.get("state") if isinstance(metadata.get("state"), dict) else {}
@@ -445,6 +460,9 @@ def _build_ingress_metadata(
                     "received_at": now,
                     "consumed_at": None,
                     "sequence": 1,
+                    "input_kind": str(buffered_input.input_kind or "").strip() or None,
+                    "question_id": str(buffered_input.question_id or "").strip() or None,
+                    "respondent_user_id": str(buffered_input.respondent_user_id or "").strip() or None,
                 }
             ],
             "state": _build_metadata_state(

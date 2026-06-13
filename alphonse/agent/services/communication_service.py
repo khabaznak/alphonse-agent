@@ -39,7 +39,7 @@ class CommunicationService:
         context: dict[str, Any],
         exec_context: Any,
         plan: Any,
-    ) -> None:
+    ) -> dict[str, Any] | None:
         resolved_service_id = self._resolve_service_id(request)
         channel = self._resolve_channel(request, service_id=resolved_service_id)
         target = self._resolve_target(request, service_id=resolved_service_id)
@@ -48,7 +48,7 @@ class CommunicationService:
         if self._is_blocked_by_policy(request=request, target=target):
             return
         message = self._apply_tone(request=request, target=target)
-        self._dispatch_step_message(
+        return self._dispatch_step_message(
             channel=channel,
             target=target,
             message=message,
@@ -66,7 +66,7 @@ class CommunicationService:
         context: dict[str, Any],
         exec_context: Any,
         plan: Any,
-    ) -> None:
+    ) -> dict[str, Any] | None:
         plan_id = str(getattr(plan, "plan_id", "") or "")
         step = str(getattr(plan, "tool", "") or "unknown")
         payload_dict = getattr(plan, "payload", {}) if hasattr(plan, "payload") else {}
@@ -74,9 +74,9 @@ class CommunicationService:
         internal_progress = _as_bool(payload_dict.get("internal_progress")) if isinstance(payload_dict, dict) else False
         visibility = str(payload_dict.get("visibility") or "").strip().lower() if isinstance(payload_dict, dict) else ""
         if not target:
-            return
+            return None
         if outbound_intent == "internal_progress":
-            return
+            return None
         payload = _message_payload(message, channel, target, exec_context)
         payload["outbound_intent"] = outbound_intent
         payload["internal_progress"] = internal_progress
@@ -96,9 +96,10 @@ class CommunicationService:
         )
         delivery = self._coordinator.deliver(action, context)
         if delivery:
-            self._deliver_normalized(delivery)
+            return self._deliver_normalized(delivery)
+        return None
 
-    def _deliver_normalized(self, delivery: NormalizedOutboundMessage) -> None:
+    def _deliver_normalized(self, delivery: NormalizedOutboundMessage) -> dict[str, Any] | None:
         registry = get_io_registry()
         adapter = registry.get_extremity(delivery.channel_type)
         if not adapter:
@@ -115,7 +116,7 @@ class CommunicationService:
                 },
             )
             raise ValueError(f"missing_extremity_adapter:{channel}")
-        adapter.deliver(delivery)
+        return adapter.deliver(delivery)
 
     def _resolve_service_id(self, request: CommunicationRequest) -> int | None:
         explicit_service_id = request.service_id

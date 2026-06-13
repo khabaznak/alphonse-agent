@@ -67,7 +67,11 @@ class CortexGraph:
             _route_after_next_step_state,
             {"execute_step_node": "execute_step_node"},
         )
-        graph.add_edge("execute_step_node", "check_node")
+        graph.add_conditional_edges(
+            "execute_step_node",
+            _route_after_execute_step_state,
+            {"check_node": "check_node", "end": END},
+        )
         return graph
 
     def invoke(
@@ -175,6 +179,13 @@ def _route_after_act_state(state: dict[str, Any]) -> str:
 
 def _route_after_next_step_state(state: dict[str, Any]) -> str:
     return route_after_next_step(state.get("planner_output"))
+
+
+def _route_after_execute_step_state(state: dict[str, Any]) -> str:
+    task_record = state.get("task_record")
+    if isinstance(task_record, TaskRecord) and task_record.status == "waiting_user":
+        return "end"
+    return "check_node"
 
 
 def _select_check_provenance(state: dict[str, Any]) -> str:

@@ -26,7 +26,7 @@ class TelegramExtremityAdapter(ExtremityAdapter):
             self._adapter = TelegramAdapter(config)
         self._reaction_cache: dict[tuple[str, str], str] = {}
 
-    def deliver(self, message: NormalizedOutboundMessage) -> None:
+    def deliver(self, message: NormalizedOutboundMessage) -> dict[str, Any] | None:
         if not self._adapter:
             logger.warning("TelegramExtremityAdapter missing adapter; message skipped")
             return
@@ -81,7 +81,7 @@ class TelegramExtremityAdapter(ExtremityAdapter):
                 }
             )
             return
-        self._adapter.handle_action(
+        return self._adapter.handle_action(
             {
                 "type": "send_message",
                 "payload": {

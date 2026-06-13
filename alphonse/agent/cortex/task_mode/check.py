@@ -237,6 +237,12 @@ def _append_consumed_inputs_to_task_record(
 ) -> None:
     for item in consumed_inputs:
         text = str(item.get("text") or "").strip()
+        if str(item.get("input_kind") or "").strip() == "question_answer" and text:
+            respondent = str(item.get("respondent_user_id") or item.get("actor_id") or "the respondent").strip()
+            question_id = str(item.get("question_id") or "").strip()
+            suffix = f" (question {question_id})" if question_id else ""
+            task_record.append_recent_conversation_line(f"{respondent} answered{suffix}: {text}")
+            continue
         attachments = item.get("attachments")
         attachment_count = len(attachments) if isinstance(attachments, list) else 0
         if text:

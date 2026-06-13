@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from alphonse.agent.tools.access_request_tools import AccessRequestsTool
+from alphonse.agent.tools.ask_question_tool import AskQuestionTool
 from alphonse.agent.services import JobRunner, JobStore
 from alphonse.agent.tools.clock import ClockTool
 from alphonse.agent.tools.context_tools import GetMySettingsTool
@@ -137,6 +138,7 @@ def _require_spec(spec_by_name: dict[str, ToolSpec], canonical_name: str) -> Too
 
 def _build_runtime_executors(*, job_store: JobStore, job_runner: JobRunner) -> list[ToolProtocol]:
     context_clock = ClockTool()
+    ask_question = AskQuestionTool()
     context_get_my_settings = GetMySettingsTool()
     context_get_user_details = GetUserDetailsTool()
     memory_search_episodes = SearchEpisodesTool()
@@ -176,6 +178,7 @@ def _build_runtime_executors(*, job_store: JobStore, job_runner: JobRunner) -> l
     domotics_execute = DomoticsExecuteTool()
     domotics_subscribe = DomoticsSubscribeTool()
     return [
+        ask_question,
         context_clock,
         context_get_my_settings,
         context_get_user_details,
@@ -314,7 +317,11 @@ def _default_specs() -> list[ToolSpec]:
             when_to_use="Only when required user data is missing.",
             returns="user_answer_captured",
             input_schema=_object_schema(
-                properties={"question": {"type": "string"}},
+                properties={
+                    "question": {"type": "string"},
+                    "respondent_user_id": {"type": ["string", "null"]},
+                    "expires_in_seconds": {"type": ["integer", "null"], "minimum": 60},
+                },
                 required=["question"],
             ),
             output_schema=_permissive_output_schema(),

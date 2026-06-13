@@ -118,7 +118,7 @@ class SendMessageTool:
             },
         )
         try:
-            self._communication.send(
+            delivery_result = self._communication.send(
                 request=request,
                 context={"state": state_payload},
                 exec_context=exec_context,
@@ -136,6 +136,7 @@ class SendMessageTool:
                 "urgency": urgency,
                 "visibility": visibility or "public",
                 "outbound_intent": outbound_intent or "mission_public",
+                **(dict(delivery_result) if isinstance(delivery_result, dict) else {}),
             },
             "exception": None,
             "metadata": {"tool": "communication.send_message"},
