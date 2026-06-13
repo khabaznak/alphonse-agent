@@ -15,7 +15,7 @@ from alphonse.agent.services.question_session_projection import project_question
 
 @dataclass(frozen=True)
 class AskQuestionTool:
-    canonical_name: ClassVar[str] = "askQuestion"
+    canonical_name: ClassVar[str] = "communication.ask_question"
     capability: ClassVar[str] = "clarification"
     _send_message_tool: SendMessageTool | None = None
 
@@ -38,19 +38,21 @@ class AskQuestionTool:
         payload = state if isinstance(state, dict) else {}
         task_record = payload.get("task_record")
         if not isinstance(task_record, TaskRecord):
-            return _failed("missing_task_record", "askQuestion requires an active PDCA task")
+            return _failed("missing_task_record", "communication.ask_question requires an active PDCA task")
         task_id = str(task_record.task_id or "").strip()
         originator_id = str(task_record.user_id or payload.get("actor_person_id") or "").strip()
         respondent_id = str(respondent_user_id or originator_id).strip()
         respondent = identity.get_user(respondent_id)
         originator = identity.get_user(originator_id)
         if not task_id or not originator_id:
-            return _failed("missing_task_context", "askQuestion requires task and originator identity")
+            return _failed("missing_task_context", "communication.ask_question requires task and originator identity")
         if not isinstance(respondent, dict):
             return _failed("unresolved_respondent", "respondent must be a registered user")
-        service_id = identity.get_preferred_service_id(respondent_id)
-        channel = identity.resolve_service_key(service_id)
-        target = identity.resolve_delivery_target(user_id=respondent_id, service_id=service_id)
+        channel, target = _resolve_delivery(
+            respondent_id=respondent_id,
+            originator_id=originator_id,
+            payload=payload,
+        )
         if not channel or not target:
             return _failed("unresolved_delivery_target", "respondent has no preferred delivery target")
         origin_conversation = str(payload.get("conversation_key") or payload.get("chat_id") or "").strip()
@@ -142,9 +144,40 @@ class AskQuestionTool:
                 "expires_at": record["expires_at"],
             },
             "exception": None,
-            "metadata": {"tool": "askQuestion"},
+            "metadata": {"tool": "communication.ask_question"},
         }
 
 
 def _failed(code: str, message: str) -> dict[str, Any]:
-    return {"output": None, "exception": {"code": code, "message": message}, "metadata": {"tool": "askQuestion"}}
+    return {"output": None, "exception": {"code": code, "message": message}, "metadata": {"tool": "communication.ask_question"}}
+
+
+def _resolve_delivery(
+    *,
+    respondent_id: str,
+    originator_id: str,
+    payload: dict[str, Any],
+) -> tuple[str | None, str | None]:
+    preferred_service_id = identity.get_preferred_service_id(respondent_id)
+    preferred_channel = identity.resolve_service_key(preferred_service_id)
+    preferred_target = identity.resolve_delivery_target(
+        user_id=respondent_id,
+        service_id=preferred_service_id,
+    )
+    if preferred_channel and preferred_target:
+        return preferred_channel, preferred_target
+
+    if respondent_id != originator_id:
+        return None, None
+
+    active_channel = str(payload.get("channel_type") or payload.get("channel") or "").strip().lower()
+    active_target = str(payload.get("channel_target") or payload.get("target") or "").strip()
+    if not active_channel or not active_target:
+        return None, None
+
+    active_service_id = identity.resolve_service_id(active_channel)
+    registered_target = identity.resolve_delivery_target(
+        user_id=respondent_id,
+        service_id=active_service_id,
+    )
+    return active_channel, registered_target or active_target

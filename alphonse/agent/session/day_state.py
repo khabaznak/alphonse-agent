@@ -323,7 +323,7 @@ def _last_action_summary(
         "terminal_command_status",
     }:
         return "Ran a terminal command."
-    if tool == "askQuestion":
+    if tool in {"askQuestion", "communication.ask_question"}:
         return "Asked the user for clarification."
     if isinstance(task_record, dict) and str(step.get("status") or "").strip().lower() == "executed":
         if tool == "audio.speak_local":

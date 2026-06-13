@@ -10,6 +10,7 @@ from alphonse.agent.cognition.memory import record_after_tool_call
 from alphonse.agent.cognition.memory import record_plan_step_completion
 from alphonse.agent.cortex.task_mode.plan import PlannerOutput
 from alphonse.agent.cortex.task_mode.task_record import TaskRecord
+from alphonse.agent.cortex.task_mode.interaction_validation import validate_planner_interaction
 from alphonse.agent.cortex.transitions import emit_presence_transition_event
 from alphonse.agent.tools.base import ensure_tool_result
 from alphonse.agent.tools.registry import ToolRegistry
@@ -30,6 +31,9 @@ def execute_step_node_impl(
     log_task_event: Any,
     runtime_state: dict[str, Any] | None = None,
 ) -> DoResult:
+    interaction_issue = validate_planner_interaction(task_record=task_record, planner_output=planner_output)
+    if interaction_issue is not None:
+        raise ValueError(f"execute_step.invalid_planner_interaction:{interaction_issue.code}")
     tool_call = _require_canonical_tool_call(planner_output)
     planner_intent = str(planner_output.get("planner_intent") or "").strip()[:_PLANNER_INTENT_MAX_LENGTH]
     _emit_planner_intent_progress(

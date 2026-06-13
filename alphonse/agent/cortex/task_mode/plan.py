@@ -10,6 +10,8 @@ from alphonse.agent.cortex.task_mode.prompt_templates import NEXT_STEP_SYSTEM_PR
 from alphonse.agent.cortex.task_mode.prompt_templates import NEXT_STEP_USER_TEMPLATE
 from alphonse.agent.cortex.task_mode.prompt_templates import render_pdca_prompt
 from alphonse.agent.cortex.task_mode.task_record import TaskRecord
+from alphonse.agent.cortex.task_mode.interaction_validation import planner_repair_instruction
+from alphonse.agent.cortex.task_mode.interaction_validation import validate_planner_interaction
 from alphonse.agent.tools.mcp.loader import default_profiles_dir
 from alphonse.agent.tools.mcp.registry import McpProfileRegistry
 from alphonse.agent.tools.registry import ToolRegistry
@@ -34,6 +36,7 @@ def plan_node_impl(
         llm_client=llm_client,
         system_prompt=NEXT_STEP_SYSTEM_PROMPT,
         user_prompt=user_prompt,
+        task_record=task_record,
     )
     _append_planner_output_to_record(task_record, planner_output=planner_output)
     _log_planner_output(
@@ -55,9 +58,35 @@ def _request_planner_output(
     llm_client: ToolCallingProvider | None,
     system_prompt: str,
     user_prompt: str,
+    task_record: TaskRecord,
 ) -> PlannerOutput:
     if llm_client is None:
         raise ValueError("planner_capability_missing: ToolCallingProvider is required for plan_node_impl")
+    planner_output = _complete_planner_call(
+        llm_client=llm_client,
+        system_prompt=system_prompt,
+        user_prompt=user_prompt,
+    )
+    issue = validate_planner_interaction(task_record=task_record, planner_output=planner_output)
+    if issue is None:
+        return planner_output
+    repaired = _complete_planner_call(
+        llm_client=llm_client,
+        system_prompt=system_prompt,
+        user_prompt=f"{user_prompt}\n\n## Planner Correction\n{planner_repair_instruction(issue)}",
+    )
+    repaired_issue = validate_planner_interaction(task_record=task_record, planner_output=repaired)
+    if repaired_issue is not None:
+        raise ValueError(f"plan_node_impl.planner_interaction_mismatch:{repaired_issue.code}")
+    return repaired
+
+
+def _complete_planner_call(
+    *,
+    llm_client: ToolCallingProvider,
+    system_prompt: str,
+    user_prompt: str,
+) -> PlannerOutput:
     raw = llm_client.complete_with_tools(
         messages=[
             {"role": "system", "content": system_prompt},

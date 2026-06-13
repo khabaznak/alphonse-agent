@@ -311,7 +311,7 @@ def _permissive_output_schema() -> dict[str, Any]:
 def _default_specs() -> list[ToolSpec]:
     return [
         ToolSpec(
-            canonical_name="askQuestion",
+            canonical_name="communication.ask_question",
             summary="Ask the user one clear question and wait for their answer.",
             description="Ask the user one clear question and wait for their answer.",
             when_to_use="Only when required user data is missing.",
@@ -326,6 +326,7 @@ def _default_specs() -> list[ToolSpec]:
             ),
             output_schema=_permissive_output_schema(),
             domain_tags=["planning", "clarification"],
+            aliases=["askQuestion"],
             safety_level=SafetyLevel.LOW,
             examples=[{"question": "What exact time should I use for this reminder?"}],
         ),

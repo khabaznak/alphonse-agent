@@ -11,7 +11,7 @@ def _catalog() -> dict:
     return {
         "tools": [
             {
-                "tool": "askQuestion",
+                "tool": "communication.ask_question",
                 "required_parameters": ["question"],
                 "input_parameters": [{"name": "question", "type": "string", "required": True}],
             },
@@ -44,7 +44,7 @@ def test_validate_step_rejects_placeholder_value() -> None:
 def test_validate_step_rejects_internal_tool_question() -> None:
     result = validate_step(
         {
-            "tool": "askQuestion",
+            "tool": "communication.ask_question",
             "parameters": {"question": "Please confirm which tool to use."},
         },
         _catalog(),

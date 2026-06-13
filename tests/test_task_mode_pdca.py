@@ -186,6 +186,30 @@ class _ToolListCaptureLlm:
         }
 
 
+class _SequentialToolLlm:
+    def __init__(self, responses: list[dict[str, object]]) -> None:
+        self.responses = list(responses)
+        self.complete_with_tools_calls = 0
+        self.user_prompts: list[str] = []
+        _set_current_test_provider(self)
+
+    def complete(self, system_prompt: str, user_prompt: str) -> str:
+        _ = (system_prompt, user_prompt)
+        raise RuntimeError("complete should not be used")
+
+    def complete_with_tools(
+        self,
+        *,
+        messages: list[dict[str, object]],
+        tools: list[dict[str, object]],
+        tool_choice: str = "auto",
+    ) -> dict[str, object]:
+        _ = (tools, tool_choice)
+        self.complete_with_tools_calls += 1
+        self.user_prompts.append(str(messages[-1].get("content") or ""))
+        return self.responses.pop(0)
+
+
 class _FakeClock:
     def execute(self, **kwargs):
         _ = kwargs
@@ -374,6 +398,78 @@ def test_tool_call_schema_includes_context_tools_when_runtime_registered() -> No
     assert "get_my_settings" in llm.tool_names
 
 
+def test_tool_call_schema_exposes_namespaced_ask_question_only() -> None:
+    next_step = build_next_step_node(tool_registry=build_default_tool_registry())
+    llm = _ToolListCaptureLlm()
+    _ = next_step(_task_record(goal="ask me for a missing fact"))
+    assert "communication.ask_question" in llm.tool_names
+    assert "askQuestion" not in llm.tool_names
+
+
+def test_planner_repairs_blocking_send_message_to_ask_question() -> None:
+    next_step = build_next_step_node(tool_registry=build_default_tool_registry())
+    llm = _SequentialToolLlm(
+        [
+            {
+                "tool_call": {
+                    "kind": "call_tool",
+                    "tool_name": "communication.send_message",
+                    "args": {"To": "alex", "Message": "¿Dónde vivías cuando tenías ocho años?"},
+                },
+                "planner_intent": "Preguntar a Alex un solo tema y esperar su respuesta.",
+            },
+            {
+                "tool_call": {
+                    "kind": "call_tool",
+                    "tool_name": "communication.ask_question",
+                    "args": {"question": "¿Dónde vivías cuando tenías ocho años?"},
+                },
+                "planner_intent": "Preguntar una vez y esperar la respuesta.",
+            },
+        ]
+    )
+    output = next_step(_task_record(goal="complete my childhood profile"))
+    assert output["tool_call"]["tool_name"] == "communication.ask_question"
+    assert llm.complete_with_tools_calls == 2
+    assert "Planner Correction" in llm.user_prompts[1]
+    assert "do not resend" in llm.user_prompts[1]
+
+
+def test_planner_rejects_second_blocking_send_message_selection() -> None:
+    next_step = build_next_step_node(tool_registry=build_default_tool_registry())
+    invalid = {
+        "tool_call": {
+            "kind": "call_tool",
+            "tool_name": "communication.send_message",
+            "args": {"To": "alex", "Message": "Where did you live when you were eight?"},
+        },
+        "planner_intent": "Ask Alex and wait for the user answer.",
+    }
+    llm = _SequentialToolLlm([invalid, invalid])
+    with pytest.raises(ValueError, match="planner_interaction_mismatch"):
+        next_step(_task_record(goal="complete my childhood profile"))
+    assert llm.complete_with_tools_calls == 2
+
+
+def test_planner_allows_non_blocking_send_message_question() -> None:
+    next_step = build_next_step_node(tool_registry=build_default_tool_registry())
+    llm = _SequentialToolLlm(
+        [
+            {
+                "tool_call": {
+                    "kind": "call_tool",
+                    "tool_name": "communication.send_message",
+                    "args": {"To": "alex", "Message": "Would you like a status update?"},
+                },
+                "planner_intent": "Send a conversational check-in without blocking the task.",
+            }
+        ]
+    )
+    output = next_step(_task_record(goal="send a check-in"))
+    assert output["tool_call"]["tool_name"] == "communication.send_message"
+    assert llm.complete_with_tools_calls == 1
+
+
 def test_execute_step_handles_structured_tool_failure(monkeypatch: pytest.MonkeyPatch) -> None:
     registry = ToolRegistry()
     _register_tool(registry, "audio.transcribe", _FailingTool())
@@ -445,6 +541,48 @@ def test_execute_step_accepts_canonical_send_message_from_planner(monkeypatch: p
     assert isinstance(updated.get("task_record"), TaskRecord)
     assert send.calls
     assert send.calls[0]["To"] == "8553589429"
+
+
+def test_execute_step_rejects_blocking_question_as_send_message(monkeypatch: pytest.MonkeyPatch) -> None:
+    registry = ToolRegistry()
+    send = _SendMessageTool()
+    _register_tool(registry, "communication.send_message", send)
+    monkeypatch.setattr(execute_step_module, "_tool_registry", lambda: registry)
+    planner_output = {
+        "tool_call": {
+            "kind": "call_tool",
+            "tool_name": "communication.send_message",
+            "args": {"To": "alex", "Message": "Where did you live when you were eight?"},
+        },
+        "planner_intent": "Ask Alex and wait for the user answer.",
+    }
+    with pytest.raises(ValueError, match="invalid_planner_interaction"):
+        execute_step_state_adapter({"task_record": _task_record(goal="complete profile"), "planner_output": planner_output})
+    assert send.calls == []
+
+
+def test_execute_step_rejects_repeated_blocking_question_from_history(monkeypatch: pytest.MonkeyPatch) -> None:
+    registry = ToolRegistry()
+    send = _SendMessageTool()
+    _register_tool(registry, "communication.send_message", send)
+    monkeypatch.setattr(execute_step_module, "_tool_registry", lambda: registry)
+    task_record = _task_record(
+        goal="complete profile",
+        tool_history=[
+            'communication.send_message args={"To":"alex","Message":"Where did you live when you were eight?"} output={"delivered":true} exception=null'
+        ],
+    )
+    planner_output = {
+        "tool_call": {
+            "kind": "call_tool",
+            "tool_name": "communication.send_message",
+            "args": {"To": "alex", "Message": "Where did you live when you were eight?"},
+        },
+        "planner_intent": "Ask Alex and wait for the user answer.",
+    }
+    with pytest.raises(ValueError, match="repeated_blocking_question_delivery"):
+        execute_step_state_adapter({"task_record": task_record, "planner_output": planner_output})
+    assert send.calls == []
 
 
 def test_execute_step_hydrates_tool_state_from_ingress_facts(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -30,6 +30,15 @@ class _SuccessfulSender:
         return {"output": {"delivered": True}, "exception": None, "metadata": {"tool": "communication.send_message"}}
 
 
+class _CapturingSender:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
+
+    def execute(self, **kwargs: Any) -> dict[str, Any]:
+        self.calls.append(dict(kwargs))
+        return {"output": {"delivered": True}, "exception": None, "metadata": {"tool": "communication.send_message"}}
+
+
 class _Bus:
     def __init__(self) -> None:
         self.signals: list[Any] = []
@@ -80,8 +89,10 @@ def _create_task(task_id: str = "task-a") -> TaskRecord:
 
 
 def test_ask_question_is_registered() -> None:
-    definition = build_default_tool_registry().get("askQuestion")
+    registry = build_default_tool_registry()
+    definition = registry.get("communication.ask_question")
     assert definition is not None
+    assert registry.get("askQuestion") is definition
     assert definition.spec.input_schema["properties"]["respondent_user_id"]
 
 
@@ -103,6 +114,54 @@ def test_ask_question_parks_task_record_and_creates_pending_question() -> None:
     pending = list_pending_for_respondent("user-a")
     assert len(pending) == 1
     assert pending[0]["task_id"] == "task-a"
+
+
+def test_owner_question_falls_back_to_active_task_channel_without_preference(monkeypatch: pytest.MonkeyPatch) -> None:
+    record = _create_task()
+    sender = _CapturingSender()
+    monkeypatch.setattr(ask_module.identity, "get_preferred_service_id", lambda _user_id: None)
+    monkeypatch.setattr(ask_module.identity, "resolve_service_id", lambda channel: 1 if channel == "telegram" else None)
+    monkeypatch.setattr(
+        ask_module.identity,
+        "resolve_delivery_target",
+        lambda user_id, service_id: None,
+    )
+
+    result = AskQuestionTool(_send_message_tool=sender).execute(
+        question="Where did you live when you were eight?",
+        state={
+            "task_record": record,
+            "conversation_key": "telegram:8553589429",
+            "channel_type": "telegram",
+            "channel_target": "8553589429",
+        },
+    )
+
+    assert result["exception"] is None
+    assert result["output"]["respondent_conversation_key"] == "telegram:8553589429"
+    assert record.status == "waiting_user"
+    assert sender.calls[0]["UserId"] == "user-a"
+    assert sender.calls[0]["Channel"] == "telegram"
+
+
+def test_delegated_question_does_not_fall_back_to_originators_active_channel(monkeypatch: pytest.MonkeyPatch) -> None:
+    record = _create_task()
+    monkeypatch.setattr(ask_module.identity, "get_preferred_service_id", lambda _user_id: None)
+    monkeypatch.setattr(ask_module.identity, "resolve_delivery_target", lambda user_id, service_id: None)
+
+    result = AskQuestionTool(_send_message_tool=_SuccessfulSender()).execute(
+        question="What do you want for dinner?",
+        respondent_user_id="user-b",
+        state={
+            "task_record": record,
+            "channel_type": "telegram",
+            "channel_target": "chat-user-a",
+        },
+    )
+
+    assert result["exception"]["code"] == "unresolved_delivery_target"
+    assert record.status == "running"
+    assert list_pending_for_respondent("user-b") == []
 
 
 def test_delegated_answer_queues_originating_task_and_updates_checkpoint() -> None:

@@ -127,19 +127,19 @@ def validate_step(
                     history=history,
                 )
 
-    if tool == "askQuestion":
+    if tool in {"askQuestion", "communication.ask_question"}:
         question = str(parameters.get("question") or "").strip()
         if not question:
             return _invalid(
                 StepValidationErrorType.INCOMPLETE_PARAMETER,
-                "askQuestion requires a non-empty 'question' parameter.",
+                "communication.ask_question requires a non-empty 'question' parameter.",
                 details={"tool": tool},
                 history=history,
             )
         if is_internal_tool_question(question):
             return _invalid(
                 StepValidationErrorType.DISALLOWED_INTERNAL_QUESTION,
-                "askQuestion cannot ask users to choose internal tool/function names.",
+                "communication.ask_question cannot ask users to choose internal tool/function names.",
                 details={"tool": tool, "question": question},
                 history=history,
             )
