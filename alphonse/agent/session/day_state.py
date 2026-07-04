@@ -317,7 +317,7 @@ def _last_action_summary(
     if tool == "audio.transcribe":
         return "Transcribed an audio asset."
     if tool in {
-        "execution.run_terminal",
+        "execution.run_bash",
         "terminal_execute",
         "terminal_command_submit",
         "terminal_command_status",

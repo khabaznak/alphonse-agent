@@ -36,7 +36,7 @@ def test_available_tool_catalog_has_minimal_tools_only() -> None:
         "jobs.resume",
         "jobs.delete",
         "jobs.run_now",
-        "execution.run_terminal",
+        "execution.run_bash",
         "execution.call_mcp",
         "audio.speak_local",
         "audio.transcribe",
@@ -44,3 +44,5 @@ def test_available_tool_catalog_has_minimal_tools_only() -> None:
         "get_user_details",
     }
     assert required.issubset(names)
+    assert "execution.run_terminal" not in names
+    assert "execution.run_ssh" not in names

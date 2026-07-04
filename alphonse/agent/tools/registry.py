@@ -5,6 +5,7 @@ from typing import Any
 
 from alphonse.agent.tools.access_request_tools import AccessRequestsTool
 from alphonse.agent.tools.ask_question_tool import AskQuestionTool
+from alphonse.agent.tools.bash_tool import BashTool
 from alphonse.agent.services import JobRunner, JobStore
 from alphonse.agent.tools.clock import ClockTool
 from alphonse.agent.tools.context_tools import GetMySettingsTool
@@ -38,9 +39,7 @@ from alphonse.agent.tools.send_message_tool import SendMessageTool
 from alphonse.agent.tools.send_message_tool import SendVoiceNoteTool
 from alphonse.agent.tools.searxng_search import SearxngSearchTool
 from alphonse.agent.tools.searxng_search import WebFetchTool
-from alphonse.agent.tools.ssh_terminal_tool import SshTerminalTool
 from alphonse.agent.tools.stt_transcribe import SttTranscribeTool
-from alphonse.agent.tools.terminal_execute_tool import TerminalExecuteTool
 from alphonse.agent.tools.telegram_files import TelegramDownloadFileTool
 from alphonse.agent.tools.telegram_files import TelegramGetFileMetaTool
 from alphonse.agent.tools.telegram_files import VisionAnalyzeImageTool
@@ -158,9 +157,8 @@ def _build_runtime_executors(*, job_store: JobStore, job_runner: JobRunner) -> l
     audio_transcribe = SttTranscribeTool()
     vision_analyze_image = VisionAnalyzeImageTool()
     vision_extract_text = VisionExtractTool()
-    execution_run_terminal = TerminalExecuteTool()
+    execution_run_bash = BashTool()
     execution_call_mcp = McpCallTool()
-    execution_run_ssh = SshTerminalTool()
     web_search = SearxngSearchTool()
     web_fetch = WebFetchTool()
     scheduler = SchedulerTool()
@@ -199,9 +197,8 @@ def _build_runtime_executors(*, job_store: JobStore, job_runner: JobRunner) -> l
         audio_transcribe,
         vision_analyze_image,
         vision_extract_text,
-        execution_run_terminal,
+        execution_run_bash,
         execution_call_mcp,
-        execution_run_ssh,
         web_search,
         web_fetch,
         scheduler,
@@ -1144,11 +1141,11 @@ def _default_specs() -> list[ToolSpec]:
             examples=[{"url": "https://docs.searxng.org/dev/search_api.html", "max_chars": 8000}],
         ),
         ToolSpec(
-            canonical_name="execution.run_terminal",
-            summary="Execute terminal commands under global Alphonse execution mode and sandbox policy.",
-            description="Execute terminal commands under global Alphonse execution mode and sandbox policy.",
-            when_to_use="Use for constrained terminal-like operations when explicit tools are insufficient.",
-            returns="command stdout/stderr/exit_code with policy metadata",
+            canonical_name="execution.run_bash",
+            summary="Execute a command in a persistent local bash shell.",
+            description="Execute a command in a persistent local bash shell and return stdout, stderr, and exit code.",
+            when_to_use="Use for local bash operations when explicit tools are insufficient and shell continuity is useful.",
+            returns="command stdout/stderr/exit_code with bash execution metadata",
             input_schema=_object_schema(
                 properties={
                     "command": {"type": "string"},
@@ -1158,7 +1155,7 @@ def _default_specs() -> list[ToolSpec]:
                 required=["command"],
             ),
             output_schema=_permissive_output_schema(),
-            domain_tags=["ops", "terminal", "automation"],
+            domain_tags=["ops", "terminal", "bash", "automation"],
             safety_level=SafetyLevel.HIGH,
             requires_confirmation=True,
             examples=[{"command": "ls -la", "cwd": ".", "timeout_seconds": 20}],
@@ -1191,39 +1188,6 @@ def _default_specs() -> list[ToolSpec]:
                     "operation": "new_page",
                     "arguments": {"url": "https://example.com"},
                     "cwd": ".",
-                }
-            ],
-        ),
-        ToolSpec(
-            canonical_name="execution.run_ssh",
-            summary="Execute a command on a remote SSH host using Paramiko.",
-            description="Execute a command on a remote SSH host using Paramiko.",
-            when_to_use="Use for explicit remote SSH operations that require host/user credentials and command execution.",
-            returns="remote command stdout/stderr/exit_code",
-            input_schema=_object_schema(
-                properties={
-                    "host": {"type": "string"},
-                    "username": {"type": "string"},
-                    "command": {"type": "string"},
-                    "port": {"type": "integer"},
-                    "password": {"type": "string"},
-                    "private_key_path": {"type": "string"},
-                    "cwd": {"type": "string"},
-                    "timeout_seconds": {"type": "number"},
-                    "connect_timeout_seconds": {"type": "number"},
-                },
-                required=["host", "username", "command"],
-            ),
-            output_schema=_permissive_output_schema(),
-            domain_tags=["ops", "ssh", "remote"],
-            safety_level=SafetyLevel.CRITICAL,
-            requires_confirmation=True,
-            examples=[
-                {
-                    "host": "192.168.1.20",
-                    "username": "pi",
-                    "command": "uname -a",
-                    "timeout_seconds": 30,
                 }
             ],
         ),

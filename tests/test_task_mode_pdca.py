@@ -331,15 +331,15 @@ def test_next_step_prompt_includes_recent_conversation_sentinel() -> None:
 
 def test_next_step_prompt_includes_tool_call_history_for_remediation() -> None:
     next_step = build_next_step_node(tool_registry=build_default_tool_registry())
-    llm = _PromptCaptureLlm('{"tool_call":{"kind":"call_tool","tool_name":"execution.run_terminal","args":{"command":"echo ok"}}}')
+    llm = _PromptCaptureLlm('{"tool_call":{"kind":"call_tool","tool_name":"execution.run_bash","args":{"command":"echo ok"}}}')
     _ = llm
     _ = next_step(
         _task_record(
             goal="check pending updates on the Raspberry Pi",
             tool_history=[
-                'step_1 execution.run_ssh args={"host":"192.168.68.127"} output=null exception={"code":"paramiko_not_installed","details":{"stderr_preview":"ModuleNotFoundError: No module named \\"paramiko\\""}}'
+                'step_1 execution.run_bash args={"command":"ssh pi@192.168.68.127 uname -a"} output=null exception={"code":"paramiko_not_installed","details":{"stderr_preview":"ModuleNotFoundError: No module named \\"paramiko\\""}}'
             ],
-            plan_lines=['step_1 [failed] execution.run_ssh args={"host":"192.168.68.127"}'],
+            plan_lines=['step_1 [failed] execution.run_bash args={"command":"ssh pi@192.168.68.127 uname -a"}'],
         )
     )
     prompt = llm.last_user_prompt

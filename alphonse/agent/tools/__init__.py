@@ -1,12 +1,12 @@
 from alphonse.agent.tools.clock import ClockTool
 from alphonse.agent.tools.geocoder import GeocoderTool, GoogleGeocoderTool
+from alphonse.agent.tools.bash_tool import BashTool
 from alphonse.agent.tools.local_audio_output import (
     LocalAudioOutputSpeakTool,
     LocalAudioOutputRenderTool,
 )
 from alphonse.agent.tools.scheduler_tool import SchedulerTool
 from alphonse.agent.tools.stt_transcribe import SttTranscribeTool
-from alphonse.agent.tools.terminal_execute_tool import TerminalExecuteTool
 from alphonse.agent.tools.terminal import TerminalTool, TerminalExecutionResult
 from alphonse.agent.tools.domotics_tools import (
     DomoticsExecuteTool,
@@ -20,11 +20,11 @@ __all__ = [
     "ClockTool",
     "GeocoderTool",
     "GoogleGeocoderTool",
+    "BashTool",
     "LocalAudioOutputSpeakTool",
     "LocalAudioOutputRenderTool",
     "SchedulerTool",
     "SttTranscribeTool",
-    "TerminalExecuteTool",
     "TerminalTool",
     "TerminalExecutionResult",
     "DomoticsQueryTool",
