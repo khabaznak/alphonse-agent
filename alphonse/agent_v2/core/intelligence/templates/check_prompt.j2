@@ -1,0 +1,20 @@
+# System Prompt
+{{ system_prompt | default("Stub check-node system prompt.", true) }}
+
+## Philosophy.md
+{{ philosophy_md | default("- (not loaded)", true) }}
+
+## GlobalContext.md
+{{ global_context_md | default("- (not loaded)", true) }}
+
+## UserPersonality
+{{ user_personality_md | default("- (not loaded)", true) }}
+
+## Project Context
+{{ project_context_md | default("- (not loaded)", true) }}
+
+# User Prompt
+{{ user_prompt | default("", true) }}
+
+# Task State
+{{ task_state_md | default("- (not provided)", true) }}

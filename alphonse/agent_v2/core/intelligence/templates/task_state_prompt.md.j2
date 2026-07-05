@@ -1,0 +1,43 @@
+# Task Metadata
+- Task ID: {{ task.task_id or "" }}
+- Message ID: {{ task.message_id or "" }}
+- User: {{ task.user or "" }}
+- Project ID: {{ task.project_id }}
+- Tag: {{ task.tag }}
+- Correlation ID: {{ task.correlation_id }}
+- Status: {{ task.status }}
+- PDCA Cycle Count: {{ task.pdca_cycle_count }}
+
+# Goal
+{{ task.goal or "- (none)" }}
+
+# Recent Conversation
+{{ task.recent_conversation_md or "- (none)" }}
+
+# Facts
+{{ task.facts_md or "- (none)" }}
+
+# Current Plan
+{{ task.plan_md or "- (none)" }}
+
+# Acceptance Criteria
+{{ task.acceptance_criteria_md or "- (none)" }}
+
+# Updates
+{{ task.updates_md or "- (none)" }}
+
+# Memory Facts
+{{ task.memory_facts_md or "- (none)" }}
+
+# Tool Call History
+{{ task.tool_call_history_md or "- (none)" }}
+
+# Check Result
+- Verdict: {{ task.check_verdict or "" }}
+- Reason: {{ task.check_reason }}
+- Confidence: {{ task.check_confidence }}
+- Evidence Refs: {{ (task.check_evidence_refs or []) | join(", ") }}
+- New Message Count: {{ task.check_new_message_count }}
+
+# Outcome
+{{ task.outcome if task.outcome is not none else "- (none)" }}
