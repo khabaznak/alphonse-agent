@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 
 from alphonse.agent_v2.core.core import AlphonseCore
 from alphonse.agent_v2.core.core import CoreMessage
 from alphonse.agent_v2.core.core import ImprovementPhase
-from alphonse.agent_v2.core.core import MessagePriority
 from alphonse.agent_v2.core.core import ProcessingResult
 from alphonse.agent_v2.core.core import StateSnapshot
 from alphonse.agent_v2.core.messages import InMemoryMessageQueue
@@ -13,70 +13,56 @@ from alphonse.agent_v2.core.messages import MessageSelector
 from alphonse.agent_v2.core.state import reset_state
 
 
-def test_dequeue_uses_fifo_when_priorities_are_equal() -> None:
+def test_dequeue_uses_fifo_order() -> None:
     queue = InMemoryMessageQueue()
     queue.enqueue(_message("first"))
     queue.enqueue(_message("second"))
 
-    assert queue.dequeue().message.content == "first"
-    assert queue.dequeue().message.content == "second"
+    assert queue.dequeue().message.prompt == "first"
+    assert queue.dequeue().message.prompt == "second"
 
 
-def test_dequeue_prefers_higher_priority_before_older_lower_priority() -> None:
+def test_dequeue_can_select_next_message_from_user() -> None:
     queue = InMemoryMessageQueue()
-    queue.enqueue(_message("low", priority=MessagePriority.LOW))
-    queue.enqueue(_message("urgent", priority=MessagePriority.URGENT))
-    queue.enqueue(_message("high", priority=MessagePriority.HIGH))
+    queue.enqueue(_message("alex request", user="alex"))
+    queue.enqueue(_message("gaby request", user="gaby"))
 
-    assert queue.dequeue().message.content == "urgent"
-    assert queue.dequeue().message.content == "high"
-    assert queue.dequeue().message.content == "low"
-
-
-def test_dequeue_can_select_next_message_from_sender() -> None:
-    queue = InMemoryMessageQueue()
-    queue.enqueue(_message("alex request", sender_id="alex"))
-    queue.enqueue(_message("gaby request", sender_id="gaby"))
-
-    queued = queue.dequeue(MessageSelector(sender_id="gaby"))
+    queued = queue.dequeue(MessageSelector(user="gaby"))
 
     assert queued is not None
-    assert queued.message.content == "gaby request"
-    assert queue.dequeue().message.content == "alex request"
+    assert queued.message.prompt == "gaby request"
+    assert queue.dequeue().message.prompt == "alex request"
 
 
-def test_selector_filters_by_topic_and_tags() -> None:
+def test_selector_filters_by_project_id_and_tag() -> None:
     queue = InMemoryMessageQueue()
-    queue.enqueue(_message("file task", topic="files", tags=("household", "work")))
-    queue.enqueue(_message("scheduled job", topic="jobs", tags=("scheduled", "maintenance")))
+    queue.enqueue(_message("file task", project_id="files", tag="household"))
+    queue.enqueue(_message("scheduled job", project_id="jobs", tag="maintenance"))
 
-    by_topic = queue.peek(MessageSelector(topic="jobs"))
-    by_any_tag = queue.peek(MessageSelector(tags_any=("maintenance", "urgent")))
-    by_all_tags = queue.peek(MessageSelector(tags_all=("household", "work")))
+    by_project = queue.peek(MessageSelector(project_id="jobs"))
+    by_tag = queue.peek(MessageSelector(tag="maintenance"))
 
-    assert by_topic is not None
-    assert by_topic.message.content == "scheduled job"
-    assert by_any_tag is not None
-    assert by_any_tag.message.content == "scheduled job"
-    assert by_all_tags is not None
-    assert by_all_tags.message.content == "file task"
+    assert by_project is not None
+    assert by_project.message.prompt == "scheduled job"
+    assert by_tag is not None
+    assert by_tag.message.prompt == "scheduled job"
 
 
 def test_peek_does_not_remove_messages() -> None:
     queue = InMemoryMessageQueue()
-    queue.enqueue(_message("gaby request", sender_id="gaby"))
+    queue.enqueue(_message("gaby request", user="gaby"))
 
-    assert queue.peek(MessageSelector(sender_id="gaby")) is not None
+    assert queue.peek(MessageSelector(user="gaby")) is not None
     assert queue.size() == 1
-    assert queue.dequeue(MessageSelector(sender_id="gaby")) is not None
+    assert queue.dequeue(MessageSelector(user="gaby")) is not None
     assert queue.size() == 0
 
 
 def test_core_run_once_processes_only_matching_message() -> None:
     reset_state()
     queue = InMemoryMessageQueue()
-    queue.enqueue(_message("alex request", sender_id="alex"))
-    queue.enqueue(_message("gaby request", sender_id="gaby"))
+    queue.enqueue(_message("alex request", user="alex"))
+    queue.enqueue(_message("gaby request", user="gaby"))
     intelligence = _RecordingIntelligence()
     state = _RecordingState()
     core = AlphonseCore(
@@ -88,7 +74,7 @@ def test_core_run_once_processes_only_matching_message() -> None:
         memory=_NullMemory(),
     )
 
-    snapshot = core.run_once(MessageSelector(sender_id="gaby"))
+    snapshot = core.run_once(MessageSelector(user="gaby"))
 
     assert snapshot == StateSnapshot(
         phase=ImprovementPhase.PLAN,
@@ -96,24 +82,16 @@ def test_core_run_once_processes_only_matching_message() -> None:
         current_work="gaby request",
     )
     assert intelligence.processed == ["gaby request"]
-    assert queue.dequeue().message.content == "alex request"
+    assert queue.dequeue().message.prompt == "alex request"
 
 
-def _message(
-    content: str,
-    *,
-    sender_id: str | None = None,
-    topic: str | None = None,
-    tags: tuple[str, ...] = (),
-    priority: MessagePriority = MessagePriority.NORMAL,
-) -> CoreMessage:
+def _message(content: str, *, user: str = "alex", project_id: str = "", tag: str = "") -> CoreMessage:
     return CoreMessage(
-        content=content,
-        source="test",
-        sender_id=sender_id,
-        topic=topic,
-        tags=tags,
-        priority=priority,
+        timestamp=datetime.now().astimezone(),
+        prompt=content,
+        user=user,
+        project_id=project_id,
+        tag=tag,
     )
 
 
@@ -125,12 +103,12 @@ class _RecordingIntelligence:
         _ = context
         if self.processed is None:
             self.processed = []
-        self.processed.append(message.content)
+        self.processed.append(message.prompt)
         return ProcessingResult(
             snapshot=StateSnapshot(
                 phase=ImprovementPhase.PLAN,
-                task_owner=message.sender_id,
-                current_work=message.content,
+                task_owner=message.user,
+                current_work=message.prompt,
             )
         )
 

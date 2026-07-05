@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 
 from alphonse.agent_v2.core.core import AlphonseCore
 from alphonse.agent_v2.core.core import CoreLoopContext
@@ -62,10 +63,10 @@ def test_working_state_does_not_let_outer_loop_consume_message() -> None:
 def test_processor_can_consume_steering_message_through_context() -> None:
     processor = _SteeringProcessor()
     core, queue, _ = _core(processor)
-    queue.enqueue(_message("main", sender_id="alex"))
-    queue.enqueue(_message("steering", sender_id="gaby"))
+    queue.enqueue(_message("main", user="alex"))
+    queue.enqueue(_message("steering", user="gaby"))
 
-    result = core.step(MessageSelector(sender_id="alex"))
+    result = core.step(MessageSelector(user="alex"))
 
     assert result.status == LoopStepStatus.PROCESSED
     assert processor.steering == "steering"
@@ -125,8 +126,8 @@ def test_ddfsm_returns_expected_seeded_transitions() -> None:
         assert outcome.next_state_key == to_state
 
 
-def _message(content: str, *, sender_id: str | None = None) -> CoreMessage:
-    return CoreMessage(content=content, source="test", sender_id=sender_id)
+def _message(content: str, *, user: str = "alex") -> CoreMessage:
+    return CoreMessage(timestamp=datetime.now().astimezone(), prompt=content, user=user)
 
 
 def _core(processor: object) -> tuple[AlphonseCore, InMemoryMessageQueue, object]:
@@ -159,9 +160,9 @@ class _Processor:
     def process(self, message: CoreMessage, context: CoreLoopContext) -> ProcessingResult:
         _ = context
         assert self.processed is not None
-        self.processed.append(message.content)
+        self.processed.append(message.prompt)
         return ProcessingResult(
-            snapshot=StateSnapshot(current_work=message.content),
+            snapshot=StateSnapshot(current_work=message.prompt),
             status=self.status,
             error=self.error,
         )
@@ -173,8 +174,8 @@ class _SteeringProcessor:
 
     def process(self, message: CoreMessage, context: CoreLoopContext) -> ProcessingResult:
         _ = message
-        steering = context.consume_message(MessageSelector(sender_id="gaby"))
-        self.steering = steering.message.content if steering else None
+        steering = context.consume_message(MessageSelector(user="gaby"))
+        self.steering = steering.message.prompt if steering else None
         return ProcessingResult(snapshot=StateSnapshot(current_work="main"))
 
 

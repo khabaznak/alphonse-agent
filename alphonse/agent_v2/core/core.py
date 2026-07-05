@@ -7,6 +7,7 @@ import or adapt v1 agent internals.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime
 from enum import Enum
 from time import sleep
 from typing import TYPE_CHECKING, Any, Protocol
@@ -35,15 +36,6 @@ class ImprovementPhase(str, Enum):
     DO = "do"
     CHECK = "check"
     ACT = "act"
-
-
-class MessagePriority(str, Enum):
-    """Initial priority vocabulary for messages entering Alphonse."""
-
-    LOW = "low"
-    NORMAL = "normal"
-    HIGH = "high"
-    URGENT = "urgent"
 
 
 class ToolKind(str, Enum):
@@ -76,14 +68,11 @@ class LoopStepStatus(str, Enum):
 class CoreMessage:
     """Message envelope for all communication with the core loop."""
 
-    content: str
-    source: str
-    sender_id: str | None = None
-    owner_id: str | None = None
-    topic: str | None = None
-    priority: MessagePriority = MessagePriority.NORMAL
-    tags: tuple[str, ...] = ()
-    persist: bool = False
+    timestamp: datetime
+    prompt: str
+    user: str
+    project_id: str = ""
+    tag: str = ""
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
@@ -270,7 +259,7 @@ class AlphonseCore:
         except Exception as exc:
             result = ProcessingResult(
                 snapshot=StateSnapshot(
-                    current_work=queued.message.content,
+                    current_work=queued.message.prompt,
                     metadata={"exception_type": type(exc).__name__},
                 ),
                 status=ProcessingStatus.FAILED,

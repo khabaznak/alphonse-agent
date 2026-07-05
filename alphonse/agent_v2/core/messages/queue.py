@@ -6,18 +6,9 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from itertools import count
 from threading import RLock
-from typing import Iterable
 from uuid import uuid4
 
-from alphonse.agent_v2.core.core import CoreMessage, MessagePriority
-
-
-_PRIORITY_RANK = {
-    MessagePriority.URGENT: 0,
-    MessagePriority.HIGH: 1,
-    MessagePriority.NORMAL: 2,
-    MessagePriority.LOW: 3,
-}
+from alphonse.agent_v2.core.core import CoreMessage
 
 
 def _now_utc() -> datetime:
@@ -38,13 +29,9 @@ class QueuedMessage:
 class MessageSelector:
     """Query criteria for retrieving messages from the queue."""
 
-    sender_id: str | None = None
-    owner_id: str | None = None
-    source: str | None = None
-    topic: str | None = None
-    tags_any: tuple[str, ...] = ()
-    tags_all: tuple[str, ...] = ()
-    priorities: tuple[MessagePriority, ...] = ()
+    user: str | None = None
+    project_id: str | None = None
+    tag: str | None = None
 
 
 class InMemoryMessageQueue:
@@ -83,15 +70,7 @@ class InMemoryMessageQueue:
 
 
 def _selection_key(message: QueuedMessage) -> tuple[int, int]:
-    return (_priority_rank(message.message.priority), message.sequence)
-
-
-def _priority_rank(priority: MessagePriority | str) -> int:
-    try:
-        normalized = priority if isinstance(priority, MessagePriority) else MessagePriority(str(priority))
-    except ValueError:
-        normalized = MessagePriority.NORMAL
-    return _PRIORITY_RANK[normalized]
+    return (message.sequence, 0)
 
 
 def _matches(queued: QueuedMessage, selector: MessageSelector | None) -> bool:
@@ -99,31 +78,11 @@ def _matches(queued: QueuedMessage, selector: MessageSelector | None) -> bool:
         return True
 
     message = queued.message
-    if selector.sender_id is not None and message.sender_id != selector.sender_id:
+    if selector.user is not None and message.user != selector.user:
         return False
-    if selector.owner_id is not None and message.owner_id != selector.owner_id:
+    if selector.project_id is not None and message.project_id != selector.project_id:
         return False
-    if selector.source is not None and message.source != selector.source:
-        return False
-    if selector.topic is not None and message.topic != selector.topic:
-        return False
-    if selector.priorities and message.priority not in _normalize_priorities(selector.priorities):
-        return False
-
-    message_tags = set(message.tags)
-    if selector.tags_any and not message_tags.intersection(selector.tags_any):
-        return False
-    if selector.tags_all and not set(selector.tags_all).issubset(message_tags):
+    if selector.tag is not None and message.tag != selector.tag:
         return False
     return True
-
-
-def _normalize_priorities(values: Iterable[MessagePriority | str]) -> set[MessagePriority]:
-    priorities: set[MessagePriority] = set()
-    for value in values:
-        try:
-            priorities.add(value if isinstance(value, MessagePriority) else MessagePriority(str(value)))
-        except ValueError:
-            continue
-    return priorities
 
