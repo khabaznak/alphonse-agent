@@ -62,6 +62,9 @@ class NullToolRegistry:
         _ = name
         return None
 
+    def list(self) -> tuple[ToolDescriptor, ...]:
+        return ()
+
 
 class NullPromptLoader:
     def load(self, name: str) -> PromptFile:

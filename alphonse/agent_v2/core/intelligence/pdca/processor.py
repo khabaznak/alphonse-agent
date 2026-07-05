@@ -23,6 +23,8 @@ class PDCAIntelligenceProcessor:
                 metadata={
                     "check_verdict": result.check_verdict,
                     "check_reason": result.check_reason,
+                    "plan_md": result.plan_md,
+                    "planned_tool_call": result.metadata.get("planned_tool_call"),
                     "task_state": result.to_dict(),
                 },
             )

@@ -35,6 +35,52 @@ def test_pdca_prompt_templates_render_expected_sections() -> None:
         assert "Task state markdown" in rendered
 
 
+def test_acceptance_criteria_prompt_template_renders_expected_sections() -> None:
+    env = Environment(loader=FileSystemLoader(TEMPLATE_DIR))
+
+    rendered = env.get_template("acceptance_criteria_prompt.j2").render(
+        check_verdict="new",
+        check_reason="No acceptance criteria were present.",
+        existing_acceptance_criteria_md="- (none)",
+        task_state_md="Task state markdown",
+    )
+
+    assert "# System Prompt" in rendered
+    assert "1.- [ ] The required outcome is true" in rendered
+    assert "2.- [x] An already completed requirement is true" in rendered
+    assert "## Philosophy.md" in rendered
+    assert "## GlobalContext.md" in rendered
+    assert "## UserPersonality" in rendered
+    assert "## Project Context" in rendered
+    assert "# Check Verdict" in rendered
+    assert "new" in rendered
+    assert "# Existing Acceptance Criteria" in rendered
+    assert "# Task State" in rendered
+    assert "Task state markdown" in rendered
+
+
+def test_tool_call_plan_prompt_template_renders_expected_sections() -> None:
+    env = Environment(loader=FileSystemLoader(TEMPLATE_DIR))
+
+    rendered = env.get_template("tool_call_plan_prompt.j2").render(
+        acceptance_criteria_md="1.- [ ] File exists",
+        available_tools_md="- tool-1 | write_file | native | Writes files",
+        task_state_md="Task state markdown",
+    )
+
+    assert "# System Prompt" in rendered
+    assert "exactly one next tool call" in rendered
+    assert '"tool_id": "string"' in rendered
+    assert '"tool_name": "string"' in rendered
+    assert '"arguments": {}' in rendered
+    assert "# Acceptance Criteria" in rendered
+    assert "1.- [ ] File exists" in rendered
+    assert "# Available Tools" in rendered
+    assert "write_file" in rendered
+    assert "# Task State" in rendered
+    assert "Task state markdown" in rendered
+
+
 def test_pdca_prompt_templates_have_stub_defaults() -> None:
     env = Environment(loader=FileSystemLoader(TEMPLATE_DIR))
 

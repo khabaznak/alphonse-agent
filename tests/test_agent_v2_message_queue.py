@@ -145,7 +145,8 @@ class _RecordingState:
 
 
 class _NullTools:
-    pass
+    def list(self) -> tuple[object, ...]:
+        return ()
 
 
 class _NullPrompts:

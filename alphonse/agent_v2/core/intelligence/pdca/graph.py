@@ -29,13 +29,21 @@ def build_pdca_graph(context: CoreLoopContext | None = None) -> Any:
     """
     graph = StateGraph(TaskState)
     graph.add_node(CHECK_NODE, lambda task: check_node(task, context=context))
-    graph.add_node(PLAN_NODE, plan_node)
+    graph.add_node(PLAN_NODE, lambda task: plan_node(task, context=context))
     graph.add_node(DO_NODE, do_node)
     graph.add_node(ACT_NODE, act_node)
 
     graph.set_entry_point(CHECK_NODE)
     graph.add_edge(CHECK_NODE, ACT_NODE)
-    graph.add_edge(ACT_NODE, END)
+    graph.add_conditional_edges(
+        ACT_NODE,
+        _route_after_act,
+        {
+            PLAN_NODE: PLAN_NODE,
+            END: END,
+        },
+    )
+    graph.add_edge(PLAN_NODE, END)
     return graph.compile()
 
 
@@ -43,3 +51,14 @@ def run_pdca_once(task: TaskState, context: CoreLoopContext | None = None) -> Ta
     """Run one stubbed PDCA pass and return a TaskState container."""
     result = build_pdca_graph(context=context).invoke(task)
     return TaskState.from_dict(dict(result))
+
+
+def _route_after_act(task: TaskState) -> str:
+    if _markdown_has_acceptance_criteria(task.acceptance_criteria_md):
+        return PLAN_NODE
+    return END
+
+
+def _markdown_has_acceptance_criteria(value: str) -> bool:
+    rendered = str(value or "").strip()
+    return bool(rendered and rendered != "- (none)")

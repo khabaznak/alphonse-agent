@@ -82,6 +82,7 @@ class CoreMessage:
 class ToolDescriptor:
     """Minimal registry descriptor for native tools and artifacts."""
 
+    tool_id: str
     name: str
     kind: ToolKind
     description: str = ""
@@ -142,6 +143,7 @@ class CoreLoopContext:
     """Processor-controlled access to selected queued messages."""
 
     messages: MessageQueue
+    tools: ToolRegistry | None = None
 
     def consume_message(self, selector: MessageSelector | None = None) -> QueuedMessage | None:
         return self.messages.dequeue(selector)
@@ -178,6 +180,9 @@ class ToolRegistry(Protocol):
 
     def get(self, name: str) -> ToolDescriptor | None:
         """Return a registered tool descriptor by name."""
+
+    def list(self) -> tuple[ToolDescriptor, ...]:
+        """Return all registered tool descriptors."""
 
 
 class SystemPromptLoader(Protocol):
@@ -259,7 +264,7 @@ class AlphonseCore:
         try:
             result = self.intelligence.process(
                 task,
-                CoreLoopContext(messages=self.messages),
+                CoreLoopContext(messages=self.messages, tools=self.tools),
             )
         except Exception as exc:
             result = ProcessingResult(
