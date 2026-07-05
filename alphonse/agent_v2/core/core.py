@@ -26,6 +26,7 @@ from alphonse.agent_v2.core.state.ddfsm import build_default_ddfsm
 from alphonse.agent_v2.core.state.runtime import State
 
 if TYPE_CHECKING:
+    from alphonse.agent_v2.core.intelligence.task_state import TaskState
     from alphonse.agent_v2.core.messages.queue import MessageSelector, QueuedMessage
 
 
@@ -148,8 +149,8 @@ class CoreLoopContext:
 class IntelligenceProcessor(Protocol):
     """PDCA-inspired processor boundary for the core loop."""
 
-    def process(self, message: CoreMessage, context: CoreLoopContext) -> ProcessingResult:
-        """Process one message and return the resulting processing status."""
+    def process(self, task: TaskState, context: CoreLoopContext) -> ProcessingResult:
+        """Process one task state and return the resulting processing status."""
 
 
 class MessageQueue(Protocol):
@@ -251,15 +252,18 @@ class AlphonseCore:
             )
 
         working = self._transition(MESSAGE_DEQUEUED)
+        from alphonse.agent_v2.core.intelligence.task_state import TaskState
+
+        task = TaskState.from_queued_message(queued)
         try:
             result = self.intelligence.process(
-                queued.message,
+                task,
                 CoreLoopContext(messages=self.messages),
             )
         except Exception as exc:
             result = ProcessingResult(
                 snapshot=StateSnapshot(
-                    current_work=queued.message.prompt,
+                    current_work=task.goal,
                     metadata={"exception_type": type(exc).__name__},
                 ),
                 status=ProcessingStatus.FAILED,

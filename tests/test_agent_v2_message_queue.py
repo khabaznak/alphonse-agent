@@ -8,6 +8,7 @@ from alphonse.agent_v2.core.core import CoreMessage
 from alphonse.agent_v2.core.core import ImprovementPhase
 from alphonse.agent_v2.core.core import ProcessingResult
 from alphonse.agent_v2.core.core import StateSnapshot
+from alphonse.agent_v2.core.intelligence import TaskState
 from alphonse.agent_v2.core.messages import InMemoryMessageQueue
 from alphonse.agent_v2.core.messages import MessageSelector
 from alphonse.agent_v2.core.state import reset_state
@@ -99,16 +100,16 @@ def _message(content: str, *, user: str = "alex", project_id: str = "", tag: str
 class _RecordingIntelligence:
     processed: list[str] | None = None
 
-    def process(self, message: CoreMessage, context: object) -> ProcessingResult:
+    def process(self, task: TaskState, context: object) -> ProcessingResult:
         _ = context
         if self.processed is None:
             self.processed = []
-        self.processed.append(message.prompt)
+        self.processed.append(task.goal)
         return ProcessingResult(
             snapshot=StateSnapshot(
                 phase=ImprovementPhase.PLAN,
-                task_owner=message.user,
-                current_work=message.prompt,
+                task_owner=task.user,
+                current_work=task.goal,
             )
         )
 

@@ -10,6 +10,7 @@ from alphonse.agent_v2.core.core import LoopStepStatus
 from alphonse.agent_v2.core.core import ProcessingResult
 from alphonse.agent_v2.core.core import ProcessingStatus
 from alphonse.agent_v2.core.core import StateSnapshot
+from alphonse.agent_v2.core.intelligence import TaskState
 from alphonse.agent_v2.core.messages import InMemoryMessageQueue
 from alphonse.agent_v2.core.messages import MessageSelector
 from alphonse.agent_v2.core.state import AVAILABLE
@@ -45,6 +46,7 @@ def test_available_state_consumes_message_and_returns_available_on_completion() 
     assert result.state_before.key == AVAILABLE
     assert result.state_after.key == AVAILABLE
     assert processor.processed == ["first"]
+    assert processor.received_message_ids == [result.queued_message_id]
     assert queue.size() == 0
 
 
@@ -93,6 +95,17 @@ def test_processor_failed_outcome_transitions_to_error() -> None:
     assert result.status == LoopStepStatus.FAILED
     assert result.state_after.key == ERROR
     assert result.error == "broken"
+
+
+def test_processor_exception_snapshot_uses_task_goal() -> None:
+    core, queue, _ = _core(_ExplodingProcessor())
+    queue.enqueue(_message("boom"))
+
+    result = core.step()
+
+    assert result.status == LoopStepStatus.FAILED
+    assert core.state.snapshot().current_work == "boom"
+    assert core.state.snapshot().metadata["exception_type"] == "RuntimeError"
 
 
 def test_request_stop_prevents_further_queue_consumption() -> None:
@@ -152,17 +165,22 @@ class _Processor:
     status: ProcessingStatus
     error: str | None = None
     processed: list[str] | None = None
+    received_message_ids: list[str | None] | None = None
 
     def __post_init__(self) -> None:
         if self.processed is None:
             self.processed = []
+        if self.received_message_ids is None:
+            self.received_message_ids = []
 
-    def process(self, message: CoreMessage, context: CoreLoopContext) -> ProcessingResult:
+    def process(self, task: TaskState, context: CoreLoopContext) -> ProcessingResult:
         _ = context
         assert self.processed is not None
-        self.processed.append(message.prompt)
+        assert self.received_message_ids is not None
+        self.processed.append(task.goal)
+        self.received_message_ids.append(task.message_id)
         return ProcessingResult(
-            snapshot=StateSnapshot(current_work=message.prompt),
+            snapshot=StateSnapshot(current_work=task.goal),
             status=self.status,
             error=self.error,
         )
@@ -172,11 +190,18 @@ class _Processor:
 class _SteeringProcessor:
     steering: str | None = None
 
-    def process(self, message: CoreMessage, context: CoreLoopContext) -> ProcessingResult:
-        _ = message
+    def process(self, task: TaskState, context: CoreLoopContext) -> ProcessingResult:
+        _ = task
         steering = context.consume_message(MessageSelector(user="gaby"))
         self.steering = steering.message.prompt if steering else None
         return ProcessingResult(snapshot=StateSnapshot(current_work="main"))
+
+
+class _ExplodingProcessor:
+    def process(self, task: TaskState, context: CoreLoopContext) -> ProcessingResult:
+        _ = task
+        _ = context
+        raise RuntimeError("processor exploded")
 
 
 @dataclass

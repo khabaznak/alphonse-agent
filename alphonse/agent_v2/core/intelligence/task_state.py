@@ -2,15 +2,18 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from jinja2 import Environment
 from jinja2 import FileSystemLoader
 from jinja2 import select_autoescape
 
 from alphonse.agent_v2.core.core import CoreMessage
+
+if TYPE_CHECKING:
+    from alphonse.agent_v2.core.messages.queue import QueuedMessage
 
 
 CHECK_VERDICTS = {"new", "steer", "wip", "mission_success", "mission_failed"}
@@ -44,6 +47,7 @@ class TaskState:
     check_evidence_refs: list[str] | None = None
     check_new_message_count: int = 0
     pdca_cycle_count: int = 0
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
     def from_message(cls, message: CoreMessage, message_id: str | None = None) -> "TaskState":
@@ -55,12 +59,18 @@ class TaskState:
             project_id=str(message.project_id or "").strip(),
             tag=str(message.tag or "").strip(),
             goal=prompt,
+            metadata=dict(message.metadata),
         )
         state.recent_conversation_md = _append_markdown_line(
             EMPTY_MARKDOWN,
             f"{message.user}: {prompt}",
         )
         return state
+
+    @classmethod
+    def from_queued_message(cls, queued: QueuedMessage) -> "TaskState":
+        """Create task state from a queue-owned message envelope."""
+        return cls.from_message(queued.message, message_id=queued.message_id)
 
     @classmethod
     def from_dict(cls, value: dict[str, Any]) -> "TaskState":
@@ -92,6 +102,7 @@ class TaskState:
             else [],
             check_new_message_count=max(0, _coerce_int(value.get("check_new_message_count"))),
             pdca_cycle_count=max(0, _coerce_int(value.get("pdca_cycle_count"))),
+            metadata=dict(value.get("metadata")) if isinstance(value.get("metadata"), dict) else {},
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -119,6 +130,7 @@ class TaskState:
             "check_evidence_refs": list(self.check_evidence_refs or []),
             "check_new_message_count": self.check_new_message_count,
             "pdca_cycle_count": self.pdca_cycle_count,
+            "metadata": dict(self.metadata or {}),
         }
 
     def to_markdown_prompt(self) -> str:

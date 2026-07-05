@@ -6,6 +6,8 @@ import pytest
 
 from alphonse.agent_v2.core.core import CoreMessage
 from alphonse.agent_v2.core.intelligence import TaskState
+from alphonse.agent_v2.core.messages import CommunicationChannel
+from alphonse.agent_v2.core.messages import InMemoryMessageQueue
 
 
 def test_from_message_maps_canonical_core_message_fields() -> None:
@@ -25,6 +27,46 @@ def test_from_message_maps_canonical_core_message_fields() -> None:
     assert state.project_id == "home"
     assert state.tag == "writing"
     assert state.recent_conversation_md == "- gaby: Build the file"
+
+
+def test_from_message_carries_message_metadata() -> None:
+    message = CoreMessage(
+        timestamp=datetime.now().astimezone(),
+        prompt="/project new",
+        user="alex",
+        metadata={"is_command": True, "command": "project", "command_args": "new"},
+    )
+
+    state = TaskState.from_message(message)
+
+    assert state.metadata == {
+        "is_command": True,
+        "command": "project",
+        "command_args": "new",
+    }
+
+
+def test_from_queued_message_preserves_queue_and_message_metadata() -> None:
+    queue = InMemoryMessageQueue()
+    queued = CommunicationChannel(queue).queue_message(
+        prompt="/project new",
+        user="alex",
+        project_id="alpha",
+        tag="work",
+    )
+
+    state = TaskState.from_queued_message(queued)
+
+    assert state.message_id == queued.message_id
+    assert state.goal == "/project new"
+    assert state.user == "alex"
+    assert state.project_id == "alpha"
+    assert state.tag == "work"
+    assert state.metadata == {
+        "is_command": True,
+        "command": "project",
+        "command_args": "new",
+    }
 
 
 def test_markdown_defaults_are_none_bullets() -> None:
@@ -77,6 +119,7 @@ def test_to_dict_from_dict_round_trip() -> None:
         check_evidence_refs=["ref-1"],
         check_new_message_count=2,
         pdca_cycle_count=3,
+        metadata={"is_command": False},
     )
     state.append_update("updated")
 
