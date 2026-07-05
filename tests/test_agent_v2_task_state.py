@@ -26,7 +26,7 @@ def test_from_message_maps_canonical_core_message_fields() -> None:
     assert state.user == "gaby"
     assert state.project_id == "home"
     assert state.tag == "writing"
-    assert state.recent_conversation_md == "- gaby: Build the file"
+    assert state.recent_conversation_md == '- gaby: "Build the file"'
 
 
 def test_from_message_carries_message_metadata() -> None:
@@ -44,6 +44,15 @@ def test_from_message_carries_message_metadata() -> None:
         "command": "project",
         "command_args": "new",
     }
+
+
+def test_append_conversation_message_uses_speaker_and_quoted_prompt() -> None:
+    state = TaskState()
+
+    state.append_conversation_message("Alex", "Hi Alphonse!")
+    state.append_conversation_message("Alphonse [agent]", "Hello, sir.")
+
+    assert state.recent_conversation_md == '- Alex: "Hi Alphonse!"\n- Alphonse [agent]: "Hello, sir."'
 
 
 def test_from_queued_message_preserves_queue_and_message_metadata() -> None:

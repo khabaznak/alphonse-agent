@@ -13,13 +13,19 @@ from alphonse.agent_v2.core.intelligence.pdca.nodes import plan_node
 from alphonse.agent_v2.core.intelligence.task_state import TaskState
 
 
-def test_pdca_node_stubs_return_task_state_unchanged() -> None:
+def test_pdca_non_check_node_stubs_return_task_state_unchanged() -> None:
     state = TaskState(goal="Review this request")
 
-    assert check_node(state) is state
     assert plan_node(state) is state
     assert do_node(state) is state
     assert act_node(state) is state
+
+
+def test_pdca_check_node_sets_initial_verdict() -> None:
+    state = TaskState(goal="Review this request")
+
+    assert check_node(state) is state
+    assert state.check_verdict == "new"
 
 
 def test_pdca_graph_uses_check_as_entry_point() -> None:
@@ -38,6 +44,13 @@ def test_pdca_graph_contains_all_cycle_nodes() -> None:
     assert PLAN_NODE in graph.nodes
     assert DO_NODE in graph.nodes
     assert ACT_NODE in graph.nodes
+
+
+def test_pdca_graph_routes_check_directly_to_act() -> None:
+    graph = build_pdca_graph().get_graph()
+
+    assert any(edge.source == CHECK_NODE and edge.target == ACT_NODE for edge in graph.edges)
+    assert not any(edge.source == CHECK_NODE and edge.target == PLAN_NODE for edge in graph.edges)
 
 
 def test_run_pdca_once_preserves_task_state_container() -> None:

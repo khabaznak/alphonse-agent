@@ -58,13 +58,11 @@ class TaskState:
             user=str(message.user or "").strip() or None,
             project_id=str(message.project_id or "").strip(),
             tag=str(message.tag or "").strip(),
+            correlation_id=str(message.correlation_id or "").strip(),
             goal=prompt,
             metadata=dict(message.metadata),
         )
-        state.recent_conversation_md = _append_markdown_line(
-            EMPTY_MARKDOWN,
-            f"{message.user}: {prompt}",
-        )
+        state.append_conversation_message(message.user, prompt)
         return state
 
     @classmethod
@@ -161,6 +159,14 @@ class TaskState:
 
     def append_recent_conversation_line(self, line: str) -> None:
         self.recent_conversation_md = _append_markdown_line(self.recent_conversation_md, line)
+
+    def append_conversation_message(self, user: str, prompt: str) -> None:
+        speaker = str(user or "").strip() or "unknown"
+        rendered_prompt = str(prompt or "").strip()
+        if not rendered_prompt:
+            return
+        escaped_prompt = rendered_prompt.replace('"', '\\"')
+        self.append_recent_conversation_line(f'{speaker}: "{escaped_prompt}"')
 
     def append_update(self, update: str) -> None:
         self.updates_md = _append_markdown_line(self.updates_md, update)

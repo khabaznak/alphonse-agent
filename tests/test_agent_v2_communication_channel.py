@@ -59,6 +59,19 @@ def test_selector_dequeues_by_user_project_id_and_tag() -> None:
     assert selected.message.prompt == "two"
 
 
+def test_queue_message_preserves_correlation_id_for_selector_lookup() -> None:
+    queue = InMemoryMessageQueue()
+    channel = CommunicationChannel(queue)
+    channel.queue_message(prompt="one", user="alex", correlation_id="task-1")
+    channel.queue_message(prompt="two", user="gaby", correlation_id="task-2")
+
+    selected = queue.dequeue(MessageSelector(correlation_id="task-2"))
+
+    assert selected is not None
+    assert selected.message.prompt == "two"
+    assert selected.message.correlation_id == "task-2"
+
+
 def test_slash_command_detected_only_at_prompt_start() -> None:
     channel = CommunicationChannel(InMemoryMessageQueue())
 

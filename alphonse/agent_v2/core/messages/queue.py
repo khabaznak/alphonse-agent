@@ -32,6 +32,7 @@ class MessageSelector:
     user: str | None = None
     project_id: str | None = None
     tag: str | None = None
+    correlation_id: str | None = None
 
 
 class InMemoryMessageQueue:
@@ -84,5 +85,6 @@ def _matches(queued: QueuedMessage, selector: MessageSelector | None) -> bool:
         return False
     if selector.tag is not None and message.tag != selector.tag:
         return False
+    if selector.correlation_id is not None and message.correlation_id != selector.correlation_id:
+        return False
     return True
-

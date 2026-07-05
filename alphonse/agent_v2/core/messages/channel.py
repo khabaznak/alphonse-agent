@@ -23,6 +23,7 @@ class CommunicationChannel:
         user: str,
         project_id: str = "",
         tag: str = "",
+        correlation_id: str = "",
         timestamp: datetime | None = None,
     ) -> QueuedMessage:
         prompt_value = str(prompt or "").strip()
@@ -38,6 +39,7 @@ class CommunicationChannel:
             user=user_value,
             project_id=str(project_id or ""),
             tag=str(tag or ""),
+            correlation_id=str(correlation_id or ""),
             metadata=_command_metadata(prompt_value),
         )
         return self.messages.enqueue(message)
@@ -56,4 +58,3 @@ def _command_metadata(prompt: str) -> dict[str, Any]:
     command = parts[0]
     command_args = parts[1] if len(parts) > 1 else ""
     return {"is_command": True, "command": command, "command_args": command_args}
-

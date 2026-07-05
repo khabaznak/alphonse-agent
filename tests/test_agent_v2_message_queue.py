@@ -49,6 +49,17 @@ def test_selector_filters_by_project_id_and_tag() -> None:
     assert by_tag.message.prompt == "scheduled job"
 
 
+def test_selector_filters_by_correlation_id() -> None:
+    queue = InMemoryMessageQueue()
+    queue.enqueue(_message("main", correlation_id="task-1"))
+    queue.enqueue(_message("answer", correlation_id="task-2"))
+
+    queued = queue.dequeue(MessageSelector(correlation_id="task-2"))
+
+    assert queued is not None
+    assert queued.message.prompt == "answer"
+
+
 def test_peek_does_not_remove_messages() -> None:
     queue = InMemoryMessageQueue()
     queue.enqueue(_message("gaby request", user="gaby"))
@@ -86,13 +97,21 @@ def test_core_run_once_processes_only_matching_message() -> None:
     assert queue.dequeue().message.prompt == "alex request"
 
 
-def _message(content: str, *, user: str = "alex", project_id: str = "", tag: str = "") -> CoreMessage:
+def _message(
+    content: str,
+    *,
+    user: str = "alex",
+    project_id: str = "",
+    tag: str = "",
+    correlation_id: str = "",
+) -> CoreMessage:
     return CoreMessage(
         timestamp=datetime.now().astimezone(),
         prompt=content,
         user=user,
         project_id=project_id,
         tag=tag,
+        correlation_id=correlation_id,
     )
 
 

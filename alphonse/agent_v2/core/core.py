@@ -74,6 +74,7 @@ class CoreMessage:
     user: str
     project_id: str = ""
     tag: str = ""
+    correlation_id: str = ""
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
