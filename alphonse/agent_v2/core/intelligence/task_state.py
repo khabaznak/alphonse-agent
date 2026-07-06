@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -158,6 +159,27 @@ class TaskState:
                 return dict(call)
         return None
 
+    def get_latest_executed_plan_call(self) -> dict[str, Any] | None:
+        calls = _json_list_or_empty(self.plan_json)
+        for call in reversed(calls):
+            if isinstance(call, dict) and isinstance(call.get("execution"), dict):
+                return dict(call)
+        return None
+
+    def acceptance_criteria_all_complete(self) -> bool:
+        checkbox_states = _acceptance_criteria_checkbox_states(self.acceptance_criteria_md)
+        return bool(checkbox_states) and all(checkbox_states)
+
+    def count_plan_call_exceptions(self) -> int:
+        count = 0
+        for call in _json_list_or_empty(self.plan_json):
+            if not isinstance(call, dict):
+                continue
+            execution = call.get("execution")
+            if isinstance(execution, dict) and str(execution.get("status") or "").strip().lower() == "exception":
+                count += 1
+        return count
+
     def record_plan_call_success(self, call_id: str, result: Any) -> None:
         self._record_plan_call_execution(
             call_id,
@@ -268,6 +290,16 @@ def _json_list_or_empty(value: str) -> list[Any]:
     except json.JSONDecodeError:
         return []
     return parsed if isinstance(parsed, list) else []
+
+
+def _acceptance_criteria_checkbox_states(value: str) -> list[bool]:
+    states: list[bool] = []
+    for line in str(value or "").splitlines():
+        match = re.search(r"\[(?P<state>x|\s)\]", line, flags=re.IGNORECASE)
+        if match is None:
+            continue
+        states.append(match.group("state").lower() == "x")
+    return states
 
 
 def _json_safe(value: Any) -> Any:

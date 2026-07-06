@@ -17,6 +17,7 @@ from alphonse.agent_v2.core.messages import InMemoryMessageQueue
 from alphonse.agent_v2.core.state import reset_state
 
 plan_node_module = import_module("alphonse.agent_v2.core.intelligence.pdca.nodes.plan_node")
+check_node_module = import_module("alphonse.agent_v2.core.intelligence.pdca.nodes.check_node")
 
 
 def test_pdca_processor_runs_graph_and_returns_completed_result() -> None:
@@ -80,6 +81,39 @@ def test_pdca_processor_snapshot_includes_planned_tool_call_when_present(monkeyp
     assert result.snapshot.metadata["planned_tool_call"] == planned
     assert result.snapshot.metadata["plan_json"].startswith("[")
     assert result.snapshot.metadata["task_state"]["metadata"]["planned_tool_call"] == planned
+
+
+def test_pdca_processor_snapshot_includes_final_act_outcome(monkeypatch) -> None:
+    monkeypatch.setattr(
+        plan_node_module,
+        "_call_tool_planning_llm",
+        lambda prompt: {
+            "id": "plan-call-1",
+            "tool_id": "tool-1",
+            "tool_name": "write_file",
+            "arguments": {"path": "a.txt"},
+            "internal_state": "Writing the requested file.",
+        },
+    )
+    monkeypatch.setattr(check_node_module, "_call_criteria_review_llm", lambda prompt: "1.- [x] File exists")
+    task = TaskState(
+        goal="Write the file",
+        user="alex",
+        acceptance_criteria_md="1.- [ ] File exists",
+    )
+
+    result = PDCAIntelligenceProcessor().process(
+        task,
+        CoreLoopContext(messages=InMemoryMessageQueue(), tools=_ToolRegistry()),
+    )
+
+    assert result.snapshot.metadata["check_verdict"] == "mission_success"
+    assert result.snapshot.metadata["status"] == "completed"
+    assert result.snapshot.metadata["outcome"] == {
+        "status": "success",
+        "reason": "All acceptance criteria are complete.",
+    }
+    assert result.snapshot.metadata["act_route"] == "end"
 
 
 class _RecordingState:

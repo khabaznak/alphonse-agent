@@ -15,18 +15,22 @@ _ACCEPTANCE_CRITERIA_ACTION_VERDICTS = {"new", "steer"}
 _PLAN_ROUTE = "plan"
 _END_ROUTE = "end"
 _TEMPORARY_MAX_COMPLETED_CYCLES = 1
+_PLAN_CALL_EXCEPTION_FAILURE_THRESHOLD = 3
 
 
 def act_node(task: TaskState) -> TaskState:
     """Act on the check verdict without re-checking or executing work."""
     _observe_completed_do_cycle(task)
+    verdict = str(task.check_verdict or "").strip().lower()
+    if verdict == "wip":
+        return _act_on_wip(task)
+
     if _temporary_cycle_limit_reached(task):
         task.metadata["act_route"] = _END_ROUTE
         task.metadata["act_stop_reason"] = "temporary_cycle_limit"
         task.append_update("Act stopped the CAPD cycle at the temporary completed-cycle limit.")
         return task
 
-    verdict = str(task.check_verdict or "").strip().lower()
     if verdict in _ACCEPTANCE_CRITERIA_ACTION_VERDICTS:
         prompt = _render_acceptance_criteria_prompt(task)
         generated_criteria = _call_acceptance_criteria_llm(prompt)
@@ -52,6 +56,75 @@ def act_node(task: TaskState) -> TaskState:
     task.metadata["act_route"] = _PLAN_ROUTE if _markdown_has_acceptance_criteria(task.acceptance_criteria_md) else _END_ROUTE
     task.append_update(f"Act has no implemented action for check verdict: {verdict or 'none'}.")
     return task
+
+
+def _act_on_wip(task: TaskState) -> TaskState:
+    if task.acceptance_criteria_all_complete():
+        return _mark_mission_success(task, "All acceptance criteria are complete.")
+
+    failure_reason = _mission_failure_reason(task)
+    if failure_reason:
+        return _mark_mission_failed(task, failure_reason)
+
+    if _temporary_cycle_limit_reached(task):
+        task.metadata["act_route"] = _END_ROUTE
+        task.metadata["act_stop_reason"] = "temporary_cycle_limit"
+        task.append_update("Act stopped the CAPD cycle at the temporary completed-cycle limit.")
+        return task
+
+    if _markdown_has_acceptance_criteria(task.acceptance_criteria_md):
+        task.metadata["act_route"] = _PLAN_ROUTE
+        task.append_update("Act routed work-in-progress task back to Plan.")
+        return task
+
+    task.metadata["act_route"] = _END_ROUTE
+    task.append_update("Act cannot continue work-in-progress task without acceptance criteria.")
+    return task
+
+
+def _mark_mission_success(task: TaskState, reason: str) -> TaskState:
+    task.set_check_result(
+        verdict="mission_success",
+        reason=reason,
+        confidence=1.0,
+        evidence_refs=list(task.check_evidence_refs or []),
+        new_message_count=task.check_new_message_count,
+    )
+    task.status = "completed"
+    task.outcome = {"status": "success", "reason": reason}
+    task.metadata["act_route"] = _END_ROUTE
+    task.metadata["act_terminal_decision"] = "mission_success"
+    task.append_update("Act marked the task as mission success.")
+    return task
+
+
+def _mark_mission_failed(task: TaskState, reason: str) -> TaskState:
+    task.set_check_result(
+        verdict="mission_failed",
+        reason=reason,
+        confidence=1.0,
+        evidence_refs=list(task.check_evidence_refs or []),
+        new_message_count=task.check_new_message_count,
+    )
+    task.status = "failed"
+    task.outcome = {"status": "failed", "reason": reason}
+    task.metadata["act_route"] = _END_ROUTE
+    task.metadata["act_terminal_decision"] = "mission_failed"
+    task.append_update("Act marked the task as mission failed.")
+    return task
+
+
+def _mission_failure_reason(task: TaskState) -> str:
+    if task.metadata.get("cancel_requested") is True:
+        return str(task.metadata.get("failure_reason") or "Task was cancelled.")
+    if task.metadata.get("mission_failed") is True:
+        return str(task.metadata.get("failure_reason") or "Mission failure was explicitly signaled.")
+    failure_reason = str(task.metadata.get("failure_reason") or "").strip()
+    if failure_reason:
+        return failure_reason
+    if task.count_plan_call_exceptions() >= _PLAN_CALL_EXCEPTION_FAILURE_THRESHOLD:
+        return f"Planned tool calls reached {_PLAN_CALL_EXCEPTION_FAILURE_THRESHOLD} exceptions."
+    return ""
 
 
 def _render_acceptance_criteria_prompt(task: TaskState) -> str:

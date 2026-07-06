@@ -71,7 +71,7 @@ def test_act_node_unsupported_verdict_does_not_render_acceptance_criteria_prompt
     assert "acceptance_criteria_prompt" not in task.metadata
     assert "acceptance_criteria_llm_stubbed" not in task.metadata
     assert task.metadata["act_route"] == "end"
-    assert "no implemented action" in task.updates_md
+    assert "cannot continue work-in-progress" in task.updates_md
 
 
 def test_act_node_prompt_includes_checkbox_instructions_and_task_state_context() -> None:
@@ -94,6 +94,105 @@ def test_act_node_routes_wip_with_acceptance_criteria_to_plan_before_cycle_limit
     act_node(task)
 
     assert task.metadata["act_route"] == "plan"
+    assert task.check_verdict == "wip"
+    assert "routed work-in-progress task back to Plan" in task.updates_md
+
+
+def test_act_node_wip_with_completed_acceptance_criteria_routes_success_to_end() -> None:
+    task = TaskState(goal="Continue task", check_verdict="wip", acceptance_criteria_md="1.- [x] Done")
+
+    act_node(task)
+
+    assert task.check_verdict == "mission_success"
+    assert task.status == "completed"
+    assert task.outcome == {"status": "success", "reason": "All acceptance criteria are complete."}
+    assert task.metadata["act_route"] == "end"
+    assert task.metadata["act_terminal_decision"] == "mission_success"
+    assert "mission success" in task.updates_md
+
+
+def test_act_node_wip_explicit_cancel_routes_failed_to_end() -> None:
+    task = TaskState(
+        goal="Continue task",
+        check_verdict="wip",
+        acceptance_criteria_md="1.- [ ] Done",
+        metadata={"cancel_requested": True, "failure_reason": "User cancelled the task."},
+    )
+
+    act_node(task)
+
+    assert task.check_verdict == "mission_failed"
+    assert task.status == "failed"
+    assert task.outcome == {"status": "failed", "reason": "User cancelled the task."}
+    assert task.metadata["act_route"] == "end"
+    assert task.metadata["act_terminal_decision"] == "mission_failed"
+
+
+def test_act_node_wip_explicit_failure_metadata_routes_failed_to_end() -> None:
+    task = TaskState(
+        goal="Continue task",
+        check_verdict="wip",
+        acceptance_criteria_md="1.- [ ] Done",
+        metadata={"mission_failed": True},
+    )
+
+    act_node(task)
+
+    assert task.check_verdict == "mission_failed"
+    assert task.outcome == {"status": "failed", "reason": "Mission failure was explicitly signaled."}
+
+
+def test_act_node_wip_repeated_tool_exceptions_route_failed_to_end() -> None:
+    task = TaskState(goal="Continue task", check_verdict="wip", acceptance_criteria_md="1.- [ ] Done")
+    for index in range(3):
+        task.append_plan_call(
+            {
+                "id": f"plan-call-{index}",
+                "tool_id": "tool-1",
+                "tool_name": "write_file",
+                "arguments": {},
+                "internal_state": "Writing.",
+            }
+        )
+        task.record_plan_call_exception(f"plan-call-{index}", RuntimeError("failed"))
+
+    act_node(task)
+
+    assert task.check_verdict == "mission_failed"
+    assert task.status == "failed"
+    assert "3 exceptions" in task.outcome["reason"]
+
+
+def test_act_node_wip_terminal_success_overrides_temporary_cycle_limit() -> None:
+    task = TaskState(
+        goal="Continue task",
+        check_verdict="wip",
+        acceptance_criteria_md="1.- [x] Done",
+        pdca_cycle_count=1,
+        metadata={"do_executed_since_last_act": True, "tool_call_planning_llm_stubbed": True},
+    )
+
+    act_node(task)
+
+    assert task.check_verdict == "mission_success"
+    assert task.metadata["act_terminal_decision"] == "mission_success"
+    assert task.metadata.get("act_stop_reason") != "temporary_cycle_limit"
+
+
+def test_act_node_wip_terminal_failure_overrides_temporary_cycle_limit() -> None:
+    task = TaskState(
+        goal="Continue task",
+        check_verdict="wip",
+        acceptance_criteria_md="1.- [ ] Done",
+        pdca_cycle_count=1,
+        metadata={"failure_reason": "No more attempts should be made.", "tool_call_planning_llm_stubbed": True},
+    )
+
+    act_node(task)
+
+    assert task.check_verdict == "mission_failed"
+    assert task.metadata["act_terminal_decision"] == "mission_failed"
+    assert task.metadata.get("act_stop_reason") != "temporary_cycle_limit"
 
 
 def test_act_node_observes_completed_do_cycle_and_stops_at_temporary_limit() -> None:

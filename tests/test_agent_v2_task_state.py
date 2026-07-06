@@ -317,3 +317,102 @@ def test_record_plan_call_exception_updates_matching_plan_row() -> None:
 def test_get_next_planned_call_handles_default_or_invalid_plan_json() -> None:
     assert TaskState().get_next_planned_call() is None
     assert TaskState(plan_json="not json").get_next_planned_call() is None
+
+
+def test_get_latest_executed_plan_call_returns_most_recent_executed_call() -> None:
+    first = {
+        "id": "plan-call-1",
+        "tool_id": "tool-1",
+        "tool_name": "write_file",
+        "arguments": {},
+        "internal_state": "First call.",
+    }
+    second = {
+        "id": "plan-call-2",
+        "tool_id": "tool-2",
+        "tool_name": "read_file",
+        "arguments": {},
+        "internal_state": "Second call.",
+    }
+    state = TaskState()
+    state.append_plan_call(first)
+    state.append_plan_call(second)
+    state.record_plan_call_success("plan-call-1", {"ok": "first"})
+    state.record_plan_call_success("plan-call-2", {"ok": "second"})
+
+    latest = state.get_latest_executed_plan_call()
+
+    assert latest is not None
+    assert latest["id"] == "plan-call-2"
+    assert latest["execution"]["result"] == {"ok": "second"}
+
+
+def test_get_latest_executed_plan_call_ignores_unexecuted_calls() -> None:
+    state = TaskState()
+    state.append_plan_call(
+        {
+            "id": "plan-call-1",
+            "tool_id": "tool-1",
+            "tool_name": "write_file",
+            "arguments": {},
+            "internal_state": "First call.",
+        }
+    )
+    state.append_plan_call(
+        {
+            "id": "plan-call-2",
+            "tool_id": "tool-2",
+            "tool_name": "read_file",
+            "arguments": {},
+            "internal_state": "Second call.",
+        }
+    )
+    state.record_plan_call_success("plan-call-1", {"ok": True})
+
+    latest = state.get_latest_executed_plan_call()
+
+    assert latest is not None
+    assert latest["id"] == "plan-call-1"
+
+
+def test_get_latest_executed_plan_call_handles_default_invalid_or_no_execution_plan_json() -> None:
+    assert TaskState().get_latest_executed_plan_call() is None
+    assert TaskState(plan_json="not json").get_latest_executed_plan_call() is None
+    state = TaskState()
+    state.append_plan_call(
+        {
+            "id": "plan-call-1",
+            "tool_id": "tool-1",
+            "tool_name": "write_file",
+            "arguments": {},
+            "internal_state": "First call.",
+        }
+    )
+    assert state.get_latest_executed_plan_call() is None
+
+
+def test_acceptance_criteria_all_complete_requires_real_completed_checkbox_criteria() -> None:
+    assert TaskState(acceptance_criteria_md="1.- [x] File exists").acceptance_criteria_all_complete()
+    assert TaskState(acceptance_criteria_md="1.- [X] File exists\nnotes without checkbox").acceptance_criteria_all_complete()
+    assert not TaskState(acceptance_criteria_md="1.- [ ] File exists").acceptance_criteria_all_complete()
+    assert not TaskState(acceptance_criteria_md="- (none)").acceptance_criteria_all_complete()
+    assert not TaskState(acceptance_criteria_md="plain text only").acceptance_criteria_all_complete()
+
+
+def test_count_plan_call_exceptions_counts_exception_executions() -> None:
+    state = TaskState()
+    for index in range(3):
+        state.append_plan_call(
+            {
+                "id": f"plan-call-{index}",
+                "tool_id": "tool-1",
+                "tool_name": "write_file",
+                "arguments": {},
+                "internal_state": "Writing.",
+            }
+        )
+    state.record_plan_call_exception("plan-call-0", RuntimeError("first"))
+    state.record_plan_call_success("plan-call-1", {"ok": True})
+    state.record_plan_call_exception("plan-call-2", RuntimeError("second"))
+
+    assert state.count_plan_call_exceptions() == 2

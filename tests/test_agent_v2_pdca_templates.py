@@ -85,6 +85,28 @@ def test_tool_call_plan_prompt_template_renders_expected_sections() -> None:
     assert "Task state markdown" in rendered
 
 
+def test_criteria_review_prompt_template_renders_expected_sections() -> None:
+    env = Environment(loader=FileSystemLoader(TEMPLATE_DIR))
+
+    rendered = env.get_template("criteria_review_prompt.j2").render(
+        acceptance_criteria_md="1.- [ ] File exists",
+        latest_executed_call_json='{"id": "plan-call-1", "execution": {"status": "success"}}',
+        task_state_md="Task state markdown",
+    )
+
+    assert "# System Prompt" in rendered
+    assert "Return revised acceptance criteria only" in rendered
+    assert "Preserve every unmet criterion with `[ ]`" in rendered
+    assert "Mark only clearly fulfilled criteria with `[x]`" in rendered
+    assert "Do not decide mission success or mission failure" in rendered
+    assert "# Current Acceptance Criteria" in rendered
+    assert "1.- [ ] File exists" in rendered
+    assert "# Latest Executed Tool Call" in rendered
+    assert "plan-call-1" in rendered
+    assert "# Task State" in rendered
+    assert "Task state markdown" in rendered
+
+
 def test_pdca_prompt_templates_have_stub_defaults() -> None:
     env = Environment(loader=FileSystemLoader(TEMPLATE_DIR))
 

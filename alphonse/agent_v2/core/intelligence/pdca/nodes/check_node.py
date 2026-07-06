@@ -2,13 +2,21 @@
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from typing import TYPE_CHECKING
+
+from jinja2 import Environment
+from jinja2 import FileSystemLoader
+from jinja2 import select_autoescape
 
 from alphonse.agent_v2.core.intelligence.task_state import TaskState
 from alphonse.agent_v2.core.messages.queue import MessageSelector
 
 if TYPE_CHECKING:
     from alphonse.agent_v2.core.core import CoreLoopContext
+
+_TEMPLATE_DIR = Path(__file__).resolve().parents[2] / "templates"
 
 
 def check_node(task: TaskState, context: CoreLoopContext | None = None) -> TaskState:
@@ -24,7 +32,7 @@ def check_node(task: TaskState, context: CoreLoopContext | None = None) -> TaskS
         reason = "Related queued messages were consumed as steering for this task."
     else:
         verdict = "wip"
-        reason = "Acceptance criteria exist, but no steering messages were available yet."
+        reason = _review_wip_acceptance_criteria(task)
 
     task.set_check_result(
         verdict=verdict,
@@ -33,6 +41,47 @@ def check_node(task: TaskState, context: CoreLoopContext | None = None) -> TaskS
         new_message_count=steering_count,
     )
     return task
+
+
+def _review_wip_acceptance_criteria(task: TaskState) -> str:
+    latest_call = task.get_latest_executed_plan_call()
+    if latest_call is None:
+        return "Acceptance criteria exist, but no steering messages or executed tool results were available yet."
+
+    prompt = _render_criteria_review_prompt(task, latest_call)
+    revised_criteria = _call_criteria_review_llm(prompt)
+    task.metadata["criteria_review_prompt"] = prompt
+    task.metadata["criteria_review_llm_stubbed"] = True
+    if revised_criteria:
+        task.acceptance_criteria_md = str(revised_criteria).strip()
+        task.metadata["criteria_review_updated"] = True
+        task.append_update("Check updated acceptance criteria from latest executed tool call.")
+        return "Acceptance criteria were reviewed against the latest executed tool call."
+
+    task.metadata["criteria_review_updated"] = False
+    task.append_update("Check prepared acceptance criteria review; LLM execution is stubbed.")
+    return "Acceptance criteria need review against the latest executed tool call."
+
+
+def _render_criteria_review_prompt(task: TaskState, latest_call: dict[str, object]) -> str:
+    env = Environment(
+        loader=FileSystemLoader(_TEMPLATE_DIR),
+        autoescape=select_autoescape(default_for_string=False),
+        trim_blocks=True,
+        lstrip_blocks=True,
+    )
+    template = env.get_template("criteria_review_prompt.j2")
+    return template.render(
+        acceptance_criteria_md=task.acceptance_criteria_md,
+        latest_executed_call_json=json.dumps(latest_call, indent=2, sort_keys=True),
+        task_state_md=task.to_markdown_prompt(),
+    ).strip()
+
+
+def _call_criteria_review_llm(prompt: str) -> str | None:
+    """Stub for the future WIP acceptance criteria review LLM call."""
+    _ = prompt
+    return None
 
 
 def _consume_steering_messages(task: TaskState, context: CoreLoopContext | None) -> int:

@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+from importlib import import_module
+
 from alphonse.agent_v2.core.core import CoreLoopContext
 from alphonse.agent_v2.core.intelligence.pdca.nodes import check_node
 from alphonse.agent_v2.core.intelligence.task_state import TaskState
 from alphonse.agent_v2.core.messages import CommunicationChannel
 from alphonse.agent_v2.core.messages import InMemoryMessageQueue
+
+check_node_module = import_module("alphonse.agent_v2.core.intelligence.pdca.nodes.check_node")
 
 
 def test_check_node_marks_new_task_when_acceptance_criteria_are_empty() -> None:
@@ -24,6 +28,7 @@ def test_check_node_marks_existing_task_without_steering_as_wip() -> None:
 
     assert task.check_verdict == "wip"
     assert task.check_new_message_count == 0
+    assert "criteria_review_prompt" not in task.metadata
 
 
 def test_check_node_consumes_same_user_same_project_steering() -> None:
@@ -62,6 +67,74 @@ def test_check_node_consumes_same_correlation_id_from_other_user() -> None:
     check_node(task, context=CoreLoopContext(messages=queue))
 
     assert task.check_verdict == "steer"
+
+
+def test_check_node_wip_with_latest_execution_renders_criteria_review_prompt() -> None:
+    task = _task_with_successful_tool_execution()
+
+    check_node(task, context=CoreLoopContext(messages=InMemoryMessageQueue()))
+
+    assert task.check_verdict == "wip"
+    assert task.metadata["criteria_review_llm_stubbed"] is True
+    assert task.metadata["criteria_review_updated"] is False
+    assert "criteria_review_prompt" in task.metadata
+    assert "plan-call-1" in task.metadata["criteria_review_prompt"]
+    assert "created" in task.metadata["criteria_review_prompt"]
+    assert "Check prepared acceptance criteria review" in task.updates_md
+
+
+def test_check_node_stubbed_criteria_review_leaves_criteria_unchanged() -> None:
+    task = _task_with_successful_tool_execution()
+    original = task.acceptance_criteria_md
+
+    check_node(task, context=CoreLoopContext(messages=InMemoryMessageQueue()))
+
+    assert task.acceptance_criteria_md == original
+    assert task.check_verdict == "wip"
+
+
+def test_check_node_criteria_review_can_mark_criteria_complete(monkeypatch) -> None:
+    task = _task_with_successful_tool_execution()
+    revised = "1.- [x] File exists"
+    monkeypatch.setattr(check_node_module, "_call_criteria_review_llm", lambda prompt: revised)
+
+    check_node(task, context=CoreLoopContext(messages=InMemoryMessageQueue()))
+
+    assert task.acceptance_criteria_md == revised
+    assert task.metadata["criteria_review_updated"] is True
+    assert task.check_verdict == "wip"
+    assert "Check updated acceptance criteria" in task.updates_md
+
+
+def test_check_node_does_not_set_terminal_verdict_when_all_criteria_complete(monkeypatch) -> None:
+    task = _task_with_successful_tool_execution()
+    monkeypatch.setattr(check_node_module, "_call_criteria_review_llm", lambda prompt: "1.- [x] File exists")
+
+    check_node(task, context=CoreLoopContext(messages=InMemoryMessageQueue()))
+
+    assert task.acceptance_criteria_md == "1.- [x] File exists"
+    assert task.check_verdict == "wip"
+    assert task.check_verdict not in {"mission_success", "mission_failed"}
+
+
+def _task_with_successful_tool_execution() -> TaskState:
+    task = TaskState(
+        goal="Create a file",
+        user="alex",
+        project_id="alpha",
+        acceptance_criteria_md="1.- [ ] File exists",
+    )
+    task.append_plan_call(
+        {
+            "id": "plan-call-1",
+            "tool_id": "tool-1",
+            "tool_name": "write_file",
+            "arguments": {"path": "a.txt"},
+            "internal_state": "Writing the requested file.",
+        }
+    )
+    task.record_plan_call_success("plan-call-1", {"path": "a.txt", "status": "created"})
+    return task
     assert task.check_new_message_count == 1
     assert '- Gaby: "No coffee today"' in task.recent_conversation_md
     assert queue.size() == 0

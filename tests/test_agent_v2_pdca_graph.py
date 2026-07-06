@@ -109,9 +109,7 @@ def test_run_pdca_once_passes_context_tools_to_plan() -> None:
 
 
 def test_run_pdca_once_executes_planned_tool_and_returns_to_check(monkeypatch) -> None:
-    from importlib import import_module
-
-    plan_node_module = import_module("alphonse.agent_v2.core.intelligence.pdca.nodes.plan_node")
+    plan_node_module = _plan_node_module()
     monkeypatch.setattr(
         plan_node_module,
         "_call_tool_planning_llm",
@@ -137,6 +135,57 @@ def test_run_pdca_once_executes_planned_tool_and_returns_to_check(monkeypatch) -
     assert result.metadata["act_route"] == "end"
     assert result.metadata["act_stop_reason"] == "temporary_cycle_limit"
     assert '"status": "success"' in result.plan_json
+
+
+def test_run_pdca_once_marks_mission_success_after_check_completes_criteria(monkeypatch) -> None:
+    monkeypatch.setattr(
+        _plan_node_module(),
+        "_call_tool_planning_llm",
+        lambda prompt: {
+            "id": "plan-call-1",
+            "tool_id": "tool-1",
+            "tool_name": "write_file",
+            "arguments": {"path": "a.txt"},
+            "internal_state": "Writing the requested file.",
+        },
+    )
+    monkeypatch.setattr(
+        _check_node_module(),
+        "_call_criteria_review_llm",
+        lambda prompt: "1.- [x] Done",
+    )
+    state = TaskState(task_id="task-1", goal="Review this request", user="alex", acceptance_criteria_md="1.- [ ] Done")
+
+    result = run_pdca_once(
+        state,
+        context=CoreLoopContext(messages=InMemoryMessageQueue(), tools=_ToolRegistry()),
+    )
+
+    assert result.check_verdict == "mission_success"
+    assert result.status == "completed"
+    assert result.outcome == {"status": "success", "reason": "All acceptance criteria are complete."}
+    assert result.metadata["act_route"] == "end"
+
+
+def test_act_route_after_wip_incomplete_criteria_can_continue_to_plan() -> None:
+    state = TaskState(check_verdict="wip", acceptance_criteria_md="1.- [ ] Done")
+
+    act_node(state)
+
+    assert state.metadata["act_route"] == "plan"
+    assert _route_after_act(state) == PLAN_NODE
+
+
+def _plan_node_module():
+    from importlib import import_module
+
+    return import_module("alphonse.agent_v2.core.intelligence.pdca.nodes.plan_node")
+
+
+def _check_node_module():
+    from importlib import import_module
+
+    return import_module("alphonse.agent_v2.core.intelligence.pdca.nodes.check_node")
 
 
 class _ToolRegistry:
