@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime
 
 import pytest
@@ -83,10 +84,9 @@ def test_markdown_defaults_are_none_bullets() -> None:
 
     assert state.facts_md == "- (none)"
     assert state.recent_conversation_md == "- (none)"
-    assert state.plan_md == "- (none)"
+    assert state.plan_json == "- (none)"
     assert state.acceptance_criteria_md == "- (none)"
     assert state.memory_facts_md == "- (none)"
-    assert state.tool_call_history_md == "- (none)"
     assert state.updates_md == "- (none)"
 
 
@@ -95,18 +95,32 @@ def test_append_helpers_use_bullet_markdown() -> None:
 
     state.append_fact("fact one")
     state.append_fact("- fact two")
-    state.append_plan_line("plan one")
+    state.append_plan_call(
+        {
+            "id": "plan-call-1",
+            "tool_id": "tool-1",
+            "tool_name": "write_file",
+            "arguments": {"path": "a.txt"},
+            "internal_state": "Writing the requested file.",
+        }
+    )
     state.append_acceptance_criterion("criterion one")
     state.append_memory_fact("memory one")
-    state.append_tool_call_history_entry("tool one")
     state.append_recent_conversation_line("conversation one")
     state.append_update("update one")
 
     assert state.facts_md == "- fact one\n- fact two"
-    assert state.plan_md == "- plan one"
+    assert json.loads(state.plan_json) == [
+        {
+            "id": "plan-call-1",
+            "tool_id": "tool-1",
+            "tool_name": "write_file",
+            "arguments": {"path": "a.txt"},
+            "internal_state": "Writing the requested file.",
+        }
+    ]
     assert state.acceptance_criteria_md == "- criterion one"
     assert state.memory_facts_md == "- memory one"
-    assert state.tool_call_history_md == "- tool one"
     assert state.recent_conversation_md == "- conversation one"
     assert state.updates_md == "- update one"
 
@@ -135,6 +149,14 @@ def test_to_dict_from_dict_round_trip() -> None:
     restored = TaskState.from_dict(state.to_dict())
 
     assert restored.to_dict() == state.to_dict()
+
+
+def test_from_dict_reads_legacy_plan_md_fallback() -> None:
+    state = TaskState.from_dict({"goal": "Goal", "plan_md": "- legacy plan"})
+
+    assert state.plan_json == "- legacy plan"
+    assert "plan_md" not in state.to_dict()
+    assert state.to_dict()["plan_json"] == "- legacy plan"
 
 
 def test_set_check_result_validates_verdict_and_clamps_confidence() -> None:
@@ -176,7 +198,15 @@ def test_replan_clears_goal_acceptance_criteria_status_and_outcome() -> None:
 
 def test_to_markdown_prompt_includes_expected_sections_without_mutating() -> None:
     state = TaskState(task_id="task-1", user="alex", goal="Create a project")
-    state.append_plan_line("First step")
+    state.append_plan_call(
+        {
+            "id": "plan-call-1",
+            "tool_id": "tool-1",
+            "tool_name": "write_file",
+            "arguments": {"path": "a.txt"},
+            "internal_state": "Writing the project file.",
+        }
+    )
     before = state.to_dict()
 
     rendered = state.to_markdown_prompt()
@@ -186,12 +216,104 @@ def test_to_markdown_prompt_includes_expected_sections_without_mutating() -> Non
     assert "Create a project" in rendered
     assert "# Recent Conversation" in rendered
     assert "# Facts" in rendered
-    assert "# Current Plan" in rendered
-    assert "- First step" in rendered
+    assert "# Plan JSON" in rendered
+    assert "plan-call-1" in rendered
     assert "# Acceptance Criteria" in rendered
     assert "# Updates" in rendered
     assert "# Memory Facts" in rendered
-    assert "# Tool Call History" in rendered
+    assert "# Tool Call History" not in rendered
     assert "# Check Result" in rendered
     assert "# Outcome" in rendered
     assert state.to_dict() == before
+
+
+def test_get_next_planned_call_returns_latest_unexecuted_call() -> None:
+    first = {
+        "id": "plan-call-1",
+        "tool_id": "tool-1",
+        "tool_name": "write_file",
+        "arguments": {},
+        "internal_state": "First call.",
+    }
+    second = {
+        "id": "plan-call-2",
+        "tool_id": "tool-2",
+        "tool_name": "read_file",
+        "arguments": {},
+        "internal_state": "Second call.",
+    }
+    state = TaskState()
+    state.append_plan_call(first)
+    state.append_plan_call(second)
+
+    assert state.get_next_planned_call() == second
+
+
+def test_get_next_planned_call_skips_executed_calls() -> None:
+    first = {
+        "id": "plan-call-1",
+        "tool_id": "tool-1",
+        "tool_name": "write_file",
+        "arguments": {},
+        "internal_state": "First call.",
+    }
+    second = {
+        "id": "plan-call-2",
+        "tool_id": "tool-2",
+        "tool_name": "read_file",
+        "arguments": {},
+        "internal_state": "Second call.",
+    }
+    state = TaskState()
+    state.append_plan_call(first)
+    state.append_plan_call(second)
+    state.record_plan_call_success("plan-call-2", {"ok": True})
+
+    assert state.get_next_planned_call() == first
+
+
+def test_record_plan_call_success_updates_matching_plan_row() -> None:
+    state = TaskState()
+    state.append_plan_call(
+        {
+            "id": "plan-call-1",
+            "tool_id": "tool-1",
+            "tool_name": "write_file",
+            "arguments": {},
+            "internal_state": "Writing.",
+        }
+    )
+
+    state.record_plan_call_success("plan-call-1", {"ok": True})
+
+    execution = json.loads(state.plan_json)[0]["execution"]
+    assert execution["status"] == "success"
+    assert execution["result"] == {"ok": True}
+    assert execution["exception"] == ""
+    assert execution["started_at"]
+    assert execution["finished_at"]
+
+
+def test_record_plan_call_exception_updates_matching_plan_row() -> None:
+    state = TaskState()
+    state.append_plan_call(
+        {
+            "id": "plan-call-1",
+            "tool_id": "tool-1",
+            "tool_name": "write_file",
+            "arguments": {},
+            "internal_state": "Writing.",
+        }
+    )
+
+    state.record_plan_call_exception("plan-call-1", RuntimeError("boom"))
+
+    execution = json.loads(state.plan_json)[0]["execution"]
+    assert execution["status"] == "exception"
+    assert execution["result"] is None
+    assert execution["exception"] == "RuntimeError: boom"
+
+
+def test_get_next_planned_call_handles_default_or_invalid_plan_json() -> None:
+    assert TaskState().get_next_planned_call() is None
+    assert TaskState(plan_json="not json").get_next_planned_call() is None

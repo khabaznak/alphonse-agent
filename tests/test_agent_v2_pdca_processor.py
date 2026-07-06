@@ -56,7 +56,13 @@ def test_core_loop_can_use_pdca_processor_snapshot_metadata() -> None:
 
 
 def test_pdca_processor_snapshot_includes_planned_tool_call_when_present(monkeypatch) -> None:
-    planned = {"tool_id": "tool-1", "tool_name": "write_file", "arguments": {"path": "a.txt"}}
+    planned = {
+        "id": "plan-call-1",
+        "tool_id": "tool-1",
+        "tool_name": "write_file",
+        "arguments": {"path": "a.txt"},
+        "internal_state": "Writing the requested file.",
+    }
     monkeypatch.setattr(plan_node_module, "_call_tool_planning_llm", lambda prompt: planned)
     task = TaskState(
         goal="Write the file",
@@ -72,7 +78,7 @@ def test_pdca_processor_snapshot_includes_planned_tool_call_when_present(monkeyp
     )
 
     assert result.snapshot.metadata["planned_tool_call"] == planned
-    assert result.snapshot.metadata["plan_md"].startswith("{")
+    assert result.snapshot.metadata["plan_json"].startswith("[")
     assert result.snapshot.metadata["task_state"]["metadata"]["planned_tool_call"] == planned
 
 
@@ -93,6 +99,9 @@ class _NullTools:
 
 
 class _ToolRegistry:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, dict[str, object]]] = []
+
     def list(self) -> tuple[ToolDescriptor, ...]:
         return (
             ToolDescriptor(
@@ -102,6 +111,10 @@ class _ToolRegistry:
                 description="Writes a file",
             ),
         )
+
+    def execute(self, tool_id: str, arguments: dict[str, object]) -> dict[str, bool]:
+        self.calls.append((tool_id, dict(arguments)))
+        return {"ok": True}
 
 
 class _NullPrompts:

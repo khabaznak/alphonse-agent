@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any, TYPE_CHECKING
+from uuid import uuid4
 
 from jinja2 import Environment
 from jinja2 import FileSystemLoader
@@ -33,7 +33,7 @@ def plan_node(task: TaskState, context: CoreLoopContext | None = None) -> TaskSt
 
     task.metadata["tool_call_planning_llm_stubbed"] = False
     task.metadata["planned_tool_call"] = planned_tool_call
-    task.plan_md = json.dumps(planned_tool_call, indent=2, sort_keys=True)
+    task.append_plan_call(planned_tool_call)
     task.append_update("Plan selected the next tool call.")
     return task
 
@@ -77,15 +77,19 @@ def _call_tool_planning_llm(prompt: str) -> dict[str, Any] | None:
 def _normalize_tool_call(value: dict[str, Any] | None, tools: tuple[ToolDescriptor, ...]) -> dict[str, Any] | None:
     if value is None:
         return None
+    planned_id = str(value.get("id") or "").strip() or f"plan-call-{uuid4()}"
     tool_id = str(value.get("tool_id") or "").strip()
     tool_name = str(value.get("tool_name") or "").strip()
     arguments = value.get("arguments")
-    if not tool_id or not tool_name or not isinstance(arguments, dict):
+    internal_state = str(value.get("internal_state") or "").strip()
+    if not tool_id or not tool_name or not isinstance(arguments, dict) or not internal_state:
         return None
     if tools and tool_id not in {tool.tool_id for tool in tools}:
         return None
     return {
+        "id": planned_id,
         "tool_id": tool_id,
         "tool_name": tool_name,
         "arguments": dict(arguments),
+        "internal_state": internal_state[:256],
     }

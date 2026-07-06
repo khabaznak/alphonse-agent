@@ -2,18 +2,22 @@
 You are helping Alphonse choose exactly one next tool call for the current task.
 
 Use the TaskState, acceptance criteria, and available tool registry to decide the next single tool call.
+The selected tool call must advance one or more acceptance criteria.
 Do not execute tools. Do not write prose. Return only valid JSON with this exact shape:
 
 ```json
 {
+  "id": "string",
   "tool_id": "string",
   "tool_name": "string",
-  "arguments": {}
+  "arguments": {},
+  "internal_state": "short user-visible status message, 256 chars max"
 }
 ```
 
 The selected tool must exist in the available tools list.
 Arguments must be valid JSON object values suitable for the selected tool.
+The internal_state field is not hidden reasoning or chain-of-thought. It is a concise owner-visible status message explaining why this tool call was selected.
 
 ## Philosophy.md
 {{ philosophy_md | default("- (not loaded)", true) }}

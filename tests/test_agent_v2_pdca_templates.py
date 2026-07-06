@@ -70,9 +70,13 @@ def test_tool_call_plan_prompt_template_renders_expected_sections() -> None:
 
     assert "# System Prompt" in rendered
     assert "exactly one next tool call" in rendered
+    assert "advance one or more acceptance criteria" in rendered
+    assert '"id": "string"' in rendered
     assert '"tool_id": "string"' in rendered
     assert '"tool_name": "string"' in rendered
     assert '"arguments": {}' in rendered
+    assert '"internal_state": "short user-visible status message, 256 chars max"' in rendered
+    assert "not hidden reasoning or chain-of-thought" in rendered
     assert "# Acceptance Criteria" in rendered
     assert "1.- [ ] File exists" in rendered
     assert "# Available Tools" in rendered

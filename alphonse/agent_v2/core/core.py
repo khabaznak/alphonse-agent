@@ -184,6 +184,9 @@ class ToolRegistry(Protocol):
     def list(self) -> tuple[ToolDescriptor, ...]:
         """Return all registered tool descriptors."""
 
+    def execute(self, tool_id: str, arguments: dict[str, Any]) -> Any:
+        """Execute a registered tool by id."""
+
 
 class SystemPromptLoader(Protocol):
     """Loader boundary for special agentic prompt files."""

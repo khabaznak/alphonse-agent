@@ -30,7 +30,7 @@ def build_pdca_graph(context: CoreLoopContext | None = None) -> Any:
     graph = StateGraph(TaskState)
     graph.add_node(CHECK_NODE, lambda task: check_node(task, context=context))
     graph.add_node(PLAN_NODE, lambda task: plan_node(task, context=context))
-    graph.add_node(DO_NODE, do_node)
+    graph.add_node(DO_NODE, lambda task: do_node(task, context=context))
     graph.add_node(ACT_NODE, act_node)
 
     graph.set_entry_point(CHECK_NODE)
@@ -43,7 +43,8 @@ def build_pdca_graph(context: CoreLoopContext | None = None) -> Any:
             END: END,
         },
     )
-    graph.add_edge(PLAN_NODE, END)
+    graph.add_edge(PLAN_NODE, DO_NODE)
+    graph.add_edge(DO_NODE, CHECK_NODE)
     return graph.compile()
 
 
@@ -54,11 +55,6 @@ def run_pdca_once(task: TaskState, context: CoreLoopContext | None = None) -> Ta
 
 
 def _route_after_act(task: TaskState) -> str:
-    if _markdown_has_acceptance_criteria(task.acceptance_criteria_md):
+    if task.metadata.get("act_route") == PLAN_NODE:
         return PLAN_NODE
     return END
-
-
-def _markdown_has_acceptance_criteria(value: str) -> bool:
-    rendered = str(value or "").strip()
-    return bool(rendered and rendered != "- (none)")

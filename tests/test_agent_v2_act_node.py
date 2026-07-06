@@ -16,6 +16,7 @@ def test_act_node_new_verdict_renders_acceptance_criteria_prompt_and_stubs_llm()
     assert result is task
     assert task.metadata["acceptance_criteria_llm_stubbed"] is True
     assert task.metadata["acceptance_criteria_updated"] is False
+    assert task.metadata["act_route"] == "end"
     assert "acceptance_criteria_prompt" in task.metadata
     assert "1.- [ ] The required outcome is true" in task.metadata["acceptance_criteria_prompt"]
     assert "Ask Gaby about coffee" in task.metadata["acceptance_criteria_prompt"]
@@ -58,6 +59,7 @@ def test_act_node_updates_acceptance_criteria_when_llm_stub_returns_result(monke
 
     assert task.acceptance_criteria_md == generated
     assert task.metadata["acceptance_criteria_updated"] is True
+    assert task.metadata["act_route"] == "plan"
     assert "Act updated acceptance criteria" in task.updates_md
 
 
@@ -68,6 +70,7 @@ def test_act_node_unsupported_verdict_does_not_render_acceptance_criteria_prompt
 
     assert "acceptance_criteria_prompt" not in task.metadata
     assert "acceptance_criteria_llm_stubbed" not in task.metadata
+    assert task.metadata["act_route"] == "end"
     assert "no implemented action" in task.updates_md
 
 
@@ -83,3 +86,42 @@ def test_act_node_prompt_includes_checkbox_instructions_and_task_state_context()
     assert "2.- [x]" in prompt
     assert '# Task State' in prompt
     assert '- Alex: "Create a file"' in prompt
+
+
+def test_act_node_routes_wip_with_acceptance_criteria_to_plan_before_cycle_limit() -> None:
+    task = TaskState(goal="Continue task", check_verdict="wip", acceptance_criteria_md="1.- [ ] Done")
+
+    act_node(task)
+
+    assert task.metadata["act_route"] == "plan"
+
+
+def test_act_node_observes_completed_do_cycle_and_stops_at_temporary_limit() -> None:
+    task = TaskState(
+        goal="Continue task",
+        check_verdict="wip",
+        acceptance_criteria_md="1.- [ ] Done",
+        metadata={"do_executed_since_last_act": True},
+    )
+
+    act_node(task)
+
+    assert task.pdca_cycle_count == 1
+    assert task.metadata["completed_capd_cycle_count"] == 1
+    assert task.metadata["act_route"] == "end"
+    assert task.metadata["act_stop_reason"] == "temporary_cycle_limit"
+    assert "temporary completed-cycle limit" in task.updates_md
+
+
+def test_act_node_stops_after_stubbed_planning_pass() -> None:
+    task = TaskState(
+        goal="Continue task",
+        check_verdict="wip",
+        acceptance_criteria_md="1.- [ ] Done",
+        metadata={"tool_call_planning_llm_stubbed": True},
+    )
+
+    act_node(task)
+
+    assert task.metadata["act_route"] == "end"
+    assert task.metadata["act_stop_reason"] == "temporary_cycle_limit"

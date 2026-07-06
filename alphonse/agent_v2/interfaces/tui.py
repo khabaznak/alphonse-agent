@@ -65,6 +65,11 @@ class NullToolRegistry:
     def list(self) -> tuple[ToolDescriptor, ...]:
         return ()
 
+    def execute(self, tool_id: str, arguments: dict[str, Any]) -> Any:
+        _ = tool_id
+        _ = arguments
+        raise KeyError("tool_not_found")
+
 
 class NullPromptLoader:
     def load(self, name: str) -> PromptFile:

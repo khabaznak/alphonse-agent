@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -34,10 +36,9 @@ class TaskState:
     goal: str = ""
     facts_md: str = EMPTY_MARKDOWN
     recent_conversation_md: str = EMPTY_MARKDOWN
-    plan_md: str = EMPTY_MARKDOWN
+    plan_json: str = EMPTY_MARKDOWN
     acceptance_criteria_md: str = EMPTY_MARKDOWN
     memory_facts_md: str = EMPTY_MARKDOWN
-    tool_call_history_md: str = EMPTY_MARKDOWN
     updates_md: str = EMPTY_MARKDOWN
     status: str = "running"
     outcome: dict[str, Any] | None = None
@@ -85,10 +86,11 @@ class TaskState:
             goal=str(value.get("goal") or "").strip(),
             facts_md=_markdown_or_default(value.get("facts_md")),
             recent_conversation_md=_markdown_or_default(value.get("recent_conversation_md")),
-            plan_md=_markdown_or_default(value.get("plan_md")),
+            plan_json=_markdown_or_default(
+                value.get("plan_json") if value.get("plan_json") is not None else value.get("plan_md")
+            ),
             acceptance_criteria_md=_markdown_or_default(value.get("acceptance_criteria_md")),
             memory_facts_md=_markdown_or_default(value.get("memory_facts_md")),
-            tool_call_history_md=_markdown_or_default(value.get("tool_call_history_md")),
             updates_md=_markdown_or_default(value.get("updates_md")),
             status=str(value.get("status") or "").strip() or "running",
             outcome=dict(outcome) if isinstance(outcome, dict) else None,
@@ -115,10 +117,9 @@ class TaskState:
             "goal": self.goal,
             "facts_md": self.facts_md,
             "recent_conversation_md": self.recent_conversation_md,
-            "plan_md": self.plan_md,
+            "plan_json": self.plan_json,
             "acceptance_criteria_md": self.acceptance_criteria_md,
             "memory_facts_md": self.memory_facts_md,
-            "tool_call_history_md": self.tool_call_history_md,
             "updates_md": self.updates_md,
             "status": self.status,
             "outcome": dict(self.outcome) if isinstance(self.outcome, dict) else None,
@@ -145,17 +146,62 @@ class TaskState:
     def append_fact(self, fact: str) -> None:
         self.facts_md = _append_markdown_line(self.facts_md, fact)
 
-    def append_plan_line(self, line: str) -> None:
-        self.plan_md = _append_markdown_line(self.plan_md, line)
+    def append_plan_call(self, planned_call: dict[str, Any]) -> None:
+        calls = _json_list_or_empty(self.plan_json)
+        calls.append(dict(planned_call))
+        self.plan_json = json.dumps(calls, indent=2, sort_keys=True)
+
+    def get_next_planned_call(self) -> dict[str, Any] | None:
+        calls = _json_list_or_empty(self.plan_json)
+        for call in reversed(calls):
+            if isinstance(call, dict) and not isinstance(call.get("execution"), dict):
+                return dict(call)
+        return None
+
+    def record_plan_call_success(self, call_id: str, result: Any) -> None:
+        self._record_plan_call_execution(
+            call_id,
+            {
+                "status": "success",
+                "result": _json_safe(result),
+                "exception": "",
+            },
+        )
+
+    def record_plan_call_exception(self, call_id: str, exception: Any) -> None:
+        self._record_plan_call_execution(
+            call_id,
+            {
+                "status": "exception",
+                "result": None,
+                "exception": _exception_payload(exception),
+            },
+        )
+
+    def _record_plan_call_execution(self, call_id: str, execution: dict[str, Any]) -> None:
+        planned_id = str(call_id or "").strip()
+        if not planned_id:
+            return
+        calls = _json_list_or_empty(self.plan_json)
+        now = datetime.now().astimezone().isoformat()
+        execution_payload = {
+            **execution,
+            "started_at": now,
+            "finished_at": now,
+        }
+        for index, call in enumerate(calls):
+            if isinstance(call, dict) and str(call.get("id") or "").strip() == planned_id:
+                updated = dict(call)
+                updated["execution"] = execution_payload
+                calls[index] = updated
+                self.plan_json = json.dumps(calls, indent=2, sort_keys=True)
+                return
 
     def append_acceptance_criterion(self, criterion: str) -> None:
         self.acceptance_criteria_md = _append_markdown_line(self.acceptance_criteria_md, criterion)
 
     def append_memory_fact(self, fact: str) -> None:
         self.memory_facts_md = _append_markdown_line(self.memory_facts_md, fact)
-
-    def append_tool_call_history_entry(self, entry: str) -> None:
-        self.tool_call_history_md = _append_markdown_line(self.tool_call_history_md, entry)
 
     def append_recent_conversation_line(self, line: str) -> None:
         self.recent_conversation_md = _append_markdown_line(self.recent_conversation_md, line)
@@ -211,6 +257,30 @@ def _append_markdown_line(current: str, value: str) -> str:
     if not existing or existing == EMPTY_MARKDOWN:
         return line
     return f"{existing}\n{line}"
+
+
+def _json_list_or_empty(value: str) -> list[Any]:
+    rendered = str(value or "").strip()
+    if not rendered or rendered == EMPTY_MARKDOWN:
+        return []
+    try:
+        parsed = json.loads(rendered)
+    except json.JSONDecodeError:
+        return []
+    return parsed if isinstance(parsed, list) else []
+
+
+def _json_safe(value: Any) -> Any:
+    try:
+        return json.loads(json.dumps(value))
+    except (TypeError, ValueError):
+        return str(value)
+
+
+def _exception_payload(exception: Any) -> str:
+    if isinstance(exception, BaseException):
+        return f"{type(exception).__name__}: {exception}"
+    return str(exception or "").strip()
 
 
 def _normalize_check_verdict(value: Any) -> str | None:

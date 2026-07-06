@@ -17,8 +17,8 @@
 # Facts
 {{ task.facts_md or "- (none)" }}
 
-# Current Plan
-{{ task.plan_md or "- (none)" }}
+# Plan JSON
+{{ task.plan_json or "- (none)" }}
 
 # Acceptance Criteria
 {{ task.acceptance_criteria_md or "- (none)" }}
@@ -28,9 +28,6 @@
 
 # Memory Facts
 {{ task.memory_facts_md or "- (none)" }}
-
-# Tool Call History
-{{ task.tool_call_history_md or "- (none)" }}
 
 # Check Result
 - Verdict: {{ task.check_verdict or "" }}

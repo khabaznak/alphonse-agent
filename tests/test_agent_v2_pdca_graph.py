@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any
+
 from alphonse.agent_v2.core.intelligence.pdca import ACT_NODE
 from alphonse.agent_v2.core.intelligence.pdca import CHECK_NODE
 from alphonse.agent_v2.core.intelligence.pdca import DO_NODE
@@ -70,8 +72,16 @@ def test_pdca_graph_routes_check_directly_to_act() -> None:
 
 
 def test_pdca_graph_routes_after_act_to_plan_when_acceptance_criteria_exist() -> None:
-    assert _route_after_act(TaskState(acceptance_criteria_md="1.- [ ] Done")) == PLAN_NODE
-    assert _route_after_act(TaskState(acceptance_criteria_md="- (none)")) == "__end__"
+    assert _route_after_act(TaskState(metadata={"act_route": "plan"})) == PLAN_NODE
+    assert _route_after_act(TaskState(metadata={"act_route": "end"})) == "__end__"
+
+
+def test_pdca_graph_routes_plan_to_do_and_do_to_check() -> None:
+    graph = build_pdca_graph().get_graph()
+
+    assert any(edge.source == PLAN_NODE and edge.target == DO_NODE for edge in graph.edges)
+    assert any(edge.source == DO_NODE and edge.target == CHECK_NODE for edge in graph.edges)
+    assert not any(edge.source == PLAN_NODE and edge.target == "__end__" for edge in graph.edges)
 
 
 def test_run_pdca_once_preserves_task_state_container() -> None:
@@ -95,9 +105,44 @@ def test_run_pdca_once_passes_context_tools_to_plan() -> None:
 
     assert "tool_call_plan_prompt" in result.metadata
     assert "write_file" in result.metadata["tool_call_plan_prompt"]
+    assert result.metadata["act_route"] == "end"
+
+
+def test_run_pdca_once_executes_planned_tool_and_returns_to_check(monkeypatch) -> None:
+    from importlib import import_module
+
+    plan_node_module = import_module("alphonse.agent_v2.core.intelligence.pdca.nodes.plan_node")
+    monkeypatch.setattr(
+        plan_node_module,
+        "_call_tool_planning_llm",
+        lambda prompt: {
+            "id": "plan-call-1",
+            "tool_id": "tool-1",
+            "tool_name": "write_file",
+            "arguments": {"path": "a.txt"},
+            "internal_state": "Writing the requested file.",
+        },
+    )
+    state = TaskState(task_id="task-1", goal="Review this request", user="alex", acceptance_criteria_md="1.- [ ] Done")
+    tools = _ToolRegistry()
+
+    result = run_pdca_once(
+        state,
+        context=CoreLoopContext(messages=InMemoryMessageQueue(), tools=tools),
+    )
+
+    assert tools.calls == [("tool-1", {"path": "a.txt"})]
+    assert result.check_verdict == "wip"
+    assert result.pdca_cycle_count == 1
+    assert result.metadata["act_route"] == "end"
+    assert result.metadata["act_stop_reason"] == "temporary_cycle_limit"
+    assert '"status": "success"' in result.plan_json
 
 
 class _ToolRegistry:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, dict[str, Any]]] = []
+
     def list(self) -> tuple[ToolDescriptor, ...]:
         return (
             ToolDescriptor(
@@ -107,3 +152,7 @@ class _ToolRegistry:
                 description="Writes a file",
             ),
         )
+
+    def execute(self, tool_id: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        self.calls.append((tool_id, dict(arguments)))
+        return {"ok": True}
