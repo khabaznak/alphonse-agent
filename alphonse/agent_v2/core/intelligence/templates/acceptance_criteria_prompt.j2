@@ -11,6 +11,7 @@ Write criteria as numbered markdown checkbox rows only:
 For a new task, create a clear initial acceptance criteria list.
 For a steering update, revise the existing criteria and add new criteria only when necessary.
 Do not write implementation steps. Do not execute tools. Do not mark criteria complete unless the task state clearly proves they are already complete.
+Do not add commentary. Do not wrap the criteria in code fences.
 
 ## Philosophy.md
 {{ philosophy_md | default("- (not loaded)", true) }}
@@ -37,4 +38,4 @@ Do not write implementation steps. Do not execute tools. Do not mark criteria co
 {{ task_state_md | default("- (not provided)", true) }}
 
 # User Prompt
-Generate acceptance criteria in the required numbered markdown checkbox format.
+Generate acceptance criteria in the required numbered markdown checkbox format only.
