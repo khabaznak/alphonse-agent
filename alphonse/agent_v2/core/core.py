@@ -26,8 +26,10 @@ from alphonse.agent_v2.core.state.ddfsm import build_default_ddfsm
 from alphonse.agent_v2.core.state.runtime import State
 
 if TYPE_CHECKING:
+    from alphonse.agent_v2.core.inference import InferenceRouter
     from alphonse.agent_v2.core.intelligence.task_state import TaskState
     from alphonse.agent_v2.core.messages.queue import MessageSelector, QueuedMessage
+    from alphonse.agent_v2.core.tools.registry import ToolDefinition
 
 
 class ImprovementPhase(str, Enum):
@@ -86,6 +88,9 @@ class ToolDescriptor:
     name: str
     kind: ToolKind
     description: str = ""
+    argument_schema: dict[str, Any] = field(default_factory=dict)
+    capabilities: tuple[str, ...] = ()
+    tags: tuple[str, ...] = ()
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
@@ -144,6 +149,7 @@ class CoreLoopContext:
 
     messages: MessageQueue
     tools: ToolRegistry | None = None
+    inference: InferenceRouter | None = None
 
     def consume_message(self, selector: MessageSelector | None = None) -> QueuedMessage | None:
         return self.messages.dequeue(selector)
@@ -175,8 +181,8 @@ class MessageQueue(Protocol):
 class ToolRegistry(Protocol):
     """Lookup and registration boundary for native tools and artifacts."""
 
-    def register(self, tool: ToolDescriptor) -> None:
-        """Register a tool descriptor."""
+    def register(self, tool: ToolDefinition) -> None:
+        """Register an executable tool definition."""
 
     def get(self, name: str) -> ToolDescriptor | None:
         """Return a registered tool descriptor by name."""
@@ -225,6 +231,7 @@ class AlphonseCore:
     prompts: SystemPromptLoader
     state: InternalState
     memory: Memory
+    inference: InferenceRouter | None = None
     fsm: DDFSM = field(default_factory=build_default_ddfsm)
     _stop_requested: bool = field(default=False, init=False, repr=False)
 
@@ -267,7 +274,7 @@ class AlphonseCore:
         try:
             result = self.intelligence.process(
                 task,
-                CoreLoopContext(messages=self.messages, tools=self.tools),
+                CoreLoopContext(messages=self.messages, tools=self.tools, inference=self.inference),
             )
         except Exception as exc:
             result = ProcessingResult(

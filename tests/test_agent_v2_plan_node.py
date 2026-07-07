@@ -6,6 +6,10 @@ from importlib import import_module
 from alphonse.agent_v2.core.core import CoreLoopContext
 from alphonse.agent_v2.core.core import ToolDescriptor
 from alphonse.agent_v2.core.core import ToolKind
+from alphonse.agent_v2.core.inference import InferencePurpose
+from alphonse.agent_v2.core.inference import InferenceRouter
+from alphonse.agent_v2.core.inference import ModelProfile
+from alphonse.agent_v2.core.inference import StubInferenceProvider
 from alphonse.agent_v2.core.intelligence.pdca.nodes import plan_node
 from alphonse.agent_v2.core.intelligence.task_state import TaskState
 from alphonse.agent_v2.core.messages import InMemoryMessageQueue
@@ -153,6 +157,32 @@ def test_plan_node_ignores_invalid_tool_call_result(monkeypatch) -> None:
 
     assert "planned_tool_call" not in task.metadata
     assert task.metadata["tool_call_planning_llm_stubbed"] is True
+
+
+def test_plan_node_uses_inference_and_exposes_tools_only_for_tool_planning() -> None:
+    planned = {
+        "tool_id": "tool-1",
+        "tool_name": "write_file",
+        "arguments": {"path": "a.txt"},
+        "internal_state": "Writing the file.",
+    }
+    provider = StubInferenceProvider(tool_call=planned)
+    router = InferenceRouter(
+        provider=provider,
+        default_profile=ModelProfile(provider="openai", model="gpt", profile_id="default"),
+    )
+    task = TaskState(goal="Write the file", project_id="alpha", user="alex", acceptance_criteria_md="1.- [ ] File exists")
+
+    plan_node(
+        task,
+        context=CoreLoopContext(messages=InMemoryMessageQueue(), tools=_ToolRegistry(), inference=router),
+    )
+
+    assert task.metadata["tool_call_planning_llm_stubbed"] is False
+    assert task.metadata["tool_call_planning_model_profile"] == "default"
+    assert provider.requests[0].purpose == InferencePurpose.TOOL_PLANNING
+    assert provider.requests[0].tools[0].tool_id == "tool-1"
+    assert json.loads(task.plan_json)[0]["tool_id"] == "tool-1"
 
 
 class _ToolRegistry:

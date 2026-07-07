@@ -2,7 +2,13 @@ from __future__ import annotations
 
 from importlib import import_module
 
+from alphonse.agent_v2.core.core import CoreLoopContext
+from alphonse.agent_v2.core.inference import InferencePurpose
+from alphonse.agent_v2.core.inference import InferenceRouter
+from alphonse.agent_v2.core.inference import ModelProfile
+from alphonse.agent_v2.core.inference import StubInferenceProvider
 from alphonse.agent_v2.core.intelligence.pdca.nodes import act_node
+from alphonse.agent_v2.core.messages import InMemoryMessageQueue
 from alphonse.agent_v2.core.intelligence.task_state import TaskState
 
 act_node_module = import_module("alphonse.agent_v2.core.intelligence.pdca.nodes.act_node")
@@ -61,6 +67,25 @@ def test_act_node_updates_acceptance_criteria_when_llm_stub_returns_result(monke
     assert task.metadata["acceptance_criteria_updated"] is True
     assert task.metadata["act_route"] == "plan"
     assert "Act updated acceptance criteria" in task.updates_md
+
+
+def test_act_node_uses_inference_without_tools_for_acceptance_criteria() -> None:
+    provider = StubInferenceProvider(
+        markdown_by_purpose={InferencePurpose.ACCEPTANCE_CRITERIA: "1.- [ ] File exists"}
+    )
+    router = InferenceRouter(
+        provider=provider,
+        default_profile=ModelProfile(provider="openai", model="gpt", profile_id="default"),
+    )
+    task = TaskState(goal="Create a file", project_id="alpha", user="alex", check_verdict="new")
+
+    act_node(task, context=CoreLoopContext(messages=InMemoryMessageQueue(), inference=router))
+
+    assert task.acceptance_criteria_md == "1.- [ ] File exists"
+    assert task.metadata["acceptance_criteria_llm_stubbed"] is False
+    assert task.metadata["acceptance_criteria_model_profile"] == "default"
+    assert provider.requests[0].purpose == InferencePurpose.ACCEPTANCE_CRITERIA
+    assert provider.requests[0].tools == ()
 
 
 def test_act_node_unsupported_verdict_does_not_render_acceptance_criteria_prompt() -> None:

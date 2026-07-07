@@ -10,6 +10,8 @@ from jinja2 import Environment
 from jinja2 import FileSystemLoader
 from jinja2 import select_autoescape
 
+from alphonse.agent_v2.core.inference import InferencePurpose
+from alphonse.agent_v2.core.inference import InferenceRequest
 from alphonse.agent_v2.core.intelligence.task_state import TaskState
 from alphonse.agent_v2.core.messages.queue import MessageSelector
 
@@ -32,7 +34,7 @@ def check_node(task: TaskState, context: CoreLoopContext | None = None) -> TaskS
         reason = "Related queued messages were consumed as steering for this task."
     else:
         verdict = "wip"
-        reason = _review_wip_acceptance_criteria(task)
+        reason = _review_wip_acceptance_criteria(task, context)
 
     task.set_check_result(
         verdict=verdict,
@@ -43,15 +45,15 @@ def check_node(task: TaskState, context: CoreLoopContext | None = None) -> TaskS
     return task
 
 
-def _review_wip_acceptance_criteria(task: TaskState) -> str:
+def _review_wip_acceptance_criteria(task: TaskState, context: CoreLoopContext | None = None) -> str:
     latest_call = task.get_latest_executed_plan_call()
     if latest_call is None:
         return "Acceptance criteria exist, but no steering messages or executed tool results were available yet."
 
     prompt = _render_criteria_review_prompt(task, latest_call)
-    revised_criteria = _call_criteria_review_llm(prompt)
+    revised_criteria = _call_criteria_review_inference(prompt, task, context)
     task.metadata["criteria_review_prompt"] = prompt
-    task.metadata["criteria_review_llm_stubbed"] = True
+    task.metadata["criteria_review_llm_stubbed"] = context is None or context.inference is None
     if revised_criteria:
         task.acceptance_criteria_md = str(revised_criteria).strip()
         task.metadata["criteria_review_updated"] = True
@@ -82,6 +84,27 @@ def _call_criteria_review_llm(prompt: str) -> str | None:
     """Stub for the future WIP acceptance criteria review LLM call."""
     _ = prompt
     return None
+
+
+def _call_criteria_review_inference(
+    prompt: str,
+    task: TaskState,
+    context: CoreLoopContext | None = None,
+) -> str | None:
+    if context is not None and context.inference is not None:
+        result = context.inference.generate_markdown(
+            InferenceRequest(
+                prompt=prompt,
+                purpose=InferencePurpose.CRITERIA_REVIEW,
+                project_id=task.project_id,
+                user=task.user,
+                task_id=task.task_id,
+            )
+        )
+        if result.model_profile is not None:
+            task.metadata["criteria_review_model_profile"] = result.model_profile.profile_id
+        return str(result.content or "").strip() or None
+    return _call_criteria_review_llm(prompt)
 
 
 def _consume_steering_messages(task: TaskState, context: CoreLoopContext | None) -> int:

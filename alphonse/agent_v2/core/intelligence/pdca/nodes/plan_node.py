@@ -11,7 +11,10 @@ from jinja2 import FileSystemLoader
 from jinja2 import select_autoescape
 
 from alphonse.agent_v2.core.core import ToolDescriptor
+from alphonse.agent_v2.core.inference import InferencePurpose
+from alphonse.agent_v2.core.inference import InferenceRequest
 from alphonse.agent_v2.core.intelligence.task_state import TaskState
+from alphonse.agent_v2.core.tools.registry import ToolExposurePolicy
 
 if TYPE_CHECKING:
     from alphonse.agent_v2.core.core import CoreLoopContext
@@ -25,7 +28,7 @@ def plan_node(task: TaskState, context: CoreLoopContext | None = None) -> TaskSt
     prompt = _render_tool_call_plan_prompt(task, tools)
     task.metadata["tool_call_plan_prompt"] = prompt
 
-    planned_tool_call = _normalize_tool_call(_call_tool_planning_llm(prompt), tools)
+    planned_tool_call = _normalize_tool_call(_call_tool_planning_inference(prompt, task, tools, context), tools)
     if planned_tool_call is None:
         task.metadata["tool_call_planning_llm_stubbed"] = True
         task.append_update("Plan prepared one-tool-call prompt; LLM execution is stubbed.")
@@ -65,7 +68,33 @@ def _render_tools_md(tools: tuple[ToolDescriptor, ...]) -> str:
 def _tools_from_context(context: CoreLoopContext | None) -> tuple[ToolDescriptor, ...]:
     if context is None or context.tools is None:
         return ()
-    return tuple(context.tools.list())
+    return ToolExposurePolicy().select_tools(registry=context.tools)
+
+
+def _call_tool_planning_inference(
+    prompt: str,
+    task: TaskState,
+    tools: tuple[ToolDescriptor, ...] = (),
+    context: CoreLoopContext | None = None,
+) -> dict[str, Any] | None:
+    if context is not None and context.inference is not None:
+        result = context.inference.plan_tool_call(
+            InferenceRequest(
+                prompt=prompt,
+                purpose=InferencePurpose.TOOL_PLANNING,
+                project_id=task.project_id,
+                user=task.user,
+                task_id=task.task_id,
+                tools=tools,
+            )
+        )
+        if result.model_profile is not None:
+            task.metadata["tool_call_planning_model_profile"] = result.model_profile.profile_id
+        if result.tool_call is not None:
+            return dict(result.tool_call)
+        if isinstance(result.json_value, dict):
+            return dict(result.json_value)
+    return _call_tool_planning_llm(prompt)
 
 
 def _call_tool_planning_llm(prompt: str) -> dict[str, Any] | None:

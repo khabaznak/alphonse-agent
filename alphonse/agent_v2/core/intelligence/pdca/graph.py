@@ -31,7 +31,7 @@ def build_pdca_graph(context: CoreLoopContext | None = None) -> Any:
     graph.add_node(CHECK_NODE, lambda task: check_node(task, context=context))
     graph.add_node(PLAN_NODE, lambda task: plan_node(task, context=context))
     graph.add_node(DO_NODE, lambda task: do_node(task, context=context))
-    graph.add_node(ACT_NODE, act_node)
+    graph.add_node(ACT_NODE, lambda task: act_node(task, context=context))
 
     graph.set_entry_point(CHECK_NODE)
     graph.add_edge(CHECK_NODE, ACT_NODE)

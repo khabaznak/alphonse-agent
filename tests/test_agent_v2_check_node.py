@@ -3,6 +3,10 @@ from __future__ import annotations
 from importlib import import_module
 
 from alphonse.agent_v2.core.core import CoreLoopContext
+from alphonse.agent_v2.core.inference import InferencePurpose
+from alphonse.agent_v2.core.inference import InferenceRouter
+from alphonse.agent_v2.core.inference import ModelProfile
+from alphonse.agent_v2.core.inference import StubInferenceProvider
 from alphonse.agent_v2.core.intelligence.pdca.nodes import check_node
 from alphonse.agent_v2.core.intelligence.task_state import TaskState
 from alphonse.agent_v2.core.messages import CommunicationChannel
@@ -115,6 +119,23 @@ def test_check_node_does_not_set_terminal_verdict_when_all_criteria_complete(mon
     assert task.acceptance_criteria_md == "1.- [x] File exists"
     assert task.check_verdict == "wip"
     assert task.check_verdict not in {"mission_success", "mission_failed"}
+
+
+def test_check_node_uses_inference_without_tools_for_criteria_review() -> None:
+    provider = StubInferenceProvider(markdown_by_purpose={InferencePurpose.CRITERIA_REVIEW: "1.- [x] File exists"})
+    router = InferenceRouter(
+        provider=provider,
+        default_profile=ModelProfile(provider="openai", model="gpt", profile_id="default"),
+    )
+    task = _task_with_successful_tool_execution()
+
+    check_node(task, context=CoreLoopContext(messages=InMemoryMessageQueue(), inference=router))
+
+    assert task.acceptance_criteria_md == "1.- [x] File exists"
+    assert task.metadata["criteria_review_llm_stubbed"] is False
+    assert task.metadata["criteria_review_model_profile"] == "default"
+    assert provider.requests[0].purpose == InferencePurpose.CRITERIA_REVIEW
+    assert provider.requests[0].tools == ()
 
 
 def _task_with_successful_tool_execution() -> TaskState:

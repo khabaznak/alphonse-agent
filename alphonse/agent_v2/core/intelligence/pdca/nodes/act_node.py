@@ -3,12 +3,18 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from jinja2 import Environment
 from jinja2 import FileSystemLoader
 from jinja2 import select_autoescape
 
+from alphonse.agent_v2.core.inference import InferencePurpose
+from alphonse.agent_v2.core.inference import InferenceRequest
 from alphonse.agent_v2.core.intelligence.task_state import TaskState
+
+if TYPE_CHECKING:
+    from alphonse.agent_v2.core.core import CoreLoopContext
 
 _TEMPLATE_DIR = Path(__file__).resolve().parents[2] / "templates"
 _ACCEPTANCE_CRITERIA_ACTION_VERDICTS = {"new", "steer"}
@@ -18,7 +24,7 @@ _TEMPORARY_MAX_COMPLETED_CYCLES = 1
 _PLAN_CALL_EXCEPTION_FAILURE_THRESHOLD = 3
 
 
-def act_node(task: TaskState) -> TaskState:
+def act_node(task: TaskState, context: CoreLoopContext | None = None) -> TaskState:
     """Act on the check verdict without re-checking or executing work."""
     _observe_completed_do_cycle(task)
     verdict = str(task.check_verdict or "").strip().lower()
@@ -33,9 +39,9 @@ def act_node(task: TaskState) -> TaskState:
 
     if verdict in _ACCEPTANCE_CRITERIA_ACTION_VERDICTS:
         prompt = _render_acceptance_criteria_prompt(task)
-        generated_criteria = _call_acceptance_criteria_llm(prompt)
+        generated_criteria = _call_acceptance_criteria_inference(prompt, task, context)
         task.metadata["acceptance_criteria_prompt"] = prompt
-        task.metadata["acceptance_criteria_llm_stubbed"] = True
+        task.metadata["acceptance_criteria_llm_stubbed"] = context is None or context.inference is None
         if generated_criteria:
             task.acceptance_criteria_md = str(generated_criteria).strip()
             task.metadata["acceptance_criteria_updated"] = True
@@ -147,6 +153,27 @@ def _call_acceptance_criteria_llm(prompt: str) -> str | None:
     """Stub for the future acceptance criteria LLM call."""
     _ = prompt
     return None
+
+
+def _call_acceptance_criteria_inference(
+    prompt: str,
+    task: TaskState,
+    context: CoreLoopContext | None = None,
+) -> str | None:
+    if context is not None and context.inference is not None:
+        result = context.inference.generate_markdown(
+            InferenceRequest(
+                prompt=prompt,
+                purpose=InferencePurpose.ACCEPTANCE_CRITERIA,
+                project_id=task.project_id,
+                user=task.user,
+                task_id=task.task_id,
+            )
+        )
+        if result.model_profile is not None:
+            task.metadata["acceptance_criteria_model_profile"] = result.model_profile.profile_id
+        return str(result.content or "").strip() or None
+    return _call_acceptance_criteria_llm(prompt)
 
 
 def _observe_completed_do_cycle(task: TaskState) -> None:
