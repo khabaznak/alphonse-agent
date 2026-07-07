@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+from threading import Thread
 
 from alphonse.agent_v2.core.core import AlphonseCore
 from alphonse.agent_v2.core.core import CoreLoopContext
@@ -137,6 +138,26 @@ def test_ddfsm_returns_expected_seeded_transitions() -> None:
         outcome = fsm.handle(fsm.current_state_for_key(from_state), CoreSignal(signal))
         assert outcome.matched
         assert outcome.next_state_key == to_state
+
+
+def test_ddfsm_default_connection_can_be_used_from_worker_thread() -> None:
+    fsm = DDFSM()
+    results: list[str] = []
+    errors: list[BaseException] = []
+
+    def worker() -> None:
+        try:
+            outcome = fsm.handle(fsm.current_state_for_key(AVAILABLE), CoreSignal(MESSAGE_DEQUEUED))
+            results.append(str(outcome.next_state_key))
+        except BaseException as exc:
+            errors.append(exc)
+
+    thread = Thread(target=worker)
+    thread.start()
+    thread.join()
+
+    assert errors == []
+    assert results == [WORKING]
 
 
 def _message(content: str, *, user: str = "alex") -> CoreMessage:

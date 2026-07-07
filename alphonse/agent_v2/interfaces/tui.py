@@ -5,11 +5,13 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import dataclass, field
+from threading import Lock
 from typing import Any
 
 from alphonse.agent_v2.core.core import AlphonseCore
 from alphonse.agent_v2.core.core import CoreMessage
 from alphonse.agent_v2.core.core import IntelligenceProcessor
+from alphonse.agent_v2.core.core import LoopStepResult
 from alphonse.agent_v2.core.core import LoopStepStatus
 from alphonse.agent_v2.core.core import MemoryRecord
 from alphonse.agent_v2.core.core import PromptFile
@@ -51,6 +53,50 @@ class TuiSubmissionResult:
     queued: bool = False
     queued_message_id: str | None = None
     step_status: LoopStepStatus | None = None
+
+
+@dataclass(frozen=True)
+class TuiProcessingResult:
+    response: str
+    event: str
+    step_status: LoopStepStatus
+    queued_message_id: str | None = None
+
+
+class TuiProcessorCoordinator:
+    """Keeps TUI queueing separate from one-at-a-time CAPD processing."""
+
+    def __init__(self, runtime: TuiRuntime) -> None:
+        self.runtime = runtime
+        self._lock = Lock()
+        self._processing = False
+
+    @property
+    def is_processing(self) -> bool:
+        with self._lock:
+            return self._processing
+
+    def reserve_processing(self) -> bool:
+        with self._lock:
+            if self._processing:
+                return False
+            self._processing = True
+            return True
+
+    def process_until_idle(self) -> list[TuiProcessingResult]:
+        results: list[TuiProcessingResult] = []
+        try:
+            while True:
+                result = process_tui_queue_once(self.runtime)
+                if result.step_status == LoopStepStatus.EMPTY:
+                    break
+                results.append(result)
+                if result.step_status in {LoopStepStatus.BUSY, LoopStepStatus.STOPPED}:
+                    break
+        finally:
+            with self._lock:
+                self._processing = False
+        return results
 
 
 @dataclass
@@ -145,6 +191,27 @@ def build_default_tui_inference_router() -> InferenceRouter:
 
 
 def submit_tui_input(runtime: TuiRuntime, prompt: str) -> TuiSubmissionResult:
+    """Queue input and process it synchronously.
+
+    This helper is useful for tests and non-interactive use. The Textual app uses
+    queue_tui_input plus a background worker so the UI can keep accepting input.
+    """
+    queued = queue_tui_input(runtime, prompt)
+    if not queued.queued:
+        return queued
+
+    processed = process_tui_queue_once(runtime)
+    return TuiSubmissionResult(
+        prompt=queued.prompt,
+        response=processed.response,
+        event=f"{queued.event}; {processed.event}",
+        queued=True,
+        queued_message_id=queued.queued_message_id,
+        step_status=processed.step_status,
+    )
+
+
+def queue_tui_input(runtime: TuiRuntime, prompt: str) -> TuiSubmissionResult:
     prompt_value = str(prompt or "").strip()
     if not prompt_value:
         return TuiSubmissionResult(prompt="", response="", event="empty input ignored")
@@ -159,19 +226,27 @@ def submit_tui_input(runtime: TuiRuntime, prompt: str) -> TuiSubmissionResult:
         )
 
     queued = runtime.channel.queue_message(prompt=prompt_value, user=runtime.user)
-    step = runtime.core.step(MessageSelector(user=runtime.user))
-    snapshot = runtime.visible_state.snapshot()
-    response = _response_from_snapshot(snapshot, step)
     command_event = ""
     if queued.message.metadata.get("is_command"):
         command_event = f" command=/{queued.message.metadata.get('command')}"
     return TuiSubmissionResult(
         prompt=prompt_value,
-        response=response,
-        event=f"queued {queued.message_id}; step={step.status.value}{command_event}",
+        response="",
+        event=f"queued {queued.message_id}{command_event}",
         queued=True,
         queued_message_id=queued.message_id,
+    )
+
+
+def process_tui_queue_once(runtime: TuiRuntime) -> TuiProcessingResult:
+    step = runtime.core.step(MessageSelector(user=runtime.user))
+    snapshot = runtime.visible_state.snapshot()
+    response = _response_from_snapshot(snapshot, step)
+    return TuiProcessingResult(
+        response=response,
+        event=f"step={step.status.value}",
         step_status=step.status,
+        queued_message_id=step.queued_message_id,
     )
 
 
@@ -305,6 +380,7 @@ def _build_textual_app_class() -> type[Any]:
         def __init__(self) -> None:
             super().__init__()
             self.runtime = build_tui_runtime()
+            self.processor = TuiProcessorCoordinator(self.runtime)
             self.last_message_id = ""
 
         def compose(self) -> ComposeResult:
@@ -327,26 +403,51 @@ def _build_textual_app_class() -> type[Any]:
         def on_input_submitted(self, event: Input.Submitted) -> None:
             prompt = event.value
             event.input.value = ""
-            result = submit_tui_input(self.runtime, prompt)
+            result = queue_tui_input(self.runtime, prompt)
             if not result.prompt:
                 return
             chat = self.query_one("#chat", RichLog)
             events = self.query_one("#events", RichLog)
             chat.write(Text.assemble((self.runtime.user, "bold cyan"), f": {result.prompt}"))
-            if result.response:
-                chat.write(Text.assemble(("Alphonse", "bold green"), f": {result.response}"))
             events.write(result.event)
             if result.queued_message_id:
                 self.last_message_id = result.queued_message_id
             self._refresh_status()
             if result.should_exit:
                 self.exit()
+                return
+            self._start_processor_if_needed()
+
+        def _start_processor_if_needed(self) -> None:
+            if not self.processor.reserve_processing():
+                self.query_one("#events", RichLog).write("processor already running; message remains queued")
+                self._refresh_status()
+                return
+            self.run_worker(self._process_queue_worker, thread=True, exclusive=False)
+
+        def _process_queue_worker(self) -> None:
+            results = self.processor.process_until_idle()
+            self.call_from_thread(self._apply_processing_results, results)
+
+        def _apply_processing_results(self, results: list[TuiProcessingResult]) -> None:
+            chat = self.query_one("#chat", RichLog)
+            events = self.query_one("#events", RichLog)
+            for result in results:
+                events.write(result.event)
+                if result.queued_message_id:
+                    self.last_message_id = result.queued_message_id
+                if result.response:
+                    chat.write(Text.assemble(("Alphonse", "bold green"), f": {result.response}"))
+            self._refresh_status()
+            if self.runtime.queue.size(MessageSelector(user=self.runtime.user)) > 0:
+                self._start_processor_if_needed()
 
         def _refresh_status(self) -> None:
             state = get_state()
             text = "\n".join(
                 [
                     f"state: {state.key}",
+                    f"processing: {self.processor.is_processing}",
                     f"user: {self.runtime.user}",
                     f"queue: {self.runtime.queue.size()}",
                     f"last message: {self.last_message_id or '-'}",

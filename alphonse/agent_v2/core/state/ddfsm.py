@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 from dataclasses import dataclass
+from threading import RLock
 
 AVAILABLE = "available"
 WORKING = "working"
@@ -58,41 +59,44 @@ class DDFSM:
         connection: sqlite3.Connection | None = None,
     ) -> None:
         self.config = config or DDFSMConfig()
-        self._connection = connection or sqlite3.connect(self.config.db_path)
+        self._lock = RLock()
+        self._connection = connection or sqlite3.connect(self.config.db_path, check_same_thread=False)
         self._connection.row_factory = sqlite3.Row
         if self.config.seed:
             self._ensure_schema()
             self._seed_defaults()
 
     def current_state_for_key(self, key: str) -> CurrentState:
-        row = self._connection.execute(
-            "SELECT id, key, name FROM states WHERE key = ? AND is_enabled = 1",
-            (key,),
-        ).fetchone()
+        with self._lock:
+            row = self._connection.execute(
+                "SELECT id, key, name FROM states WHERE key = ? AND is_enabled = 1",
+                (key,),
+            ).fetchone()
         if row is None:
             raise KeyError(f"unknown_state:{key}")
         return CurrentState(id=int(row["id"]), key=str(row["key"]), name=str(row["name"]))
 
     def handle(self, state: CurrentState, signal: CoreSignal) -> TransitionOutcome:
-        row = self._connection.execute(
-            """
-            SELECT
-                t.id AS transition_id,
-                s.id AS next_state_id,
-                s.key AS next_state_key,
-                s.name AS next_state_name
-            FROM transitions t
-            JOIN states s ON s.id = t.next_state_id
-            JOIN signals sig ON sig.id = t.signal_id
-            WHERE t.is_enabled = 1
-              AND sig.is_enabled = 1
-              AND sig.key = ?
-              AND ((t.match_any_state = 0 AND t.state_id = ?) OR t.match_any_state = 1)
-            ORDER BY t.match_any_state ASC, t.priority ASC, t.id ASC
-            LIMIT 1
-            """,
-            (signal.key, state.id),
-        ).fetchone()
+        with self._lock:
+            row = self._connection.execute(
+                """
+                SELECT
+                    t.id AS transition_id,
+                    s.id AS next_state_id,
+                    s.key AS next_state_key,
+                    s.name AS next_state_name
+                FROM transitions t
+                JOIN states s ON s.id = t.next_state_id
+                JOIN signals sig ON sig.id = t.signal_id
+                WHERE t.is_enabled = 1
+                  AND sig.is_enabled = 1
+                  AND sig.key = ?
+                  AND ((t.match_any_state = 0 AND t.state_id = ?) OR t.match_any_state = 1)
+                ORDER BY t.match_any_state ASC, t.priority ASC, t.id ASC
+                LIMIT 1
+                """,
+                (signal.key, state.id),
+            ).fetchone()
         if row is None:
             return TransitionOutcome(matched=False, reason="NO_TRANSITION")
         return TransitionOutcome(
@@ -105,36 +109,37 @@ class DDFSM:
         )
 
     def _ensure_schema(self) -> None:
-        self._connection.executescript(
-            """
-            CREATE TABLE IF NOT EXISTS states (
-              id INTEGER PRIMARY KEY,
-              key TEXT NOT NULL UNIQUE,
-              name TEXT NOT NULL,
-              is_enabled INTEGER NOT NULL DEFAULT 1
-            );
+        with self._lock:
+            self._connection.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS states (
+                  id INTEGER PRIMARY KEY,
+                  key TEXT NOT NULL UNIQUE,
+                  name TEXT NOT NULL,
+                  is_enabled INTEGER NOT NULL DEFAULT 1
+                );
 
-            CREATE TABLE IF NOT EXISTS signals (
-              id INTEGER PRIMARY KEY,
-              key TEXT NOT NULL UNIQUE,
-              name TEXT NOT NULL,
-              is_enabled INTEGER NOT NULL DEFAULT 1
-            );
+                CREATE TABLE IF NOT EXISTS signals (
+                  id INTEGER PRIMARY KEY,
+                  key TEXT NOT NULL UNIQUE,
+                  name TEXT NOT NULL,
+                  is_enabled INTEGER NOT NULL DEFAULT 1
+                );
 
-            CREATE TABLE IF NOT EXISTS transitions (
-              id INTEGER PRIMARY KEY,
-              state_id INTEGER NOT NULL,
-              signal_id INTEGER NOT NULL,
-              next_state_id INTEGER NOT NULL,
-              priority INTEGER NOT NULL DEFAULT 100,
-              is_enabled INTEGER NOT NULL DEFAULT 1,
-              match_any_state INTEGER NOT NULL DEFAULT 0,
-              FOREIGN KEY (state_id) REFERENCES states(id),
-              FOREIGN KEY (signal_id) REFERENCES signals(id),
-              FOREIGN KEY (next_state_id) REFERENCES states(id)
-            );
-            """
-        )
+                CREATE TABLE IF NOT EXISTS transitions (
+                  id INTEGER PRIMARY KEY,
+                  state_id INTEGER NOT NULL,
+                  signal_id INTEGER NOT NULL,
+                  next_state_id INTEGER NOT NULL,
+                  priority INTEGER NOT NULL DEFAULT 100,
+                  is_enabled INTEGER NOT NULL DEFAULT 1,
+                  match_any_state INTEGER NOT NULL DEFAULT 0,
+                  FOREIGN KEY (state_id) REFERENCES states(id),
+                  FOREIGN KEY (signal_id) REFERENCES signals(id),
+                  FOREIGN KEY (next_state_id) REFERENCES states(id)
+                );
+                """
+            )
 
     def _seed_defaults(self) -> None:
         states = (
@@ -160,31 +165,31 @@ class DDFSM:
             (5, AVAILABLE, PROCESSOR_FAILED, ERROR, 10, 1),
             (6, ERROR, ERROR_CLEARED, AVAILABLE, 10, 0),
         )
-        with self._connection:
-            self._connection.executemany(
-                "INSERT OR IGNORE INTO states (id, key, name) VALUES (?, ?, ?)",
-                states,
-            )
-            self._connection.executemany(
-                "INSERT OR IGNORE INTO signals (id, key, name) VALUES (?, ?, ?)",
-                signals,
-            )
-            for transition_id, from_key, signal_key, to_key, priority, any_state in transitions:
-                self._connection.execute(
-                    """
-                    INSERT OR IGNORE INTO transitions (
-                      id, state_id, signal_id, next_state_id, priority, match_any_state
-                    )
-                    SELECT ?, from_state.id, sig.id, to_state.id, ?, ?
-                    FROM states from_state
-                    JOIN signals sig ON sig.key = ?
-                    JOIN states to_state ON to_state.key = ?
-                    WHERE from_state.key = ?
-                    """,
-                    (transition_id, priority, any_state, signal_key, to_key, from_key),
+        with self._lock:
+            with self._connection:
+                self._connection.executemany(
+                    "INSERT OR IGNORE INTO states (id, key, name) VALUES (?, ?, ?)",
+                    states,
                 )
+                self._connection.executemany(
+                    "INSERT OR IGNORE INTO signals (id, key, name) VALUES (?, ?, ?)",
+                    signals,
+                )
+                for transition_id, from_key, signal_key, to_key, priority, any_state in transitions:
+                    self._connection.execute(
+                        """
+                        INSERT OR IGNORE INTO transitions (
+                          id, state_id, signal_id, next_state_id, priority, match_any_state
+                        )
+                        SELECT ?, from_state.id, sig.id, to_state.id, ?, ?
+                        FROM states from_state
+                        JOIN signals sig ON sig.key = ?
+                        JOIN states to_state ON to_state.key = ?
+                        WHERE from_state.key = ?
+                        """,
+                        (transition_id, priority, any_state, signal_key, to_key, from_key),
+                    )
 
 
 def build_default_ddfsm() -> DDFSM:
     return DDFSM()
-
