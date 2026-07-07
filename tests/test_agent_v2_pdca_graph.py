@@ -110,16 +110,22 @@ def test_run_pdca_once_passes_context_tools_to_plan() -> None:
 
 def test_run_pdca_once_executes_planned_tool_and_returns_to_check(monkeypatch) -> None:
     plan_node_module = _plan_node_module()
-    monkeypatch.setattr(
-        plan_node_module,
-        "_call_tool_planning_llm",
-        lambda prompt: {
-            "id": "plan-call-1",
+    call_index = {"value": 0}
+
+    def next_tool_call(prompt: str) -> dict[str, Any]:
+        call_index["value"] += 1
+        return {
+            "id": f"plan-call-{call_index['value']}",
             "tool_id": "tool-1",
             "tool_name": "write_file",
             "arguments": {"path": "a.txt"},
             "internal_state": "Writing the requested file.",
-        },
+        }
+
+    monkeypatch.setattr(
+        plan_node_module,
+        "_call_tool_planning_llm",
+        next_tool_call,
     )
     state = TaskState(task_id="task-1", goal="Review this request", user="alex", acceptance_criteria_md="1.- [ ] Done")
     tools = _ToolRegistry()
@@ -129,9 +135,9 @@ def test_run_pdca_once_executes_planned_tool_and_returns_to_check(monkeypatch) -
         context=CoreLoopContext(messages=InMemoryMessageQueue(), tools=tools),
     )
 
-    assert tools.calls == [("tool-1", {"path": "a.txt"})]
+    assert tools.calls == [("tool-1", {"path": "a.txt"})] * 10
     assert result.check_verdict == "wip"
-    assert result.pdca_cycle_count == 1
+    assert result.pdca_cycle_count == 10
     assert result.metadata["act_route"] == "end"
     assert result.metadata["act_stop_reason"] == "temporary_cycle_limit"
     assert '"status": "success"' in result.plan_json

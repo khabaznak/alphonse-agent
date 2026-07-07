@@ -50,7 +50,7 @@ def build_pdca_graph(context: CoreLoopContext | None = None) -> Any:
 
 def run_pdca_once(task: TaskState, context: CoreLoopContext | None = None) -> TaskState:
     """Run one stubbed PDCA pass and return a TaskState container."""
-    result = build_pdca_graph(context=context).invoke(task)
+    result = build_pdca_graph(context=context).invoke(task, config={"recursion_limit": 64})
     return TaskState.from_dict(dict(result))
 
 

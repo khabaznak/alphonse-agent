@@ -193,7 +193,7 @@ def test_act_node_wip_terminal_success_overrides_temporary_cycle_limit() -> None
         goal="Continue task",
         check_verdict="wip",
         acceptance_criteria_md="1.- [x] Done",
-        pdca_cycle_count=1,
+        pdca_cycle_count=10,
         metadata={"do_executed_since_last_act": True, "tool_call_planning_llm_stubbed": True},
     )
 
@@ -209,7 +209,7 @@ def test_act_node_wip_terminal_failure_overrides_temporary_cycle_limit() -> None
         goal="Continue task",
         check_verdict="wip",
         acceptance_criteria_md="1.- [ ] Done",
-        pdca_cycle_count=1,
+        pdca_cycle_count=10,
         metadata={"failure_reason": "No more attempts should be made.", "tool_call_planning_llm_stubbed": True},
     )
 
@@ -220,7 +220,7 @@ def test_act_node_wip_terminal_failure_overrides_temporary_cycle_limit() -> None
     assert task.metadata.get("act_stop_reason") != "temporary_cycle_limit"
 
 
-def test_act_node_observes_completed_do_cycle_and_stops_at_temporary_limit() -> None:
+def test_act_node_observes_completed_do_cycle_and_continues_before_temporary_limit() -> None:
     task = TaskState(
         goal="Continue task",
         check_verdict="wip",
@@ -232,6 +232,23 @@ def test_act_node_observes_completed_do_cycle_and_stops_at_temporary_limit() -> 
 
     assert task.pdca_cycle_count == 1
     assert task.metadata["completed_capd_cycle_count"] == 1
+    assert task.metadata["act_route"] == "plan"
+    assert "routed work-in-progress task back to Plan" in task.updates_md
+
+
+def test_act_node_observes_completed_do_cycle_and_stops_at_temporary_limit() -> None:
+    task = TaskState(
+        goal="Continue task",
+        check_verdict="wip",
+        acceptance_criteria_md="1.- [ ] Done",
+        pdca_cycle_count=9,
+        metadata={"do_executed_since_last_act": True},
+    )
+
+    act_node(task)
+
+    assert task.pdca_cycle_count == 10
+    assert task.metadata["completed_capd_cycle_count"] == 10
     assert task.metadata["act_route"] == "end"
     assert task.metadata["act_stop_reason"] == "temporary_cycle_limit"
     assert "temporary completed-cycle limit" in task.updates_md

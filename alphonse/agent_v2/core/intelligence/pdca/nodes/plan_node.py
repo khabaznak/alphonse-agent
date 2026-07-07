@@ -115,10 +115,29 @@ def _normalize_tool_call(value: dict[str, Any] | None, tools: tuple[ToolDescript
         return None
     if tools and tool_id not in {tool.tool_id for tool in tools}:
         return None
+    normalized_arguments = _normalize_tool_arguments(tool_id, arguments)
     return {
         "id": planned_id,
         "tool_id": tool_id,
         "tool_name": tool_name,
-        "arguments": dict(arguments),
+        "arguments": normalized_arguments,
         "internal_state": internal_state[:256],
     }
+
+
+def _normalize_tool_arguments(tool_id: str, arguments: dict[str, Any]) -> dict[str, Any]:
+    normalized = dict(arguments)
+    if tool_id == "native.bash":
+        _drop_codex_temp_cwd(normalized)
+    return normalized
+
+
+def _drop_codex_temp_cwd(arguments: dict[str, Any]) -> None:
+    raw_cwd = arguments.get("cwd")
+    if raw_cwd is None or str(raw_cwd).strip() == "":
+        return
+    cwd = Path(str(raw_cwd)).expanduser()
+    if cwd.exists():
+        return
+    if any(str(part).startswith("alphonse-codex-") for part in cwd.parts):
+        arguments.pop("cwd", None)

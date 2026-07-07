@@ -2,22 +2,32 @@
 
 from __future__ import annotations
 
+import json
+import os
 from dataclasses import dataclass, field
 from typing import Any
 
 from alphonse.agent_v2.core.core import AlphonseCore
 from alphonse.agent_v2.core.core import CoreMessage
+from alphonse.agent_v2.core.core import IntelligenceProcessor
 from alphonse.agent_v2.core.core import LoopStepStatus
 from alphonse.agent_v2.core.core import MemoryRecord
 from alphonse.agent_v2.core.core import PromptFile
 from alphonse.agent_v2.core.core import StateSnapshot
 from alphonse.agent_v2.core.core import ToolDescriptor
-from alphonse.agent_v2.core.intelligence import BasicIntelligenceProcessor
+from alphonse.agent_v2.core.core import ToolRegistry
+from alphonse.agent_v2.core.inference import InferenceRouter
+from alphonse.agent_v2.core.inference import ModelProfile
+from alphonse.agent_v2.core.inference import OpenAICodexProvider
+from alphonse.agent_v2.core.intelligence import PDCAIntelligenceProcessor
 from alphonse.agent_v2.core.messages import CommunicationChannel
 from alphonse.agent_v2.core.messages import InMemoryMessageQueue
 from alphonse.agent_v2.core.messages import MessageSelector
 from alphonse.agent_v2.core.state import get_state
 from alphonse.agent_v2.core.state import reset_state
+from alphonse.agent_v2.core.tools.registry.native import BASH_TOOL_ID
+from alphonse.agent_v2.core.tools.registry.native import RESPOND_TOOL_ID
+from alphonse.agent_v2.core.tools.registry.native import build_native_tool_registry
 
 LOCAL_STOP_COMMANDS = {"/exit", "/quit", "/stop"}
 
@@ -28,7 +38,7 @@ class TuiRuntime:
     queue: InMemoryMessageQueue
     channel: CommunicationChannel
     visible_state: "InMemoryInternalState"
-    processor: BasicIntelligenceProcessor
+    processor: IntelligenceProcessor
     core: AlphonseCore
 
 
@@ -85,19 +95,28 @@ class NullMemory:
         return None
 
 
-def build_tui_runtime(*, user: str = "local") -> TuiRuntime:
+def build_tui_runtime(
+    *,
+    user: str = "local",
+    inference: InferenceRouter | None = None,
+    tools: ToolRegistry | None = None,
+    processor: IntelligenceProcessor | None = None,
+) -> TuiRuntime:
     reset_state()
     queue = InMemoryMessageQueue()
     channel = CommunicationChannel(queue)
     visible_state = InMemoryInternalState()
-    processor = BasicIntelligenceProcessor()
+    processor = processor or PDCAIntelligenceProcessor()
+    tools = tools or build_native_tool_registry()
+    inference = inference or build_default_tui_inference_router()
     core = AlphonseCore(
         intelligence=processor,
         messages=queue,
-        tools=NullToolRegistry(),
+        tools=tools,
         prompts=NullPromptLoader(),
         state=visible_state,
         memory=NullMemory(),
+        inference=inference,
     )
     return TuiRuntime(
         user=str(user or "local").strip() or "local",
@@ -106,6 +125,22 @@ def build_tui_runtime(*, user: str = "local") -> TuiRuntime:
         visible_state=visible_state,
         processor=processor,
         core=core,
+    )
+
+
+def build_default_tui_inference_router() -> InferenceRouter:
+    """Build the default live inference router for the native TUI."""
+    return InferenceRouter(
+        provider=OpenAICodexProvider(),
+        default_profile=ModelProfile(
+            provider="openai_codex",
+            model=os.getenv("OPENAI_CODEX_MODEL", ""),
+            profile_id="chatgpt-plus-codex",
+            supports_tool_calling=False,
+            supports_structured_output=False,
+            supports_json_mode=True,
+            cost_tier="subscription",
+        ),
     )
 
 
@@ -126,7 +161,7 @@ def submit_tui_input(runtime: TuiRuntime, prompt: str) -> TuiSubmissionResult:
     queued = runtime.channel.queue_message(prompt=prompt_value, user=runtime.user)
     step = runtime.core.step(MessageSelector(user=runtime.user))
     snapshot = runtime.visible_state.snapshot()
-    response = str(snapshot.metadata.get("response") or "")
+    response = _response_from_snapshot(snapshot, step)
     command_event = ""
     if queued.message.metadata.get("is_command"):
         command_event = f" command=/{queued.message.metadata.get('command')}"
@@ -140,6 +175,85 @@ def submit_tui_input(runtime: TuiRuntime, prompt: str) -> TuiSubmissionResult:
     )
 
 
+def _response_from_snapshot(snapshot: StateSnapshot, step: Any) -> str:
+    if step.status == LoopStepStatus.FAILED:
+        return f"CAPD failed: {step.error or 'unknown error'}"
+
+    metadata = snapshot.metadata or {}
+    if "response" in metadata:
+        return str(metadata.get("response") or "")
+
+    task_state = metadata.get("task_state")
+    if isinstance(task_state, dict):
+        verdict = str(metadata.get("check_verdict") or task_state.get("check_verdict") or "unknown")
+        status = str(metadata.get("status") or task_state.get("status") or "unknown")
+        route = str(metadata.get("act_route") or task_state.get("metadata", {}).get("act_route") or "unknown")
+        planned = metadata.get("planned_tool_call")
+        tool_result_response = _latest_tool_result_response(task_state)
+        if tool_result_response:
+            return tool_result_response
+        if verdict == "mission_success":
+            if isinstance(planned, dict):
+                tool_name = str(planned.get("tool_name") or planned.get("tool_id") or "tool")
+                return f"Done. CAPD completed the task using {tool_name}."
+            return "Done. CAPD completed the task."
+        if verdict == "mission_failed":
+            outcome = metadata.get("outcome")
+            if isinstance(outcome, dict) and outcome.get("reason"):
+                return f"CAPD could not complete the task: {outcome['reason']}"
+            return "CAPD could not complete the task."
+        if isinstance(planned, dict):
+            tool_name = str(planned.get("tool_name") or planned.get("tool_id") or "tool")
+            return f"CAPD status={status}; verdict={verdict}; route={route}; planned {tool_name}."
+        return f"CAPD status={status}; verdict={verdict}; route={route}."
+
+    if snapshot.current_work:
+        return f"CAPD processed: {snapshot.current_work}"
+    return ""
+
+
+def _latest_tool_result_response(task_state: dict[str, Any]) -> str:
+    plan = _json_list_or_empty(task_state.get("plan_json"))
+    for call in reversed(plan):
+        if not isinstance(call, dict):
+            continue
+        execution = call.get("execution")
+        if not isinstance(execution, dict):
+            continue
+        status = str(execution.get("status") or "").strip()
+        tool_id = str(call.get("tool_id") or "").strip()
+        if status == "exception":
+            exception = str(execution.get("exception") or "").strip()
+            if exception:
+                return f"{tool_id or 'tool'} failed: {exception}"
+            return f"{tool_id or 'tool'} failed."
+        if status != "success":
+            continue
+        result = execution.get("result")
+        if not isinstance(result, dict):
+            continue
+        if tool_id == RESPOND_TOOL_ID:
+            return str(result.get("message") or "").strip()
+        if tool_id == BASH_TOOL_ID:
+            stdout = str(result.get("stdout") or "").strip()
+            stderr = str(result.get("stderr") or "").strip()
+            if stdout:
+                return stdout
+            if stderr:
+                return stderr
+    return ""
+
+
+def _json_list_or_empty(value: Any) -> list[Any]:
+    if not isinstance(value, str) or not value.strip() or value.strip() == "- (none)":
+        return []
+    try:
+        parsed = json.loads(value)
+    except ValueError:
+        return []
+    return parsed if isinstance(parsed, list) else []
+
+
 def main() -> None:
     app_cls = _build_textual_app_class()
     app_cls().run()
@@ -150,6 +264,7 @@ def _build_textual_app_class() -> type[Any]:
         from textual.app import App, ComposeResult
         from textual.containers import Horizontal, Vertical
         from textual.widgets import Footer, Header, Input, Label, RichLog, Static
+        from rich.text import Text
     except ModuleNotFoundError as exc:
         raise RuntimeError(
             "Textual is required for the Alphonse v2 TUI. Install dependencies with `pip install -r requirements.txt`."
@@ -205,7 +320,7 @@ def _build_textual_app_class() -> type[Any]:
 
         def on_mount(self) -> None:
             self.title = "Alphonse v2"
-            self.query_one("#chat", RichLog).write("[bold]Alphonse v2[/bold] native TUI")
+            self.query_one("#chat", RichLog).write(Text.from_markup("[bold]Alphonse v2[/bold] native TUI"))
             self.query_one("#events", RichLog).write("ready")
             self._refresh_status()
 
@@ -217,9 +332,9 @@ def _build_textual_app_class() -> type[Any]:
                 return
             chat = self.query_one("#chat", RichLog)
             events = self.query_one("#events", RichLog)
-            chat.write(f"[bold cyan]{self.runtime.user}[/bold cyan]: {result.prompt}")
+            chat.write(Text.assemble((self.runtime.user, "bold cyan"), f": {result.prompt}"))
             if result.response:
-                chat.write(f"[bold green]Alphonse[/bold green]: {result.response}")
+                chat.write(Text.assemble(("Alphonse", "bold green"), f": {result.response}"))
             events.write(result.event)
             if result.queued_message_id:
                 self.last_message_id = result.queued_message_id

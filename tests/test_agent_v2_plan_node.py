@@ -13,6 +13,9 @@ from alphonse.agent_v2.core.inference import StubInferenceProvider
 from alphonse.agent_v2.core.intelligence.pdca.nodes import plan_node
 from alphonse.agent_v2.core.intelligence.task_state import TaskState
 from alphonse.agent_v2.core.messages import InMemoryMessageQueue
+from alphonse.agent_v2.core.tools.registry.native import BASH_TOOL_ID
+from alphonse.agent_v2.core.tools.registry.native import BASH_TOOL_NAME
+from alphonse.agent_v2.core.tools.registry.native import build_native_tool_registry
 
 plan_node_module = import_module("alphonse.agent_v2.core.intelligence.pdca.nodes.plan_node")
 
@@ -183,6 +186,25 @@ def test_plan_node_uses_inference_and_exposes_tools_only_for_tool_planning() -> 
     assert provider.requests[0].purpose == InferencePurpose.TOOL_PLANNING
     assert provider.requests[0].tools[0].tool_id == "tool-1"
     assert json.loads(task.plan_json)[0]["tool_id"] == "tool-1"
+
+
+def test_plan_node_strips_codex_provider_temp_cwd_from_native_bash_plan(monkeypatch) -> None:
+    planned = {
+        "tool_id": BASH_TOOL_ID,
+        "tool_name": BASH_TOOL_NAME,
+        "arguments": {
+            "command": "ls -la",
+            "cwd": "/private/var/folders/example/T/alphonse-codex-deleted",
+        },
+        "internal_state": "Listing files.",
+    }
+    task = TaskState(goal="Please run this command: ls -la", acceptance_criteria_md="1.- [ ] Files are listed")
+    monkeypatch.setattr(plan_node_module, "_call_tool_planning_llm", lambda prompt: planned)
+
+    plan_node(task, context=CoreLoopContext(messages=InMemoryMessageQueue(), tools=build_native_tool_registry()))
+
+    arguments = json.loads(task.plan_json)[0]["arguments"]
+    assert arguments == {"command": "ls -la"}
 
 
 class _ToolRegistry:
