@@ -9,7 +9,12 @@ from alphonse.agent_v2.core.inference import ModelProfile
 from alphonse.agent_v2.core.inference import StubInferenceProvider
 from alphonse.agent_v2.core.intelligence import PDCAIntelligenceProcessor
 from alphonse.agent_v2.interfaces.tui import build_tui_runtime
+from alphonse.agent_v2.interfaces.tui import format_current_project_status
 from alphonse.agent_v2.interfaces.tui import format_activity_message
+from alphonse.agent_v2.interfaces.tui import format_activity_status_line
+from alphonse.agent_v2.interfaces.tui import format_inference_status
+from alphonse.agent_v2.interfaces.tui import format_slash_command_suggestions
+from alphonse.agent_v2.interfaces.tui import matching_slash_commands
 from alphonse.agent_v2.interfaces.tui import process_tui_queue_once
 from alphonse.agent_v2.interfaces.tui import queue_tui_input
 from alphonse.agent_v2.interfaces.tui import submit_tui_input
@@ -115,6 +120,55 @@ def test_format_activity_message_renders_label_and_message() -> None:
     )
 
     assert format_activity_message(event) == "thinking - Answering the greeting."
+
+
+def test_format_activity_status_line_renders_morphing_internal_state() -> None:
+    event = CoreActivityEvent(
+        phase=ImprovementPhase.PLAN,
+        label="thinking",
+        message="Choosing the next tool call.",
+    )
+
+    assert format_activity_status_line(event) == "Thinking: Choosing the next tool call."
+
+
+def test_format_activity_status_line_falls_back_to_phase() -> None:
+    event = CoreActivityEvent(
+        phase=ImprovementPhase.CHECK,
+        label="",
+        message="",
+    )
+
+    assert format_activity_status_line(event) == "Check"
+
+
+def test_format_slash_command_suggestions_filters_matches() -> None:
+    assert "> /project - Select or create a project" in format_slash_command_suggestions("/")
+    assert "> /project-context - Edit the active project context" in format_slash_command_suggestions("/project-c")
+    assert "/project - Select or create a project" not in format_slash_command_suggestions("/project-c")
+    assert format_slash_command_suggestions(" /project") == ""
+
+
+def test_format_slash_command_suggestions_marks_selected_row() -> None:
+    rendered = format_slash_command_suggestions("/", selected_index=1)
+
+    assert "  /project - Select or create a project" in rendered
+    assert "> /project-context - Edit the active project context" in rendered
+    assert [command for command, _ in matching_slash_commands("/project")] == ["/project", "/project-context"]
+
+
+def test_sidebar_status_helpers_render_project_and_inference(tmp_path) -> None:
+    runtime = build_tui_runtime(user="alex", inference=_respond_router())
+    project = runtime.project_store.create_project(
+        name="Alpha",
+        root_path=str(tmp_path / "alpha"),
+        owner_user_id="alex",
+    )
+
+    assert format_current_project_status(runtime) == "None"
+    runtime.active_project_id = project.project_id
+    assert format_current_project_status(runtime) == "Alpha"
+    assert format_inference_status(runtime) == "stub / stub"
 
 
 def test_submitting_shell_prompt_displays_bash_stdout() -> None:

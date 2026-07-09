@@ -32,7 +32,7 @@ def plan_node(task: TaskState, context: CoreLoopContext | None = None) -> TaskSt
             message="Choosing the next tool call.",
         )
     tools = _tools_from_context(context)
-    prompt = _render_tool_call_plan_prompt(task, tools)
+    prompt = _render_tool_call_plan_prompt(task, tools, project_context_md=_project_context_md(task, context))
     task.metadata["tool_call_plan_prompt"] = prompt
 
     planned_tool_call = _normalize_tool_call(_call_tool_planning_inference(prompt, task, tools, context), tools)
@@ -54,7 +54,12 @@ def plan_node(task: TaskState, context: CoreLoopContext | None = None) -> TaskSt
     return task
 
 
-def _render_tool_call_plan_prompt(task: TaskState, tools: tuple[ToolDescriptor, ...]) -> str:
+def _render_tool_call_plan_prompt(
+    task: TaskState,
+    tools: tuple[ToolDescriptor, ...],
+    *,
+    project_context_md: str = "",
+) -> str:
     env = Environment(
         loader=FileSystemLoader(_TEMPLATE_DIR),
         autoescape=select_autoescape(default_for_string=False),
@@ -65,6 +70,7 @@ def _render_tool_call_plan_prompt(task: TaskState, tools: tuple[ToolDescriptor, 
     return template.render(
         acceptance_criteria_md=task.acceptance_criteria_md,
         available_tools_md=_render_tools_md(tools),
+        project_context_md=project_context_md,
         task_state_md=task.to_markdown_prompt(),
     ).strip()
 
@@ -82,6 +88,15 @@ def _tools_from_context(context: CoreLoopContext | None) -> tuple[ToolDescriptor
     if context is None or context.tools is None:
         return ()
     return ToolExposurePolicy().select_tools(registry=context.tools)
+
+
+def _project_context_md(task: TaskState, context: CoreLoopContext | None) -> str:
+    if context is None or context.project_store is None or not str(task.project_id or "").strip():
+        return ""
+    render = getattr(context.project_store, "render_project_context", None)
+    if render is None:
+        return ""
+    return str(render(task.project_id, requester_user_id=task.user) or "").strip()
 
 
 def _call_tool_planning_inference(

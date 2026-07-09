@@ -45,7 +45,7 @@ def act_node(task: TaskState, context: CoreLoopContext | None = None) -> TaskSta
         return task
 
     if verdict in _ACCEPTANCE_CRITERIA_ACTION_VERDICTS:
-        prompt = _render_acceptance_criteria_prompt(task)
+        prompt = _render_acceptance_criteria_prompt(task, project_context_md=_project_context_md(task, context))
         generated_criteria = _call_acceptance_criteria_inference(prompt, task, context)
         task.metadata["acceptance_criteria_prompt"] = prompt
         task.metadata["acceptance_criteria_llm_stubbed"] = context is None or context.inference is None
@@ -140,7 +140,7 @@ def _mission_failure_reason(task: TaskState) -> str:
     return ""
 
 
-def _render_acceptance_criteria_prompt(task: TaskState) -> str:
+def _render_acceptance_criteria_prompt(task: TaskState, *, project_context_md: str = "") -> str:
     env = Environment(
         loader=FileSystemLoader(_TEMPLATE_DIR),
         autoescape=select_autoescape(default_for_string=False),
@@ -152,8 +152,18 @@ def _render_acceptance_criteria_prompt(task: TaskState) -> str:
         check_verdict=task.check_verdict or "",
         check_reason=task.check_reason,
         existing_acceptance_criteria_md=task.acceptance_criteria_md,
+        project_context_md=project_context_md,
         task_state_md=task.to_markdown_prompt(),
     ).strip()
+
+
+def _project_context_md(task: TaskState, context: CoreLoopContext | None) -> str:
+    if context is None or context.project_store is None or not str(task.project_id or "").strip():
+        return ""
+    render = getattr(context.project_store, "render_project_context", None)
+    if render is None:
+        return ""
+    return str(render(task.project_id, requester_user_id=task.user) or "").strip()
 
 
 def _call_acceptance_criteria_llm(prompt: str) -> str | None:

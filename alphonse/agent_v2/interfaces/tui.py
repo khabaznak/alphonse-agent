@@ -27,6 +27,8 @@ from alphonse.agent_v2.core.intelligence import PDCAIntelligenceProcessor
 from alphonse.agent_v2.core.messages import CommunicationChannel
 from alphonse.agent_v2.core.messages import InMemoryMessageQueue
 from alphonse.agent_v2.core.messages import MessageSelector
+from alphonse.agent_v2.core.projects import ProjectRecord
+from alphonse.agent_v2.core.projects import ProjectStore
 from alphonse.agent_v2.core.questions import SQLiteQuestionStore
 from alphonse.agent_v2.core.state import get_state
 from alphonse.agent_v2.core.state import reset_state
@@ -35,6 +37,13 @@ from alphonse.agent_v2.core.tools.registry.native import RESPOND_TOOL_ID
 from alphonse.agent_v2.core.tools.registry.native import build_native_tool_registry
 
 LOCAL_STOP_COMMANDS = {"/exit", "/quit", "/stop"}
+TUI_SLASH_COMMANDS: tuple[tuple[str, str], ...] = (
+    ("/project", "Select or create a project"),
+    ("/project-context", "Edit the active project context"),
+    ("/stop", "Stop Alphonse"),
+    ("/exit", "Exit the TUI"),
+    ("/quit", "Exit the TUI"),
+)
 
 
 @dataclass
@@ -46,6 +55,8 @@ class TuiRuntime:
     processor: IntelligenceProcessor
     core: AlphonseCore
     question_store: SQLiteQuestionStore
+    project_store: ProjectStore
+    active_project_id: str = ""
     ui_events: list[CoreUiEvent] = field(default_factory=list)
 
 
@@ -58,6 +69,7 @@ class TuiSubmissionResult:
     queued: bool = False
     queued_message_id: str | None = None
     step_status: LoopStepStatus | None = None
+    command: str = ""
 
 
 @dataclass(frozen=True)
@@ -154,6 +166,7 @@ def build_tui_runtime(
     tools: ToolRegistry | None = None,
     processor: IntelligenceProcessor | None = None,
     question_store: SQLiteQuestionStore | None = None,
+    project_store: ProjectStore | None = None,
 ) -> TuiRuntime:
     reset_state()
     queue = InMemoryMessageQueue()
@@ -163,6 +176,7 @@ def build_tui_runtime(
     tools = tools or build_native_tool_registry()
     inference = inference or build_default_tui_inference_router()
     question_store = question_store or SQLiteQuestionStore()
+    project_store = project_store or ProjectStore()
     ui_events: list[CoreUiEvent] = []
     core = AlphonseCore(
         intelligence=processor,
@@ -174,6 +188,7 @@ def build_tui_runtime(
         inference=inference,
         ui_event_sink=ui_events.append,
         question_store=question_store,
+        project_store=project_store,
     )
     return TuiRuntime(
         user=str(user or "local").strip() or "local",
@@ -183,6 +198,7 @@ def build_tui_runtime(
         processor=processor,
         core=core,
         question_store=question_store,
+        project_store=project_store,
         ui_events=ui_events,
     )
 
@@ -225,7 +241,8 @@ def submit_tui_input(runtime: TuiRuntime, prompt: str) -> TuiSubmissionResult:
 
 
 def queue_tui_input(runtime: TuiRuntime, prompt: str) -> TuiSubmissionResult:
-    prompt_value = str(prompt or "").strip()
+    raw_prompt = str(prompt or "")
+    prompt_value = raw_prompt.strip()
     if not prompt_value:
         return TuiSubmissionResult(prompt="", response="", event="empty input ignored")
 
@@ -238,11 +255,24 @@ def queue_tui_input(runtime: TuiRuntime, prompt: str) -> TuiSubmissionResult:
             should_exit=True,
         )
 
+    command = detect_tui_slash_command(raw_prompt)
+    if command in {"project", "project-context"}:
+        return TuiSubmissionResult(
+            prompt=prompt_value,
+            response="",
+            event=f"command=/{command}",
+            command=command,
+        )
+
     pending_result = _route_pending_question_answer(runtime, prompt_value)
     if pending_result is not None:
         return pending_result
 
-    queued = runtime.channel.queue_message(prompt=prompt_value, user=runtime.user)
+    queued = runtime.channel.queue_message(
+        prompt=prompt_value,
+        user=runtime.user,
+        project_id=runtime.active_project_id,
+    )
     command_event = ""
     if queued.message.metadata.get("is_command"):
         command_event = f" command=/{queued.message.metadata.get('command')}"
@@ -252,6 +282,74 @@ def queue_tui_input(runtime: TuiRuntime, prompt: str) -> TuiSubmissionResult:
         event=f"queued {queued.message_id}{command_event}",
         queued=True,
         queued_message_id=queued.message_id,
+    )
+
+
+def detect_tui_slash_command(prompt: str) -> str:
+    raw_prompt = str(prompt or "")
+    if not raw_prompt.startswith("/"):
+        return ""
+    command_body = raw_prompt[1:]
+    if not command_body or command_body[0].isspace():
+        return ""
+    return command_body.split(maxsplit=1)[0]
+
+
+def matching_slash_commands(prompt: str) -> list[tuple[str, str]]:
+    raw_prompt = str(prompt or "")
+    if not raw_prompt.startswith("/"):
+        return []
+    typed = raw_prompt.split(maxsplit=1)[0]
+    return [(command, description) for command, description in TUI_SLASH_COMMANDS if command.startswith(typed)]
+
+
+def format_slash_command_suggestions(prompt: str, *, selected_index: int = 0) -> str:
+    matches = matching_slash_commands(prompt)
+    if not matches:
+        return ""
+    selected = min(max(0, selected_index), len(matches) - 1)
+    lines = ["Commands"]
+    lines.extend(
+        f"{'> ' if index == selected else '  '}{command} - {description}"
+        for index, (command, description) in enumerate(matches)
+    )
+    return "\n".join(lines)
+
+
+def select_tui_project(runtime: TuiRuntime, project_id: str) -> ProjectRecord:
+    project = runtime.project_store.get_project(project_id, requester_user_id=runtime.user)
+    if project is None:
+        raise KeyError(f"project_not_found: {project_id}")
+    runtime.active_project_id = project.project_id
+    return project
+
+
+def create_tui_project(
+    runtime: TuiRuntime,
+    *,
+    name: str,
+    description: str,
+    root_path: str,
+    visibility: str = "private",
+) -> ProjectRecord:
+    project = runtime.project_store.create_project(
+        name=name,
+        description=description,
+        root_path=root_path,
+        visibility=visibility,  # type: ignore[arg-type]
+        owner_user_id=runtime.user,
+    )
+    runtime.active_project_id = project.project_id
+    return project
+
+
+def save_tui_project_context(runtime: TuiRuntime, content: str) -> ProjectRecord:
+    if not runtime.active_project_id:
+        raise RuntimeError("active_project_required")
+    return runtime.project_store.write_project_context(
+        runtime.active_project_id,
+        content,
+        requester_user_id=runtime.user,
     )
 
 
@@ -412,6 +510,34 @@ def format_activity_message(event: CoreActivityEvent) -> str:
     return event.label
 
 
+def format_activity_status_line(event: CoreActivityEvent) -> str:
+    label = str(event.label or "").strip() or event.phase.value
+    message = str(event.message or "").strip()
+    prefix = label.capitalize()
+    if message:
+        return f"{prefix}: {message}"
+    return prefix
+
+
+def format_inference_status(runtime: TuiRuntime) -> str:
+    inference = runtime.core.inference
+    if inference is None:
+        return "None"
+    profile = inference.default_profile
+    provider = str(profile.provider or "").strip() or "-"
+    model = str(profile.model or "").strip() or "-"
+    return f"{provider} / {model}"
+
+
+def format_current_project_status(runtime: TuiRuntime) -> str:
+    if not runtime.active_project_id:
+        return "None"
+    project = runtime.project_store.get_project(runtime.active_project_id, requester_user_id=runtime.user)
+    if project is None:
+        return "None"
+    return project.name
+
+
 def main() -> None:
     app_cls = _build_textual_app_class()
     app_cls().run()
@@ -420,13 +546,124 @@ def main() -> None:
 def _build_textual_app_class() -> type[Any]:
     try:
         from textual.app import App, ComposeResult
+        from textual.screen import ModalScreen
         from textual.containers import Horizontal, Vertical
-        from textual.widgets import Footer, Header, Input, Label, RichLog, Static
+        from textual.widgets import Button, Footer, Header, Input, RichLog, Select, Static, TextArea
         from rich.text import Text
     except ModuleNotFoundError as exc:
         raise RuntimeError(
             "Textual is required for the Alphonse v2 TUI. Install dependencies with `pip install -r requirements.txt`."
         ) from exc
+
+    class ProjectPickerScreen(ModalScreen[str | None]):
+        def __init__(self, runtime: TuiRuntime) -> None:
+            super().__init__()
+            self.runtime = runtime
+
+        def compose(self) -> ComposeResult:
+            projects = self.runtime.project_store.list_visible_projects(self.runtime.user)
+            options = [(f"{project.name} - {project.root_path}", project.project_id) for project in projects]
+            options.append(("New Project", "__new__"))
+            with Vertical(id="project-dialog"):
+                yield Static("Project", classes="dialog-title")
+                yield Select(options=options, id="project-select", allow_blank=False)
+                with Horizontal(classes="dialog-actions"):
+                    yield Button("Open", id="open-project", variant="primary")
+                    yield Button("Cancel", id="cancel-project")
+
+        def on_button_pressed(self, event: Button.Pressed) -> None:
+            if event.button.id == "cancel-project":
+                self.dismiss(None)
+                return
+            select = self.query_one("#project-select", Select)
+            value = str(select.value or "")
+            if value:
+                self.dismiss(value)
+
+    class NewProjectScreen(ModalScreen[ProjectRecord | None]):
+        def __init__(self, runtime: TuiRuntime) -> None:
+            super().__init__()
+            self.runtime = runtime
+
+        def on_mount(self) -> None:
+            self.query_one("#project-name", Input).focus()
+
+        def compose(self) -> ComposeResult:
+            with Vertical(id="project-dialog"):
+                yield Static("New Project", classes="dialog-title")
+                yield Input(placeholder="Name", id="project-name")
+                yield Input(placeholder="Description", id="project-description")
+                yield Input(placeholder="Directory path", id="project-path")
+                yield Select(options=[("Private", "private"), ("Shared", "shared")], id="project-visibility", allow_blank=False)
+                yield Static("", id="project-error")
+                with Horizontal(classes="dialog-actions"):
+                    yield Button("Create", id="create-project", variant="primary")
+                    yield Button("Cancel", id="cancel-new-project")
+
+        def on_input_submitted(self, event: Input.Submitted) -> None:
+            event.stop()
+            if event.input.id == "project-name":
+                self.query_one("#project-description", Input).focus()
+                return
+            if event.input.id == "project-description":
+                self.query_one("#project-path", Input).focus()
+                return
+            if event.input.id == "project-path":
+                self.query_one("#create-project", Button).focus()
+
+        def on_button_pressed(self, event: Button.Pressed) -> None:
+            if event.button.id == "cancel-new-project":
+                self.dismiss(None)
+                return
+            try:
+                project = create_tui_project(
+                    self.runtime,
+                    name=self.query_one("#project-name", Input).value,
+                    description=self.query_one("#project-description", Input).value,
+                    root_path=self.query_one("#project-path", Input).value,
+                    visibility=str(self.query_one("#project-visibility", Select).value or "private"),
+                )
+            except Exception as exc:
+                self.query_one("#project-error", Static).update(str(exc))
+                return
+            self.dismiss(project)
+
+    class ProjectContextScreen(ModalScreen[bool]):
+        def __init__(self, runtime: TuiRuntime) -> None:
+            super().__init__()
+            self.runtime = runtime
+
+        def on_mount(self) -> None:
+            self.query_one("#project-context-editor", TextArea).focus()
+
+        def compose(self) -> ComposeResult:
+            project = self.runtime.project_store.get_project(self.runtime.active_project_id, requester_user_id=self.runtime.user)
+            content = ""
+            title = "Project Context"
+            if project is not None:
+                title = f"Project Context - {project.name}"
+                content = self.runtime.project_store.read_project_context(project.project_id, requester_user_id=self.runtime.user)
+            with Vertical(id="project-context-dialog"):
+                yield Static(title, classes="dialog-title")
+                yield TextArea(content, id="project-context-editor")
+                yield Static("", id="project-context-error")
+                with Horizontal(classes="dialog-actions"):
+                    yield Button("Save", id="save-project-context", variant="primary")
+                    yield Button("Cancel", id="cancel-project-context")
+
+        def on_button_pressed(self, event: Button.Pressed) -> None:
+            if event.button.id == "cancel-project-context":
+                self.dismiss(False)
+                return
+            try:
+                save_tui_project_context(
+                    self.runtime,
+                    self.query_one("#project-context-editor", TextArea).text,
+                )
+            except Exception as exc:
+                self.query_one("#project-context-error", Static).update(str(exc))
+                return
+            self.dismiss(True)
 
     class AlphonseTuiApp(App[None]):
         CSS = """
@@ -447,8 +684,15 @@ def _build_textual_app_class() -> type[Any]:
             min-width: 28;
         }
 
-        #chat, #events {
+        #chat {
             border: solid $primary;
+        }
+
+        #activity {
+            border: solid $primary;
+            height: 5;
+            padding: 1;
+            color: $text-muted;
         }
 
         #status {
@@ -456,44 +700,125 @@ def _build_textual_app_class() -> type[Any]:
             height: 8;
             padding: 1;
         }
+
+        #slash-commands {
+            height: auto;
+            max-height: 7;
+            padding: 0 1;
+            color: $text-muted;
+            display: none;
+        }
+
+        #project-dialog {
+            width: 70;
+            height: auto;
+            padding: 1;
+            border: solid $primary;
+            background: $surface;
+        }
+
+        #project-context-dialog {
+            width: 80%;
+            height: 80%;
+            padding: 1;
+            border: solid $primary;
+            background: $surface;
+        }
+
+        .dialog-title {
+            text-style: bold;
+            margin-bottom: 1;
+        }
+
+        .dialog-actions {
+            height: auto;
+            margin-top: 1;
+        }
         """
 
         BINDINGS = [("ctrl+c", "quit", "Quit")]
 
         def __init__(self) -> None:
             super().__init__()
-            self.runtime = build_tui_runtime()
+            self.runtime = build_tui_runtime(project_store=ProjectStore.default())
             self.runtime.core.activity_sink = self._emit_activity_from_worker
             self.processor = TuiProcessorCoordinator(self.runtime)
             self.last_message_id = ""
+            self.slash_command_matches: list[tuple[str, str]] = []
+            self.slash_command_selected_index = 0
 
         def compose(self) -> ComposeResult:
             yield Header(show_clock=True)
             with Horizontal(id="main"):
                 with Vertical(id="chat-column"):
                     yield RichLog(id="chat", wrap=True, highlight=True)
+                    yield Static(id="slash-commands")
                     yield Input(placeholder="Message Alphonse...", id="prompt")
                 with Vertical(id="side-column"):
+                    yield Static(id="activity")
                     yield Static(id="status")
-                    yield RichLog(id="events", wrap=True, highlight=True)
             yield Footer()
 
         def on_mount(self) -> None:
             self.title = "Alphonse v2"
             self.query_one("#chat", RichLog).write(Text.from_markup("[bold]Alphonse v2[/bold] native TUI"))
-            self.query_one("#events", RichLog).write("ready")
+            self.query_one("#activity", Static).update("Idle: ready")
             self._refresh_status()
+            self.query_one("#prompt", Input).focus()
+
+        def on_input_changed(self, event: Input.Changed) -> None:
+            if event.input.id != "prompt":
+                return
+            self._refresh_slash_commands(event.value)
+
+        def on_key(self, event: Any) -> None:
+            if not self.slash_command_matches:
+                return
+            if getattr(self.focused, "id", "") != "prompt":
+                return
+            if event.key == "down":
+                event.stop()
+                self.slash_command_selected_index = min(
+                    self.slash_command_selected_index + 1,
+                    len(self.slash_command_matches) - 1,
+                )
+                self._refresh_slash_commands(self.query_one("#prompt", Input).value, reset_selection=False)
+                return
+            if event.key == "up":
+                event.stop()
+                self.slash_command_selected_index = max(self.slash_command_selected_index - 1, 0)
+                self._refresh_slash_commands(self.query_one("#prompt", Input).value, reset_selection=False)
+                return
+            if event.key == "enter":
+                event.stop()
+                command = self.slash_command_matches[self.slash_command_selected_index][0]
+                prompt = self.query_one("#prompt", Input)
+                prompt.value = command
+                self._refresh_slash_commands("")
+                self._handle_prompt_submission(command)
 
         def on_input_submitted(self, event: Input.Submitted) -> None:
             prompt = event.value
             event.input.value = ""
+            self._handle_prompt_submission(prompt)
+
+        def _handle_prompt_submission(self, prompt: str) -> None:
+            self._refresh_slash_commands("")
+            command = detect_tui_slash_command(prompt)
+            if command == "project":
+                self.query_one("#chat", RichLog).write(Text.assemble((self.runtime.user, "bold cyan"), f": {prompt.strip()}"))
+                self._open_project_picker()
+                return
+            if command == "project-context":
+                self.query_one("#chat", RichLog).write(Text.assemble((self.runtime.user, "bold cyan"), f": {prompt.strip()}"))
+                self._open_project_context_flow()
+                return
+
             result = queue_tui_input(self.runtime, prompt)
             if not result.prompt:
                 return
             chat = self.query_one("#chat", RichLog)
-            events = self.query_one("#events", RichLog)
             chat.write(Text.assemble((self.runtime.user, "bold cyan"), f": {result.prompt}"))
-            events.write(result.event)
             if result.queued_message_id:
                 self.last_message_id = result.queued_message_id
             self._refresh_status()
@@ -502,9 +827,36 @@ def _build_textual_app_class() -> type[Any]:
                 return
             self._start_processor_if_needed()
 
+        def _open_project_picker(self, *, then_context: bool = False) -> None:
+            def _selected(value: str | None) -> None:
+                if not value:
+                    return
+                if value == "__new__":
+                    self.push_screen(NewProjectScreen(self.runtime), callback=_created)
+                    return
+                select_tui_project(self.runtime, value)
+                self._refresh_status()
+                if then_context:
+                    self.push_screen(ProjectContextScreen(self.runtime), callback=lambda _: self._refresh_status())
+
+            def _created(project: ProjectRecord | None) -> None:
+                if project is None:
+                    return
+                self._refresh_status()
+                if then_context:
+                    self.push_screen(ProjectContextScreen(self.runtime), callback=lambda _: self._refresh_status())
+
+            self.push_screen(ProjectPickerScreen(self.runtime), callback=_selected)
+
+        def _open_project_context_flow(self) -> None:
+            if not self.runtime.active_project_id:
+                self._open_project_picker(then_context=True)
+                return
+            self.push_screen(ProjectContextScreen(self.runtime), callback=lambda _: self._refresh_status())
+
         def _start_processor_if_needed(self) -> None:
             if not self.processor.reserve_processing():
-                self.query_one("#events", RichLog).write("processor already running; message remains queued")
+                self.query_one("#activity", Static).update("Queued: processor already running")
                 self._refresh_status()
                 return
             self.run_worker(self._process_queue_worker, thread=True, exclusive=False)
@@ -517,17 +869,11 @@ def _build_textual_app_class() -> type[Any]:
             self.call_from_thread(self._append_activity_event, event)
 
         def _append_activity_event(self, event: CoreActivityEvent) -> None:
-            chat = self.query_one("#chat", RichLog)
-            events = self.query_one("#events", RichLog)
-            rendered = format_activity_message(event)
-            chat.write(Text.assemble((event.speaker, "bold green"), f": {rendered}"))
-            events.write(f"activity={event.phase.value}:{event.label}")
+            self.query_one("#activity", Static).update(format_activity_status_line(event))
 
         def _apply_processing_results(self, results: list[TuiProcessingResult]) -> None:
             chat = self.query_one("#chat", RichLog)
-            events = self.query_one("#events", RichLog)
             for result in results:
-                events.write(result.event)
                 if result.queued_message_id:
                     self.last_message_id = result.queued_message_id
                 if result.response:
@@ -536,6 +882,22 @@ def _build_textual_app_class() -> type[Any]:
             if self.runtime.queue.size(MessageSelector(user=self.runtime.user)) > 0:
                 self._start_processor_if_needed()
 
+        def _refresh_slash_commands(self, prompt: str, *, reset_selection: bool = True) -> None:
+            suggestions = self.query_one("#slash-commands", Static)
+            matches = matching_slash_commands(prompt)
+            if reset_selection or not matches:
+                self.slash_command_selected_index = 0
+            self.slash_command_matches = matches
+            if matches:
+                self.slash_command_selected_index = min(self.slash_command_selected_index, len(matches) - 1)
+            rendered = format_slash_command_suggestions(prompt, selected_index=self.slash_command_selected_index)
+            if rendered:
+                suggestions.update(rendered)
+                suggestions.display = True
+                return
+            suggestions.update("")
+            suggestions.display = False
+
         def _refresh_status(self) -> None:
             state = get_state()
             text = "\n".join(
@@ -543,6 +905,8 @@ def _build_textual_app_class() -> type[Any]:
                     f"state: {state.key}",
                     f"processing: {self.processor.is_processing}",
                     f"user: {self.runtime.user}",
+                    f"current project: {format_current_project_status(self.runtime)}",
+                    f"inference: {format_inference_status(self.runtime)}",
                     f"queue: {self.runtime.queue.size()}",
                     f"last message: {self.last_message_id or '-'}",
                 ]

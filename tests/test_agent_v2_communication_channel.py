@@ -85,9 +85,9 @@ def test_slash_command_detected_only_at_prompt_start() -> None:
         "command_args": "new",
     }
     assert indented.metadata == {
-        "is_command": True,
-        "command": "project",
-        "command_args": "new",
+        "is_command": False,
+        "command": "",
+        "command_args": "",
     }
     assert sentence.metadata == {
         "is_command": False,

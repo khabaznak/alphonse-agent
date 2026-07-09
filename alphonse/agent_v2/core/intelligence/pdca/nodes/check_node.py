@@ -62,7 +62,11 @@ def _review_wip_acceptance_criteria(
     if latest_call is None and require_latest_call:
         return "Acceptance criteria exist, but no steering messages or executed tool results were available yet."
 
-    prompt = _render_criteria_review_prompt(task, latest_call or {})
+    prompt = _render_criteria_review_prompt(
+        task,
+        latest_call or {},
+        project_context_md=_project_context_md(task, context),
+    )
     revised_criteria = _call_criteria_review_inference(prompt, task, context)
     task.metadata["criteria_review_prompt"] = prompt
     task.metadata["criteria_review_llm_stubbed"] = context is None or context.inference is None
@@ -77,7 +81,12 @@ def _review_wip_acceptance_criteria(
     return "Acceptance criteria need review against the latest executed tool call."
 
 
-def _render_criteria_review_prompt(task: TaskState, latest_call: dict[str, object]) -> str:
+def _render_criteria_review_prompt(
+    task: TaskState,
+    latest_call: dict[str, object],
+    *,
+    project_context_md: str = "",
+) -> str:
     env = Environment(
         loader=FileSystemLoader(_TEMPLATE_DIR),
         autoescape=select_autoescape(default_for_string=False),
@@ -88,8 +97,18 @@ def _render_criteria_review_prompt(task: TaskState, latest_call: dict[str, objec
     return template.render(
         acceptance_criteria_md=task.acceptance_criteria_md,
         latest_executed_call_json=json.dumps(latest_call, indent=2, sort_keys=True),
+        project_context_md=project_context_md,
         task_state_md=task.to_markdown_prompt(),
     ).strip()
+
+
+def _project_context_md(task: TaskState, context: CoreLoopContext | None) -> str:
+    if context is None or context.project_store is None or not str(task.project_id or "").strip():
+        return ""
+    render = getattr(context.project_store, "render_project_context", None)
+    if render is None:
+        return ""
+    return str(render(task.project_id, requester_user_id=task.user) or "").strip()
 
 
 def _call_criteria_review_llm(prompt: str) -> str | None:

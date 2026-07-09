@@ -171,6 +171,7 @@ class ToolExecutionContext:
     messages: MessageQueue
     ui_event_sink: Callable[[CoreUiEvent], None] | None = None
     question_store: Any | None = None
+    project_store: Any | None = None
     delivery_sink: Callable[[dict[str, Any]], Any] | None = None
 
 
@@ -184,6 +185,7 @@ class CoreLoopContext:
     activity_sink: Callable[[CoreActivityEvent], None] | None = None
     ui_event_sink: Callable[[CoreUiEvent], None] | None = None
     question_store: Any | None = None
+    project_store: Any | None = None
     delivery_sink: Callable[[dict[str, Any]], Any] | None = None
 
     def consume_message(self, selector: MessageSelector | None = None) -> QueuedMessage | None:
@@ -205,6 +207,7 @@ class CoreLoopContext:
             messages=self.messages,
             ui_event_sink=self.ui_event_sink,
             question_store=self.question_store,
+            project_store=self.project_store,
             delivery_sink=self.delivery_sink,
         )
 
@@ -294,6 +297,7 @@ class AlphonseCore:
     activity_sink: Callable[[CoreActivityEvent], None] | None = None
     ui_event_sink: Callable[[CoreUiEvent], None] | None = None
     question_store: Any | None = None
+    project_store: Any | None = None
     delivery_sink: Callable[[dict[str, Any]], Any] | None = None
     fsm: DDFSM = field(default_factory=build_default_ddfsm)
     _stop_requested: bool = field(default=False, init=False, repr=False)
@@ -349,6 +353,7 @@ class AlphonseCore:
                     activity_sink=self.activity_sink,
                     ui_event_sink=self.ui_event_sink,
                     question_store=self.question_store,
+                    project_store=self.project_store,
                     delivery_sink=self.delivery_sink,
                 ),
             )

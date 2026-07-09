@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from alphonse.agent_v2.core.core import ToolDescriptor
+from alphonse.agent_v2.core.core import ToolExecutionContext
 from alphonse.agent_v2.core.core import ToolKind
 from alphonse.agent_v2.core.tools.registry import ToolDefinition
 
@@ -54,10 +55,11 @@ def build_bash_tool_definition() -> ToolDefinition:
         callable=execute_bash,
         argument_schema=dict(BASH_ARGUMENT_SCHEMA),
         enabled=True,
+        accepts_context=True,
     )
 
 
-def execute_bash(arguments: dict[str, Any]) -> dict[str, Any]:
+def execute_bash(arguments: dict[str, Any], *, context: ToolExecutionContext | None = None) -> dict[str, Any]:
     """Execute a bash command and return a JSON-safe result."""
     command = str(arguments.get("command") or "").strip()
     if not command:
@@ -67,7 +69,7 @@ def execute_bash(arguments: dict[str, Any]) -> dict[str, Any]:
     if not Path(bash_bin).exists():
         raise RuntimeError("bash_executable_missing")
 
-    cwd = _resolve_cwd(arguments.get("cwd"))
+    cwd = _resolve_cwd(arguments.get("cwd"), context=context)
     timeout_seconds = _coerce_timeout(arguments.get("timeout_seconds"))
 
     try:
@@ -97,8 +99,11 @@ def execute_bash(arguments: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _resolve_cwd(raw_cwd: Any) -> str:
+def _resolve_cwd(raw_cwd: Any, *, context: ToolExecutionContext | None = None) -> str:
     if raw_cwd is None or str(raw_cwd).strip() == "":
+        project_root = _project_root_from_context(context)
+        if project_root:
+            return project_root
         return str(Path.cwd())
     path = Path(str(raw_cwd)).expanduser().resolve()
     if not path.exists():
@@ -106,6 +111,25 @@ def _resolve_cwd(raw_cwd: Any) -> str:
     if not path.is_dir():
         raise ValueError(f"bash_cwd_not_directory: {path}")
     return str(path)
+
+
+def _project_root_from_context(context: ToolExecutionContext | None) -> str:
+    if context is None or context.project_store is None:
+        return ""
+    task = context.task
+    project_id = str(getattr(task, "project_id", "") or "").strip()
+    if not project_id:
+        return ""
+    get_project = getattr(context.project_store, "get_project", None)
+    if get_project is None:
+        return ""
+    project = get_project(project_id, requester_user_id=getattr(task, "user", None))
+    if project is None:
+        return ""
+    root = Path(str(project.root_path)).expanduser().resolve()
+    if not root.exists() or not root.is_dir():
+        return ""
+    return str(root)
 
 
 def _coerce_timeout(raw_timeout: Any) -> float:
