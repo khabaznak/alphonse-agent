@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from alphonse.agent_v2.core.core import ImprovementPhase
 from alphonse.agent_v2.core.intelligence.task_state import TaskState
 
 if TYPE_CHECKING:
@@ -16,6 +17,14 @@ def do_node(task: TaskState, context: CoreLoopContext | None = None) -> TaskStat
     if planned_call is None:
         task.append_update("Do found no unexecuted planned tool call.")
         return task
+
+    if context is not None:
+        tool_name = str(planned_call.get("tool_name") or planned_call.get("tool_id") or "tool").strip()
+        context.emit_activity(
+            phase=ImprovementPhase.DO,
+            label="working",
+            message=f"Running {tool_name}.",
+        )
 
     call_id = str(planned_call.get("id") or "").strip()
     if context is None or context.tools is None:

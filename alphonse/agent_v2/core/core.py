@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from time import sleep
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import TYPE_CHECKING, Any, Callable, Protocol
 
 from alphonse.agent_v2.core.state.ddfsm import AVAILABLE
 from alphonse.agent_v2.core.state.ddfsm import ERROR
@@ -143,6 +143,16 @@ class LoopStepResult:
     error: str | None = None
 
 
+@dataclass(frozen=True)
+class CoreActivityEvent:
+    """Owner-visible activity event emitted while CAPD is running."""
+
+    phase: ImprovementPhase
+    label: str
+    message: str
+    speaker: str = "Alphonse"
+
+
 @dataclass
 class CoreLoopContext:
     """Processor-controlled access to selected queued messages."""
@@ -150,9 +160,15 @@ class CoreLoopContext:
     messages: MessageQueue
     tools: ToolRegistry | None = None
     inference: InferenceRouter | None = None
+    activity_sink: Callable[[CoreActivityEvent], None] | None = None
 
     def consume_message(self, selector: MessageSelector | None = None) -> QueuedMessage | None:
         return self.messages.dequeue(selector)
+
+    def emit_activity(self, *, phase: ImprovementPhase, label: str, message: str) -> None:
+        if self.activity_sink is None:
+            return
+        self.activity_sink(CoreActivityEvent(phase=phase, label=label, message=message))
 
 
 class IntelligenceProcessor(Protocol):
@@ -232,6 +248,7 @@ class AlphonseCore:
     state: InternalState
     memory: Memory
     inference: InferenceRouter | None = None
+    activity_sink: Callable[[CoreActivityEvent], None] | None = None
     fsm: DDFSM = field(default_factory=build_default_ddfsm)
     _stop_requested: bool = field(default=False, init=False, repr=False)
 
@@ -274,7 +291,12 @@ class AlphonseCore:
         try:
             result = self.intelligence.process(
                 task,
-                CoreLoopContext(messages=self.messages, tools=self.tools, inference=self.inference),
+                CoreLoopContext(
+                    messages=self.messages,
+                    tools=self.tools,
+                    inference=self.inference,
+                    activity_sink=self.activity_sink,
+                ),
             )
         except Exception as exc:
             result = ProcessingResult(

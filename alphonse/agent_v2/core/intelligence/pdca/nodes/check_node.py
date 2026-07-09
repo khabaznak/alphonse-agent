@@ -12,6 +12,7 @@ from jinja2 import select_autoescape
 
 from alphonse.agent_v2.core.inference import InferencePurpose
 from alphonse.agent_v2.core.inference import InferenceRequest
+from alphonse.agent_v2.core.core import ImprovementPhase
 from alphonse.agent_v2.core.intelligence.task_state import TaskState
 from alphonse.agent_v2.core.messages.queue import MessageSelector
 
@@ -23,6 +24,12 @@ _TEMPLATE_DIR = Path(__file__).resolve().parents[2] / "templates"
 
 def check_node(task: TaskState, context: CoreLoopContext | None = None) -> TaskState:
     """Classify the task and fold related steering messages into it."""
+    if context is not None:
+        context.emit_activity(
+            phase=ImprovementPhase.CHECK,
+            label="deliberating",
+            message="Reviewing the task and queued steering messages.",
+        )
     is_new_task = _markdown_is_empty(task.acceptance_criteria_md)
     steering_count = _consume_steering_messages(task, context)
 

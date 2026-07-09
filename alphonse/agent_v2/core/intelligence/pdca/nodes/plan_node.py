@@ -10,6 +10,7 @@ from jinja2 import Environment
 from jinja2 import FileSystemLoader
 from jinja2 import select_autoescape
 
+from alphonse.agent_v2.core.core import ImprovementPhase
 from alphonse.agent_v2.core.core import ToolDescriptor
 from alphonse.agent_v2.core.inference import InferencePurpose
 from alphonse.agent_v2.core.inference import InferenceRequest
@@ -24,6 +25,12 @@ _TEMPLATE_DIR = Path(__file__).resolve().parents[2] / "templates"
 
 def plan_node(task: TaskState, context: CoreLoopContext | None = None) -> TaskState:
     """Prepare one future tool call without executing it."""
+    if context is not None:
+        context.emit_activity(
+            phase=ImprovementPhase.PLAN,
+            label="thinking",
+            message="Choosing the next tool call.",
+        )
     tools = _tools_from_context(context)
     prompt = _render_tool_call_plan_prompt(task, tools)
     task.metadata["tool_call_plan_prompt"] = prompt
@@ -37,6 +44,12 @@ def plan_node(task: TaskState, context: CoreLoopContext | None = None) -> TaskSt
     task.metadata["tool_call_planning_llm_stubbed"] = False
     task.metadata["planned_tool_call"] = planned_tool_call
     task.append_plan_call(planned_tool_call)
+    if context is not None:
+        context.emit_activity(
+            phase=ImprovementPhase.PLAN,
+            label="thinking",
+            message=str(planned_tool_call.get("internal_state") or "").strip(),
+        )
     task.append_update("Plan selected the next tool call.")
     return task
 

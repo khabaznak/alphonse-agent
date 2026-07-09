@@ -10,6 +10,7 @@ from typing import Any
 
 from alphonse.agent_v2.core.core import AlphonseCore
 from alphonse.agent_v2.core.core import CoreMessage
+from alphonse.agent_v2.core.core import CoreActivityEvent
 from alphonse.agent_v2.core.core import IntelligenceProcessor
 from alphonse.agent_v2.core.core import LoopStepResult
 from alphonse.agent_v2.core.core import LoopStepStatus
@@ -329,6 +330,13 @@ def _json_list_or_empty(value: Any) -> list[Any]:
     return parsed if isinstance(parsed, list) else []
 
 
+def format_activity_message(event: CoreActivityEvent) -> str:
+    message = str(event.message or "").strip()
+    if message:
+        return f"{event.label} - {message}"
+    return event.label
+
+
 def main() -> None:
     app_cls = _build_textual_app_class()
     app_cls().run()
@@ -380,6 +388,7 @@ def _build_textual_app_class() -> type[Any]:
         def __init__(self) -> None:
             super().__init__()
             self.runtime = build_tui_runtime()
+            self.runtime.core.activity_sink = self._emit_activity_from_worker
             self.processor = TuiProcessorCoordinator(self.runtime)
             self.last_message_id = ""
 
@@ -428,6 +437,16 @@ def _build_textual_app_class() -> type[Any]:
         def _process_queue_worker(self) -> None:
             results = self.processor.process_until_idle()
             self.call_from_thread(self._apply_processing_results, results)
+
+        def _emit_activity_from_worker(self, event: CoreActivityEvent) -> None:
+            self.call_from_thread(self._append_activity_event, event)
+
+        def _append_activity_event(self, event: CoreActivityEvent) -> None:
+            chat = self.query_one("#chat", RichLog)
+            events = self.query_one("#events", RichLog)
+            rendered = format_activity_message(event)
+            chat.write(Text.assemble((event.speaker, "bold green"), f": {rendered}"))
+            events.write(f"activity={event.phase.value}:{event.label}")
 
         def _apply_processing_results(self, results: list[TuiProcessingResult]) -> None:
             chat = self.query_one("#chat", RichLog)

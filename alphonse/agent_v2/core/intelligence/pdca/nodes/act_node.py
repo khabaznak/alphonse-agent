@@ -9,6 +9,7 @@ from jinja2 import Environment
 from jinja2 import FileSystemLoader
 from jinja2 import select_autoescape
 
+from alphonse.agent_v2.core.core import ImprovementPhase
 from alphonse.agent_v2.core.inference import InferencePurpose
 from alphonse.agent_v2.core.inference import InferenceRequest
 from alphonse.agent_v2.core.intelligence.task_state import TaskState
@@ -26,6 +27,12 @@ _PLAN_CALL_EXCEPTION_FAILURE_THRESHOLD = 3
 
 def act_node(task: TaskState, context: CoreLoopContext | None = None) -> TaskState:
     """Act on the check verdict without re-checking or executing work."""
+    if context is not None:
+        context.emit_activity(
+            phase=ImprovementPhase.ACT,
+            label="deciding",
+            message="Deciding the next CAPD route.",
+        )
     _observe_completed_do_cycle(task)
     verdict = str(task.check_verdict or "").strip().lower()
     if verdict == "wip":

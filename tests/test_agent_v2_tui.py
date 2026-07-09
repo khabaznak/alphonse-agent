@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from alphonse.agent_v2.core.core import CoreActivityEvent
+from alphonse.agent_v2.core.core import ImprovementPhase
 from alphonse.agent_v2.core.core import LoopStepStatus
 from alphonse.agent_v2.core.inference import InferencePurpose
 from alphonse.agent_v2.core.inference import InferenceRouter
@@ -7,6 +9,7 @@ from alphonse.agent_v2.core.inference import ModelProfile
 from alphonse.agent_v2.core.inference import StubInferenceProvider
 from alphonse.agent_v2.core.intelligence import PDCAIntelligenceProcessor
 from alphonse.agent_v2.interfaces.tui import build_tui_runtime
+from alphonse.agent_v2.interfaces.tui import format_activity_message
 from alphonse.agent_v2.interfaces.tui import process_tui_queue_once
 from alphonse.agent_v2.interfaces.tui import queue_tui_input
 from alphonse.agent_v2.interfaces.tui import submit_tui_input
@@ -86,6 +89,32 @@ def test_process_tui_queue_once_displays_response_after_queue_only_submit() -> N
 
     assert result.step_status == LoopStepStatus.PROCESSED
     assert result.response == "Hello, Alex."
+
+
+def test_capd_activity_events_include_phase_signifiers_and_plan_internal_state() -> None:
+    runtime = build_tui_runtime(user="alex", inference=_respond_router())
+    events: list[CoreActivityEvent] = []
+    runtime.core.activity_sink = events.append
+
+    submit_tui_input(runtime, "hello")
+
+    labels = [event.label for event in events]
+    messages = [event.message for event in events]
+    assert "deliberating" in labels
+    assert "deciding" in labels
+    assert "thinking" in labels
+    assert "working" in labels
+    assert "Answering the greeting." in messages
+
+
+def test_format_activity_message_renders_label_and_message() -> None:
+    event = CoreActivityEvent(
+        phase=ImprovementPhase.PLAN,
+        label="thinking",
+        message="Answering the greeting.",
+    )
+
+    assert format_activity_message(event) == "thinking - Answering the greeting."
 
 
 def test_submitting_shell_prompt_displays_bash_stdout() -> None:
