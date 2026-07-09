@@ -13,6 +13,10 @@ from alphonse.agent_v2.core.tools.registry.native.respond import RESPOND_TOOL_ID
 from alphonse.agent_v2.core.tools.registry.native.respond import RESPOND_TOOL_NAME
 from alphonse.agent_v2.core.tools.registry.native.respond import build_respond_tool_definition
 from alphonse.agent_v2.core.tools.registry.native.respond import execute_respond
+from alphonse.agent_v2.core.tools.registry.native.scheduled_task import SCHEDULED_TASK_TOOL_ID
+from alphonse.agent_v2.core.tools.registry.native.scheduled_task import SCHEDULED_TASK_TOOL_NAME
+from alphonse.agent_v2.core.tools.registry.native.scheduled_task import build_scheduled_task_tool_definition
+from alphonse.agent_v2.core.tools.registry.native.scheduled_task import execute_scheduled_task
 
 
 def build_native_tool_registry() -> InMemoryToolRegistry:
@@ -21,6 +25,7 @@ def build_native_tool_registry() -> InMemoryToolRegistry:
     registry.register(build_respond_tool_definition())
     registry.register(build_bash_tool_definition())
     registry.register(build_ask_question_tool_definition())
+    registry.register(build_scheduled_task_tool_definition())
     return registry
 
 
@@ -31,11 +36,15 @@ __all__ = [
     "BASH_TOOL_NAME",
     "RESPOND_TOOL_ID",
     "RESPOND_TOOL_NAME",
+    "SCHEDULED_TASK_TOOL_ID",
+    "SCHEDULED_TASK_TOOL_NAME",
     "build_ask_question_tool_definition",
     "build_bash_tool_definition",
     "build_native_tool_registry",
     "build_respond_tool_definition",
+    "build_scheduled_task_tool_definition",
     "execute_ask_question",
     "execute_bash",
     "execute_respond",
+    "execute_scheduled_task",
 ]

@@ -30,10 +30,12 @@ from alphonse.agent_v2.core.messages import MessageSelector
 from alphonse.agent_v2.core.projects import ProjectRecord
 from alphonse.agent_v2.core.projects import ProjectStore
 from alphonse.agent_v2.core.questions import SQLiteQuestionStore
+from alphonse.agent_v2.core.scheduled_tasks import ScheduledTaskStore
 from alphonse.agent_v2.core.state import get_state
 from alphonse.agent_v2.core.state import reset_state
 from alphonse.agent_v2.core.tools.registry.native import BASH_TOOL_ID
 from alphonse.agent_v2.core.tools.registry.native import RESPOND_TOOL_ID
+from alphonse.agent_v2.core.tools.registry.native import SCHEDULED_TASK_TOOL_ID
 from alphonse.agent_v2.core.tools.registry.native import build_native_tool_registry
 
 LOCAL_STOP_COMMANDS = {"/exit", "/quit", "/stop"}
@@ -56,6 +58,7 @@ class TuiRuntime:
     core: AlphonseCore
     question_store: SQLiteQuestionStore
     project_store: ProjectStore
+    schedule_store: ScheduledTaskStore
     active_project_id: str = ""
     ui_events: list[CoreUiEvent] = field(default_factory=list)
 
@@ -167,6 +170,7 @@ def build_tui_runtime(
     processor: IntelligenceProcessor | None = None,
     question_store: SQLiteQuestionStore | None = None,
     project_store: ProjectStore | None = None,
+    schedule_store: ScheduledTaskStore | None = None,
 ) -> TuiRuntime:
     reset_state()
     queue = InMemoryMessageQueue()
@@ -177,6 +181,7 @@ def build_tui_runtime(
     inference = inference or build_default_tui_inference_router()
     question_store = question_store or SQLiteQuestionStore()
     project_store = project_store or ProjectStore()
+    schedule_store = schedule_store or ScheduledTaskStore()
     ui_events: list[CoreUiEvent] = []
     core = AlphonseCore(
         intelligence=processor,
@@ -189,6 +194,7 @@ def build_tui_runtime(
         ui_event_sink=ui_events.append,
         question_store=question_store,
         project_store=project_store,
+        schedule_store=schedule_store,
     )
     return TuiRuntime(
         user=str(user or "local").strip() or "local",
@@ -199,6 +205,7 @@ def build_tui_runtime(
         core=core,
         question_store=question_store,
         project_store=project_store,
+        schedule_store=schedule_store,
         ui_events=ui_events,
     )
 
@@ -490,6 +497,12 @@ def _latest_tool_result_response(task_state: dict[str, Any]) -> str:
                 return stdout
             if stderr:
                 return stderr
+        if tool_id == SCHEDULED_TASK_TOOL_ID:
+            name = str(result.get("name") or "Scheduled task").strip()
+            next_run_at = str(result.get("next_run_at") or "").strip()
+            if next_run_at:
+                return f'Scheduled "{name}" for {next_run_at}.'
+            return f'Scheduled "{name}".'
     return ""
 
 
@@ -740,7 +753,10 @@ def _build_textual_app_class() -> type[Any]:
 
         def __init__(self) -> None:
             super().__init__()
-            self.runtime = build_tui_runtime(project_store=ProjectStore.default())
+            self.runtime = build_tui_runtime(
+                project_store=ProjectStore.default(),
+                schedule_store=ScheduledTaskStore.default(),
+            )
             self.runtime.core.activity_sink = self._emit_activity_from_worker
             self.processor = TuiProcessorCoordinator(self.runtime)
             self.last_message_id = ""
