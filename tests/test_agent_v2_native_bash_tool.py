@@ -31,7 +31,7 @@ def test_native_registry_registers_bash_tool() -> None:
 
 def test_bash_descriptor_and_schema_are_visible_to_plan_prompt() -> None:
     task = TaskState(goal="List files", acceptance_criteria_md="1.- [ ] Files are listed")
-    descriptor = build_native_tool_registry().list()[0]
+    descriptor = next(item for item in build_native_tool_registry().list() if item.tool_id == BASH_TOOL_ID)
 
     prompt = _render_tool_call_plan_prompt(task, (descriptor,))
 

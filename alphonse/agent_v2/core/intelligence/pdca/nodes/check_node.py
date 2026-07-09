@@ -38,7 +38,7 @@ def check_node(task: TaskState, context: CoreLoopContext | None = None) -> TaskS
         reason = "No acceptance criteria were present; treating this as a new task."
     elif steering_count > 0:
         verdict = "steer"
-        reason = "Related queued messages were consumed as steering for this task."
+        reason = _review_wip_acceptance_criteria(task, context, require_latest_call=False)
     else:
         verdict = "wip"
         reason = _review_wip_acceptance_criteria(task, context)
@@ -52,12 +52,17 @@ def check_node(task: TaskState, context: CoreLoopContext | None = None) -> TaskS
     return task
 
 
-def _review_wip_acceptance_criteria(task: TaskState, context: CoreLoopContext | None = None) -> str:
+def _review_wip_acceptance_criteria(
+    task: TaskState,
+    context: CoreLoopContext | None = None,
+    *,
+    require_latest_call: bool = True,
+) -> str:
     latest_call = task.get_latest_executed_plan_call()
-    if latest_call is None:
+    if latest_call is None and require_latest_call:
         return "Acceptance criteria exist, but no steering messages or executed tool results were available yet."
 
-    prompt = _render_criteria_review_prompt(task, latest_call)
+    prompt = _render_criteria_review_prompt(task, latest_call or {})
     revised_criteria = _call_criteria_review_inference(prompt, task, context)
     task.metadata["criteria_review_prompt"] = prompt
     task.metadata["criteria_review_llm_stubbed"] = context is None or context.inference is None

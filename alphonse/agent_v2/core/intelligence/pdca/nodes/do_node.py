@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import inspect
 from typing import TYPE_CHECKING, Any
 
 from alphonse.agent_v2.core.core import ImprovementPhase
 from alphonse.agent_v2.core.intelligence.task_state import TaskState
+from alphonse.agent_v2.core.tools.registry.native.ask_question import ASK_QUESTION_TOOL_ID
 
 if TYPE_CHECKING:
     from alphonse.agent_v2.core.core import CoreLoopContext
@@ -42,14 +44,73 @@ def do_node(task: TaskState, context: CoreLoopContext | None = None) -> TaskStat
         return task
 
     try:
-        result: Any = context.tools.execute(tool_id, dict(arguments))
+        context.emit_ui_event(
+            "tool_call_started",
+            {
+                "tool_call_id": call_id,
+                "tool_name": tool_name,
+                "tool_id": tool_id,
+                "arguments": dict(arguments),
+            },
+        )
+        result: Any = _execute_tool(context, task, tool_id, dict(arguments))
     except Exception as exc:
+        context.emit_ui_event(
+            "tool_call_result",
+            {
+                "tool_call_id": call_id,
+                "tool_name": tool_name,
+                "tool_id": tool_id,
+                "status": "exception",
+                "exception": f"{type(exc).__name__}: {exc}",
+            },
+        )
         task.record_plan_call_exception(call_id, exc)
         task.metadata["do_executed_since_last_act"] = True
         task.append_update(f"Do recorded exception from planned tool call: {call_id}.")
         return task
 
+    if tool_id == ASK_QUESTION_TOOL_ID or _result_waits_for_answer(result):
+        context.emit_ui_event(
+            "tool_call_result",
+            {
+                "tool_call_id": call_id,
+                "tool_name": tool_name,
+                "tool_id": tool_id,
+                "status": "waiting",
+                "result": result,
+            },
+        )
+        task.record_plan_call_waiting(call_id, result)
+        task.metadata["do_executed_since_last_act"] = True
+        task.metadata["task_parked"] = True
+        task.status = "waiting_user"
+        task.append_update(f"Do parked task waiting for question answer: {call_id}.")
+        return task
+
+    context.emit_ui_event(
+        "tool_call_result",
+        {
+            "tool_call_id": call_id,
+            "tool_name": tool_name,
+            "tool_id": tool_id,
+            "status": "success",
+            "result": result,
+        },
+    )
     task.record_plan_call_success(call_id, result)
     task.metadata["do_executed_since_last_act"] = True
     task.append_update(f"Do executed planned tool call: {call_id}.")
     return task
+
+
+def _execute_tool(context: CoreLoopContext, task: TaskState, tool_id: str, arguments: dict[str, Any]) -> Any:
+    execute = context.tools.execute
+    signature = inspect.signature(execute)
+    if "execution_context" in signature.parameters:
+        return execute(tool_id, arguments, execution_context=context.tool_execution_context(task))
+    return execute(tool_id, arguments)
+
+
+def _result_waits_for_answer(result: Any) -> bool:
+    return isinstance(result, dict) and result.get("waiting_for_answer") is True

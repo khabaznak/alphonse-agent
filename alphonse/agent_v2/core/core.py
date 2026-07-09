@@ -52,6 +52,7 @@ class ProcessingStatus(str, Enum):
     """Outcome states returned by the intelligence processor."""
 
     COMPLETED = "completed"
+    PARKED = "parked"
     WAITING = "waiting"
     FAILED = "failed"
 
@@ -63,6 +64,7 @@ class LoopStepStatus(str, Enum):
     BUSY = "busy"
     EMPTY = "empty"
     PROCESSED = "processed"
+    PARKED = "parked"
     WAITING = "waiting"
     FAILED = "failed"
 
@@ -153,6 +155,25 @@ class CoreActivityEvent:
     speaker: str = "Alphonse"
 
 
+@dataclass(frozen=True)
+class CoreUiEvent:
+    """Protocol-neutral UI event emitted by the core."""
+
+    event_type: str
+    payload: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class ToolExecutionContext:
+    """Context supplied to native tools that need task/runtime boundaries."""
+
+    task: TaskState
+    messages: MessageQueue
+    ui_event_sink: Callable[[CoreUiEvent], None] | None = None
+    question_store: Any | None = None
+    delivery_sink: Callable[[dict[str, Any]], Any] | None = None
+
+
 @dataclass
 class CoreLoopContext:
     """Processor-controlled access to selected queued messages."""
@@ -161,6 +182,9 @@ class CoreLoopContext:
     tools: ToolRegistry | None = None
     inference: InferenceRouter | None = None
     activity_sink: Callable[[CoreActivityEvent], None] | None = None
+    ui_event_sink: Callable[[CoreUiEvent], None] | None = None
+    question_store: Any | None = None
+    delivery_sink: Callable[[dict[str, Any]], Any] | None = None
 
     def consume_message(self, selector: MessageSelector | None = None) -> QueuedMessage | None:
         return self.messages.dequeue(selector)
@@ -169,6 +193,20 @@ class CoreLoopContext:
         if self.activity_sink is None:
             return
         self.activity_sink(CoreActivityEvent(phase=phase, label=label, message=message))
+
+    def emit_ui_event(self, event_type: str, payload: dict[str, Any] | None = None) -> None:
+        if self.ui_event_sink is None:
+            return
+        self.ui_event_sink(CoreUiEvent(event_type=event_type, payload=dict(payload or {})))
+
+    def tool_execution_context(self, task: TaskState) -> ToolExecutionContext:
+        return ToolExecutionContext(
+            task=task,
+            messages=self.messages,
+            ui_event_sink=self.ui_event_sink,
+            question_store=self.question_store,
+            delivery_sink=self.delivery_sink,
+        )
 
 
 class IntelligenceProcessor(Protocol):
@@ -206,7 +244,12 @@ class ToolRegistry(Protocol):
     def list(self) -> tuple[ToolDescriptor, ...]:
         """Return all registered tool descriptors."""
 
-    def execute(self, tool_id: str, arguments: dict[str, Any]) -> Any:
+    def execute(
+        self,
+        tool_id: str,
+        arguments: dict[str, Any],
+        execution_context: ToolExecutionContext | None = None,
+    ) -> Any:
         """Execute a registered tool by id."""
 
 
@@ -249,13 +292,21 @@ class AlphonseCore:
     memory: Memory
     inference: InferenceRouter | None = None
     activity_sink: Callable[[CoreActivityEvent], None] | None = None
+    ui_event_sink: Callable[[CoreUiEvent], None] | None = None
+    question_store: Any | None = None
+    delivery_sink: Callable[[dict[str, Any]], Any] | None = None
     fsm: DDFSM = field(default_factory=build_default_ddfsm)
     _stop_requested: bool = field(default=False, init=False, repr=False)
 
     def run_once(self, selector: MessageSelector | None = None) -> StateSnapshot | None:
         """Process one queued message and return its visible snapshot."""
         result = self.step(selector)
-        if result.status in {LoopStepStatus.PROCESSED, LoopStepStatus.WAITING, LoopStepStatus.FAILED}:
+        if result.status in {
+            LoopStepStatus.PROCESSED,
+            LoopStepStatus.PARKED,
+            LoopStepStatus.WAITING,
+            LoopStepStatus.FAILED,
+        }:
             return self.state.snapshot()
         return None
 
@@ -296,6 +347,9 @@ class AlphonseCore:
                     tools=self.tools,
                     inference=self.inference,
                     activity_sink=self.activity_sink,
+                    ui_event_sink=self.ui_event_sink,
+                    question_store=self.question_store,
+                    delivery_sink=self.delivery_sink,
                 ),
             )
         except Exception as exc:
@@ -349,6 +403,8 @@ class AlphonseCore:
 def _signal_for_processing_status(status: ProcessingStatus) -> str:
     if status == ProcessingStatus.COMPLETED:
         return PROCESSOR_COMPLETED
+    if status == ProcessingStatus.PARKED:
+        return PROCESSOR_COMPLETED
     if status == ProcessingStatus.WAITING:
         return PROCESSOR_WAITING
     return PROCESSOR_FAILED
@@ -357,6 +413,8 @@ def _signal_for_processing_status(status: ProcessingStatus) -> str:
 def _loop_status_for_processing_status(status: ProcessingStatus) -> LoopStepStatus:
     if status == ProcessingStatus.COMPLETED:
         return LoopStepStatus.PROCESSED
+    if status == ProcessingStatus.PARKED:
+        return LoopStepStatus.PARKED
     if status == ProcessingStatus.WAITING:
         return LoopStepStatus.WAITING
     return LoopStepStatus.FAILED

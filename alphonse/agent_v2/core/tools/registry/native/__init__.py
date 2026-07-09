@@ -1,6 +1,10 @@
 """Native tools package for Alphonse agent v2."""
 
 from alphonse.agent_v2.core.tools.registry import InMemoryToolRegistry
+from alphonse.agent_v2.core.tools.registry.native.ask_question import ASK_QUESTION_TOOL_ID
+from alphonse.agent_v2.core.tools.registry.native.ask_question import ASK_QUESTION_TOOL_NAME
+from alphonse.agent_v2.core.tools.registry.native.ask_question import build_ask_question_tool_definition
+from alphonse.agent_v2.core.tools.registry.native.ask_question import execute_ask_question
 from alphonse.agent_v2.core.tools.registry.native.bash import BASH_TOOL_ID
 from alphonse.agent_v2.core.tools.registry.native.bash import BASH_TOOL_NAME
 from alphonse.agent_v2.core.tools.registry.native.bash import build_bash_tool_definition
@@ -16,17 +20,22 @@ def build_native_tool_registry() -> InMemoryToolRegistry:
     registry = InMemoryToolRegistry()
     registry.register(build_respond_tool_definition())
     registry.register(build_bash_tool_definition())
+    registry.register(build_ask_question_tool_definition())
     return registry
 
 
 __all__ = [
+    "ASK_QUESTION_TOOL_ID",
+    "ASK_QUESTION_TOOL_NAME",
     "BASH_TOOL_ID",
     "BASH_TOOL_NAME",
     "RESPOND_TOOL_ID",
     "RESPOND_TOOL_NAME",
+    "build_ask_question_tool_definition",
     "build_bash_tool_definition",
     "build_native_tool_registry",
     "build_respond_tool_definition",
+    "execute_ask_question",
     "execute_bash",
     "execute_respond",
 ]

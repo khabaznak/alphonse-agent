@@ -25,6 +25,7 @@ class CommunicationChannel:
         tag: str = "",
         correlation_id: str = "",
         timestamp: datetime | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> QueuedMessage:
         prompt_value = str(prompt or "").strip()
         user_value = str(user or "").strip()
@@ -40,7 +41,7 @@ class CommunicationChannel:
             project_id=str(project_id or ""),
             tag=str(tag or ""),
             correlation_id=str(correlation_id or ""),
-            metadata=_command_metadata(prompt_value),
+            metadata={**_command_metadata(prompt_value), **dict(metadata or {})},
         )
         return self.messages.enqueue(message)
 

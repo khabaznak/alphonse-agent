@@ -44,7 +44,14 @@ def build_pdca_graph(context: CoreLoopContext | None = None) -> Any:
         },
     )
     graph.add_edge(PLAN_NODE, DO_NODE)
-    graph.add_edge(DO_NODE, CHECK_NODE)
+    graph.add_conditional_edges(
+        DO_NODE,
+        _route_after_do,
+        {
+            CHECK_NODE: CHECK_NODE,
+            END: END,
+        },
+    )
     return graph.compile()
 
 
@@ -58,3 +65,9 @@ def _route_after_act(task: TaskState) -> str:
     if task.metadata.get("act_route") == PLAN_NODE:
         return PLAN_NODE
     return END
+
+
+def _route_after_do(task: TaskState) -> str:
+    if str(task.status or "").strip().lower() == "waiting_user" or task.metadata.get("task_parked") is True:
+        return END
+    return CHECK_NODE

@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable
 
 from alphonse.agent_v2.core.core import ToolDescriptor
+from alphonse.agent_v2.core.core import ToolExecutionContext
 
 
 @dataclass(frozen=True)
@@ -13,9 +14,10 @@ class ToolDefinition:
     """Executable tool registered with Alphonse."""
 
     descriptor: ToolDescriptor
-    callable: Callable[[dict[str, Any]], Any]
+    callable: Callable[..., Any]
     argument_schema: dict[str, Any] = field(default_factory=dict)
     enabled: bool = True
+    accepts_context: bool = False
 
     def descriptor_with_schema(self) -> ToolDescriptor:
         schema = dict(self.argument_schema or self.descriptor.argument_schema or {})
@@ -67,12 +69,19 @@ class InMemoryToolRegistry:
             if definition.enabled
         )
 
-    def execute(self, tool_id: str, arguments: dict[str, Any]) -> Any:
+    def execute(
+        self,
+        tool_id: str,
+        arguments: dict[str, Any],
+        execution_context: ToolExecutionContext | None = None,
+    ) -> Any:
         definition = self.get_definition(tool_id)
         if definition is None:
             raise KeyError(f"tool_not_found: {tool_id}")
         if not definition.enabled:
             raise PermissionError(f"tool_disabled: {tool_id}")
+        if definition.accepts_context:
+            return definition.callable(dict(arguments or {}), context=execution_context)
         return definition.callable(dict(arguments or {}))
 
 

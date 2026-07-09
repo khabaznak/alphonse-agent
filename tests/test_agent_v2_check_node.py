@@ -56,6 +56,25 @@ def test_check_node_consumes_same_user_same_project_steering() -> None:
     assert queue.size() == 1
 
 
+def test_check_node_steer_reviews_acceptance_criteria_before_returning(monkeypatch) -> None:
+    queue = InMemoryMessageQueue()
+    CommunicationChannel(queue).queue_message(prompt="The file exists now", user="alex", project_id="alpha")
+    task = TaskState(
+        goal="Create a file",
+        user="alex",
+        project_id="alpha",
+        acceptance_criteria_md="1.- [ ] File exists",
+    )
+    monkeypatch.setattr(check_node_module, "_call_criteria_review_llm", lambda prompt: "1.- [x] File exists")
+
+    check_node(task, context=CoreLoopContext(messages=queue))
+
+    assert task.check_verdict == "steer"
+    assert task.acceptance_criteria_md == "1.- [x] File exists"
+    assert task.metadata["criteria_review_updated"] is True
+    assert "criteria_review_prompt" in task.metadata
+
+
 def test_check_node_consumes_same_correlation_id_from_other_user() -> None:
     queue = InMemoryMessageQueue()
     channel = CommunicationChannel(queue)

@@ -70,6 +70,13 @@ class TaskState:
     @classmethod
     def from_queued_message(cls, queued: QueuedMessage) -> "TaskState":
         """Create task state from a queue-owned message envelope."""
+        raw_task_state = queued.message.metadata.get("task_state")
+        if isinstance(raw_task_state, dict):
+            restored = cls.from_dict(raw_task_state)
+            restored.message_id = queued.message_id
+            if queued.message.prompt:
+                restored.append_conversation_message(queued.message.user, queued.message.prompt)
+            return restored
         return cls.from_message(queued.message, message_id=queued.message_id)
 
     @classmethod
@@ -197,6 +204,16 @@ class TaskState:
                 "status": "exception",
                 "result": None,
                 "exception": _exception_payload(exception),
+            },
+        )
+
+    def record_plan_call_waiting(self, call_id: str, result: Any) -> None:
+        self._record_plan_call_execution(
+            call_id,
+            {
+                "status": "waiting",
+                "result": _json_safe(result),
+                "exception": "",
             },
         )
 

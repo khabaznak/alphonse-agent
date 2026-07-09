@@ -11,6 +11,7 @@ from typing import Any
 from alphonse.agent_v2.core.core import AlphonseCore
 from alphonse.agent_v2.core.core import CoreMessage
 from alphonse.agent_v2.core.core import CoreActivityEvent
+from alphonse.agent_v2.core.core import CoreUiEvent
 from alphonse.agent_v2.core.core import IntelligenceProcessor
 from alphonse.agent_v2.core.core import LoopStepResult
 from alphonse.agent_v2.core.core import LoopStepStatus
@@ -26,6 +27,7 @@ from alphonse.agent_v2.core.intelligence import PDCAIntelligenceProcessor
 from alphonse.agent_v2.core.messages import CommunicationChannel
 from alphonse.agent_v2.core.messages import InMemoryMessageQueue
 from alphonse.agent_v2.core.messages import MessageSelector
+from alphonse.agent_v2.core.questions import SQLiteQuestionStore
 from alphonse.agent_v2.core.state import get_state
 from alphonse.agent_v2.core.state import reset_state
 from alphonse.agent_v2.core.tools.registry.native import BASH_TOOL_ID
@@ -43,6 +45,8 @@ class TuiRuntime:
     visible_state: "InMemoryInternalState"
     processor: IntelligenceProcessor
     core: AlphonseCore
+    question_store: SQLiteQuestionStore
+    ui_events: list[CoreUiEvent] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -122,9 +126,10 @@ class NullToolRegistry:
     def list(self) -> tuple[ToolDescriptor, ...]:
         return ()
 
-    def execute(self, tool_id: str, arguments: dict[str, Any]) -> Any:
+    def execute(self, tool_id: str, arguments: dict[str, Any], execution_context: Any | None = None) -> Any:
         _ = tool_id
         _ = arguments
+        _ = execution_context
         raise KeyError("tool_not_found")
 
 
@@ -148,6 +153,7 @@ def build_tui_runtime(
     inference: InferenceRouter | None = None,
     tools: ToolRegistry | None = None,
     processor: IntelligenceProcessor | None = None,
+    question_store: SQLiteQuestionStore | None = None,
 ) -> TuiRuntime:
     reset_state()
     queue = InMemoryMessageQueue()
@@ -156,6 +162,8 @@ def build_tui_runtime(
     processor = processor or PDCAIntelligenceProcessor()
     tools = tools or build_native_tool_registry()
     inference = inference or build_default_tui_inference_router()
+    question_store = question_store or SQLiteQuestionStore()
+    ui_events: list[CoreUiEvent] = []
     core = AlphonseCore(
         intelligence=processor,
         messages=queue,
@@ -164,6 +172,8 @@ def build_tui_runtime(
         state=visible_state,
         memory=NullMemory(),
         inference=inference,
+        ui_event_sink=ui_events.append,
+        question_store=question_store,
     )
     return TuiRuntime(
         user=str(user or "local").strip() or "local",
@@ -172,6 +182,8 @@ def build_tui_runtime(
         visible_state=visible_state,
         processor=processor,
         core=core,
+        question_store=question_store,
+        ui_events=ui_events,
     )
 
 
@@ -226,6 +238,10 @@ def queue_tui_input(runtime: TuiRuntime, prompt: str) -> TuiSubmissionResult:
             should_exit=True,
         )
 
+    pending_result = _route_pending_question_answer(runtime, prompt_value)
+    if pending_result is not None:
+        return pending_result
+
     queued = runtime.channel.queue_message(prompt=prompt_value, user=runtime.user)
     command_event = ""
     if queued.message.metadata.get("is_command"):
@@ -259,6 +275,10 @@ def _response_from_snapshot(snapshot: StateSnapshot, step: Any) -> str:
     if "response" in metadata:
         return str(metadata.get("response") or "")
 
+    question = metadata.get("question_interrupt")
+    if isinstance(question, dict):
+        return _render_question_interrupt(question)
+
     task_state = metadata.get("task_state")
     if isinstance(task_state, dict):
         verdict = str(metadata.get("check_verdict") or task_state.get("check_verdict") or "unknown")
@@ -286,6 +306,61 @@ def _response_from_snapshot(snapshot: StateSnapshot, step: Any) -> str:
     if snapshot.current_work:
         return f"CAPD processed: {snapshot.current_work}"
     return ""
+
+
+def _route_pending_question_answer(runtime: TuiRuntime, prompt_value: str) -> TuiSubmissionResult | None:
+    pending = runtime.question_store.list_pending_for_respondent(runtime.user)
+    if not pending:
+        return None
+    result = runtime.question_store.route_answer(respondent_user_id=runtime.user, text=prompt_value)
+    if result.ambiguous or result.invalid:
+        return TuiSubmissionResult(
+            prompt=prompt_value,
+            response=result.message,
+            event="question answer rejected",
+        )
+    if not result.handled or result.resumed_task is None:
+        return None
+    runtime.ui_events.append(
+        CoreUiEvent(
+            event_type="question_interrupt_resolved",
+            payload={
+                "question": result.question.to_dict() if result.question is not None else None,
+                "answer": result.answer,
+            },
+        )
+    )
+    queued = runtime.channel.queue_message(
+        prompt=prompt_value,
+        user=runtime.user,
+        project_id=result.resumed_task.project_id,
+        correlation_id=result.resumed_task.correlation_id,
+        metadata={"task_state": result.resumed_task.to_dict(), "answered_question_id": result.question.question_id if result.question else ""},
+    )
+    return TuiSubmissionResult(
+        prompt=prompt_value,
+        response="",
+        event=f"answered question; queued {queued.message_id}",
+        queued=True,
+        queued_message_id=queued.message_id,
+    )
+
+
+def _render_question_interrupt(question: dict[str, Any]) -> str:
+    message = str(question.get("message") or "").strip()
+    kind = str(question.get("kind") or "open_text").strip()
+    choices = question.get("choices") if isinstance(question.get("choices"), list) else []
+    if kind == "yes_no":
+        return f"{message}\n[yes/no]"
+    if kind == "single_choice":
+        rendered_choices = "\n".join(
+            f"{index + 1}. {str(choice.get('label') or choice.get('id') or '').strip()}"
+            for index, choice in enumerate(choices)
+            if isinstance(choice, dict)
+        )
+        if rendered_choices:
+            return f"{message}\n{rendered_choices}"
+    return message
 
 
 def _latest_tool_result_response(task_state: dict[str, Any]) -> str:
