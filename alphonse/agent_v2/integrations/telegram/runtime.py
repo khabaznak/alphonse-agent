@@ -97,6 +97,8 @@ class TelegramIntegrationRuntime:
         owner_user_id: str = "local",
         http_client: TelegramHttpClient | None = None,
         on_message_queued: Callable[[], None] | None = None,
+        on_outbox_delivered: Callable[[Any], None] | None = None,
+        on_outbox_failed: Callable[[Any, str], None] | None = None,
         presence_projector: PresenceProjector | None = None,
     ) -> None:
         self.record = record
@@ -114,6 +116,8 @@ class TelegramIntegrationRuntime:
         self._stats = TelegramRuntimeStats()
         self.http_client = http_client or TelegramHttpClient(bot_token=str(record.secrets.get("bot_token") or ""))
         self._on_message_queued = on_message_queued
+        self._on_outbox_delivered = on_outbox_delivered
+        self._on_outbox_failed = on_outbox_failed
         self.presence_projector = presence_projector
         self.presence_adapter = TelegramPresenceAdapter(
             http_client=self.http_client,
@@ -221,10 +225,16 @@ class TelegramIntegrationRuntime:
                     text=outbound.message,
                 )
             except Exception as exc:
-                self.outbox.mark_failed(outbound.outbox_message_id, error=f"{type(exc).__name__}: {exc}")
+                error = f"{type(exc).__name__}: {exc}"
+                self.outbox.mark_failed(outbound.outbox_message_id, error=error)
+                updated = self.outbox.get(outbound.outbox_message_id)
+                if self._on_outbox_failed is not None and updated is not None and updated.status == "failed":
+                    self._safe_delivery_callback(self._on_outbox_failed, outbound, error)
                 self._stats = _replace_stats(self._stats, outbox_failed=self._stats.outbox_failed + 1)
                 continue
             self.outbox.mark_delivered(outbound.outbox_message_id, provider_message_id=provider_message_id)
+            if self._on_outbox_delivered is not None:
+                self._safe_delivery_callback(self._on_outbox_delivered, outbound)
             self._stats = _replace_stats(self._stats, outbox_delivered=self._stats.outbox_delivered + 1)
         return self._stats
 
@@ -276,6 +286,12 @@ class TelegramIntegrationRuntime:
         except Exception:
             pass
 
+    def _safe_delivery_callback(self, callback: Callable[..., None], *args: Any) -> None:
+        try:
+            callback(*args)
+        except Exception:
+            pass
+
 
 def build_telegram_runtime(
     *,
@@ -285,6 +301,8 @@ def build_telegram_runtime(
     identity_resolver: V2IdentityResolver,
     owner_user_id: str = "local",
     on_message_queued: Callable[[], None] | None = None,
+    on_outbox_delivered: Callable[[Any], None] | None = None,
+    on_outbox_failed: Callable[[Any, str], None] | None = None,
     presence_projector: PresenceProjector | None = None,
 ) -> TelegramIntegrationRuntime:
     return TelegramIntegrationRuntime(
@@ -294,6 +312,8 @@ def build_telegram_runtime(
         identity_resolver=identity_resolver,
         owner_user_id=owner_user_id,
         on_message_queued=on_message_queued,
+        on_outbox_delivered=on_outbox_delivered,
+        on_outbox_failed=on_outbox_failed,
         presence_projector=presence_projector,
     )
 

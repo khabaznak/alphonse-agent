@@ -8,6 +8,7 @@ from alphonse.agent_v2.core.inference import ModelProfile
 from alphonse.agent_v2.core.inference import StubInferenceProvider
 from alphonse.agent_v2.core.scheduled_tasks import ScheduledTaskStore
 from alphonse.agent_v2.daemon import V2Daemon
+from alphonse.agent_v2.core.io import ChannelAddress
 from alphonse.agent_v2.runtime import build_runtime_host
 from alphonse.agent_v2.services.scheduled_worker import ScheduledTaskWorker
 
@@ -65,6 +66,52 @@ def test_scheduled_worker_dispatches_due_task_and_records_stats() -> None:
     assert runtime.queue.size() == 1
 
 
+def test_scheduled_occurrence_is_claimed_by_one_worker_only() -> None:
+    store = ScheduledTaskStore(":memory:")
+    now = datetime(2026, 7, 10, 12, 30, tzinfo=timezone.utc)
+    task = store.create_task(
+        owner_user_id="u-alex",
+        name="Reminder",
+        prompt="Remind Alex",
+        schedule_kind="once",
+        run_at=(now - timedelta(seconds=1)).isoformat(),
+        timezone_name="UTC",
+        now=now - timedelta(minutes=1),
+    )
+
+    first = store.claim_due_occurrences(worker_id="worker-1", now=now, lease_seconds=60)
+    second = store.claim_due_occurrences(worker_id="worker-2", now=now, lease_seconds=60)
+
+    assert len(first) == 1
+    assert first[0].task.scheduled_task_id == task.scheduled_task_id
+    assert second == []
+
+
+def test_scheduled_occurrence_expired_lease_is_reclaimed() -> None:
+    store = ScheduledTaskStore(":memory:")
+    now = datetime(2026, 7, 10, 12, 30, tzinfo=timezone.utc)
+    store.create_task(
+        owner_user_id="u-alex",
+        name="Reminder",
+        prompt="Remind Alex",
+        schedule_kind="once",
+        run_at=(now - timedelta(seconds=1)).isoformat(),
+        timezone_name="UTC",
+        now=now - timedelta(minutes=1),
+    )
+
+    first = store.claim_due_occurrences(worker_id="worker-1", now=now, lease_seconds=1)
+    reclaimed = store.claim_expired_occurrences(
+        worker_id="worker-2",
+        now=now + timedelta(seconds=2),
+        lease_seconds=60,
+    )
+
+    assert len(first) == 1
+    assert len(reclaimed) == 1
+    assert reclaimed[0].occurrence_key == first[0].occurrence_key
+
+
 def test_daemon_processes_host_queue_without_tui() -> None:
     runtime = build_runtime_host(
         schedule_store=ScheduledTaskStore(":memory:"),
@@ -76,3 +123,36 @@ def test_daemon_processes_host_queue_without_tui() -> None:
     result = daemon.run_once()
 
     assert result.queued_message_id is not None
+
+
+def test_daemon_marks_scheduled_occurrence_delivered_after_outbox_delivery() -> None:
+    store = ScheduledTaskStore(":memory:")
+    runtime = build_runtime_host(schedule_store=store)
+    daemon = V2Daemon(runtime)
+    now = datetime(2026, 7, 10, 12, 30, tzinfo=timezone.utc)
+    task = store.create_task(
+        owner_user_id="u-alex",
+        name="Reminder",
+        prompt="Remind Alex",
+        schedule_kind="once",
+        run_at=(now - timedelta(seconds=1)).isoformat(),
+        timezone_name="UTC",
+        now=now - timedelta(minutes=1),
+    )
+    occurrence = store.claim_due_occurrences(worker_id="worker-1", now=now)[0]
+    outbound = runtime.outbox.enqueue(
+        address=ChannelAddress(
+            integration_id="telegram-home",
+            provider_key="telegram",
+            channel_target="123",
+            alphonse_user_id="u-alex",
+        ),
+        message="Reminder",
+        metadata={"occurrence_key": occurrence.occurrence_key},
+    )
+
+    daemon._on_outbox_delivered(outbound)
+
+    executions = store.list_executions(scheduled_task_id=task.scheduled_task_id)
+    assert executions[0].status == "delivered"
+    assert executions[0].response_outbox_id == outbound.outbox_message_id

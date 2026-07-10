@@ -43,8 +43,8 @@ class InMemoryMessageQueue:
         self._messages: list[QueuedMessage] = []
         self._sequence = count(1)
 
-    def enqueue(self, message: CoreMessage) -> QueuedMessage:
-        queued = QueuedMessage(message=message, sequence=next(self._sequence))
+    def enqueue(self, message: CoreMessage, *, message_id: str | None = None) -> QueuedMessage:
+        queued = QueuedMessage(message=message, message_id=str(message_id or uuid4()), sequence=next(self._sequence))
         with self._lock:
             self._messages.append(queued)
         return queued

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from alphonse.agent import identity as users_store
@@ -49,6 +50,56 @@ def test_outbox_selector_isolates_tui_messages() -> None:
     assert selected is not None
     assert selected.message == "hello tui"
     assert store.list_pending(OutboundSelector(integration_id="telegram-home"))[0].message == "hello telegram"
+
+
+def test_outbox_retries_failed_delivery_before_terminal_failure() -> None:
+    store = SQLiteOutboundStore()
+    store.enqueue(
+        address=ChannelAddress(
+            integration_id="telegram-home",
+            provider_key="telegram",
+            channel_target="123",
+            alphonse_user_id="u-alex",
+        ),
+        message="retry me",
+    )
+
+    claimed = store.claim_next(OutboundSelector(integration_id="telegram-home"))
+    assert claimed is not None
+    assert store.mark_failed(claimed.outbox_message_id, error="temporary", retry_after_seconds=0) is True
+    retrying = store.list(OutboundSelector(integration_id="telegram-home", status="retry_wait"))
+    assert retrying[0].last_error == "temporary"
+
+    reclaimed = store.claim_next(OutboundSelector(integration_id="telegram-home"))
+    assert reclaimed is not None
+    assert reclaimed.outbox_message_id == claimed.outbox_message_id
+    assert reclaimed.attempt_count == 2
+
+
+def test_outbox_reclaims_expired_delivery_claims() -> None:
+    store = SQLiteOutboundStore()
+    store.enqueue(
+        address=ChannelAddress(
+            integration_id="telegram-home",
+            provider_key="telegram",
+            channel_target="123",
+            alphonse_user_id="u-alex",
+        ),
+        message="recover delivery",
+    )
+    claimed = store.claim_next(
+        OutboundSelector(integration_id="telegram-home"),
+        lease_owner="worker-1",
+        lease_seconds=1,
+    )
+    assert claimed is not None
+
+    reclaimed_count = store.reclaim_expired(now=datetime.now(timezone.utc) + timedelta(seconds=2))
+    assert reclaimed_count == 1
+    reclaimed = store.claim_next(OutboundSelector(integration_id="telegram-home"), lease_owner="worker-2")
+
+    assert reclaimed is not None
+    assert reclaimed.outbox_message_id == claimed.outbox_message_id
 
 
 def test_snapshot_projection_routes_bash_stdout_to_integration_outbox() -> None:

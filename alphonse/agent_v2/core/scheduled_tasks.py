@@ -5,8 +5,9 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+import hashlib
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Literal
 from uuid import uuid4
@@ -18,7 +19,17 @@ from alphonse.agent_v2.core.messages import CommunicationChannel
 
 ScheduleKind = Literal["once", "rrule"]
 ScheduledTaskStatus = Literal["active", "paused", "completed", "cancelled", "failed"]
-ExecutionStatus = Literal["queued", "error"]
+ExecutionStatus = Literal[
+    "pending",
+    "claimed",
+    "enqueued",
+    "processing",
+    "response_pending",
+    "retry_wait",
+    "delivered",
+    "failed",
+    "delivery_failed",
+]
 
 
 @dataclass(frozen=True)
@@ -66,6 +77,15 @@ class ScheduledTaskExecutionRecord:
     started_at: str
     finished_at: str | None
     error: str
+    occurrence_key: str = ""
+    attempt_count: int = 0
+    lease_owner: str = ""
+    lease_expires_at: str = ""
+    next_attempt_at: str = ""
+    response_outbox_id: str = ""
+    last_error: str = ""
+    created_at: str = ""
+    updated_at: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -76,7 +96,27 @@ class ScheduledTaskExecutionRecord:
             "started_at": self.started_at,
             "finished_at": self.finished_at,
             "error": self.error,
+            "occurrence_key": self.occurrence_key,
+            "attempt_count": self.attempt_count,
+            "lease_owner": self.lease_owner,
+            "lease_expires_at": self.lease_expires_at,
+            "next_attempt_at": self.next_attempt_at,
+            "response_outbox_id": self.response_outbox_id,
+            "last_error": self.last_error,
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
         }
+
+
+@dataclass(frozen=True)
+class ScheduledOccurrence:
+    task: ScheduledTaskRecord
+    occurrence_key: str
+    run_id: str
+    scheduled_run_at: str
+    attempt_count: int
+    lease_owner: str
+    lease_expires_at: str
 
 
 class ScheduledTaskStore:
@@ -283,22 +323,33 @@ class ScheduledTaskStore:
             started_at=started_at or _now_iso(),
             finished_at=finished_at,
             error=str(error or "").strip(),
+            occurrence_key=f"{str(scheduled_task_id or '').strip()}:{str(run_id or '').strip()}",
+            attempt_count=1,
+            last_error=str(error or "").strip(),
+            created_at=started_at or _now_iso(),
+            updated_at=finished_at or _now_iso(),
         )
         with self._connect() as conn:
             conn.execute(
                 """
                 INSERT INTO v2_scheduled_task_executions (
-                  scheduled_task_id, run_id, status, queued_message_id, started_at, finished_at, error
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                  scheduled_task_id, occurrence_key, run_id, status, queued_message_id,
+                  started_at, finished_at, error, attempt_count, last_error, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     record.scheduled_task_id,
+                    record.occurrence_key,
                     record.run_id,
                     record.status,
                     record.queued_message_id,
                     record.started_at,
                     record.finished_at,
                     record.error,
+                    record.attempt_count,
+                    record.last_error,
+                    record.created_at,
+                    record.updated_at,
                 ),
             )
         return record
@@ -315,6 +366,295 @@ class ScheduledTaskStore:
                 (str(scheduled_task_id or "").strip(), max(1, min(int(limit), 1000))),
             ).fetchall()
         return [_execution_from_row(row) for row in rows if _execution_from_row(row) is not None]
+
+    def claim_due_occurrences(
+        self,
+        *,
+        worker_id: str,
+        now: datetime | None = None,
+        lease_seconds: float = 30.0,
+        limit: int = 20,
+    ) -> list[ScheduledOccurrence]:
+        current = _as_utc(now or _now_utc())
+        now_text = current.isoformat()
+        lease_until = (current + timedelta(seconds=max(1.0, float(lease_seconds)))).isoformat()
+        owner = str(worker_id or "").strip()
+        if not owner:
+            raise ValueError("scheduled_worker_id_required")
+        claimed: list[ScheduledOccurrence] = []
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            rows = conn.execute(
+                """
+                SELECT * FROM v2_scheduled_tasks
+                WHERE status = 'active' AND next_run_at IS NOT NULL AND next_run_at <= ?
+                ORDER BY next_run_at, created_at LIMIT ?
+                """,
+                (now_text, max(1, min(int(limit), 100))),
+            ).fetchall()
+            for row in rows:
+                task = _task_from_row(row)
+                if task is None or not task.next_run_at:
+                    continue
+                scheduled_run_at = str(task.next_run_at)
+                occurrence_key = f"{task.scheduled_task_id}:{scheduled_run_at}"
+                run_id = f"scheduled_run_{hashlib.sha256(occurrence_key.encode()).hexdigest()[:16]}"
+                existing = conn.execute(
+                    "SELECT * FROM v2_scheduled_task_executions WHERE occurrence_key = ?",
+                    (occurrence_key,),
+                ).fetchone()
+                if existing is None:
+                    conn.execute(
+                        """
+                        INSERT INTO v2_scheduled_task_executions (
+                          scheduled_task_id, occurrence_key, run_id, status, queued_message_id,
+                          started_at, finished_at, error, attempt_count, lease_owner,
+                          lease_expires_at, next_attempt_at, response_outbox_id, last_error,
+                          created_at, updated_at
+                        ) VALUES (?, ?, ?, 'pending', '', ?, '', '', 0, '', '', '', '', '', ?, ?)
+                        """,
+                        (task.scheduled_task_id, occurrence_key, run_id, now_text, now_text, now_text),
+                    )
+                    existing = conn.execute(
+                        "SELECT * FROM v2_scheduled_task_executions WHERE occurrence_key = ?",
+                        (occurrence_key,),
+                    ).fetchone()
+                status = str(existing["status"] or "")
+                expired = str(existing["lease_expires_at"] or "") <= now_text
+                if status in {"delivered", "failed", "delivery_failed", "enqueued", "response_pending"}:
+                    continue
+                if status == "claimed" and not expired and str(existing["lease_owner"] or "") != owner:
+                    continue
+                attempt = int(existing["attempt_count"] or 0) + 1
+                conn.execute(
+                    """
+                    UPDATE v2_scheduled_task_executions
+                    SET status = 'claimed', attempt_count = ?, lease_owner = ?, lease_expires_at = ?,
+                        next_attempt_at = '', updated_at = ?, last_error = ''
+                    WHERE occurrence_key = ?
+                    """,
+                    (attempt, owner, lease_until, now_text, occurrence_key),
+                )
+                updated_task = task
+                if str(task.schedule.get("kind") or "") == "once":
+                    updated_task = _replace_task(task, next_run_at=None)
+                else:
+                    updated_task = _replace_task(
+                        task,
+                        next_run_at=compute_next_run_at(
+                            schedule=task.schedule,
+                            timezone_name=task.timezone,
+                            after=current,
+                        ),
+                    )
+                self._save_task_connection(conn, updated_task)
+                claimed.append(
+                    ScheduledOccurrence(
+                        task=task,
+                        occurrence_key=occurrence_key,
+                        run_id=run_id,
+                        scheduled_run_at=scheduled_run_at,
+                        attempt_count=attempt,
+                        lease_owner=owner,
+                        lease_expires_at=lease_until,
+                    )
+                )
+            conn.commit()
+        return claimed
+
+    def claim_retry_occurrences(
+        self,
+        *,
+        worker_id: str,
+        now: datetime | None = None,
+        lease_seconds: float = 30.0,
+        limit: int = 20,
+    ) -> list[ScheduledOccurrence]:
+        current = _as_utc(now or _now_utc())
+        now_text = current.isoformat()
+        lease_until = (current + timedelta(seconds=max(1.0, float(lease_seconds)))).isoformat()
+        owner = str(worker_id or "").strip()
+        claimed: list[ScheduledOccurrence] = []
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            rows = conn.execute(
+                """
+                SELECT e.occurrence_key, e.run_id, e.attempt_count, e.lease_expires_at,
+                       e.status AS execution_status, t.*
+                FROM v2_scheduled_task_executions e
+                JOIN v2_scheduled_tasks t ON t.scheduled_task_id = e.scheduled_task_id
+                WHERE e.status = 'retry_wait' AND e.next_attempt_at != '' AND e.next_attempt_at <= ?
+                ORDER BY e.next_attempt_at LIMIT ?
+                """,
+                (now_text, max(1, min(int(limit), 100))),
+            ).fetchall()
+            for row in rows:
+                if str(row["lease_expires_at"] or "") > now_text:
+                    continue
+                task = _task_from_row(row)
+                if task is None:
+                    continue
+                attempt = int(row["attempt_count"] or 0) + 1
+                conn.execute(
+                    """
+                    UPDATE v2_scheduled_task_executions
+                    SET status = 'claimed', attempt_count = ?, lease_owner = ?, lease_expires_at = ?,
+                        next_attempt_at = '', updated_at = ?
+                    WHERE occurrence_key = ? AND status = 'retry_wait'
+                    """,
+                    (attempt, owner, lease_until, now_text, str(row["occurrence_key"])),
+                )
+                claimed.append(
+                    ScheduledOccurrence(
+                        task=task,
+                        occurrence_key=str(row["occurrence_key"]),
+                        run_id=str(row["run_id"]),
+                        scheduled_run_at=str(row["occurrence_key"]).rsplit(":", 1)[-1],
+                        attempt_count=attempt,
+                        lease_owner=owner,
+                        lease_expires_at=lease_until,
+                    )
+                )
+            conn.commit()
+        return claimed
+
+    def claim_expired_occurrences(
+        self,
+        *,
+        worker_id: str,
+        now: datetime | None = None,
+        lease_seconds: float = 30.0,
+        limit: int = 20,
+    ) -> list[ScheduledOccurrence]:
+        current = _as_utc(now or _now_utc())
+        now_text = current.isoformat()
+        lease_until = (current + timedelta(seconds=max(1.0, float(lease_seconds)))).isoformat()
+        owner = str(worker_id or "").strip()
+        if not owner:
+            raise ValueError("scheduled_worker_id_required")
+        claimed: list[ScheduledOccurrence] = []
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            rows = conn.execute(
+                """
+                SELECT e.occurrence_key, e.run_id, e.attempt_count, e.lease_expires_at,
+                       e.status AS execution_status, t.*
+                FROM v2_scheduled_task_executions e
+                JOIN v2_scheduled_tasks t ON t.scheduled_task_id = e.scheduled_task_id
+                WHERE e.status = 'claimed'
+                  AND e.lease_expires_at != ''
+                  AND e.lease_expires_at <= ?
+                ORDER BY e.lease_expires_at LIMIT ?
+                """,
+                (now_text, max(1, min(int(limit), 100))),
+            ).fetchall()
+            for row in rows:
+                task = _task_from_row(row)
+                if task is None:
+                    continue
+                attempt = int(row["attempt_count"] or 0) + 1
+                cursor = conn.execute(
+                    """
+                    UPDATE v2_scheduled_task_executions
+                    SET status = 'claimed', attempt_count = ?, lease_owner = ?, lease_expires_at = ?,
+                        next_attempt_at = '', updated_at = ?, last_error = ''
+                    WHERE occurrence_key = ?
+                      AND status = 'claimed'
+                      AND lease_expires_at != ''
+                      AND lease_expires_at <= ?
+                    """,
+                    (attempt, owner, lease_until, now_text, str(row["occurrence_key"]), now_text),
+                )
+                if cursor.rowcount != 1:
+                    continue
+                claimed.append(
+                    ScheduledOccurrence(
+                        task=task,
+                        occurrence_key=str(row["occurrence_key"]),
+                        run_id=str(row["run_id"]),
+                        scheduled_run_at=str(row["occurrence_key"]).rsplit(":", 1)[-1],
+                        attempt_count=attempt,
+                        lease_owner=owner,
+                        lease_expires_at=lease_until,
+                    )
+                )
+            conn.commit()
+        return claimed
+
+    def mark_occurrence_enqueued(self, occurrence_key: str, *, worker_id: str, message_id: str) -> bool:
+        return self._update_occurrence(
+            occurrence_key,
+            worker_id=worker_id,
+            status="enqueued",
+            queued_message_id=message_id,
+            lease_expires_at="",
+        )
+
+    def mark_occurrence_retry(
+        self,
+        occurrence_key: str,
+        *,
+        worker_id: str,
+        error: str,
+        next_attempt_at: str,
+    ) -> bool:
+        return self._update_occurrence(
+            occurrence_key,
+            worker_id=worker_id,
+            status="retry_wait",
+            last_error=error,
+            error=error,
+            next_attempt_at=next_attempt_at,
+            lease_expires_at="",
+        )
+
+    def mark_occurrence_delivered(self, occurrence_key: str, *, response_outbox_id: str = "") -> bool:
+        return self._update_occurrence(
+            occurrence_key,
+            status="delivered",
+            response_outbox_id=response_outbox_id,
+            lease_owner="",
+            lease_expires_at="",
+        )
+
+    def mark_occurrence_response_pending(self, occurrence_key: str, *, response_outbox_id: str = "") -> bool:
+        return self._update_occurrence(
+            occurrence_key,
+            status="response_pending",
+            response_outbox_id=str(response_outbox_id or "").strip(),
+            lease_owner="",
+            lease_expires_at="",
+        )
+
+    def mark_occurrence_failed(self, occurrence_key: str, *, error: str) -> bool:
+        return self._update_occurrence(
+            occurrence_key,
+            status="delivery_failed",
+            last_error=error,
+            error=error,
+            lease_owner="",
+            lease_expires_at="",
+        )
+
+    def _update_occurrence(self, occurrence_key: str, *, worker_id: str = "", **values: Any) -> bool:
+        allowed = {
+            "status", "queued_message_id", "lease_expires_at", "lease_owner", "last_error",
+            "error", "next_attempt_at", "response_outbox_id",
+        }
+        updates = {key: value for key, value in values.items() if key in allowed}
+        updates["updated_at"] = _now_iso()
+        assignments = ", ".join(f"{key} = ?" for key in updates)
+        params = list(updates.values()) + [str(occurrence_key or "").strip()]
+        where = "occurrence_key = ?"
+        if worker_id:
+            where += " AND lease_owner = ?"
+            params.append(str(worker_id).strip())
+        with self._connect() as conn:
+            cursor = conn.execute(
+                f"UPDATE v2_scheduled_task_executions SET {assignments} WHERE {where}",
+                tuple(params),
+            )
+            return cursor.rowcount == 1
 
     def _set_status(self, scheduled_task_id: str, status: ScheduledTaskStatus, *, clear_next: bool) -> ScheduledTaskRecord:
         task = self._require_task(scheduled_task_id)
@@ -335,7 +675,10 @@ class ScheduledTaskStore:
 
     def _save_task(self, task: ScheduledTaskRecord) -> None:
         with self._connect() as conn:
-            conn.execute(
+            self._save_task_connection(conn, task)
+
+    def _save_task_connection(self, conn: sqlite3.Connection, task: ScheduledTaskRecord) -> None:
+        conn.execute(
                 """
                 UPDATE v2_scheduled_tasks SET
                   owner_user_id = ?,
@@ -344,6 +687,7 @@ class ScheduledTaskStore:
                   description = ?,
                   prompt = ?,
                   schedule_json = ?,
+                  origin_channel_json = ?,
                   timezone = ?,
                   status = ?,
                   next_run_at = ?,
@@ -359,6 +703,7 @@ class ScheduledTaskStore:
                     task.description,
                     task.prompt,
                     json.dumps(task.schedule, sort_keys=True),
+                    json.dumps(task.origin_channel, sort_keys=True),
                     task.timezone,
                     task.status,
                     task.next_run_at,
@@ -409,13 +754,22 @@ class ScheduledTaskStore:
                 CREATE TABLE IF NOT EXISTS v2_scheduled_task_executions (
                   id INTEGER PRIMARY KEY AUTOINCREMENT,
                   scheduled_task_id TEXT NOT NULL,
+                  occurrence_key TEXT NOT NULL DEFAULT '',
                   run_id TEXT NOT NULL,
                   status TEXT NOT NULL,
                   queued_message_id TEXT,
                   started_at TEXT NOT NULL,
                   finished_at TEXT,
                   error TEXT NOT NULL DEFAULT '',
-                  CHECK (status IN ('queued', 'error'))
+                  attempt_count INTEGER NOT NULL DEFAULT 0,
+                  lease_owner TEXT NOT NULL DEFAULT '',
+                  lease_expires_at TEXT NOT NULL DEFAULT '',
+                  next_attempt_at TEXT NOT NULL DEFAULT '',
+                  response_outbox_id TEXT NOT NULL DEFAULT '',
+                  last_error TEXT NOT NULL DEFAULT '',
+                  created_at TEXT NOT NULL DEFAULT '',
+                  updated_at TEXT NOT NULL DEFAULT '',
+                  CHECK (status IN ('pending', 'claimed', 'enqueued', 'processing', 'response_pending', 'retry_wait', 'delivered', 'failed', 'delivery_failed'))
                 ) STRICT;
 
                 CREATE INDEX IF NOT EXISTS idx_v2_scheduled_task_executions_task
@@ -427,6 +781,49 @@ class ScheduledTaskStore:
                 conn.execute(
                     "ALTER TABLE v2_scheduled_tasks ADD COLUMN origin_channel_json TEXT NOT NULL DEFAULT '{}'"
                 )
+            execution_columns = {
+                str(row[1]) for row in conn.execute("PRAGMA table_info(v2_scheduled_task_executions)").fetchall()
+            }
+            if "occurrence_key" not in execution_columns:
+                conn.execute("ALTER TABLE v2_scheduled_task_executions RENAME TO v2_scheduled_task_executions_legacy")
+                conn.executescript(
+                    """
+                    CREATE TABLE v2_scheduled_task_executions (
+                      id INTEGER PRIMARY KEY AUTOINCREMENT,
+                      scheduled_task_id TEXT NOT NULL,
+                      occurrence_key TEXT NOT NULL DEFAULT '',
+                      run_id TEXT NOT NULL,
+                      status TEXT NOT NULL,
+                      queued_message_id TEXT,
+                      started_at TEXT NOT NULL,
+                      finished_at TEXT,
+                      error TEXT NOT NULL DEFAULT '',
+                      attempt_count INTEGER NOT NULL DEFAULT 0,
+                      lease_owner TEXT NOT NULL DEFAULT '',
+                      lease_expires_at TEXT NOT NULL DEFAULT '',
+                      next_attempt_at TEXT NOT NULL DEFAULT '',
+                      response_outbox_id TEXT NOT NULL DEFAULT '',
+                      last_error TEXT NOT NULL DEFAULT '',
+                      created_at TEXT NOT NULL DEFAULT '',
+                      updated_at TEXT NOT NULL DEFAULT '',
+                      CHECK (status IN ('pending', 'claimed', 'enqueued', 'processing', 'response_pending', 'retry_wait', 'delivered', 'failed', 'delivery_failed'))
+                    ) STRICT;
+                    """
+                )
+                conn.execute(
+                    """
+                    INSERT INTO v2_scheduled_task_executions (
+                      scheduled_task_id, occurrence_key, run_id, status, queued_message_id,
+                      started_at, finished_at, error, attempt_count, created_at, updated_at
+                    )
+                    SELECT scheduled_task_id, scheduled_task_id || ':' || run_id, run_id,
+                           CASE status WHEN 'queued' THEN 'enqueued' ELSE 'failed' END,
+                           queued_message_id, started_at, finished_at, error, 1, started_at,
+                           COALESCE(finished_at, started_at)
+                    FROM v2_scheduled_task_executions_legacy
+                    """
+                )
+                conn.execute("DROP TABLE v2_scheduled_task_executions_legacy")
 
 
 class ScheduledTaskRunner:
@@ -616,6 +1013,15 @@ def _execution_from_row(row: sqlite3.Row | None) -> ScheduledTaskExecutionRecord
         started_at=str(row["started_at"]),
         finished_at=_optional_text(row["finished_at"]),
         error=str(row["error"] or ""),
+        occurrence_key=str(row["occurrence_key"] or ""),
+        attempt_count=int(row["attempt_count"] or 0),
+        lease_owner=str(row["lease_owner"] or ""),
+        lease_expires_at=str(row["lease_expires_at"] or ""),
+        next_attempt_at=str(row["next_attempt_at"] or ""),
+        response_outbox_id=str(row["response_outbox_id"] or ""),
+        last_error=str(row["last_error"] or ""),
+        created_at=str(row["created_at"] or ""),
+        updated_at=str(row["updated_at"] or ""),
     )
 
 
@@ -677,7 +1083,14 @@ def _normalize_status(value: object) -> ScheduledTaskStatus:
 
 def _normalize_execution_status(value: object) -> ExecutionStatus:
     rendered = str(value or "").strip()
-    if rendered not in {"queued", "error"}:
+    if rendered == "queued":
+        rendered = "enqueued"
+    if rendered == "error":
+        rendered = "failed"
+    if rendered not in {
+        "pending", "claimed", "enqueued", "processing", "response_pending",
+        "retry_wait", "delivered", "failed", "delivery_failed",
+    }:
         raise ValueError(f"invalid_scheduled_task_execution_status: {value}")
     return rendered  # type: ignore[return-value]
 

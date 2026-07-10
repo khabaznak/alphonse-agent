@@ -34,6 +34,7 @@ class CommunicationChannel:
         provider_message_id: str = "",
         reply_to_provider_message_id: str = "",
         thread_id: str = "",
+        message_id: str | None = None,
     ) -> QueuedMessage:
         raw_prompt = str(prompt or "")
         prompt_value = raw_prompt.strip()
@@ -71,7 +72,10 @@ class CommunicationChannel:
             correlation_id=str(correlation_id or ""),
             metadata=merged_metadata,
         )
-        return self.messages.enqueue(message)
+        try:
+            return self.messages.enqueue(message, message_id=message_id)
+        except TypeError:
+            return self.messages.enqueue(message)
 
 
 def _command_metadata(prompt: str) -> dict[str, Any]:

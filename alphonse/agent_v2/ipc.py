@@ -6,6 +6,7 @@ import json
 import os
 import socket
 import threading
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -49,6 +50,24 @@ class V2DaemonClient:
 
     def restart_integrations(self) -> dict[str, Any]:
         return self.request("restart_integrations")
+
+    def scheduled_tasks(self, **filters: Any) -> dict[str, Any]:
+        return self.request("scheduled_tasks", **filters)
+
+    def scheduled_executions(self, **filters: Any) -> dict[str, Any]:
+        return self.request("scheduled_executions", **filters)
+
+    def deliveries(self, **filters: Any) -> dict[str, Any]:
+        return self.request("deliveries", **filters)
+
+    def retry_occurrence(self, occurrence_key: str) -> dict[str, Any]:
+        return self.request("retry_occurrence", occurrence_key=occurrence_key)
+
+    def pause_schedule(self, scheduled_task_id: str) -> dict[str, Any]:
+        return self.request("pause_schedule", scheduled_task_id=scheduled_task_id)
+
+    def cancel_schedule(self, scheduled_task_id: str) -> dict[str, Any]:
+        return self.request("cancel_schedule", scheduled_task_id=scheduled_task_id)
 
 
 class V2DaemonServer:
@@ -117,9 +136,13 @@ class V2DaemonServer:
             return {"service": "alphonse-v2-daemon", "status": "ready"}
         if method == "status":
             runtime = self.daemon.runtime
+            due = runtime.schedule_store.due_tasks()
             return {
                 "service": "alphonse-v2-daemon",
+                "daemon_id": getattr(self.daemon, "daemon_id", ""),
                 "queue_size": runtime.queue.size(),
+                "outbound_queue_size": len(runtime.outbox.list_pending(limit=1000)),
+                "due_schedules": len(due),
                 "scheduler": self.daemon.scheduler.stats.__dict__,
             }
         if method == "events":
@@ -142,6 +165,56 @@ class V2DaemonServer:
                 provider_message_id=str(params.get("provider_message_id") or ""),
             )
             return {"message_id": queued.message_id}
+        if method == "scheduled_tasks":
+            status = str(params.get("status") or "").strip() or None
+            tasks = self.daemon.runtime.schedule_store.list_tasks(
+                owner_user_id=str(params.get("owner_user_id") or "").strip() or None,
+                project_id=str(params.get("project_id") or "").strip() or None,
+                status=status,
+                limit=int(params.get("limit") or 100),
+            )
+            return {"tasks": [task.to_dict() for task in tasks]}
+        if method == "scheduled_executions":
+            scheduled_task_id = str(params.get("scheduled_task_id") or "").strip()
+            if not scheduled_task_id:
+                raise ValueError("scheduled_task_id_required")
+            executions = self.daemon.runtime.schedule_store.list_executions(
+                scheduled_task_id=scheduled_task_id,
+                limit=int(params.get("limit") or 100),
+            )
+            return {"executions": [execution.to_dict() for execution in executions]}
+        if method == "deliveries":
+            from alphonse.agent_v2.core.io import OutboundSelector
+
+            status = str(params.get("status") or "").strip() or None
+            deliveries = self.daemon.runtime.outbox.list(
+                OutboundSelector(
+                    integration_id=str(params.get("integration_id") or "").strip() or None,
+                    channel_target=str(params.get("channel_target") or "").strip() or None,
+                    status=status,
+                    correlation_id=str(params.get("correlation_id") or "").strip() or None,
+                    audience_user_id=str(params.get("audience_user_id") or "").strip() or None,
+                ),
+                limit=int(params.get("limit") or 100),
+            )
+            return {"deliveries": [delivery.to_dict() for delivery in deliveries]}
+        if method == "retry_occurrence":
+            occurrence_key = str(params.get("occurrence_key") or "").strip()
+            if not occurrence_key:
+                raise ValueError("occurrence_key_required")
+            ok = self.daemon.runtime.schedule_store.mark_occurrence_retry(
+                occurrence_key,
+                worker_id="",
+                error="manual_retry",
+                next_attempt_at=datetime.now(timezone.utc).isoformat(),
+            )
+            return {"status": "queued" if ok else "not_found", "occurrence_key": occurrence_key}
+        if method == "pause_schedule":
+            task = self.daemon.runtime.schedule_store.pause_task(str(params.get("scheduled_task_id") or ""))
+            return {"task": task.to_dict()}
+        if method == "cancel_schedule":
+            task = self.daemon.runtime.schedule_store.cancel_task(str(params.get("scheduled_task_id") or ""))
+            return {"task": task.to_dict()}
         raise ValueError(f"daemon_method_not_found: {method}")
 
 

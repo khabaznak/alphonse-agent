@@ -196,6 +196,8 @@ def start_runtime_integrations(
     runtime: V2RuntimeHost,
     *,
     on_message_queued: Any | None = None,
+    on_outbox_delivered: Any | None = None,
+    on_outbox_failed: Any | None = None,
 ) -> list[Any]:
     stop_runtime_integrations(runtime)
     refresh_runtime_identity_resolver(runtime)
@@ -212,6 +214,8 @@ def start_runtime_integrations(
                 identity_resolver=runtime.identity_resolver,
                 owner_user_id=runtime.user,
                 on_message_queued=on_message_queued,
+                on_outbox_delivered=on_outbox_delivered,
+                on_outbox_failed=on_outbox_failed,
                 presence_projector=runtime.presence_projector,
             )
             integration_runtime.start()

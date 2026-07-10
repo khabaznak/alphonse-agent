@@ -6,7 +6,7 @@ import json
 import os
 import sqlite3
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable
 from uuid import uuid4
@@ -39,6 +39,12 @@ class OutboundMessage:
     delivered_at: str = ""
     created_at: str = ""
     updated_at: str = ""
+    attempt_count: int = 0
+    lease_owner: str = ""
+    lease_expires_at: str = ""
+    next_attempt_at: str = ""
+    last_error: str = ""
+    max_attempts: int = 5
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -60,6 +66,12 @@ class OutboundMessage:
             "delivered_at": self.delivered_at,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
+            "attempt_count": self.attempt_count,
+            "lease_owner": self.lease_owner,
+            "lease_expires_at": self.lease_expires_at,
+            "next_attempt_at": self.next_attempt_at,
+            "last_error": self.last_error,
+            "max_attempts": self.max_attempts,
         }
 
 
@@ -161,6 +173,14 @@ class SQLiteOutboundStore:
     def list_pending(self, selector: OutboundSelector | None = None, *, limit: int = 100) -> list[OutboundMessage]:
         return self.list(selector or OutboundSelector(), limit=limit)
 
+    def get(self, outbox_message_id: str) -> OutboundMessage | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM v2_outbox WHERE outbox_message_id = ?",
+                (str(outbox_message_id or "").strip(),),
+            ).fetchone()
+        return _message_from_row(row) if row is not None else None
+
     def list(self, selector: OutboundSelector | None = None, *, limit: int = 100) -> list[OutboundMessage]:
         where, values = _selector_where(selector)
         values.append(max(1, min(int(limit), 1000)))
@@ -176,18 +196,33 @@ class SQLiteOutboundStore:
             ).fetchall()
         return [_message_from_row(row) for row in rows]
 
-    def claim_next(self, selector: OutboundSelector | None = None) -> OutboundMessage | None:
+    def claim_next(
+        self,
+        selector: OutboundSelector | None = None,
+        *,
+        lease_owner: str = "outbox",
+        lease_seconds: int = 60,
+    ) -> OutboundMessage | None:
         selector = selector or OutboundSelector()
         pending_selector = OutboundSelector(
             integration_id=selector.integration_id,
             channel_target=selector.channel_target,
-            status=selector.status or "pending",
+            status=None if (selector.status or "pending") == "pending" else selector.status,
             correlation_id=selector.correlation_id,
             audience_user_id=selector.audience_user_id,
         )
         where, values = _selector_where(pending_selector)
-        now = _now_iso()
+        now = _now()
+        owner = str(lease_owner or "outbox").strip() or "outbox"
+        lease_expires_at = (now + timedelta(seconds=max(1, int(lease_seconds)))).isoformat()
+        eligibility = "status = 'pending' OR (status = 'retry_wait' AND next_attempt_at <= ?)"
+        values = [now.isoformat(), *values]
+        if where:
+            where = where.replace("WHERE ", f"WHERE ({eligibility}) AND ", 1)
+        else:
+            where = f"WHERE ({eligibility})"
         with self._connect() as conn:
+            self.reclaim_expired(conn=conn, now=now)
             row = conn.execute(
                 f"""
                 SELECT * FROM v2_outbox
@@ -203,10 +238,17 @@ class SQLiteOutboundStore:
             cursor = conn.execute(
                 """
                 UPDATE v2_outbox
-                SET status = 'claimed', claimed_at = ?, updated_at = ?
-                WHERE outbox_message_id = ? AND status = ?
+                SET status = 'claimed',
+                    claimed_at = ?,
+                    updated_at = ?,
+                    attempt_count = attempt_count + 1,
+                    lease_owner = ?,
+                    lease_expires_at = ?,
+                    next_attempt_at = ''
+                WHERE outbox_message_id = ?
+                  AND (status = 'pending' OR (status = 'retry_wait' AND next_attempt_at <= ?))
                 """,
-                (now, now, message_id, pending_selector.status or "pending"),
+                (now.isoformat(), now.isoformat(), owner, lease_expires_at, message_id, now.isoformat()),
             )
             if cursor.rowcount != 1:
                 return None
@@ -219,7 +261,13 @@ class SQLiteOutboundStore:
             cursor = conn.execute(
                 """
                 UPDATE v2_outbox
-                SET status = 'delivered', provider_message_id = ?, delivered_at = ?, updated_at = ?
+                SET status = 'delivered',
+                    provider_message_id = ?,
+                    delivered_at = ?,
+                    updated_at = ?,
+                    lease_owner = '',
+                    lease_expires_at = '',
+                    next_attempt_at = ''
                 WHERE outbox_message_id = ?
                 """,
                 (
@@ -231,25 +279,82 @@ class SQLiteOutboundStore:
             )
             return cursor.rowcount == 1
 
-    def mark_failed(self, outbox_message_id: str, *, error: str) -> bool:
+    def mark_failed(
+        self,
+        outbox_message_id: str,
+        *,
+        error: str,
+        retry_after_seconds: float | None = None,
+    ) -> bool:
         with self._connect() as conn:
             row = conn.execute(
-                "SELECT metadata_json FROM v2_outbox WHERE outbox_message_id = ?",
+                "SELECT metadata_json, attempt_count, max_attempts FROM v2_outbox WHERE outbox_message_id = ?",
                 (str(outbox_message_id or "").strip(),),
             ).fetchone()
             if row is None:
                 return False
             metadata = _json_object(row["metadata_json"])
-            metadata["last_error"] = str(error or "").strip()
+            normalized_error = str(error or "").strip()
+            metadata["last_error"] = normalized_error
+            attempts = int(row["attempt_count"] or 0)
+            max_attempts = int(row["max_attempts"] or 5)
+            retry_delay = 2.0 ** max(0, min(attempts - 1, 5))
+            if retry_after_seconds is not None:
+                retry_delay = max(0.0, float(retry_after_seconds))
+            next_attempt_at = (_now() + timedelta(seconds=retry_delay)).isoformat()
+            terminal = attempts >= max_attempts
             cursor = conn.execute(
                 """
                 UPDATE v2_outbox
-                SET status = 'failed', metadata_json = ?, updated_at = ?
+                SET status = ?,
+                    metadata_json = ?,
+                    updated_at = ?,
+                    lease_owner = '',
+                    lease_expires_at = '',
+                    next_attempt_at = ?,
+                    last_error = ?
                 WHERE outbox_message_id = ?
                 """,
-                (json.dumps(metadata, sort_keys=True), _now_iso(), str(outbox_message_id or "").strip()),
+                (
+                    "failed" if terminal else "retry_wait",
+                    json.dumps(metadata, sort_keys=True),
+                    _now_iso(),
+                    "" if terminal else next_attempt_at,
+                    normalized_error,
+                    str(outbox_message_id or "").strip(),
+                ),
             )
             return cursor.rowcount == 1
+
+    def reclaim_expired(
+        self,
+        *,
+        conn: sqlite3.Connection | None = None,
+        now: datetime | None = None,
+    ) -> int:
+        timestamp = (now or _now()).isoformat()
+
+        def _reclaim(connection: sqlite3.Connection) -> int:
+            cursor = connection.execute(
+                """
+                UPDATE v2_outbox
+                SET status = 'pending',
+                    lease_owner = '',
+                    lease_expires_at = '',
+                    claimed_at = '',
+                    updated_at = ?
+                WHERE status = 'claimed'
+                  AND lease_expires_at != ''
+                  AND lease_expires_at <= ?
+                """,
+                (timestamp, timestamp),
+            )
+            return int(cursor.rowcount)
+
+        if conn is not None:
+            return _reclaim(conn)
+        with self._connect() as opened:
+            return _reclaim(opened)
 
     def _connect(self) -> sqlite3.Connection:
         if self._memory_connection is not None:
@@ -283,7 +388,13 @@ class SQLiteOutboundStore:
                   delivered_at TEXT NOT NULL DEFAULT '',
                   created_at TEXT NOT NULL,
                   updated_at TEXT NOT NULL,
-                  CHECK (status IN ('pending', 'claimed', 'delivered', 'failed'))
+                  attempt_count INTEGER NOT NULL DEFAULT 0,
+                  lease_owner TEXT NOT NULL DEFAULT '',
+                  lease_expires_at TEXT NOT NULL DEFAULT '',
+                  next_attempt_at TEXT NOT NULL DEFAULT '',
+                  last_error TEXT NOT NULL DEFAULT '',
+                  max_attempts INTEGER NOT NULL DEFAULT 5,
+                  CHECK (status IN ('pending', 'claimed', 'retry_wait', 'delivered', 'failed'))
                 ) STRICT;
 
                 CREATE INDEX IF NOT EXISTS idx_v2_outbox_consumer
@@ -293,6 +404,18 @@ class SQLiteOutboundStore:
                   ON v2_outbox (question_id, status);
                 """
             )
+            _ensure_columns(
+                conn,
+                {
+                    "attempt_count": "INTEGER NOT NULL DEFAULT 0",
+                    "lease_owner": "TEXT NOT NULL DEFAULT ''",
+                    "lease_expires_at": "TEXT NOT NULL DEFAULT ''",
+                    "next_attempt_at": "TEXT NOT NULL DEFAULT ''",
+                    "last_error": "TEXT NOT NULL DEFAULT ''",
+                    "max_attempts": "INTEGER NOT NULL DEFAULT 5",
+                },
+            )
+            _migrate_status_check(conn)
 
 
 def build_outbox_delivery_sink(
@@ -396,7 +519,13 @@ def project_snapshot_to_outbox(
         audience_user_id=str(task_state.get("user") or origin.alphonse_user_id or "").strip(),
         correlation_id=str(task_state.get("correlation_id") or "").strip(),
         task_id=str(task_state.get("task_id") or "").strip(),
-        metadata={"source": "task_result", "tool": "respond"},
+        metadata={
+            "source": "task_result",
+            "tool": "respond",
+            "scheduled_task_id": str(task_metadata.get("scheduled_task_id") or "").strip(),
+            "scheduled_run_id": str(task_metadata.get("scheduled_run_id") or "").strip(),
+            "occurrence_key": str(task_metadata.get("occurrence_key") or "").strip(),
+        },
     )
 
 
@@ -473,6 +602,12 @@ def _message_from_row(row: sqlite3.Row) -> OutboundMessage:
         delivered_at=str(row["delivered_at"]),
         created_at=str(row["created_at"]),
         updated_at=str(row["updated_at"]),
+        attempt_count=int(row["attempt_count"] or 0),
+        lease_owner=str(row["lease_owner"] or ""),
+        lease_expires_at=str(row["lease_expires_at"] or ""),
+        next_attempt_at=str(row["next_attempt_at"] or ""),
+        last_error=str(row["last_error"] or ""),
+        max_attempts=int(row["max_attempts"] or 5),
     )
 
 
@@ -510,7 +645,88 @@ def _json_list(value: Any) -> list[Any]:
 
 
 def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return _now().isoformat()
+
+
+def _now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _ensure_columns(conn: sqlite3.Connection, columns: dict[str, str]) -> None:
+    existing = {str(row["name"]) for row in conn.execute("PRAGMA table_info(v2_outbox)").fetchall()}
+    for name, definition in columns.items():
+        if name not in existing:
+            conn.execute(f"ALTER TABLE v2_outbox ADD COLUMN {name} {definition}")
+
+
+def _migrate_status_check(conn: sqlite3.Connection) -> None:
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'v2_outbox'"
+    ).fetchone()
+    sql = str(row["sql"] or "") if row is not None else ""
+    if "retry_wait" in sql:
+        return
+    conn.execute("ALTER TABLE v2_outbox RENAME TO v2_outbox_legacy")
+    conn.executescript(
+        """
+        CREATE TABLE v2_outbox (
+          outbox_message_id TEXT PRIMARY KEY,
+          integration_id TEXT NOT NULL,
+          provider_key TEXT NOT NULL,
+          channel_target TEXT NOT NULL,
+          message TEXT NOT NULL,
+          kind TEXT NOT NULL,
+          audience_user_id TEXT NOT NULL DEFAULT '',
+          correlation_id TEXT NOT NULL DEFAULT '',
+          status TEXT NOT NULL DEFAULT 'pending',
+          provider_message_id TEXT NOT NULL DEFAULT '',
+          reply_to_provider_message_id TEXT NOT NULL DEFAULT '',
+          task_id TEXT NOT NULL DEFAULT '',
+          question_id TEXT NOT NULL DEFAULT '',
+          metadata_json TEXT NOT NULL DEFAULT '{}',
+          claimed_at TEXT NOT NULL DEFAULT '',
+          delivered_at TEXT NOT NULL DEFAULT '',
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          attempt_count INTEGER NOT NULL DEFAULT 0,
+          lease_owner TEXT NOT NULL DEFAULT '',
+          lease_expires_at TEXT NOT NULL DEFAULT '',
+          next_attempt_at TEXT NOT NULL DEFAULT '',
+          last_error TEXT NOT NULL DEFAULT '',
+          max_attempts INTEGER NOT NULL DEFAULT 5,
+          CHECK (status IN ('pending', 'claimed', 'retry_wait', 'delivered', 'failed'))
+        ) STRICT;
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO v2_outbox (
+          outbox_message_id, integration_id, provider_key, channel_target, message,
+          kind, audience_user_id, correlation_id, status, provider_message_id,
+          reply_to_provider_message_id, task_id, question_id, metadata_json,
+          claimed_at, delivered_at, created_at, updated_at, attempt_count,
+          lease_owner, lease_expires_at, next_attempt_at, last_error, max_attempts
+        )
+        SELECT
+          outbox_message_id, integration_id, provider_key, channel_target, message,
+          kind, audience_user_id, correlation_id,
+          CASE WHEN status IN ('pending', 'claimed', 'delivered', 'failed') THEN status ELSE 'pending' END,
+          provider_message_id, reply_to_provider_message_id, task_id, question_id,
+          metadata_json, claimed_at, delivered_at, created_at, updated_at,
+          attempt_count, lease_owner, lease_expires_at, next_attempt_at, last_error, max_attempts
+        FROM v2_outbox_legacy
+        """
+    )
+    conn.execute("DROP TABLE v2_outbox_legacy")
+    conn.executescript(
+        """
+        CREATE INDEX IF NOT EXISTS idx_v2_outbox_consumer
+          ON v2_outbox (integration_id, channel_target, status, created_at);
+
+        CREATE INDEX IF NOT EXISTS idx_v2_outbox_question
+          ON v2_outbox (question_id, status);
+        """
+    )
 
 
 def _default_outbox_db_path() -> str:
