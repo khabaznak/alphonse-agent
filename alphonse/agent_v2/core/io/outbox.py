@@ -408,9 +408,25 @@ def _latest_tool_result_response(task_state: dict[str, Any]) -> str:
         execution = call.get("execution")
         if not isinstance(execution, dict) or str(execution.get("status") or "") != "success":
             continue
+        tool_id = str(call.get("tool_id") or "").strip()
         result = execution.get("result")
-        if isinstance(result, dict) and str(result.get("message") or "").strip():
+        if not isinstance(result, dict):
+            continue
+        if str(result.get("message") or "").strip():
             return str(result.get("message") or "").strip()
+        if tool_id == "native.bash":
+            stdout = str(result.get("stdout") or "").strip()
+            stderr = str(result.get("stderr") or "").strip()
+            if stdout:
+                return stdout
+            if stderr:
+                return stderr
+        if tool_id == "native.scheduled_task":
+            name = str(result.get("name") or "Scheduled task").strip()
+            next_run_at = str(result.get("next_run_at") or "").strip()
+            if next_run_at:
+                return f'Scheduled "{name}" for {next_run_at}.'
+            return f'Scheduled "{name}".'
     return ""
 
 

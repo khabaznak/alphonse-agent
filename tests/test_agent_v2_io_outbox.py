@@ -51,6 +51,44 @@ def test_outbox_selector_isolates_tui_messages() -> None:
     assert store.list_pending(OutboundSelector(integration_id="telegram-home"))[0].message == "hello telegram"
 
 
+def test_snapshot_projection_routes_bash_stdout_to_integration_outbox() -> None:
+    from alphonse.agent_v2.core.core import ImprovementPhase, StateSnapshot
+    from alphonse.agent_v2.core.io import channel_metadata
+    from alphonse.agent_v2.core.io import project_snapshot_to_outbox
+
+    snapshot = StateSnapshot(
+        phase=ImprovementPhase.ACT,
+        metadata={
+            "task_state": {
+                "user": "u-alex",
+                "correlation_id": "telegram-home:55",
+                "metadata": {
+                    "channel": channel_metadata(
+                        integration_id="telegram-home",
+                        provider_key="telegram",
+                        channel_target="999",
+                        provider_message_id="55",
+                        alphonse_user_id="u-alex",
+                    )
+                },
+                "plan_json": [
+                    {
+                        "tool_id": "native.bash",
+                        "execution": {"status": "success", "result": {"stdout": "10:42"}},
+                    }
+                ],
+            }
+        },
+    )
+    outbox = SQLiteOutboundStore()
+
+    projected = project_snapshot_to_outbox(snapshot=snapshot, outbox=outbox)
+
+    assert projected is not None
+    assert projected.integration_id == "telegram-home"
+    assert projected.message == "10:42"
+
+
 def test_identity_resolver_maps_inbound_and_preferred_outbound_across_providers(
     tmp_path: Path,
     monkeypatch,
