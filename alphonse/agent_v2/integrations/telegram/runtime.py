@@ -14,6 +14,10 @@ from alphonse.agent_v2.core.io import OutboundSelector
 from alphonse.agent_v2.core.io import SQLiteOutboundStore
 from alphonse.agent_v2.core.io import V2IdentityResolver
 from alphonse.agent_v2.core.messages import CommunicationChannel
+from alphonse.agent_v2.integrations.presence import PresenceCapabilities
+from alphonse.agent_v2.integrations.presence import PresencePhase
+from alphonse.agent_v2.integrations.presence import PresenceState
+from alphonse.agent_v2.integrations.presence import PresenceProjector
 from alphonse.agent_v2.integrations.store import IntegrationConfigRecord
 
 
@@ -53,6 +57,20 @@ class TelegramHttpClient:
         message_id = body.get("message_id") if isinstance(body, dict) else ""
         return str(message_id or "").strip()
 
+    def send_chat_action(self, *, chat_id: str, action: str = "typing") -> None:
+        self._post("sendChatAction", {"chat_id": str(chat_id), "action": str(action or "typing")})
+
+    def set_message_reaction(self, *, chat_id: str, message_id: str, emoji: str) -> None:
+        reaction = [{"type": "emoji", "emoji": str(emoji)}] if str(emoji or "").strip() else []
+        self._post(
+            "setMessageReaction",
+            {
+                "chat_id": str(chat_id),
+                "message_id": str(message_id),
+                "reaction": json.dumps(reaction, ensure_ascii=False),
+            },
+        )
+
     def _post(self, endpoint: str, payload: dict[str, Any]) -> dict[str, Any]:
         url = f"https://api.telegram.org/bot{self.bot_token}/{endpoint}"
         data = parse.urlencode(payload).encode("utf-8")
@@ -79,6 +97,7 @@ class TelegramIntegrationRuntime:
         owner_user_id: str = "local",
         http_client: TelegramHttpClient | None = None,
         on_message_queued: Callable[[], None] | None = None,
+        presence_projector: PresenceProjector | None = None,
     ) -> None:
         self.record = record
         self.channel = channel
@@ -95,6 +114,13 @@ class TelegramIntegrationRuntime:
         self._stats = TelegramRuntimeStats()
         self.http_client = http_client or TelegramHttpClient(bot_token=str(record.secrets.get("bot_token") or ""))
         self._on_message_queued = on_message_queued
+        self.presence_projector = presence_projector
+        self.presence_adapter = TelegramPresenceAdapter(
+            http_client=self.http_client,
+            enabled=bool(config["presence_enabled"]),
+            reactions_enabled=bool(config["presence_reactions_enabled"]),
+            typing_enabled=bool(config["presence_typing_enabled"]),
+        )
 
     @property
     def integration_id(self) -> str:
@@ -125,6 +151,8 @@ class TelegramIntegrationRuntime:
                 self._last_update_id = update_id if self._last_update_id is None else max(self._last_update_id, update_id)
             self.handle_update(update)
         self.drain_outbox_once()
+        if self.presence_projector is not None:
+            self.presence_projector.heartbeat()
         return self._stats
 
     def handle_update(self, update: dict[str, Any]) -> bool:
@@ -257,6 +285,7 @@ def build_telegram_runtime(
     identity_resolver: V2IdentityResolver,
     owner_user_id: str = "local",
     on_message_queued: Callable[[], None] | None = None,
+    presence_projector: PresenceProjector | None = None,
 ) -> TelegramIntegrationRuntime:
     return TelegramIntegrationRuntime(
         record=record,
@@ -265,6 +294,7 @@ def build_telegram_runtime(
         identity_resolver=identity_resolver,
         owner_user_id=owner_user_id,
         on_message_queued=on_message_queued,
+        presence_projector=presence_projector,
     )
 
 
@@ -275,6 +305,9 @@ def normalize_telegram_config(record: IntegrationConfigRecord) -> dict[str, Any]
         "poll_interval_sec": _parse_float(config.get("poll_interval_sec"), default=1.0),
         "allowed_chat_ids": sorted(allowed),
         "owner_user_id": str(config.get("owner_user_id") or "local").strip() or "local",
+        "presence_enabled": _parse_bool(config.get("presence_enabled"), default=True),
+        "presence_reactions_enabled": _parse_bool(config.get("presence_reactions_enabled"), default=True),
+        "presence_typing_enabled": _parse_bool(config.get("presence_typing_enabled"), default=True),
     }
 
 
@@ -300,6 +333,75 @@ def _parse_float(value: Any, *, default: float) -> float:
     except (TypeError, ValueError):
         return default
     return parsed if parsed > 0 else default
+
+
+def _parse_bool(value: Any, *, default: bool) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() not in {"", "0", "false", "no", "off"}
+
+
+class TelegramPresenceAdapter:
+    """Maps generic presence phases to Telegram typing and reactions."""
+
+    capabilities = PresenceCapabilities(transient_activity=True, reactions=True)
+    _REACTIONS = {
+        PresencePhase.ACKNOWLEDGED: "👀",
+        PresencePhase.THINKING: "🤔",
+        PresencePhase.EXECUTING: "⚡",
+        PresencePhase.WAITING_USER: "❓",
+        PresencePhase.DONE: "👍",
+        PresencePhase.FAILED: "👎",
+    }
+
+    def __init__(
+        self,
+        *,
+        http_client: TelegramHttpClient,
+        enabled: bool = True,
+        reactions_enabled: bool = True,
+        typing_enabled: bool = True,
+    ) -> None:
+        self.http_client = http_client
+        self.enabled = enabled
+        self.reactions_enabled = reactions_enabled
+        self.typing_enabled = typing_enabled
+
+    def start(self, presence: PresenceState) -> None:
+        self._project(presence)
+
+    def update(self, presence: PresenceState) -> None:
+        self._project(presence)
+
+    def heartbeat(self, presence: PresenceState) -> None:
+        if self.enabled and self.typing_enabled and presence.phase in _ACTIVE_PRESENCE_PHASES:
+            self.http_client.send_chat_action(chat_id=presence.address.channel_target, action="typing")
+
+    def stop(self, presence: PresenceState) -> None:
+        return
+
+    def _project(self, presence: PresenceState) -> None:
+        if not self.enabled:
+            return
+        if self.typing_enabled and presence.phase in _ACTIVE_PRESENCE_PHASES:
+            self.http_client.send_chat_action(chat_id=presence.address.channel_target, action="typing")
+        if self.reactions_enabled and presence.provider_message_id:
+            emoji = self._REACTIONS.get(presence.phase)
+            if emoji:
+                self.http_client.set_message_reaction(
+                    chat_id=presence.address.channel_target,
+                    message_id=presence.provider_message_id,
+                    emoji=emoji,
+                )
+
+
+_ACTIVE_PRESENCE_PHASES = {
+    PresencePhase.ACKNOWLEDGED,
+    PresencePhase.THINKING,
+    PresencePhase.EXECUTING,
+}
 
 
 def _replace_stats(stats: TelegramRuntimeStats, **updates: int) -> TelegramRuntimeStats:

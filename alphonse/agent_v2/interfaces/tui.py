@@ -50,6 +50,8 @@ from alphonse.agent_v2.integrations import IntegrationConfigRecord
 from alphonse.agent_v2.integrations import IntegrationRegistry
 from alphonse.agent_v2.integrations import SQLiteIntegrationStore
 from alphonse.agent_v2.integrations import build_default_integration_registry
+from alphonse.agent_v2.integrations.presence import PresenceProjector
+from alphonse.agent_v2.integrations.presence import TuiPresenceAdapter
 
 LOCAL_STOP_COMMANDS = {"/exit", "/quit", "/stop"}
 TUI_SLASH_COMMANDS: tuple[tuple[str, str], ...] = (
@@ -77,6 +79,7 @@ class TuiRuntime:
     identity_resolver: V2IdentityResolver
     integration_store: SQLiteIntegrationStore
     integration_registry: IntegrationRegistry
+    presence_projector: PresenceProjector
     integration_runtimes: list[Any] = field(default_factory=list)
     active_project_id: str = ""
     ui_events: list[CoreUiEvent] = field(default_factory=list)
@@ -208,6 +211,8 @@ def build_tui_runtime(
     outbox = outbox or SQLiteOutboundStore()
     integration_store = integration_store or SQLiteIntegrationStore()
     integration_registry = integration_registry or build_default_integration_registry()
+    presence_projector = PresenceProjector()
+    presence_projector.register("tui", TuiPresenceAdapter())
     identity_resolver = identity_resolver or build_identity_resolver_from_integrations(integration_store)
     delivery_sink = build_outbox_delivery_sink(outbox=outbox, identity_resolver=identity_resolver)
     ui_events: list[CoreUiEvent] = []
@@ -224,6 +229,7 @@ def build_tui_runtime(
         project_store=project_store,
         schedule_store=schedule_store,
         delivery_sink=delivery_sink,
+        activity_sink=presence_projector.on_activity,
     )
     return TuiRuntime(
         user=str(user or "local").strip() or "local",
@@ -239,6 +245,7 @@ def build_tui_runtime(
         identity_resolver=identity_resolver,
         integration_store=integration_store,
         integration_registry=integration_registry,
+        presence_projector=presence_projector,
         ui_events=ui_events,
     )
 
@@ -380,10 +387,14 @@ def start_enabled_integration_runtimes(
                 identity_resolver=runtime.identity_resolver,
                 owner_user_id=runtime.user,
                 on_message_queued=on_message_queued,
+                presence_projector=runtime.presence_projector,
             )
             integration_runtime.start()
         except Exception:
             continue
+        presence_adapter = getattr(integration_runtime, "presence_adapter", None)
+        if presence_adapter is not None:
+            runtime.presence_projector.register(record.integration_id, presence_adapter)
         started.append(integration_runtime)
     runtime.integration_runtimes = started
     return started
@@ -391,6 +402,9 @@ def start_enabled_integration_runtimes(
 
 def stop_integration_runtimes(runtime: TuiRuntime) -> None:
     for integration_runtime in list(runtime.integration_runtimes):
+        integration_id = str(getattr(integration_runtime, "integration_id", "") or "").strip()
+        if integration_id:
+            runtime.presence_projector.unregister(integration_id)
         stop = getattr(integration_runtime, "stop", None)
         if callable(stop):
             stop()
@@ -418,6 +432,7 @@ def save_telegram_integration_config(
     telegram_user_id: str = "",
     enabled: bool = False,
     remove_token: bool = False,
+    presence_enabled: bool = True,
 ) -> IntegrationConfigRecord:
     existing = runtime.integration_store.get(integration_id) or runtime.integration_store.get_by_provider("telegram")
     secrets = dict(existing.secrets) if existing is not None else {}
@@ -447,6 +462,7 @@ def save_telegram_integration_config(
             "allowed_chat_ids": _parse_chat_ids(allowed_chat_ids),
             "owner_user_id": runtime.user,
             "telegram_user_id": provider_user_id,
+            "presence_enabled": presence_enabled,
         },
         secrets=secrets,
     )
@@ -517,7 +533,19 @@ def save_tui_project_context(runtime: TuiRuntime, content: str) -> ProjectRecord
 
 
 def process_tui_queue_once(runtime: TuiRuntime) -> TuiProcessingResult:
-    step = runtime.core.step()
+    queued = runtime.queue.peek()
+    with runtime.presence_projector.processing(queued):
+        step = runtime.core.step()
+        if step.status in {
+            LoopStepStatus.PROCESSED,
+            LoopStepStatus.PARKED,
+            LoopStepStatus.WAITING,
+            LoopStepStatus.FAILED,
+        }:
+            runtime.presence_projector.finish(
+                failed=step.status == LoopStepStatus.FAILED,
+                waiting=step.status in {LoopStepStatus.PARKED, LoopStepStatus.WAITING},
+            )
     snapshot = runtime.visible_state.snapshot()
     if step.status in {LoopStepStatus.PROCESSED, LoopStepStatus.PARKED, LoopStepStatus.WAITING}:
         project_snapshot_to_outbox(snapshot=snapshot, outbox=runtime.outbox)
@@ -914,6 +942,7 @@ def _build_textual_app_class() -> type[Any]:
                     mapped_user_id = None
                 telegram_user_id = str(mapped_user_id or "").strip()
             enabled = "yes" if self.record is not None and self.record.enabled else "no"
+            presence_enabled = "yes" if config.get("presence_enabled", True) else "no"
             with Vertical(id="integration-dialog"):
                 yield Static("Telegram", classes="dialog-title")
                 yield Input(value=integration_id, placeholder="Integration id", id="telegram-integration-id")
@@ -923,6 +952,7 @@ def _build_textual_app_class() -> type[Any]:
                 yield Input(value=str(config.get("poll_interval_sec") or "1.0"), placeholder="Poll interval seconds", id="telegram-poll-interval")
                 yield Input(value=allowed, placeholder="Allowed chat ids, comma separated", id="telegram-allowed-chat-ids")
                 yield Select(options=[("Enabled", "yes"), ("Disabled", "no")], value=enabled, id="telegram-enabled", allow_blank=False)
+                yield Select(options=[("Presence enabled", "yes"), ("Presence disabled", "no")], value=presence_enabled, id="telegram-presence-enabled", allow_blank=False)
                 yield Static("", id="telegram-config-error")
                 with Horizontal(classes="dialog-actions"):
                     yield Button("Save", id="save-telegram", variant="primary")
@@ -955,6 +985,7 @@ def _build_textual_app_class() -> type[Any]:
                     telegram_user_id=self.query_one("#telegram-user-id", Input).value,
                     enabled=str(self.query_one("#telegram-enabled", Select).value or "no") == "yes",
                     remove_token=event.button.id == "remove-telegram-token",
+                    presence_enabled=str(self.query_one("#telegram-presence-enabled", Select).value or "yes") == "yes",
                 )
             except Exception as exc:
                 self.query_one("#telegram-config-error", Static).update(str(exc))
@@ -1050,6 +1081,10 @@ def _build_textual_app_class() -> type[Any]:
                 schedule_store=ScheduledTaskStore.default(),
                 outbox=SQLiteOutboundStore.default(),
                 integration_store=integration_store,
+            )
+            self.runtime.presence_projector.register(
+                "tui",
+                TuiPresenceAdapter(self._emit_presence_status),
             )
             self.runtime.core.activity_sink = self._emit_activity_from_worker
             self.processor = TuiProcessorCoordinator(self.runtime)
@@ -1202,7 +1237,14 @@ def _build_textual_app_class() -> type[Any]:
             self.call_from_thread(self._apply_processing_results, results)
 
         def _emit_activity_from_worker(self, event: CoreActivityEvent) -> None:
+            self.runtime.presence_projector.on_activity(event)
             self.call_from_thread(self._append_activity_event, event)
+
+        def _emit_presence_status(self, status: str) -> None:
+            self.call_from_thread(self._set_presence_status, status)
+
+        def _set_presence_status(self, status: str) -> None:
+            self.query_one("#activity", Static).update(status)
 
         def _wake_processor_from_integration(self) -> None:
             self.call_from_thread(self._start_processor_if_needed)
