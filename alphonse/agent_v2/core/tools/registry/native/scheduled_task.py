@@ -109,6 +109,9 @@ def execute_scheduled_task(
         run_at=_optional_text(arguments.get("run_at")),
         rrule=_optional_text(arguments.get("rrule")),
         dtstart=_optional_text(arguments.get("dtstart")),
+        origin_channel=dict(task.metadata.get("channel") or {})
+        if isinstance(task.metadata.get("channel"), dict)
+        else {},
         timezone_name=str(arguments.get("timezone") or "").strip() or "UTC",
         enabled=bool(arguments.get("enabled", True)),
     )

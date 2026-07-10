@@ -36,6 +36,7 @@ from alphonse.agent_v2.core.io import upsert_provider_user_mapping
 from alphonse.agent_v2.core.messages import CommunicationChannel
 from alphonse.agent_v2.core.messages import InMemoryMessageQueue
 from alphonse.agent_v2.core.messages import MessageSelector
+from alphonse.agent_v2.core.messages import SQLiteMessageQueue
 from alphonse.agent_v2.core.projects import ProjectRecord
 from alphonse.agent_v2.core.projects import ProjectStore
 from alphonse.agent_v2.core.questions import SQLiteQuestionStore
@@ -52,6 +53,15 @@ from alphonse.agent_v2.integrations import SQLiteIntegrationStore
 from alphonse.agent_v2.integrations import build_default_integration_registry
 from alphonse.agent_v2.integrations.presence import PresenceProjector
 from alphonse.agent_v2.integrations.presence import TuiPresenceAdapter
+from alphonse.agent_v2.runtime import InMemoryInternalState
+from alphonse.agent_v2.runtime import NullMemory
+from alphonse.agent_v2.runtime import NullPromptLoader
+from alphonse.agent_v2.runtime import V2RuntimeHost
+from alphonse.agent_v2.runtime import build_runtime_host
+from alphonse.agent_v2.daemon import V2Daemon
+from alphonse.agent_v2.ipc import V2DaemonClient
+
+TuiRuntime = V2RuntimeHost
 
 LOCAL_STOP_COMMANDS = {"/exit", "/quit", "/stop"}
 TUI_SLASH_COMMANDS: tuple[tuple[str, str], ...] = (
@@ -62,27 +72,6 @@ TUI_SLASH_COMMANDS: tuple[tuple[str, str], ...] = (
     ("/exit", "Exit the TUI"),
     ("/quit", "Exit the TUI"),
 )
-
-
-@dataclass
-class TuiRuntime:
-    user: str
-    queue: InMemoryMessageQueue
-    channel: CommunicationChannel
-    visible_state: "InMemoryInternalState"
-    processor: IntelligenceProcessor
-    core: AlphonseCore
-    question_store: SQLiteQuestionStore
-    project_store: ProjectStore
-    schedule_store: ScheduledTaskStore
-    outbox: SQLiteOutboundStore
-    identity_resolver: V2IdentityResolver
-    integration_store: SQLiteIntegrationStore
-    integration_registry: IntegrationRegistry
-    presence_projector: PresenceProjector
-    integration_runtimes: list[Any] = field(default_factory=list)
-    active_project_id: str = ""
-    ui_events: list[CoreUiEvent] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -141,17 +130,6 @@ class TuiProcessorCoordinator:
         return results
 
 
-@dataclass
-class InMemoryInternalState:
-    value: StateSnapshot = field(default_factory=StateSnapshot)
-
-    def update(self, snapshot: StateSnapshot) -> None:
-        self.value = snapshot
-
-    def snapshot(self) -> StateSnapshot:
-        return self.value
-
-
 class NullToolRegistry:
     def register(self, tool: ToolDescriptor) -> None:
         _ = tool
@@ -170,20 +148,6 @@ class NullToolRegistry:
         raise KeyError("tool_not_found")
 
 
-class NullPromptLoader:
-    def load(self, name: str) -> PromptFile:
-        return PromptFile(name=name, content="")
-
-
-class NullMemory:
-    def write(self, record: MemoryRecord) -> None:
-        _ = record
-
-    def read(self, path: str) -> MemoryRecord | None:
-        _ = path
-        return None
-
-
 def build_tui_runtime(
     *,
     user: str = "local",
@@ -198,46 +162,11 @@ def build_tui_runtime(
     integration_store: SQLiteIntegrationStore | None = None,
     integration_registry: IntegrationRegistry | None = None,
 ) -> TuiRuntime:
-    reset_state()
-    queue = InMemoryMessageQueue()
-    channel = CommunicationChannel(queue)
-    visible_state = InMemoryInternalState()
-    processor = processor or PDCAIntelligenceProcessor()
-    tools = tools or build_native_tool_registry()
-    inference = inference or build_default_tui_inference_router()
-    question_store = question_store or SQLiteQuestionStore()
-    project_store = project_store or ProjectStore()
-    schedule_store = schedule_store or ScheduledTaskStore()
-    outbox = outbox or SQLiteOutboundStore()
-    integration_store = integration_store or SQLiteIntegrationStore()
-    integration_registry = integration_registry or build_default_integration_registry()
-    presence_projector = PresenceProjector()
-    presence_projector.register("tui", TuiPresenceAdapter())
-    identity_resolver = identity_resolver or build_identity_resolver_from_integrations(integration_store)
-    delivery_sink = build_outbox_delivery_sink(outbox=outbox, identity_resolver=identity_resolver)
-    ui_events: list[CoreUiEvent] = []
-    core = AlphonseCore(
-        intelligence=processor,
-        messages=queue,
-        tools=tools,
-        prompts=NullPromptLoader(),
-        state=visible_state,
-        memory=NullMemory(),
+    return build_runtime_host(
+        user=user,
         inference=inference,
-        ui_event_sink=ui_events.append,
-        question_store=question_store,
-        project_store=project_store,
-        schedule_store=schedule_store,
-        delivery_sink=delivery_sink,
-        activity_sink=presence_projector.on_activity,
-    )
-    return TuiRuntime(
-        user=str(user or "local").strip() or "local",
-        queue=queue,
-        channel=channel,
-        visible_state=visible_state,
+        tools=tools,
         processor=processor,
-        core=core,
         question_store=question_store,
         project_store=project_store,
         schedule_store=schedule_store,
@@ -245,8 +174,6 @@ def build_tui_runtime(
         identity_resolver=identity_resolver,
         integration_store=integration_store,
         integration_registry=integration_registry,
-        presence_projector=presence_projector,
-        ui_events=ui_events,
     )
 
 
@@ -1076,22 +1003,25 @@ def _build_textual_app_class() -> type[Any]:
         def __init__(self) -> None:
             super().__init__()
             integration_store = SQLiteIntegrationStore.default()
-            self.runtime = build_tui_runtime(
+            self.daemon_client = V2DaemonClient()
+            self.external_daemon = _daemon_is_available(self.daemon_client)
+            self.runtime = build_runtime_host(
+                user="local",
                 project_store=ProjectStore.default(),
                 schedule_store=ScheduledTaskStore.default(),
                 outbox=SQLiteOutboundStore.default(),
                 integration_store=integration_store,
+                messages=SQLiteMessageQueue.default(),
             )
+            self.daemon = None if self.external_daemon else V2Daemon(self.runtime)
             self.runtime.presence_projector.register(
                 "tui",
                 TuiPresenceAdapter(self._emit_presence_status),
             )
-            self.runtime.core.activity_sink = self._emit_activity_from_worker
+            if self.daemon is not None:
+                self.daemon.start()
             self.processor = TuiProcessorCoordinator(self.runtime)
-            start_enabled_integration_runtimes(
-                self.runtime,
-                on_message_queued=self._wake_processor_from_integration,
-            )
+            self.external_queue_size = -1
             self.last_message_id = ""
             self.slash_command_matches: list[tuple[str, str]] = []
             self.slash_command_selected_index = 0
@@ -1114,6 +1044,7 @@ def _build_textual_app_class() -> type[Any]:
             self.query_one("#activity", Static).update("Idle: ready")
             self._refresh_status()
             self.query_one("#prompt", Input).focus()
+            self.set_interval(0.1, self._poll_daemon)
 
         def on_input_changed(self, event: Input.Changed) -> None:
             if event.input.id != "prompt":
@@ -1167,17 +1098,38 @@ def _build_textual_app_class() -> type[Any]:
                 self._open_integrations()
                 return
 
-            result = queue_tui_input(self.runtime, prompt)
-            if not result.prompt:
-                return
-            chat = self.query_one("#chat", RichLog)
-            chat.write(Text.assemble((self.runtime.user, "bold cyan"), f": {result.prompt}"))
-            if result.queued_message_id:
-                self.last_message_id = result.queued_message_id
-            self._refresh_status()
-            if result.should_exit:
+            if str(prompt or "").strip() in LOCAL_STOP_COMMANDS:
                 self.exit()
                 return
+
+            if self.external_daemon:
+                prompt_value = str(prompt or "").strip()
+                if not prompt_value:
+                    return
+                try:
+                    queued = self.daemon_client.queue_message(
+                        prompt=prompt_value,
+                        user=self.runtime.user,
+                        integration_id="tui",
+                        provider_key="tui",
+                        channel_target=self.runtime.user,
+                    )
+                except Exception as exc:
+                    self.query_one("#activity", Static).update(f"Daemon unavailable: {exc}")
+                    return
+                submitted_prompt = prompt_value
+                queued_message_id = str(queued.get("message_id") or "")
+            else:
+                result = queue_tui_input(self.runtime, prompt)
+                if not result.prompt:
+                    return
+                submitted_prompt = result.prompt
+                queued_message_id = result.queued_message_id
+            chat = self.query_one("#chat", RichLog)
+            chat.write(Text.assemble((self.runtime.user, "bold cyan"), f": {submitted_prompt}"))
+            if queued_message_id:
+                self.last_message_id = queued_message_id
+            self._refresh_status()
             self._start_processor_if_needed()
 
         def _open_project_picker(self, *, then_context: bool = False) -> None:
@@ -1214,27 +1166,23 @@ def _build_textual_app_class() -> type[Any]:
 
             def _updated(updated: bool) -> None:
                 if updated:
-                    start_enabled_integration_runtimes(
-                        self.runtime,
-                        on_message_queued=self._wake_processor_from_integration,
-                    )
+                    if self.external_daemon:
+                        self.daemon_client.restart_integrations()
+                    elif self.daemon is not None:
+                        self.daemon.restart_integrations()
                     self._refresh_status()
 
             self.push_screen(IntegrationsScreen(self.runtime), callback=_selected)
 
         def on_unmount(self) -> None:
-            stop_integration_runtimes(self.runtime)
+            if self.daemon is not None:
+                self.daemon.stop()
 
         def _start_processor_if_needed(self) -> None:
-            if not self.processor.reserve_processing():
-                self.query_one("#activity", Static).update("Queued: processor already running")
-                self._refresh_status()
-                return
-            self.run_worker(self._process_queue_worker, thread=True, exclusive=False)
+            self._refresh_status()
 
         def _process_queue_worker(self) -> None:
-            results = self.processor.process_until_idle()
-            self.call_from_thread(self._apply_processing_results, results)
+            return
 
         def _emit_activity_from_worker(self, event: CoreActivityEvent) -> None:
             self.runtime.presence_projector.on_activity(event)
@@ -1247,7 +1195,39 @@ def _build_textual_app_class() -> type[Any]:
             self.query_one("#activity", Static).update(status)
 
         def _wake_processor_from_integration(self) -> None:
-            self.call_from_thread(self._start_processor_if_needed)
+            self.call_from_thread(self._refresh_status)
+
+        def _poll_daemon(self) -> None:
+            if self.external_daemon:
+                try:
+                    events = self.daemon_client.events()
+                    for event in events:
+                        self._append_activity_event(
+                            CoreActivityEvent(
+                                phase=ImprovementPhase(str(event.get("phase") or "act")),
+                                label=str(event.get("label") or ""),
+                                message=str(event.get("message") or ""),
+                                speaker=str(event.get("speaker") or "Alphonse"),
+                            )
+                        )
+                    status = self.daemon_client.status()
+                    self.external_queue_size = int(status.get("queue_size") or 0)
+                except Exception:
+                    self.external_queue_size = -1
+            else:
+                while self.runtime.activity_events:
+                    event = self.runtime.activity_events.pop(0)
+                    self._append_activity_event(event)
+            selector = OutboundSelector(integration_id="tui", channel_target=self.runtime.user, status="pending")
+            chat = self.query_one("#chat", RichLog)
+            while True:
+                outbound = self.runtime.outbox.claim_next(selector)
+                if outbound is None:
+                    break
+                if outbound.message:
+                    chat.write(Text.assemble(("Alphonse", "bold green"), f": {outbound.message}"))
+                self.runtime.outbox.mark_delivered(outbound.outbox_message_id)
+            self._refresh_status()
 
         def _append_activity_event(self, event: CoreActivityEvent) -> None:
             self.query_one("#activity", Static).update(format_activity_status_line(event))
@@ -1284,14 +1264,22 @@ def _build_textual_app_class() -> type[Any]:
             text = "\n".join(
                 [
                     f"state: {state.key}",
-                    f"processing: {self.processor.is_processing}",
+                    f"processing: {self.processor.is_processing if not self.external_daemon else 'daemon'}",
                     f"user: {self.runtime.user}",
                     f"current project: {format_current_project_status(self.runtime)}",
                     f"inference: {format_inference_status(self.runtime)}",
-                    f"queue: {self.runtime.queue.size()}",
+                    f"queue: {self.external_queue_size if self.external_daemon else self.runtime.queue.size()}",
                     f"last message: {self.last_message_id or '-'}",
                 ]
             )
             self.query_one("#status", Static).update(text)
 
     return AlphonseTuiApp
+
+
+def _daemon_is_available(client: V2DaemonClient) -> bool:
+    try:
+        client.ping()
+    except Exception:
+        return False
+    return True

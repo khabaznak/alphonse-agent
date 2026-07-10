@@ -29,6 +29,7 @@ class ScheduledTaskRecord:
     name: str
     description: str
     prompt: str
+    origin_channel: dict[str, Any]
     schedule: dict[str, Any]
     timezone: str
     status: ScheduledTaskStatus
@@ -45,6 +46,7 @@ class ScheduledTaskRecord:
             "name": self.name,
             "description": self.description,
             "prompt": self.prompt,
+            "origin_channel": dict(self.origin_channel),
             "schedule": dict(self.schedule),
             "timezone": self.timezone,
             "status": self.status,
@@ -104,6 +106,7 @@ class ScheduledTaskStore:
         run_at: str | None = None,
         rrule: str | None = None,
         dtstart: str | None = None,
+        origin_channel: dict[str, Any] | None = None,
         timezone_name: str = "UTC",
         enabled: bool = True,
         now: datetime | None = None,
@@ -135,6 +138,7 @@ class ScheduledTaskStore:
             name=name_value,
             description=str(description or "").strip(),
             prompt=prompt_value,
+            origin_channel=dict(origin_channel or {}),
             schedule=schedule,
             timezone=timezone_value,
             status="active" if enabled else "paused",
@@ -148,8 +152,8 @@ class ScheduledTaskStore:
                 """
                 INSERT INTO v2_scheduled_tasks (
                   scheduled_task_id, owner_user_id, project_id, name, description, prompt,
-                  schedule_json, timezone, status, next_run_at, last_run_at, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                  schedule_json, origin_channel_json, timezone, status, next_run_at, last_run_at, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 _task_values(record),
             )
@@ -386,6 +390,7 @@ class ScheduledTaskStore:
                   description TEXT NOT NULL DEFAULT '',
                   prompt TEXT NOT NULL,
                   schedule_json TEXT NOT NULL,
+                  origin_channel_json TEXT NOT NULL DEFAULT '{}',
                   timezone TEXT NOT NULL,
                   status TEXT NOT NULL,
                   next_run_at TEXT,
@@ -417,6 +422,11 @@ class ScheduledTaskStore:
                   ON v2_scheduled_task_executions (scheduled_task_id, started_at);
                 """
             )
+            columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(v2_scheduled_tasks)").fetchall()}
+            if "origin_channel_json" not in columns:
+                conn.execute(
+                    "ALTER TABLE v2_scheduled_tasks ADD COLUMN origin_channel_json TEXT NOT NULL DEFAULT '{}'"
+                )
 
 
 class ScheduledTaskRunner:
@@ -445,6 +455,7 @@ class ScheduledTaskRunner:
                     "source": "scheduled_task",
                     "scheduled_task_id": task.scheduled_task_id,
                     "scheduled_run_id": run_id,
+                    "channel": dict(task.origin_channel),
                 },
             )
             self.store.record_execution(
@@ -575,6 +586,7 @@ def _task_from_row(row: sqlite3.Row | None) -> ScheduledTaskRecord | None:
     if row is None:
         return None
     schedule = json.loads(str(row["schedule_json"] or "{}"))
+    origin_channel = json.loads(str(row["origin_channel_json"] or "{}"))
     return ScheduledTaskRecord(
         scheduled_task_id=str(row["scheduled_task_id"]),
         owner_user_id=str(row["owner_user_id"]),
@@ -582,6 +594,7 @@ def _task_from_row(row: sqlite3.Row | None) -> ScheduledTaskRecord | None:
         name=str(row["name"]),
         description=str(row["description"] or ""),
         prompt=str(row["prompt"]),
+        origin_channel=dict(origin_channel) if isinstance(origin_channel, dict) else {},
         schedule=dict(schedule) if isinstance(schedule, dict) else {},
         timezone=str(row["timezone"] or "UTC"),
         status=_normalize_status(row["status"]),
@@ -615,6 +628,7 @@ def _task_values(record: ScheduledTaskRecord) -> tuple[Any, ...]:
         record.description,
         record.prompt,
         json.dumps(record.schedule, sort_keys=True),
+        json.dumps(record.origin_channel, sort_keys=True),
         record.timezone,
         record.status,
         record.next_run_at,
@@ -634,6 +648,7 @@ def _replace_task(task: ScheduledTaskRecord, **values: Any) -> ScheduledTaskReco
         name=str(data["name"]),
         description=str(data["description"] or ""),
         prompt=str(data["prompt"]),
+        origin_channel=dict(data.get("origin_channel") or {}),
         schedule=dict(data["schedule"]),
         timezone=str(data["timezone"] or "UTC"),
         status=_normalize_status(data["status"]),

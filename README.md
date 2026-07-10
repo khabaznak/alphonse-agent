@@ -61,6 +61,9 @@ Key files:
 - `docs/channel_integration_blueprint.md` — Reusable channel integration scaffolding (Telegram reference for Discord/others)
 - `docs/refactor_roadmap.md` — Cleanup and separation roadmap
 - `docs/message_io_contract.md` — Normalized inbound/outbound adapter contract
+- `alphonse/agent_v2/daemon.py` — Long-lived v2 daemon host
+- `alphonse/agent_v2/runtime.py` — Shared v2 runtime construction
+- `alphonse/agent_v2/integrations/` — Optional v2 provider integrations
 
 Configuration is driven by environment variables in `alphonse/agent/.env`.
 Provider routing is controlled by:
@@ -90,6 +93,85 @@ Expose Alphonse Agent to the local network with:
 ```bash
 python -m alphonse.agent.main
 ```
+
+## Alphonse v2 Runtime
+
+Alphonse v2 uses a daemon-owned runtime. The daemon owns CAPD processing, the
+scheduled-task worker, optional integrations, durable inbound messages, and
+outbound delivery. The TUI is an interface client and does not need to remain
+open for Telegram messages or scheduled tasks to be processed.
+
+### Start the v2 daemon
+
+Run the daemon as a foreground process:
+
+```bash
+python -m alphonse.agent_v2.daemon
+```
+
+The daemon uses a local Unix socket for interface communication. Its default
+runtime files are stored under `~/.alphonse/`:
+
+- `v2-daemon.sock` — local daemon IPC socket
+- `v2-messages.sqlite3` — durable inbound message queue
+- `v2-outbox.sqlite3` — durable outbound message queue
+- `v2-scheduled-tasks.sqlite3` — scheduled task definitions and executions
+- `v2-integrations.sqlite3` — integration configuration and local secrets
+
+Override paths with these environment variables when needed:
+
+```dotenv
+ALPHONSE_V2_SOCKET_PATH=
+ALPHONSE_V2_MESSAGES_DB_PATH=
+ALPHONSE_V2_OUTBOX_DB_PATH=
+ALPHONSE_V2_SCHEDULE_DB_PATH=
+ALPHONSE_V2_INTEGRATIONS_DB_PATH=
+```
+
+### Start the v2 TUI
+
+In a second terminal:
+
+```bash
+python -m alphonse.agent_v2.tui
+```
+
+The TUI attaches to an already-running local daemon. If no daemon is running,
+it starts an embedded daemon for the default out-of-the-box experience.
+
+Use `/integrations` inside the TUI to configure optional providers. TUI setup
+and configuration changes are applied to the daemon-owned runtime.
+
+### Configure Telegram in v2
+
+1. Start the v2 daemon.
+2. Start the v2 TUI.
+3. Enter `/integrations`.
+4. Select Telegram and configure an opaque integration id such as `telegram-home`.
+5. Enter the bot token, Telegram user id, allowed chat ids, and enable the integration.
+6. Send a fresh message to the bot.
+
+Telegram supports text messages and text responses in the current v2 slice. The
+integration also projects presence through typing indicators and message reactions.
+Provider polling, CAPD processing, and outbound delivery continue when the TUI is closed
+as long as the daemon remains running.
+
+### v2 scheduled tasks
+
+Scheduled tasks created through Telegram preserve their originating channel, so
+the triggered response can return to Telegram. The v2 scheduler is part of the
+daemon process:
+
+```bash
+python -m alphonse.agent_v2.daemon
+```
+
+The daemon must remain running for scheduled tasks to trigger. The task definition,
+execution record, inbound message, and outbound response are stored separately so
+work can be inspected after a restart.
+
+The v2 daemon is the active development runtime. The legacy commands below use
+the v1 Heart and timed-signal pipeline and are retained for v1 compatibility.
 
 ## Timed Signals / Scheduler
 
