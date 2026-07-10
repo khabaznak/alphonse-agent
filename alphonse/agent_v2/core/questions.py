@@ -9,9 +9,10 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
-from alphonse.agent_v2.core.intelligence.task_state import TaskState
+if TYPE_CHECKING:
+    from alphonse.agent_v2.core.intelligence.task_state import TaskState
 
 QuestionKind = Literal["open_text", "yes_no", "single_choice"]
 QuestionStatus = Literal["pending", "answered", "expired", "cancelled"]
@@ -311,7 +312,7 @@ class SQLiteQuestionStore:
             ).fetchone()
         if row is None:
             return None
-        return TaskState.from_dict(_json_object(row["task_state_json"]))
+        return _task_state_cls().from_dict(_json_object(row["task_state_json"]))
 
     def get_question(self, question_id: str) -> QuestionInterrupt | None:
         with self._connect() as conn:
@@ -759,6 +760,12 @@ def _json_list(value: Any) -> list[Any]:
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _task_state_cls() -> Any:
+    from alphonse.agent_v2.core.intelligence.task_state import TaskState
+
+    return TaskState
 
 
 def _default_db_path() -> str:

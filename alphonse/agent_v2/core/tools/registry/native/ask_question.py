@@ -91,7 +91,11 @@ def execute_ask_question(
     if not hasattr(store, "create_question"):
         raise TypeError("ask_question_store_invalid")
 
-    delivery_metadata: dict[str, Any] = {}
+    delivery_metadata: dict[str, Any] = {
+        "origin_channel": dict(context.task.metadata.get("channel"))
+        if isinstance(context.task.metadata.get("channel"), dict)
+        else {},
+    }
     interrupt = store.create_question(
         task=context.task,
         question=question,
@@ -109,6 +113,7 @@ def execute_ask_question(
                 {
                     "event_type": "question.deliver",
                     "question": interrupt.to_dict(),
+                    "task": context.task.to_dict(),
                 }
             )
         except Exception:

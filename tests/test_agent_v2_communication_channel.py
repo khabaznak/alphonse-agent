@@ -79,20 +79,57 @@ def test_slash_command_detected_only_at_prompt_start() -> None:
     indented = channel.queue_message(prompt=" /project new", user="alex").message
     sentence = channel.queue_message(prompt="please /project new", user="alex").message
 
-    assert command.metadata == {
+    assert command.metadata["is_command"] is True
+    assert command.metadata["command"] == "project"
+    assert command.metadata["command_args"] == "new"
+    assert command.metadata["channel"]["integration_id"] == "tui"
+    assert indented.metadata["channel"]["channel_target"] == "alex"
+    assert sentence.metadata["channel"]["alphonse_user_id"] == "alex"
+    assert {key: indented.metadata[key] for key in ("is_command", "command", "command_args")} == {
+        "is_command": False,
+        "command": "",
+        "command_args": "",
+    }
+    assert {key: sentence.metadata[key] for key in ("is_command", "command", "command_args")} == {
+        "is_command": False,
+        "command": "",
+        "command_args": "",
+    }
+
+
+def test_queue_message_accepts_explicit_channel_metadata() -> None:
+    message = CommunicationChannel(InMemoryMessageQueue()).queue_message(
+        prompt="hello",
+        user="u-alex",
+        integration_id="telegram-home",
+        provider_key="telegram",
+        provider_user_id="123",
+        channel_target="chat-1",
+        provider_message_id="msg-9",
+        reply_to_provider_message_id="msg-8",
+        thread_id="thread-1",
+    ).message
+
+    assert message.metadata["channel"] == {
+        "integration_id": "telegram-home",
+        "provider_key": "telegram",
+        "channel_target": "chat-1",
+        "alphonse_user_id": "u-alex",
+        "provider_user_id": "123",
+        "provider_message_id": "msg-9",
+        "reply_to_provider_message_id": "msg-8",
+        "thread_id": "thread-1",
+    }
+
+
+def test_legacy_slash_command_metadata_shape_is_still_available() -> None:
+    channel = CommunicationChannel(InMemoryMessageQueue())
+    command = channel.queue_message(prompt="/project new", user="alex").message
+
+    assert {key: command.metadata[key] for key in ("is_command", "command", "command_args")} == {
         "is_command": True,
         "command": "project",
         "command_args": "new",
-    }
-    assert indented.metadata == {
-        "is_command": False,
-        "command": "",
-        "command_args": "",
-    }
-    assert sentence.metadata == {
-        "is_command": False,
-        "command": "",
-        "command_args": "",
     }
 
 

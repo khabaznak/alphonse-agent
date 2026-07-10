@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from alphonse.agent import identity
+from alphonse.agent.nervous_system.migrate import apply_schema
 from alphonse.agent_v2.core.core import CoreActivityEvent
 from alphonse.agent_v2.core.core import ImprovementPhase
 from alphonse.agent_v2.core.core import LoopStepStatus
@@ -8,6 +10,8 @@ from alphonse.agent_v2.core.inference import InferenceRouter
 from alphonse.agent_v2.core.inference import ModelProfile
 from alphonse.agent_v2.core.inference import StubInferenceProvider
 from alphonse.agent_v2.core.intelligence import PDCAIntelligenceProcessor
+from alphonse.agent_v2.integrations import IntegrationDescriptor
+from alphonse.agent_v2.integrations import IntegrationRegistry
 from alphonse.agent_v2.interfaces.tui import build_tui_runtime
 from alphonse.agent_v2.interfaces.tui import format_current_project_status
 from alphonse.agent_v2.interfaces.tui import format_activity_message
@@ -17,6 +21,9 @@ from alphonse.agent_v2.interfaces.tui import format_slash_command_suggestions
 from alphonse.agent_v2.interfaces.tui import matching_slash_commands
 from alphonse.agent_v2.interfaces.tui import process_tui_queue_once
 from alphonse.agent_v2.interfaces.tui import queue_tui_input
+from alphonse.agent_v2.interfaces.tui import list_integration_options
+from alphonse.agent_v2.interfaces.tui import save_telegram_integration_config
+from alphonse.agent_v2.interfaces.tui import start_enabled_integration_runtimes
 from alphonse.agent_v2.interfaces.tui import submit_tui_input
 from alphonse.agent_v2.interfaces.tui import TuiProcessorCoordinator
 
@@ -94,6 +101,34 @@ def test_process_tui_queue_once_displays_response_after_queue_only_submit() -> N
 
     assert result.step_status == LoopStepStatus.PROCESSED
     assert result.response == "Hello, Alex."
+    delivered = runtime.outbox.list()
+    assert len(delivered) == 1
+    assert delivered[0].integration_id == "tui"
+    assert delivered[0].channel_target == "alex"
+    assert delivered[0].status == "delivered"
+
+
+def test_process_tui_queue_once_processes_integration_message_for_canonical_user() -> None:
+    runtime = build_tui_runtime(user="local", inference=_respond_router())
+    runtime.channel.queue_message(
+        prompt="hello",
+        user="u-alex",
+        integration_id="telegram-home",
+        provider_key="telegram",
+        provider_user_id="8553589429",
+        channel_target="8553589429",
+        provider_message_id="5",
+    )
+
+    result = process_tui_queue_once(runtime)
+
+    assert result.step_status == LoopStepStatus.PROCESSED
+    assert result.response == ""
+    pending = runtime.outbox.list()
+    assert len(pending) == 1
+    assert pending[0].integration_id == "telegram-home"
+    assert pending[0].channel_target == "8553589429"
+    assert pending[0].status == "pending"
 
 
 def test_capd_activity_events_include_phase_signifiers_and_plan_internal_state() -> None:
@@ -143,7 +178,7 @@ def test_format_activity_status_line_falls_back_to_phase() -> None:
 
 
 def test_format_slash_command_suggestions_filters_matches() -> None:
-    assert "> /project - Select or create a project" in format_slash_command_suggestions("/")
+    assert "> /integrations - Configure optional integrations" in format_slash_command_suggestions("/")
     assert "> /project-context - Edit the active project context" in format_slash_command_suggestions("/project-c")
     assert "/project - Select or create a project" not in format_slash_command_suggestions("/project-c")
     assert format_slash_command_suggestions(" /project") == ""
@@ -152,9 +187,140 @@ def test_format_slash_command_suggestions_filters_matches() -> None:
 def test_format_slash_command_suggestions_marks_selected_row() -> None:
     rendered = format_slash_command_suggestions("/", selected_index=1)
 
-    assert "  /project - Select or create a project" in rendered
-    assert "> /project-context - Edit the active project context" in rendered
+    assert "  /integrations - Configure optional integrations" in rendered
+    assert "> /project - Select or create a project" in rendered
     assert [command for command, _ in matching_slash_commands("/project")] == ["/project", "/project-context"]
+
+
+def test_queue_integrations_command_opens_command_flow() -> None:
+    runtime = build_tui_runtime(user="alex")
+
+    result = queue_tui_input(runtime, "/integrations")
+
+    assert result.command == "integrations"
+    assert result.queued is False
+
+
+def test_tui_integration_options_and_telegram_config_save() -> None:
+    runtime = build_tui_runtime(user="alex")
+
+    assert list_integration_options(runtime) == [("Telegram - disabled (telegram-home)", "telegram")]
+    record = save_telegram_integration_config(
+        runtime,
+        integration_id="telegram-home",
+        display_name="Telegram Home",
+        bot_token="token",
+        poll_interval_sec="2.5",
+        allowed_chat_ids="123, -456",
+        enabled=True,
+    )
+
+    assert record.enabled is True
+    assert record.config["owner_user_id"] == "alex"
+    assert record.config["poll_interval_sec"] == 2.5
+    assert record.config["allowed_chat_ids"] == ["123", "-456"]
+    assert record.secrets["bot_token"] == "token"
+    assert list_integration_options(runtime) == [("Telegram - enabled (telegram-home)", "telegram")]
+
+
+def test_telegram_config_save_maps_current_tui_user(tmp_path, monkeypatch) -> None:
+    db_path = tmp_path / "nerve-db"
+    monkeypatch.setenv("NERVE_DB_PATH", str(db_path))
+    apply_schema(db_path)
+    runtime = build_tui_runtime(user="u-alex")
+
+    record = save_telegram_integration_config(
+        runtime,
+        integration_id="telegram-home",
+        display_name="Telegram Home",
+        bot_token="token",
+        telegram_user_id="123",
+        enabled=True,
+    )
+
+    assert record.config["telegram_user_id"] == "123"
+    assert identity.resolve_user_id(service_id=2, service_user_id="123") == "u-alex"
+    assert identity.resolve_service_user_id(user_id="u-alex", service_id=2) == "123"
+
+
+def test_disabling_telegram_config_keeps_identity_mapping(tmp_path, monkeypatch) -> None:
+    db_path = tmp_path / "nerve-db"
+    monkeypatch.setenv("NERVE_DB_PATH", str(db_path))
+    apply_schema(db_path)
+    runtime = build_tui_runtime(user="u-alex")
+    save_telegram_integration_config(
+        runtime,
+        integration_id="telegram-home",
+        display_name="Telegram Home",
+        bot_token="token",
+        telegram_user_id="123",
+        enabled=True,
+    )
+
+    save_telegram_integration_config(
+        runtime,
+        integration_id="telegram-home",
+        display_name="Telegram Home",
+        enabled=False,
+    )
+
+    assert identity.resolve_user_id(service_id=2, service_user_id="123") == "u-alex"
+
+
+def test_no_enabled_integrations_keeps_tui_runtime_without_background_runtimes() -> None:
+    runtime = build_tui_runtime(user="alex")
+
+    started = start_enabled_integration_runtimes(runtime)
+
+    assert started == []
+    assert runtime.integration_runtimes == []
+
+
+def test_start_enabled_integrations_passes_message_wake_callback() -> None:
+    captured: dict[str, object] = {}
+
+    class FakeIntegrationRuntime:
+        def __init__(self) -> None:
+            self.started = False
+
+        def start(self) -> None:
+            self.started = True
+
+    def fake_runtime_factory(**kwargs):
+        captured.update(kwargs)
+        return FakeIntegrationRuntime()
+
+    runtime = build_tui_runtime(
+        user="alex",
+        integration_registry=IntegrationRegistry(
+            (
+                IntegrationDescriptor(
+                    provider_key="fake",
+                    display_name="Fake",
+                    description="Fake integration",
+                    default_integration_id="fake-home",
+                    runtime_factory=fake_runtime_factory,
+                ),
+            )
+        ),
+    )
+    runtime.integration_store.upsert(
+        integration_id="fake-home",
+        provider_key="fake",
+        display_name="Fake",
+        enabled=True,
+        config={},
+        secrets={},
+    )
+    wakes: list[str] = []
+
+    started = start_enabled_integration_runtimes(runtime, on_message_queued=lambda: wakes.append("wake"))
+
+    assert len(started) == 1
+    assert started[0].started is True
+    assert captured["record"].integration_id == "fake-home"
+    captured["on_message_queued"]()
+    assert wakes == ["wake"]
 
 
 def test_sidebar_status_helpers_render_project_and_inference(tmp_path) -> None:

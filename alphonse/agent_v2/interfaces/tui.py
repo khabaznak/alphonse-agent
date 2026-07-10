@@ -6,7 +6,7 @@ import json
 import os
 from dataclasses import dataclass, field
 from threading import Lock
-from typing import Any
+from typing import Any, Callable
 
 from alphonse.agent_v2.core.core import AlphonseCore
 from alphonse.agent_v2.core.core import CoreMessage
@@ -24,6 +24,15 @@ from alphonse.agent_v2.core.inference import InferenceRouter
 from alphonse.agent_v2.core.inference import ModelProfile
 from alphonse.agent_v2.core.inference import OpenAICodexProvider
 from alphonse.agent_v2.core.intelligence import PDCAIntelligenceProcessor
+from alphonse.agent_v2.core.io import OutboundSelector
+from alphonse.agent_v2.core.io import IntegrationIdentity
+from alphonse.agent_v2.core.io import SQLiteOutboundStore
+from alphonse.agent_v2.core.io import V2IdentityResolver
+from alphonse.agent_v2.core.io import build_outbox_delivery_sink
+from alphonse.agent_v2.core.io import channel_address_from_metadata
+from alphonse.agent_v2.core.io import project_snapshot_to_outbox
+from alphonse.agent_v2.core.io import resolve_provider_user_mapping
+from alphonse.agent_v2.core.io import upsert_provider_user_mapping
 from alphonse.agent_v2.core.messages import CommunicationChannel
 from alphonse.agent_v2.core.messages import InMemoryMessageQueue
 from alphonse.agent_v2.core.messages import MessageSelector
@@ -37,9 +46,14 @@ from alphonse.agent_v2.core.tools.registry.native import BASH_TOOL_ID
 from alphonse.agent_v2.core.tools.registry.native import RESPOND_TOOL_ID
 from alphonse.agent_v2.core.tools.registry.native import SCHEDULED_TASK_TOOL_ID
 from alphonse.agent_v2.core.tools.registry.native import build_native_tool_registry
+from alphonse.agent_v2.integrations import IntegrationConfigRecord
+from alphonse.agent_v2.integrations import IntegrationRegistry
+from alphonse.agent_v2.integrations import SQLiteIntegrationStore
+from alphonse.agent_v2.integrations import build_default_integration_registry
 
 LOCAL_STOP_COMMANDS = {"/exit", "/quit", "/stop"}
 TUI_SLASH_COMMANDS: tuple[tuple[str, str], ...] = (
+    ("/integrations", "Configure optional integrations"),
     ("/project", "Select or create a project"),
     ("/project-context", "Edit the active project context"),
     ("/stop", "Stop Alphonse"),
@@ -59,6 +73,11 @@ class TuiRuntime:
     question_store: SQLiteQuestionStore
     project_store: ProjectStore
     schedule_store: ScheduledTaskStore
+    outbox: SQLiteOutboundStore
+    identity_resolver: V2IdentityResolver
+    integration_store: SQLiteIntegrationStore
+    integration_registry: IntegrationRegistry
+    integration_runtimes: list[Any] = field(default_factory=list)
     active_project_id: str = ""
     ui_events: list[CoreUiEvent] = field(default_factory=list)
 
@@ -171,6 +190,10 @@ def build_tui_runtime(
     question_store: SQLiteQuestionStore | None = None,
     project_store: ProjectStore | None = None,
     schedule_store: ScheduledTaskStore | None = None,
+    outbox: SQLiteOutboundStore | None = None,
+    identity_resolver: V2IdentityResolver | None = None,
+    integration_store: SQLiteIntegrationStore | None = None,
+    integration_registry: IntegrationRegistry | None = None,
 ) -> TuiRuntime:
     reset_state()
     queue = InMemoryMessageQueue()
@@ -182,6 +205,11 @@ def build_tui_runtime(
     question_store = question_store or SQLiteQuestionStore()
     project_store = project_store or ProjectStore()
     schedule_store = schedule_store or ScheduledTaskStore()
+    outbox = outbox or SQLiteOutboundStore()
+    integration_store = integration_store or SQLiteIntegrationStore()
+    integration_registry = integration_registry or build_default_integration_registry()
+    identity_resolver = identity_resolver or build_identity_resolver_from_integrations(integration_store)
+    delivery_sink = build_outbox_delivery_sink(outbox=outbox, identity_resolver=identity_resolver)
     ui_events: list[CoreUiEvent] = []
     core = AlphonseCore(
         intelligence=processor,
@@ -195,6 +223,7 @@ def build_tui_runtime(
         question_store=question_store,
         project_store=project_store,
         schedule_store=schedule_store,
+        delivery_sink=delivery_sink,
     )
     return TuiRuntime(
         user=str(user or "local").strip() or "local",
@@ -206,6 +235,10 @@ def build_tui_runtime(
         question_store=question_store,
         project_store=project_store,
         schedule_store=schedule_store,
+        outbox=outbox,
+        identity_resolver=identity_resolver,
+        integration_store=integration_store,
+        integration_registry=integration_registry,
         ui_events=ui_events,
     )
 
@@ -263,7 +296,7 @@ def queue_tui_input(runtime: TuiRuntime, prompt: str) -> TuiSubmissionResult:
         )
 
     command = detect_tui_slash_command(raw_prompt)
-    if command in {"project", "project-context"}:
+    if command in {"project", "project-context", "integrations"}:
         return TuiSubmissionResult(
             prompt=prompt_value,
             response="",
@@ -308,6 +341,129 @@ def matching_slash_commands(prompt: str) -> list[tuple[str, str]]:
         return []
     typed = raw_prompt.split(maxsplit=1)[0]
     return [(command, description) for command, description in TUI_SLASH_COMMANDS if command.startswith(typed)]
+
+
+def build_identity_resolver_from_integrations(store: SQLiteIntegrationStore) -> V2IdentityResolver:
+    identities = [IntegrationIdentity("tui", "tui")]
+    identities.extend(
+        IntegrationIdentity(record.integration_id, record.provider_key)
+        for record in store.list_enabled()
+    )
+    return V2IdentityResolver(tuple(identities))
+
+
+def refresh_tui_identity_resolver(runtime: TuiRuntime) -> None:
+    runtime.identity_resolver = build_identity_resolver_from_integrations(runtime.integration_store)
+    runtime.core.delivery_sink = build_outbox_delivery_sink(
+        outbox=runtime.outbox,
+        identity_resolver=runtime.identity_resolver,
+    )
+
+
+def start_enabled_integration_runtimes(
+    runtime: TuiRuntime,
+    *,
+    on_message_queued: Callable[[], None] | None = None,
+) -> list[Any]:
+    stop_integration_runtimes(runtime)
+    refresh_tui_identity_resolver(runtime)
+    started: list[Any] = []
+    for record in runtime.integration_store.list_enabled():
+        descriptor = runtime.integration_registry.get(record.provider_key)
+        if descriptor is None or descriptor.runtime_factory is None:
+            continue
+        try:
+            integration_runtime = descriptor.runtime_factory(
+                record=record,
+                channel=runtime.channel,
+                outbox=runtime.outbox,
+                identity_resolver=runtime.identity_resolver,
+                owner_user_id=runtime.user,
+                on_message_queued=on_message_queued,
+            )
+            integration_runtime.start()
+        except Exception:
+            continue
+        started.append(integration_runtime)
+    runtime.integration_runtimes = started
+    return started
+
+
+def stop_integration_runtimes(runtime: TuiRuntime) -> None:
+    for integration_runtime in list(runtime.integration_runtimes):
+        stop = getattr(integration_runtime, "stop", None)
+        if callable(stop):
+            stop()
+    runtime.integration_runtimes = []
+
+
+def list_integration_options(runtime: TuiRuntime) -> list[tuple[str, str]]:
+    options: list[tuple[str, str]] = []
+    for descriptor in runtime.integration_registry.list():
+        record = runtime.integration_store.get_by_provider(descriptor.provider_key)
+        status = "enabled" if record is not None and record.enabled else "disabled"
+        integration_id = record.integration_id if record is not None else descriptor.default_integration_id
+        options.append((f"{descriptor.display_name} - {status} ({integration_id})", descriptor.provider_key))
+    return options
+
+
+def save_telegram_integration_config(
+    runtime: TuiRuntime,
+    *,
+    integration_id: str,
+    display_name: str,
+    bot_token: str = "",
+    poll_interval_sec: str | float = "1.0",
+    allowed_chat_ids: str = "",
+    telegram_user_id: str = "",
+    enabled: bool = False,
+    remove_token: bool = False,
+) -> IntegrationConfigRecord:
+    existing = runtime.integration_store.get(integration_id) or runtime.integration_store.get_by_provider("telegram")
+    secrets = dict(existing.secrets) if existing is not None else {}
+    token = str(bot_token or "").strip()
+    if remove_token:
+        secrets.pop("bot_token", None)
+    elif token:
+        secrets["bot_token"] = token
+    if enabled and not str(secrets.get("bot_token") or "").strip():
+        raise ValueError("telegram_bot_token_required")
+    provider_user_id = str(telegram_user_id or "").strip()
+    if provider_user_id:
+        upsert_provider_user_mapping(
+            alphonse_user_id=runtime.user,
+            provider_key="telegram",
+            provider_user_id=provider_user_id,
+            display_name=runtime.user,
+            is_active=True,
+        )
+    record = runtime.integration_store.upsert(
+        integration_id=str(integration_id or "").strip(),
+        provider_key="telegram",
+        display_name=str(display_name or "").strip() or "Telegram",
+        enabled=enabled,
+        config={
+            "poll_interval_sec": _coerce_poll_interval(poll_interval_sec),
+            "allowed_chat_ids": _parse_chat_ids(allowed_chat_ids),
+            "owner_user_id": runtime.user,
+            "telegram_user_id": provider_user_id,
+        },
+        secrets=secrets,
+    )
+    refresh_tui_identity_resolver(runtime)
+    return record
+
+
+def _parse_chat_ids(value: str) -> list[str]:
+    return [entry.strip() for entry in str(value or "").split(",") if entry.strip()]
+
+
+def _coerce_poll_interval(value: str | float) -> float:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return 1.0
+    return parsed if parsed > 0 else 1.0
 
 
 def format_slash_command_suggestions(prompt: str, *, selected_index: int = 0) -> str:
@@ -361,15 +517,41 @@ def save_tui_project_context(runtime: TuiRuntime, content: str) -> ProjectRecord
 
 
 def process_tui_queue_once(runtime: TuiRuntime) -> TuiProcessingResult:
-    step = runtime.core.step(MessageSelector(user=runtime.user))
+    step = runtime.core.step()
     snapshot = runtime.visible_state.snapshot()
-    response = _response_from_snapshot(snapshot, step)
+    if step.status in {LoopStepStatus.PROCESSED, LoopStepStatus.PARKED, LoopStepStatus.WAITING}:
+        project_snapshot_to_outbox(snapshot=snapshot, outbox=runtime.outbox)
+    response = _drain_tui_outbox(runtime)
+    if not response and _snapshot_origin_is_tui(snapshot):
+        response = _response_from_snapshot(snapshot, step)
     return TuiProcessingResult(
         response=response,
         event=f"step={step.status.value}",
         step_status=step.status,
         queued_message_id=step.queued_message_id,
     )
+
+
+def _drain_tui_outbox(runtime: TuiRuntime) -> str:
+    selector = OutboundSelector(integration_id="tui", channel_target=runtime.user, status="pending")
+    messages: list[str] = []
+    while True:
+        outbound = runtime.outbox.claim_next(selector)
+        if outbound is None:
+            break
+        messages.append(outbound.message)
+        runtime.outbox.mark_delivered(outbound.outbox_message_id)
+    return "\n".join(message for message in messages if message)
+
+
+def _snapshot_origin_is_tui(snapshot: StateSnapshot) -> bool:
+    metadata = snapshot.metadata or {}
+    task_state = metadata.get("task_state")
+    if not isinstance(task_state, dict):
+        return True
+    task_metadata = task_state.get("metadata") if isinstance(task_state.get("metadata"), dict) else {}
+    origin = channel_address_from_metadata(task_metadata)
+    return origin is None or origin.integration_id == "tui"
 
 
 def _response_from_snapshot(snapshot: StateSnapshot, step: Any) -> str:
@@ -678,6 +860,107 @@ def _build_textual_app_class() -> type[Any]:
                 return
             self.dismiss(True)
 
+    class IntegrationsScreen(ModalScreen[str | None]):
+        def __init__(self, runtime: TuiRuntime) -> None:
+            super().__init__()
+            self.runtime = runtime
+
+        def compose(self) -> ComposeResult:
+            options = list_integration_options(self.runtime)
+            with Vertical(id="integration-dialog"):
+                yield Static("Integrations", classes="dialog-title")
+                yield Select(options=options, id="integration-select", allow_blank=False)
+                with Horizontal(classes="dialog-actions"):
+                    yield Button("Configure", id="configure-integration", variant="primary")
+                    yield Button("Cancel", id="cancel-integration")
+
+        def on_button_pressed(self, event: Button.Pressed) -> None:
+            if event.button.id == "cancel-integration":
+                self.dismiss(None)
+                return
+            select = self.query_one("#integration-select", Select)
+            value = str(select.value or "")
+            if value:
+                self.dismiss(value)
+
+    class TelegramConfigScreen(ModalScreen[bool]):
+        def __init__(self, runtime: TuiRuntime) -> None:
+            super().__init__()
+            self.runtime = runtime
+            self.record = runtime.integration_store.get_by_provider("telegram")
+
+        def on_mount(self) -> None:
+            self.query_one("#telegram-integration-id", Input).focus()
+
+        def compose(self) -> ComposeResult:
+            descriptor = self.runtime.integration_registry.get("telegram")
+            integration_id = (
+                self.record.integration_id
+                if self.record is not None
+                else (descriptor.default_integration_id if descriptor is not None else "telegram-home")
+            )
+            display_name = self.record.display_name if self.record is not None else "Telegram"
+            config = self.record.config if self.record is not None else {}
+            has_token = self.record is not None and bool(str(self.record.secrets.get("bot_token") or "").strip())
+            allowed = ", ".join(str(item) for item in config.get("allowed_chat_ids", []) if str(item).strip())
+            telegram_user_id = str(config.get("telegram_user_id") or "").strip()
+            if not telegram_user_id:
+                try:
+                    mapped_user_id = resolve_provider_user_mapping(
+                        alphonse_user_id=self.runtime.user,
+                        provider_key="telegram",
+                    )
+                except Exception:
+                    mapped_user_id = None
+                telegram_user_id = str(mapped_user_id or "").strip()
+            enabled = "yes" if self.record is not None and self.record.enabled else "no"
+            with Vertical(id="integration-dialog"):
+                yield Static("Telegram", classes="dialog-title")
+                yield Input(value=integration_id, placeholder="Integration id", id="telegram-integration-id")
+                yield Input(value=display_name, placeholder="Display name", id="telegram-display-name")
+                yield Input(placeholder="Bot token" + (" (saved)" if has_token else ""), id="telegram-bot-token")
+                yield Input(value=telegram_user_id, placeholder="Telegram user id for this Alphonse user", id="telegram-user-id")
+                yield Input(value=str(config.get("poll_interval_sec") or "1.0"), placeholder="Poll interval seconds", id="telegram-poll-interval")
+                yield Input(value=allowed, placeholder="Allowed chat ids, comma separated", id="telegram-allowed-chat-ids")
+                yield Select(options=[("Enabled", "yes"), ("Disabled", "no")], value=enabled, id="telegram-enabled", allow_blank=False)
+                yield Static("", id="telegram-config-error")
+                with Horizontal(classes="dialog-actions"):
+                    yield Button("Save", id="save-telegram", variant="primary")
+                    yield Button("Disable", id="disable-telegram")
+                    yield Button("Remove Token", id="remove-telegram-token")
+                    yield Button("Cancel", id="cancel-telegram")
+
+        def on_button_pressed(self, event: Button.Pressed) -> None:
+            if event.button.id == "cancel-telegram":
+                self.dismiss(False)
+                return
+            integration_id = self.query_one("#telegram-integration-id", Input).value
+            if event.button.id == "disable-telegram":
+                try:
+                    self.runtime.integration_store.set_enabled(integration_id, False)
+                    refresh_tui_identity_resolver(self.runtime)
+                except Exception as exc:
+                    self.query_one("#telegram-config-error", Static).update(str(exc))
+                    return
+                self.dismiss(True)
+                return
+            try:
+                save_telegram_integration_config(
+                    self.runtime,
+                    integration_id=integration_id,
+                    display_name=self.query_one("#telegram-display-name", Input).value,
+                    bot_token=self.query_one("#telegram-bot-token", Input).value,
+                    poll_interval_sec=self.query_one("#telegram-poll-interval", Input).value,
+                    allowed_chat_ids=self.query_one("#telegram-allowed-chat-ids", Input).value,
+                    telegram_user_id=self.query_one("#telegram-user-id", Input).value,
+                    enabled=str(self.query_one("#telegram-enabled", Select).value or "no") == "yes",
+                    remove_token=event.button.id == "remove-telegram-token",
+                )
+            except Exception as exc:
+                self.query_one("#telegram-config-error", Static).update(str(exc))
+                return
+            self.dismiss(True)
+
     class AlphonseTuiApp(App[None]):
         CSS = """
         Screen {
@@ -738,6 +1021,14 @@ def _build_textual_app_class() -> type[Any]:
             background: $surface;
         }
 
+        #integration-dialog {
+            width: 80;
+            height: auto;
+            padding: 1;
+            border: solid $primary;
+            background: $surface;
+        }
+
         .dialog-title {
             text-style: bold;
             margin-bottom: 1;
@@ -753,12 +1044,19 @@ def _build_textual_app_class() -> type[Any]:
 
         def __init__(self) -> None:
             super().__init__()
+            integration_store = SQLiteIntegrationStore.default()
             self.runtime = build_tui_runtime(
                 project_store=ProjectStore.default(),
                 schedule_store=ScheduledTaskStore.default(),
+                outbox=SQLiteOutboundStore.default(),
+                integration_store=integration_store,
             )
             self.runtime.core.activity_sink = self._emit_activity_from_worker
             self.processor = TuiProcessorCoordinator(self.runtime)
+            start_enabled_integration_runtimes(
+                self.runtime,
+                on_message_queued=self._wake_processor_from_integration,
+            )
             self.last_message_id = ""
             self.slash_command_matches: list[tuple[str, str]] = []
             self.slash_command_selected_index = 0
@@ -829,6 +1127,10 @@ def _build_textual_app_class() -> type[Any]:
                 self.query_one("#chat", RichLog).write(Text.assemble((self.runtime.user, "bold cyan"), f": {prompt.strip()}"))
                 self._open_project_context_flow()
                 return
+            if command == "integrations":
+                self.query_one("#chat", RichLog).write(Text.assemble((self.runtime.user, "bold cyan"), f": {prompt.strip()}"))
+                self._open_integrations()
+                return
 
             result = queue_tui_input(self.runtime, prompt)
             if not result.prompt:
@@ -870,6 +1172,24 @@ def _build_textual_app_class() -> type[Any]:
                 return
             self.push_screen(ProjectContextScreen(self.runtime), callback=lambda _: self._refresh_status())
 
+        def _open_integrations(self) -> None:
+            def _selected(provider_key: str | None) -> None:
+                if provider_key == "telegram":
+                    self.push_screen(TelegramConfigScreen(self.runtime), callback=_updated)
+
+            def _updated(updated: bool) -> None:
+                if updated:
+                    start_enabled_integration_runtimes(
+                        self.runtime,
+                        on_message_queued=self._wake_processor_from_integration,
+                    )
+                    self._refresh_status()
+
+            self.push_screen(IntegrationsScreen(self.runtime), callback=_selected)
+
+        def on_unmount(self) -> None:
+            stop_integration_runtimes(self.runtime)
+
         def _start_processor_if_needed(self) -> None:
             if not self.processor.reserve_processing():
                 self.query_one("#activity", Static).update("Queued: processor already running")
@@ -883,6 +1203,9 @@ def _build_textual_app_class() -> type[Any]:
 
         def _emit_activity_from_worker(self, event: CoreActivityEvent) -> None:
             self.call_from_thread(self._append_activity_event, event)
+
+        def _wake_processor_from_integration(self) -> None:
+            self.call_from_thread(self._start_processor_if_needed)
 
         def _append_activity_event(self, event: CoreActivityEvent) -> None:
             self.query_one("#activity", Static).update(format_activity_status_line(event))

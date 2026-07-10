@@ -40,7 +40,7 @@ def test_from_message_carries_message_metadata() -> None:
 
     state = TaskState.from_message(message)
 
-    assert state.metadata == {
+    assert {key: state.metadata[key] for key in ("is_command", "command", "command_args")} == {
         "is_command": True,
         "command": "project",
         "command_args": "new",
@@ -72,11 +72,14 @@ def test_from_queued_message_preserves_queue_and_message_metadata() -> None:
     assert state.user == "alex"
     assert state.project_id == "alpha"
     assert state.tag == "work"
-    assert state.metadata == {
+    assert {key: state.metadata[key] for key in ("is_command", "command", "command_args")} == {
         "is_command": True,
         "command": "project",
         "command_args": "new",
     }
+    assert state.metadata["alphonse_user_id"] == "alex"
+    assert state.metadata["channel"]["integration_id"] == "tui"
+    assert state.metadata["channel"]["channel_target"] == "alex"
 
 
 def test_markdown_defaults_are_none_bullets() -> None:
