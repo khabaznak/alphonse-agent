@@ -32,7 +32,13 @@ def plan_node(task: TaskState, context: CoreLoopContext | None = None) -> TaskSt
             message="Choosing the next tool call.",
         )
     tools = _tools_from_context(context)
-    prompt = _render_tool_call_plan_prompt(task, tools, project_context_md=_project_context_md(task, context))
+    prompt = _render_tool_call_plan_prompt(
+        task,
+        tools,
+        project_context_md=_project_context_md(task, context),
+        philosophy_md=_agent_prompt_md(context, "Philosophy.md"),
+        global_context_md=_agent_prompt_md(context, "CoreContext.md"),
+    )
     task.metadata["tool_call_plan_prompt"] = prompt
 
     planned_tool_call = _normalize_tool_call(_call_tool_planning_inference(prompt, task, tools, context), tools)
@@ -59,6 +65,8 @@ def _render_tool_call_plan_prompt(
     tools: tuple[ToolDescriptor, ...],
     *,
     project_context_md: str = "",
+    philosophy_md: str = "",
+    global_context_md: str = "",
 ) -> str:
     env = Environment(
         loader=FileSystemLoader(_TEMPLATE_DIR),
@@ -71,6 +79,8 @@ def _render_tool_call_plan_prompt(
         acceptance_criteria_md=task.acceptance_criteria_md,
         available_tools_md=_render_tools_md(tools),
         project_context_md=project_context_md,
+        philosophy_md=philosophy_md,
+        global_context_md=global_context_md,
         task_state_md=task.to_markdown_prompt(),
     ).strip()
 
@@ -97,6 +107,15 @@ def _project_context_md(task: TaskState, context: CoreLoopContext | None) -> str
     if render is None:
         return ""
     return str(render(task.project_id, requester_user_id=task.user) or "").strip()
+
+
+def _agent_prompt_md(context: CoreLoopContext | None, name: str) -> str:
+    if context is None or context.prompts is None:
+        return ""
+    load = getattr(context.prompts, "load", None)
+    if not callable(load):
+        return ""
+    return str(load(name).content or "").strip()
 
 
 def _call_tool_planning_inference(

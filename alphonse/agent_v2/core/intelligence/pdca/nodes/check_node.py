@@ -66,6 +66,8 @@ def _review_wip_acceptance_criteria(
         task,
         latest_call or {},
         project_context_md=_project_context_md(task, context),
+        philosophy_md=_agent_prompt_md(context, "Philosophy.md"),
+        global_context_md=_agent_prompt_md(context, "CoreContext.md"),
     )
     revised_criteria = _call_criteria_review_inference(prompt, task, context)
     task.metadata["criteria_review_prompt"] = prompt
@@ -86,6 +88,8 @@ def _render_criteria_review_prompt(
     latest_call: dict[str, object],
     *,
     project_context_md: str = "",
+    philosophy_md: str = "",
+    global_context_md: str = "",
 ) -> str:
     env = Environment(
         loader=FileSystemLoader(_TEMPLATE_DIR),
@@ -98,6 +102,8 @@ def _render_criteria_review_prompt(
         acceptance_criteria_md=task.acceptance_criteria_md,
         latest_executed_call_json=json.dumps(latest_call, indent=2, sort_keys=True),
         project_context_md=project_context_md,
+        philosophy_md=philosophy_md,
+        global_context_md=global_context_md,
         task_state_md=task.to_markdown_prompt(),
     ).strip()
 
@@ -109,6 +115,15 @@ def _project_context_md(task: TaskState, context: CoreLoopContext | None) -> str
     if render is None:
         return ""
     return str(render(task.project_id, requester_user_id=task.user) or "").strip()
+
+
+def _agent_prompt_md(context: CoreLoopContext | None, name: str) -> str:
+    if context is None or context.prompts is None:
+        return ""
+    load = getattr(context.prompts, "load", None)
+    if not callable(load):
+        return ""
+    return str(load(name).content or "").strip()
 
 
 def _call_criteria_review_llm(prompt: str) -> str | None:

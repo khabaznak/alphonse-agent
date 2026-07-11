@@ -6,6 +6,8 @@ from alphonse.agent_v2.core.inference import ModelProfile
 from alphonse.agent_v2.core.inference import StubInferenceProvider
 from alphonse.agent_v2.core.scheduled_tasks import ScheduledTaskStore
 from alphonse.agent_v2.daemon import V2Daemon
+from alphonse.agent_v2.agent_config import AgentConfigStore
+from alphonse.agent_v2.agent_config import PHILOSOPHY_FILE
 from alphonse.agent_v2.runtime import build_runtime_host
 
 
@@ -65,3 +67,19 @@ def test_model_settings_request_uses_validation_timeout(monkeypatch) -> None:
     client.set_inference_settings(provider_key="openai_codex", model_id="gpt-5.5")
 
     assert captured == {"timeout": 35.0, "method": "set_inference_settings"}
+
+
+def test_daemon_ipc_reads_and_saves_agent_configuration(tmp_path) -> None:
+    runtime = build_runtime_host(
+        schedule_store=ScheduledTaskStore(":memory:"),
+        agent_config_store=AgentConfigStore(tmp_path / "agent-config"),
+    )
+    daemon = V2Daemon(runtime)
+
+    documents = daemon.ipc._dispatch({"method": "agent_config_documents"})["documents"]
+    saved = daemon.ipc._dispatch(
+        {"method": "save_agent_config", "params": {"file_name": PHILOSOPHY_FILE, "content": "Updated philosophy"}}
+    )["document"]
+
+    assert {document["file_name"] for document in documents} == {"CoreContext.md", "Philosophy.md"}
+    assert saved["content"] == "Updated philosophy"

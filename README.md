@@ -135,6 +135,7 @@ runtime files are stored under `~/.alphonse/`:
 - `v2-scheduled-tasks.sqlite3` — scheduled task definitions and executions
 - `v2-integrations.sqlite3` — integration configuration and local secrets
 - `v2-inference.sqlite3` — daemon-wide inference provider and model selection
+- `agent-config/` — editable `CoreContext.md` and `Philosophy.md` snapshots
 
 Override paths with these environment variables when needed:
 
@@ -144,6 +145,7 @@ ALPHONSE_V2_MESSAGES_DB_PATH=
 ALPHONSE_V2_OUTBOX_DB_PATH=
 ALPHONSE_V2_SCHEDULE_DB_PATH=
 ALPHONSE_V2_INTEGRATIONS_DB_PATH=
+ALPHONSE_V2_AGENT_CONFIG_DIR=
 ```
 
 ### Start the v2 TUI
@@ -165,6 +167,12 @@ the model used by new v2 tasks. The initial provider is OpenAI Codex: Alphonse
 reads the locally signed-in Codex CLI model catalog and validates a choice with
 the installed CLI before saving it. The selection applies to TUI, Telegram, and
 scheduled tasks; a CAPD task already in progress keeps its original model.
+
+Use `/agent-config` to edit the global `Core Context` or `Philosophy` markdown
+used by v2 CAPD prompts. These files live under `~/.alphonse/agent-config/` by
+default; set `ALPHONSE_V2_AGENT_CONFIG_DIR` to relocate them. The daemon reads
+them at startup, so save changes and then run `alphonse stop` followed by
+`alphonse start` before they affect new tasks.
 
 ### Configure Telegram in v2
 

@@ -189,6 +189,7 @@ class CoreLoopContext:
     messages: MessageQueue
     tools: ToolRegistry | None = None
     inference: InferenceRouter | None = None
+    prompts: SystemPromptLoader | None = None
     activity_sink: Callable[[CoreActivityEvent], None] | None = None
     ui_event_sink: Callable[[CoreUiEvent], None] | None = None
     question_store: Any | None = None
@@ -385,6 +386,7 @@ class AlphonseCore:
                 messages=self.messages,
                 tools=self.tools,
                 inference=self.inference,
+                prompts=self.prompts,
                 activity_sink=_task_activity_sink,
                 ui_event_sink=self.ui_event_sink,
                 question_store=self.question_store,

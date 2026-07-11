@@ -30,6 +30,7 @@ from alphonse.agent_v2.runtime import start_runtime_integrations
 from alphonse.agent_v2.runtime import stop_runtime_integrations
 from alphonse.agent_v2.runtime import refresh_runtime_inference
 from alphonse.agent_v2.inference_settings import validate_and_save_inference_settings
+from alphonse.agent_v2.agent_config import AgentConfigStore
 from alphonse.agent_v2.services.scheduled_worker import ScheduledTaskWorker
 
 
@@ -115,6 +116,15 @@ class V2Daemon:
         )
         refresh_runtime_inference(self.runtime, settings)
         return settings.to_dict()
+
+    def list_agent_config(self) -> list[dict[str, str]]:
+        return [document.to_dict(include_content=False) for document in self.runtime.agent_config_store.list_documents()]
+
+    def read_agent_config(self, file_name: str) -> dict[str, str]:
+        return self.runtime.agent_config_store.read(file_name).to_dict()
+
+    def save_agent_config(self, file_name: str, content: str) -> dict[str, str]:
+        return self.runtime.agent_config_store.save(file_name, content).to_dict()
 
     def pop_activity_events(self) -> list[dict[str, Any]]:
         events = list(self.runtime.activity_events)
@@ -289,6 +299,7 @@ def main() -> None:
             outbox=SQLiteOutboundStore.default(),
             integration_store=SQLiteIntegrationStore.default(),
             inference_settings_store=SQLiteInferenceSettingsStore.default(),
+            agent_config_store=AgentConfigStore.default(),
         )
     )
     previous = {}

@@ -57,6 +57,7 @@ from alphonse.agent_v2.inference_settings import SQLiteInferenceSettingsStore
 from alphonse.agent_v2.inference_settings import inference_provider_descriptors
 from alphonse.agent_v2.inference_settings import provider_status
 from alphonse.agent_v2.inference_settings import validate_and_save_inference_settings
+from alphonse.agent_v2.agent_config import AgentConfigStore
 from alphonse.agent_v2.runtime import InMemoryInternalState
 from alphonse.agent_v2.runtime import NullMemory
 from alphonse.agent_v2.runtime import NullPromptLoader
@@ -79,6 +80,7 @@ TUI_SLASH_COMMANDS: tuple[tuple[str, str], ...] = (
     ("/quit", "Exit the TUI"),
     ("/model-provider", "Select an inference provider"),
     ("/model", "Select and validate an inference model"),
+    ("/agent-config", "Edit global agent configuration"),
 )
 
 
@@ -170,6 +172,7 @@ def build_tui_runtime(
     integration_store: SQLiteIntegrationStore | None = None,
     integration_registry: IntegrationRegistry | None = None,
     inference_settings_store: SQLiteInferenceSettingsStore | None = None,
+    agent_config_store: AgentConfigStore | None = None,
 ) -> TuiRuntime:
     return build_runtime_host(
         user=user,
@@ -184,6 +187,7 @@ def build_tui_runtime(
         integration_store=integration_store,
         integration_registry=integration_registry,
         inference_settings_store=inference_settings_store,
+        agent_config_store=agent_config_store,
     )
 
 
@@ -229,7 +233,7 @@ def queue_tui_input(runtime: TuiRuntime, prompt: str) -> TuiSubmissionResult:
         )
 
     command = detect_tui_slash_command(raw_prompt)
-    if command in {"project", "project-context", "integrations", "model-provider", "model"}:
+    if command in {"project", "project-context", "integrations", "model-provider", "model", "agent-config"}:
         return TuiSubmissionResult(
             prompt=prompt_value,
             response="",
@@ -1051,6 +1055,71 @@ def _build_textual_app_class() -> type[Any]:
                 return
             self.dismiss(str(options.get_option_at_index(options.highlighted).id or "") or None)
 
+    class AgentConfigScreen(ModalScreen[str | None]):
+        def __init__(self, documents: list[dict[str, Any]]) -> None:
+            super().__init__()
+            self.documents = documents
+
+        def compose(self) -> ComposeResult:
+            options = [
+                (str(document.get("display_name") or document.get("file_name") or "Document"), str(document.get("file_name") or ""))
+                for document in self.documents
+                if str(document.get("file_name") or "").strip()
+            ]
+            with Vertical(id="agent-config-dialog"):
+                yield Static("Agent Configuration", classes="dialog-title")
+                yield Select(options=options, id="agent-config-select", allow_blank=False)
+                with Horizontal(classes="dialog-actions"):
+                    yield Button("Edit", id="edit-agent-config", variant="primary")
+                    yield Button("Cancel", id="cancel-agent-config")
+
+        def on_button_pressed(self, event: Button.Pressed) -> None:
+            if event.button.id == "cancel-agent-config":
+                self.dismiss(None)
+                return
+            self.dismiss(str(self.query_one("#agent-config-select", Select).value or "") or None)
+
+    class AgentConfigEditorScreen(ModalScreen[bool]):
+        def __init__(self, document: dict[str, Any], save: Callable[[str, str], dict[str, Any]]) -> None:
+            super().__init__()
+            self.document = document
+            self.save = save
+
+        def on_mount(self) -> None:
+            self.query_one("#agent-config-editor", TextArea).focus()
+            self.query_one("#close-agent-config-editor", Button).display = False
+
+        def compose(self) -> ComposeResult:
+            with Vertical(id="agent-config-editor-dialog"):
+                yield Static(str(self.document.get("display_name") or "Agent Configuration"), classes="dialog-title")
+                yield TextArea(str(self.document.get("content") or ""), id="agent-config-editor")
+                yield Static("", id="agent-config-notice")
+                with Horizontal(classes="dialog-actions", id="agent-config-actions"):
+                    yield Button("Save", id="save-agent-config", variant="primary")
+                    yield Button("Cancel", id="cancel-agent-config-editor")
+                yield Button("Close", id="close-agent-config-editor")
+
+        def on_button_pressed(self, event: Button.Pressed) -> None:
+            if event.button.id == "cancel-agent-config-editor":
+                self.dismiss(False)
+                return
+            if event.button.id == "close-agent-config-editor":
+                self.dismiss(True)
+                return
+            try:
+                self.save(
+                    str(self.document.get("file_name") or ""),
+                    self.query_one("#agent-config-editor", TextArea).text,
+                )
+            except Exception as exc:
+                self.query_one("#agent-config-notice", Static).update(str(exc))
+                return
+            self.query_one("#agent-config-actions", Horizontal).display = False
+            self.query_one("#close-agent-config-editor", Button).display = True
+            self.query_one("#agent-config-notice", Static).update(
+                "Saved. Restart the daemon for changes to take effect: alphonse stop, then alphonse start."
+            )
+
     class TelegramConfigScreen(ModalScreen[bool]):
         def __init__(self, runtime: TuiRuntime) -> None:
             super().__init__()
@@ -1220,6 +1289,26 @@ def _build_textual_app_class() -> type[Any]:
             background: $surface;
         }
 
+        #agent-config-dialog {
+            width: 70;
+            height: auto;
+            padding: 1;
+            border: solid $primary;
+            background: $surface;
+        }
+
+        #agent-config-editor-dialog {
+            width: 85%;
+            height: 85%;
+            padding: 1;
+            border: solid $primary;
+            background: $surface;
+        }
+
+        #agent-config-editor {
+            height: 1fr;
+        }
+
         .dialog-title {
             text-style: bold;
             margin-bottom: 1;
@@ -1237,6 +1326,7 @@ def _build_textual_app_class() -> type[Any]:
             super().__init__()
             integration_store = SQLiteIntegrationStore.default()
             inference_settings_store = SQLiteInferenceSettingsStore.default()
+            agent_config_store = AgentConfigStore.default()
             self.daemon_client = V2DaemonClient()
             self.external_daemon = _daemon_is_available(self.daemon_client)
             self.daemon_connection_status = "connected" if self.external_daemon else "embedded"
@@ -1247,6 +1337,7 @@ def _build_textual_app_class() -> type[Any]:
                 outbox=SQLiteOutboundStore.default(),
                 integration_store=integration_store,
                 inference_settings_store=inference_settings_store,
+                agent_config_store=agent_config_store,
                 messages=SQLiteMessageQueue.default(),
             )
             self.daemon = None if self.external_daemon else V2Daemon(self.runtime)
@@ -1329,6 +1420,10 @@ def _build_textual_app_class() -> type[Any]:
             if command == "model":
                 self.query_one("#chat", RichLog).write(Text.assemble((self.runtime.user, "bold cyan"), f": {prompt.strip()}"))
                 self._open_model()
+                return
+            if command == "agent-config":
+                self.query_one("#chat", RichLog).write(Text.assemble((self.runtime.user, "bold cyan"), f": {prompt.strip()}"))
+                self._open_agent_config()
                 return
 
             if str(prompt or "").strip() in LOCAL_STOP_COMMANDS:
@@ -1434,6 +1529,41 @@ def _build_textual_app_class() -> type[Any]:
             )
             refresh_runtime_inference(self.runtime, settings)
             return settings.to_dict()
+
+        def _agent_config_documents(self) -> list[dict[str, Any]]:
+            if self.external_daemon:
+                payload = self.daemon_client.agent_config_documents().get("documents")
+                return [dict(item) for item in payload if isinstance(item, dict)] if isinstance(payload, list) else []
+            return [document.to_dict(include_content=False) for document in self.runtime.agent_config_store.list_documents()]
+
+        def _read_agent_config(self, file_name: str) -> dict[str, Any]:
+            if self.external_daemon:
+                return dict(self.daemon_client.read_agent_config(file_name).get("document") or {})
+            return self.runtime.agent_config_store.read(file_name).to_dict()
+
+        def _save_agent_config(self, file_name: str, content: str) -> dict[str, Any]:
+            if self.external_daemon:
+                return dict(self.daemon_client.save_agent_config(file_name=file_name, content=content).get("document") or {})
+            return self.runtime.agent_config_store.save(file_name, content).to_dict()
+
+        def _open_agent_config(self) -> None:
+            try:
+                documents = self._agent_config_documents()
+            except Exception as exc:
+                self.query_one("#activity", Static).update(f"Agent configuration unavailable: {exc}")
+                return
+
+            def _selected(file_name: str | None) -> None:
+                if not file_name:
+                    return
+                try:
+                    document = self._read_agent_config(file_name)
+                except Exception as exc:
+                    self.query_one("#activity", Static).update(f"Agent configuration unavailable: {exc}")
+                    return
+                self.push_screen(AgentConfigEditorScreen(document, self._save_agent_config))
+
+            self.push_screen(AgentConfigScreen(documents), callback=_selected)
 
         def _open_model_provider(self) -> None:
             try:

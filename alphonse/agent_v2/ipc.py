@@ -70,6 +70,15 @@ class V2DaemonClient:
         client = V2DaemonClient(self.socket_path, timeout_sec=max(self.timeout_sec, 35.0))
         return client.request("set_inference_settings", provider_key=provider_key, model_id=model_id)
 
+    def agent_config_documents(self) -> dict[str, Any]:
+        return self.request("agent_config_documents")
+
+    def read_agent_config(self, file_name: str) -> dict[str, Any]:
+        return self.request("read_agent_config", file_name=file_name)
+
+    def save_agent_config(self, *, file_name: str, content: str) -> dict[str, Any]:
+        return self.request("save_agent_config", file_name=file_name, content=content)
+
     def scheduled_tasks(self, **filters: Any) -> dict[str, Any]:
         return self.request("scheduled_tasks", **filters)
 
@@ -221,6 +230,17 @@ class V2DaemonServer:
                 model_id=str(params.get("model_id") or ""),
             )
             return {"settings": settings}
+        if method == "agent_config_documents":
+            return {"documents": self.daemon.list_agent_config()}
+        if method == "read_agent_config":
+            return {"document": self.daemon.read_agent_config(str(params.get("file_name") or ""))}
+        if method == "save_agent_config":
+            return {
+                "document": self.daemon.save_agent_config(
+                    str(params.get("file_name") or ""),
+                    str(params.get("content") or ""),
+                )
+            }
         if method == "queue_message":
             queued = self.daemon.runtime.channel.queue_message(
                 prompt=str(params.get("prompt") or ""),

@@ -35,6 +35,9 @@ from alphonse.agent_v2.integrations.presence import TuiPresenceAdapter
 from alphonse.agent_v2.inference_settings import InferenceSettingsRecord
 from alphonse.agent_v2.inference_settings import SQLiteInferenceSettingsStore
 from alphonse.agent_v2.inference_settings import build_inference_router_from_settings
+from alphonse.agent_v2.agent_config import AgentConfigPromptLoader
+from alphonse.agent_v2.agent_config import AgentConfigStore
+from alphonse.agent_v2.agent_config import packaged_agent_config_dir
 
 
 @dataclass
@@ -81,6 +84,7 @@ class V2RuntimeHost:
     integration_registry: IntegrationRegistry
     presence_projector: PresenceProjector
     inference_settings_store: SQLiteInferenceSettingsStore
+    agent_config_store: AgentConfigStore
     integration_runtimes: list[Any] = field(default_factory=list)
     active_project_id: str = ""
     ui_events: list[CoreUiEvent] = field(default_factory=list)
@@ -101,6 +105,7 @@ def build_runtime_host(
     integration_store: SQLiteIntegrationStore | None = None,
     integration_registry: IntegrationRegistry | None = None,
     inference_settings_store: SQLiteInferenceSettingsStore | None = None,
+    agent_config_store: AgentConfigStore | None = None,
     messages: Any | None = None,
 ) -> V2RuntimeHost:
     reset_state()
@@ -110,6 +115,9 @@ def build_runtime_host(
     processor = processor or PDCAIntelligenceProcessor()
     tools = tools or build_native_tool_registry()
     inference_settings_store = inference_settings_store or SQLiteInferenceSettingsStore()
+    # Persistent daemon/TUI constructors pass `AgentConfigStore.default()`.
+    # Generic test and helper runtimes only need the package defaults.
+    agent_config_store = agent_config_store or AgentConfigStore(packaged_agent_config_dir())
     inference = inference or build_inference_router_from_settings(inference_settings_store.get())
     question_store = question_store or SQLiteQuestionStore()
     project_store = project_store or ProjectStore()
@@ -132,7 +140,7 @@ def build_runtime_host(
         intelligence=processor,
         messages=queue,
         tools=tools,
-        prompts=NullPromptLoader(),
+        prompts=AgentConfigPromptLoader.from_store(agent_config_store),
         state=visible_state,
         memory=NullMemory(),
         inference=inference,
@@ -159,6 +167,7 @@ def build_runtime_host(
         integration_registry=integration_registry,
         presence_projector=presence_projector,
         inference_settings_store=inference_settings_store,
+        agent_config_store=agent_config_store,
         ui_events=ui_events,
         activity_events=activity_events,
     )
