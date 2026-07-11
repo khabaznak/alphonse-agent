@@ -1005,6 +1005,7 @@ def _build_textual_app_class() -> type[Any]:
             integration_store = SQLiteIntegrationStore.default()
             self.daemon_client = V2DaemonClient()
             self.external_daemon = _daemon_is_available(self.daemon_client)
+            self.daemon_connection_status = "connected" if self.external_daemon else "embedded"
             self.runtime = build_runtime_host(
                 user="local",
                 project_store=ProjectStore.default(),
@@ -1212,8 +1213,10 @@ def _build_textual_app_class() -> type[Any]:
                         )
                     status = self.daemon_client.status()
                     self.external_queue_size = int(status.get("queue_size") or 0)
+                    self.daemon_connection_status = "connected"
                 except Exception:
                     self.external_queue_size = -1
+                    self.daemon_connection_status = "disconnected"
             else:
                 while self.runtime.activity_events:
                     event = self.runtime.activity_events.pop(0)
@@ -1263,6 +1266,7 @@ def _build_textual_app_class() -> type[Any]:
             state = get_state()
             text = "\n".join(
                 [
+                    f"daemon: {format_daemon_connection_status(self.daemon_connection_status)}",
                     f"state: {state.key}",
                     f"processing: {self.processor.is_processing if not self.external_daemon else 'daemon'}",
                     f"user: {self.runtime.user}",
@@ -1283,3 +1287,13 @@ def _daemon_is_available(client: V2DaemonClient) -> bool:
     except Exception:
         return False
     return True
+
+
+def format_daemon_connection_status(status: str) -> str:
+    """Render the TUI's current relationship with the daemon host."""
+    normalized = str(status or "").strip().lower()
+    if normalized == "embedded":
+        return "connected (embedded)"
+    if normalized == "connected":
+        return "connected"
+    return "disconnected"

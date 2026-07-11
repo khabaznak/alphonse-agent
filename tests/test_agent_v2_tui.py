@@ -14,6 +14,7 @@ from alphonse.agent_v2.integrations import IntegrationDescriptor
 from alphonse.agent_v2.integrations import IntegrationRegistry
 from alphonse.agent_v2.interfaces.tui import build_tui_runtime
 from alphonse.agent_v2.interfaces.tui import format_current_project_status
+from alphonse.agent_v2.interfaces.tui import format_daemon_connection_status
 from alphonse.agent_v2.interfaces.tui import format_activity_message
 from alphonse.agent_v2.interfaces.tui import format_activity_status_line
 from alphonse.agent_v2.interfaces.tui import format_inference_status
@@ -335,6 +336,13 @@ def test_sidebar_status_helpers_render_project_and_inference(tmp_path) -> None:
     runtime.active_project_id = project.project_id
     assert format_current_project_status(runtime) == "Alpha"
     assert format_inference_status(runtime) == "stub / stub"
+
+
+def test_daemon_connection_status_distinguishes_external_embedded_and_disconnected() -> None:
+    assert format_daemon_connection_status("connected") == "connected"
+    assert format_daemon_connection_status("embedded") == "connected (embedded)"
+    assert format_daemon_connection_status("disconnected") == "disconnected"
+    assert format_daemon_connection_status("unexpected") == "disconnected"
 
 
 def test_submitting_shell_prompt_displays_bash_stdout() -> None:

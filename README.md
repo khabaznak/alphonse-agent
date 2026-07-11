@@ -109,6 +109,20 @@ Run the daemon as a foreground process:
 python -m alphonse.agent_v2.daemon
 ```
 
+After installing the project in the virtual environment, the daemon can also
+be managed with the short lifecycle commands:
+
+```bash
+source .venv/bin/activate
+alphonse start
+alphonse status
+alphonse stop
+```
+
+`alphonse start` runs the daemon in the background and waits for its local
+health socket. `alphonse status` reports daemon, queue, scheduler, and
+outbound status. Daemon output is written to `~/.alphonse/v2-daemon.log`.
+
 The daemon uses a local Unix socket for interface communication. Its default
 runtime files are stored under `~/.alphonse/`:
 

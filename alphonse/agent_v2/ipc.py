@@ -40,6 +40,9 @@ class V2DaemonClient:
     def status(self) -> dict[str, Any]:
         return self.request("status")
 
+    def stop(self) -> dict[str, Any]:
+        return self.request("stop")
+
     def queue_message(self, **message: Any) -> dict[str, Any]:
         return self.request("queue_message", **message)
 
@@ -145,6 +148,9 @@ class V2DaemonServer:
                 "due_schedules": len(due),
                 "scheduler": self.daemon.scheduler.stats.__dict__,
             }
+        if method == "stop":
+            threading.Thread(target=self.daemon.stop, name="alphonse-v2-stop", daemon=True).start()
+            return {"status": "stopping"}
         if method == "events":
             return {"events": self.daemon.pop_activity_events()}
         if method == "restart_integrations":

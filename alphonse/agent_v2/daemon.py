@@ -48,19 +48,29 @@ class V2Daemon:
         if self._processor_thread is not None and self._processor_thread.is_alive():
             return
         self._acquire_single_instance_lock()
-        self._stop.clear()
-        reclaim_expired = getattr(self.runtime.queue, "reclaim_expired", None)
-        if callable(reclaim_expired):
-            reclaim_expired()
-        start_runtime_integrations(
-            self.runtime,
-            on_outbox_delivered=self._on_outbox_delivered,
-            on_outbox_failed=self._on_outbox_failed,
-        )
-        self.scheduler.start()
-        self.ipc.start()
-        self._processor_thread = threading.Thread(target=self._process_loop, name="alphonse-v2-core", daemon=True)
-        self._processor_thread.start()
+        try:
+            self._stop.clear()
+            reclaim_expired = getattr(self.runtime.queue, "reclaim_expired", None)
+            if callable(reclaim_expired):
+                reclaim_expired()
+            # Publish the health socket before optional providers initialize so
+            # clients can distinguish a live daemon from a failed startup.
+            self.ipc.start()
+            start_runtime_integrations(
+                self.runtime,
+                on_outbox_delivered=self._on_outbox_delivered,
+                on_outbox_failed=self._on_outbox_failed,
+            )
+            self.scheduler.start()
+            self._processor_thread = threading.Thread(target=self._process_loop, name="alphonse-v2-core", daemon=True)
+            self._processor_thread.start()
+        except Exception:
+            self._stop.set()
+            self.ipc.stop()
+            self.scheduler.stop()
+            stop_runtime_integrations(self.runtime)
+            self._release_single_instance_lock()
+            raise
 
     def stop(self) -> None:
         self._stop.set()
