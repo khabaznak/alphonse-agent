@@ -38,3 +38,30 @@ def test_daemon_ipc_dispatches_ping_status_and_queue_message() -> None:
     assert daemon.ipc._dispatch({"method": "status"})["queue_size"] == 1
     daemon.run_once()
     assert daemon.ipc._dispatch({"method": "status"})["queue_size"] == 0
+
+
+def test_daemon_ipc_exposes_inference_configuration() -> None:
+    runtime = build_runtime_host(schedule_store=ScheduledTaskStore(":memory:"))
+    daemon = V2Daemon(runtime)
+
+    settings = daemon.ipc._dispatch({"method": "inference_settings"})["settings"]
+    providers = daemon.ipc._dispatch({"method": "inference_providers"})["providers"]
+
+    assert settings["provider_key"] == "openai_codex"
+    assert providers[0]["provider_key"] == "openai_codex"
+
+
+def test_model_settings_request_uses_validation_timeout(monkeypatch) -> None:
+    client = __import__("alphonse.agent_v2.ipc", fromlist=["V2DaemonClient"]).V2DaemonClient("/tmp/test.sock", timeout_sec=2)
+    captured = {}
+
+    def fake_request(self, method, **params):
+        captured["timeout"] = self.timeout_sec
+        captured["method"] = method
+        return {"settings": {}}
+
+    monkeypatch.setattr("alphonse.agent_v2.ipc.V2DaemonClient.request", fake_request)
+
+    client.set_inference_settings(provider_key="openai_codex", model_id="gpt-5.5")
+
+    assert captured == {"timeout": 35.0, "method": "set_inference_settings"}

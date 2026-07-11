@@ -22,6 +22,7 @@ class OpenAICodexProviderConfig:
     cli_bin: str = "codex"
     model: str | None = None
     timeout_seconds: float = 120.0
+    ephemeral: bool = False
 
 
 class OpenAICodexProvider:
@@ -59,6 +60,8 @@ class OpenAICodexProvider:
             raise ValueError("openai_codex_cli_missing")
 
         command = [cli_bin, "exec", "--skip-git-repo-check"]
+        if self.config.ephemeral:
+            command.append("--ephemeral")
         model = _model_for_request(request, self.config.model)
         if model:
             command.extend(["--model", model])
@@ -83,6 +86,8 @@ class OpenAICodexProvider:
             text = f"{stdout}\n{stderr}".lower()
             if any(token in text for token in ("login", "auth", "authenticate", "unauthorized")):
                 raise ValueError("openai_codex_auth_required")
+            if "requires a newer version of codex" in text:
+                raise ValueError("openai_codex_cli_upgrade_required")
             raise ValueError(f"openai_codex_exec_failed: exit_code={completed.returncode}")
         if not stdout:
             raise ValueError("openai_codex_empty_response")
@@ -161,8 +166,10 @@ def _tool_descriptor_to_dict(tool: ToolDescriptor) -> dict[str, Any]:
 
 
 def _model_for_request(request: InferenceRequest, fallback: str | None) -> str | None:
-    if request.model_profile is not None and request.model_profile.model.strip():
-        return request.model_profile.model.strip()
+    if request.model_profile is not None:
+        # A resolved profile, including an explicit empty model for the Codex
+        # default, is authoritative over an environment fallback.
+        return request.model_profile.model.strip() or None
     if fallback and fallback.strip():
         return fallback.strip()
     return None

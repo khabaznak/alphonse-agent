@@ -173,6 +173,16 @@ class SQLiteOutboundStore:
     def list_pending(self, selector: OutboundSelector | None = None, *, limit: int = 100) -> list[OutboundMessage]:
         return self.list(selector or OutboundSelector(), limit=limit)
 
+    def status_counts(self) -> dict[str, int]:
+        counts = {"pending": 0, "claimed": 0, "retry_wait": 0, "delivered": 0, "failed": 0}
+        with self._connect() as conn:
+            rows = conn.execute("SELECT status, COUNT(*) AS count FROM v2_outbox GROUP BY status").fetchall()
+        for row in rows:
+            status = str(row["status"] or "")
+            if status in counts:
+                counts[status] = int(row["count"] or 0)
+        return counts
+
     def get(self, outbox_message_id: str) -> OutboundMessage | None:
         with self._connect() as conn:
             row = conn.execute(

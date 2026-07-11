@@ -125,6 +125,15 @@ def test_daemon_processes_host_queue_without_tui() -> None:
     assert result.queued_message_id is not None
 
 
+def test_daemon_stop_is_idempotent(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("ALPHONSE_V2_SOCKET_PATH", str(tmp_path / "v2-daemon.sock"))
+    runtime = build_runtime_host(schedule_store=ScheduledTaskStore(":memory:"))
+    daemon = V2Daemon(runtime)
+
+    daemon.stop()
+    daemon.stop()
+
+
 def test_daemon_marks_scheduled_occurrence_delivered_after_outbox_delivery() -> None:
     store = ScheduledTaskStore(":memory:")
     runtime = build_runtime_host(schedule_store=store)

@@ -109,6 +109,18 @@ def test_processor_exception_snapshot_uses_task_goal() -> None:
     assert core.state.snapshot().metadata["exception_type"] == "RuntimeError"
 
 
+def test_core_can_be_released_after_a_failed_attempt() -> None:
+    core, queue, processor = _core(_Processor(ProcessingStatus.FAILED, error="broken"))
+    queue.enqueue(_message("first"))
+
+    assert core.step().status == LoopStepStatus.FAILED
+    assert core.clear_failure().key == AVAILABLE
+
+    processor.status = ProcessingStatus.COMPLETED
+    queue.enqueue(_message("second"))
+    assert core.step().status == LoopStepStatus.PROCESSED
+
+
 def test_request_stop_prevents_further_queue_consumption() -> None:
     core, queue, processor = _core(_Processor(ProcessingStatus.COMPLETED))
     queue.enqueue(_message("do not process"))

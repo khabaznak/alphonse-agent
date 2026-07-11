@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -16,8 +15,6 @@ from alphonse.agent_v2.core.core import StateSnapshot
 from alphonse.agent_v2.core.core import ToolDescriptor
 from alphonse.agent_v2.core.core import ToolRegistry
 from alphonse.agent_v2.core.inference import InferenceRouter
-from alphonse.agent_v2.core.inference import ModelProfile
-from alphonse.agent_v2.core.inference import OpenAICodexProvider
 from alphonse.agent_v2.core.intelligence import PDCAIntelligenceProcessor
 from alphonse.agent_v2.core.io import IntegrationIdentity
 from alphonse.agent_v2.core.io import SQLiteOutboundStore
@@ -35,6 +32,9 @@ from alphonse.agent_v2.integrations import SQLiteIntegrationStore
 from alphonse.agent_v2.integrations import build_default_integration_registry
 from alphonse.agent_v2.integrations.presence import PresenceProjector
 from alphonse.agent_v2.integrations.presence import TuiPresenceAdapter
+from alphonse.agent_v2.inference_settings import InferenceSettingsRecord
+from alphonse.agent_v2.inference_settings import SQLiteInferenceSettingsStore
+from alphonse.agent_v2.inference_settings import build_inference_router_from_settings
 
 
 @dataclass
@@ -80,6 +80,7 @@ class V2RuntimeHost:
     integration_store: SQLiteIntegrationStore
     integration_registry: IntegrationRegistry
     presence_projector: PresenceProjector
+    inference_settings_store: SQLiteInferenceSettingsStore
     integration_runtimes: list[Any] = field(default_factory=list)
     active_project_id: str = ""
     ui_events: list[CoreUiEvent] = field(default_factory=list)
@@ -99,6 +100,7 @@ def build_runtime_host(
     identity_resolver: V2IdentityResolver | None = None,
     integration_store: SQLiteIntegrationStore | None = None,
     integration_registry: IntegrationRegistry | None = None,
+    inference_settings_store: SQLiteInferenceSettingsStore | None = None,
     messages: Any | None = None,
 ) -> V2RuntimeHost:
     reset_state()
@@ -107,7 +109,8 @@ def build_runtime_host(
     visible_state = InMemoryInternalState()
     processor = processor or PDCAIntelligenceProcessor()
     tools = tools or build_native_tool_registry()
-    inference = inference or build_default_runtime_inference_router()
+    inference_settings_store = inference_settings_store or SQLiteInferenceSettingsStore()
+    inference = inference or build_inference_router_from_settings(inference_settings_store.get())
     question_store = question_store or SQLiteQuestionStore()
     project_store = project_store or ProjectStore()
     schedule_store = schedule_store or ScheduledTaskStore()
@@ -155,24 +158,25 @@ def build_runtime_host(
         integration_store=integration_store,
         integration_registry=integration_registry,
         presence_projector=presence_projector,
+        inference_settings_store=inference_settings_store,
         ui_events=ui_events,
         activity_events=activity_events,
     )
 
 
 def build_default_runtime_inference_router() -> InferenceRouter:
-    return InferenceRouter(
-        provider=OpenAICodexProvider(),
-        default_profile=ModelProfile(
-            provider="openai_codex",
-            model=os.getenv("OPENAI_CODEX_MODEL", ""),
-            profile_id="chatgpt-plus-codex",
-            supports_tool_calling=False,
-            supports_structured_output=False,
-            supports_json_mode=True,
-            cost_tier="subscription",
-        ),
-    )
+    return build_inference_router_from_settings(SQLiteInferenceSettingsStore().get())
+
+
+def refresh_runtime_inference(runtime: V2RuntimeHost, settings: InferenceSettingsRecord | None = None) -> InferenceSettingsRecord:
+    """Apply saved settings to subsequently started core tasks.
+
+    `AlphonseCore.step` captures its router in its loop context, so replacing the
+    router here cannot alter a task already being processed.
+    """
+    selected = settings or runtime.inference_settings_store.get()
+    runtime.core.inference = build_inference_router_from_settings(selected)
+    return selected
 
 
 def build_identity_resolver(store: SQLiteIntegrationStore) -> V2IdentityResolver:

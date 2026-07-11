@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import json
-import os
+import time
 from dataclasses import dataclass, field
-from threading import Lock
+from threading import Lock, Thread
 from typing import Any, Callable
 
 from alphonse.agent_v2.core.core import AlphonseCore
@@ -13,6 +13,7 @@ from alphonse.agent_v2.core.core import CoreMessage
 from alphonse.agent_v2.core.core import CoreActivityEvent
 from alphonse.agent_v2.core.core import CoreUiEvent
 from alphonse.agent_v2.core.core import IntelligenceProcessor
+from alphonse.agent_v2.core.core import ImprovementPhase
 from alphonse.agent_v2.core.core import LoopStepResult
 from alphonse.agent_v2.core.core import LoopStepStatus
 from alphonse.agent_v2.core.core import MemoryRecord
@@ -21,8 +22,6 @@ from alphonse.agent_v2.core.core import StateSnapshot
 from alphonse.agent_v2.core.core import ToolDescriptor
 from alphonse.agent_v2.core.core import ToolRegistry
 from alphonse.agent_v2.core.inference import InferenceRouter
-from alphonse.agent_v2.core.inference import ModelProfile
-from alphonse.agent_v2.core.inference import OpenAICodexProvider
 from alphonse.agent_v2.core.intelligence import PDCAIntelligenceProcessor
 from alphonse.agent_v2.core.io import OutboundSelector
 from alphonse.agent_v2.core.io import IntegrationIdentity
@@ -53,11 +52,18 @@ from alphonse.agent_v2.integrations import SQLiteIntegrationStore
 from alphonse.agent_v2.integrations import build_default_integration_registry
 from alphonse.agent_v2.integrations.presence import PresenceProjector
 from alphonse.agent_v2.integrations.presence import TuiPresenceAdapter
+from alphonse.agent_v2.inference_settings import CODEX_DEFAULT_MODEL
+from alphonse.agent_v2.inference_settings import SQLiteInferenceSettingsStore
+from alphonse.agent_v2.inference_settings import inference_provider_descriptors
+from alphonse.agent_v2.inference_settings import provider_status
+from alphonse.agent_v2.inference_settings import validate_and_save_inference_settings
 from alphonse.agent_v2.runtime import InMemoryInternalState
 from alphonse.agent_v2.runtime import NullMemory
 from alphonse.agent_v2.runtime import NullPromptLoader
 from alphonse.agent_v2.runtime import V2RuntimeHost
 from alphonse.agent_v2.runtime import build_runtime_host
+from alphonse.agent_v2.runtime import build_default_runtime_inference_router
+from alphonse.agent_v2.runtime import refresh_runtime_inference
 from alphonse.agent_v2.daemon import V2Daemon
 from alphonse.agent_v2.ipc import V2DaemonClient
 
@@ -71,6 +77,8 @@ TUI_SLASH_COMMANDS: tuple[tuple[str, str], ...] = (
     ("/stop", "Stop Alphonse"),
     ("/exit", "Exit the TUI"),
     ("/quit", "Exit the TUI"),
+    ("/model-provider", "Select an inference provider"),
+    ("/model", "Select and validate an inference model"),
 )
 
 
@@ -161,6 +169,7 @@ def build_tui_runtime(
     identity_resolver: V2IdentityResolver | None = None,
     integration_store: SQLiteIntegrationStore | None = None,
     integration_registry: IntegrationRegistry | None = None,
+    inference_settings_store: SQLiteInferenceSettingsStore | None = None,
 ) -> TuiRuntime:
     return build_runtime_host(
         user=user,
@@ -174,23 +183,13 @@ def build_tui_runtime(
         identity_resolver=identity_resolver,
         integration_store=integration_store,
         integration_registry=integration_registry,
+        inference_settings_store=inference_settings_store,
     )
 
 
 def build_default_tui_inference_router() -> InferenceRouter:
     """Build the default live inference router for the native TUI."""
-    return InferenceRouter(
-        provider=OpenAICodexProvider(),
-        default_profile=ModelProfile(
-            provider="openai_codex",
-            model=os.getenv("OPENAI_CODEX_MODEL", ""),
-            profile_id="chatgpt-plus-codex",
-            supports_tool_calling=False,
-            supports_structured_output=False,
-            supports_json_mode=True,
-            cost_tier="subscription",
-        ),
-    )
+    return build_default_runtime_inference_router()
 
 
 def submit_tui_input(runtime: TuiRuntime, prompt: str) -> TuiSubmissionResult:
@@ -230,7 +229,7 @@ def queue_tui_input(runtime: TuiRuntime, prompt: str) -> TuiSubmissionResult:
         )
 
     command = detect_tui_slash_command(raw_prompt)
-    if command in {"project", "project-context", "integrations"}:
+    if command in {"project", "project-context", "integrations", "model-provider", "model"}:
         return TuiSubmissionResult(
             prompt=prompt_value,
             response="",
@@ -476,6 +475,8 @@ def process_tui_queue_once(runtime: TuiRuntime) -> TuiProcessingResult:
     snapshot = runtime.visible_state.snapshot()
     if step.status in {LoopStepStatus.PROCESSED, LoopStepStatus.PARKED, LoopStepStatus.WAITING}:
         project_snapshot_to_outbox(snapshot=snapshot, outbox=runtime.outbox)
+    elif step.status == LoopStepStatus.FAILED:
+        runtime.core.clear_failure()
     response = _drain_tui_outbox(runtime)
     if not response and _snapshot_origin_is_tui(snapshot):
         response = _response_from_snapshot(snapshot, step)
@@ -669,6 +670,35 @@ def format_activity_status_line(event: CoreActivityEvent) -> str:
     return prefix
 
 
+def activity_spinner(index: int) -> str:
+    return ("|", "/", "-", "\\")[max(0, int(index)) % 4]
+
+
+def capd_activity_verb(event: CoreActivityEvent) -> str:
+    return {
+        ImprovementPhase.PLAN: "Planning",
+        ImprovementPhase.DO: "Doing",
+        ImprovementPhase.CHECK: "Checking",
+        ImprovementPhase.ACT: "Acting",
+    }.get(event.phase, "Working")
+
+
+def format_global_activity_status(event: CoreActivityEvent, spinner_index: int = 0) -> str:
+    """Show safe CAPD progress without exposing another user's task details."""
+    return f"Working: {capd_activity_verb(event)} {activity_spinner(spinner_index)}"
+
+
+def format_global_activity_state(activity: dict[str, Any] | None, *, error: str = "") -> str:
+    state = str(activity.get("state") or "idle").strip().lower() if isinstance(activity, dict) else "idle"
+    if state == "working":
+        return "Working"
+    if state == "waiting":
+        return "Waiting: user input"
+    if state == "error":
+        return "Error: model token limit" if "token" in str(error).lower() else "Error: attention required"
+    return "Idle: ready"
+
+
 def format_inference_status(runtime: TuiRuntime) -> str:
     inference = runtime.core.inference
     if inference is None:
@@ -677,6 +707,26 @@ def format_inference_status(runtime: TuiRuntime) -> str:
     provider = str(profile.provider or "").strip() or "-"
     model = str(profile.model or "").strip() or "-"
     return f"{provider} / {model}"
+
+
+def format_inference_settings_status(settings: dict[str, Any] | None) -> str:
+    provider, model = inference_status_parts(settings)
+    return f"{provider} / {model}"
+
+
+def inference_status_parts(
+    settings: dict[str, Any] | None,
+    *,
+    runtime: TuiRuntime | None = None,
+) -> tuple[str, str]:
+    if isinstance(settings, dict):
+        provider = str(settings.get("provider_key") or "").strip() or "-"
+        model = str(settings.get("model_id") or "").strip() or "default"
+        return provider, model
+    if runtime is not None and runtime.core.inference is not None:
+        profile = runtime.core.inference.default_profile
+        return str(profile.provider or "").strip() or "-", str(profile.model or "").strip() or "default"
+    return "-", "-"
 
 
 def format_current_project_status(runtime: TuiRuntime) -> str:
@@ -838,6 +888,114 @@ def _build_textual_app_class() -> type[Any]:
             if value:
                 self.dismiss(value)
 
+    class ModelProviderScreen(ModalScreen[str | None]):
+        def __init__(self, providers: list[dict[str, Any]], selected_provider: str) -> None:
+            super().__init__()
+            self.providers = providers
+            self.selected_provider = selected_provider
+
+        def compose(self) -> ComposeResult:
+            options = [
+                (str(provider.get("display_name") or provider.get("provider_key") or "Provider"), str(provider.get("provider_key") or ""))
+                for provider in self.providers
+                if str(provider.get("provider_key") or "").strip()
+            ]
+            selected = self.selected_provider if any(value == self.selected_provider for _, value in options) else None
+            with Vertical(id="model-dialog"):
+                yield Static("Model Provider", classes="dialog-title")
+                yield Select(options=options, value=selected, id="model-provider-select", allow_blank=False)
+                yield Static("", id="model-provider-details")
+                with Horizontal(classes="dialog-actions"):
+                    yield Button("Continue", id="select-model-provider", variant="primary")
+                    yield Button("Cancel", id="cancel-model-provider")
+
+        def on_mount(self) -> None:
+            self._render_details()
+
+        def on_select_changed(self, event: Select.Changed) -> None:
+            if event.select.id == "model-provider-select":
+                self._render_details()
+
+        def _render_details(self) -> None:
+            selected = str(self.query_one("#model-provider-select", Select).value or "")
+            provider = next((item for item in self.providers if item.get("provider_key") == selected), {})
+            models = provider.get("models")
+            count = len(models) if isinstance(models, list) else 0
+            fetched_at = str(provider.get("catalog_fetched_at") or "")
+            cli_version = str(provider.get("cli_version") or "")
+            detail = str(provider.get("description") or "")
+            detail += f"\n{count} selectable models"
+            if fetched_at:
+                detail += f" | catalog: {fetched_at}"
+            if cli_version:
+                detail += f" | CLI: {cli_version}"
+            self.query_one("#model-provider-details", Static).update(detail)
+
+        def on_button_pressed(self, event: Button.Pressed) -> None:
+            if event.button.id == "cancel-model-provider":
+                self.dismiss(None)
+                return
+            self.dismiss(str(self.query_one("#model-provider-select", Select).value or "") or None)
+
+    class ModelSelectionScreen(ModalScreen[dict[str, Any] | None]):
+        def __init__(self, settings: dict[str, Any], provider: dict[str, Any], save: Callable[[str, str], dict[str, Any]]) -> None:
+            super().__init__()
+            self.settings = settings
+            self.provider = provider
+            self.save = save
+
+        def compose(self) -> ComposeResult:
+            models = self.provider.get("models") if isinstance(self.provider.get("models"), list) else []
+            options = [
+                (str(item.get("display_name") or item.get("model_id") or "Model"), str(item.get("model_id") or ""))
+                for item in models
+                if isinstance(item, dict) and str(item.get("model_id") or "").strip()
+            ]
+            current = str(self.settings.get("model_id") or "") or CODEX_DEFAULT_MODEL
+            if not any(value == current for _, value in options):
+                options.insert(0, ("Codex default", CODEX_DEFAULT_MODEL))
+                current = CODEX_DEFAULT_MODEL
+            with Vertical(id="model-dialog"):
+                yield Static("Inference Model", classes="dialog-title")
+                yield Select(options=options, value=current, id="model-select", allow_blank=False)
+                yield Static(self._details_for(current), id="model-details")
+                yield Static("", id="model-error")
+                with Horizontal(classes="dialog-actions"):
+                    yield Button("Validate & Save", id="save-model", variant="primary")
+                    yield Button("Cancel", id="cancel-model")
+
+        def on_select_changed(self, event: Select.Changed) -> None:
+            if event.select.id == "model-select":
+                self.query_one("#model-details", Static).update(self._details_for(str(event.value or "")))
+
+        def _details_for(self, model_id: str) -> str:
+            for item in self.provider.get("models", []):
+                if isinstance(item, dict) and str(item.get("model_id") or "") == model_id:
+                    return str(item.get("description") or "")
+            return "The installed Codex CLI will validate this choice before it becomes active."
+
+        def on_button_pressed(self, event: Button.Pressed) -> None:
+            if event.button.id == "cancel-model":
+                self.dismiss(None)
+                return
+            self.query_one("#save-model", Button).disabled = True
+            self.query_one("#model-error", Static).update("Validating model with Codex...")
+            provider_key = str(self.provider.get("provider_key") or "")
+            model_id = str(self.query_one("#model-select", Select).value or "")
+            Thread(target=self._save_in_background, args=(provider_key, model_id), daemon=True).start()
+
+        def _save_in_background(self, provider_key: str, model_id: str) -> None:
+            try:
+                settings = self.save(provider_key, model_id)
+            except Exception as exc:
+                self.app.call_from_thread(self._save_failed, str(exc))
+                return
+            self.app.call_from_thread(self.dismiss, settings)
+
+        def _save_failed(self, error: str) -> None:
+            self.query_one("#save-model", Button).disabled = False
+            self.query_one("#model-error", Static).update(error)
+
     class TelegramConfigScreen(ModalScreen[bool]):
         def __init__(self, runtime: TuiRuntime) -> None:
             super().__init__()
@@ -951,7 +1109,7 @@ def _build_textual_app_class() -> type[Any]:
 
         #status {
             border: solid $secondary;
-            height: 8;
+            height: 13;
             padding: 1;
         }
 
@@ -961,6 +1119,12 @@ def _build_textual_app_class() -> type[Any]:
             padding: 0 1;
             color: $text-muted;
             display: none;
+        }
+
+        #reply-activity {
+            height: 1;
+            padding: 0 1;
+            color: $text-muted;
         }
 
         #project-dialog {
@@ -987,6 +1151,14 @@ def _build_textual_app_class() -> type[Any]:
             background: $surface;
         }
 
+        #model-dialog {
+            width: 80;
+            height: auto;
+            padding: 1;
+            border: solid $primary;
+            background: $surface;
+        }
+
         .dialog-title {
             text-style: bold;
             margin-bottom: 1;
@@ -1003,6 +1175,7 @@ def _build_textual_app_class() -> type[Any]:
         def __init__(self) -> None:
             super().__init__()
             integration_store = SQLiteIntegrationStore.default()
+            inference_settings_store = SQLiteInferenceSettingsStore.default()
             self.daemon_client = V2DaemonClient()
             self.external_daemon = _daemon_is_available(self.daemon_client)
             self.daemon_connection_status = "connected" if self.external_daemon else "embedded"
@@ -1012,6 +1185,7 @@ def _build_textual_app_class() -> type[Any]:
                 schedule_store=ScheduledTaskStore.default(),
                 outbox=SQLiteOutboundStore.default(),
                 integration_store=integration_store,
+                inference_settings_store=inference_settings_store,
                 messages=SQLiteMessageQueue.default(),
             )
             self.daemon = None if self.external_daemon else V2Daemon(self.runtime)
@@ -1023,7 +1197,16 @@ def _build_textual_app_class() -> type[Any]:
                 self.daemon.start()
             self.processor = TuiProcessorCoordinator(self.runtime)
             self.external_queue_size = -1
+            self.external_queue_counts: dict[str, int] = {}
+            self.external_active_work: dict[str, Any] = {}
+            self.external_inference_settings: dict[str, Any] = {}
+            self.external_activity: dict[str, Any] = {"state": "idle"}
+            self.external_processor_error = ""
             self.last_message_id = ""
+            self.reply_message_id = ""
+            self.reply_activity_verb = ""
+            self.activity_hold_until = 0.0
+            self.spinner_index = 0
             self.slash_command_matches: list[tuple[str, str]] = []
             self.slash_command_selected_index = 0
 
@@ -1033,6 +1216,7 @@ def _build_textual_app_class() -> type[Any]:
                 with Vertical(id="chat-column"):
                     yield RichLog(id="chat", wrap=True, highlight=True)
                     yield Static(id="slash-commands")
+                    yield Static(id="reply-activity")
                     yield Input(placeholder="Message Alphonse...", id="prompt")
                 with Vertical(id="side-column"):
                     yield Static(id="activity")
@@ -1043,9 +1227,11 @@ def _build_textual_app_class() -> type[Any]:
             self.title = "Alphonse v2"
             self.query_one("#chat", RichLog).write(Text.from_markup("[bold]Alphonse v2[/bold] native TUI"))
             self.query_one("#activity", Static).update("Idle: ready")
+            self.query_one("#reply-activity", Static).update("")
             self._refresh_status()
             self.query_one("#prompt", Input).focus()
             self.set_interval(0.1, self._poll_daemon)
+            self.set_interval(0.2, self._advance_activity_indicators)
 
         def on_input_changed(self, event: Input.Changed) -> None:
             if event.input.id != "prompt":
@@ -1098,6 +1284,14 @@ def _build_textual_app_class() -> type[Any]:
                 self.query_one("#chat", RichLog).write(Text.assemble((self.runtime.user, "bold cyan"), f": {prompt.strip()}"))
                 self._open_integrations()
                 return
+            if command == "model-provider":
+                self.query_one("#chat", RichLog).write(Text.assemble((self.runtime.user, "bold cyan"), f": {prompt.strip()}"))
+                self._open_model_provider()
+                return
+            if command == "model":
+                self.query_one("#chat", RichLog).write(Text.assemble((self.runtime.user, "bold cyan"), f": {prompt.strip()}"))
+                self._open_model()
+                return
 
             if str(prompt or "").strip() in LOCAL_STOP_COMMANDS:
                 self.exit()
@@ -1130,6 +1324,7 @@ def _build_textual_app_class() -> type[Any]:
             chat.write(Text.assemble((self.runtime.user, "bold cyan"), f": {submitted_prompt}"))
             if queued_message_id:
                 self.last_message_id = queued_message_id
+                self._begin_tui_reply_activity(queued_message_id)
             self._refresh_status()
             self._start_processor_if_needed()
 
@@ -1175,6 +1370,64 @@ def _build_textual_app_class() -> type[Any]:
 
             self.push_screen(IntegrationsScreen(self.runtime), callback=_selected)
 
+        def _inference_settings(self) -> dict[str, Any]:
+            if self.external_daemon:
+                return dict(self.daemon_client.inference_settings().get("settings") or {})
+            return self.runtime.inference_settings_store.get().to_dict()
+
+        def _inference_providers(self) -> list[dict[str, Any]]:
+            if self.external_daemon:
+                payload = self.daemon_client.inference_providers().get("providers")
+                return [dict(item) for item in payload if isinstance(item, dict)] if isinstance(payload, list) else []
+            return [provider_status(item.provider_key) for item in inference_provider_descriptors()]
+
+        def _inference_provider(self, provider_key: str) -> dict[str, Any]:
+            if self.external_daemon:
+                return dict(self.daemon_client.inference_models(provider_key))
+            return provider_status(provider_key)
+
+        def _save_inference_settings(self, provider_key: str, model_id: str) -> dict[str, Any]:
+            if self.external_daemon:
+                return dict(self.daemon_client.set_inference_settings(provider_key=provider_key, model_id=model_id).get("settings") or {})
+            settings = validate_and_save_inference_settings(
+                self.runtime.inference_settings_store,
+                provider_key=provider_key,
+                model_id=model_id,
+            )
+            refresh_runtime_inference(self.runtime, settings)
+            return settings.to_dict()
+
+        def _open_model_provider(self) -> None:
+            try:
+                settings = self._inference_settings()
+                providers = self._inference_providers()
+            except Exception as exc:
+                self.query_one("#activity", Static).update(f"Model settings unavailable: {exc}")
+                return
+
+            def _selected(provider_key: str | None) -> None:
+                if provider_key:
+                    self._open_model(provider_key=provider_key)
+
+            self.push_screen(ModelProviderScreen(providers, str(settings.get("provider_key") or "")), callback=_selected)
+
+        def _open_model(self, *, provider_key: str | None = None) -> None:
+            try:
+                settings = self._inference_settings()
+                provider = self._inference_provider(provider_key or str(settings.get("provider_key") or "openai_codex"))
+            except Exception as exc:
+                self.query_one("#activity", Static).update(f"Model settings unavailable: {exc}")
+                return
+            self.push_screen(
+                ModelSelectionScreen(settings, provider, self._save_inference_settings),
+                callback=self._on_model_saved,
+            )
+
+        def _on_model_saved(self, settings: dict[str, Any] | None) -> None:
+            if isinstance(settings, dict) and self.external_daemon:
+                self.external_inference_settings = dict(settings)
+            self._refresh_status()
+
         def on_unmount(self) -> None:
             if self.daemon is not None:
                 self.daemon.stop()
@@ -1209,13 +1462,32 @@ def _build_textual_app_class() -> type[Any]:
                                 label=str(event.get("label") or ""),
                                 message=str(event.get("message") or ""),
                                 speaker=str(event.get("speaker") or "Alphonse"),
+                                task_id=str(event.get("task_id") or ""),
+                                message_id=str(event.get("message_id") or ""),
+                                user=str(event.get("user") or ""),
+                                integration_id=str(event.get("integration_id") or ""),
+                                channel_target=str(event.get("channel_target") or ""),
                             )
                         )
                     status = self.daemon_client.status()
                     self.external_queue_size = int(status.get("queue_size") or 0)
+                    counts = status.get("inbound_counts")
+                    self.external_queue_counts = dict(counts) if isinstance(counts, dict) else {}
+                    active_work = status.get("active_work")
+                    self.external_active_work = dict(active_work) if isinstance(active_work, dict) else {}
+                    activity = status.get("activity")
+                    self.external_activity = dict(activity) if isinstance(activity, dict) else {"state": "idle"}
+                    self.external_processor_error = str(status.get("last_processor_error") or "")
+                    settings = self.daemon_client.inference_settings().get("settings")
+                    self.external_inference_settings = dict(settings) if isinstance(settings, dict) else {}
                     self.daemon_connection_status = "connected"
                 except Exception:
                     self.external_queue_size = -1
+                    self.external_queue_counts = {}
+                    self.external_active_work = {}
+                    self.external_inference_settings = {}
+                    self.external_activity = {"state": "error"}
+                    self.external_processor_error = "daemon connection lost"
                     self.daemon_connection_status = "disconnected"
             else:
                 while self.runtime.activity_events:
@@ -1229,11 +1501,58 @@ def _build_textual_app_class() -> type[Any]:
                     break
                 if outbound.message:
                     chat.write(Text.assemble(("Alphonse", "bold green"), f": {outbound.message}"))
+                    self._clear_tui_reply_activity()
                 self.runtime.outbox.mark_delivered(outbound.outbox_message_id)
+            self._refresh_global_activity()
             self._refresh_status()
 
         def _append_activity_event(self, event: CoreActivityEvent) -> None:
-            self.query_one("#activity", Static).update(format_activity_status_line(event))
+            self.activity_hold_until = time.monotonic() + 0.8
+            self.query_one("#activity", Static).update(format_global_activity_status(event, self.spinner_index))
+            if self._is_tui_reply_event(event):
+                self.reply_activity_verb = capd_activity_verb(event)
+                self._render_tui_reply_activity()
+
+        def _begin_tui_reply_activity(self, message_id: str) -> None:
+            self.reply_message_id = str(message_id or "")
+            self.reply_activity_verb = "Planning"
+            self._render_tui_reply_activity()
+
+        def _clear_tui_reply_activity(self) -> None:
+            self.reply_message_id = ""
+            self.reply_activity_verb = ""
+            self.query_one("#reply-activity", Static).update("")
+
+        def _is_tui_reply_event(self, event: CoreActivityEvent) -> bool:
+            return bool(
+                self.reply_message_id
+                and event.message_id == self.reply_message_id
+                and event.integration_id == "tui"
+                and event.channel_target == self.runtime.user
+            )
+
+        def _render_tui_reply_activity(self) -> None:
+            if self.reply_message_id:
+                self.query_one("#reply-activity", Static).update(
+                    f"Alphonse: {self.reply_activity_verb} {activity_spinner(self.spinner_index)}"
+                )
+
+        def _advance_activity_indicators(self) -> None:
+            self.spinner_index += 1
+            self._render_tui_reply_activity()
+            self._refresh_global_activity()
+
+        def _refresh_global_activity(self) -> None:
+            active_work = self.external_active_work if self.external_daemon else self.daemon.active_work() if self.daemon else {}
+            activity = self.external_activity if self.external_daemon else self.daemon.activity_status() if self.daemon else {"state": "idle"}
+            if active_work:
+                self.query_one("#activity", Static).update(f"Working {activity_spinner(self.spinner_index)}")
+                return
+            if time.monotonic() < self.activity_hold_until:
+                return
+            self.query_one("#activity", Static).update(
+                format_global_activity_state(activity, error=self.external_processor_error)
+            )
 
         def _apply_processing_results(self, results: list[TuiProcessingResult]) -> None:
             chat = self.query_one("#chat", RichLog)
@@ -1264,15 +1583,28 @@ def _build_textual_app_class() -> type[Any]:
 
         def _refresh_status(self) -> None:
             state = get_state()
+            active_work = self.external_active_work if self.external_daemon else self.daemon.active_work() if self.daemon else {}
+            active_text = format_daemon_active_work(active_work)
+            queue_text = (
+                f"{self.external_queue_size} ready, {self.external_queue_counts.get('processing', 0)} processing"
+                if self.external_daemon
+                else str(self.runtime.queue.size())
+            )
+            inference_provider, inference_model = inference_status_parts(
+                self.external_inference_settings if self.external_daemon else None,
+                runtime=self.runtime if not self.external_daemon else None,
+            )
             text = "\n".join(
                 [
                     f"daemon: {format_daemon_connection_status(self.daemon_connection_status)}",
+                    f"model provider: {inference_provider}",
+                    f"model: {inference_model}",
                     f"state: {state.key}",
                     f"processing: {self.processor.is_processing if not self.external_daemon else 'daemon'}",
                     f"user: {self.runtime.user}",
                     f"current project: {format_current_project_status(self.runtime)}",
-                    f"inference: {format_inference_status(self.runtime)}",
-                    f"queue: {self.external_queue_size if self.external_daemon else self.runtime.queue.size()}",
+                    f"queue: {queue_text}",
+                    f"active work: {active_text or '-'}",
                     f"last message: {self.last_message_id or '-'}",
                 ]
             )
@@ -1297,3 +1629,13 @@ def format_daemon_connection_status(status: str) -> str:
     if normalized == "connected":
         return "connected"
     return "disconnected"
+
+
+def format_daemon_active_work(active_work: dict[str, Any] | None) -> str:
+    if not isinstance(active_work, dict):
+        return ""
+    prompt = " ".join(str(active_work.get("prompt") or "").split())
+    if not prompt:
+        return ""
+    user = str(active_work.get("user") or "unknown")
+    return f"{user}: {prompt[:96]}"

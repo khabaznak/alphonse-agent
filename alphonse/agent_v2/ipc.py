@@ -6,6 +6,7 @@ import json
 import os
 import socket
 import threading
+import traceback
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -53,6 +54,21 @@ class V2DaemonClient:
 
     def restart_integrations(self) -> dict[str, Any]:
         return self.request("restart_integrations")
+
+    def inference_settings(self) -> dict[str, Any]:
+        return self.request("inference_settings")
+
+    def inference_providers(self) -> dict[str, Any]:
+        return self.request("inference_providers")
+
+    def inference_models(self, provider_key: str) -> dict[str, Any]:
+        return self.request("inference_models", provider_key=provider_key)
+
+    def set_inference_settings(self, *, provider_key: str, model_id: str) -> dict[str, Any]:
+        # Model validation performs one bounded provider request. It needs a
+        # longer timeout than routine daemon health and queue operations.
+        client = V2DaemonClient(self.socket_path, timeout_sec=max(self.timeout_sec, 35.0))
+        return client.request("set_inference_settings", provider_key=provider_key, model_id=model_id)
 
     def scheduled_tasks(self, **filters: Any) -> dict[str, Any]:
         return self.request("scheduled_tasks", **filters)
@@ -127,6 +143,7 @@ class V2DaemonServer:
                 result = self._dispatch(request)
                 response = {"ok": True, "result": result}
             except Exception as exc:
+                traceback.print_exc()
                 response = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
             connection.sendall((json.dumps(response, sort_keys=True) + "\n").encode("utf-8"))
 
@@ -139,13 +156,38 @@ class V2DaemonServer:
             return {"service": "alphonse-v2-daemon", "status": "ready"}
         if method == "status":
             runtime = self.daemon.runtime
-            due = runtime.schedule_store.due_tasks()
+            status_error = ""
+            try:
+                due_count = len(runtime.schedule_store.due_tasks())
+            except Exception as exc:
+                due_count = -1
+                status_error = f"schedule_status: {type(exc).__name__}: {exc}"
+            try:
+                queue_size = runtime.queue.size()
+            except Exception as exc:
+                queue_size = -1
+                status_error = status_error or f"queue_status: {type(exc).__name__}: {exc}"
+            try:
+                outbound_queue_size = len(runtime.outbox.list_pending(limit=1000))
+            except Exception as exc:
+                outbound_queue_size = -1
+                status_error = status_error or f"outbox_status: {type(exc).__name__}: {exc}"
+            queue_counts = getattr(runtime.queue, "status_counts", lambda: {})()
+            outbox_counts = getattr(runtime.outbox, "status_counts", lambda: {})()
+            processor_thread = getattr(self.daemon, "_processor_thread", None)
             return {
                 "service": "alphonse-v2-daemon",
                 "daemon_id": getattr(self.daemon, "daemon_id", ""),
-                "queue_size": runtime.queue.size(),
-                "outbound_queue_size": len(runtime.outbox.list_pending(limit=1000)),
-                "due_schedules": len(due),
+                "queue_size": queue_size,
+                "outbound_queue_size": outbound_queue_size,
+                "inbound_counts": dict(queue_counts) if isinstance(queue_counts, dict) else {},
+                "outbound_counts": dict(outbox_counts) if isinstance(outbox_counts, dict) else {},
+                "active_work": self.daemon.active_work(),
+                "activity": self.daemon.activity_status(),
+                "due_schedules": due_count,
+                "processor_alive": bool(processor_thread is not None and processor_thread.is_alive()),
+                "last_processor_error": str(getattr(self.daemon, "_last_processor_error", "") or ""),
+                "status_error": status_error,
                 "scheduler": self.daemon.scheduler.stats.__dict__,
             }
         if method == "stop":
@@ -156,6 +198,29 @@ class V2DaemonServer:
         if method == "restart_integrations":
             self.daemon.restart_integrations()
             return {"status": "restarted"}
+        if method == "inference_settings":
+            return {"settings": self.daemon.runtime.inference_settings_store.get().to_dict()}
+        if method == "inference_providers":
+            from alphonse.agent_v2.inference_settings import inference_provider_descriptors
+            from alphonse.agent_v2.inference_settings import provider_status
+
+            return {
+                "providers": [
+                    provider_status(descriptor.provider_key)
+                    for descriptor in inference_provider_descriptors()
+                ]
+            }
+        if method == "inference_models":
+            from alphonse.agent_v2.inference_settings import provider_status
+
+            provider_key = str(params.get("provider_key") or "").strip()
+            return provider_status(provider_key)
+        if method == "set_inference_settings":
+            settings = self.daemon.update_inference_settings(
+                provider_key=str(params.get("provider_key") or ""),
+                model_id=str(params.get("model_id") or ""),
+            )
+            return {"settings": settings}
         if method == "queue_message":
             queued = self.daemon.runtime.channel.queue_message(
                 prompt=str(params.get("prompt") or ""),

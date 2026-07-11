@@ -15,9 +15,14 @@ from alphonse.agent_v2.integrations import IntegrationRegistry
 from alphonse.agent_v2.interfaces.tui import build_tui_runtime
 from alphonse.agent_v2.interfaces.tui import format_current_project_status
 from alphonse.agent_v2.interfaces.tui import format_daemon_connection_status
+from alphonse.agent_v2.interfaces.tui import format_daemon_active_work
 from alphonse.agent_v2.interfaces.tui import format_activity_message
 from alphonse.agent_v2.interfaces.tui import format_activity_status_line
+from alphonse.agent_v2.interfaces.tui import format_global_activity_state
+from alphonse.agent_v2.interfaces.tui import format_global_activity_status
 from alphonse.agent_v2.interfaces.tui import format_inference_status
+from alphonse.agent_v2.interfaces.tui import format_inference_settings_status
+from alphonse.agent_v2.interfaces.tui import inference_status_parts
 from alphonse.agent_v2.interfaces.tui import format_slash_command_suggestions
 from alphonse.agent_v2.interfaces.tui import matching_slash_commands
 from alphonse.agent_v2.interfaces.tui import process_tui_queue_once
@@ -146,6 +151,10 @@ def test_capd_activity_events_include_phase_signifiers_and_plan_internal_state()
     assert "thinking" in labels
     assert "working" in labels
     assert "Answering the greeting." in messages
+    assert all(event.message_id for event in events)
+    assert all(event.user == "alex" for event in events)
+    assert all(event.integration_id == "tui" for event in events)
+    assert all(event.channel_target == "alex" for event in events)
 
 
 def test_format_activity_message_renders_label_and_message() -> None:
@@ -178,6 +187,20 @@ def test_format_activity_status_line_falls_back_to_phase() -> None:
     assert format_activity_status_line(event) == "Check"
 
 
+def test_global_activity_status_is_safe_and_reports_terminal_states() -> None:
+    event = CoreActivityEvent(
+        phase=ImprovementPhase.PLAN,
+        label="thinking",
+        message="Sensitive task detail",
+        user="other-user",
+    )
+
+    assert format_global_activity_status(event, 1) == "Working: Planning /"
+    assert format_global_activity_state({"state": "waiting"}) == "Waiting: user input"
+    assert format_global_activity_state({"state": "error"}, error="token limit reached") == "Error: model token limit"
+    assert format_global_activity_state({"state": "idle"}) == "Idle: ready"
+
+
 def test_format_slash_command_suggestions_filters_matches() -> None:
     assert "> /integrations - Configure optional integrations" in format_slash_command_suggestions("/")
     assert "> /project-context - Edit the active project context" in format_slash_command_suggestions("/project-c")
@@ -200,6 +223,13 @@ def test_queue_integrations_command_opens_command_flow() -> None:
 
     assert result.command == "integrations"
     assert result.queued is False
+
+
+def test_queue_model_commands_open_local_command_flows() -> None:
+    runtime = build_tui_runtime(user="alex")
+
+    assert queue_tui_input(runtime, "/model").command == "model"
+    assert queue_tui_input(runtime, "/model-provider").command == "model-provider"
 
 
 def test_tui_integration_options_and_telegram_config_save() -> None:
@@ -336,6 +366,8 @@ def test_sidebar_status_helpers_render_project_and_inference(tmp_path) -> None:
     runtime.active_project_id = project.project_id
     assert format_current_project_status(runtime) == "Alpha"
     assert format_inference_status(runtime) == "stub / stub"
+    assert format_inference_settings_status({"provider_key": "openai_codex", "model_id": ""}) == "openai_codex / default"
+    assert inference_status_parts({"provider_key": "openai_codex", "model_id": "gpt-5.5"}) == ("openai_codex", "gpt-5.5")
 
 
 def test_daemon_connection_status_distinguishes_external_embedded_and_disconnected() -> None:
@@ -343,6 +375,11 @@ def test_daemon_connection_status_distinguishes_external_embedded_and_disconnect
     assert format_daemon_connection_status("embedded") == "connected (embedded)"
     assert format_daemon_connection_status("disconnected") == "disconnected"
     assert format_daemon_connection_status("unexpected") == "disconnected"
+
+
+def test_daemon_active_work_formatting_collapses_whitespace() -> None:
+    assert format_daemon_active_work({"user": "alex", "prompt": "  Reply\nnow  "}) == "alex: Reply now"
+    assert format_daemon_active_work({}) == ""
 
 
 def test_submitting_shell_prompt_displays_bash_stdout() -> None:

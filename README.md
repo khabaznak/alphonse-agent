@@ -115,13 +115,16 @@ be managed with the short lifecycle commands:
 ```bash
 source .venv/bin/activate
 alphonse start
+alphonse start tui
 alphonse status
 alphonse stop
 ```
 
 `alphonse start` runs the daemon in the background and waits for its local
-health socket. `alphonse status` reports daemon, queue, scheduler, and
-outbound status. Daemon output is written to `~/.alphonse/v2-daemon.log`.
+health socket. `alphonse start tui` starts or reuses the daemon and then opens
+the TUI while leaving the daemon running when the TUI closes. `alphonse status`
+reports daemon, queue, scheduler, and outbound status. Daemon output is
+written to `~/.alphonse/v2-daemon.log`.
 
 The daemon uses a local Unix socket for interface communication. Its default
 runtime files are stored under `~/.alphonse/`:
@@ -131,6 +134,7 @@ runtime files are stored under `~/.alphonse/`:
 - `v2-outbox.sqlite3` — durable outbound message queue
 - `v2-scheduled-tasks.sqlite3` — scheduled task definitions and executions
 - `v2-integrations.sqlite3` — integration configuration and local secrets
+- `v2-inference.sqlite3` — daemon-wide inference provider and model selection
 
 Override paths with these environment variables when needed:
 
@@ -155,6 +159,12 @@ it starts an embedded daemon for the default out-of-the-box experience.
 
 Use `/integrations` inside the TUI to configure optional providers. TUI setup
 and configuration changes are applied to the daemon-owned runtime.
+
+Use `/model-provider` to select the inference provider and `/model` to select
+the model used by new v2 tasks. The initial provider is OpenAI Codex: Alphonse
+reads the locally signed-in Codex CLI model catalog and validates a choice with
+the installed CLI before saving it. The selection applies to TUI, Telegram, and
+scheduled tasks; a CAPD task already in progress keeps its original model.
 
 ### Configure Telegram in v2
 

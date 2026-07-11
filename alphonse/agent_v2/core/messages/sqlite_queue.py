@@ -84,22 +84,24 @@ class SQLiteMessageQueue:
         *,
         lease_owner: str | None = None,
         lease_seconds: int = 60,
+        include_owned: bool = False,
     ) -> QueuedMessage | None:
         owner = str(lease_owner or self.lease_owner or "default").strip() or "default"
         now = _now()
         lease_expires_at = (now + timedelta(seconds=max(1, int(lease_seconds)))).isoformat()
         with self._connect() as conn:
-            owned = conn.execute(
-                f"""
-                SELECT * FROM v2_inbound_messages
-                WHERE status = 'processing' AND lease_owner = ?
-                  {_where(selector)}
-                ORDER BY sequence LIMIT 1
-                """,
-                (owner, *_values(selector)),
-            ).fetchone()
-            if owned is not None:
-                return _row_to_message(owned)
+            if include_owned:
+                owned = conn.execute(
+                    f"""
+                    SELECT * FROM v2_inbound_messages
+                    WHERE status = 'processing' AND lease_owner = ?
+                      {_where(selector)}
+                    ORDER BY sequence LIMIT 1
+                    """,
+                    (owner, *_values(selector)),
+                ).fetchone()
+                if owned is not None:
+                    return _row_to_message(owned)
             row = conn.execute(
                 f"""
                 SELECT * FROM v2_inbound_messages
@@ -151,14 +153,26 @@ class SQLiteMessageQueue:
         error: str = "",
         next_attempt_at: datetime | str | None = None,
         lease_owner: str | None = None,
+        max_attempts: int | None = None,
     ) -> bool:
         owner = str(lease_owner or self.lease_owner or "default").strip() or "default"
         retry_at = _coerce_iso(next_attempt_at or _now())
         with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT attempt_count FROM v2_inbound_messages
+                WHERE message_id = ? AND status = 'processing' AND lease_owner = ?
+                """,
+                (str(message_id or "").strip(), owner),
+            ).fetchone()
+            if row is None:
+                return False
+            attempts = int(row["attempt_count"] or 0)
+            terminal = max_attempts is not None and attempts >= max(1, int(max_attempts))
             cursor = conn.execute(
                 """
                 UPDATE v2_inbound_messages
-                SET status = 'retry_wait',
+                SET status = ?,
                     processing_at = '',
                     lease_owner = '',
                     lease_expires_at = '',
@@ -166,7 +180,13 @@ class SQLiteMessageQueue:
                     last_error = ?
                 WHERE message_id = ? AND status = 'processing' AND lease_owner = ?
                 """,
-                (retry_at, str(error or "").strip(), str(message_id or "").strip(), owner),
+                (
+                    "failed" if terminal else "retry_wait",
+                    "" if terminal else retry_at,
+                    str(error or "").strip(),
+                    str(message_id or "").strip(),
+                    owner,
+                ),
             )
             return cursor.rowcount == 1
 
@@ -184,8 +204,10 @@ class SQLiteMessageQueue:
                     lease_owner = '',
                     lease_expires_at = ''
                 WHERE status = 'processing'
-                  AND lease_expires_at != ''
-                  AND lease_expires_at <= ?
+                  AND (
+                    (lease_expires_at != '' AND lease_expires_at <= ?)
+                    OR (lease_owner = '' AND lease_expires_at = '')
+                  )
                 """,
                 (timestamp,),
             )
@@ -202,6 +224,18 @@ class SQLiteMessageQueue:
                 (_now_iso(), *_values(selector)),
             ).fetchone()
         return int(row["count"] if row is not None else 0)
+
+    def status_counts(self) -> dict[str, int]:
+        counts = {"pending": 0, "processing": 0, "retry_wait": 0, "failed": 0}
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT status, COUNT(*) AS count FROM v2_inbound_messages GROUP BY status"
+            ).fetchall()
+        for row in rows:
+            status = str(row["status"] or "")
+            if status in counts:
+                counts[status] = int(row["count"] or 0)
+        return counts
 
     def _connect(self) -> sqlite3.Connection:
         if self._memory_connection is not None:

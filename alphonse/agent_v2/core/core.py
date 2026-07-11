@@ -6,7 +6,7 @@ import or adapt v1 agent internals.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from enum import Enum
 from time import sleep
@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any, Callable, Protocol
 
 from alphonse.agent_v2.core.state.ddfsm import AVAILABLE
 from alphonse.agent_v2.core.state.ddfsm import ERROR
+from alphonse.agent_v2.core.state.ddfsm import ERROR_CLEARED
 from alphonse.agent_v2.core.state.ddfsm import MESSAGE_DEQUEUED
 from alphonse.agent_v2.core.state.ddfsm import PROCESSOR_COMPLETED
 from alphonse.agent_v2.core.state.ddfsm import PROCESSOR_FAILED
@@ -153,6 +154,11 @@ class CoreActivityEvent:
     label: str
     message: str
     speaker: str = "Alphonse"
+    task_id: str = ""
+    message_id: str = ""
+    user: str = ""
+    integration_id: str = ""
+    channel_target: str = ""
 
 
 @dataclass(frozen=True)
@@ -189,9 +195,20 @@ class CoreLoopContext:
     project_store: Any | None = None
     schedule_store: Any | None = None
     delivery_sink: Callable[[dict[str, Any]], Any] | None = None
+    consumed_message_ids: list[str] = field(default_factory=list)
 
     def consume_message(self, selector: MessageSelector | None = None) -> QueuedMessage | None:
-        return self.messages.dequeue(selector)
+        queued = self.messages.dequeue(selector)
+        if queued is not None:
+            self.consumed_message_ids.append(queued.message_id)
+        return queued
+
+    def acknowledge_consumed_messages(self) -> None:
+        acknowledge = getattr(self.messages, "ack", None)
+        if not callable(acknowledge):
+            return
+        for message_id in self.consumed_message_ids:
+            acknowledge(message_id)
 
     def emit_activity(self, *, phase: ImprovementPhase, label: str, message: str) -> None:
         if self.activity_sink is None:
@@ -347,21 +364,37 @@ class AlphonseCore:
         from alphonse.agent_v2.core.intelligence.task_state import TaskState
 
         task = TaskState.from_queued_message(queued)
-        try:
-            result = self.intelligence.process(
-                task,
-                CoreLoopContext(
-                    messages=self.messages,
-                    tools=self.tools,
-                    inference=self.inference,
-                    activity_sink=self.activity_sink,
-                    ui_event_sink=self.ui_event_sink,
-                    question_store=self.question_store,
-                    project_store=self.project_store,
-                    schedule_store=self.schedule_store,
-                    delivery_sink=self.delivery_sink,
-                ),
+
+        def _task_activity_sink(event: CoreActivityEvent) -> None:
+            if self.activity_sink is None:
+                return
+            channel = task.metadata.get("channel") if isinstance(task.metadata, dict) else {}
+            channel = channel if isinstance(channel, dict) else {}
+            self.activity_sink(
+                replace(
+                    event,
+                    task_id=str(task.task_id or ""),
+                    message_id=str(queued.message_id or ""),
+                    user=str(task.user or ""),
+                    integration_id=str(channel.get("integration_id") or ""),
+                    channel_target=str(channel.get("channel_target") or ""),
+                )
             )
+        try:
+            context = CoreLoopContext(
+                messages=self.messages,
+                tools=self.tools,
+                inference=self.inference,
+                activity_sink=_task_activity_sink,
+                ui_event_sink=self.ui_event_sink,
+                question_store=self.question_store,
+                project_store=self.project_store,
+                schedule_store=self.schedule_store,
+                delivery_sink=self.delivery_sink,
+            )
+            result = self.intelligence.process(task, context)
+            if result.status != ProcessingStatus.FAILED:
+                context.acknowledge_consumed_messages()
         except Exception as exc:
             result = ProcessingResult(
                 snapshot=StateSnapshot(
@@ -403,6 +436,12 @@ class AlphonseCore:
         """Request loop shutdown without consuming another queue message."""
         self._stop_requested = True
         self.fsm.handle(State.snapshot(), CoreSignal(STOP_REQUESTED))
+
+    def clear_failure(self) -> CurrentState:
+        """Release the core after its host has durably recorded a failed attempt."""
+        current = State.snapshot()
+        outcome = self.fsm.handle(current, CoreSignal(ERROR_CLEARED))
+        return State.apply(outcome)
 
     def _transition(self, signal_key: str) -> CurrentState:
         current = State.snapshot()
