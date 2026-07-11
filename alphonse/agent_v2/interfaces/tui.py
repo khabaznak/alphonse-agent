@@ -748,7 +748,8 @@ def _build_textual_app_class() -> type[Any]:
         from textual.app import App, ComposeResult
         from textual.screen import ModalScreen
         from textual.containers import Horizontal, Vertical
-        from textual.widgets import Button, Footer, Header, Input, RichLog, Select, Static, TextArea
+        from textual.widgets import Button, Footer, Header, Input, OptionList, RichLog, Select, Static, TextArea
+        from textual.widgets.option_list import Option
         from rich.text import Text
     except ModuleNotFoundError as exc:
         raise RuntimeError(
@@ -996,6 +997,60 @@ def _build_textual_app_class() -> type[Any]:
             self.query_one("#save-model", Button).disabled = False
             self.query_one("#model-error", Static).update(error)
 
+    class SlashCommandScreen(ModalScreen[str | None]):
+        def compose(self) -> ComposeResult:
+            with Vertical(id="slash-command-dialog"):
+                yield Static("Commands", classes="dialog-title")
+                yield Input(value="/", id="slash-command-filter")
+                yield OptionList(id="slash-command-options")
+
+        def on_mount(self) -> None:
+            self._refresh_options()
+            self.query_one("#slash-command-filter", Input).focus()
+
+        def on_input_changed(self, event: Input.Changed) -> None:
+            if event.input.id == "slash-command-filter":
+                self._refresh_options()
+
+        def on_input_submitted(self, event: Input.Submitted) -> None:
+            if event.input.id == "slash-command-filter":
+                self._choose_highlighted()
+
+        def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+            self.dismiss(str(event.option.id or "") or None)
+
+        def on_key(self, event: Any) -> None:
+            if event.key == "escape":
+                event.stop()
+                self.dismiss(None)
+                return
+            if event.key not in {"up", "down"}:
+                return
+            event.stop()
+            options = self.query_one("#slash-command-options", OptionList)
+            if options.option_count <= 0:
+                return
+            current = options.highlighted if options.highlighted is not None else 0
+            options.highlighted = max(0, min(options.option_count - 1, current + (1 if event.key == "down" else -1)))
+            options.scroll_to_highlight()
+
+        def _refresh_options(self) -> None:
+            typed = self.query_one("#slash-command-filter", Input).value
+            options = self.query_one("#slash-command-options", OptionList)
+            options.clear_options()
+            options.add_options(
+                Option(f"{command} - {description}", id=command)
+                for command, description in matching_slash_commands(typed)
+            )
+            if options.option_count:
+                options.highlighted = 0
+
+        def _choose_highlighted(self) -> None:
+            options = self.query_one("#slash-command-options", OptionList)
+            if options.highlighted is None:
+                return
+            self.dismiss(str(options.get_option_at_index(options.highlighted).id or "") or None)
+
     class TelegramConfigScreen(ModalScreen[bool]):
         def __init__(self, runtime: TuiRuntime) -> None:
             super().__init__()
@@ -1113,12 +1168,18 @@ def _build_textual_app_class() -> type[Any]:
             padding: 1;
         }
 
-        #slash-commands {
-            height: auto;
-            max-height: 7;
-            padding: 0 1;
-            color: $text-muted;
-            display: none;
+        #slash-command-dialog {
+            width: 80%;
+            max-width: 80;
+            height: 18;
+            max-height: 80%;
+            padding: 1;
+            border: solid $primary;
+            background: $surface;
+        }
+
+        #slash-command-options {
+            height: 1fr;
         }
 
         #reply-activity {
@@ -1215,7 +1276,6 @@ def _build_textual_app_class() -> type[Any]:
             with Horizontal(id="main"):
                 with Vertical(id="chat-column"):
                     yield RichLog(id="chat", wrap=True, highlight=True)
-                    yield Static(id="slash-commands")
                     yield Static(id="reply-activity")
                     yield Input(placeholder="Message Alphonse...", id="prompt")
                 with Vertical(id="side-column"):
@@ -1236,33 +1296,12 @@ def _build_textual_app_class() -> type[Any]:
         def on_input_changed(self, event: Input.Changed) -> None:
             if event.input.id != "prompt":
                 return
-            self._refresh_slash_commands(event.value)
+            if event.value == "/":
+                event.input.value = ""
+                self._open_slash_command_palette()
 
         def on_key(self, event: Any) -> None:
-            if not self.slash_command_matches:
-                return
-            if getattr(self.focused, "id", "") != "prompt":
-                return
-            if event.key == "down":
-                event.stop()
-                self.slash_command_selected_index = min(
-                    self.slash_command_selected_index + 1,
-                    len(self.slash_command_matches) - 1,
-                )
-                self._refresh_slash_commands(self.query_one("#prompt", Input).value, reset_selection=False)
-                return
-            if event.key == "up":
-                event.stop()
-                self.slash_command_selected_index = max(self.slash_command_selected_index - 1, 0)
-                self._refresh_slash_commands(self.query_one("#prompt", Input).value, reset_selection=False)
-                return
-            if event.key == "enter":
-                event.stop()
-                command = self.slash_command_matches[self.slash_command_selected_index][0]
-                prompt = self.query_one("#prompt", Input)
-                prompt.value = command
-                self._refresh_slash_commands("")
-                self._handle_prompt_submission(command)
+            _ = event
 
         def on_input_submitted(self, event: Input.Submitted) -> None:
             prompt = event.value
@@ -1270,7 +1309,6 @@ def _build_textual_app_class() -> type[Any]:
             self._handle_prompt_submission(prompt)
 
         def _handle_prompt_submission(self, prompt: str) -> None:
-            self._refresh_slash_commands("")
             command = detect_tui_slash_command(prompt)
             if command == "project":
                 self.query_one("#chat", RichLog).write(Text.assemble((self.runtime.user, "bold cyan"), f": {prompt.strip()}"))
@@ -1565,21 +1603,11 @@ def _build_textual_app_class() -> type[Any]:
             if self.runtime.queue.size(MessageSelector(user=self.runtime.user)) > 0:
                 self._start_processor_if_needed()
 
-        def _refresh_slash_commands(self, prompt: str, *, reset_selection: bool = True) -> None:
-            suggestions = self.query_one("#slash-commands", Static)
-            matches = matching_slash_commands(prompt)
-            if reset_selection or not matches:
-                self.slash_command_selected_index = 0
-            self.slash_command_matches = matches
-            if matches:
-                self.slash_command_selected_index = min(self.slash_command_selected_index, len(matches) - 1)
-            rendered = format_slash_command_suggestions(prompt, selected_index=self.slash_command_selected_index)
-            if rendered:
-                suggestions.update(rendered)
-                suggestions.display = True
-                return
-            suggestions.update("")
-            suggestions.display = False
+        def _open_slash_command_palette(self) -> None:
+            self.push_screen(
+                SlashCommandScreen(),
+                callback=lambda command: self._handle_prompt_submission(command) if command else None,
+            )
 
         def _refresh_status(self) -> None:
             state = get_state()
