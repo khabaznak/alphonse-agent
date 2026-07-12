@@ -217,6 +217,13 @@ class ProjectStore:
         with self._connect() as conn:
             return conn.execute("UPDATE v2_projects SET owner_user_id=?, updated_at=? WHERE owner_user_id=?", (str(new_user_id), _now_iso(), str(old_user_id))).rowcount
 
+    def delete_owned_by(self, user_id: str) -> list[str]:
+        with self._connect() as conn:
+            roots = [str(row[0]) for row in conn.execute("SELECT root_path FROM v2_projects WHERE owner_user_id=?", (str(user_id),)).fetchall()]
+            conn.execute("DELETE FROM v2_project_members WHERE user_id=? OR project_id IN (SELECT project_id FROM v2_projects WHERE owner_user_id=?)", (str(user_id), str(user_id)))
+            conn.execute("DELETE FROM v2_projects WHERE owner_user_id=?", (str(user_id),))
+        return roots
+
     def _connect(self) -> sqlite3.Connection:
         if self._memory_connection is not None:
             return _ConnectionProxy(self._memory_connection)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -63,7 +64,7 @@ class V2UserStore:
     def status(self) -> dict[str, object]:
         admin = self.admin_user()
         return {"onboarded": admin is not None, "admin_user": admin.to_dict() if admin else None,
-                "users_root": self.users_root()}
+                "users_root": str(self.users_root())}
 
     def users_root(self) -> Path:
         value = self._setting("users_root")
@@ -180,10 +181,39 @@ class V2UserStore:
         with self._connect() as conn:
             return conn.execute("DELETE FROM v2_user_addresses WHERE address_id=?", (str(address_id),)).rowcount > 0
 
+    def delete_user(self, user_id: str) -> bool:
+        """Permanently remove a non-admin user and their managed profile tree."""
+        user = self.get_user(user_id)
+        if user is None:
+            return False
+        if self.is_admin(user.user_id):
+            raise ValueError("admin_user_cannot_be_deleted")
+        profile = self.users_root() / user.user_id
+        with self._connect() as conn:
+            conn.execute("DELETE FROM v2_user_addresses WHERE user_id=?", (user.user_id,))
+            deleted = conn.execute("DELETE FROM v2_users WHERE user_id=?", (user.user_id,)).rowcount > 0
+        if profile.exists():
+            shutil.rmtree(profile)
+        return deleted
+
     def list_addresses(self, user_id: str) -> list[UserAddress]:
         with self._connect() as conn:
             rows = conn.execute("SELECT * FROM v2_user_addresses WHERE user_id=? ORDER BY is_preferred DESC, created_at", (str(user_id),)).fetchall()
         return [_address(row) for row in rows if _address(row) is not None]  # type: ignore[list-item]
+
+    def normalize_duplicate_addresses(self, integration_ids: set[str]) -> int:
+        """Collapse legacy duplicate provider identities toward configured adapters."""
+        removed = 0
+        with self._connect() as conn:
+            groups = conn.execute("SELECT user_id, provider_key, provider_user_id FROM v2_user_addresses GROUP BY user_id, provider_key, provider_user_id HAVING COUNT(*) > 1").fetchall()
+            for group in groups:
+                rows = conn.execute("SELECT * FROM v2_user_addresses WHERE user_id=? AND provider_key=? AND provider_user_id=? ORDER BY is_preferred DESC, updated_at DESC", tuple(group)).fetchall()
+                keep = next((row for row in rows if str(row["integration_id"]) in integration_ids), rows[0])
+                for row in rows:
+                    if row["address_id"] == keep["address_id"]:
+                        continue
+                    removed += conn.execute("DELETE FROM v2_user_addresses WHERE address_id=?", (row["address_id"],)).rowcount
+        return removed
 
     def address_for_inbound(self, *, integration_id: str, provider_user_id: str) -> UserAddress | None:
         with self._connect() as conn:

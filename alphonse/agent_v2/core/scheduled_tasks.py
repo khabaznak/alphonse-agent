@@ -207,6 +207,10 @@ class ScheduledTaskStore:
             row = conn.execute("SELECT * FROM v2_scheduled_tasks WHERE scheduled_task_id = ?", (task_id,)).fetchone()
         return _task_from_row(row)
 
+    def get_task_for_owner(self, scheduled_task_id: str, *, owner_user_id: str) -> ScheduledTaskRecord | None:
+        task = self.get_task(scheduled_task_id)
+        return task if task is not None and task.owner_user_id == str(owner_user_id or "").strip() else None
+
     def list_tasks(
         self,
         *,
@@ -256,10 +260,15 @@ class ScheduledTaskStore:
         return [_task_from_row(row) for row in rows if _task_from_row(row) is not None]
 
     def pause_task(self, scheduled_task_id: str) -> ScheduledTaskRecord:
+        task = self._require_task(scheduled_task_id)
+        if task.status != "active":
+            raise ValueError("scheduled_task_not_active")
         return self._set_status(scheduled_task_id, "paused", clear_next=True)
 
     def resume_task(self, scheduled_task_id: str, *, now: datetime | None = None) -> ScheduledTaskRecord:
         task = self._require_task(scheduled_task_id)
+        if task.status != "paused":
+            raise ValueError("scheduled_task_not_paused")
         next_run_at = compute_next_run_at(schedule=task.schedule, timezone_name=task.timezone, after=now or _now_utc())
         updated = _replace_task(task, status="active", next_run_at=next_run_at, updated_at=_now_iso())
         self._save_task(updated)
@@ -267,6 +276,26 @@ class ScheduledTaskStore:
 
     def cancel_task(self, scheduled_task_id: str) -> ScheduledTaskRecord:
         return self._set_status(scheduled_task_id, "cancelled", clear_next=True)
+
+    def update_task(self, scheduled_task_id: str, *, name: str, prompt: str) -> ScheduledTaskRecord:
+        task = self._require_task(scheduled_task_id)
+        if task.status not in {"active", "paused"}:
+            raise ValueError("scheduled_task_not_editable")
+        name_value = str(name or "").strip()
+        prompt_value = str(prompt or "").strip()
+        if not name_value:
+            raise ValueError("scheduled_task_name_required")
+        if not prompt_value:
+            raise ValueError("scheduled_task_prompt_required")
+        updated = _replace_task(task, name=name_value, prompt=prompt_value, updated_at=_now_iso())
+        self._save_task(updated)
+        return updated
+
+    def delete_task(self, scheduled_task_id: str) -> bool:
+        task = self._require_task(scheduled_task_id)
+        with self._connect() as conn:
+            conn.execute("DELETE FROM v2_scheduled_task_executions WHERE scheduled_task_id = ?", (task.scheduled_task_id,))
+            return conn.execute("DELETE FROM v2_scheduled_tasks WHERE scheduled_task_id = ?", (task.scheduled_task_id,)).rowcount == 1
 
     def complete_task(self, scheduled_task_id: str, *, last_run_at: str | None = None) -> ScheduledTaskRecord:
         task = self._require_task(scheduled_task_id)

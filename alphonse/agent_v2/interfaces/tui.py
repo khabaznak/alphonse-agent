@@ -40,6 +40,7 @@ from alphonse.agent_v2.core.projects import ProjectRecord
 from alphonse.agent_v2.core.projects import ProjectStore
 from alphonse.agent_v2.core.questions import SQLiteQuestionStore
 from alphonse.agent_v2.core.scheduled_tasks import ScheduledTaskStore
+from alphonse.agent_v2.core.scheduled_tasks import schedule_summary
 from alphonse.agent_v2.core.state import get_state
 from alphonse.agent_v2.core.state import reset_state
 from alphonse.agent_v2.core.tools.registry.native import BASH_TOOL_ID
@@ -83,6 +84,7 @@ TUI_SLASH_COMMANDS: tuple[tuple[str, str], ...] = (
     ("/model-provider", "Select an inference provider"),
     ("/model", "Select and validate an inference model"),
     ("/agent-config", "Edit global agent configuration"),
+    ("/scheduled-tasks", "Manage scheduled tasks"),
     ("/settings", "Configure local user data"),
     ("/users", "Manage Alphonse users"),
 )
@@ -239,7 +241,7 @@ def queue_tui_input(runtime: TuiRuntime, prompt: str) -> TuiSubmissionResult:
         )
 
     command = detect_tui_slash_command(raw_prompt)
-    if command in {"project", "project-context", "integrations", "model-provider", "model", "agent-config", "settings", "users"}:
+    if command in {"project", "project-context", "integrations", "model-provider", "model", "agent-config", "scheduled-tasks", "settings", "users"}:
         return TuiSubmissionResult(
             prompt=prompt_value,
             response="",
@@ -930,6 +932,138 @@ def _build_textual_app_class() -> type[Any]:
                 return
             self.dismiss(True)
 
+    class ScheduledTasksScreen(ModalScreen[bool]):
+        def __init__(
+            self,
+            *,
+            actor_user_id: str,
+            users: list[dict[str, Any]],
+            can_manage_all_users: bool,
+            load_tasks: Callable[[str, str], list[dict[str, Any]]],
+            load_executions: Callable[[str], list[dict[str, Any]]],
+            action: Callable[[str, dict[str, Any]], Any],
+        ) -> None:
+            super().__init__()
+            self.actor_user_id = actor_user_id
+            self.users = users
+            self.can_manage_all_users = can_manage_all_users
+            self.load_tasks = load_tasks
+            self.load_executions = load_executions
+            self.action = action
+            self.tasks: list[dict[str, Any]] = []
+            self.selected_task_id = ""
+            self.remove_open = False
+
+        def compose(self) -> ComposeResult:
+            owner_options = [(str(item.get("display_name") or item.get("user_id") or "User"), str(item.get("user_id") or "")) for item in self.users]
+            status_options = [("All statuses", ""), *[(value.title(), value) for value in ("active", "paused", "completed", "cancelled", "failed")]]
+            with Vertical(id="project-dialog"):
+                yield Static("Scheduled Tasks", classes="dialog-title")
+                if self.can_manage_all_users:
+                    yield Select(owner_options, value=self.actor_user_id, id="scheduled-owner", allow_blank=False)
+                yield Select(status_options, value="", id="scheduled-status", allow_blank=False)
+                yield Select([], id="scheduled-task", prompt="Choose a scheduled task", allow_blank=True)
+                yield Static("Choose a task to see its details.", id="scheduled-task-details")
+                yield Input(placeholder="Task name", id="scheduled-task-name")
+                yield TextArea("", id="scheduled-task-prompt")
+                yield Static("", id="scheduled-task-executions")
+                yield Static("", id="scheduled-task-notice")
+                with Horizontal(classes="dialog-actions"):
+                    yield Button("Save", id="save-scheduled-task", variant="primary")
+                    yield Button("Suspend", id="pause-scheduled-task")
+                    yield Button("Resume", id="resume-scheduled-task")
+                    yield Button("Remove…", id="remove-scheduled-task")
+                    yield Button("Close", id="close-scheduled-tasks")
+                with Horizontal(classes="dialog-actions", id="scheduled-remove-actions"):
+                    yield Button("Cancel task", id="cancel-scheduled-task")
+                    yield Button("Delete permanently", id="delete-scheduled-task")
+
+        def on_mount(self) -> None:
+            self.query_one("#scheduled-remove-actions", Horizontal).display = False
+            self._reload_tasks()
+
+        def on_select_changed(self, event: Select.Changed) -> None:
+            if event.select.id in {"scheduled-owner", "scheduled-status"}:
+                self.selected_task_id = ""
+                self._reload_tasks()
+            elif event.select.id == "scheduled-task":
+                self.selected_task_id = str(event.value or "")
+                self._render_selected()
+
+        def _reload_tasks(self) -> None:
+            owner = str(self.query_one("#scheduled-owner", Select).value or self.actor_user_id) if self.can_manage_all_users else self.actor_user_id
+            status = str(self.query_one("#scheduled-status", Select).value or "")
+            try:
+                self.tasks = self.load_tasks(owner, status)
+            except Exception as exc:
+                self.query_one("#scheduled-task-notice", Static).update(str(exc)); return
+            names = {str(item.get("user_id") or ""): str(item.get("display_name") or item.get("user_id") or "User") for item in self.users}
+            options = [(f"{item.get('name')} [{item.get('status')}] — {names.get(str(item.get('owner_user_id') or ''), item.get('owner_user_id') or 'unknown owner')}", str(item.get("scheduled_task_id") or "")) for item in self.tasks]
+            select = self.query_one("#scheduled-task", Select)
+            select.set_options(options)
+            self._render_selected()
+
+        def _selected(self) -> dict[str, Any] | None:
+            return next((item for item in self.tasks if str(item.get("scheduled_task_id") or "") == self.selected_task_id), None)
+
+        def _render_selected(self) -> None:
+            task = self._selected()
+            details = self.query_one("#scheduled-task-details", Static)
+            name = self.query_one("#scheduled-task-name", Input)
+            prompt = self.query_one("#scheduled-task-prompt", TextArea)
+            executions = self.query_one("#scheduled-task-executions", Static)
+            if task is None:
+                details.update("Choose a task to see its details."); name.value = ""; prompt.text = ""; executions.update("")
+                for button_id in ("save-scheduled-task", "pause-scheduled-task", "resume-scheduled-task", "remove-scheduled-task", "cancel-scheduled-task", "delete-scheduled-task"):
+                    self.query_one(f"#{button_id}", Button).disabled = True
+                return
+            schedule = task.get("schedule") if isinstance(task.get("schedule"), dict) else {}
+            latest = task.get("latest_execution") if isinstance(task.get("latest_execution"), dict) else {}
+            owner_id = str(task.get("owner_user_id") or "")
+            owner_name = next((str(item.get("display_name") or owner_id) for item in self.users if str(item.get("user_id") or "") == owner_id), owner_id or "unknown owner")
+            details.update(f"Owner: {owner_name} ({owner_id}) · {task.get('status')} · {schedule_summary(schedule)} · next: {task.get('next_run_at') or '—'} · last: {task.get('last_run_at') or '—'} · latest: {latest.get('status') or 'not run'}")
+            name.value = str(task.get("name") or ""); prompt.text = str(task.get("prompt") or "")
+            editable = str(task.get("status") or "") in {"active", "paused"}
+            name.disabled = not editable; prompt.disabled = not editable
+            task_status = str(task.get("status") or "")
+            self.query_one("#save-scheduled-task", Button).disabled = not editable
+            self.query_one("#pause-scheduled-task", Button).disabled = task_status != "active"
+            self.query_one("#resume-scheduled-task", Button).disabled = task_status != "paused"
+            self.query_one("#remove-scheduled-task", Button).disabled = False
+            self.query_one("#cancel-scheduled-task", Button).disabled = task_status not in {"active", "paused"}
+            self.query_one("#delete-scheduled-task", Button).disabled = False
+            try:
+                history = self.load_executions(str(task.get("scheduled_task_id") or ""))
+                executions.update("\n".join(f"{item.get('status')} · {item.get('started_at')}" + (f" · {item.get('error') or item.get('last_error')}" if item.get("error") or item.get("last_error") else "") for item in history) or "No executions yet.")
+            except Exception as exc:
+                executions.update(f"Execution history unavailable: {exc}")
+
+        def on_button_pressed(self, event: Button.Pressed) -> None:
+            if event.button.id == "close-scheduled-tasks": self.dismiss(False); return
+            task = self._selected()
+            if task is None:
+                self.query_one("#scheduled-task-notice", Static).update("Choose a task first."); return
+            task_id = str(task.get("scheduled_task_id") or "")
+            if event.button.id == "remove-scheduled-task":
+                self.remove_open = not self.remove_open
+                self.query_one("#scheduled-remove-actions", Horizontal).display = self.remove_open
+                return
+            method = {"save-scheduled-task": "update_scheduled_task", "pause-scheduled-task": "pause_schedule", "resume-scheduled-task": "resume_schedule", "cancel-scheduled-task": "cancel_schedule", "delete-scheduled-task": "delete_scheduled_task"}.get(event.button.id)
+            if method is None: return
+            if method == "cancel_schedule" and str(task.get("status") or "") not in {"active", "paused"}:
+                self.query_one("#scheduled-task-notice", Static).update("Only active or paused tasks can be cancelled."); return
+            values: dict[str, Any] = {"actor_user_id": self.actor_user_id, "scheduled_task_id": task_id}
+            if method == "update_scheduled_task":
+                values.update(name=self.query_one("#scheduled-task-name", Input).value, prompt=self.query_one("#scheduled-task-prompt", TextArea).text)
+            try:
+                self.action(method, values)
+                self.query_one("#scheduled-task-notice", Static).update("Task permanently deleted." if method == "delete_scheduled_task" else "Task updated.")
+                self.selected_task_id = "" if method == "delete_scheduled_task" else task_id
+                self.remove_open = False; self.query_one("#scheduled-remove-actions", Horizontal).display = False
+                self._reload_tasks()
+            except Exception as exc:
+                self.query_one("#scheduled-task-notice", Static).update(str(exc))
+
     class OnboardingScreen(ModalScreen[dict[str, str] | None]):
         def compose(self) -> ComposeResult:
             with Vertical(id="project-dialog"):
@@ -1532,6 +1666,10 @@ def _build_textual_app_class() -> type[Any]:
                 self.query_one("#chat", RichLog).write(Text.assemble((self.runtime.user, "bold cyan"), f": {prompt.strip()}"))
                 self._open_agent_config()
                 return
+            if command == "scheduled-tasks":
+                self.query_one("#chat", RichLog).write(Text.assemble((self.runtime.user, "bold cyan"), f": {prompt.strip()}"))
+                self._open_scheduled_tasks()
+                return
             if command == "settings":
                 self._open_user_settings()
                 return
@@ -1679,6 +1817,34 @@ def _build_textual_app_class() -> type[Any]:
                     return self.daemon_client.request("create_user", display_name=name, role=role)
                 return self.runtime.user_store.create_user(display_name=name, role=role)
             self.push_screen(UsersScreen(_list(), _create), callback=lambda _: self._refresh_status())
+
+        def _open_scheduled_tasks(self) -> None:
+            def _users() -> list[dict[str, Any]]:
+                if self.external_daemon:
+                    values = self.daemon_client.request("users").get("users")
+                    return [dict(item) for item in values if isinstance(item, dict)] if isinstance(values, list) else []
+                return self.daemon.list_users() if self.daemon is not None else []
+            def _tasks(owner_user_id: str, status: str) -> list[dict[str, Any]]:
+                values = {"actor_user_id": self.runtime.user, "owner_user_id": owner_user_id, "status": status}
+                result = self.daemon_client.request("scheduled_tasks", **values) if self.external_daemon else {"tasks": self.daemon.scheduled_tasks(**values)}
+                return [dict(item) for item in result.get("tasks", []) if isinstance(item, dict)]
+            def _executions(scheduled_task_id: str) -> list[dict[str, Any]]:
+                values = {"actor_user_id": self.runtime.user, "scheduled_task_id": scheduled_task_id, "limit": 8}
+                result = self.daemon_client.request("scheduled_executions", **values) if self.external_daemon else {"executions": self.daemon.scheduled_task_executions(**values)}
+                return [dict(item) for item in result.get("executions", []) if isinstance(item, dict)]
+            def _action(method: str, values: dict[str, Any]) -> Any:
+                if self.external_daemon: return self.daemon_client.request(method, **values)
+                if method == "update_scheduled_task": return self.daemon.update_scheduled_task(**values)
+                if method == "pause_schedule": return self.daemon.pause_scheduled_task(**values)
+                if method == "resume_schedule": return self.daemon.resume_scheduled_task(**values)
+                if method == "cancel_schedule": return self.daemon.cancel_scheduled_task(**values)
+                if method == "delete_scheduled_task": return self.daemon.delete_scheduled_task(**values)
+                raise ValueError("scheduled_task_action_unknown")
+            can_manage_all_users = self.runtime.user_store.is_admin(self.runtime.user)
+            users = _users()
+            if not can_manage_all_users:
+                users = [item for item in users if str(item.get("user_id") or "") == self.runtime.user]
+            self.push_screen(ScheduledTasksScreen(actor_user_id=self.runtime.user, users=users, can_manage_all_users=can_manage_all_users, load_tasks=_tasks, load_executions=_executions, action=_action), callback=lambda _: self._refresh_status())
 
         def _inference_settings(self) -> dict[str, Any]:
             if self.external_daemon:

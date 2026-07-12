@@ -190,6 +190,9 @@ class V2DaemonClient:
     def cancel_schedule(self, scheduled_task_id: str) -> dict[str, Any]:
         return self.request("cancel_schedule", scheduled_task_id=scheduled_task_id)
 
+    def resume_schedule(self, scheduled_task_id: str, *, actor_user_id: str = "") -> dict[str, Any]:
+        return self.request("resume_schedule", scheduled_task_id=scheduled_task_id, actor_user_id=actor_user_id)
+
 
 class V2DaemonServer:
     def __init__(self, daemon: Any, socket_path: str | Path | None = None) -> None:
@@ -383,6 +386,8 @@ class V2DaemonServer:
             return {"user": self.daemon.create_user(display_name=str(params.get("display_name") or ""), role=str(params.get("role") or "member"))}
         if method == "update_user":
             return {"user": self.daemon.update_user(str(params.get("user_id") or ""), display_name=params.get("display_name"), role=params.get("role"), is_active=params.get("is_active"))}
+        if method == "delete_user":
+            return self.daemon.delete_user(str(params.get("user_id") or ""), confirmation=str(params.get("confirmation") or ""))
         if method == "user_context":
             return self.daemon.user_context(str(params.get("user_id") or ""))
         if method == "save_user_context":
@@ -496,22 +501,22 @@ class V2DaemonServer:
             )
         if method == "scheduled_tasks":
             status = str(params.get("status") or "").strip() or None
-            tasks = self.daemon.runtime.schedule_store.list_tasks(
-                owner_user_id=str(params.get("owner_user_id") or "").strip() or None,
-                project_id=str(params.get("project_id") or "").strip() or None,
+            return {"tasks": self.daemon.scheduled_tasks(
+                actor_user_id=str(params.get("actor_user_id") or params.get("user") or ""),
+                owner_user_id=str(params.get("owner_user_id") or ""),
                 status=status,
                 limit=int(params.get("limit") or 100),
-            )
-            return {"tasks": [task.to_dict() for task in tasks]}
+            )}
         if method == "scheduled_executions":
             scheduled_task_id = str(params.get("scheduled_task_id") or "").strip()
             if not scheduled_task_id:
                 raise ValueError("scheduled_task_id_required")
-            executions = self.daemon.runtime.schedule_store.list_executions(
+            executions = self.daemon.scheduled_task_executions(
+                actor_user_id=str(params.get("actor_user_id") or params.get("user") or ""),
                 scheduled_task_id=scheduled_task_id,
                 limit=int(params.get("limit") or 100),
             )
-            return {"executions": [execution.to_dict() for execution in executions]}
+            return {"executions": executions}
         if method == "deliveries":
             from alphonse.agent_v2.core.io import OutboundSelector
 
@@ -539,11 +544,15 @@ class V2DaemonServer:
             )
             return {"status": "queued" if ok else "not_found", "occurrence_key": occurrence_key}
         if method == "pause_schedule":
-            task = self.daemon.runtime.schedule_store.pause_task(str(params.get("scheduled_task_id") or ""))
-            return {"task": task.to_dict()}
+            return {"task": self.daemon.pause_scheduled_task(actor_user_id=str(params.get("actor_user_id") or params.get("user") or ""), scheduled_task_id=str(params.get("scheduled_task_id") or ""))}
+        if method == "resume_schedule":
+            return {"task": self.daemon.resume_scheduled_task(actor_user_id=str(params.get("actor_user_id") or params.get("user") or ""), scheduled_task_id=str(params.get("scheduled_task_id") or ""))}
         if method == "cancel_schedule":
-            task = self.daemon.runtime.schedule_store.cancel_task(str(params.get("scheduled_task_id") or ""))
-            return {"task": task.to_dict()}
+            return {"task": self.daemon.cancel_scheduled_task(actor_user_id=str(params.get("actor_user_id") or params.get("user") or ""), scheduled_task_id=str(params.get("scheduled_task_id") or ""))}
+        if method == "update_scheduled_task":
+            return {"task": self.daemon.update_scheduled_task(actor_user_id=str(params.get("actor_user_id") or params.get("user") or ""), scheduled_task_id=str(params.get("scheduled_task_id") or ""), name=str(params.get("name") or ""), prompt=str(params.get("prompt") or ""))}
+        if method == "delete_scheduled_task":
+            return {"deleted": self.daemon.delete_scheduled_task(actor_user_id=str(params.get("actor_user_id") or params.get("user") or ""), scheduled_task_id=str(params.get("scheduled_task_id") or ""))}
         raise ValueError(f"daemon_method_not_found: {method}")
 
 

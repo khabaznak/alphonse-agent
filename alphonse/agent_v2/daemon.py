@@ -5,11 +5,13 @@ from __future__ import annotations
 import signal
 import fcntl
 import sqlite3
+import shutil
 import threading
 import time
 import traceback
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
@@ -191,13 +193,126 @@ class V2Daemon:
         return admin.user_id
 
     def list_users(self) -> list[dict[str, object]]:
+        self.runtime.user_store.normalize_duplicate_addresses({record.integration_id for record in self.runtime.integration_store.list()})
         return [{**user.to_dict(), "addresses": [address.to_dict() for address in self.runtime.user_store.list_addresses(user.user_id)]} for user in self.runtime.user_store.list_users()]
 
     def create_user(self, *, display_name: str, role: str = "member") -> dict[str, object]:
         return self.runtime.user_store.create_user(display_name=display_name, role=role).to_dict()
 
+    def scheduled_tasks(
+        self,
+        *,
+        actor_user_id: str = "",
+        owner_user_id: str = "",
+        status: str | None = None,
+        limit: int = 100,
+    ) -> list[dict[str, object]]:
+        owner = self._scheduled_task_owner(actor_user_id=actor_user_id, requested_owner_user_id=owner_user_id)
+        tasks = self.runtime.schedule_store.list_tasks(owner_user_id=owner, status=status, limit=limit)
+        return [{**task.to_dict(), "latest_execution": self._latest_scheduled_execution(task.scheduled_task_id)} for task in tasks]
+
+    def scheduled_task_executions(self, *, actor_user_id: str = "", scheduled_task_id: str, limit: int = 100) -> list[dict[str, object]]:
+        self._scheduled_task_for_actor(actor_user_id=actor_user_id, scheduled_task_id=scheduled_task_id)
+        return [item.to_dict() for item in self.runtime.schedule_store.list_executions(scheduled_task_id=scheduled_task_id, limit=limit)]
+
+    def update_scheduled_task(self, *, actor_user_id: str = "", scheduled_task_id: str, name: str, prompt: str) -> dict[str, object]:
+        self._scheduled_task_for_actor(actor_user_id=actor_user_id, scheduled_task_id=scheduled_task_id)
+        return self.runtime.schedule_store.update_task(scheduled_task_id, name=name, prompt=prompt).to_dict()
+
+    def pause_scheduled_task(self, *, actor_user_id: str = "", scheduled_task_id: str) -> dict[str, object]:
+        self._scheduled_task_for_actor(actor_user_id=actor_user_id, scheduled_task_id=scheduled_task_id)
+        return self.runtime.schedule_store.pause_task(scheduled_task_id).to_dict()
+
+    def resume_scheduled_task(self, *, actor_user_id: str = "", scheduled_task_id: str) -> dict[str, object]:
+        self._scheduled_task_for_actor(actor_user_id=actor_user_id, scheduled_task_id=scheduled_task_id)
+        return self.runtime.schedule_store.resume_task(scheduled_task_id).to_dict()
+
+    def cancel_scheduled_task(self, *, actor_user_id: str = "", scheduled_task_id: str) -> dict[str, object]:
+        task = self._scheduled_task_for_actor(actor_user_id=actor_user_id, scheduled_task_id=scheduled_task_id)
+        if getattr(task, "status", "") not in {"active", "paused"}:
+            raise ValueError("scheduled_task_not_cancellable")
+        return self.runtime.schedule_store.cancel_task(scheduled_task_id).to_dict()
+
+    def delete_scheduled_task(self, *, actor_user_id: str = "", scheduled_task_id: str) -> bool:
+        self._scheduled_task_for_actor(actor_user_id=actor_user_id, scheduled_task_id=scheduled_task_id)
+        return self.runtime.schedule_store.delete_task(scheduled_task_id)
+
+    def _scheduled_task_owner(self, *, actor_user_id: str, requested_owner_user_id: str) -> str:
+        actor = str(actor_user_id or self._admin_user_id()).strip() or self._admin_user_id()
+        if self.runtime.user_store.get_user(actor) is None:
+            raise ValueError("scheduled_task_actor_not_found")
+        requested = str(requested_owner_user_id or actor).strip() or actor
+        if requested != actor and not self.runtime.user_store.is_admin(actor):
+            raise PermissionError("scheduled_task_owner_forbidden")
+        if self.runtime.user_store.get_user(requested) is None:
+            raise KeyError("scheduled_task_owner_not_found")
+        return requested
+
+    def _scheduled_task_for_actor(self, *, actor_user_id: str, scheduled_task_id: str) -> object:
+        task = self.runtime.schedule_store.get_task(scheduled_task_id)
+        if task is None:
+            raise KeyError(f"scheduled_task_not_found: {scheduled_task_id}")
+        owner = self._scheduled_task_owner(actor_user_id=actor_user_id, requested_owner_user_id=task.owner_user_id)
+        if task.owner_user_id != owner:
+            raise PermissionError("scheduled_task_owner_forbidden")
+        return task
+
+    def _latest_scheduled_execution(self, scheduled_task_id: str) -> dict[str, object] | None:
+        executions = self.runtime.schedule_store.list_executions(scheduled_task_id=scheduled_task_id, limit=1)
+        return executions[0].to_dict() if executions else None
+
     def update_user(self, user_id: str, **values: Any) -> dict[str, object]:
         return self.runtime.user_store.update_user(user_id, display_name=values.get("display_name"), role=values.get("role"), is_active=values.get("is_active")).to_dict()
+
+    def delete_user(self, user_id: str, *, confirmation: str) -> dict[str, int]:
+        self._admin_user_id()
+        user = self.runtime.user_store.get_user(user_id)
+        if user is None:
+            raise KeyError("user_not_found")
+        if str(confirmation or "") != user.user_id:
+            raise ValueError("delete_confirmation_must_match_user_id")
+        roots = self.runtime.project_store.delete_owned_by(user.user_id)
+        self.runtime.project_session_store.delete_user(user.user_id)
+        for root in roots:
+            path = Path(root)
+            if path.exists() and self.runtime.user_store.users_root() in path.parents:
+                shutil.rmtree(path)
+        schedules = self._delete_user_schedule_data(user.user_id)
+        questions = self._delete_user_question_data(user.user_id)
+        inbound = self._delete_user_inbound_data(user.user_id)
+        outbound = self._delete_user_outbound_data(user.user_id)
+        deleted = self.runtime.user_store.delete_user(user.user_id)
+        return {"deleted": int(deleted), "projects": len(roots), "schedules": schedules, "questions": questions, "inbound": inbound, "outbound": outbound}
+
+    def _delete_user_schedule_data(self, user_id: str) -> int:
+        store = self.runtime.schedule_store
+        with store._connect() as conn:
+            ids = [str(row[0]) for row in conn.execute("SELECT scheduled_task_id FROM v2_scheduled_tasks WHERE owner_user_id=?", (user_id,)).fetchall()]
+            if ids:
+                conn.executemany("DELETE FROM v2_scheduled_task_executions WHERE scheduled_task_id=?", [(task_id,) for task_id in ids])
+            return conn.execute("DELETE FROM v2_scheduled_tasks WHERE owner_user_id=?", (user_id,)).rowcount
+
+    def _delete_user_question_data(self, user_id: str) -> int:
+        store = self.runtime.question_store
+        with store._connect() as conn:
+            rows = conn.execute("SELECT question_id FROM v2_questions WHERE respondent_user_id=? OR originator_user_id=?", (user_id, user_id)).fetchall()
+            ids = [str(row[0]) for row in rows]
+            if ids:
+                conn.executemany("DELETE FROM v2_task_dependencies WHERE question_id=?", [(question_id,) for question_id in ids])
+            conn.execute("DELETE FROM v2_task_checkpoints WHERE owner_id=?", (user_id,))
+            return conn.execute("DELETE FROM v2_questions WHERE respondent_user_id=? OR originator_user_id=?", (user_id, user_id)).rowcount
+
+    def _delete_user_inbound_data(self, user_id: str) -> int:
+        queue = self.runtime.queue
+        connect = getattr(queue, "_connect", None)
+        if not callable(connect):
+            return 0
+        with connect() as conn:
+            return conn.execute("DELETE FROM v2_inbound_messages WHERE user_id=?", (user_id,)).rowcount
+
+    def _delete_user_outbound_data(self, user_id: str) -> int:
+        with self.runtime.outbox._connect() as conn:
+            return conn.execute("DELETE FROM v2_outbox WHERE audience_user_id=?", (user_id,)).rowcount
 
     def user_context(self, user_id: str) -> dict[str, str]:
         return {"user_id": user_id, "content": self.runtime.user_store.read_user_context(user_id)}

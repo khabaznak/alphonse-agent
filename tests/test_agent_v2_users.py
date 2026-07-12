@@ -57,3 +57,29 @@ def test_onboarding_migrates_legacy_local_projects(tmp_path: Path) -> None:
 
     assert result["migration"]["local_projects_migrated"] == 1
     assert projects.get_project(legacy.project_id).owner_user_id == result["admin_user"]["user_id"]
+
+
+def test_hard_delete_removes_user_profile_projects_and_addresses(tmp_path: Path) -> None:
+    users = V2UserStore(tmp_path / "users.sqlite3")
+    admin = users.onboard(display_name="Alex", users_root=tmp_path / "profiles")
+    gaby = users.create_user(display_name="Gaby")
+    projects = ProjectStore(tmp_path / "projects.sqlite3")
+    project = projects.create_project(name="Health", root_path=str(users.managed_project_root(gaby.user_id) / "health"), owner_user_id=gaby.user_id)
+    users.bind_address(user_id=gaby.user_id, integration_id="telegram-home", provider_key="telegram", provider_user_id="123")
+    daemon = V2Daemon(build_runtime_host(user=admin.user_id, user_store=users, project_store=projects))
+
+    result = daemon.delete_user(gaby.user_id, confirmation=gaby.user_id)
+
+    assert result["deleted"] == 1
+    assert projects.get_project(project.project_id) is None
+    assert users.get_user(gaby.user_id) is None
+    assert not (tmp_path / "profiles" / gaby.user_id).exists()
+
+
+def test_hard_delete_requires_exact_confirmation_and_never_deletes_admin(tmp_path: Path) -> None:
+    users = V2UserStore(tmp_path / "users.sqlite3")
+    admin = users.onboard(display_name="Alex", users_root=tmp_path / "profiles")
+    daemon = V2Daemon(build_runtime_host(user=admin.user_id, user_store=users))
+
+    with pytest.raises(ValueError):
+        daemon.delete_user(admin.user_id, confirmation=admin.user_id)

@@ -231,6 +231,7 @@ def test_queue_model_commands_open_local_command_flows() -> None:
     assert queue_tui_input(runtime, "/model").command == "model"
     assert queue_tui_input(runtime, "/model-provider").command == "model-provider"
     assert queue_tui_input(runtime, "/agent-config").command == "agent-config"
+    assert queue_tui_input(runtime, "/scheduled-tasks").command == "scheduled-tasks"
 
 
 def test_tui_integration_options_and_telegram_config_save() -> None:

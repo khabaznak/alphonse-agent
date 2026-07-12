@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from alphonse.agent_v2.core.inference import InferencePurpose
 from alphonse.agent_v2.core.inference import InferenceRouter
 from alphonse.agent_v2.core.inference import ModelProfile
@@ -256,3 +258,31 @@ def test_desktop_project_ipc_uses_the_daemon_owned_store(tmp_path) -> None:
     assert daemon.ipc._dispatch(
         {"method": "project_context", "params": {"user": "alex", "project_id": created["project_id"]}}
     )["content"] == "Focus here."
+
+
+def test_scheduled_task_ipc_scopes_owners_and_manages_task_lifecycle(tmp_path) -> None:
+    runtime = build_runtime_host(inference=_router(), schedule_store=ScheduledTaskStore(":memory:"))
+    admin = runtime.user_store.onboard(display_name="Alex", users_root=tmp_path / "users")
+    member = runtime.user_store.create_user(display_name="Gaby")
+    daemon = V2Daemon(runtime)
+    task = runtime.schedule_store.create_task(
+        owner_user_id=member.user_id,
+        name="Morning check-in",
+        prompt="Ask how the morning is going.",
+        schedule_kind="rrule",
+        rrule="FREQ=DAILY",
+        dtstart="2026-07-10T09:00:00+00:00",
+    )
+    runtime.schedule_store.record_execution(scheduled_task_id=task.scheduled_task_id, run_id="run-1", status="delivered")
+
+    listed = daemon.ipc._dispatch({"method": "scheduled_tasks", "params": {"actor_user_id": admin.user_id, "owner_user_id": member.user_id}})["tasks"]
+    assert listed[0]["latest_execution"]["status"] == "delivered"
+    with pytest.raises(PermissionError, match="scheduled_task_owner_forbidden"):
+        daemon.ipc._dispatch({"method": "scheduled_tasks", "params": {"actor_user_id": member.user_id, "owner_user_id": admin.user_id}})
+
+    updated = daemon.ipc._dispatch({"method": "update_scheduled_task", "params": {"actor_user_id": admin.user_id, "scheduled_task_id": task.scheduled_task_id, "name": "Daily check-in", "prompt": "Ask about the day."}})["task"]
+    assert updated["name"] == "Daily check-in"
+    assert daemon.ipc._dispatch({"method": "pause_schedule", "params": {"actor_user_id": admin.user_id, "scheduled_task_id": task.scheduled_task_id}})["task"]["status"] == "paused"
+    assert daemon.ipc._dispatch({"method": "resume_schedule", "params": {"actor_user_id": admin.user_id, "scheduled_task_id": task.scheduled_task_id}})["task"]["status"] == "active"
+    assert daemon.ipc._dispatch({"method": "cancel_schedule", "params": {"actor_user_id": admin.user_id, "scheduled_task_id": task.scheduled_task_id}})["task"]["status"] == "cancelled"
+    assert daemon.ipc._dispatch({"method": "delete_scheduled_task", "params": {"actor_user_id": admin.user_id, "scheduled_task_id": task.scheduled_task_id}})["deleted"] is True

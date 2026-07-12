@@ -105,6 +105,10 @@ class SQLiteProjectSessionStore:
                 conn.execute("INSERT OR REPLACE INTO v2_project_sessions (alphonse_user_id,integration_id,channel_target,thread_id,active_project_id,project_name,updated_at) VALUES (?,?,?,?,?,?,?)", (str(new_user_id), row["integration_id"], row["channel_target"], row["thread_id"], row["active_project_id"], row["project_name"], _now_iso()))
         return len(rows)
 
+    def delete_user(self, user_id: str) -> int:
+        with self._connect() as conn:
+            return conn.execute("DELETE FROM v2_project_sessions WHERE alphonse_user_id=?", (str(user_id),)).rowcount
+
     def _connect(self) -> sqlite3.Connection | "_ConnectionProxy":
         if self._memory_connection is not None:
             return _ConnectionProxy(self._memory_connection)

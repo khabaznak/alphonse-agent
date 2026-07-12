@@ -260,11 +260,12 @@ button { border: 0; cursor: pointer; }
   place-items: center;
   background: #13251c88;
   padding: 28px;
+  z-index: 10;
 }
 
 .modal {
   width: min(620px, 100%);
-  max-height: calc(100vh - 56px);
+  max-height: min(680px, calc(100dvh - 180px));
   overflow: auto;
   padding: 24px;
   background: #eff0e8;
@@ -286,13 +287,16 @@ button { border: 0; cursor: pointer; }
 .form-field {
   display: grid;
   gap: 6px;
-  padding: 12px;
+  padding: 9px 10px;
   border: 1px solid #cad3c6;
   border-radius: 8px;
   background: #f7f8f1;
 }
 
 .form-field > label { color: #385046; font-size: 12px; }
+.form-field output { overflow-wrap: anywhere; color: #526258; font-size: 12px; }
+.form-field p { margin: 0; font-size: 12px; line-height: 1.45; }
+.dialog-actions { display: flex; gap: 8px; margin-top: 12px; }
 .form-field small { color: #65776a; font-size: 11px; line-height: 1.45; }
 
 .field-help {
@@ -325,6 +329,16 @@ button { border: 0; cursor: pointer; }
 .stack button { display: grid; gap: 4px; text-align: left; color: #27352e; background: #fbfcf5; border: 1px solid #cad3c6; }
 .stack button.selected { border-color: #315441; }
 .stack small { color: #6b776d; }
+.stack .user-card { grid-template-columns: 24px minmax(0, 1fr); align-items: center; }
+.user-card-icon { display: grid; place-items: center; width: 24px; height: 24px; font-size: 15px; }
+.user-card > span:last-child { display: grid; gap: 4px; min-width: 0; }
+.scheduled-task-list { max-height: 230px; overflow-y: auto; }
+.scheduled-task-list strong { font-size: 13px; }
+.scheduled-task-detail { display: grid; gap: 12px; margin-top: 14px; }
+.task-readonly { gap: 4px; }
+.execution-list { max-height: 160px; overflow-y: auto; border-top: 1px solid #cad3c6; }
+.execution-list p { margin: 0; padding: 8px 0; border-bottom: 1px solid #d9dfd6; color: #526258; font-size: 11px; overflow-wrap: anywhere; }
+.destructive-action { border-color: #c7816b; background: #fff1ea; }
 
 @media (max-width: 760px) {
   body { min-width: 0; }

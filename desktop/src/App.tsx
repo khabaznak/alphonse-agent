@@ -5,7 +5,7 @@ import { A2uiSurfaceView, applyA2uiEvent, DESKTOP_CATALOG_ID } from "./a2ui";
 import { agentStateLabel, capdActivityLabel, projectKey } from "./layoutState";
 import type { ActivityEvent, AgentDocument, ChatMessage, InferenceSettings, Project, Question } from "./types";
 
-type Modal = "projects" | "project-context" | "integrations" | "model" | "agent-config" | "settings" | "users" | "onboarding" | null;
+type Modal = "projects" | "project-context" | "integrations" | "model" | "agent-config" | "scheduled-tasks" | "settings" | "users" | "onboarding" | null;
 type PollResponse = {
   events: ActivityEvent[];
   next_sequence: number;
@@ -170,6 +170,7 @@ export default function App() {
     if (command === "/integrations") return setModal("integrations");
     if (command === "/model" || command === "/model-provider") return setModal("model");
     if (command === "/agent-config") return setModal("agent-config");
+    if (command === "/scheduled-tasks") return setModal("scheduled-tasks");
     if (command === "/settings") return setModal("settings");
     if (command === "/users") return setModal("users");
     if (command === "/stop") {
@@ -195,6 +196,7 @@ export default function App() {
         <button title="Integrations" onClick={() => setModal("integrations")}><span>Integrations</span></button>
         <button title="Model" onClick={() => setModal("model")}><span>Model</span></button>
         <button title="Agent configuration" onClick={() => setModal("agent-config")}><span>Agent configuration</span></button>
+        <button title="Scheduled tasks" onClick={() => setModal("scheduled-tasks")}><span>Scheduled tasks</span></button>
         <button title="Users" onClick={() => setModal("users")}><span>Users</span></button>
         <button title="Settings" onClick={() => setModal("settings")}><span>Settings</span></button>
       </aside>
@@ -230,6 +232,7 @@ export default function App() {
       {modal === "integrations" && <IntegrationsModal user={user} onClose={() => setModal(null)} />}
       {modal === "model" && <ModelModal onClose={() => setModal(null)} />}
       {modal === "agent-config" && <AgentConfigModal onClose={() => setModal(null)} />}
+      {modal === "scheduled-tasks" && <ScheduledTasksModal actorUserId={user} onClose={() => setModal(null)} />}
       {modal === "settings" && <SettingsModal enterToSend={enterToSend} onEnterToSendChange={setEnterToSend} onClose={() => setModal(null)} />}
       {modal === "users" && <UsersModal onClose={() => setModal(null)} />}
       {modal === "onboarding" && <OnboardingModal onComplete={(next) => { setUser(next); setModal(null); void poll(); }} />}
@@ -273,21 +276,94 @@ function SettingsModal({ enterToSend, onEnterToSendChange, onClose }: { enterToS
 
 type ManagedAddress = { address_id: string; integration_id: string; provider_key: string; provider_user_id: string; channel_target: string; is_preferred: boolean };
 type ManagedUser = { user_id: string; display_name: string; role: string; is_active: boolean; addresses?: ManagedAddress[] };
+type ScheduledTask = {
+  scheduled_task_id: string; owner_user_id: string; name: string; description: string; prompt: string;
+  schedule: Record<string, unknown>; timezone: string; status: string; next_run_at: string | null; last_run_at: string | null;
+  latest_execution?: { status: string; started_at: string; finished_at: string | null; error: string; last_error?: string } | null;
+};
+type ScheduledExecution = { run_id: string; status: string; started_at: string; finished_at: string | null; error: string; last_error?: string; attempt_count: number };
+
+function scheduleLabel(schedule: Record<string, unknown>): string {
+  return schedule.kind === "once" ? `Once at ${String(schedule.run_at || "unknown")}` : `Repeats: ${String(schedule.rrule || "unknown")}`;
+}
+
+function dateLabel(value: string | null | undefined): string {
+  return value ? new Date(value).toLocaleString() : "—";
+}
+
+function ScheduledTasksModal({ actorUserId, onClose }: { actorUserId: string; onClose: () => void }) {
+  const [users, setUsers] = useState<ManagedUser[]>([]); const [ownerId, setOwnerId] = useState(actorUserId); const [status, setStatus] = useState("");
+  const [tasks, setTasks] = useState<ScheduledTask[]>([]); const [selected, setSelected] = useState<ScheduledTask | null>(null); const [executions, setExecutions] = useState<ScheduledExecution[]>([]);
+  const [name, setName] = useState(""); const [prompt, setPrompt] = useState(""); const [notice, setNotice] = useState(""); const [removeOpen, setRemoveOpen] = useState(false);
+  const isAdmin = users.some((item) => item.user_id === actorUserId && item.role === "admin");
+  const load = useCallback(async () => {
+    try {
+      const [taskResult, userResult] = await Promise.all([
+        daemonRequest<{ tasks: ScheduledTask[] }>("scheduled_tasks", { actor_user_id: actorUserId, owner_user_id: ownerId, status }),
+        daemonRequest<{ users: ManagedUser[] }>("users"),
+      ]);
+      setTasks(taskResult.tasks); setUsers(userResult.users); setNotice("");
+      setSelected((current) => current ? taskResult.tasks.find((task) => task.scheduled_task_id === current.scheduled_task_id) || null : null);
+    } catch (cause) { setNotice(cause instanceof Error ? cause.message : "Scheduled tasks could not be loaded."); }
+  }, [actorUserId, ownerId, status]);
+  useEffect(() => { void load(); }, [load]);
+  const select = async (task: ScheduledTask) => {
+    setSelected(task); setName(task.name); setPrompt(task.prompt); setRemoveOpen(false);
+    try { const result = await daemonRequest<{ executions: ScheduledExecution[] }>("scheduled_executions", { actor_user_id: actorUserId, scheduled_task_id: task.scheduled_task_id, limit: 8 }); setExecutions(result.executions); } catch (cause) { setNotice(cause instanceof Error ? cause.message : "Execution history could not be loaded."); }
+  };
+  const mutate = async (method: string, extra: Record<string, unknown> = {}) => {
+    if (!selected) return;
+    try {
+      await daemonRequest(method, { actor_user_id: actorUserId, scheduled_task_id: selected.scheduled_task_id, ...extra });
+      setNotice(method === "delete_scheduled_task" ? "Task permanently deleted." : "Task updated."); setRemoveOpen(false);
+      if (method === "delete_scheduled_task") { setSelected(null); setExecutions([]); }
+      await load();
+    } catch (cause) { setNotice(cause instanceof Error ? cause.message : "Scheduled task could not be updated."); }
+  };
+  const editable = selected?.status === "active" || selected?.status === "paused";
+  return <ModalFrame title="Scheduled tasks" onClose={onClose}>
+    {isAdmin && <div className="form-field"><label htmlFor="scheduled-owner">User</label><select id="scheduled-owner" value={ownerId} onChange={(event) => { setOwnerId(event.target.value); setSelected(null); setExecutions([]); }}>{users.map((item) => <option key={item.user_id} value={item.user_id}>{item.display_name}</option>)}</select></div>}
+    <div className="form-field"><label htmlFor="scheduled-status">Status</label><select id="scheduled-status" value={status} onChange={(event) => { setStatus(event.target.value); setSelected(null); setExecutions([]); }}><option value="">All statuses</option>{["active", "paused", "completed", "cancelled", "failed"].map((value) => <option key={value} value={value}>{value}</option>)}</select></div>
+    <div className="stack scheduled-task-list">{tasks.length ? tasks.map((task) => <button className={task.scheduled_task_id === selected?.scheduled_task_id ? "selected" : ""} key={task.scheduled_task_id} onClick={() => void select(task)}><strong>{task.name}</strong><small>Owner: {users.find((item) => item.user_id === task.owner_user_id)?.display_name || task.owner_user_id}</small><small>{task.status} · {scheduleLabel(task.schedule)} · next {dateLabel(task.next_run_at)}</small><small>Latest execution: {task.latest_execution?.status || "not run"}</small></button>) : <p>No scheduled tasks match this filter.</p>}</div>
+    {selected && <section className="scheduled-task-detail">
+      <div className="form-field"><label htmlFor="scheduled-name">Task name</label><input id="scheduled-name" value={name} disabled={!editable} onChange={(event) => setName(event.target.value)} /></div>
+      <div className="form-field"><label htmlFor="scheduled-prompt">Stored prompt</label><textarea id="scheduled-prompt" value={prompt} disabled={!editable} onChange={(event) => setPrompt(event.target.value)} rows={6} /></div>
+      <div className="form-field task-readonly"><label>Owner</label><output>{users.find((item) => item.user_id === selected.owner_user_id)?.display_name || selected.owner_user_id}</output><small>{selected.owner_user_id}</small></div>
+      <div className="form-field task-readonly"><label>Schedule</label><output>{scheduleLabel(selected.schedule)} ({selected.timezone})</output><small>Next run: {dateLabel(selected.next_run_at)} · Last run: {dateLabel(selected.last_run_at)}</small></div>
+      {editable && <button onClick={() => void mutate("update_scheduled_task", { name, prompt })}>Save name and prompt</button>}
+      <div className="dialog-actions">{selected.status === "active" && <button onClick={() => void mutate("pause_schedule")}>Suspend</button>}{selected.status === "paused" && <button onClick={() => void mutate("resume_schedule")}>Resume</button>}<button onClick={() => setRemoveOpen((value) => !value)}>Remove…</button></div>
+      {removeOpen && <div className="form-field destructive-action"><p>Cancel keeps this task and its execution history. Permanent deletion removes both.</p><div className="dialog-actions">{["active", "paused"].includes(selected.status) && <button onClick={() => void mutate("cancel_schedule")}>Cancel task</button>}<button onClick={() => void mutate("delete_scheduled_task")}>Delete permanently</button></div></div>}
+      <h3>Recent executions</h3><div className="execution-list">{executions.length ? executions.map((execution) => <p key={execution.run_id}><strong>{execution.status}</strong> · {dateLabel(execution.started_at)}{execution.error || execution.last_error ? ` · ${execution.error || execution.last_error}` : ""}</p>) : <p>No executions yet.</p>}</div>
+    </section>}
+    <p>{notice}</p>
+  </ModalFrame>;
+}
 
 function UsersModal({ onClose }: { onClose: () => void }) {
   const [users, setUsers] = useState<ManagedUser[]>([]); const [selectedId, setSelectedId] = useState("");
-  const [name, setName] = useState(""); const [role, setRole] = useState("member"); const [active, setActive] = useState(true); const [context, setContext] = useState(""); const [notice, setNotice] = useState(""); const [addresses, setAddresses] = useState<ManagedAddress[]>([]); const [integrationId, setIntegrationId] = useState("telegram-home"); const [providerKey, setProviderKey] = useState("telegram"); const [providerUserId, setProviderUserId] = useState(""); const [channelTarget, setChannelTarget] = useState(""); const [confirmation, setConfirmation] = useState("");
+  const [name, setName] = useState(""); const [role, setRole] = useState("member"); const [active, setActive] = useState(true); const [context, setContext] = useState(""); const [notice, setNotice] = useState(""); const [addresses, setAddresses] = useState<ManagedAddress[]>([]); const [communicationOptions, setCommunicationOptions] = useState<Array<{ integration_id: string; provider_key: string; label: string }>>([]); const [showCommunicationForm, setShowCommunicationForm] = useState(false); const [integrationId, setIntegrationId] = useState(""); const [providerUserId, setProviderUserId] = useState(""); const [channelTarget, setChannelTarget] = useState(""); const [confirmation, setConfirmation] = useState("");
   const load = useCallback(async () => { const result = await daemonRequest<{ users: ManagedUser[] }>("users"); setUsers(result.users); return result.users; }, []);
-  useEffect(() => { void load(); }, [load]);
+  useEffect(() => { void load(); void daemonRequest<{ integrations: Array<{ provider_key: string; display_name: string; integration: Record<string, unknown> | null }> }>("integrations").then((result) => setCommunicationOptions(result.integrations.map((item) => ({ integration_id: String(item.integration?.integration_id || `${item.provider_key}-home`), provider_key: item.provider_key, label: String(item.integration?.display_name || item.display_name) })))); }, [load]);
   const select = async (item: ManagedUser) => { setSelectedId(item.user_id); setName(item.display_name); setRole(item.role); setActive(item.is_active); setAddresses(item.addresses || []); setNotice(""); setConfirmation(""); const result = await daemonRequest<{ content: string }>("user_context", { user_id: item.user_id }); setContext(result.content); };
   const create = async () => { const result = await daemonRequest<{ user: ManagedUser }>("create_user", { display_name: name, role }); await load(); await select(result.user); setNotice("User created."); };
   const save = async () => { if (!selectedId) return create(); await daemonRequest("update_user", { user_id: selectedId, display_name: name, role, is_active: active }); await daemonRequest("save_user_context", { user_id: selectedId, content: context }); await load(); setNotice("User saved."); };
   const deactivate = async () => { if (!selectedId) return; await daemonRequest("update_user", { user_id: selectedId, is_active: !active }); setActive(!active); await load(); setNotice(active ? "User deactivated. Existing data is preserved." : "User reactivated."); };
-  const bind = async () => { if (!selectedId) return; await daemonRequest("bind_user_address", { user_id: selectedId, integration_id: integrationId, provider_key: providerKey, provider_user_id: providerUserId, channel_target: channelTarget || providerUserId, is_preferred: true }); setProviderUserId(""); setChannelTarget(""); await load(); const selected = users.find((item) => item.user_id === selectedId); if (selected) await select(selected); setNotice("Preferred communication address saved."); };
+  const selectCommunication = (nextIntegrationId: string) => { setIntegrationId(nextIntegrationId); const existing = addresses.find((address) => address.integration_id === nextIntegrationId); setProviderUserId(existing?.provider_user_id || ""); setChannelTarget(existing?.channel_target || ""); };
+  const bind = async () => { if (!selectedId || !integrationId || !providerUserId) return; const option = communicationOptions.find((item) => item.integration_id === integrationId); if (!option) return; await daemonRequest("bind_user_address", { user_id: selectedId, integration_id: option.integration_id, provider_key: option.provider_key, provider_user_id: providerUserId, channel_target: channelTarget || providerUserId, is_preferred: true }); setShowCommunicationForm(false); await load(); setAddresses((current) => [{ address_id: `pending-${integrationId}`, integration_id: option.integration_id, provider_key: option.provider_key, provider_user_id: providerUserId, channel_target: channelTarget || providerUserId, is_preferred: true }, ...current.filter((address) => address.integration_id !== option.integration_id)]); setNotice("Preferred communication address saved."); };
+  const makePreferred = async (address: ManagedAddress) => { await daemonRequest("bind_user_address", { user_id: selectedId, integration_id: address.integration_id, provider_key: address.provider_key, provider_user_id: address.provider_user_id, channel_target: address.channel_target, is_preferred: true }); setAddresses((current) => current.map((item) => ({ ...item, is_preferred: item.address_id === address.address_id }))); };
   const removeAddress = async (addressId: string) => { await daemonRequest("remove_user_address", { address_id: addressId }); await load(); setAddresses((current) => current.filter((item) => item.address_id !== addressId)); };
-  const remove = async () => { if (!selectedId) return; const result = await daemonRequest<{ deleted: number }>("delete_user", { user_id: selectedId, confirmation }); if (result.deleted) { beginCreate(); await load(); setNotice("User and all owned data permanently deleted."); } };
-  const beginCreate = () => { setSelectedId(""); setName(""); setRole("member"); setActive(true); setContext("# User Context\n"); setAddresses([]); setNotice(""); setConfirmation(""); };
-  return <ModalFrame title="Users" onClose={onClose}><div className="stack">{users.map((item) => <button className={item.user_id === selectedId ? "selected" : ""} key={item.user_id} onClick={() => void select(item)}>{item.display_name} <small>{item.is_active ? item.role : "inactive"}</small></button>)}<button onClick={beginCreate}>New user</button></div><hr/><label>Name<input value={name} onChange={(event) => setName(event.target.value)} placeholder="Name" /></label><label>Role<select value={role} onChange={(event) => setRole(event.target.value)}><option value="member">Member</option><option value="caregiver">Caregiver</option><option value="admin">Admin</option></select></label><label>User context<textarea value={context} onChange={(event) => setContext(event.target.value)} rows={8} /></label>{selectedId && <><small>{selectedId}</small><h3>Preferred communication</h3>{addresses.map((address) => <p key={address.address_id}>{address.provider_key}: {address.provider_user_id}{address.is_preferred ? " (preferred)" : ""} <button onClick={() => void removeAddress(address.address_id)}>Remove</button></p>)}<input value={integrationId} onChange={(event) => setIntegrationId(event.target.value)} placeholder="Integration ID" /><input value={providerKey} onChange={(event) => setProviderKey(event.target.value)} placeholder="Provider" /><input value={providerUserId} onChange={(event) => setProviderUserId(event.target.value)} placeholder="Provider user ID" /><input value={channelTarget} onChange={(event) => setChannelTarget(event.target.value)} placeholder="Channel target (optional)" /><button onClick={() => void bind()}>Set preferred address</button></>}<div><button onClick={() => void save()}>{selectedId ? "Save user" : "Create user"}</button>{selectedId && <button onClick={() => void deactivate()}>{active ? "Deactivate user" : "Reactivate user"}</button>}</div>{selectedId && <><h3>Permanent deletion</h3><p>This permanently deletes the user, profile, managed projects, schedules, pending questions, and channel mappings.</p><input value={confirmation} onChange={(event) => setConfirmation(event.target.value)} placeholder="Type the user ID to confirm" /><button onClick={() => void remove()}>Delete permanently</button></>}<p>{notice}</p></ModalFrame>;
+  const remove = async () => { if (!selectedId) return; try { const result = await daemonRequest<{ deleted: number }>("delete_user", { user_id: selectedId, confirmation }); if (result.deleted) { beginCreate(); await load(); setNotice("User and all owned data permanently deleted."); } } catch (cause) { setNotice(cause instanceof Error ? cause.message : "User could not be deleted."); } };
+  const beginCreate = () => { setSelectedId(""); setName(""); setRole("member"); setActive(true); setContext("# User Context\n"); setAddresses([]); setShowCommunicationForm(false); setNotice(""); setConfirmation(""); };
+  return <ModalFrame title="Users" onClose={onClose}>
+    <div className="stack">{users.map((item) => <button className={item.user_id === selectedId ? "selected user-card" : "user-card"} key={item.user_id} onClick={() => void select(item)}><span className="user-card-icon" aria-hidden="true">👤</span><span>{item.display_name}<small>{item.is_active ? item.role : "inactive"}</small></span></button>)}<button onClick={beginCreate}>New user</button></div>
+    <div className="form-field"><label htmlFor="user-name">Name</label><input id="user-name" value={name} onChange={(event) => setName(event.target.value)} placeholder="Name" /></div>
+    <div className="form-field"><label htmlFor="user-role">Role</label><select id="user-role" value={role} onChange={(event) => setRole(event.target.value)}><option value="member">Member</option><option value="caregiver">Caregiver</option><option value="admin">Admin</option></select></div>
+    <div className="form-field"><label htmlFor="user-context">User context</label><textarea id="user-context" value={context} onChange={(event) => setContext(event.target.value)} rows={6} /></div>
+    {selectedId && <><div className="form-field"><label>Canonical user ID</label><output>{selectedId}</output></div><h3>Preferred communication</h3>{addresses.map((address) => <div className="form-field" key={address.address_id}><label>{address.provider_key}: {address.provider_user_id}{address.is_preferred ? " (preferred)" : ""}</label><div className="dialog-actions">{!address.is_preferred && <button onClick={() => void makePreferred(address)}>Set preferred</button>}<button onClick={() => void removeAddress(address.address_id)}>Remove address</button></div></div>)}<button onClick={() => { setShowCommunicationForm(true); selectCommunication(communicationOptions[0]?.integration_id || ""); }}>Add communication</button>{showCommunicationForm && <div className="form-field"><label htmlFor="address-integration">Integration</label><select id="address-integration" value={integrationId} onChange={(event) => selectCommunication(event.target.value)}>{communicationOptions.map((option) => <option key={option.integration_id} value={option.integration_id}>{option.label}</option>)}</select><label htmlFor="address-user-id">Provider user ID</label><input id="address-user-id" value={providerUserId} onChange={(event) => setProviderUserId(event.target.value)} /><label htmlFor="address-target">Channel target</label><input id="address-target" value={channelTarget} onChange={(event) => setChannelTarget(event.target.value)} placeholder="Optional; provider user ID by default" /><button onClick={() => void bind()}>Save and set preferred</button></div>}</>}
+    <div className="dialog-actions"><button onClick={() => void save()}>{selectedId ? "Save user" : "Create user"}</button>{selectedId && <button onClick={() => void deactivate()}>{active ? "Deactivate user" : "Reactivate user"}</button>}</div>
+    {selectedId && <><h3>Permanent deletion</h3><div className="form-field"><p>This permanently deletes the user, profile, managed projects, schedules, pending questions, and channel mappings.</p><label htmlFor="delete-confirmation">Type this canonical user ID to confirm deletion</label><input id="delete-confirmation" value={confirmation} onChange={(event) => setConfirmation(event.target.value)} placeholder={selectedId} /><button disabled={confirmation !== selectedId} onClick={() => void remove()}>Delete permanently</button></div></>}
+    <p>{notice}</p>
+  </ModalFrame>;
 }
 
 function ProjectsModal({ user, active, onSelect, onClose }: { user: string; active: Project | null; onSelect: (project: Project) => void; onClose: () => void }) {

@@ -98,6 +98,33 @@ def test_store_pause_resume_cancel_complete_and_execution_history() -> None:
     assert cancelled.status == "cancelled"
 
 
+def test_store_updates_only_editable_tasks_and_permanently_deletes_execution_history() -> None:
+    store = ScheduledTaskStore()
+    task = store.create_task(
+        owner_user_id="alex",
+        name="Original",
+        prompt="Original prompt.",
+        schedule_kind="once",
+        run_at="2026-07-10T09:00:00+00:00",
+    )
+    store.record_execution(scheduled_task_id=task.scheduled_task_id, run_id="run-1", status="queued")
+
+    updated = store.update_task(task.scheduled_task_id, name="Updated", prompt="Updated prompt.")
+
+    assert updated.name == "Updated"
+    assert updated.prompt == "Updated prompt."
+    assert updated.schedule == task.schedule
+    with pytest.raises(ValueError, match="scheduled_task_not_active"):
+        store.pause_task(store.pause_task(task.scheduled_task_id).scheduled_task_id)
+    store.cancel_task(task.scheduled_task_id)
+    with pytest.raises(ValueError, match="scheduled_task_not_editable"):
+        store.update_task(task.scheduled_task_id, name="No", prompt="No.")
+
+    assert store.delete_task(task.scheduled_task_id) is True
+    assert store.get_task(task.scheduled_task_id) is None
+    assert store.list_executions(scheduled_task_id=task.scheduled_task_id) == []
+
+
 def test_native_scheduled_task_tool_registers_and_uses_context_owner_project() -> None:
     store = ScheduledTaskStore()
     task = TaskState(user="alex", project_id="alpha")
