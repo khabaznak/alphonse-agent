@@ -15,9 +15,12 @@ from alphonse.agent_v2.core.questions import SQLiteQuestionStore
 from alphonse.agent_v2.core.scheduled_tasks import ScheduledTaskStore
 from alphonse.agent_v2.daemon import V2Daemon
 from alphonse.agent_v2.agent_config import AgentConfigStore
+from alphonse.agent_v2.agent_config import GLOBAL_CONTEXT_FILE
 from alphonse.agent_v2.agent_config import PHILOSOPHY_FILE
 from alphonse.agent_v2.services.project_sessions import SQLiteProjectSessionStore
 from alphonse.agent_v2.runtime import build_runtime_host
+from alphonse.agent_v2.users import V2UserStore
+from alphonse.agent_v2.web_tools_settings import SQLiteWebToolsSettingsStore
 
 
 def _router() -> InferenceRouter:
@@ -62,6 +65,18 @@ def test_daemon_ipc_exposes_inference_configuration() -> None:
     assert providers[0]["provider_key"] == "openai_codex"
 
 
+def test_daemon_ipc_web_tools_require_admin_and_refresh_registry(tmp_path) -> None:
+    users = V2UserStore(":memory:")
+    admin = users.onboard(display_name="Admin", users_root=tmp_path / "users")
+    runtime = build_runtime_host(user_store=users, web_tools_settings_store=SQLiteWebToolsSettingsStore(":memory:"), schedule_store=ScheduledTaskStore(":memory:"))
+    daemon = V2Daemon(runtime)
+    with pytest.raises(PermissionError, match="admin_required"):
+        daemon.ipc._dispatch({"method": "web_tools_settings", "params": {"actor_user_id": "not-admin"}})
+    saved = daemon.ipc._dispatch({"method": "save_web_tools_settings", "params": {"actor_user_id": admin.user_id, "values": {"enabled": True, "searxng_base_url": "http://127.0.0.1:8080", "search_timeout_seconds": 10, "fetch_timeout_seconds": 10, "fetch_max_chars": 12000}}})["settings"]
+    assert saved["available"] is True
+    assert runtime.core.tools.get("web_search") is not None
+
+
 def test_model_settings_request_uses_validation_timeout(monkeypatch) -> None:
     client = __import__("alphonse.agent_v2.ipc", fromlist=["V2DaemonClient"]).V2DaemonClient("/tmp/test.sock", timeout_sec=2)
     captured = {}
@@ -90,7 +105,7 @@ def test_daemon_ipc_reads_and_saves_agent_configuration(tmp_path) -> None:
         {"method": "save_agent_config", "params": {"file_name": PHILOSOPHY_FILE, "content": "Updated philosophy"}}
     )["document"]
 
-    assert {document["file_name"] for document in documents} == {"CoreContext.md", "Philosophy.md"}
+    assert {document["file_name"] for document in documents} == {GLOBAL_CONTEXT_FILE, "Philosophy.md"}
     assert saved["content"] == "Updated philosophy"
 
 

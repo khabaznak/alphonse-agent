@@ -135,7 +135,7 @@ runtime files are stored under `~/.alphonse/`:
 - `v2-scheduled-tasks.sqlite3` — scheduled task definitions and executions
 - `v2-integrations.sqlite3` — integration configuration and local secrets
 - `v2-inference.sqlite3` — daemon-wide inference provider and model selection
-- `agent-config/` — editable `CoreContext.md` and `Philosophy.md` snapshots
+- `agent-config/` — editable `GlobalContext.md` and `Philosophy.md` snapshots
 - `v2-project-sessions.sqlite3` — active project selections by channel conversation
 - `v2-users.sqlite3` — canonical users, admin role, and channel address mappings
 - `users/` — local user profiles and managed non-admin projects
@@ -174,7 +174,7 @@ reads the locally signed-in Codex CLI model catalog and validates a choice with
 the installed CLI before saving it. The selection applies to TUI, Telegram, and
 scheduled tasks; a CAPD task already in progress keeps its original model.
 
-Use `/agent-config` to edit the global `Core Context` or `Philosophy` markdown
+Use `/agent-config` to edit the global `Global Context` or `Philosophy` markdown
 used by v2 CAPD prompts. These files live under `~/.alphonse/agent-config/` by
 default; set `ALPHONSE_V2_AGENT_CONFIG_DIR` to relocate them. The daemon reads
 them at startup, so save changes and then run `alphonse stop` followed by
@@ -645,6 +645,12 @@ If you want to normalize addresses into lat/lng, set:
 The geocoder tool is registered as `geocoder` and uses the Google Maps Geocoding API.
 
 ### SearXNG Web Search (optional)
+
+> V2 Desktop: configure this in **Settings → Tools → Web Tools**. Both Web Search
+> and Web Fetch remain unavailable to the V2 agent until an administrator saves a
+> SearXNG endpoint and enables them. Docker is managed outside Alphonse.
+> SearXNG must allow `json` under `search.formats`. Web Fetch only reads public
+> HTTP(S) pages; local/private hosts, credential URLs, and redirects to them are blocked.
 
 Alphonse includes two read-only web tools:
 

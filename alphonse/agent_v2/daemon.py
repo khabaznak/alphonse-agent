@@ -47,6 +47,10 @@ from alphonse.agent_v2.interfaces.a2ui import surface_id_for_question
 from alphonse.agent_v2.interfaces.ag_ui import AgUiAdapter
 from alphonse.agent_v2.services.scheduled_worker import ScheduledTaskWorker
 from alphonse.agent_v2.users import V2UserStore
+from alphonse.agent_v2.web_tools_settings import WebToolsSettings
+from alphonse.agent_v2.web_tools_settings import SQLiteWebToolsSettingsStore
+from alphonse.agent_v2.runtime import refresh_runtime_web_tools
+from alphonse.agent_v2.core.tools.registry.native.web import execute_web_fetch, execute_web_search
 
 
 @dataclass
@@ -331,6 +335,33 @@ class V2Daemon:
 
     def save_settings(self, *, users_root: str) -> dict[str, object]:
         return {"users_root": self.runtime.user_store.set_users_root(users_root), "warning_repository_path": "/Alphonse/" in str(users_root)}
+
+    def web_tools_settings(self, *, actor_user_id: str) -> dict[str, object]:
+        self._require_admin(actor_user_id)
+        return self.runtime.web_tools_settings_store.get().to_dict()
+
+    def save_web_tools_settings(self, *, actor_user_id: str, values: dict[str, Any]) -> dict[str, object]:
+        self._require_admin(actor_user_id)
+        current = self.runtime.web_tools_settings_store.get()
+        saved = self.runtime.web_tools_settings_store.save(WebToolsSettings(
+            enabled=bool(values.get("enabled", current.enabled)), searxng_base_url=str(values.get("searxng_base_url", current.searxng_base_url)),
+            search_timeout_seconds=values.get("search_timeout_seconds", current.search_timeout_seconds), fetch_timeout_seconds=values.get("fetch_timeout_seconds", current.fetch_timeout_seconds),
+            fetch_max_chars=values.get("fetch_max_chars", current.fetch_max_chars),
+        ))
+        refresh_runtime_web_tools(self.runtime)
+        return saved.to_dict()
+
+    def verify_web_tools(self, *, actor_user_id: str, kind: str) -> dict[str, Any]:
+        self._require_admin(actor_user_id)
+        settings = self.runtime.web_tools_settings_store.get()
+        if kind == "search": return execute_web_search({"query": "Alphonse SearXNG verification", "limit": 1}, settings=settings)
+        if kind == "fetch": return execute_web_fetch({"url": "https://example.com", "max_chars": 200}, settings=settings)
+        raise ValueError("web_tools_verify_kind_invalid")
+
+    def _require_admin(self, actor_user_id: str) -> None:
+        actor = str(actor_user_id or "").strip()
+        if not actor or not self.runtime.user_store.is_admin(actor):
+            raise PermissionError("admin_required")
 
     def list_agent_config(self) -> list[dict[str, str]]:
         return [document.to_dict(include_content=False) for document in self.runtime.agent_config_store.list_documents()]
@@ -938,6 +969,7 @@ def main() -> None:
             question_store=SQLiteQuestionStore.default(),
             project_store=ProjectStore.default(),
             schedule_store=ScheduledTaskStore.default(),
+            web_tools_settings_store=SQLiteWebToolsSettingsStore.default(),
             outbox=SQLiteOutboundStore.default(),
             integration_store=SQLiteIntegrationStore.default(),
             inference_settings_store=SQLiteInferenceSettingsStore.default(),

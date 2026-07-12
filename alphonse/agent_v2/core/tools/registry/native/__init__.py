@@ -17,15 +17,21 @@ from alphonse.agent_v2.core.tools.registry.native.scheduled_task import SCHEDULE
 from alphonse.agent_v2.core.tools.registry.native.scheduled_task import SCHEDULED_TASK_TOOL_NAME
 from alphonse.agent_v2.core.tools.registry.native.scheduled_task import build_scheduled_task_tool_definition
 from alphonse.agent_v2.core.tools.registry.native.scheduled_task import execute_scheduled_task
+from alphonse.agent_v2.core.tools.registry.native.web import build_web_fetch_tool_definition
+from alphonse.agent_v2.core.tools.registry.native.web import build_web_search_tool_definition
+from alphonse.agent_v2.web_tools_settings import WebToolsSettings
 
 
-def build_native_tool_registry() -> InMemoryToolRegistry:
+def build_native_tool_registry(web_tools_settings: WebToolsSettings | None = None) -> InMemoryToolRegistry:
     """Build the default v2-native tool registry."""
     registry = InMemoryToolRegistry()
     registry.register(build_respond_tool_definition())
     registry.register(build_bash_tool_definition())
     registry.register(build_ask_question_tool_definition())
     registry.register(build_scheduled_task_tool_definition())
+    settings = web_tools_settings or WebToolsSettings()
+    registry.register(build_web_search_tool_definition(settings))
+    registry.register(build_web_fetch_tool_definition(settings))
     return registry
 
 

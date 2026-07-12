@@ -163,6 +163,15 @@ class V2DaemonClient:
         client = V2DaemonClient(self.socket_path, timeout_sec=max(self.timeout_sec, 35.0))
         return client.request("set_inference_settings", provider_key=provider_key, model_id=model_id)
 
+    def web_tools_settings(self, *, actor_user_id: str) -> dict[str, Any]:
+        return self.request("web_tools_settings", actor_user_id=actor_user_id)
+
+    def save_web_tools_settings(self, *, actor_user_id: str, values: dict[str, Any]) -> dict[str, Any]:
+        return self.request("save_web_tools_settings", actor_user_id=actor_user_id, values=values)
+
+    def verify_web_tools(self, *, actor_user_id: str, kind: str) -> dict[str, Any]:
+        return self.request("verify_web_tools", actor_user_id=actor_user_id, kind=kind)
+
     def agent_config_documents(self) -> dict[str, Any]:
         return self.request("agent_config_documents")
 
@@ -380,6 +389,12 @@ class V2DaemonServer:
             return self.daemon.settings()
         if method == "save_settings":
             return self.daemon.save_settings(users_root=str(params.get("users_root") or ""))
+        if method == "web_tools_settings":
+            return {"settings": self.daemon.web_tools_settings(actor_user_id=str(params.get("actor_user_id") or ""))}
+        if method == "save_web_tools_settings":
+            return {"settings": self.daemon.save_web_tools_settings(actor_user_id=str(params.get("actor_user_id") or ""), values=dict(params.get("values") or {}))}
+        if method == "verify_web_tools":
+            return {"result": self.daemon.verify_web_tools(actor_user_id=str(params.get("actor_user_id") or ""), kind=str(params.get("kind") or ""))}
         if method == "users":
             return {"users": self.daemon.list_users()}
         if method == "create_user":

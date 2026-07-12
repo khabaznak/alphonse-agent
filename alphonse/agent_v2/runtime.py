@@ -41,6 +41,7 @@ from alphonse.agent_v2.agent_config import packaged_agent_config_dir
 from alphonse.agent_v2.services.project_sessions import ProjectInboundRouter
 from alphonse.agent_v2.services.project_sessions import SQLiteProjectSessionStore
 from alphonse.agent_v2.users import V2UserStore
+from alphonse.agent_v2.web_tools_settings import SQLiteWebToolsSettingsStore
 
 
 @dataclass
@@ -91,6 +92,7 @@ class V2RuntimeHost:
     project_session_store: SQLiteProjectSessionStore
     inbound_router: ProjectInboundRouter
     user_store: V2UserStore
+    web_tools_settings_store: SQLiteWebToolsSettingsStore
     integration_runtimes: list[Any] = field(default_factory=list)
     active_project_id: str = ""
     ui_events: list[CoreUiEvent] = field(default_factory=list)
@@ -115,13 +117,15 @@ def build_runtime_host(
     agent_config_store: AgentConfigStore | None = None,
     project_session_store: SQLiteProjectSessionStore | None = None,
     messages: Any | None = None,
+    web_tools_settings_store: SQLiteWebToolsSettingsStore | None = None,
 ) -> V2RuntimeHost:
     reset_state()
     queue = messages or InMemoryMessageQueue()
     channel = CommunicationChannel(queue)
     visible_state = InMemoryInternalState()
     processor = processor or PDCAIntelligenceProcessor()
-    tools = tools or build_native_tool_registry()
+    web_tools_settings_store = web_tools_settings_store or SQLiteWebToolsSettingsStore()
+    tools = tools or build_native_tool_registry(web_tools_settings_store.get())
     inference_settings_store = inference_settings_store or SQLiteInferenceSettingsStore()
     # Persistent daemon/TUI constructors pass `AgentConfigStore.default()`.
     # Generic test and helper runtimes only need the package defaults.
@@ -190,9 +194,15 @@ def build_runtime_host(
         project_session_store=project_session_store,
         inbound_router=inbound_router,
         user_store=user_store,
+        web_tools_settings_store=web_tools_settings_store,
         ui_events=ui_events,
         activity_events=activity_events,
     )
+
+
+def refresh_runtime_web_tools(runtime: V2RuntimeHost) -> None:
+    """Apply Web Tools settings to tasks started after this call."""
+    runtime.core.tools = build_native_tool_registry(runtime.web_tools_settings_store.get())
 
 
 def build_default_runtime_inference_router() -> InferenceRouter:
