@@ -268,7 +268,7 @@ function SettingsModal({ enterToSend, onEnterToSendChange, onClose }: { enterToS
   const [root, setRoot] = useState(""); const [notice, setNotice] = useState("");
   useEffect(() => { void daemonRequest<{ users_root: string }>("settings").then((result) => setRoot(result.users_root)); }, []);
   const save = async () => { const result = await daemonRequest<{ users_root: string; warning_repository_path?: boolean }>("save_settings", { users_root: root }); setNotice(result.warning_repository_path ? "Saved. This path is inside the repository; keep it ignored." : "Saved."); };
-  return <ModalFrame title="Settings" onClose={onClose}><label className="setting-row"><input type="checkbox" checked={enterToSend} onChange={(event) => onEnterToSendChange(event.target.checked)} /> Enter sends message</label><label>Users root<input value={root} onChange={(event) => setRoot(event.target.value)} /></label><button onClick={() => void save()}>Save</button><p>{notice}</p></ModalFrame>;
+  return <ModalFrame title="Settings" onClose={onClose}><label className="setting-row"><input type="checkbox" checked={enterToSend} onChange={(event) => onEnterToSendChange(event.target.checked)} /> Enter sends message</label><br/><label>Users root<input value={root} onChange={(event) => setRoot(event.target.value)} /></label><button onClick={() => void save()}>Save</button><p>{notice}</p></ModalFrame>;
 }
 
 function UsersModal({ onClose }: { onClose: () => void }) {
