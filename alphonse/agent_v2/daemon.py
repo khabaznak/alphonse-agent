@@ -240,6 +240,28 @@ class V2Daemon:
             return False
         return self.runtime.outbox.mark_delivered(outbox_message_id)
 
+    def desktop_conversation_history(self, *, user: str, project_id: str = "", limit: int = 100) -> list[dict[str, Any]]:
+        normalized_user = str(user or "local").strip() or "local"
+        normalized_project = str(project_id or "").strip()
+        deliveries = self.runtime.outbox.list(
+            OutboundSelector(integration_id="desktop", channel_target=normalized_user, status=None),
+            limit=max(1, min(int(limit or 100), 500)),
+        )
+        messages: list[dict[str, Any]] = []
+        for delivery in deliveries:
+            metadata_project = str(delivery.metadata.get("project_id") or "").strip()
+            if metadata_project != normalized_project:
+                continue
+            messages.append(
+                {
+                    "id": delivery.outbox_message_id,
+                    "role": "assistant",
+                    "content": delivery.message,
+                    "created_at": delivery.created_at,
+                }
+            )
+        return messages[-max(1, min(int(limit or 100), 500)):]
+
     def list_projects(self, *, user: str) -> list[dict[str, str]]:
         return [project.to_dict() for project in self.runtime.project_store.list_visible_projects(str(user or "local"))]
 

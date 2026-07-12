@@ -1,4 +1,4 @@
-import { type ReactNode, useState } from "react";
+import { type ReactNode, useEffect, useState } from "react";
 import { daemonRequest } from "./api";
 
 export const DESKTOP_CATALOG_ID = "alphonse.desktop.catalog.v1";
@@ -42,11 +42,12 @@ export function applyA2uiEvent(surfaces: Record<string, A2uiSurface>, event: AgU
 }
 
 export function A2uiSurfaceHost({ surfaces, clientId, user, onDone }: { surfaces: Record<string, A2uiSurface>; clientId: string; user: string; onDone: () => Promise<void> }) {
-  return <>{Object.values(surfaces).map((surface) => <Surface key={surface.surfaceId} surface={surface} clientId={clientId} user={user} onDone={onDone} />)}</>;
+  return <>{Object.values(surfaces).map((surface) => <A2uiSurfaceView key={surface.surfaceId} surface={surface} clientId={clientId} user={user} onDone={onDone} />)}</>;
 }
 
-function Surface({ surface, clientId, user, onDone }: { surface: A2uiSurface; clientId: string; user: string; onDone: () => Promise<void> }) {
+export function A2uiSurfaceView({ surface, clientId, user, onDone }: { surface: A2uiSurface; clientId: string; user: string; onDone: () => Promise<void> }) {
   const [dataModel, setDataModel] = useState(surface.dataModel);
+  useEffect(() => setDataModel(surface.dataModel), [surface.dataModel, surface.surfaceId]);
   const component = (id: string): ReactNode => {
     const item = surface.components[id]; if (!item) return null;
     const children = <>{(item.children || []).map(component)}</>;

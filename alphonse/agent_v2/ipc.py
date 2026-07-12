@@ -85,6 +85,9 @@ class V2DaemonClient:
     def acknowledge_desktop_delivery(self, *, client_id: str, outbox_message_id: str) -> dict[str, Any]:
         return self.request("desktop_ack_delivery", client_id=client_id, outbox_message_id=outbox_message_id)
 
+    def desktop_conversation_history(self, *, user: str, project_id: str = "", limit: int = 100) -> dict[str, Any]:
+        return self.request("desktop_conversation_history", user=user, project_id=project_id, limit=limit)
+
     def projects(self, *, user: str) -> dict[str, Any]:
         return self.request("projects", user=user)
 
@@ -317,6 +320,14 @@ class V2DaemonServer:
                 "acknowledged": self.daemon.acknowledge_desktop_delivery(
                     client_id=str(params.get("client_id") or "desktop"),
                     outbox_message_id=str(params.get("outbox_message_id") or ""),
+                )
+            }
+        if method == "desktop_conversation_history":
+            return {
+                "messages": self.daemon.desktop_conversation_history(
+                    user=str(params.get("user") or "local"),
+                    project_id=str(params.get("project_id") or ""),
+                    limit=int(params.get("limit") or 100),
                 )
             }
         if method == "restart_integrations":

@@ -1,12 +1,13 @@
-import { FormEvent, ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, KeyboardEvent, ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { daemonRequest, ensureDaemon, stopDaemon } from "./api";
 import { matchingCommands } from "./commands";
-import { A2uiSurfaceHost, applyA2uiEvent, DESKTOP_CATALOG_ID } from "./a2ui";
+import { A2uiSurfaceView, applyA2uiEvent, DESKTOP_CATALOG_ID } from "./a2ui";
+import { agentStateLabel, capdActivityLabel, projectKey } from "./layoutState";
 import type { ActivityEvent, AgentDocument, ChatMessage, InferenceSettings, Project, Question } from "./types";
 
 const USER = "local";
 
-type Modal = "projects" | "project-context" | "integrations" | "model" | "agent-config" | null;
+type Modal = "projects" | "project-context" | "integrations" | "model" | "agent-config" | "desktop-settings" | null;
 type PollResponse = {
   events: ActivityEvent[];
   next_sequence: number;
@@ -16,6 +17,7 @@ type PollResponse = {
   questions: Question[];
   status: { active_work: Record<string, string>; activity: { state?: string } };
 };
+type HistoryResponse = { messages: ChatMessage[] };
 type Provider = { provider_key: string; display_name: string; models: Array<{ model_id: string; display_name: string }> };
 
 export default function App() {
@@ -23,16 +25,30 @@ export default function App() {
   const sequence = useRef(0);
   const uiSequence = useRef(0);
   const delivered = useRef(new Set<string>());
+  const timelineRef = useRef<HTMLDivElement | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([{ id: "welcome", role: "assistant", content: "Alphonse Desktop is connected locally." }]);
+  const [messageBuckets, setMessageBuckets] = useState<Record<string, ChatMessage[]>>({});
   const [prompt, setPrompt] = useState("");
   const [connected, setConnected] = useState(false);
-  const [activity, setActivity] = useState("Starting daemon…");
+  const [activity, setActivity] = useState("idle");
+  const [agentState, setAgentState] = useState<"Idle" | "Working" | "Error" | "Disconnected">("Disconnected");
   const [questions, setQuestions] = useState<Question[]>([]);
   const [project, setProject] = useState<Project | null>(null);
   const [modal, setModal] = useState<Modal>(null);
   const [error, setError] = useState("");
-  const [events, setEvents] = useState<ActivityEvent[]>([]);
   const [surfaces, setSurfaces] = useState<Record<string, import("./a2ui").A2uiSurface>>({});
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [enterToSend, setEnterToSend] = useState(() => window.localStorage.getItem("alphonse.desktop.enterToSend") !== "false");
+  const currentProjectKey = projectKey(project?.project_id);
+
+  const appendMessage = useCallback((message: ChatMessage) => {
+    setMessages((current) => {
+      const next = [...current, message];
+      setMessageBuckets((buckets) => ({ ...buckets, [currentProjectKey]: next }));
+      return next;
+    });
+  }, [currentProjectKey]);
 
   const poll = useCallback(async () => {
     try {
@@ -50,21 +66,22 @@ export default function App() {
       setError("");
       setQuestions(response.questions);
       setSurfaces((current) => (response.ui_events || []).reduce((next, item) => applyA2uiEvent(next, item.event), current));
-      setEvents((current) => [...current, ...response.events].slice(-12));
       const latest = response.events.at(-1);
-      setActivity(latest ? `${latest.label || latest.phase}: ${latest.message || "Working"}` : response.status.activity.state || "idle");
+      setActivity(capdActivityLabel(latest, response.status.activity.state || "idle"));
+      setAgentState(agentStateLabel(true, false, Object.keys(response.status.active_work || {}).length));
       for (const delivery of response.deliveries) {
         if (delivered.current.has(delivery.outbox_message_id)) continue;
         delivered.current.add(delivery.outbox_message_id);
-        setMessages((current) => [...current, { id: delivery.outbox_message_id, role: "assistant", content: delivery.message }]);
+        appendMessage({ id: delivery.outbox_message_id, role: "assistant", content: delivery.message });
         await daemonRequest("desktop_ack_delivery", { client_id: clientId, outbox_message_id: delivery.outbox_message_id });
       }
     } catch (cause) {
       setConnected(false);
       setError(cause instanceof Error ? cause.message : "Daemon connection lost");
-      setActivity("Disconnected");
+      setActivity("idle");
+      setAgentState("Disconnected");
     }
-  }, [clientId]);
+  }, [appendMessage, clientId]);
 
   useEffect(() => {
     ensureDaemon().then(() => poll()).catch((cause: unknown) => setError(cause instanceof Error ? cause.message : "Unable to start daemon"));
@@ -72,8 +89,42 @@ export default function App() {
     return () => window.clearInterval(timer);
   }, [poll]);
 
-  const submit = async (event: FormEvent) => {
-    event.preventDefault();
+  useEffect(() => {
+    window.localStorage.setItem("alphonse.desktop.enterToSend", String(enterToSend));
+  }, [enterToSend]);
+
+  useEffect(() => {
+    const element = timelineRef.current;
+    if (!element) return;
+    element.scrollTop = element.scrollHeight;
+  }, [messages]);
+
+  useEffect(() => {
+    const element = textareaRef.current;
+    if (!element) return;
+    element.style.height = "auto";
+    element.style.height = `${Math.min(element.scrollHeight, 10 * 22 + 24)}px`;
+  }, [prompt]);
+
+  const selectProject = useCallback(async (next: Project) => {
+    const nextKey = projectKey(next.project_id);
+    setMessageBuckets((buckets) => ({ ...buckets, [currentProjectKey]: messages }));
+    setProject(next);
+    setModal(null);
+    setSurfaces({});
+    setQuestions([]);
+    delivered.current.clear();
+    setMessages(messageBuckets[nextKey] || []);
+    try {
+      const history = await daemonRequest<HistoryResponse>("desktop_conversation_history", { user: USER, project_id: next.project_id, limit: 100 });
+      setMessages((current) => current.length > 0 ? current : history.messages);
+      setMessageBuckets((buckets) => ({ ...buckets, [nextKey]: buckets[nextKey]?.length ? buckets[nextKey] : history.messages }));
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Conversation history could not be loaded");
+    }
+  }, [currentProjectKey, messageBuckets, messages]);
+
+  const submitPrompt = async () => {
     const value = prompt.trim();
     if (!value) return;
     setPrompt("");
@@ -81,7 +132,7 @@ export default function App() {
       await runCommand(value.split(/\s+/, 1)[0]);
       return;
     }
-    setMessages((current) => [...current, { id: crypto.randomUUID(), role: "user", content: value }]);
+    appendMessage({ id: crypto.randomUUID(), role: "user", content: value });
     try {
       await daemonRequest("queue_message", {
         prompt: value,
@@ -91,11 +142,23 @@ export default function App() {
         provider_key: "tui",
         channel_target: USER,
       });
-      setActivity("Queued");
+      setActivity("doing");
       await poll();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Message could not be queued");
+      setAgentState("Error");
     }
+  };
+
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    await submitPrompt();
+  };
+
+  const onComposerKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (!enterToSend || event.key !== "Enter" || event.shiftKey) return;
+    event.preventDefault();
+    void submitPrompt();
   };
 
   const runCommand = async (command: string) => {
@@ -112,47 +175,62 @@ export default function App() {
   };
 
   const suggestions = useMemo(() => matchingCommands(prompt), [prompt]);
+  const activeSurface = Object.values(surfaces)[0];
+  const fallbackQuestion = questions.find((question) => !surfaces[`question:${question.question_id}`]);
 
   return (
-    <main className="app-shell">
-      <aside className="sidebar">
-        <div className="brand"><span className="mark">A</span><span>Alphonse</span></div>
-        <p className={`connection ${connected ? "online" : "offline"}`}>{connected ? "Daemon connected" : "Daemon unavailable"}</p>
-        <button onClick={() => setModal("projects")}>Project{project ? `: ${project.name}` : ""}</button>
-        <button onClick={() => setModal("integrations")}>Integrations</button>
-        <button onClick={() => setModal("model")}>Model</button>
-        <button onClick={() => setModal("agent-config")}>Agent configuration</button>
-        <div className="event-log">
-          <h2>Activity</h2>
-          {events.slice(-5).reverse().map((entry) => <p key={entry.sequence}>{entry.label || entry.phase}</p>)}
+    <main className={`app-shell ${sidebarCollapsed ? "sidebar-collapsed" : ""}`}>
+      <aside className="sidebar" aria-label="Alphonse navigation">
+        <div className="brand">
+          <span className="mark">A</span>
+          <span className="brand-name">Alphonse</span>
+          <button className="collapse-toggle" type="button" onClick={() => setSidebarCollapsed((value) => !value)} aria-label={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}>{sidebarCollapsed ? ">" : "<"}</button>
         </div>
+        <button title="Projects" onClick={() => setModal("projects")}><span>Project</span><small>{project?.name || "Home"}</small></button>
+        <button title="Integrations" onClick={() => setModal("integrations")}><span>Integrations</span></button>
+        <button title="Model" onClick={() => setModal("model")}><span>Model</span></button>
+        <button title="Agent configuration" onClick={() => setModal("agent-config")}><span>Agent configuration</span></button>
+        <button title="Desktop settings" onClick={() => setModal("desktop-settings")}><span>Desktop settings</span></button>
       </aside>
 
       <section className="conversation">
-        <header>
-          <div><p className="eyebrow">LOCAL PRESENCE</p><h1>{project?.name || "Home"}</h1></div>
-          <p className="activity">{activity}</p>
+        <header className="topbar">
+          <div className="topbar-project"><p className="eyebrow">Project</p><h1>{project?.name || "Home"}</h1></div>
+          <StatusPill label="Activity" value={activity} />
+          <StatusPill label="State" value={agentState} tone={agentState.toLowerCase()} />
+          <StatusPill label="Connection" value={connected ? "Connected" : "Disconnected"} tone={connected ? "online" : "offline"} />
         </header>
         {error && <div className="error" role="alert">{error}</div>}
-        <div className="timeline" aria-live="polite">
+        <div className="timeline" ref={timelineRef} aria-live="polite">
           {messages.map((message) => <article className={`message ${message.role}`} key={message.id}>{message.content}</article>)}
         </div>
-        <A2uiSurfaceHost surfaces={surfaces} clientId={clientId} user={USER} onDone={poll} />
-        {questions.filter((question) => !surfaces[`question:${question.question_id}`]).map((question) => <QuestionCard key={question.question_id} question={question} onDone={poll} />)}
-        <form className="composer" onSubmit={submit}>
-          {suggestions.length > 0 && <div className="suggestions">{suggestions.map((item) => <button type="button" key={item} onClick={() => setPrompt(item)}>{item}</button>)}</div>}
-          <textarea value={prompt} onChange={(event) => setPrompt(event.target.value)} placeholder="Message Alphonse…  Type / for commands" rows={3} />
-          <button className="send" type="submit">Send</button>
-        </form>
+        <section className="input-dock">
+          {activeSurface ? (
+            <A2uiSurfaceView surface={activeSurface} clientId={clientId} user={USER} onDone={poll} />
+          ) : fallbackQuestion ? (
+            <QuestionCard question={fallbackQuestion} onDone={poll} />
+          ) : (
+            <form className="composer" onSubmit={submit}>
+              {suggestions.length > 0 && <div className="suggestions">{suggestions.map((item) => <button type="button" key={item} onClick={() => setPrompt(item)}>{item}</button>)}</div>}
+              <textarea ref={textareaRef} value={prompt} onKeyDown={onComposerKeyDown} onChange={(event) => setPrompt(event.target.value)} placeholder="Message Alphonse... Type / for commands" rows={1} />
+              <button className="send" type="submit">Send</button>
+            </form>
+          )}
+        </section>
       </section>
 
-      {modal === "projects" && <ProjectsModal active={project} onSelect={(next) => { setProject(next); setModal(null); }} onClose={() => setModal(null)} />}
+      {modal === "projects" && <ProjectsModal active={project} onSelect={(next) => void selectProject(next)} onClose={() => setModal(null)} />}
       {modal === "project-context" && <ProjectContextModal project={project} onClose={() => setModal(null)} />}
       {modal === "integrations" && <IntegrationsModal onClose={() => setModal(null)} />}
       {modal === "model" && <ModelModal onClose={() => setModal(null)} />}
       {modal === "agent-config" && <AgentConfigModal onClose={() => setModal(null)} />}
+      {modal === "desktop-settings" && <DesktopSettingsModal enterToSend={enterToSend} onEnterToSendChange={setEnterToSend} onClose={() => setModal(null)} />}
     </main>
   );
+}
+
+function StatusPill({ label, value, tone = "" }: { label: string; value: string; tone?: string }) {
+  return <div className={`status-pill ${tone}`}><span>{label}</span><strong>{value}</strong></div>;
 }
 
 function QuestionCard({ question, onDone }: { question: Question; onDone: () => Promise<void> }) {
@@ -170,6 +248,10 @@ function QuestionCard({ question, onDone }: { question: Question; onDone: () => 
 
 function ModalFrame({ title, children, onClose }: { title: string; children: ReactNode; onClose: () => void }) {
   return <div className="modal-backdrop" role="presentation"><section className="modal" role="dialog" aria-modal="true" aria-label={title}><header><h2>{title}</h2><button onClick={onClose}>Close</button></header>{children}</section></div>;
+}
+
+function DesktopSettingsModal({ enterToSend, onEnterToSendChange, onClose }: { enterToSend: boolean; onEnterToSendChange: (value: boolean) => void; onClose: () => void }) {
+  return <ModalFrame title="Desktop settings" onClose={onClose}><label className="setting-row"><input type="checkbox" checked={enterToSend} onChange={(event) => onEnterToSendChange(event.target.checked)} /> Enter sends message</label></ModalFrame>;
 }
 
 function ProjectsModal({ active, onSelect, onClose }: { active: Project | null; onSelect: (project: Project) => void; onClose: () => void }) {

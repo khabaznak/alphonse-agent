@@ -156,6 +156,35 @@ def test_desktop_poll_is_cursor_based_and_acknowledges_only_its_delivery() -> No
     assert repeat["deliveries"] == []
 
 
+def test_desktop_conversation_history_is_project_scoped() -> None:
+    runtime = build_runtime_host(inference=_router(), schedule_store=ScheduledTaskStore(":memory:"))
+    daemon = V2Daemon(runtime)
+    first = runtime.outbox.enqueue(
+        address=ChannelAddress("desktop", "tui", "alex", alphonse_user_id="alex"),
+        message="Project one response.",
+        metadata={"project_id": "project-one"},
+    )
+    runtime.outbox.mark_delivered(first.outbox_message_id)
+    runtime.outbox.enqueue(
+        address=ChannelAddress("desktop", "tui", "alex", alphonse_user_id="alex"),
+        message="Project two response.",
+        metadata={"project_id": "project-two"},
+    )
+
+    history = daemon.ipc._dispatch(
+        {"method": "desktop_conversation_history", "params": {"user": "alex", "project_id": "project-one"}}
+    )["messages"]
+
+    assert history == [
+        {
+            "id": first.outbox_message_id,
+            "role": "assistant",
+            "content": "Project one response.",
+            "created_at": first.created_at,
+        }
+    ]
+
+
 def test_desktop_a2ui_question_surface_is_negotiated_and_actions_resume_only_the_question() -> None:
     store = SQLiteQuestionStore(":memory:")
     runtime = build_runtime_host(inference=_router(), schedule_store=ScheduledTaskStore(":memory:"), question_store=store)

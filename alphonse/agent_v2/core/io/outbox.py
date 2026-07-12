@@ -532,6 +532,7 @@ def project_snapshot_to_outbox(
         metadata={
             "source": "task_result",
             "tool": "respond",
+            "project_id": str(task_state.get("project_id") or "").strip(),
             "scheduled_task_id": str(task_metadata.get("scheduled_task_id") or "").strip(),
             "scheduled_run_id": str(task_metadata.get("scheduled_run_id") or "").strip(),
             "occurrence_key": str(task_metadata.get("occurrence_key") or "").strip(),
