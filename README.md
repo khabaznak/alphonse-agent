@@ -136,6 +136,7 @@ runtime files are stored under `~/.alphonse/`:
 - `v2-integrations.sqlite3` — integration configuration and local secrets
 - `v2-inference.sqlite3` — daemon-wide inference provider and model selection
 - `agent-config/` — editable `CoreContext.md` and `Philosophy.md` snapshots
+- `v2-project-sessions.sqlite3` — active project selections by channel conversation
 
 Override paths with these environment variables when needed:
 
@@ -146,6 +147,8 @@ ALPHONSE_V2_OUTBOX_DB_PATH=
 ALPHONSE_V2_SCHEDULE_DB_PATH=
 ALPHONSE_V2_INTEGRATIONS_DB_PATH=
 ALPHONSE_V2_AGENT_CONFIG_DIR=
+ALPHONSE_V2_PROJECT_SESSION_DB_PATH=
+ALPHONSE_V2_MANAGED_PROJECTS_DIR=
 ```
 
 ### Start the v2 TUI
@@ -173,6 +176,12 @@ used by v2 CAPD prompts. These files live under `~/.alphonse/agent-config/` by
 default; set `ALPHONSE_V2_AGENT_CONFIG_DIR` to relocate them. The daemon reads
 them at startup, so save changes and then run `alphonse stop` followed by
 `alphonse start` before they affect new tasks.
+
+Projects are selected independently per user and conversation. `/project` in
+the TUI opens the project picker; text channels can use `/projects`,
+`/project <name-or-id>`, `/project none`, `/project create <name>`, and
+`/project context`. New channel-created projects are private and use the
+managed project root under `~/.alphonse/projects/` by default.
 
 ### Configure Telegram in v2
 

@@ -10,6 +10,10 @@ import traceback
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
+
+
+PROTOCOL_VERSION = 1
 
 
 def default_socket_path() -> Path:
@@ -22,7 +26,11 @@ class V2DaemonClient:
         self.timeout_sec = max(0.1, float(timeout_sec))
 
     def request(self, method: str, **params: Any) -> dict[str, Any]:
-        payload = json.dumps({"method": str(method), "params": params}, sort_keys=True) + "\n"
+        request_id = uuid4().hex
+        payload = json.dumps(
+            {"version": PROTOCOL_VERSION, "request_id": request_id, "method": str(method), "params": params},
+            sort_keys=True,
+        ) + "\n"
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
             connection.settimeout(self.timeout_sec)
             connection.connect(str(self.socket_path))
@@ -31,6 +39,8 @@ class V2DaemonClient:
         response = json.loads(data)
         if not isinstance(response, dict):
             raise RuntimeError("daemon_invalid_response")
+        if response.get("request_id") not in {None, request_id}:
+            raise RuntimeError("daemon_request_id_mismatch")
         if not response.get("ok"):
             raise RuntimeError(str(response.get("error") or "daemon_request_failed"))
         return dict(response.get("result") or {})
@@ -51,6 +61,86 @@ class V2DaemonClient:
         result = self.request("events")
         events = result.get("events")
         return [dict(event) for event in events if isinstance(event, dict)] if isinstance(events, list) else []
+
+    def desktop_poll(
+        self,
+        *,
+        client_id: str,
+        user: str,
+        after_sequence: int = 0,
+        after_ui_sequence: int = 0,
+        client_capabilities: dict[str, Any] | None = None,
+        limit: int = 100,
+    ) -> dict[str, Any]:
+        return self.request(
+            "desktop_poll",
+            client_id=client_id,
+            user=user,
+            after_sequence=after_sequence,
+            after_ui_sequence=after_ui_sequence,
+            client_capabilities=dict(client_capabilities or {}),
+            limit=limit,
+        )
+
+    def acknowledge_desktop_delivery(self, *, client_id: str, outbox_message_id: str) -> dict[str, Any]:
+        return self.request("desktop_ack_delivery", client_id=client_id, outbox_message_id=outbox_message_id)
+
+    def projects(self, *, user: str) -> dict[str, Any]:
+        return self.request("projects", user=user)
+
+    def create_project(self, *, user: str, name: str, description: str, root_path: str, visibility: str = "private") -> dict[str, Any]:
+        return self.request(
+            "create_project", user=user, name=name, description=description, root_path=root_path, visibility=visibility,
+        )
+
+    def project_context(self, *, user: str, project_id: str) -> dict[str, Any]:
+        return self.request("project_context", user=user, project_id=project_id)
+
+    def save_project_context(self, *, user: str, project_id: str, content: str) -> dict[str, Any]:
+        return self.request("save_project_context", user=user, project_id=project_id, content=content)
+
+    def select_project_session(self, **values: Any) -> dict[str, Any]:
+        return self.request("select_project_session", **values)
+
+    def active_project_session(self, **values: Any) -> dict[str, Any]:
+        return self.request("active_project_session", **values)
+
+    def pending_questions(self, *, user: str) -> dict[str, Any]:
+        return self.request("pending_questions", user=user)
+
+    def answer_question(self, *, user: str, question_id: str, text: str = "", payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        return self.request("answer_question", user=user, question_id=question_id, text=text, payload=dict(payload or {}))
+
+    def cancel_question(self, question_id: str) -> dict[str, Any]:
+        return self.request("cancel_question", question_id=question_id)
+
+    def a2ui_action(
+        self,
+        *,
+        client_id: str,
+        user: str,
+        surface_id: str,
+        source_component_id: str,
+        action_name: str,
+        context: dict[str, Any] | None = None,
+        data_model: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        return self.request(
+            "a2ui_action",
+            client_id=client_id,
+            user=user,
+            surface_id=surface_id,
+            source_component_id=source_component_id,
+            action_name=action_name,
+            context=dict(context or {}),
+            data_model=dict(data_model or {}),
+        )
+
+    def integrations(self) -> dict[str, Any]:
+        return self.request("integrations")
+
+    def save_telegram_integration(self, *, user: str, values: dict[str, Any]) -> dict[str, Any]:
+        return self.request("save_telegram_integration", user=user, values=dict(values))
 
     def restart_integrations(self) -> dict[str, Any]:
         return self.request("restart_integrations")
@@ -147,18 +237,27 @@ class V2DaemonServer:
 
     def _handle(self, connection: socket.socket) -> None:
         with connection:
+            request: Any = {}
             try:
                 request = json.loads(_read_line(connection))
                 result = self._dispatch(request)
-                response = {"ok": True, "result": result}
+                response = {"version": PROTOCOL_VERSION, "request_id": _request_id(request), "ok": True, "result": result}
             except Exception as exc:
                 traceback.print_exc()
-                response = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+                response = {
+                    "version": PROTOCOL_VERSION,
+                    "request_id": _request_id(request),
+                    "ok": False,
+                    "error": f"{type(exc).__name__}: {exc}",
+                }
             connection.sendall((json.dumps(response, sort_keys=True) + "\n").encode("utf-8"))
 
     def _dispatch(self, request: Any) -> dict[str, Any]:
         if not isinstance(request, dict):
             raise ValueError("daemon_request_object_required")
+        version = request.get("version")
+        if version is not None and int(version) != PROTOCOL_VERSION:
+            raise ValueError(f"daemon_protocol_version_unsupported: {version}")
         method = str(request.get("method") or "").strip()
         params = request.get("params") if isinstance(request.get("params"), dict) else {}
         if method == "ping":
@@ -204,6 +303,22 @@ class V2DaemonServer:
             return {"status": "stopping"}
         if method == "events":
             return {"events": self.daemon.pop_activity_events()}
+        if method == "desktop_poll":
+            return self.daemon.poll_desktop(
+                client_id=str(params.get("client_id") or "desktop"),
+                user=str(params.get("user") or "local"),
+                after_sequence=int(params.get("after_sequence") or 0),
+                after_ui_sequence=int(params.get("after_ui_sequence") or 0),
+                client_capabilities=params.get("client_capabilities") if isinstance(params.get("client_capabilities"), dict) else {},
+                limit=int(params.get("limit") or 100),
+            )
+        if method == "desktop_ack_delivery":
+            return {
+                "acknowledged": self.daemon.acknowledge_desktop_delivery(
+                    client_id=str(params.get("client_id") or "desktop"),
+                    outbox_message_id=str(params.get("outbox_message_id") or ""),
+                )
+            }
         if method == "restart_integrations":
             self.daemon.restart_integrations()
             return {"status": "restarted"}
@@ -241,8 +356,83 @@ class V2DaemonServer:
                     str(params.get("content") or ""),
                 )
             }
+        if method == "projects":
+            return {"projects": self.daemon.list_projects(user=str(params.get("user") or "local"))}
+        if method == "create_project":
+            return {
+                "project": self.daemon.create_project(
+                    user=str(params.get("user") or "local"),
+                    name=str(params.get("name") or ""),
+                    description=str(params.get("description") or ""),
+                    root_path=str(params.get("root_path") or ""),
+                    visibility=str(params.get("visibility") or "private"),
+                )
+            }
+        if method == "project_context":
+            return self.daemon.read_project_context(
+                user=str(params.get("user") or "local"), project_id=str(params.get("project_id") or ""),
+            )
+        if method == "save_project_context":
+            return {
+                "project": self.daemon.save_project_context(
+                    user=str(params.get("user") or "local"),
+                    project_id=str(params.get("project_id") or ""),
+                    content=str(params.get("content") or ""),
+                )
+            }
+        if method == "select_project_session":
+            return {
+                "session": self.daemon.select_project_session(
+                    user=str(params.get("user") or "local"),
+                    integration_id=str(params.get("integration_id") or "tui"),
+                    channel_target=str(params.get("channel_target") or params.get("user") or "local"),
+                    thread_id=str(params.get("thread_id") or ""),
+                    project_id=str(params.get("project_id") or ""),
+                )
+            }
+        if method == "active_project_session":
+            return {
+                "session": self.daemon.active_project_session(
+                    user=str(params.get("user") or "local"),
+                    integration_id=str(params.get("integration_id") or "tui"),
+                    channel_target=str(params.get("channel_target") or params.get("user") or "local"),
+                    thread_id=str(params.get("thread_id") or ""),
+                )
+            }
+        if method == "pending_questions":
+            user = str(params.get("user") or "local")
+            return {"questions": [question.to_dict() for question in self.daemon.runtime.question_store.list_pending_for_respondent(user)]}
+        if method == "answer_question":
+            payload = params.get("payload") if isinstance(params.get("payload"), dict) else {}
+            return self.daemon.answer_question(
+                user=str(params.get("user") or "local"),
+                question_id=str(params.get("question_id") or ""),
+                text=str(params.get("text") or ""),
+                payload=dict(payload),
+            )
+        if method == "cancel_question":
+            return {"cancelled": self.daemon.cancel_question(str(params.get("question_id") or ""))}
+        if method == "a2ui_action":
+            return self.daemon.a2ui_action(
+                client_id=str(params.get("client_id") or "desktop"),
+                user=str(params.get("user") or "local"),
+                surface_id=str(params.get("surface_id") or ""),
+                source_component_id=str(params.get("source_component_id") or ""),
+                action_name=str(params.get("action_name") or ""),
+                context=params.get("context") if isinstance(params.get("context"), dict) else {},
+                data_model=params.get("data_model") if isinstance(params.get("data_model"), dict) else {},
+            )
+        if method == "integrations":
+            return {"integrations": self.daemon.list_integrations()}
+        if method == "save_telegram_integration":
+            values = params.get("values") if isinstance(params.get("values"), dict) else {}
+            return {
+                "integration": self.daemon.save_telegram_integration(
+                    user=str(params.get("user") or "local"), values=dict(values),
+                )
+            }
         if method == "queue_message":
-            queued = self.daemon.runtime.channel.queue_message(
+            return self.daemon.ingest_message(
                 prompt=str(params.get("prompt") or ""),
                 user=str(params.get("user") or ""),
                 project_id=str(params.get("project_id") or ""),
@@ -255,7 +445,6 @@ class V2DaemonServer:
                 channel_target=str(params.get("channel_target") or ""),
                 provider_message_id=str(params.get("provider_message_id") or ""),
             )
-            return {"message_id": queued.message_id}
         if method == "scheduled_tasks":
             status = str(params.get("status") or "").strip() or None
             tasks = self.daemon.runtime.schedule_store.list_tasks(
@@ -319,3 +508,7 @@ def _read_line(connection: socket.socket) -> str:
         if b"\n" in chunk:
             break
     return b"".join(chunks).split(b"\n", 1)[0].decode("utf-8")
+
+
+def _request_id(request: Any) -> str:
+    return str(request.get("request_id") or "") if isinstance(request, dict) else ""

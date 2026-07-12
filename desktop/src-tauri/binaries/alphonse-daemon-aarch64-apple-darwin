@@ -1,0 +1,4 @@
+#!/bin/sh
+# Development fallback. Release packaging replaces this with the PyInstaller
+# executable emitted by ../scripts/build-daemon-sidecar.sh.
+exec alphonse start

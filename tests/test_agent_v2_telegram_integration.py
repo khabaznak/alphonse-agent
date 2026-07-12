@@ -14,6 +14,10 @@ from alphonse.agent_v2.core.messages import CommunicationChannel
 from alphonse.agent_v2.core.messages import InMemoryMessageQueue
 from alphonse.agent_v2.integrations.store import SQLiteIntegrationStore
 from alphonse.agent_v2.integrations.telegram.runtime import TelegramIntegrationRuntime
+from alphonse.agent_v2.core.projects import ProjectStore
+from alphonse.agent_v2.services.project_sessions import ProjectInboundRouter
+from alphonse.agent_v2.services.project_sessions import ProjectSessionKey
+from alphonse.agent_v2.services.project_sessions import SQLiteProjectSessionStore
 
 
 class FakeTelegramClient:
@@ -157,12 +161,38 @@ def test_telegram_outbound_drains_matching_outbox_message() -> None:
     assert delivered[0].provider_message_id == "777"
 
 
+def test_telegram_project_command_is_handled_without_queueing_capd_work(tmp_path: Path, monkeypatch) -> None:
+    db_path = tmp_path / "nerve-db"
+    monkeypatch.setenv("NERVE_DB_PATH", str(db_path))
+    apply_schema(db_path)
+    users_store.upsert_user({"user_id": "u-alex", "display_name": "Alex", "is_active": True})
+    resolvers.upsert_service_resolver(user_id="u-alex", service_id=2, service_user_id="123")
+    queue = InMemoryMessageQueue()
+    outbox = SQLiteOutboundStore()
+    projects = ProjectStore(":memory:")
+    project = projects.create_project(name="Exercise", root_path=str(tmp_path / "exercise"), owner_user_id="u-alex")
+    router = ProjectInboundRouter(
+        channel=CommunicationChannel(queue), outbox=outbox, projects=projects, sessions=SQLiteProjectSessionStore(":memory:")
+    )
+    client = FakeTelegramClient(
+        [{"update_id": 10, "message": {"message_id": 5, "text": "/project Exercise", "chat": {"id": "999"}, "from": {"id": "123"}}}]
+    )
+    runtime = _runtime(queue=queue, outbox=outbox, http_client=client, inbound_router=router)
+
+    runtime.poll_once()
+
+    assert queue.size() == 0
+    assert client.sent == [{"chat_id": "999", "text": "Active project: Exercise."}]
+    assert router.active_project(ProjectSessionKey("u-alex", "telegram-home", "999")).project_id == project.project_id
+
+
 def _runtime(
     *,
     queue: InMemoryMessageQueue | None = None,
     outbox: SQLiteOutboundStore | None = None,
     http_client: FakeTelegramClient | None = None,
     on_message_queued=None,
+    inbound_router=None,
 ) -> TelegramIntegrationRuntime:
     store = SQLiteIntegrationStore()
     record = store.upsert(
@@ -181,4 +211,5 @@ def _runtime(
         owner_user_id="local",
         http_client=http_client or FakeTelegramClient(),
         on_message_queued=on_message_queued,
+        inbound_router=inbound_router,
     )

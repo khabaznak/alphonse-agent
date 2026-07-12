@@ -19,6 +19,7 @@ from alphonse.agent_v2.integrations.presence import PresencePhase
 from alphonse.agent_v2.integrations.presence import PresenceState
 from alphonse.agent_v2.integrations.presence import PresenceProjector
 from alphonse.agent_v2.integrations.store import IntegrationConfigRecord
+from alphonse.agent_v2.services.project_sessions import ProjectInboundRouter
 
 
 @dataclass(frozen=True)
@@ -100,6 +101,7 @@ class TelegramIntegrationRuntime:
         on_outbox_delivered: Callable[[Any], None] | None = None,
         on_outbox_failed: Callable[[Any, str], None] | None = None,
         presence_projector: PresenceProjector | None = None,
+        inbound_router: ProjectInboundRouter | None = None,
     ) -> None:
         self.record = record
         self.channel = channel
@@ -119,6 +121,7 @@ class TelegramIntegrationRuntime:
         self._on_outbox_delivered = on_outbox_delivered
         self._on_outbox_failed = on_outbox_failed
         self.presence_projector = presence_projector
+        self.inbound_router = inbound_router
         self.presence_adapter = TelegramPresenceAdapter(
             http_client=self.http_client,
             enabled=bool(config["presence_enabled"]),
@@ -182,6 +185,7 @@ class TelegramIntegrationRuntime:
         provider_message_id = str(message.get("message_id") or update.get("update_id") or "").strip()
         reply_to = message.get("reply_to_message") if isinstance(message.get("reply_to_message"), dict) else {}
         reply_to_message_id = str(reply_to.get("message_id") or "").strip()
+        thread_id = str(message.get("message_thread_id") or "").strip()
         self._stats = _replace_stats(self._stats, updates_seen=self._stats.updates_seen + 1)
         resolved = self.identity_resolver.resolve_inbound_user(
             integration_id=self.integration_id,
@@ -197,20 +201,28 @@ class TelegramIntegrationRuntime:
             )
             self._stats = _replace_stats(self._stats, unknown_users=self._stats.unknown_users + 1)
             return False
-        self.channel.queue_message(
-            prompt=text,
-            user=resolved.alphonse_user_id,
-            integration_id=self.integration_id,
-            provider_key="telegram",
-            provider_user_id=provider_user_id,
-            channel_target=chat_id,
-            provider_message_id=provider_message_id,
-            reply_to_provider_message_id=reply_to_message_id,
-            metadata={"provider_raw_message": dict(update)},
-            correlation_id=f"{self.integration_id}:{provider_message_id}" if provider_message_id else "",
-        )
-        self._stats = _replace_stats(self._stats, messages_queued=self._stats.messages_queued + 1)
-        self._notify_message_queued()
+        values = {
+            "prompt": text,
+            "user": resolved.alphonse_user_id,
+            "integration_id": self.integration_id,
+            "provider_key": "telegram",
+            "provider_user_id": provider_user_id,
+            "channel_target": chat_id,
+            "provider_message_id": provider_message_id,
+            "reply_to_provider_message_id": reply_to_message_id,
+            "thread_id": thread_id,
+            "metadata": {"provider_raw_message": dict(update)},
+            "correlation_id": f"{self.integration_id}:{provider_message_id}" if provider_message_id else "",
+        }
+        if self.inbound_router is not None:
+            routed = self.inbound_router.ingest(**values)
+            if routed.queued is not None:
+                self._stats = _replace_stats(self._stats, messages_queued=self._stats.messages_queued + 1)
+                self._notify_message_queued()
+        else:
+            self.channel.queue_message(**values)
+            self._stats = _replace_stats(self._stats, messages_queued=self._stats.messages_queued + 1)
+            self._notify_message_queued()
         return True
 
     def drain_outbox_once(self, *, limit: int = 20) -> TelegramRuntimeStats:
@@ -304,6 +316,7 @@ def build_telegram_runtime(
     on_outbox_delivered: Callable[[Any], None] | None = None,
     on_outbox_failed: Callable[[Any, str], None] | None = None,
     presence_projector: PresenceProjector | None = None,
+    inbound_router: ProjectInboundRouter | None = None,
 ) -> TelegramIntegrationRuntime:
     return TelegramIntegrationRuntime(
         record=record,
@@ -315,6 +328,7 @@ def build_telegram_runtime(
         on_outbox_delivered=on_outbox_delivered,
         on_outbox_failed=on_outbox_failed,
         presence_projector=presence_projector,
+        inbound_router=inbound_router,
     )
 
 

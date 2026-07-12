@@ -58,6 +58,8 @@ from alphonse.agent_v2.inference_settings import inference_provider_descriptors
 from alphonse.agent_v2.inference_settings import provider_status
 from alphonse.agent_v2.inference_settings import validate_and_save_inference_settings
 from alphonse.agent_v2.agent_config import AgentConfigStore
+from alphonse.agent_v2.services.project_sessions import ProjectSessionKey
+from alphonse.agent_v2.services.project_sessions import SQLiteProjectSessionStore
 from alphonse.agent_v2.runtime import InMemoryInternalState
 from alphonse.agent_v2.runtime import NullMemory
 from alphonse.agent_v2.runtime import NullPromptLoader
@@ -173,6 +175,7 @@ def build_tui_runtime(
     integration_registry: IntegrationRegistry | None = None,
     inference_settings_store: SQLiteInferenceSettingsStore | None = None,
     agent_config_store: AgentConfigStore | None = None,
+    project_session_store: SQLiteProjectSessionStore | None = None,
 ) -> TuiRuntime:
     return build_runtime_host(
         user=user,
@@ -188,6 +191,7 @@ def build_tui_runtime(
         integration_registry=integration_registry,
         inference_settings_store=inference_settings_store,
         agent_config_store=agent_config_store,
+        project_session_store=project_session_store,
     )
 
 
@@ -245,11 +249,16 @@ def queue_tui_input(runtime: TuiRuntime, prompt: str) -> TuiSubmissionResult:
     if pending_result is not None:
         return pending_result
 
-    queued = runtime.channel.queue_message(
-        prompt=prompt_value,
+    routed = runtime.inbound_router.ingest(
+        prompt=raw_prompt,
         user=runtime.user,
-        project_id=runtime.active_project_id,
+        integration_id="tui",
+        provider_key="tui",
+        channel_target=runtime.user,
     )
+    if routed.queued is None:
+        return TuiSubmissionResult(prompt=prompt_value, response="", event="channel command handled")
+    queued = routed.queued
     command_event = ""
     if queued.message.metadata.get("is_command"):
         command_event = f" command=/{queued.message.metadata.get('command')}"
@@ -430,6 +439,7 @@ def select_tui_project(runtime: TuiRuntime, project_id: str) -> ProjectRecord:
     if project is None:
         raise KeyError(f"project_not_found: {project_id}")
     runtime.active_project_id = project.project_id
+    runtime.project_session_store.set(ProjectSessionKey(runtime.user, "tui", runtime.user), project)
     return project
 
 
@@ -449,6 +459,7 @@ def create_tui_project(
         owner_user_id=runtime.user,
     )
     runtime.active_project_id = project.project_id
+    runtime.project_session_store.set(ProjectSessionKey(runtime.user, "tui", runtime.user), project)
     return project
 
 
@@ -1327,6 +1338,7 @@ def _build_textual_app_class() -> type[Any]:
             integration_store = SQLiteIntegrationStore.default()
             inference_settings_store = SQLiteInferenceSettingsStore.default()
             agent_config_store = AgentConfigStore.default()
+            project_session_store = SQLiteProjectSessionStore.default()
             self.daemon_client = V2DaemonClient()
             self.external_daemon = _daemon_is_available(self.daemon_client)
             self.daemon_connection_status = "connected" if self.external_daemon else "embedded"
@@ -1338,6 +1350,7 @@ def _build_textual_app_class() -> type[Any]:
                 integration_store=integration_store,
                 inference_settings_store=inference_settings_store,
                 agent_config_store=agent_config_store,
+                project_session_store=project_session_store,
                 messages=SQLiteMessageQueue.default(),
             )
             self.daemon = None if self.external_daemon else V2Daemon(self.runtime)
@@ -1361,6 +1374,7 @@ def _build_textual_app_class() -> type[Any]:
             self.spinner_index = 0
             self.slash_command_matches: list[tuple[str, str]] = []
             self.slash_command_selected_index = 0
+            self._sync_tui_project_session()
 
         def compose(self) -> ComposeResult:
             yield Header(show_clock=True)
@@ -1468,7 +1482,8 @@ def _build_textual_app_class() -> type[Any]:
                 if value == "__new__":
                     self.push_screen(NewProjectScreen(self.runtime), callback=_created)
                     return
-                select_tui_project(self.runtime, value)
+                if not self._select_tui_project_session(value):
+                    return
                 self._refresh_status()
                 if then_context:
                     self.push_screen(ProjectContextScreen(self.runtime), callback=lambda _: self._refresh_status())
@@ -1476,11 +1491,52 @@ def _build_textual_app_class() -> type[Any]:
             def _created(project: ProjectRecord | None) -> None:
                 if project is None:
                     return
+                if not self._select_tui_project_session(project.project_id):
+                    return
                 self._refresh_status()
                 if then_context:
                     self.push_screen(ProjectContextScreen(self.runtime), callback=lambda _: self._refresh_status())
 
             self.push_screen(ProjectPickerScreen(self.runtime), callback=_selected)
+
+        def _select_tui_project_session(self, project_id: str) -> bool:
+            try:
+                if self.external_daemon:
+                    self.daemon_client.select_project_session(
+                        user=self.runtime.user,
+                        integration_id="tui",
+                        channel_target=self.runtime.user,
+                        project_id=project_id,
+                    )
+                    project = self.runtime.project_store.get_project(project_id, requester_user_id=self.runtime.user)
+                    if project is None:
+                        raise KeyError(f"project_not_found: {project_id}")
+                    self.runtime.active_project_id = project.project_id
+                else:
+                    select_tui_project(self.runtime, project_id)
+            except Exception as exc:
+                self.query_one("#activity", Static).update(f"Project selection failed: {exc}")
+                return False
+            return True
+
+        def _sync_tui_project_session(self) -> None:
+            try:
+                if self.external_daemon:
+                    result = self.daemon_client.active_project_session(
+                        user=self.runtime.user,
+                        integration_id="tui",
+                        channel_target=self.runtime.user,
+                    )
+                    session = result.get("session")
+                    project_id = str(session.get("active_project_id") or "") if isinstance(session, dict) else ""
+                else:
+                    project = self.runtime.inbound_router.active_project(
+                        ProjectSessionKey(self.runtime.user, "tui", self.runtime.user)
+                    )
+                    project_id = project.project_id if project is not None else ""
+                self.runtime.active_project_id = project_id
+            except Exception:
+                self.runtime.active_project_id = ""
 
         def _open_project_context_flow(self) -> None:
             if not self.runtime.active_project_id:

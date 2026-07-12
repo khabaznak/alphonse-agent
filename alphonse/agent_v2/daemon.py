@@ -12,7 +12,10 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import uuid4
 
+from alphonse.agent_v2.core.core import CoreUiEvent
 from alphonse.agent_v2.core.core import LoopStepStatus
+from alphonse.agent_v2.core.io import OutboundSelector
+from alphonse.agent_v2.core.io import upsert_provider_user_mapping
 from alphonse.agent_v2.core.io import project_snapshot_to_outbox
 from alphonse.agent_v2.core.io import SQLiteOutboundStore
 from alphonse.agent_v2.core.messages import SQLiteMessageQueue
@@ -29,8 +32,16 @@ from alphonse.agent_v2.runtime import build_runtime_host
 from alphonse.agent_v2.runtime import start_runtime_integrations
 from alphonse.agent_v2.runtime import stop_runtime_integrations
 from alphonse.agent_v2.runtime import refresh_runtime_inference
+from alphonse.agent_v2.runtime import refresh_runtime_identity_resolver
 from alphonse.agent_v2.inference_settings import validate_and_save_inference_settings
+from alphonse.agent_v2.services.project_sessions import ProjectSessionKey
+from alphonse.agent_v2.services.project_sessions import SQLiteProjectSessionStore
 from alphonse.agent_v2.agent_config import AgentConfigStore
+from alphonse.agent_v2.interfaces.a2ui import ALPHONSE_DESKTOP_CATALOG_ID
+from alphonse.agent_v2.interfaces.a2ui import A2UiAdapter
+from alphonse.agent_v2.interfaces.a2ui import question_id_from_surface
+from alphonse.agent_v2.interfaces.a2ui import surface_id_for_question
+from alphonse.agent_v2.interfaces.ag_ui import AgUiAdapter
 from alphonse.agent_v2.services.scheduled_worker import ScheduledTaskWorker
 
 
@@ -53,6 +64,17 @@ class V2Daemon:
         self._active_work_lock = threading.RLock()
         self._active_work: dict[str, str] = {}
         self._activity_status: dict[str, str] = {"state": "idle", "updated_at": datetime.now(timezone.utc).isoformat()}
+        self._event_lock = threading.RLock()
+        self._activity_event_sequence = 0
+        self._legacy_activity_cursor = 0
+        self._activity_event_journal: list[dict[str, Any]] = []
+        self._ui_event_lock = threading.RLock()
+        self._ui_event_sequence = 0
+        self._ui_event_journal: list[dict[str, Any]] = []
+        self._desktop_capabilities: dict[str, set[str]] = {}
+        self._desktop_surfaces: dict[tuple[str, str], set[str]] = {}
+        self._ag_ui = AgUiAdapter(question_store=self.runtime.question_store)
+        self._a2ui = A2UiAdapter()
         self.scheduler = ScheduledTaskWorker(
             store=self.runtime.schedule_store,
             messages=self.runtime.queue,
@@ -127,22 +149,357 @@ class V2Daemon:
         return self.runtime.agent_config_store.save(file_name, content).to_dict()
 
     def pop_activity_events(self) -> list[dict[str, Any]]:
-        events = list(self.runtime.activity_events)
-        self.runtime.activity_events.clear()
+        """Legacy destructive-looking API backed by a shared event journal.
+
+        Old TUI clients retain their one-shot polling behaviour while Desktop
+        clients can use a cursor without stealing events from the TUI.
+        """
+        with self._event_lock:
+            self._collect_activity_events()
+            events = [event for event in self._activity_event_journal if int(event["sequence"]) > self._legacy_activity_cursor]
+            if events:
+                self._legacy_activity_cursor = int(events[-1]["sequence"])
+            return [_without_sequence(event) for event in events]
+
+    def activity_events_since(
+        self,
+        *,
+        after_sequence: int = 0,
+        integration_id: str = "",
+        channel_target: str = "",
+        limit: int = 100,
+    ) -> tuple[list[dict[str, Any]], int]:
+        """Return a non-destructive, client-cursored view of activity."""
+        with self._event_lock:
+            self._collect_activity_events()
+            cursor = max(0, int(after_sequence or 0))
+            matched = [
+                event
+                for event in self._activity_event_journal
+                if int(event["sequence"]) > cursor
+                and (not integration_id or event["integration_id"] == integration_id)
+                and (not channel_target or event["channel_target"] == channel_target)
+            ][: max(1, min(int(limit or 100), 500))]
+            next_sequence = int(matched[-1]["sequence"]) if matched else cursor
+            return matched, next_sequence
+
+    def poll_desktop(
+        self,
+        *,
+        client_id: str,
+        user: str,
+        after_sequence: int = 0,
+        after_ui_sequence: int = 0,
+        client_capabilities: dict[str, Any] | None = None,
+        limit: int = 100,
+    ) -> dict[str, Any]:
+        """Collect Desktop activity and atomically lease its pending messages."""
+        normalized_user = str(user or "local").strip() or "local"
+        normalized_client = str(client_id or "desktop").strip() or "desktop"
+        capabilities = dict(client_capabilities or {})
+        catalogs = capabilities.get("supportedCatalogIds")
+        self._desktop_capabilities[normalized_client] = {
+            str(catalog).strip() for catalog in catalogs if str(catalog).strip()
+        } if isinstance(catalogs, list) else set()
+        events, next_sequence = self.activity_events_since(
+            after_sequence=after_sequence,
+            integration_id="desktop",
+            channel_target=normalized_user,
+            limit=limit,
+        )
+        selector = OutboundSelector(integration_id="desktop", channel_target=normalized_user, status="pending")
+        deliveries: list[dict[str, Any]] = []
+        for _ in range(max(1, min(int(limit or 20), 100))):
+            delivery = self.runtime.outbox.claim_next(selector, lease_owner=f"desktop:{normalized_client}", lease_seconds=120)
+            if delivery is None:
+                break
+            deliveries.append(delivery.to_dict())
+        questions = [question.to_dict() for question in self.runtime.question_store.list_pending_for_respondent(normalized_user)]
+        ui_events, next_ui_sequence = self.ui_events_since(
+            after_sequence=after_ui_sequence,
+            user=normalized_user,
+            limit=limit,
+        )
+        if ALPHONSE_DESKTOP_CATALOG_ID in self._desktop_capabilities[normalized_client]:
+            ui_events.extend(self._sync_question_surfaces(client_id=normalized_client, user=normalized_user))
+        return {
+            "events": events,
+            "next_sequence": next_sequence,
+            "deliveries": deliveries,
+            "questions": questions,
+            "ui_events": ui_events,
+            "next_ui_sequence": next_ui_sequence,
+            "server_capabilities": self._a2ui.server_capabilities(),
+            "status": {"active_work": self.active_work(), "activity": self.activity_status()},
+        }
+
+    def acknowledge_desktop_delivery(self, *, client_id: str, outbox_message_id: str) -> bool:
+        delivery = self.runtime.outbox.get(outbox_message_id)
+        expected_owner = f"desktop:{str(client_id or 'desktop').strip() or 'desktop'}"
+        if delivery is None or delivery.integration_id != "desktop" or delivery.lease_owner != expected_owner:
+            return False
+        return self.runtime.outbox.mark_delivered(outbox_message_id)
+
+    def list_projects(self, *, user: str) -> list[dict[str, str]]:
+        return [project.to_dict() for project in self.runtime.project_store.list_visible_projects(str(user or "local"))]
+
+    def create_project(self, *, user: str, name: str, description: str, root_path: str, visibility: str) -> dict[str, str]:
+        project = self.runtime.project_store.create_project(
+            name=name,
+            description=description,
+            root_path=root_path,
+            visibility=visibility if visibility in {"private", "shared"} else "private",
+            owner_user_id=str(user or "local"),
+        )
+        return project.to_dict()
+
+    def select_project_session(
+        self,
+        *,
+        user: str,
+        integration_id: str,
+        channel_target: str,
+        thread_id: str,
+        project_id: str,
+    ) -> dict[str, str]:
+        key = ProjectSessionKey(user, integration_id, channel_target, thread_id)
+        project = self.runtime.inbound_router.select_project(key, project_id)
+        return self.runtime.project_session_store.set(key, project).to_dict()
+
+    def active_project_session(self, *, user: str, integration_id: str, channel_target: str, thread_id: str) -> dict[str, str] | None:
+        key = ProjectSessionKey(user, integration_id, channel_target, thread_id)
+        project = self.runtime.inbound_router.active_project(key)
+        if project is None:
+            return None
+        session = self.runtime.project_session_store.get(key)
+        return session.to_dict() if session is not None else None
+
+    def ingest_message(self, **values: Any) -> dict[str, Any]:
+        routed = self.runtime.inbound_router.ingest(**values)
+        return {
+            "message_id": routed.queued.message_id if routed.queued is not None else "",
+            "handled_command": routed.handled_command,
+            "project_id": routed.project_id,
+        }
+
+    def read_project_context(self, *, user: str, project_id: str) -> dict[str, str]:
+        project = self.runtime.project_store.get_project(project_id, requester_user_id=user)
+        if project is None:
+            raise KeyError(f"project_not_found: {project_id}")
+        return {"project_id": project.project_id, "content": self.runtime.project_store.read_project_context(project.project_id, requester_user_id=user)}
+
+    def save_project_context(self, *, user: str, project_id: str, content: str) -> dict[str, str]:
+        return self.runtime.project_store.write_project_context(project_id, content, requester_user_id=user).to_dict()
+
+    def answer_question(self, *, user: str, question_id: str, text: str = "", payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        normalized_user = str(user or "local").strip() or "local"
+        result = self.runtime.question_store.route_answer(
+            respondent_user_id=normalized_user,
+            question_id=question_id,
+            text=text or None,
+            payload=payload,
+        )
+        if result.handled and result.resumed_task is not None:
+            self.runtime.ui_events.append(
+                CoreUiEvent(
+                    event_type="question_interrupt_resolved",
+                    payload={"question": result.question.to_dict() if result.question else None, "answer": result.answer},
+                )
+            )
+            queued = self.runtime.channel.queue_message(
+                prompt=text or _question_answer_text(payload),
+                user=normalized_user,
+                project_id=result.resumed_task.project_id,
+                correlation_id=result.resumed_task.correlation_id,
+                metadata={"task_state": result.resumed_task.to_dict(), "answered_question_id": result.question.question_id if result.question else ""},
+                integration_id="desktop",
+                provider_key="tui",
+                channel_target=normalized_user,
+            )
+            payload_result = result.to_dict()
+            payload_result["message_id"] = queued.message_id
+            return payload_result
+        return result.to_dict()
+
+    def cancel_question(self, question_id: str) -> bool:
+        question = self.runtime.question_store.get_question(question_id)
+        cancelled = self.runtime.question_store.cancel_question(question_id)
+        if cancelled:
+            self.runtime.ui_events.append(
+                CoreUiEvent(
+                    event_type="question_interrupt_cancelled",
+                    payload={"question": question.to_dict() if question else None, "cancelled": True},
+                )
+            )
+        return cancelled
+
+    def a2ui_action(
+        self,
+        *,
+        client_id: str,
+        user: str,
+        surface_id: str,
+        source_component_id: str,
+        action_name: str,
+        context: dict[str, Any] | None = None,
+        data_model: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Perform the sole permitted A2UI mutation: answer or cancel a question."""
+        client = str(client_id or "desktop").strip() or "desktop"
+        respondent = str(user or "local").strip() or "local"
+        if ALPHONSE_DESKTOP_CATALOG_ID not in self._desktop_capabilities.get(client, set()):
+            raise ValueError("a2ui_catalog_not_negotiated")
+        question_id = question_id_from_surface(surface_id)
+        values = dict(context or {})
+        if not question_id or question_id != str(values.get("question_id") or ""):
+            raise ValueError("a2ui_surface_or_context_invalid")
+        question = self.runtime.question_store.get_question(question_id)
+        if question is None or question.status != "pending" or question.respondent_user_id != respondent:
+            raise ValueError("a2ui_question_not_available")
+        source = str(source_component_id or "").strip()
+        action = str(action_name or "").strip()
+        if action == "cancel_question" and source == "cancel":
+            return {"cancelled": self.cancel_question(question_id)}
+        if action != "answer_question":
+            raise ValueError("a2ui_action_not_allowed")
+        payload: dict[str, Any]
+        text = ""
+        if question.kind == "yes_no":
+            answer = values.get("answer")
+            if source not in {"answer_yes", "answer_no"} or not isinstance(answer, bool):
+                raise ValueError("a2ui_answer_invalid")
+            if (source == "answer_yes") != answer:
+                raise ValueError("a2ui_source_invalid")
+            payload, text = {"answer": answer}, "yes" if answer else "no"
+        elif question.kind == "single_choice":
+            choice_id = str(values.get("choice_id") or "")
+            if source != f"choice_{choice_id}" or choice_id not in {choice.id for choice in question.choices}:
+                raise ValueError("a2ui_choice_invalid")
+            label = next(choice.label for choice in question.choices if choice.id == choice_id)
+            payload, text = {"choice_id": choice_id}, label
+        else:
+            model = dict(data_model or {})
+            answer = model.get("answer") if isinstance(model.get("answer"), dict) else {}
+            text = str(answer.get("text") or "").strip()
+            if source != "submit" or not text:
+                raise ValueError("a2ui_text_invalid")
+            payload = {"text": text}
+        return self.answer_question(user=respondent, question_id=question_id, text=text, payload=payload)
+
+    def list_integrations(self) -> list[dict[str, Any]]:
+        records = {record.provider_key: record for record in self.runtime.integration_store.list()}
         return [
             {
-                "phase": event.phase.value,
-                "label": event.label,
-                "message": event.message,
-                "speaker": event.speaker,
-                "task_id": event.task_id,
-                "message_id": event.message_id,
-                "user": event.user,
-                "integration_id": event.integration_id,
-                "channel_target": event.channel_target,
+                "provider_key": descriptor.provider_key,
+                "display_name": descriptor.display_name,
+                "integration": records[descriptor.provider_key].to_dict() if descriptor.provider_key in records else None,
             }
-            for event in events
+            for descriptor in self.runtime.integration_registry.list()
         ]
+
+    def save_telegram_integration(self, *, user: str, values: dict[str, Any]) -> dict[str, Any]:
+        existing = self.runtime.integration_store.get(str(values.get("integration_id") or "")) or self.runtime.integration_store.get_by_provider("telegram")
+        secrets = dict(existing.secrets) if existing is not None else {}
+        token = str(values.get("bot_token") or "").strip()
+        if bool(values.get("remove_token")):
+            secrets.pop("bot_token", None)
+        elif token:
+            secrets["bot_token"] = token
+        enabled = bool(values.get("enabled"))
+        if enabled and not str(secrets.get("bot_token") or "").strip():
+            raise ValueError("telegram_bot_token_required")
+        provider_user_id = str(values.get("telegram_user_id") or "").strip()
+        if provider_user_id:
+            upsert_provider_user_mapping(
+                alphonse_user_id=str(user or "local"), provider_key="telegram", provider_user_id=provider_user_id,
+                display_name=str(user or "local"), is_active=True,
+            )
+        record = self.runtime.integration_store.upsert(
+            integration_id=str(values.get("integration_id") or "telegram-home").strip() or "telegram-home",
+            provider_key="telegram",
+            display_name=str(values.get("display_name") or "Telegram").strip() or "Telegram",
+            enabled=enabled,
+            config={
+                "poll_interval_sec": _positive_float(values.get("poll_interval_sec")),
+                "allowed_chat_ids": _comma_values(values.get("allowed_chat_ids")),
+                "owner_user_id": str(user or "local"),
+                "telegram_user_id": provider_user_id,
+                "presence_enabled": bool(values.get("presence_enabled", True)),
+            },
+            secrets=secrets,
+        )
+        refresh_runtime_identity_resolver(self.runtime)
+        self.restart_integrations()
+        return record.to_dict()
+
+    def _collect_activity_events(self) -> None:
+        events = list(self.runtime.activity_events)
+        self.runtime.activity_events.clear()
+        for event in events:
+            self._activity_event_sequence += 1
+            self._activity_event_journal.append(
+                {
+                    "sequence": self._activity_event_sequence,
+                    "phase": event.phase.value,
+                    "label": event.label,
+                    "message": event.message,
+                    "speaker": event.speaker,
+                    "task_id": event.task_id,
+                    "message_id": event.message_id,
+                    "user": event.user,
+                    "integration_id": event.integration_id,
+                    "channel_target": event.channel_target,
+                }
+            )
+        if len(self._activity_event_journal) > 2000:
+            self._activity_event_journal = self._activity_event_journal[-2000:]
+
+    def ui_events_since(self, *, after_sequence: int = 0, user: str, limit: int = 100) -> tuple[list[dict[str, Any]], int]:
+        """Return ordered AG-UI events without changing TUI activity polling."""
+        with self._ui_event_lock:
+            self._collect_ui_events()
+            cursor = max(0, int(after_sequence or 0))
+            matched = [
+                event
+                for event in self._ui_event_journal
+                if int(event["sequence"]) > cursor and (not event["user"] or event["user"] == user)
+            ][: max(1, min(int(limit or 100), 500))]
+            return matched, int(matched[-1]["sequence"]) if matched else cursor
+
+    def _collect_ui_events(self) -> None:
+        events = list(self.runtime.ui_events)
+        self.runtime.ui_events.clear()
+        for core_event in events:
+            for event in self._ag_ui.map_event(core_event):
+                self._ui_event_sequence += 1
+                self._ui_event_journal.append(
+                    {
+                        "sequence": self._ui_event_sequence,
+                        "user": _ui_event_user(core_event),
+                        "event": event,
+                    }
+                )
+        if len(self._ui_event_journal) > 2000:
+            self._ui_event_journal = self._ui_event_journal[-2000:]
+
+    def _sync_question_surfaces(self, *, client_id: str, user: str) -> list[dict[str, Any]]:
+        """Reconcile trusted question surfaces per Desktop client.
+
+        This is deliberately state based: a reconnect (and question expiry) is
+        recoverable even if a prior poll response was lost.
+        """
+        key = (client_id, user)
+        known = self._desktop_surfaces.setdefault(key, set())
+        pending = self.runtime.question_store.list_pending_for_respondent(user)
+        expected = {surface_id_for_question(question.question_id): question for question in pending}
+        events: list[dict[str, Any]] = []
+        for surface_id in sorted(known - set(expected)):
+            events.append({"event": _a2ui_custom(self._a2ui.question_closed(question_id_from_surface(surface_id)))})
+        for surface_id, question in expected.items():
+            if surface_id not in known:
+                events.extend({"event": _a2ui_custom(message)} for message in self._a2ui.question_opened(question))
+        self._desktop_surfaces[key] = set(expected)
+        return events
 
     def active_work(self) -> dict[str, str]:
         with self._active_work_lock:
@@ -287,6 +644,50 @@ class V2Daemon:
             self.runtime.schedule_store.mark_occurrence_failed(occurrence_key, error=error)
 
 
+def _without_sequence(event: dict[str, Any]) -> dict[str, Any]:
+    return {key: value for key, value in event.items() if key != "sequence"}
+
+
+def _ui_event_user(event: CoreUiEvent) -> str:
+    payload = dict(event.payload or {})
+    question = payload.get("question")
+    if isinstance(question, dict):
+        return str(question.get("respondent_user_id") or "").strip()
+    task = payload.get("task") or payload.get("task_state")
+    if isinstance(task, dict):
+        return str(task.get("user") or "").strip()
+    return str(payload.get("user") or "").strip()
+
+
+def _a2ui_custom(envelope: dict[str, Any]) -> dict[str, Any]:
+    return {"type": "CUSTOM", "name": "a2ui.envelope", "value": envelope}
+
+
+def _comma_values(value: Any) -> list[str]:
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    return [item.strip() for item in str(value or "").split(",") if item.strip()]
+
+
+def _positive_float(value: Any) -> float:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return 1.0
+    return parsed if parsed > 0 else 1.0
+
+
+def _question_answer_text(payload: dict[str, Any] | None) -> str:
+    value = dict(payload or {})
+    if "text" in value:
+        return str(value["text"] or "")
+    if "choice_id" in value:
+        return str(value["choice_id"] or "")
+    if "answer" in value:
+        return "yes" if bool(value["answer"]) else "no"
+    return "answer"
+
+
 def main() -> None:
     daemon_id = f"daemon-{uuid4().hex[:12]}"
     daemon = V2Daemon(
@@ -300,6 +701,7 @@ def main() -> None:
             integration_store=SQLiteIntegrationStore.default(),
             inference_settings_store=SQLiteInferenceSettingsStore.default(),
             agent_config_store=AgentConfigStore.default(),
+            project_session_store=SQLiteProjectSessionStore.default(),
         )
     )
     previous = {}

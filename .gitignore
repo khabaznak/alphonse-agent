@@ -23,6 +23,8 @@ pnpm-debug.log*
 dist/
 build/
 coverage/
+desktop/src-tauri/target/
+desktop/src-tauri/gen/
 
 # Python
 __pycache__/

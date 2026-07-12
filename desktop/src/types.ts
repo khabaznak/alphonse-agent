@@ -1,0 +1,43 @@
+export type ActivityEvent = {
+  sequence: number;
+  phase: string;
+  label: string;
+  message: string;
+  speaker: string;
+  task_id: string;
+  message_id: string;
+  user: string;
+  integration_id: string;
+  channel_target: string;
+};
+
+export type Delivery = {
+  outbox_message_id: string;
+  message: string;
+  kind: string;
+  metadata: Record<string, unknown>;
+};
+
+export type Question = {
+  question_id: string;
+  message: string;
+  kind: "open_text" | "yes_no" | "single_choice";
+  choices: Array<{ id: string; label: string }>;
+};
+
+export type Project = {
+  project_id: string;
+  name: string;
+  description: string;
+  root_path: string;
+  visibility: "private" | "shared";
+};
+
+export type AgentDocument = { file_name: string; display_name: string; content?: string };
+export type InferenceSettings = { provider_key: string; model_id: string; validation_error?: string };
+
+export type ChatMessage = {
+  id: string;
+  role: "user" | "assistant" | "system";
+  content: string;
+};

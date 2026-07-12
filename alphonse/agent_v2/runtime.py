@@ -38,6 +38,8 @@ from alphonse.agent_v2.inference_settings import build_inference_router_from_set
 from alphonse.agent_v2.agent_config import AgentConfigPromptLoader
 from alphonse.agent_v2.agent_config import AgentConfigStore
 from alphonse.agent_v2.agent_config import packaged_agent_config_dir
+from alphonse.agent_v2.services.project_sessions import ProjectInboundRouter
+from alphonse.agent_v2.services.project_sessions import SQLiteProjectSessionStore
 
 
 @dataclass
@@ -85,6 +87,8 @@ class V2RuntimeHost:
     presence_projector: PresenceProjector
     inference_settings_store: SQLiteInferenceSettingsStore
     agent_config_store: AgentConfigStore
+    project_session_store: SQLiteProjectSessionStore
+    inbound_router: ProjectInboundRouter
     integration_runtimes: list[Any] = field(default_factory=list)
     active_project_id: str = ""
     ui_events: list[CoreUiEvent] = field(default_factory=list)
@@ -106,6 +110,7 @@ def build_runtime_host(
     integration_registry: IntegrationRegistry | None = None,
     inference_settings_store: SQLiteInferenceSettingsStore | None = None,
     agent_config_store: AgentConfigStore | None = None,
+    project_session_store: SQLiteProjectSessionStore | None = None,
     messages: Any | None = None,
 ) -> V2RuntimeHost:
     reset_state()
@@ -118,6 +123,7 @@ def build_runtime_host(
     # Persistent daemon/TUI constructors pass `AgentConfigStore.default()`.
     # Generic test and helper runtimes only need the package defaults.
     agent_config_store = agent_config_store or AgentConfigStore(packaged_agent_config_dir())
+    project_session_store = project_session_store or SQLiteProjectSessionStore()
     inference = inference or build_inference_router_from_settings(inference_settings_store.get())
     question_store = question_store or SQLiteQuestionStore()
     project_store = project_store or ProjectStore()
@@ -129,6 +135,12 @@ def build_runtime_host(
     presence_projector.register("tui", TuiPresenceAdapter())
     identity_resolver = identity_resolver or build_identity_resolver(integration_store)
     delivery_sink = build_outbox_delivery_sink(outbox=outbox, identity_resolver=identity_resolver)
+    inbound_router = ProjectInboundRouter(
+        channel=channel,
+        outbox=outbox,
+        projects=project_store,
+        sessions=project_session_store,
+    )
     ui_events: list[CoreUiEvent] = []
     activity_events: list[CoreActivityEvent] = []
 
@@ -168,6 +180,8 @@ def build_runtime_host(
         presence_projector=presence_projector,
         inference_settings_store=inference_settings_store,
         agent_config_store=agent_config_store,
+        project_session_store=project_session_store,
+        inbound_router=inbound_router,
         ui_events=ui_events,
         activity_events=activity_events,
     )
@@ -189,7 +203,11 @@ def refresh_runtime_inference(runtime: V2RuntimeHost, settings: InferenceSetting
 
 
 def build_identity_resolver(store: SQLiteIntegrationStore) -> V2IdentityResolver:
-    identities = [IntegrationIdentity("tui", "tui")]
+    # Native clients use separate integration ids so their durable outbox
+    # deliveries cannot be consumed by another interface. Both are local
+    # first-party clients and therefore share the lightweight ``tui`` provider
+    # identity semantics.
+    identities = [IntegrationIdentity("tui", "tui"), IntegrationIdentity("desktop", "tui")]
     identities.extend(
         IntegrationIdentity(record.integration_id, record.provider_key)
         for record in store.list_enabled()
@@ -223,6 +241,7 @@ def start_runtime_integrations(
             integration_runtime = descriptor.runtime_factory(
                 record=record,
                 channel=runtime.channel,
+                inbound_router=runtime.inbound_router,
                 outbox=runtime.outbox,
                 identity_resolver=runtime.identity_resolver,
                 owner_user_id=runtime.user,
