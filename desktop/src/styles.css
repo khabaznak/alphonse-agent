@@ -7,12 +7,16 @@
 }
 
 * { box-sizing: border-box; }
+html,
+body,
+#root { height: 100%; }
 body { margin: 0; min-width: 720px; overflow: hidden; }
 button, input, textarea, select { font: inherit; }
 button { border: 0; cursor: pointer; }
 
 .app-shell {
-  height: 100vh;
+  height: 100dvh;
+  min-height: 100%;
   display: grid;
   grid-template-columns: 240px minmax(520px, 1fr);
   overflow: hidden;
@@ -85,16 +89,23 @@ button { border: 0; cursor: pointer; }
 
 .conversation {
   min-height: 0;
-  height: 100vh;
+  height: 100dvh;
   display: grid;
   grid-template-rows: minmax(56px, 80px) auto minmax(0, 1fr) auto;
+  grid-template-areas:
+    "topbar"
+    "error"
+    "timeline"
+    "input";
   max-width: 1040px;
   width: 100%;
-  margin: auto;
+  margin: 0 auto;
   padding: 18px clamp(22px, 4vw, 56px);
+  overflow: hidden;
 }
 
 .topbar {
+  grid-area: topbar;
   min-height: 56px;
   max-height: 80px;
   display: grid;
@@ -128,6 +139,7 @@ button { border: 0; cursor: pointer; }
 .status-pill.working strong { color: #795a12; }
 
 .error {
+  grid-area: error;
   margin: 12px 0 0;
   padding: 10px;
   color: #7f2e1d;
@@ -137,6 +149,7 @@ button { border: 0; cursor: pointer; }
 }
 
 .timeline {
+  grid-area: timeline;
   min-height: 0;
   overflow-y: auto;
   padding: 26px 0;
@@ -159,9 +172,13 @@ button { border: 0; cursor: pointer; }
 .message.system { background: #e6e7dd; }
 
 .input-dock {
-  position: relative;
+  grid-area: input;
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
   border-top: 1px solid #cdd5c7;
   padding-top: 14px;
+  padding-bottom: 2px;
   background: #eff0e8;
 }
 
@@ -265,7 +282,15 @@ button { border: 0; cursor: pointer; }
 .modal > p,
 .modal > label { margin-top: 12px; }
 
-.setting-row { display: flex; align-items: center; gap: 9px; }
+.setting-row {
+  display: inline-flex;
+  width: fit-content;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 9px;
+}
+
+.setting-row input { width: auto; }
 .stack { display: grid; gap: 8px; margin: 10px 0 20px; }
 .stack button { display: grid; gap: 4px; text-align: left; color: #27352e; background: #fbfcf5; border: 1px solid #cad3c6; }
 .stack button.selected { border-color: #315441; }
