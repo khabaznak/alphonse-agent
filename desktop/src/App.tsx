@@ -271,12 +271,23 @@ function SettingsModal({ enterToSend, onEnterToSendChange, onClose }: { enterToS
   return <ModalFrame title="Settings" onClose={onClose}><label className="setting-row"><input type="checkbox" checked={enterToSend} onChange={(event) => onEnterToSendChange(event.target.checked)} /> Enter sends message</label><br/><label>Users root<input value={root} onChange={(event) => setRoot(event.target.value)} /></label><button onClick={() => void save()}>Save</button><p>{notice}</p></ModalFrame>;
 }
 
+type ManagedAddress = { address_id: string; integration_id: string; provider_key: string; provider_user_id: string; channel_target: string; is_preferred: boolean };
+type ManagedUser = { user_id: string; display_name: string; role: string; is_active: boolean; addresses?: ManagedAddress[] };
+
 function UsersModal({ onClose }: { onClose: () => void }) {
-  const [users, setUsers] = useState<Array<{ user_id: string; display_name: string; role: string; is_active: boolean }>>([]); const [name, setName] = useState(""); const [role, setRole] = useState("member");
-  const load = useCallback(() => daemonRequest<{ users: Array<{ user_id: string; display_name: string; role: string; is_active: boolean }> }>("users").then((result) => setUsers(result.users)), []);
+  const [users, setUsers] = useState<ManagedUser[]>([]); const [selectedId, setSelectedId] = useState("");
+  const [name, setName] = useState(""); const [role, setRole] = useState("member"); const [active, setActive] = useState(true); const [context, setContext] = useState(""); const [notice, setNotice] = useState(""); const [addresses, setAddresses] = useState<ManagedAddress[]>([]); const [integrationId, setIntegrationId] = useState("telegram-home"); const [providerKey, setProviderKey] = useState("telegram"); const [providerUserId, setProviderUserId] = useState(""); const [channelTarget, setChannelTarget] = useState(""); const [confirmation, setConfirmation] = useState("");
+  const load = useCallback(async () => { const result = await daemonRequest<{ users: ManagedUser[] }>("users"); setUsers(result.users); return result.users; }, []);
   useEffect(() => { void load(); }, [load]);
-  const create = async () => { await daemonRequest("create_user", { display_name: name, role }); setName(""); await load(); };
-  return <ModalFrame title="Users" onClose={onClose}><div className="stack">{users.map((item) => <p key={item.user_id}>{item.display_name} ({item.role})<small>{item.user_id}</small></p>)}</div><input value={name} onChange={(event) => setName(event.target.value)} placeholder="Name" /><select value={role} onChange={(event) => setRole(event.target.value)}><option value="member">Member</option><option value="caregiver">Caregiver</option></select><button onClick={() => void create()}>Add user</button></ModalFrame>;
+  const select = async (item: ManagedUser) => { setSelectedId(item.user_id); setName(item.display_name); setRole(item.role); setActive(item.is_active); setAddresses(item.addresses || []); setNotice(""); setConfirmation(""); const result = await daemonRequest<{ content: string }>("user_context", { user_id: item.user_id }); setContext(result.content); };
+  const create = async () => { const result = await daemonRequest<{ user: ManagedUser }>("create_user", { display_name: name, role }); await load(); await select(result.user); setNotice("User created."); };
+  const save = async () => { if (!selectedId) return create(); await daemonRequest("update_user", { user_id: selectedId, display_name: name, role, is_active: active }); await daemonRequest("save_user_context", { user_id: selectedId, content: context }); await load(); setNotice("User saved."); };
+  const deactivate = async () => { if (!selectedId) return; await daemonRequest("update_user", { user_id: selectedId, is_active: !active }); setActive(!active); await load(); setNotice(active ? "User deactivated. Existing data is preserved." : "User reactivated."); };
+  const bind = async () => { if (!selectedId) return; await daemonRequest("bind_user_address", { user_id: selectedId, integration_id: integrationId, provider_key: providerKey, provider_user_id: providerUserId, channel_target: channelTarget || providerUserId, is_preferred: true }); setProviderUserId(""); setChannelTarget(""); await load(); const selected = users.find((item) => item.user_id === selectedId); if (selected) await select(selected); setNotice("Preferred communication address saved."); };
+  const removeAddress = async (addressId: string) => { await daemonRequest("remove_user_address", { address_id: addressId }); await load(); setAddresses((current) => current.filter((item) => item.address_id !== addressId)); };
+  const remove = async () => { if (!selectedId) return; const result = await daemonRequest<{ deleted: number }>("delete_user", { user_id: selectedId, confirmation }); if (result.deleted) { beginCreate(); await load(); setNotice("User and all owned data permanently deleted."); } };
+  const beginCreate = () => { setSelectedId(""); setName(""); setRole("member"); setActive(true); setContext("# User Context\n"); setAddresses([]); setNotice(""); setConfirmation(""); };
+  return <ModalFrame title="Users" onClose={onClose}><div className="stack">{users.map((item) => <button className={item.user_id === selectedId ? "selected" : ""} key={item.user_id} onClick={() => void select(item)}>{item.display_name} <small>{item.is_active ? item.role : "inactive"}</small></button>)}<button onClick={beginCreate}>New user</button></div><hr/><label>Name<input value={name} onChange={(event) => setName(event.target.value)} placeholder="Name" /></label><label>Role<select value={role} onChange={(event) => setRole(event.target.value)}><option value="member">Member</option><option value="caregiver">Caregiver</option><option value="admin">Admin</option></select></label><label>User context<textarea value={context} onChange={(event) => setContext(event.target.value)} rows={8} /></label>{selectedId && <><small>{selectedId}</small><h3>Preferred communication</h3>{addresses.map((address) => <p key={address.address_id}>{address.provider_key}: {address.provider_user_id}{address.is_preferred ? " (preferred)" : ""} <button onClick={() => void removeAddress(address.address_id)}>Remove</button></p>)}<input value={integrationId} onChange={(event) => setIntegrationId(event.target.value)} placeholder="Integration ID" /><input value={providerKey} onChange={(event) => setProviderKey(event.target.value)} placeholder="Provider" /><input value={providerUserId} onChange={(event) => setProviderUserId(event.target.value)} placeholder="Provider user ID" /><input value={channelTarget} onChange={(event) => setChannelTarget(event.target.value)} placeholder="Channel target (optional)" /><button onClick={() => void bind()}>Set preferred address</button></>}<div><button onClick={() => void save()}>{selectedId ? "Save user" : "Create user"}</button>{selectedId && <button onClick={() => void deactivate()}>{active ? "Deactivate user" : "Reactivate user"}</button>}</div>{selectedId && <><h3>Permanent deletion</h3><p>This permanently deletes the user, profile, managed projects, schedules, pending questions, and channel mappings.</p><input value={confirmation} onChange={(event) => setConfirmation(event.target.value)} placeholder="Type the user ID to confirm" /><button onClick={() => void remove()}>Delete permanently</button></>}<p>{notice}</p></ModalFrame>;
 }
 
 function ProjectsModal({ user, active, onSelect, onClose }: { user: string; active: Project | null; onSelect: (project: Project) => void; onClose: () => void }) {
@@ -307,7 +318,41 @@ function IntegrationsModal({ user, onClose }: { user: string; onClose: () => voi
     setPollInterval(String(config.poll_interval_sec || 1)); setPresenceEnabled(config.presence_enabled !== false);
   }); }, []);
   const save = async () => { await daemonRequest("save_telegram_integration", { user, values: { integration_id: integrationId, display_name: displayName, enabled, bot_token: token, telegram_user_id: telegramUserId, allowed_chat_ids: allowedChatIds, poll_interval_sec: pollInterval, presence_enabled: presenceEnabled } }); setToken(""); setNotice("Saved and integrations restarted."); };
-  return <ModalFrame title="Telegram integration" onClose={onClose}><input value={integrationId} onChange={(event) => setIntegrationId(event.target.value)} placeholder="Integration id" /><input value={displayName} onChange={(event) => setDisplayName(event.target.value)} placeholder="Display name" /><input type="password" value={token} onChange={(event) => setToken(event.target.value)} placeholder="Bot token (leave blank to keep current)" /><input value={telegramUserId} onChange={(event) => setTelegramUserId(event.target.value)} placeholder="Telegram user id" /><input value={allowedChatIds} onChange={(event) => setAllowedChatIds(event.target.value)} placeholder="Allowed chat IDs, comma separated" /><input value={pollInterval} onChange={(event) => setPollInterval(event.target.value)} placeholder="Poll interval seconds" /><label><input type="checkbox" checked={enabled} onChange={(event) => setEnabled(event.target.checked)} /> Enabled</label><label><input type="checkbox" checked={presenceEnabled} onChange={(event) => setPresenceEnabled(event.target.checked)} /> Presence enabled</label><button onClick={() => void save()}>Save integration</button><p>{notice}</p></ModalFrame>;
+  return <ModalFrame title="Telegram integration" onClose={onClose}>
+    <div className="form-field">
+      <label htmlFor="telegram-integration-id">Integration ID</label>
+      <input id="telegram-integration-id" value={integrationId} onChange={(event) => setIntegrationId(event.target.value)} />
+    </div>
+    <div className="form-field">
+      <label htmlFor="telegram-display-name">Display name</label>
+      <input id="telegram-display-name" value={displayName} onChange={(event) => setDisplayName(event.target.value)} />
+    </div>
+    <div className="form-field">
+      <label htmlFor="telegram-bot-token">Bot token <span className="field-help" title="Create this token with Telegram's @BotFather. Leave this field blank to keep the token already saved for this integration.">?</span></label>
+      <input id="telegram-bot-token" type="password" value={token} onChange={(event) => setToken(event.target.value)} placeholder="Leave blank to keep the current token" autoComplete="new-password" />
+    </div>
+    <div className="form-field">
+      <label htmlFor="telegram-user-id">Telegram user ID <span className="field-help" title="The Telegram numeric user ID to associate with the currently selected Alphonse user.">?</span></label>
+      <input id="telegram-user-id" value={telegramUserId} onChange={(event) => setTelegramUserId(event.target.value)} />
+    </div>
+    <div className="form-field">
+      <label htmlFor="telegram-allowed-chat-ids">Allowed chat IDs <span className="field-help" title="Enter one or more Telegram chat IDs, separated by commas. Leave empty to allow all chats.">?</span></label>
+      <input id="telegram-allowed-chat-ids" value={allowedChatIds} onChange={(event) => setAllowedChatIds(event.target.value)} placeholder="123456, -1001234567890" />
+    </div>
+    <div className="form-field">
+      <label htmlFor="telegram-poll-interval">Poll interval (seconds) <span className="field-help" title="How often Alphonse checks Telegram for new messages. Use a positive number; the default is 1 second.">?</span></label>
+      <input id="telegram-poll-interval" inputMode="decimal" value={pollInterval} onChange={(event) => setPollInterval(event.target.value)} />
+    </div>
+    <div className="form-field checkbox-field">
+      <label htmlFor="telegram-enabled"><input id="telegram-enabled" type="checkbox" checked={enabled} onChange={(event) => setEnabled(event.target.checked)} /> Enable Telegram integration</label>
+      <small>Starts the Telegram bridge to receive messages and send replies. A bot token is required.</small>
+    </div>
+    <div className="form-field checkbox-field">
+      <label htmlFor="telegram-presence-enabled"><input id="telegram-presence-enabled" type="checkbox" checked={presenceEnabled} onChange={(event) => setPresenceEnabled(event.target.checked)} /> Show Telegram presence</label>
+      <small>Shows typing indicators and status reactions while Alphonse is working on a Telegram message.</small>
+    </div>
+    <button onClick={() => void save()}>Save integration</button><p>{notice}</p>
+  </ModalFrame>;
 }
 
 function ModelModal({ onClose }: { onClose: () => void }) {
