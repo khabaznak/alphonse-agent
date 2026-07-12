@@ -9,9 +9,9 @@ from pathlib import Path
 
 from alphonse.agent_v2.core.core import PromptFile
 
-CORE_CONTEXT_FILE = "CoreContext.md"
+GLOBAL_CONTEXT_FILE = "GlobalContext.md"
 PHILOSOPHY_FILE = "Philosophy.md"
-EDITABLE_AGENT_CONFIG_FILES = (CORE_CONTEXT_FILE, PHILOSOPHY_FILE)
+EDITABLE_AGENT_CONFIG_FILES = (GLOBAL_CONTEXT_FILE, PHILOSOPHY_FILE)
 
 
 @dataclass(frozen=True)
@@ -125,4 +125,4 @@ def _validate_file_name(file_name: str) -> str:
 
 
 def _display_name(file_name: str) -> str:
-    return "Core Context" if file_name == CORE_CONTEXT_FILE else "Philosophy"
+    return "Global Context" if file_name == GLOBAL_CONTEXT_FILE else "Philosophy"

@@ -153,6 +153,55 @@ def test_prompt_render_paths_include_project_context(tmp_path: Path) -> None:
     )
 
 
+def test_capd_prompts_keep_user_and_project_contexts_isolated(tmp_path: Path) -> None:
+    store = ProjectStore(":memory:")
+    alex_project = store.create_project(name="Alex project", root_path=str(tmp_path / "alex"), owner_user_id="alex")
+    gaby_project = store.create_project(name="Gaby project", root_path=str(tmp_path / "gaby"), owner_user_id="gaby")
+    store.write_project_context(alex_project.project_id, "ALEX_PROJECT_SENTINEL", requester_user_id="alex")
+    store.write_project_context(gaby_project.project_id, "GABY_PROJECT_SENTINEL", requester_user_id="gaby")
+    context = CoreLoopContext(
+        messages=InMemoryMessageQueue(),
+        tools=build_native_tool_registry(),
+        project_store=store,
+        user_context_provider=lambda user_id: f"{user_id.upper()}_USER_SENTINEL",
+    )
+
+    alex_task = TaskState(goal="Respond", user="alex", project_id=alex_project.project_id, acceptance_criteria_md="1.- [ ] Reply")
+    gaby_task = TaskState(goal="Respond", user="gaby", project_id=gaby_project.project_id, acceptance_criteria_md="1.- [ ] Reply")
+    plan_node(alex_task, context=context)
+    plan_node(gaby_task, context=context)
+
+    alex_prompt = alex_task.metadata["tool_call_plan_prompt"]
+    gaby_prompt = gaby_task.metadata["tool_call_plan_prompt"]
+    assert "ALEX_USER_SENTINEL" in alex_prompt
+    assert "ALEX_PROJECT_SENTINEL" in alex_prompt
+    assert "GABY_USER_SENTINEL" not in alex_prompt
+    assert "GABY_PROJECT_SENTINEL" not in alex_prompt
+    assert "GABY_USER_SENTINEL" in gaby_prompt
+    assert "GABY_PROJECT_SENTINEL" in gaby_prompt
+    assert "ALEX_USER_SENTINEL" not in gaby_prompt
+    assert "ALEX_PROJECT_SENTINEL" not in gaby_prompt
+
+
+def test_capd_prompt_uses_the_project_attached_to_each_new_task(tmp_path: Path) -> None:
+    store = ProjectStore(":memory:")
+    first = store.create_project(name="First", root_path=str(tmp_path / "first"), owner_user_id="alex")
+    second = store.create_project(name="Second", root_path=str(tmp_path / "second"), owner_user_id="alex")
+    store.write_project_context(first.project_id, "FIRST_PROJECT_SENTINEL", requester_user_id="alex")
+    store.write_project_context(second.project_id, "SECOND_PROJECT_SENTINEL", requester_user_id="alex")
+    context = CoreLoopContext(messages=InMemoryMessageQueue(), tools=build_native_tool_registry(), project_store=store)
+
+    first_task = TaskState(goal="Respond", user="alex", project_id=first.project_id, acceptance_criteria_md="1.- [ ] Reply")
+    second_task = TaskState(goal="Respond", user="alex", project_id=second.project_id, acceptance_criteria_md="1.- [ ] Reply")
+    plan_node(first_task, context=context)
+    plan_node(second_task, context=context)
+
+    assert "FIRST_PROJECT_SENTINEL" in first_task.metadata["tool_call_plan_prompt"]
+    assert "SECOND_PROJECT_SENTINEL" not in first_task.metadata["tool_call_plan_prompt"]
+    assert "SECOND_PROJECT_SENTINEL" in second_task.metadata["tool_call_plan_prompt"]
+    assert "FIRST_PROJECT_SENTINEL" not in second_task.metadata["tool_call_plan_prompt"]
+
+
 def test_bash_defaults_to_project_root_when_cwd_omitted(tmp_path: Path) -> None:
     store = ProjectStore(":memory:")
     project = store.create_project(name="Alpha", root_path=str(tmp_path / "alpha"), owner_user_id="alex")

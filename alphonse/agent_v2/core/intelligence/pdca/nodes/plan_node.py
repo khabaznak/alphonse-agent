@@ -35,9 +35,10 @@ def plan_node(task: TaskState, context: CoreLoopContext | None = None) -> TaskSt
     prompt = _render_tool_call_plan_prompt(
         task,
         tools,
+        user_context_md=_user_context_md(task, context),
         project_context_md=_project_context_md(task, context),
         philosophy_md=_agent_prompt_md(context, "Philosophy.md"),
-        global_context_md=_agent_prompt_md(context, "CoreContext.md"),
+        global_context_md=_agent_prompt_md(context, "GlobalContext.md"),
     )
     task.metadata["tool_call_plan_prompt"] = prompt
 
@@ -64,6 +65,7 @@ def _render_tool_call_plan_prompt(
     task: TaskState,
     tools: tuple[ToolDescriptor, ...],
     *,
+    user_context_md: str = "",
     project_context_md: str = "",
     philosophy_md: str = "",
     global_context_md: str = "",
@@ -78,6 +80,7 @@ def _render_tool_call_plan_prompt(
     return template.render(
         acceptance_criteria_md=task.acceptance_criteria_md,
         available_tools_md=_render_tools_md(tools),
+        user_context_md=user_context_md,
         project_context_md=project_context_md,
         philosophy_md=philosophy_md,
         global_context_md=global_context_md,
@@ -101,16 +104,21 @@ def _tools_from_context(context: CoreLoopContext | None) -> tuple[ToolDescriptor
 
 
 def _project_context_md(task: TaskState, context: CoreLoopContext | None) -> str:
-    if context is None:
+    if context is None or context.project_store is None or not str(task.project_id or "").strip():
         return ""
-    parts: list[str] = []
-    if context.project_store is not None and str(task.project_id or "").strip():
-        render = getattr(context.project_store, "render_project_context", None)
-        if callable(render): parts.append(str(render(task.project_id, requester_user_id=task.user) or "").strip())
-    if callable(context.user_context_provider):
-        try: parts.append("# User Context\n" + str(context.user_context_provider(task.user) or "").strip())
-        except (OSError, KeyError): pass
-    return "\n\n".join(part for part in parts if part)
+    render = getattr(context.project_store, "render_project_context", None)
+    if not callable(render):
+        return ""
+    return str(render(task.project_id, requester_user_id=task.user) or "").strip()
+
+
+def _user_context_md(task: TaskState, context: CoreLoopContext | None) -> str:
+    if context is None or not callable(context.user_context_provider):
+        return ""
+    try:
+        return str(context.user_context_provider(task.user) or "").strip()
+    except (OSError, KeyError):
+        return ""
 
 
 def _agent_prompt_md(context: CoreLoopContext | None, name: str) -> str:

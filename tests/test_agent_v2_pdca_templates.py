@@ -17,7 +17,7 @@ def test_pdca_prompt_templates_render_expected_sections() -> None:
             system_prompt="System instructions",
             philosophy_md="Philosophy content",
             global_context_md="Global context",
-            user_personality_md="User personality",
+            user_context_md="User context",
             project_context_md="Project context",
             user_prompt="User request",
             task_state_md="Task state markdown",
@@ -27,7 +27,7 @@ def test_pdca_prompt_templates_render_expected_sections() -> None:
         assert "System instructions" in rendered
         assert "## Philosophy.md" in rendered
         assert "## GlobalContext.md" in rendered
-        assert "## UserPersonality" in rendered
+        assert "## User Context" in rendered
         assert "## Project Context" in rendered
         assert "# User Prompt" in rendered
         assert "User request" in rendered
@@ -50,7 +50,7 @@ def test_acceptance_criteria_prompt_template_renders_expected_sections() -> None
     assert "2.- [x] An already completed requirement is true" in rendered
     assert "## Philosophy.md" in rendered
     assert "## GlobalContext.md" in rendered
-    assert "## UserPersonality" in rendered
+    assert "## User Context" in rendered
     assert "## Project Context" in rendered
     assert "# Check Verdict" in rendered
     assert "new" in rendered
