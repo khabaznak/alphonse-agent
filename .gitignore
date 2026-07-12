@@ -66,6 +66,7 @@ data/*.db
 alphonse/agent/nervous_system/db/
 **/nerve-db*
 sessions/
+.alphonse/users/
 
 # Artifacts
 artifacts/

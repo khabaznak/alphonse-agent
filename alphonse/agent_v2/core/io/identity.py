@@ -34,7 +34,7 @@ class IdentityResolution:
 class V2IdentityResolver:
     """Resolve provider identities and preferred outbound addresses."""
 
-    def __init__(self, integrations: tuple[IntegrationIdentity, ...] | None = None) -> None:
+    def __init__(self, integrations: tuple[IntegrationIdentity, ...] | None = None, *, user_store: Any | None = None) -> None:
         configured = integrations or (IntegrationIdentity("tui", "tui"),)
         self._by_id = {
             str(item.integration_id or "").strip(): item
@@ -46,6 +46,7 @@ class V2IdentityResolver:
             provider = str(item.provider_key or "").strip().lower()
             if provider and provider not in self._by_provider:
                 self._by_provider[provider] = item
+        self._user_store = user_store
 
     def resolve_inbound_user(
         self,
@@ -61,6 +62,14 @@ class V2IdentityResolver:
             return IdentityResolution(resolved=False, reason="provider_user_id_required")
         if integration.provider_key == "tui":
             return IdentityResolution(resolved=True, alphonse_user_id=provider_user)
+
+        if self._user_store is not None:
+            address = self._user_store.address_for_inbound(
+                integration_id=integration.integration_id, provider_user_id=provider_user
+            )
+            if address is None:
+                return IdentityResolution(resolved=False, reason="user_mapping_not_found")
+            return IdentityResolution(resolved=True, alphonse_user_id=address.user_id)
 
         service_id = _resolve_service_id(integration.provider_key)
         if service_id is None:
@@ -82,7 +91,7 @@ class V2IdentityResolver:
         if not user_id:
             return IdentityResolution(resolved=False, reason="alphonse_user_id_required")
 
-        if preferred_integration_id:
+        if preferred_integration_id and self._user_store is None:
             integration = self.integration_for(integration_id=preferred_integration_id)
             address = self._address_for_integration(user_id=user_id, integration=integration)
             if address is not None:
@@ -91,6 +100,22 @@ class V2IdentityResolver:
 
         if fallback_address is not None and fallback_address.alphonse_user_id == user_id:
             return IdentityResolution(resolved=True, alphonse_user_id=user_id, address=fallback_address)
+
+        if self._user_store is not None:
+            address_record = self._user_store.address_for_outbound(user_id, integration_id=preferred_integration_id)
+            if address_record is None:
+                return IdentityResolution(resolved=False, alphonse_user_id=user_id, reason="preferred_delivery_not_found")
+            return IdentityResolution(
+                resolved=True,
+                alphonse_user_id=user_id,
+                address=ChannelAddress(
+                    integration_id=address_record.integration_id,
+                    provider_key=address_record.provider_key,
+                    channel_target=address_record.channel_target,
+                    alphonse_user_id=user_id,
+                    provider_user_id=address_record.provider_user_id,
+                ),
+            )
 
         preferred_service_id = _identity().get_preferred_service_id(user_id)
         if preferred_service_id is not None:

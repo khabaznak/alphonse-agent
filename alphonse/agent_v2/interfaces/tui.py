@@ -83,6 +83,8 @@ TUI_SLASH_COMMANDS: tuple[tuple[str, str], ...] = (
     ("/model-provider", "Select an inference provider"),
     ("/model", "Select and validate an inference model"),
     ("/agent-config", "Edit global agent configuration"),
+    ("/settings", "Configure local user data"),
+    ("/users", "Manage Alphonse users"),
 )
 
 
@@ -237,7 +239,7 @@ def queue_tui_input(runtime: TuiRuntime, prompt: str) -> TuiSubmissionResult:
         )
 
     command = detect_tui_slash_command(raw_prompt)
-    if command in {"project", "project-context", "integrations", "model-provider", "model", "agent-config"}:
+    if command in {"project", "project-context", "integrations", "model-provider", "model", "agent-config", "settings", "users"}:
         return TuiSubmissionResult(
             prompt=prompt_value,
             response="",
@@ -289,17 +291,17 @@ def matching_slash_commands(prompt: str) -> list[tuple[str, str]]:
     return [(command, description) for command, description in TUI_SLASH_COMMANDS if command.startswith(typed)]
 
 
-def build_identity_resolver_from_integrations(store: SQLiteIntegrationStore) -> V2IdentityResolver:
+def build_identity_resolver_from_integrations(store: SQLiteIntegrationStore, user_store: Any | None = None) -> V2IdentityResolver:
     identities = [IntegrationIdentity("tui", "tui")]
     identities.extend(
         IntegrationIdentity(record.integration_id, record.provider_key)
         for record in store.list_enabled()
     )
-    return V2IdentityResolver(tuple(identities))
+    return V2IdentityResolver(tuple(identities), user_store=user_store)
 
 
 def refresh_tui_identity_resolver(runtime: TuiRuntime) -> None:
-    runtime.identity_resolver = build_identity_resolver_from_integrations(runtime.integration_store)
+    runtime.identity_resolver = build_identity_resolver_from_integrations(runtime.integration_store, runtime.user_store)
     runtime.core.delivery_sink = build_outbox_delivery_sink(
         outbox=runtime.outbox,
         identity_resolver=runtime.identity_resolver,
@@ -881,6 +883,66 @@ def _build_textual_app_class() -> type[Any]:
                 return
             self.dismiss(True)
 
+    class UserSettingsScreen(ModalScreen[bool]):
+        def __init__(self, settings: dict[str, Any], save: Callable[[str], dict[str, Any]]) -> None:
+            super().__init__()
+            self.settings = settings
+            self.save = save
+
+        def compose(self) -> ComposeResult:
+            with Vertical(id="project-dialog"):
+                yield Static("Settings", classes="dialog-title")
+                yield Input(value=str(self.settings.get("users_root") or ""), id="users-root")
+                yield Static("", id="settings-notice")
+                with Horizontal(classes="dialog-actions"):
+                    yield Button("Save", id="save-settings", variant="primary")
+                    yield Button("Cancel", id="cancel-settings")
+
+        def on_button_pressed(self, event: Button.Pressed) -> None:
+            if event.button.id == "cancel-settings":
+                self.dismiss(False); return
+            try:
+                self.save(self.query_one("#users-root", Input).value)
+            except Exception as exc:
+                self.query_one("#settings-notice", Static).update(str(exc)); return
+            self.dismiss(True)
+
+    class UsersScreen(ModalScreen[bool]):
+        def __init__(self, users: list[dict[str, Any]], create: Callable[[str, str], Any]) -> None:
+            super().__init__(); self.users = users; self.create = create
+
+        def compose(self) -> ComposeResult:
+            entries = "\n".join(f"{item.get('display_name')} ({item.get('role')})\n{item.get('user_id')}" for item in self.users) or "No users"
+            with Vertical(id="project-dialog"):
+                yield Static("Users", classes="dialog-title")
+                yield Static(entries, id="users-list")
+                yield Input(placeholder="Name", id="new-user-name")
+                yield Input(value="member", id="new-user-role")
+                with Horizontal(classes="dialog-actions"):
+                    yield Button("Add", id="add-user", variant="primary")
+                    yield Button("Close", id="close-users")
+
+        def on_button_pressed(self, event: Button.Pressed) -> None:
+            if event.button.id == "close-users": self.dismiss(False); return
+            try:
+                self.create(self.query_one("#new-user-name", Input).value, self.query_one("#new-user-role", Input).value)
+            except Exception:
+                return
+            self.dismiss(True)
+
+    class OnboardingScreen(ModalScreen[dict[str, str] | None]):
+        def compose(self) -> ComposeResult:
+            with Vertical(id="project-dialog"):
+                yield Static("Set up Alphonse", classes="dialog-title")
+                yield Input(placeholder="Administrator name", id="admin-name")
+                yield Input(value="~/.alphonse/users", id="onboarding-root")
+                yield Button("Create administrator", id="complete-onboarding", variant="primary")
+                yield Static("", id="onboarding-error")
+
+        def on_button_pressed(self, event: Button.Pressed) -> None:
+            if event.button.id == "complete-onboarding":
+                self.dismiss({"display_name": self.query_one("#admin-name", Input).value, "users_root": self.query_one("#onboarding-root", Input).value})
+
     class IntegrationsScreen(ModalScreen[str | None]):
         def __init__(self, runtime: TuiRuntime) -> None:
             super().__init__()
@@ -1342,8 +1404,16 @@ def _build_textual_app_class() -> type[Any]:
             self.daemon_client = V2DaemonClient()
             self.external_daemon = _daemon_is_available(self.daemon_client)
             self.daemon_connection_status = "connected" if self.external_daemon else "embedded"
+            current_user = ""
+            if self.external_daemon:
+                try:
+                    current = self.daemon_client.request("current_user")
+                    user = current.get("user") if isinstance(current, dict) else None
+                    current_user = str(user.get("user_id") or "") if isinstance(user, dict) else ""
+                except Exception:
+                    current_user = ""
             self.runtime = build_runtime_host(
-                user="local",
+                user=current_user or "local",
                 project_store=ProjectStore.default(),
                 schedule_store=ScheduledTaskStore.default(),
                 outbox=SQLiteOutboundStore.default(),
@@ -1395,8 +1465,31 @@ def _build_textual_app_class() -> type[Any]:
             self.query_one("#reply-activity", Static).update("")
             self._refresh_status()
             self.query_one("#prompt", Input).focus()
+            self._begin_onboarding_if_needed()
             self.set_interval(0.1, self._poll_daemon)
             self.set_interval(0.2, self._advance_activity_indicators)
+
+        def _begin_onboarding_if_needed(self) -> None:
+            try:
+                status = self.daemon_client.request("onboarding_status") if self.external_daemon else self.runtime.user_store.status()
+            except Exception:
+                return
+            if bool(status.get("onboarded")):
+                return
+            def _complete(values: dict[str, str] | None) -> None:
+                if not values:
+                    return
+                try:
+                    if self.external_daemon:
+                        result = self.daemon_client.request("onboard", **values, import_v1=True)
+                        admin = result.get("admin_user") if isinstance(result, dict) else None
+                        if isinstance(admin, dict): self.runtime.user = str(admin.get("user_id") or self.runtime.user)
+                    else:
+                        admin = self.runtime.user_store.onboard(**values)
+                        self.runtime.user = admin.user_id
+                except Exception as exc:
+                    self.query_one("#activity", Static).update(f"Onboarding failed: {exc}")
+            self.push_screen(OnboardingScreen(), callback=_complete)
 
         def on_input_changed(self, event: Input.Changed) -> None:
             if event.input.id != "prompt":
@@ -1438,6 +1531,12 @@ def _build_textual_app_class() -> type[Any]:
             if command == "agent-config":
                 self.query_one("#chat", RichLog).write(Text.assemble((self.runtime.user, "bold cyan"), f": {prompt.strip()}"))
                 self._open_agent_config()
+                return
+            if command == "settings":
+                self._open_user_settings()
+                return
+            if command == "users":
+                self._open_users()
                 return
 
             if str(prompt or "").strip() in LOCAL_STOP_COMMANDS:
@@ -1558,6 +1657,28 @@ def _build_textual_app_class() -> type[Any]:
                     self._refresh_status()
 
             self.push_screen(IntegrationsScreen(self.runtime), callback=_selected)
+
+        def _open_user_settings(self) -> None:
+            def _settings() -> dict[str, Any]:
+                return self.daemon_client.request("settings") if self.external_daemon else self.runtime.user_store.status()
+            def _save(root: str) -> dict[str, Any]:
+                return self.daemon_client.request("save_settings", users_root=root) if self.external_daemon else {"users_root": self.runtime.user_store.set_users_root(root)}
+            try:
+                self.push_screen(UserSettingsScreen(_settings(), _save), callback=lambda _: self._refresh_status())
+            except Exception as exc:
+                self.query_one("#activity", Static).update(f"Settings unavailable: {exc}")
+
+        def _open_users(self) -> None:
+            def _list() -> list[dict[str, Any]]:
+                if self.external_daemon:
+                    values = self.daemon_client.request("users").get("users")
+                    return [dict(item) for item in values if isinstance(item, dict)] if isinstance(values, list) else []
+                return [user.to_dict() for user in self.runtime.user_store.list_users()]
+            def _create(name: str, role: str) -> Any:
+                if self.external_daemon:
+                    return self.daemon_client.request("create_user", display_name=name, role=role)
+                return self.runtime.user_store.create_user(display_name=name, role=role)
+            self.push_screen(UsersScreen(_list(), _create), callback=lambda _: self._refresh_status())
 
         def _inference_settings(self) -> dict[str, Any]:
             if self.external_daemon:

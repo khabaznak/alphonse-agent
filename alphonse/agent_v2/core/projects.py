@@ -78,6 +78,9 @@ class ProjectStore:
         visibility_value = _normalize_visibility(visibility)
         root = _resolve_project_root(root_path)
         root.mkdir(parents=True, exist_ok=True)
+        context = root / PROJECT_CONTEXT_FILENAME
+        if not context.exists():
+            context.write_text("# Project Context\n", encoding="utf-8")
         now = _now_iso()
         project_id_value = str(project_id or "").strip() or _project_id_from_name(name_value)
         record = ProjectRecord(
@@ -111,7 +114,7 @@ class ProjectStore:
             )
         return record
 
-    def get_project(self, project_id: str, *, requester_user_id: str | None = None) -> ProjectRecord | None:
+    def get_project(self, project_id: str, *, requester_user_id: str | None = None, requester_is_admin: bool = False) -> ProjectRecord | None:
         project_id_value = str(project_id or "").strip()
         if not project_id_value:
             return None
@@ -121,20 +124,20 @@ class ProjectStore:
         if record is None:
             return None
         requester = str(requester_user_id or "").strip()
-        if record.visibility == "private" and requester and record.owner_user_id != requester:
+        if requester and not requester_is_admin and record.owner_user_id != requester and not self.is_member(record.project_id, requester) and record.visibility != "shared":
             return None
         return record
 
-    def list_visible_projects(self, user_id: str) -> list[ProjectRecord]:
+    def list_visible_projects(self, user_id: str, *, requester_is_admin: bool = False) -> list[ProjectRecord]:
         user_value = str(user_id or "").strip()
         with self._connect() as conn:
             rows = conn.execute(
                 """
                 SELECT * FROM v2_projects
-                WHERE visibility = 'shared' OR owner_user_id = ?
+                WHERE visibility = 'shared' OR owner_user_id = ? OR project_id IN (SELECT project_id FROM v2_project_members WHERE user_id = ?)
                 ORDER BY lower(name), created_at
                 """,
-                (user_value,),
+                (user_value, user_value),
             ).fetchall()
         return [_project_from_row(row) for row in rows if _project_from_row(row) is not None]
 
@@ -153,10 +156,13 @@ class ProjectStore:
         content: str,
         *,
         requester_user_id: str | None = None,
+        requester_is_admin: bool = False,
     ) -> ProjectRecord:
-        project = self.get_project(project_id, requester_user_id=requester_user_id)
+        project = self.get_project(project_id, requester_user_id=requester_user_id, requester_is_admin=requester_is_admin)
         if project is None:
             raise KeyError(f"project_not_found: {project_id}")
+        if not requester_is_admin and str(requester_user_id or "") != project.owner_user_id:
+            raise PermissionError("project_context_owner_required")
         root = Path(project.root_path)
         root.mkdir(parents=True, exist_ok=True)
         Path(project.context_path).write_text(str(content or ""), encoding="utf-8")
@@ -191,6 +197,26 @@ class ProjectStore:
         lines.append(context or "- (no project_context.md content)")
         return "\n".join(lines).strip()
 
+    def add_member(self, project_id: str, user_id: str) -> None:
+        with self._connect() as conn:
+            conn.execute("INSERT OR IGNORE INTO v2_project_members (project_id, user_id, created_at) VALUES (?, ?, ?)", (str(project_id), str(user_id), _now_iso()))
+
+    def remove_member(self, project_id: str, user_id: str) -> bool:
+        with self._connect() as conn:
+            return conn.execute("DELETE FROM v2_project_members WHERE project_id=? AND user_id=?", (str(project_id), str(user_id))).rowcount > 0
+
+    def list_members(self, project_id: str) -> list[str]:
+        with self._connect() as conn:
+            return [str(row[0]) for row in conn.execute("SELECT user_id FROM v2_project_members WHERE project_id=? ORDER BY user_id", (str(project_id),)).fetchall()]
+
+    def is_member(self, project_id: str, user_id: str) -> bool:
+        with self._connect() as conn:
+            return conn.execute("SELECT 1 FROM v2_project_members WHERE project_id=? AND user_id=?", (str(project_id), str(user_id))).fetchone() is not None
+
+    def migrate_owner(self, old_user_id: str, new_user_id: str) -> int:
+        with self._connect() as conn:
+            return conn.execute("UPDATE v2_projects SET owner_user_id=?, updated_at=? WHERE owner_user_id=?", (str(new_user_id), _now_iso(), str(old_user_id))).rowcount
+
     def _connect(self) -> sqlite3.Connection:
         if self._memory_connection is not None:
             return _ConnectionProxy(self._memory_connection)
@@ -218,6 +244,10 @@ class ProjectStore:
 
                 CREATE INDEX IF NOT EXISTS idx_v2_projects_owner_visibility
                   ON v2_projects (owner_user_id, visibility, lower(name));
+                CREATE TABLE IF NOT EXISTS v2_project_members (
+                  project_id TEXT NOT NULL, user_id TEXT NOT NULL, created_at TEXT NOT NULL,
+                  PRIMARY KEY (project_id, user_id)
+                ) STRICT;
                 """
             )
 

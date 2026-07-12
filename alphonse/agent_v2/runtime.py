@@ -40,6 +40,7 @@ from alphonse.agent_v2.agent_config import AgentConfigStore
 from alphonse.agent_v2.agent_config import packaged_agent_config_dir
 from alphonse.agent_v2.services.project_sessions import ProjectInboundRouter
 from alphonse.agent_v2.services.project_sessions import SQLiteProjectSessionStore
+from alphonse.agent_v2.users import V2UserStore
 
 
 @dataclass
@@ -89,6 +90,7 @@ class V2RuntimeHost:
     agent_config_store: AgentConfigStore
     project_session_store: SQLiteProjectSessionStore
     inbound_router: ProjectInboundRouter
+    user_store: V2UserStore
     integration_runtimes: list[Any] = field(default_factory=list)
     active_project_id: str = ""
     ui_events: list[CoreUiEvent] = field(default_factory=list)
@@ -98,6 +100,7 @@ class V2RuntimeHost:
 def build_runtime_host(
     *,
     user: str = "local",
+    user_store: V2UserStore | None = None,
     inference: InferenceRouter | None = None,
     tools: ToolRegistry | None = None,
     processor: IntelligenceProcessor | None = None,
@@ -130,16 +133,19 @@ def build_runtime_host(
     schedule_store = schedule_store or ScheduledTaskStore()
     outbox = outbox or SQLiteOutboundStore()
     integration_store = integration_store or SQLiteIntegrationStore()
+    user_store = user_store or V2UserStore()
     integration_registry = integration_registry or build_default_integration_registry()
     presence_projector = PresenceProjector()
     presence_projector.register("tui", TuiPresenceAdapter())
-    identity_resolver = identity_resolver or build_identity_resolver(integration_store)
+    identity_resolver = identity_resolver or build_identity_resolver(integration_store, user_store=user_store)
     delivery_sink = build_outbox_delivery_sink(outbox=outbox, identity_resolver=identity_resolver)
     inbound_router = ProjectInboundRouter(
         channel=channel,
         outbox=outbox,
         projects=project_store,
         sessions=project_session_store,
+        is_admin=user_store.is_admin,
+        managed_root=user_store.managed_project_root,
     )
     ui_events: list[CoreUiEvent] = []
     activity_events: list[CoreActivityEvent] = []
@@ -161,10 +167,11 @@ def build_runtime_host(
         project_store=project_store,
         schedule_store=schedule_store,
         delivery_sink=delivery_sink,
+        user_context_provider=user_store.read_user_context,
         activity_sink=_activity_sink,
     )
     return V2RuntimeHost(
-        user=str(user or "local").strip() or "local",
+        user=str(user or (user_store.admin_user().user_id if user_store.admin_user() else "local")).strip() or "local",
         queue=queue,
         channel=channel,
         visible_state=visible_state,
@@ -182,6 +189,7 @@ def build_runtime_host(
         agent_config_store=agent_config_store,
         project_session_store=project_session_store,
         inbound_router=inbound_router,
+        user_store=user_store,
         ui_events=ui_events,
         activity_events=activity_events,
     )
@@ -202,7 +210,7 @@ def refresh_runtime_inference(runtime: V2RuntimeHost, settings: InferenceSetting
     return selected
 
 
-def build_identity_resolver(store: SQLiteIntegrationStore) -> V2IdentityResolver:
+def build_identity_resolver(store: SQLiteIntegrationStore, *, user_store: V2UserStore | None = None) -> V2IdentityResolver:
     # Native clients use separate integration ids so their durable outbox
     # deliveries cannot be consumed by another interface. Both are local
     # first-party clients and therefore share the lightweight ``tui`` provider
@@ -212,11 +220,11 @@ def build_identity_resolver(store: SQLiteIntegrationStore) -> V2IdentityResolver
         IntegrationIdentity(record.integration_id, record.provider_key)
         for record in store.list_enabled()
     )
-    return V2IdentityResolver(tuple(identities))
+    return V2IdentityResolver(tuple(identities), user_store=user_store)
 
 
 def refresh_runtime_identity_resolver(runtime: V2RuntimeHost) -> None:
-    runtime.identity_resolver = build_identity_resolver(runtime.integration_store)
+    runtime.identity_resolver = build_identity_resolver(runtime.integration_store, user_store=runtime.user_store)
     runtime.core.delivery_sink = build_outbox_delivery_sink(
         outbox=runtime.outbox,
         identity_resolver=runtime.identity_resolver,

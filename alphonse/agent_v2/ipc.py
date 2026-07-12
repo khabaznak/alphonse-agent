@@ -367,8 +367,32 @@ class V2DaemonServer:
                     str(params.get("content") or ""),
                 )
             }
+        if method == "onboarding_status":
+            return self.daemon.onboarding_status()
+        if method == "onboard":
+            return self.daemon.onboard(display_name=str(params.get("display_name") or ""), users_root=str(params.get("users_root") or ""), import_v1=bool(params.get("import_v1")))
+        if method == "current_user":
+            return self.daemon.current_user()
+        if method == "settings":
+            return self.daemon.settings()
+        if method == "save_settings":
+            return self.daemon.save_settings(users_root=str(params.get("users_root") or ""))
+        if method == "users":
+            return {"users": self.daemon.list_users()}
+        if method == "create_user":
+            return {"user": self.daemon.create_user(display_name=str(params.get("display_name") or ""), role=str(params.get("role") or "member"))}
+        if method == "update_user":
+            return {"user": self.daemon.update_user(str(params.get("user_id") or ""), display_name=params.get("display_name"), role=params.get("role"), is_active=params.get("is_active"))}
+        if method == "user_context":
+            return self.daemon.user_context(str(params.get("user_id") or ""))
+        if method == "save_user_context":
+            return self.daemon.save_user_context(str(params.get("user_id") or ""), str(params.get("content") or ""))
+        if method == "bind_user_address":
+            return {"address": self.daemon.bind_user_address(**dict(params))}
+        if method == "remove_user_address":
+            return {"removed": self.daemon.remove_user_address(str(params.get("address_id") or ""))}
         if method == "projects":
-            return {"projects": self.daemon.list_projects(user=str(params.get("user") or "local"))}
+            return {"projects": self.daemon.list_projects(user=str(params.get("user") or ""))}
         if method == "create_project":
             return {
                 "project": self.daemon.create_project(
@@ -379,6 +403,13 @@ class V2DaemonServer:
                     visibility=str(params.get("visibility") or "private"),
                 )
             }
+        if method == "project_members":
+            return {"members": self.daemon.project_members(str(params.get("project_id") or ""))}
+        if method == "add_project_member":
+            self.daemon.add_project_member(str(params.get("project_id") or ""), str(params.get("user_id") or ""))
+            return {"added": True}
+        if method == "remove_project_member":
+            return {"removed": self.daemon.remove_project_member(str(params.get("project_id") or ""), str(params.get("user_id") or ""))}
         if method == "project_context":
             return self.daemon.read_project_context(
                 user=str(params.get("user") or "local"), project_id=str(params.get("project_id") or ""),
@@ -443,15 +474,22 @@ class V2DaemonServer:
                 )
             }
         if method == "queue_message":
+            integration_id = str(params.get("integration_id") or "tui")
+            provider_key = str(params.get("provider_key") or "tui")
+            user = str(params.get("user") or "")
+            if provider_key == "tui" or integration_id in {"tui", "desktop"}:
+                current = self.daemon.current_user().get("user")
+                if isinstance(current, dict):
+                    user = str(current.get("user_id") or "")
             return self.daemon.ingest_message(
                 prompt=str(params.get("prompt") or ""),
-                user=str(params.get("user") or ""),
+                user=user,
                 project_id=str(params.get("project_id") or ""),
                 tag=str(params.get("tag") or ""),
                 correlation_id=str(params.get("correlation_id") or ""),
                 metadata=dict(params.get("metadata") or {}),
-                integration_id=str(params.get("integration_id") or "tui"),
-                provider_key=str(params.get("provider_key") or "tui"),
+                integration_id=integration_id,
+                provider_key=provider_key,
                 provider_user_id=str(params.get("provider_user_id") or ""),
                 channel_target=str(params.get("channel_target") or ""),
                 provider_message_id=str(params.get("provider_message_id") or ""),

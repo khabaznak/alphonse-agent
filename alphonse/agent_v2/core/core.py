@@ -180,6 +180,7 @@ class ToolExecutionContext:
     project_store: Any | None = None
     schedule_store: Any | None = None
     delivery_sink: Callable[[dict[str, Any]], Any] | None = None
+    user_context_provider: Callable[[str], str] | None = None
 
 
 @dataclass
@@ -196,6 +197,7 @@ class CoreLoopContext:
     project_store: Any | None = None
     schedule_store: Any | None = None
     delivery_sink: Callable[[dict[str, Any]], Any] | None = None
+    user_context_provider: Callable[[str], str] | None = None
     consumed_message_ids: list[str] = field(default_factory=list)
 
     def consume_message(self, selector: MessageSelector | None = None) -> QueuedMessage | None:
@@ -321,6 +323,7 @@ class AlphonseCore:
     project_store: Any | None = None
     schedule_store: Any | None = None
     delivery_sink: Callable[[dict[str, Any]], Any] | None = None
+    user_context_provider: Callable[[str], str] | None = None
     fsm: DDFSM = field(default_factory=build_default_ddfsm)
     _stop_requested: bool = field(default=False, init=False, repr=False)
 
@@ -393,6 +396,7 @@ class AlphonseCore:
                 project_store=self.project_store,
                 schedule_store=self.schedule_store,
                 delivery_sink=self.delivery_sink,
+                user_context_provider=self.user_context_provider,
             )
             result = self.intelligence.process(task, context)
             if result.status != ProcessingStatus.FAILED:

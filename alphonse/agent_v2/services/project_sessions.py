@@ -97,6 +97,14 @@ class SQLiteProjectSessionStore:
             )
         return cursor.rowcount > 0
 
+    def migrate_user(self, old_user_id: str, new_user_id: str) -> int:
+        with self._connect() as conn:
+            rows = conn.execute("SELECT * FROM v2_project_sessions WHERE alphonse_user_id=?", (str(old_user_id),)).fetchall()
+            for row in rows:
+                conn.execute("DELETE FROM v2_project_sessions WHERE alphonse_user_id=? AND integration_id=? AND channel_target=? AND thread_id=?", (str(old_user_id), row["integration_id"], row["channel_target"], row["thread_id"]))
+                conn.execute("INSERT OR REPLACE INTO v2_project_sessions (alphonse_user_id,integration_id,channel_target,thread_id,active_project_id,project_name,updated_at) VALUES (?,?,?,?,?,?,?)", (str(new_user_id), row["integration_id"], row["channel_target"], row["thread_id"], row["active_project_id"], row["project_name"], _now_iso()))
+        return len(rows)
+
     def _connect(self) -> sqlite3.Connection | "_ConnectionProxy":
         if self._memory_connection is not None:
             return _ConnectionProxy(self._memory_connection)
@@ -141,11 +149,15 @@ class ProjectInboundRouter:
         outbox: SQLiteOutboundStore,
         projects: ProjectStore,
         sessions: SQLiteProjectSessionStore,
+        is_admin: Any | None = None,
+        managed_root: Any | None = None,
     ) -> None:
         self.channel = channel
         self.outbox = outbox
         self.projects = projects
         self.sessions = sessions
+        self.is_admin = is_admin or (lambda _user: False)
+        self.managed_root = managed_root
 
     def ingest(
         self,
@@ -206,7 +218,7 @@ class ProjectInboundRouter:
         session = self.sessions.get(key)
         if session is None:
             return None
-        project = self.projects.get_project(session.active_project_id, requester_user_id=key.alphonse_user_id)
+        project = self.projects.get_project(session.active_project_id, requester_user_id=key.alphonse_user_id, requester_is_admin=bool(self.is_admin(key.alphonse_user_id)))
         if project is None:
             self.sessions.clear(key)
         return project
@@ -264,7 +276,7 @@ class ProjectInboundRouter:
         return f"Active project: {project.name}."
 
     def _list_projects(self, key: ProjectSessionKey) -> str:
-        projects = self.projects.list_visible_projects(key.alphonse_user_id)
+        projects = self.projects.list_visible_projects(key.alphonse_user_id, requester_is_admin=bool(self.is_admin(key.alphonse_user_id)))
         active = self.active_project(key)
         if not projects:
             return "No visible projects. Create one with /project create <name>."
@@ -281,7 +293,7 @@ class ProjectInboundRouter:
 
     def _resolve_visible_project(self, user: str, value: str) -> ProjectRecord:
         rendered = str(value or "").strip()
-        visible = self.projects.list_visible_projects(user)
+        visible = self.projects.list_visible_projects(user, requester_is_admin=bool(self.is_admin(user)))
         for project in visible:
             if project.project_id == rendered:
                 return project
@@ -296,7 +308,7 @@ class ProjectInboundRouter:
     def _create_managed_project(self, user: str, name: str) -> ProjectRecord:
         slug = re.sub(r"[^a-z0-9]+", "-", name.casefold()).strip("-") or "project"
         project_id = f"{slug}-{uuid4().hex[:8]}"
-        root = managed_projects_root() / _safe_segment(user) / project_id
+        root = (Path(self.managed_root(user)) if self.managed_root is not None else managed_projects_root() / _safe_segment(user)) / slug
         return self.projects.create_project(
             name=name,
             root_path=str(root),

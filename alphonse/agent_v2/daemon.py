@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import signal
 import fcntl
+import sqlite3
 import threading
 import time
 import traceback
@@ -43,6 +44,7 @@ from alphonse.agent_v2.interfaces.a2ui import question_id_from_surface
 from alphonse.agent_v2.interfaces.a2ui import surface_id_for_question
 from alphonse.agent_v2.interfaces.ag_ui import AgUiAdapter
 from alphonse.agent_v2.services.scheduled_worker import ScheduledTaskWorker
+from alphonse.agent_v2.users import V2UserStore
 
 
 @dataclass
@@ -139,6 +141,82 @@ class V2Daemon:
         refresh_runtime_inference(self.runtime, settings)
         return settings.to_dict()
 
+    def onboarding_status(self) -> dict[str, object]:
+        return self.runtime.user_store.status()
+
+    def onboard(self, *, display_name: str, users_root: str, import_v1: bool = False) -> dict[str, object]:
+        store = self.runtime.user_store
+        if import_v1:
+            store.set_users_root(users_root)
+            imported = store.import_v1()
+            admin = store.admin_user()
+            if admin is None:
+                admin = store.onboard(display_name=display_name, users_root=users_root)
+        else:
+            admin = store.onboard(display_name=display_name, users_root=users_root)
+            imported = {}
+        self.runtime.user = admin.user_id
+        migrated = self._migrate_legacy_local(admin.user_id)
+        refresh_runtime_identity_resolver(self.runtime)
+        return {"admin_user": admin.to_dict(), "migration": {**imported, **migrated}, "users_root": str(store.users_root())}
+
+    def _migrate_legacy_local(self, admin_user_id: str) -> dict[str, int]:
+        """Idempotently claim records created before canonical-user onboarding."""
+        projects = self.runtime.project_store.migrate_owner("local", admin_user_id)
+        sessions = self.runtime.project_session_store.migrate_user("local", admin_user_id)
+        integrations = 0
+        schedules = 0
+        for record in self.runtime.integration_store.list():
+            config = dict(record.config)
+            if str(config.get("owner_user_id") or "") != "local":
+                continue
+            config["owner_user_id"] = admin_user_id
+            self.runtime.integration_store.upsert(integration_id=record.integration_id, provider_key=record.provider_key, display_name=record.display_name, enabled=record.enabled, config=config, secrets=dict(record.secrets))
+            integrations += 1
+        if getattr(self.runtime.schedule_store, "db_path", ":memory:") != ":memory:":
+            with sqlite3.connect(self.runtime.schedule_store.db_path) as conn:
+                schedules = conn.execute("UPDATE v2_scheduled_tasks SET owner_user_id=? WHERE owner_user_id='local'", (admin_user_id,)).rowcount
+        return {"local_projects_migrated": projects, "local_sessions_migrated": sessions, "local_integrations_migrated": integrations, "local_schedules_migrated": schedules}
+
+    def current_user(self) -> dict[str, object]:
+        admin = self.runtime.user_store.admin_user()
+        return {"user": admin.to_dict() if admin else None, "onboarded": admin is not None}
+
+    def _admin_user_id(self, requested: str = "") -> str:
+        admin = self.runtime.user_store.admin_user()
+        if admin is None:
+            if self.runtime.user_store.is_ephemeral and str(requested or "").strip():
+                return str(requested).strip()
+            raise RuntimeError("v2_onboarding_required")
+        return admin.user_id
+
+    def list_users(self) -> list[dict[str, object]]:
+        return [{**user.to_dict(), "addresses": [address.to_dict() for address in self.runtime.user_store.list_addresses(user.user_id)]} for user in self.runtime.user_store.list_users()]
+
+    def create_user(self, *, display_name: str, role: str = "member") -> dict[str, object]:
+        return self.runtime.user_store.create_user(display_name=display_name, role=role).to_dict()
+
+    def update_user(self, user_id: str, **values: Any) -> dict[str, object]:
+        return self.runtime.user_store.update_user(user_id, display_name=values.get("display_name"), role=values.get("role"), is_active=values.get("is_active")).to_dict()
+
+    def user_context(self, user_id: str) -> dict[str, str]:
+        return {"user_id": user_id, "content": self.runtime.user_store.read_user_context(user_id)}
+
+    def save_user_context(self, user_id: str, content: str) -> dict[str, str]:
+        return {"user_id": user_id, "path": self.runtime.user_store.write_user_context(user_id, content)}
+
+    def bind_user_address(self, **values: Any) -> dict[str, object]:
+        return self.runtime.user_store.bind_address(**values).to_dict()
+
+    def remove_user_address(self, address_id: str) -> bool:
+        return self.runtime.user_store.remove_address(address_id)
+
+    def settings(self) -> dict[str, object]:
+        return self.runtime.user_store.status()
+
+    def save_settings(self, *, users_root: str) -> dict[str, object]:
+        return {"users_root": self.runtime.user_store.set_users_root(users_root), "warning_repository_path": "/Alphonse/" in str(users_root)}
+
     def list_agent_config(self) -> list[dict[str, str]]:
         return [document.to_dict(include_content=False) for document in self.runtime.agent_config_store.list_documents()]
 
@@ -194,7 +272,7 @@ class V2Daemon:
         limit: int = 100,
     ) -> dict[str, Any]:
         """Collect Desktop activity and atomically lease its pending messages."""
-        normalized_user = str(user or "local").strip() or "local"
+        normalized_user = self._admin_user_id(user)
         normalized_client = str(client_id or "desktop").strip() or "desktop"
         capabilities = dict(client_capabilities or {})
         catalogs = capabilities.get("supportedCatalogIds")
@@ -241,7 +319,7 @@ class V2Daemon:
         return self.runtime.outbox.mark_delivered(outbox_message_id)
 
     def desktop_conversation_history(self, *, user: str, project_id: str = "", limit: int = 100) -> list[dict[str, Any]]:
-        normalized_user = str(user or "local").strip() or "local"
+        normalized_user = self._admin_user_id(user)
         normalized_project = str(project_id or "").strip()
         deliveries = self.runtime.outbox.list(
             OutboundSelector(integration_id="desktop", channel_target=normalized_user, status=None),
@@ -263,17 +341,36 @@ class V2Daemon:
         return messages[-max(1, min(int(limit or 100), 500)):]
 
     def list_projects(self, *, user: str) -> list[dict[str, str]]:
-        return [project.to_dict() for project in self.runtime.project_store.list_visible_projects(str(user or "local"))]
+        normalized = self._admin_user_id(user)
+        return [project.to_dict() for project in self.runtime.project_store.list_visible_projects(normalized, requester_is_admin=True)]
 
     def create_project(self, *, user: str, name: str, description: str, root_path: str, visibility: str) -> dict[str, str]:
+        owner = self._admin_user_id(user)
+        from pathlib import Path
+        slug = "-".join(part for part in "".join(char.lower() if char.isalnum() else " " for char in name).split()) or "project"
+        parent = Path(root_path).expanduser() if str(root_path).strip() else self.runtime.user_store.managed_project_root(owner)
         project = self.runtime.project_store.create_project(
             name=name,
             description=description,
-            root_path=root_path,
-            visibility=visibility if visibility in {"private", "shared"} else "private",
-            owner_user_id=str(user or "local"),
+            root_path=str(parent / slug),
+            visibility="private",
+            owner_user_id=owner,
         )
         return project.to_dict()
+
+    def project_members(self, project_id: str) -> list[str]:
+        self._admin_user_id()
+        return self.runtime.project_store.list_members(project_id)
+
+    def add_project_member(self, project_id: str, user_id: str) -> None:
+        self._admin_user_id()
+        if self.runtime.user_store.get_user(user_id) is None:
+            raise KeyError("user_not_found")
+        self.runtime.project_store.add_member(project_id, user_id)
+
+    def remove_project_member(self, project_id: str, user_id: str) -> bool:
+        self._admin_user_id()
+        return self.runtime.project_store.remove_member(project_id, user_id)
 
     def select_project_session(
         self,
@@ -284,12 +381,14 @@ class V2Daemon:
         thread_id: str,
         project_id: str,
     ) -> dict[str, str]:
-        key = ProjectSessionKey(user, integration_id, channel_target, thread_id)
+        user = self._admin_user_id(user)
+        key = ProjectSessionKey(user, integration_id, channel_target or user, thread_id)
         project = self.runtime.inbound_router.select_project(key, project_id)
         return self.runtime.project_session_store.set(key, project).to_dict()
 
     def active_project_session(self, *, user: str, integration_id: str, channel_target: str, thread_id: str) -> dict[str, str] | None:
-        key = ProjectSessionKey(user, integration_id, channel_target, thread_id)
+        user = self._admin_user_id(user)
+        key = ProjectSessionKey(user, integration_id, channel_target or user, thread_id)
         project = self.runtime.inbound_router.active_project(key)
         if project is None:
             return None
@@ -305,16 +404,17 @@ class V2Daemon:
         }
 
     def read_project_context(self, *, user: str, project_id: str) -> dict[str, str]:
-        project = self.runtime.project_store.get_project(project_id, requester_user_id=user)
+        user = self._admin_user_id(user)
+        project = self.runtime.project_store.get_project(project_id, requester_user_id=user, requester_is_admin=True)
         if project is None:
             raise KeyError(f"project_not_found: {project_id}")
         return {"project_id": project.project_id, "content": self.runtime.project_store.read_project_context(project.project_id, requester_user_id=user)}
 
     def save_project_context(self, *, user: str, project_id: str, content: str) -> dict[str, str]:
-        return self.runtime.project_store.write_project_context(project_id, content, requester_user_id=user).to_dict()
+        return self.runtime.project_store.write_project_context(project_id, content, requester_user_id=self._admin_user_id(user), requester_is_admin=True).to_dict()
 
     def answer_question(self, *, user: str, question_id: str, text: str = "", payload: dict[str, Any] | None = None) -> dict[str, Any]:
-        normalized_user = str(user or "local").strip() or "local"
+        normalized_user = self._admin_user_id(user)
         result = self.runtime.question_store.route_answer(
             respondent_user_id=normalized_user,
             question_id=question_id,
@@ -368,7 +468,7 @@ class V2Daemon:
     ) -> dict[str, Any]:
         """Perform the sole permitted A2UI mutation: answer or cancel a question."""
         client = str(client_id or "desktop").strip() or "desktop"
-        respondent = str(user or "local").strip() or "local"
+        respondent = self._admin_user_id(user)
         if ALPHONSE_DESKTOP_CATALOG_ID not in self._desktop_capabilities.get(client, set()):
             raise ValueError("a2ui_catalog_not_negotiated")
         question_id = question_id_from_surface(surface_id)
@@ -432,9 +532,11 @@ class V2Daemon:
             raise ValueError("telegram_bot_token_required")
         provider_user_id = str(values.get("telegram_user_id") or "").strip()
         if provider_user_id:
-            upsert_provider_user_mapping(
-                alphonse_user_id=str(user or "local"), provider_key="telegram", provider_user_id=provider_user_id,
-                display_name=str(user or "local"), is_active=True,
+            self.runtime.user_store.bind_address(
+                user_id=self._admin_user_id(user),
+                integration_id=str(values.get("integration_id") or "telegram-home"),
+                provider_key="telegram",
+                provider_user_id=provider_user_id,
             )
         record = self.runtime.integration_store.upsert(
             integration_id=str(values.get("integration_id") or "telegram-home").strip() or "telegram-home",
@@ -444,7 +546,7 @@ class V2Daemon:
             config={
                 "poll_interval_sec": _positive_float(values.get("poll_interval_sec")),
                 "allowed_chat_ids": _comma_values(values.get("allowed_chat_ids")),
-                "owner_user_id": str(user or "local"),
+                "owner_user_id": self._admin_user_id(user),
                 "telegram_user_id": provider_user_id,
                 "presence_enabled": bool(values.get("presence_enabled", True)),
             },
@@ -712,9 +814,11 @@ def _question_answer_text(payload: dict[str, Any] | None) -> str:
 
 def main() -> None:
     daemon_id = f"daemon-{uuid4().hex[:12]}"
+    user_store = V2UserStore.default()
     daemon = V2Daemon(
         build_runtime_host(
-            user="local",
+            user=user_store.admin_user().user_id if user_store.admin_user() else "",
+            user_store=user_store,
             messages=SQLiteMessageQueue.default(lease_owner=daemon_id),
             question_store=SQLiteQuestionStore.default(),
             project_store=ProjectStore.default(),

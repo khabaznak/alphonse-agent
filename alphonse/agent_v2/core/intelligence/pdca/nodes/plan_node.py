@@ -101,12 +101,16 @@ def _tools_from_context(context: CoreLoopContext | None) -> tuple[ToolDescriptor
 
 
 def _project_context_md(task: TaskState, context: CoreLoopContext | None) -> str:
-    if context is None or context.project_store is None or not str(task.project_id or "").strip():
+    if context is None:
         return ""
-    render = getattr(context.project_store, "render_project_context", None)
-    if render is None:
-        return ""
-    return str(render(task.project_id, requester_user_id=task.user) or "").strip()
+    parts: list[str] = []
+    if context.project_store is not None and str(task.project_id or "").strip():
+        render = getattr(context.project_store, "render_project_context", None)
+        if callable(render): parts.append(str(render(task.project_id, requester_user_id=task.user) or "").strip())
+    if callable(context.user_context_provider):
+        try: parts.append("# User Context\n" + str(context.user_context_provider(task.user) or "").strip())
+        except (OSError, KeyError): pass
+    return "\n\n".join(part for part in parts if part)
 
 
 def _agent_prompt_md(context: CoreLoopContext | None, name: str) -> str:

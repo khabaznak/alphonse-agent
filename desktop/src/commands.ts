@@ -5,6 +5,8 @@ export const DESKTOP_COMMANDS = [
   "/model-provider",
   "/model",
   "/agent-config",
+  "/settings",
+  "/users",
   "/stop",
   "/exit",
   "/quit",

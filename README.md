@@ -137,6 +137,8 @@ runtime files are stored under `~/.alphonse/`:
 - `v2-inference.sqlite3` — daemon-wide inference provider and model selection
 - `agent-config/` — editable `CoreContext.md` and `Philosophy.md` snapshots
 - `v2-project-sessions.sqlite3` — active project selections by channel conversation
+- `v2-users.sqlite3` — canonical users, admin role, and channel address mappings
+- `users/` — local user profiles and managed non-admin projects
 
 Override paths with these environment variables when needed:
 
@@ -149,6 +151,7 @@ ALPHONSE_V2_INTEGRATIONS_DB_PATH=
 ALPHONSE_V2_AGENT_CONFIG_DIR=
 ALPHONSE_V2_PROJECT_SESSION_DB_PATH=
 ALPHONSE_V2_MANAGED_PROJECTS_DIR=
+ALPHONSE_V2_USERS_DB_PATH=
 ```
 
 ### Start the v2 TUI
@@ -176,6 +179,24 @@ used by v2 CAPD prompts. These files live under `~/.alphonse/agent-config/` by
 default; set `ALPHONSE_V2_AGENT_CONFIG_DIR` to relocate them. The daemon reads
 them at startup, so save changes and then run `alphonse stop` followed by
 `alphonse start` before they affect new tasks.
+
+### Users and profiles
+
+On first run, v2 asks the local administrator to complete onboarding. Alphonse
+creates a canonical UUID for the administrator; `admin` is a role, not an ID.
+The TUI and Desktop app are administrator-only interfaces. Telegram and future
+integrations resolve provider identities to the same canonical user IDs.
+
+User data defaults to `~/.alphonse/users/`. Each user has
+`<users-root>/<user-id>/user_context.md`; managed non-admin projects live under
+that same user directory and always include `project_context.md`. Admin projects
+may use any selected parent directory. `/settings` configures the users root and
+`/users` opens the administrator’s user list. Projects are private by default;
+named members can be added through administrator project controls.
+
+Existing v1 installations can choose the one-time identity import during
+onboarding. It copies canonical users and supported channel mappings into the
+v2 database; v2 does not query v1 identity tables after import.
 
 Projects are selected independently per user and conversation. `/project` in
 the TUI opens the project picker; text channels can use `/projects`,

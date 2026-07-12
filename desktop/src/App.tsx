@@ -5,9 +5,7 @@ import { A2uiSurfaceView, applyA2uiEvent, DESKTOP_CATALOG_ID } from "./a2ui";
 import { agentStateLabel, capdActivityLabel, projectKey } from "./layoutState";
 import type { ActivityEvent, AgentDocument, ChatMessage, InferenceSettings, Project, Question } from "./types";
 
-const USER = "local";
-
-type Modal = "projects" | "project-context" | "integrations" | "model" | "agent-config" | "desktop-settings" | null;
+type Modal = "projects" | "project-context" | "integrations" | "model" | "agent-config" | "settings" | "users" | "onboarding" | null;
 type PollResponse = {
   events: ActivityEvent[];
   next_sequence: number;
@@ -36,6 +34,7 @@ export default function App() {
   const [questions, setQuestions] = useState<Question[]>([]);
   const [project, setProject] = useState<Project | null>(null);
   const [modal, setModal] = useState<Modal>(null);
+  const [user, setUser] = useState("");
   const [error, setError] = useState("");
   const [surfaces, setSurfaces] = useState<Record<string, import("./a2ui").A2uiSurface>>({});
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
@@ -54,7 +53,7 @@ export default function App() {
     try {
       const response = await daemonRequest<PollResponse>("desktop_poll", {
         client_id: clientId,
-        user: USER,
+        user,
         after_sequence: sequence.current,
         after_ui_sequence: uiSequence.current,
         client_capabilities: { supportedCatalogIds: [DESKTOP_CATALOG_ID] },
@@ -81,10 +80,14 @@ export default function App() {
       setActivity("idle");
       setAgentState("Disconnected");
     }
-  }, [appendMessage, clientId]);
+  }, [appendMessage, clientId, user]);
 
   useEffect(() => {
-    ensureDaemon().then(() => poll()).catch((cause: unknown) => setError(cause instanceof Error ? cause.message : "Unable to start daemon"));
+    ensureDaemon().then(async () => {
+      const current = await daemonRequest<{ onboarded: boolean; user: { user_id: string } | null }>("current_user");
+      if (!current.onboarded || !current.user) setModal("onboarding"); else setUser(current.user.user_id);
+      await poll();
+    }).catch((cause: unknown) => setError(cause instanceof Error ? cause.message : "Unable to start daemon"));
     const timer = window.setInterval(() => void poll(), 800);
     return () => window.clearInterval(timer);
   }, [poll]);
@@ -116,13 +119,13 @@ export default function App() {
     delivered.current.clear();
     setMessages(messageBuckets[nextKey] || []);
     try {
-      const history = await daemonRequest<HistoryResponse>("desktop_conversation_history", { user: USER, project_id: next.project_id, limit: 100 });
+      const history = await daemonRequest<HistoryResponse>("desktop_conversation_history", { user, project_id: next.project_id, limit: 100 });
       setMessages((current) => current.length > 0 ? current : history.messages);
       setMessageBuckets((buckets) => ({ ...buckets, [nextKey]: buckets[nextKey]?.length ? buckets[nextKey] : history.messages }));
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Conversation history could not be loaded");
     }
-  }, [currentProjectKey, messageBuckets, messages]);
+  }, [currentProjectKey, messageBuckets, messages, user]);
 
   const submitPrompt = async () => {
     const value = prompt.trim();
@@ -136,11 +139,11 @@ export default function App() {
     try {
       await daemonRequest("queue_message", {
         prompt: value,
-        user: USER,
+        user,
         project_id: project?.project_id || "",
         integration_id: "desktop",
         provider_key: "tui",
-        channel_target: USER,
+        channel_target: user,
       });
       setActivity("doing");
       await poll();
@@ -167,6 +170,8 @@ export default function App() {
     if (command === "/integrations") return setModal("integrations");
     if (command === "/model" || command === "/model-provider") return setModal("model");
     if (command === "/agent-config") return setModal("agent-config");
+    if (command === "/settings") return setModal("settings");
+    if (command === "/users") return setModal("users");
     if (command === "/stop") {
       if (window.confirm("Stop the Alphonse daemon?")) await stopDaemon();
       return;
@@ -190,7 +195,8 @@ export default function App() {
         <button title="Integrations" onClick={() => setModal("integrations")}><span>Integrations</span></button>
         <button title="Model" onClick={() => setModal("model")}><span>Model</span></button>
         <button title="Agent configuration" onClick={() => setModal("agent-config")}><span>Agent configuration</span></button>
-        <button title="Desktop settings" onClick={() => setModal("desktop-settings")}><span>Desktop settings</span></button>
+        <button title="Users" onClick={() => setModal("users")}><span>Users</span></button>
+        <button title="Settings" onClick={() => setModal("settings")}><span>Settings</span></button>
       </aside>
 
       <section className="conversation">
@@ -206,7 +212,7 @@ export default function App() {
         </div>
         <section className="input-dock">
           {activeSurface ? (
-            <A2uiSurfaceView surface={activeSurface} clientId={clientId} user={USER} onDone={poll} />
+            <A2uiSurfaceView surface={activeSurface} clientId={clientId} user={user} onDone={poll} />
           ) : fallbackQuestion ? (
             <QuestionCard question={fallbackQuestion} onDone={poll} />
           ) : (
@@ -219,12 +225,14 @@ export default function App() {
         </section>
       </section>
 
-      {modal === "projects" && <ProjectsModal active={project} onSelect={(next) => void selectProject(next)} onClose={() => setModal(null)} />}
-      {modal === "project-context" && <ProjectContextModal project={project} onClose={() => setModal(null)} />}
-      {modal === "integrations" && <IntegrationsModal onClose={() => setModal(null)} />}
+      {modal === "projects" && <ProjectsModal user={user} active={project} onSelect={(next) => void selectProject(next)} onClose={() => setModal(null)} />}
+      {modal === "project-context" && <ProjectContextModal user={user} project={project} onClose={() => setModal(null)} />}
+      {modal === "integrations" && <IntegrationsModal user={user} onClose={() => setModal(null)} />}
       {modal === "model" && <ModelModal onClose={() => setModal(null)} />}
       {modal === "agent-config" && <AgentConfigModal onClose={() => setModal(null)} />}
-      {modal === "desktop-settings" && <DesktopSettingsModal enterToSend={enterToSend} onEnterToSendChange={setEnterToSend} onClose={() => setModal(null)} />}
+      {modal === "settings" && <SettingsModal enterToSend={enterToSend} onEnterToSendChange={setEnterToSend} onClose={() => setModal(null)} />}
+      {modal === "users" && <UsersModal onClose={() => setModal(null)} />}
+      {modal === "onboarding" && <OnboardingModal onComplete={(next) => { setUser(next); setModal(null); void poll(); }} />}
     </main>
   );
 }
@@ -236,7 +244,7 @@ function StatusPill({ label, value, tone = "" }: { label: string; value: string;
 function QuestionCard({ question, onDone }: { question: Question; onDone: () => Promise<void> }) {
   const [value, setValue] = useState("");
   const answer = async (payload: Record<string, unknown>, text = "") => {
-    await daemonRequest("answer_question", { user: USER, question_id: question.question_id, payload, text });
+    await daemonRequest("answer_question", { question_id: question.question_id, payload, text });
     await onDone();
   };
   return <section className="question-card"><strong>Alphonse needs your input</strong><p>{question.message}</p>
@@ -250,27 +258,44 @@ function ModalFrame({ title, children, onClose }: { title: string; children: Rea
   return <div className="modal-backdrop" role="presentation"><section className="modal" role="dialog" aria-modal="true" aria-label={title}><header><h2>{title}</h2><button onClick={onClose}>Close</button></header>{children}</section></div>;
 }
 
-function DesktopSettingsModal({ enterToSend, onEnterToSendChange, onClose }: { enterToSend: boolean; onEnterToSendChange: (value: boolean) => void; onClose: () => void }) {
-  return <ModalFrame title="Desktop settings" onClose={onClose}><label className="setting-row"><input type="checkbox" checked={enterToSend} onChange={(event) => onEnterToSendChange(event.target.checked)} /> Enter sends message</label></ModalFrame>;
+function OnboardingModal({ onComplete }: { onComplete: (userId: string) => void }) {
+  const [name, setName] = useState(""); const [root, setRoot] = useState("~/.alphonse/users"); const [importV1, setImportV1] = useState(true); const [error, setError] = useState("");
+  const save = async () => { try { const result = await daemonRequest<{ admin_user: { user_id: string } }>("onboard", { display_name: name, users_root: root, import_v1: importV1 }); onComplete(result.admin_user.user_id); } catch (cause) { setError(cause instanceof Error ? cause.message : "Onboarding failed"); } };
+  return <ModalFrame title="Set up Alphonse" onClose={() => undefined}><p>Create the local administrator and choose where user data is stored.</p><input value={name} onChange={(event) => setName(event.target.value)} placeholder="Your name" /><input value={root} onChange={(event) => setRoot(event.target.value)} placeholder="Users root" /><label><input type="checkbox" checked={importV1} onChange={(event) => setImportV1(event.target.checked)} /> Import existing v1 identity data</label><button onClick={() => void save()}>Create administrator</button><p>{error}</p></ModalFrame>;
 }
 
-function ProjectsModal({ active, onSelect, onClose }: { active: Project | null; onSelect: (project: Project) => void; onClose: () => void }) {
+function SettingsModal({ enterToSend, onEnterToSendChange, onClose }: { enterToSend: boolean; onEnterToSendChange: (value: boolean) => void; onClose: () => void }) {
+  const [root, setRoot] = useState(""); const [notice, setNotice] = useState("");
+  useEffect(() => { void daemonRequest<{ users_root: string }>("settings").then((result) => setRoot(result.users_root)); }, []);
+  const save = async () => { const result = await daemonRequest<{ users_root: string; warning_repository_path?: boolean }>("save_settings", { users_root: root }); setNotice(result.warning_repository_path ? "Saved. This path is inside the repository; keep it ignored." : "Saved."); };
+  return <ModalFrame title="Settings" onClose={onClose}><label className="setting-row"><input type="checkbox" checked={enterToSend} onChange={(event) => onEnterToSendChange(event.target.checked)} /> Enter sends message</label><label>Users root<input value={root} onChange={(event) => setRoot(event.target.value)} /></label><button onClick={() => void save()}>Save</button><p>{notice}</p></ModalFrame>;
+}
+
+function UsersModal({ onClose }: { onClose: () => void }) {
+  const [users, setUsers] = useState<Array<{ user_id: string; display_name: string; role: string; is_active: boolean }>>([]); const [name, setName] = useState(""); const [role, setRole] = useState("member");
+  const load = useCallback(() => daemonRequest<{ users: Array<{ user_id: string; display_name: string; role: string; is_active: boolean }> }>("users").then((result) => setUsers(result.users)), []);
+  useEffect(() => { void load(); }, [load]);
+  const create = async () => { await daemonRequest("create_user", { display_name: name, role }); setName(""); await load(); };
+  return <ModalFrame title="Users" onClose={onClose}><div className="stack">{users.map((item) => <p key={item.user_id}>{item.display_name} ({item.role})<small>{item.user_id}</small></p>)}</div><input value={name} onChange={(event) => setName(event.target.value)} placeholder="Name" /><select value={role} onChange={(event) => setRole(event.target.value)}><option value="member">Member</option><option value="caregiver">Caregiver</option></select><button onClick={() => void create()}>Add user</button></ModalFrame>;
+}
+
+function ProjectsModal({ user, active, onSelect, onClose }: { user: string; active: Project | null; onSelect: (project: Project) => void; onClose: () => void }) {
   const [projects, setProjects] = useState<Project[]>([]);
   const [name, setName] = useState(""); const [rootPath, setRootPath] = useState("");
-  const load = useCallback(() => daemonRequest<{ projects: Project[] }>("projects", { user: USER }).then((result) => setProjects(result.projects)), []);
+  const load = useCallback(() => daemonRequest<{ projects: Project[] }>("projects", { user }).then((result) => setProjects(result.projects)), [user]);
   useEffect(() => { void load(); }, [load]);
-  const create = async (event: FormEvent) => { event.preventDefault(); const result = await daemonRequest<{ project: Project }>("create_project", { user: USER, name, description: "", root_path: rootPath, visibility: "private" }); onSelect(result.project); };
+  const create = async (event: FormEvent) => { event.preventDefault(); const result = await daemonRequest<{ project: Project }>("create_project", { user, name, description: "", root_path: rootPath, visibility: "private" }); onSelect(result.project); };
   return <ModalFrame title="Projects" onClose={onClose}><div className="stack">{projects.map((item) => <button className={item.project_id === active?.project_id ? "selected" : ""} key={item.project_id} onClick={() => onSelect(item)}>{item.name}<small>{item.root_path}</small></button>)}</div><form className="stack" onSubmit={create}><input value={name} onChange={(event) => setName(event.target.value)} placeholder="New project name" required /><input value={rootPath} onChange={(event) => setRootPath(event.target.value)} placeholder="Directory path" required /><button>Create project</button></form></ModalFrame>;
 }
 
-function ProjectContextModal({ project, onClose }: { project: Project | null; onClose: () => void }) {
+function ProjectContextModal({ user, project, onClose }: { user: string; project: Project | null; onClose: () => void }) {
   const [content, setContent] = useState(""); const [notice, setNotice] = useState("");
-  useEffect(() => { if (project) void daemonRequest<{ content: string }>("project_context", { user: USER, project_id: project.project_id }).then((result) => setContent(result.content)); }, [project]);
+  useEffect(() => { if (project) void daemonRequest<{ content: string }>("project_context", { user, project_id: project.project_id }).then((result) => setContent(result.content)); }, [project, user]);
   if (!project) return <ModalFrame title="Project context" onClose={onClose}><p>Select a project before editing its context.</p></ModalFrame>;
-  return <ModalFrame title={`${project.name} context`} onClose={onClose}><textarea value={content} onChange={(event) => setContent(event.target.value)} rows={12} /><button onClick={() => void daemonRequest("save_project_context", { user: USER, project_id: project.project_id, content }).then(() => setNotice("Saved."))}>Save context</button><p>{notice}</p></ModalFrame>;
+  return <ModalFrame title={`${project.name} context`} onClose={onClose}><textarea value={content} onChange={(event) => setContent(event.target.value)} rows={12} /><button onClick={() => void daemonRequest("save_project_context", { user, project_id: project.project_id, content }).then(() => setNotice("Saved."))}>Save context</button><p>{notice}</p></ModalFrame>;
 }
 
-function IntegrationsModal({ onClose }: { onClose: () => void }) {
+function IntegrationsModal({ user, onClose }: { user: string; onClose: () => void }) {
   const [integrationId, setIntegrationId] = useState("telegram-home"); const [displayName, setDisplayName] = useState("Telegram");
   const [token, setToken] = useState(""); const [telegramUserId, setTelegramUserId] = useState(""); const [allowedChatIds, setAllowedChatIds] = useState("");
   const [pollInterval, setPollInterval] = useState("1"); const [enabled, setEnabled] = useState(false); const [presenceEnabled, setPresenceEnabled] = useState(true); const [notice, setNotice] = useState("");
@@ -281,7 +306,7 @@ function IntegrationsModal({ onClose }: { onClose: () => void }) {
     setTelegramUserId(String(config.telegram_user_id || "")); setAllowedChatIds(Array.isArray(config.allowed_chat_ids) ? config.allowed_chat_ids.join(", ") : "");
     setPollInterval(String(config.poll_interval_sec || 1)); setPresenceEnabled(config.presence_enabled !== false);
   }); }, []);
-  const save = async () => { await daemonRequest("save_telegram_integration", { user: USER, values: { integration_id: integrationId, display_name: displayName, enabled, bot_token: token, telegram_user_id: telegramUserId, allowed_chat_ids: allowedChatIds, poll_interval_sec: pollInterval, presence_enabled: presenceEnabled } }); setToken(""); setNotice("Saved and integrations restarted."); };
+  const save = async () => { await daemonRequest("save_telegram_integration", { user, values: { integration_id: integrationId, display_name: displayName, enabled, bot_token: token, telegram_user_id: telegramUserId, allowed_chat_ids: allowedChatIds, poll_interval_sec: pollInterval, presence_enabled: presenceEnabled } }); setToken(""); setNotice("Saved and integrations restarted."); };
   return <ModalFrame title="Telegram integration" onClose={onClose}><input value={integrationId} onChange={(event) => setIntegrationId(event.target.value)} placeholder="Integration id" /><input value={displayName} onChange={(event) => setDisplayName(event.target.value)} placeholder="Display name" /><input type="password" value={token} onChange={(event) => setToken(event.target.value)} placeholder="Bot token (leave blank to keep current)" /><input value={telegramUserId} onChange={(event) => setTelegramUserId(event.target.value)} placeholder="Telegram user id" /><input value={allowedChatIds} onChange={(event) => setAllowedChatIds(event.target.value)} placeholder="Allowed chat IDs, comma separated" /><input value={pollInterval} onChange={(event) => setPollInterval(event.target.value)} placeholder="Poll interval seconds" /><label><input type="checkbox" checked={enabled} onChange={(event) => setEnabled(event.target.checked)} /> Enabled</label><label><input type="checkbox" checked={presenceEnabled} onChange={(event) => setPresenceEnabled(event.target.checked)} /> Presence enabled</label><button onClick={() => void save()}>Save integration</button><p>{notice}</p></ModalFrame>;
 }
 
