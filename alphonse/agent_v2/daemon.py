@@ -490,6 +490,13 @@ class V2Daemon:
         normalized = self._admin_user_id(user)
         return [project.to_dict() for project in self.runtime.project_store.list_visible_projects(normalized, requester_is_admin=True)]
 
+    def manageable_projects(self, *, user: str, status: str = "") -> list[dict[str, Any]]:
+        actor = self._admin_user_id(user)
+        status_value = str(status or "").strip() or None
+        projects = self.runtime.project_store.list_manageable_projects(actor, requester_is_admin=True, status=status_value)  # type: ignore[arg-type]
+        users = {item["user_id"]: item for item in self.list_users()}
+        return [{**project.to_dict(), "owner": users.get(project.owner_user_id)} for project in projects]
+
     def create_project(self, *, user: str, name: str, description: str, root_path: str, visibility: str) -> dict[str, str]:
         owner = self._admin_user_id(user)
         from pathlib import Path
@@ -499,10 +506,60 @@ class V2Daemon:
             name=name,
             description=description,
             root_path=str(parent / slug),
-            visibility="private",
+            visibility=visibility,  # type: ignore[arg-type]
             owner_user_id=owner,
         )
         return project.to_dict()
+
+    def import_project(self, *, user: str, name: str, description: str, root_path: str, visibility: str) -> dict[str, Any]:
+        owner = self._admin_user_id(user)
+        root = Path(root_path).expanduser().resolve()
+        if not root.exists() or not root.is_dir():
+            raise ValueError("project_import_directory_required")
+        if self.runtime.project_store.find_project_by_root(str(root)) is not None:
+            raise ValueError("project_root_already_registered")
+        return self.runtime.project_store.create_project(name=name, description=description, root_path=str(root), visibility=visibility, owner_user_id=owner).to_dict()  # type: ignore[arg-type]
+
+    def update_project(self, *, user: str, project_id: str, name: str, description: str, visibility: str) -> dict[str, Any]:
+        actor = self._admin_user_id(user)
+        return self.runtime.project_store.update_project(project_id, name=name, description=description, visibility=visibility, requester_user_id=actor, requester_is_admin=True).to_dict()  # type: ignore[arg-type]
+
+    def archive_project(self, *, user: str, project_id: str) -> dict[str, Any]:
+        actor = self._admin_user_id(user)
+        self._ensure_project_has_no_live_schedules(project_id)
+        project = self.runtime.project_store.archive_project(project_id, requester_user_id=actor, requester_is_admin=True)
+        self.runtime.project_session_store.clear_project(project.project_id)
+        if self.runtime.active_project_id == project.project_id: self.runtime.active_project_id = ""
+        return project.to_dict()
+
+    def restore_project(self, *, user: str, project_id: str) -> dict[str, Any]:
+        actor = self._admin_user_id(user)
+        return self.runtime.project_store.restore_project(project_id, requester_user_id=actor, requester_is_admin=True).to_dict()
+
+    def delete_project(self, *, user: str, project_id: str, confirmation: str) -> dict[str, Any]:
+        actor = self._admin_user_id(user)
+        if str(confirmation or "") != str(project_id or ""):
+            raise ValueError("delete_confirmation_must_match_project_id")
+        self._ensure_project_has_no_live_schedules(project_id)
+        project = self.runtime.project_store.delete_project(project_id, requester_user_id=actor, requester_is_admin=True)
+        self.runtime.project_session_store.clear_project(project.project_id)
+        if self.runtime.active_project_id == project.project_id: self.runtime.active_project_id = ""
+        root = Path(project.root_path).resolve()
+        managed = self.runtime.user_store.managed_project_root(project.owner_user_id).resolve()
+        removed_files = False
+        try:
+            root.relative_to(managed)
+            if root.exists():
+                shutil.rmtree(root)
+                removed_files = True
+        except ValueError:
+            pass
+        return {"deleted": True, "project_id": project.project_id, "removed_managed_files": removed_files}
+
+    def _ensure_project_has_no_live_schedules(self, project_id: str) -> None:
+        tasks = self.runtime.schedule_store.list_tasks(project_id=str(project_id or ""), limit=1000)
+        if any(task.status in {"active", "paused"} for task in tasks):
+            raise ValueError("project_has_active_scheduled_tasks")
 
     def project_members(self, project_id: str) -> list[str]:
         self._admin_user_id()

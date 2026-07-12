@@ -301,3 +301,22 @@ def test_scheduled_task_ipc_scopes_owners_and_manages_task_lifecycle(tmp_path) -
     assert daemon.ipc._dispatch({"method": "resume_schedule", "params": {"actor_user_id": admin.user_id, "scheduled_task_id": task.scheduled_task_id}})["task"]["status"] == "active"
     assert daemon.ipc._dispatch({"method": "cancel_schedule", "params": {"actor_user_id": admin.user_id, "scheduled_task_id": task.scheduled_task_id}})["task"]["status"] == "cancelled"
     assert daemon.ipc._dispatch({"method": "delete_scheduled_task", "params": {"actor_user_id": admin.user_id, "scheduled_task_id": task.scheduled_task_id}})["deleted"] is True
+
+
+def test_project_management_ipc_archives_imports_and_safely_removes(tmp_path) -> None:
+    users = V2UserStore(tmp_path / "users.sqlite3")
+    admin = users.onboard(display_name="Alex", users_root=tmp_path / "users")
+    runtime = build_runtime_host(inference=_router(), user=admin.user_id, user_store=users, schedule_store=ScheduledTaskStore(":memory:"))
+    daemon = V2Daemon(runtime)
+    external = tmp_path / "external"; external.mkdir()
+    imported = daemon.ipc._dispatch({"method": "import_project", "params": {"user": admin.user_id, "name": "Imported", "description": "", "root_path": str(external), "visibility": "private"}})["project"]
+
+    assert daemon.ipc._dispatch({"method": "manageable_projects", "params": {"user": admin.user_id}})["projects"][0]["owner"]["display_name"] == "Alex"
+    archived = daemon.ipc._dispatch({"method": "archive_project", "params": {"user": admin.user_id, "project_id": imported["project_id"]}})["project"]
+    assert archived["status"] == "archived"
+    assert daemon.ipc._dispatch({"method": "restore_project", "params": {"user": admin.user_id, "project_id": imported["project_id"]}})["project"]["status"] == "active"
+    with pytest.raises(ValueError, match="delete_confirmation_must_match_project_id"):
+        daemon.ipc._dispatch({"method": "delete_project", "params": {"user": admin.user_id, "project_id": imported["project_id"], "confirmation": "wrong"}})
+    removed = daemon.ipc._dispatch({"method": "delete_project", "params": {"user": admin.user_id, "project_id": imported["project_id"], "confirmation": imported["project_id"]}})
+    assert removed["removed_managed_files"] is False
+    assert external.exists()

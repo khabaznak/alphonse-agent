@@ -31,6 +31,11 @@ export type Project = {
   description: string;
   root_path: string;
   visibility: "private" | "shared";
+  owner_user_id: string;
+  status: "active" | "archived";
+  archived_at: string | null;
+  created_at: string;
+  updated_at: string;
 };
 
 export type AgentDocument = { file_name: string; display_name: string; content?: string };

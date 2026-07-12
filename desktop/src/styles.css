@@ -332,6 +332,11 @@ button { border: 0; cursor: pointer; }
 .stack .user-card { grid-template-columns: 24px minmax(0, 1fr); align-items: center; }
 .user-card-icon { display: grid; place-items: center; width: 24px; height: 24px; font-size: 15px; }
 .user-card > span:last-child { display: grid; gap: 4px; min-width: 0; }
+.project-list { max-height: 250px; overflow-y: auto; }
+.stack .project-card { grid-template-columns: 26px minmax(0, 1fr); align-items: start; }
+.project-card-icon { font-size: 18px; line-height: 1.3; }
+.project-card > span:last-child { display: grid; gap: 4px; min-width: 0; }
+.project-detail, .project-create { display: grid; gap: 12px; margin-top: 14px; }
 .scheduled-task-list { max-height: 230px; overflow-y: auto; }
 .scheduled-task-list strong { font-size: 13px; }
 .scheduled-task-detail { display: grid; gap: 12px; margin-top: 14px; }

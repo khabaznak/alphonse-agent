@@ -109,6 +109,10 @@ class SQLiteProjectSessionStore:
         with self._connect() as conn:
             return conn.execute("DELETE FROM v2_project_sessions WHERE alphonse_user_id=?", (str(user_id),)).rowcount
 
+    def clear_project(self, project_id: str) -> int:
+        with self._connect() as conn:
+            return conn.execute("DELETE FROM v2_project_sessions WHERE active_project_id=?", (str(project_id),)).rowcount
+
     def _connect(self) -> sqlite3.Connection | "_ConnectionProxy":
         if self._memory_connection is not None:
             return _ConnectionProxy(self._memory_connection)

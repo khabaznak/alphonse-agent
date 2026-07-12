@@ -848,6 +848,82 @@ def _build_textual_app_class() -> type[Any]:
                 return
             self.dismiss(project)
 
+    class ProjectManagementScreen(ModalScreen[str | None]):
+        def __init__(self, *, projects: Callable[[str], list[dict[str, Any]]], users: Callable[[], list[dict[str, Any]]], read_context: Callable[[str], str], save: Callable[[str, str, str, str, str], Any], create_or_import: Callable[[bool, str, str, str, str], dict[str, Any]], lifecycle: Callable[[str, str, str], Any]) -> None:
+            super().__init__(); self.projects = projects; self.users = users; self.read_context = read_context; self.save = save; self.create_or_import = create_or_import; self.lifecycle = lifecycle; self.items: list[dict[str, Any]] = []; self.import_mode = False
+
+        def compose(self) -> ComposeResult:
+            with Vertical(id="project-context-dialog"):
+                yield Static("Projects", classes="dialog-title")
+                yield Select([("All projects", ""), ("Active", "active"), ("Archived", "archived")], value="", id="project-manager-status", allow_blank=False)
+                yield Select([], id="project-manager-select", prompt="Choose a project", allow_blank=True)
+                yield Static("", id="project-manager-details")
+                yield Input(placeholder="Name", id="project-manager-name")
+                yield Input(placeholder="Description", id="project-manager-description")
+                yield Select([("Private", "private"), ("Shared", "shared")], value="private", id="project-manager-visibility", allow_blank=False)
+                yield Input(placeholder="Parent directory (new) or existing folder (import)", id="project-manager-root")
+                yield TextArea("", id="project-manager-context")
+                yield Input(placeholder="Type project ID to remove", id="project-manager-confirmation")
+                yield Static("", id="project-manager-notice")
+                with Horizontal(classes="dialog-actions"):
+                    yield Button("Open", id="open-managed-project", variant="primary")
+                    yield Button("Save", id="save-managed-project")
+                    yield Button("Archive", id="archive-managed-project")
+                    yield Button("Restore", id="restore-managed-project")
+                    yield Button("New", id="new-managed-project")
+                    yield Button("Import", id="import-managed-project")
+                    yield Button("Remove", id="delete-managed-project")
+                    yield Button("Close", id="close-managed-projects")
+
+        def on_mount(self) -> None: self._reload()
+
+        def on_select_changed(self, event: Select.Changed) -> None:
+            if event.select.id == "project-manager-status": self._reload(); return
+            if event.select.id == "project-manager-select": self._render_selected()
+
+        def _reload(self) -> None:
+            try: self.items = self.projects(str(self.query_one("#project-manager-status", Select).value or ""))
+            except Exception as exc: self.query_one("#project-manager-notice", Static).update(str(exc)); return
+            names = {str(item.get("user_id") or ""): str(item.get("display_name") or item.get("user_id") or "User") for item in self.users()}
+            options = [(f"🗂️ {item.get('name')} [{item.get('status')}] · 👤 {names.get(str(item.get('owner_user_id') or ''), item.get('owner_user_id') or 'unknown')}", str(item.get("project_id") or "")) for item in self.items]
+            self.query_one("#project-manager-select", Select).set_options(options); self._render_selected()
+
+        def _selected(self) -> dict[str, Any] | None:
+            selected = str(self.query_one("#project-manager-select", Select).value or "")
+            return next((item for item in self.items if str(item.get("project_id") or "") == selected), None)
+
+        def _render_selected(self) -> None:
+            item = self._selected(); details = self.query_one("#project-manager-details", Static)
+            if item is None: details.update("Select a project to edit it."); return
+            self.query_one("#project-manager-name", Input).value = str(item.get("name") or "")
+            self.query_one("#project-manager-description", Input).value = str(item.get("description") or "")
+            self.query_one("#project-manager-visibility", Select).value = str(item.get("visibility") or "private")
+            self.query_one("#project-manager-root", Input).value = str(item.get("root_path") or "")
+            self.query_one("#project-manager-context", TextArea).text = self.read_context(str(item.get("project_id") or ""))
+            details.update(f"👤 {item.get('owner', {}).get('display_name') if isinstance(item.get('owner'), dict) else item.get('owner_user_id')} · created {item.get('created_at')} · updated {item.get('updated_at')} · {item.get('root_path')}")
+
+        def on_button_pressed(self, event: Button.Pressed) -> None:
+            if event.button.id == "close-managed-projects": self.dismiss(None); return
+            item = self._selected(); project_id = str(item.get("project_id") or "") if item else ""
+            try:
+                if event.button.id == "open-managed-project":
+                    if project_id: self.dismiss(project_id)
+                    return
+                if event.button.id == "save-managed-project":
+                    if not project_id: raise ValueError("project_selection_required")
+                    self.save(project_id, self.query_one("#project-manager-name", Input).value, self.query_one("#project-manager-description", Input).value, str(self.query_one("#project-manager-visibility", Select).value or "private"), self.query_one("#project-manager-context", TextArea).text)
+                elif event.button.id in {"archive-managed-project", "restore-managed-project"}:
+                    if not project_id: raise ValueError("project_selection_required")
+                    self.lifecycle("archive_project" if event.button.id.startswith("archive") else "restore_project", project_id, "")
+                elif event.button.id == "delete-managed-project":
+                    if not project_id: raise ValueError("project_selection_required")
+                    self.lifecycle("delete_project", project_id, self.query_one("#project-manager-confirmation", Input).value)
+                elif event.button.id in {"new-managed-project", "import-managed-project"}:
+                    self.create_or_import(event.button.id == "import-managed-project", self.query_one("#project-manager-name", Input).value, self.query_one("#project-manager-description", Input).value, self.query_one("#project-manager-root", Input).value, str(self.query_one("#project-manager-visibility", Select).value or "private"))
+                else: return
+                self.query_one("#project-manager-notice", Static).update("Project updated."); self.query_one("#project-manager-confirmation", Input).value = ""; self._reload()
+            except Exception as exc: self.query_one("#project-manager-notice", Static).update(str(exc))
+
     class ProjectContextScreen(ModalScreen[bool]):
         def __init__(self, runtime: TuiRuntime) -> None:
             super().__init__()
@@ -1734,7 +1810,38 @@ def _build_textual_app_class() -> type[Any]:
                 if then_context:
                     self.push_screen(ProjectContextScreen(self.runtime), callback=lambda _: self._refresh_status())
 
-            self.push_screen(ProjectPickerScreen(self.runtime), callback=_selected)
+            def _projects(status: str) -> list[dict[str, Any]]:
+                if self.external_daemon:
+                    result = self.daemon_client.request("manageable_projects", user=self.runtime.user, status=status)
+                    return [dict(item) for item in result.get("projects", []) if isinstance(item, dict)]
+                if self.daemon is not None:
+                    return self.daemon.manageable_projects(user=self.runtime.user, status=status)
+                return []
+            def _users() -> list[dict[str, Any]]:
+                if self.external_daemon:
+                    result = self.daemon_client.request("users")
+                    return [dict(item) for item in result.get("users", []) if isinstance(item, dict)]
+                return self.daemon.list_users() if self.daemon is not None else []
+            def _context(project_id: str) -> str:
+                if self.external_daemon:
+                    return str(self.daemon_client.project_context(user=self.runtime.user, project_id=project_id).get("content") or "")
+                return str(self.daemon.read_project_context(user=self.runtime.user, project_id=project_id).get("content") or "")
+            def _save(project_id: str, name: str, description: str, visibility: str, content: str) -> None:
+                values = {"user": self.runtime.user, "project_id": project_id, "name": name, "description": description, "visibility": visibility}
+                if self.external_daemon:
+                    self.daemon_client.request("update_project", **values); self.daemon_client.save_project_context(user=self.runtime.user, project_id=project_id, content=content)
+                else:
+                    self.daemon.update_project(**values); self.daemon.save_project_context(user=self.runtime.user, project_id=project_id, content=content)
+            def _create_or_import(importing: bool, name: str, description: str, root_path: str, visibility: str) -> dict[str, Any]:
+                values = {"user": self.runtime.user, "name": name, "description": description, "root_path": root_path, "visibility": visibility}
+                method = "import_project" if importing else "create_project"
+                return self.daemon_client.request(method, **values) if self.external_daemon else {"project": self.daemon.import_project(**values) if importing else self.daemon.create_project(**values)}
+            def _lifecycle(method: str, project_id: str, confirmation: str) -> Any:
+                values = {"user": self.runtime.user, "project_id": project_id}
+                if method == "delete_project": values["confirmation"] = confirmation
+                if self.external_daemon: return self.daemon_client.request(method, **values)
+                return getattr(self.daemon, method)(**values)
+            self.push_screen(ProjectManagementScreen(projects=_projects, users=_users, read_context=_context, save=_save, create_or_import=_create_or_import, lifecycle=_lifecycle), callback=_selected)
 
         def _select_tui_project_session(self, project_id: str) -> bool:
             try:

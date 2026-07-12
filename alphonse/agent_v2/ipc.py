@@ -96,6 +96,9 @@ class V2DaemonClient:
             "create_project", user=user, name=name, description=description, root_path=root_path, visibility=visibility,
         )
 
+    def manageable_projects(self, *, user: str, status: str = "") -> dict[str, Any]:
+        return self.request("manageable_projects", user=user, status=status)
+
     def project_context(self, *, user: str, project_id: str) -> dict[str, Any]:
         return self.request("project_context", user=user, project_id=project_id)
 
@@ -413,6 +416,8 @@ class V2DaemonServer:
             return {"removed": self.daemon.remove_user_address(str(params.get("address_id") or ""))}
         if method == "projects":
             return {"projects": self.daemon.list_projects(user=str(params.get("user") or ""))}
+        if method == "manageable_projects":
+            return {"projects": self.daemon.manageable_projects(user=str(params.get("user") or ""), status=str(params.get("status") or ""))}
         if method == "create_project":
             return {
                 "project": self.daemon.create_project(
@@ -423,6 +428,16 @@ class V2DaemonServer:
                     visibility=str(params.get("visibility") or "private"),
                 )
             }
+        if method == "import_project":
+            return {"project": self.daemon.import_project(user=str(params.get("user") or "local"), name=str(params.get("name") or ""), description=str(params.get("description") or ""), root_path=str(params.get("root_path") or ""), visibility=str(params.get("visibility") or "private"))}
+        if method == "update_project":
+            return {"project": self.daemon.update_project(user=str(params.get("user") or "local"), project_id=str(params.get("project_id") or ""), name=str(params.get("name") or ""), description=str(params.get("description") or ""), visibility=str(params.get("visibility") or "private"))}
+        if method == "archive_project":
+            return {"project": self.daemon.archive_project(user=str(params.get("user") or "local"), project_id=str(params.get("project_id") or ""))}
+        if method == "restore_project":
+            return {"project": self.daemon.restore_project(user=str(params.get("user") or "local"), project_id=str(params.get("project_id") or ""))}
+        if method == "delete_project":
+            return self.daemon.delete_project(user=str(params.get("user") or "local"), project_id=str(params.get("project_id") or ""), confirmation=str(params.get("confirmation") or ""))
         if method == "project_members":
             return {"members": self.daemon.project_members(str(params.get("project_id") or ""))}
         if method == "add_project_member":

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from alphonse.agent_v2.core.core import CoreLoopContext
 from alphonse.agent_v2.core.core import ToolExecutionContext
 from alphonse.agent_v2.core.intelligence.pdca.nodes.act_node import _render_acceptance_criteria_prompt
@@ -64,6 +66,26 @@ def test_project_store_filters_private_and_shared_projects(tmp_path: Path) -> No
     assert alex_projects == {private.project_id, shared.project_id}
     assert gaby_projects == {shared.project_id}
     assert store.get_project(private.project_id, requester_user_id="gaby") is None
+
+
+def test_project_store_archives_restores_and_updates_metadata(tmp_path: Path) -> None:
+    store = ProjectStore(":memory:")
+    project = store.create_project(name="Alpha", root_path=str(tmp_path / "alpha"), owner_user_id="alex")
+
+    archived = store.archive_project(project.project_id, requester_user_id="alex")
+
+    assert archived.status == "archived"
+    assert archived.archived_at
+    assert store.get_project(project.project_id, requester_user_id="alex") is None
+    assert store.list_manageable_projects("alex", status="archived") == [archived]
+    restored = store.restore_project(project.project_id, requester_user_id="alex")
+    updated = store.update_project(project.project_id, name="Renamed", description="Details", visibility="shared", requester_user_id="alex")
+    assert restored.status == "active"
+    assert updated.name == "Renamed"
+    assert updated.description == "Details"
+    assert updated.visibility == "shared"
+    with pytest.raises(PermissionError, match="project_owner_required"):
+        store.update_project(project.project_id, name="No", description="", visibility="private", requester_user_id="gaby")
 
 
 def test_tui_project_commands_are_intercepted_and_not_queued(tmp_path: Path) -> None:

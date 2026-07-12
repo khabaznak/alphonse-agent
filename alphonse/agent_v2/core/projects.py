@@ -12,6 +12,7 @@ from typing import Literal
 from uuid import uuid4
 
 ProjectVisibility = Literal["private", "shared"]
+ProjectStatus = Literal["active", "archived"]
 PROJECT_CONTEXT_FILENAME = "project_context.md"
 
 
@@ -23,6 +24,8 @@ class ProjectRecord:
     root_path: str
     visibility: ProjectVisibility
     owner_user_id: str
+    status: ProjectStatus
+    archived_at: str | None
     created_at: str
     updated_at: str
 
@@ -30,7 +33,7 @@ class ProjectRecord:
     def context_path(self) -> str:
         return str(Path(self.root_path) / PROJECT_CONTEXT_FILENAME)
 
-    def to_dict(self) -> dict[str, str]:
+    def to_dict(self) -> dict[str, str | None]:
         return {
             "project_id": self.project_id,
             "name": self.name,
@@ -38,6 +41,8 @@ class ProjectRecord:
             "root_path": self.root_path,
             "visibility": self.visibility,
             "owner_user_id": self.owner_user_id,
+            "status": self.status,
+            "archived_at": self.archived_at,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
             "context_path": self.context_path,
@@ -90,6 +95,8 @@ class ProjectStore:
             root_path=str(root),
             visibility=visibility_value,
             owner_user_id=owner_value,
+            status="active",
+            archived_at=None,
             created_at=now,
             updated_at=now,
         )
@@ -98,8 +105,8 @@ class ProjectStore:
                 """
                 INSERT INTO v2_projects (
                   project_id, name, description, root_path, visibility,
-                  owner_user_id, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                  owner_user_id, status, archived_at, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     record.project_id,
@@ -108,13 +115,15 @@ class ProjectStore:
                     record.root_path,
                     record.visibility,
                     record.owner_user_id,
+                    record.status,
+                    record.archived_at,
                     record.created_at,
                     record.updated_at,
                 ),
             )
         return record
 
-    def get_project(self, project_id: str, *, requester_user_id: str | None = None, requester_is_admin: bool = False) -> ProjectRecord | None:
+    def get_project(self, project_id: str, *, requester_user_id: str | None = None, requester_is_admin: bool = False, include_archived: bool = False) -> ProjectRecord | None:
         project_id_value = str(project_id or "").strip()
         if not project_id_value:
             return None
@@ -122,6 +131,8 @@ class ProjectStore:
             row = conn.execute("SELECT * FROM v2_projects WHERE project_id = ?", (project_id_value,)).fetchone()
         record = _project_from_row(row)
         if record is None:
+            return None
+        if record.status == "archived" and not include_archived:
             return None
         requester = str(requester_user_id or "").strip()
         if requester and not requester_is_admin and record.owner_user_id != requester and not self.is_member(record.project_id, requester) and record.visibility != "shared":
@@ -131,15 +142,71 @@ class ProjectStore:
     def list_visible_projects(self, user_id: str, *, requester_is_admin: bool = False) -> list[ProjectRecord]:
         user_value = str(user_id or "").strip()
         with self._connect() as conn:
-            rows = conn.execute(
-                """
-                SELECT * FROM v2_projects
-                WHERE visibility = 'shared' OR owner_user_id = ? OR project_id IN (SELECT project_id FROM v2_project_members WHERE user_id = ?)
-                ORDER BY lower(name), created_at
-                """,
-                (user_value, user_value),
-            ).fetchall()
+            if requester_is_admin:
+                rows = conn.execute("SELECT * FROM v2_projects WHERE status = 'active' ORDER BY lower(name), created_at").fetchall()
+            else:
+                rows = conn.execute(
+                    """
+                    SELECT * FROM v2_projects
+                    WHERE status = 'active' AND (visibility = 'shared' OR owner_user_id = ? OR project_id IN (SELECT project_id FROM v2_project_members WHERE user_id = ?))
+                    ORDER BY lower(name), created_at
+                    """,
+                    (user_value, user_value),
+                ).fetchall()
         return [_project_from_row(row) for row in rows if _project_from_row(row) is not None]
+
+    def list_manageable_projects(self, user_id: str, *, requester_is_admin: bool = False, status: ProjectStatus | None = None) -> list[ProjectRecord]:
+        filters = ["owner_user_id = ?"]
+        values: list[object] = [str(user_id or "").strip()]
+        if requester_is_admin:
+            filters = []
+            values = []
+        if status is not None:
+            filters.append("status = ?")
+            values.append(_normalize_status(status))
+        where = f"WHERE {' AND '.join(filters)}" if filters else ""
+        with self._connect() as conn:
+            rows = conn.execute(f"SELECT * FROM v2_projects {where} ORDER BY status, lower(name), created_at", tuple(values)).fetchall()
+        return [_project_from_row(row) for row in rows if _project_from_row(row) is not None]
+
+    def find_project_by_root(self, root_path: str) -> ProjectRecord | None:
+        root = str(_resolve_project_root(root_path))
+        with self._connect() as conn:
+            row = conn.execute("SELECT * FROM v2_projects WHERE root_path = ?", (root,)).fetchone()
+        return _project_from_row(row)
+
+    def update_project(self, project_id: str, *, name: str, description: str, visibility: ProjectVisibility, requester_user_id: str, requester_is_admin: bool = False) -> ProjectRecord:
+        project = self._require_manageable(project_id, requester_user_id=requester_user_id, requester_is_admin=requester_is_admin)
+        name_value = str(name or "").strip()
+        if not name_value:
+            raise ValueError("project_name_required")
+        now = _now_iso()
+        with self._connect() as conn:
+            conn.execute("UPDATE v2_projects SET name=?, description=?, visibility=?, updated_at=? WHERE project_id=?", (name_value, str(description or "").strip(), _normalize_visibility(visibility), now, project.project_id))
+        return self._replace(project, name=name_value, description=str(description or "").strip(), visibility=_normalize_visibility(visibility), updated_at=now)
+
+    def archive_project(self, project_id: str, *, requester_user_id: str, requester_is_admin: bool = False) -> ProjectRecord:
+        project = self._require_manageable(project_id, requester_user_id=requester_user_id, requester_is_admin=requester_is_admin)
+        if project.status != "active": raise ValueError("project_not_active")
+        now = _now_iso()
+        with self._connect() as conn:
+            conn.execute("UPDATE v2_projects SET status='archived', archived_at=?, updated_at=? WHERE project_id=?", (now, now, project.project_id))
+        return self._replace(project, status="archived", archived_at=now, updated_at=now)
+
+    def restore_project(self, project_id: str, *, requester_user_id: str, requester_is_admin: bool = False) -> ProjectRecord:
+        project = self._require_manageable(project_id, requester_user_id=requester_user_id, requester_is_admin=requester_is_admin)
+        if project.status != "archived": raise ValueError("project_not_archived")
+        now = _now_iso()
+        with self._connect() as conn:
+            conn.execute("UPDATE v2_projects SET status='active', archived_at=NULL, updated_at=? WHERE project_id=?", (now, project.project_id))
+        return self._replace(project, status="active", archived_at=None, updated_at=now)
+
+    def delete_project(self, project_id: str, *, requester_user_id: str, requester_is_admin: bool = False) -> ProjectRecord:
+        project = self._require_manageable(project_id, requester_user_id=requester_user_id, requester_is_admin=requester_is_admin)
+        with self._connect() as conn:
+            conn.execute("DELETE FROM v2_project_members WHERE project_id=?", (project.project_id,))
+            conn.execute("DELETE FROM v2_projects WHERE project_id=?", (project.project_id,))
+        return project
 
     def read_project_context(self, project_id: str, *, requester_user_id: str | None = None) -> str:
         project = self.get_project(project_id, requester_user_id=requester_user_id)
@@ -169,16 +236,7 @@ class ProjectStore:
         now = _now_iso()
         with self._connect() as conn:
             conn.execute("UPDATE v2_projects SET updated_at = ? WHERE project_id = ?", (now, project.project_id))
-        return ProjectRecord(
-            project_id=project.project_id,
-            name=project.name,
-            description=project.description,
-            root_path=project.root_path,
-            visibility=project.visibility,
-            owner_user_id=project.owner_user_id,
-            created_at=project.created_at,
-            updated_at=now,
-        )
+        return self._replace(project, updated_at=now)
 
     def render_project_context(self, project_id: str, *, requester_user_id: str | None = None) -> str:
         project = self.get_project(project_id, requester_user_id=requester_user_id)
@@ -224,6 +282,16 @@ class ProjectStore:
             conn.execute("DELETE FROM v2_projects WHERE owner_user_id=?", (str(user_id),))
         return roots
 
+    def _require_manageable(self, project_id: str, *, requester_user_id: str, requester_is_admin: bool) -> ProjectRecord:
+        project = self.get_project(project_id, requester_user_id=requester_user_id, requester_is_admin=requester_is_admin, include_archived=True)
+        if project is None: raise KeyError(f"project_not_found: {project_id}")
+        if not requester_is_admin and project.owner_user_id != str(requester_user_id or ""):
+            raise PermissionError("project_owner_required")
+        return project
+
+    def _replace(self, project: ProjectRecord, **values: object) -> ProjectRecord:
+        return ProjectRecord(**{**project.__dict__, **values})
+
     def _connect(self) -> sqlite3.Connection:
         if self._memory_connection is not None:
             return _ConnectionProxy(self._memory_connection)
@@ -244,6 +312,8 @@ class ProjectStore:
                   root_path TEXT NOT NULL,
                   visibility TEXT NOT NULL,
                   owner_user_id TEXT NOT NULL,
+                  status TEXT NOT NULL DEFAULT 'active',
+                  archived_at TEXT,
                   created_at TEXT NOT NULL,
                   updated_at TEXT NOT NULL,
                   CHECK (visibility IN ('private', 'shared'))
@@ -257,6 +327,11 @@ class ProjectStore:
                 ) STRICT;
                 """
             )
+            columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(v2_projects)").fetchall()}
+            if "status" not in columns:
+                conn.execute("ALTER TABLE v2_projects ADD COLUMN status TEXT NOT NULL DEFAULT 'active'")
+            if "archived_at" not in columns:
+                conn.execute("ALTER TABLE v2_projects ADD COLUMN archived_at TEXT")
 
 
 class _ConnectionProxy:
@@ -283,6 +358,8 @@ def _project_from_row(row: sqlite3.Row | None) -> ProjectRecord | None:
         root_path=str(row["root_path"]),
         visibility=_normalize_visibility(row["visibility"]),
         owner_user_id=str(row["owner_user_id"]),
+        status=_normalize_status(row["status"] if "status" in row.keys() else "active"),
+        archived_at=str(row["archived_at"] or "") or None,
         created_at=str(row["created_at"]),
         updated_at=str(row["updated_at"]),
     )
@@ -292,6 +369,13 @@ def _normalize_visibility(value: object) -> ProjectVisibility:
     rendered = str(value or "").strip().lower()
     if rendered not in {"private", "shared"}:
         raise ValueError(f"invalid_project_visibility: {value}")
+    return rendered  # type: ignore[return-value]
+
+
+def _normalize_status(value: object) -> ProjectStatus:
+    rendered = str(value or "").strip().lower()
+    if rendered not in {"active", "archived"}:
+        raise ValueError(f"invalid_project_status: {value}")
     return rendered  # type: ignore[return-value]
 
 
