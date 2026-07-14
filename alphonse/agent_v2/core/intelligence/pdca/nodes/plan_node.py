@@ -52,6 +52,8 @@ def plan_node(task: TaskState, context: CoreLoopContext | None = None) -> TaskSt
     task.metadata["planned_tool_call"] = planned_tool_call
     task.append_plan_call(planned_tool_call)
     if context is not None:
+        context.record_memory_event(task, "Plan", planned_tool_call)
+    if context is not None:
         context.emit_activity(
             phase=ImprovementPhase.PLAN,
             label="thinking",

@@ -8,6 +8,7 @@ from alphonse.agent_v2.core.core import ToolDescriptor
 from alphonse.agent_v2.core.core import ToolExecutionContext
 from alphonse.agent_v2.core.core import ToolKind
 from alphonse.agent_v2.core.questions import SQLiteQuestionStore
+from alphonse.agent_v2.core.intelligence.task_state import TaskState
 from alphonse.agent_v2.core.tools.registry import ToolDefinition
 
 ASK_QUESTION_TOOL_ID = "native.ask_question"
@@ -105,6 +106,17 @@ def execute_ask_question(
         expires_in_seconds=_optional_int(arguments.get("expires_in_seconds")),
         delivery_metadata=delivery_metadata,
     )
+    if context.memory is not None and interrupt.respondent_user_id != str(context.task.user or ""):
+        child_id = str(interrupt.metadata.get("child_task_id") or "").strip()
+        if child_id:
+            recipient_task = TaskState(task_id=child_id, user=interrupt.respondent_user_id, project_id=context.task.project_id, goal=question, status="waiting_user")
+            context.memory.ensure_project_scope(user_id=recipient_task.user or "", project_id=recipient_task.project_id)
+            if recipient_task.project_id and context.project_store is not None:
+                add_member = getattr(context.project_store, "add_member", None)
+                if callable(add_member):
+                    add_member(recipient_task.project_id, recipient_task.user or "")
+            context.memory.start_task(recipient_task)
+            context.memory.event(recipient_task, "Delegated Question", {"from": context.task.user, "question": question, "question_id": interrupt.question_id})
 
     delivery_result: Any = None
     if context.delivery_sink is not None:

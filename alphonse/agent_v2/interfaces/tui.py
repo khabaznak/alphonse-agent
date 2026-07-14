@@ -962,7 +962,7 @@ def _build_textual_app_class() -> type[Any]:
             self.dismiss(True)
 
     class UserSettingsScreen(ModalScreen[bool]):
-        def __init__(self, settings: dict[str, Any], save: Callable[[str], dict[str, Any]]) -> None:
+        def __init__(self, settings: dict[str, Any], save: Callable[[str, int, int], dict[str, Any]]) -> None:
             super().__init__()
             self.settings = settings
             self.save = save
@@ -971,6 +971,8 @@ def _build_textual_app_class() -> type[Any]:
             with Vertical(id="project-dialog"):
                 yield Static("Settings", classes="dialog-title")
                 yield Input(value=str(self.settings.get("users_root") or ""), id="users-root")
+                yield Input(value=str(self.settings.get("max_ledger_bytes") or 512000), id="memory-max-ledger-bytes")
+                yield Input(value=str(self.settings.get("compaction_summary_max_words") or 500), id="memory-summary-max-words")
                 yield Static("", id="settings-notice")
                 with Horizontal(classes="dialog-actions"):
                     yield Button("Save", id="save-settings", variant="primary")
@@ -980,7 +982,7 @@ def _build_textual_app_class() -> type[Any]:
             if event.button.id == "cancel-settings":
                 self.dismiss(False); return
             try:
-                self.save(self.query_one("#users-root", Input).value)
+                self.save(self.query_one("#users-root", Input).value, int(self.query_one("#memory-max-ledger-bytes", Input).value), int(self.query_one("#memory-summary-max-words", Input).value))
             except Exception as exc:
                 self.query_one("#settings-notice", Static).update(str(exc)); return
             self.dismiss(True)
@@ -1905,9 +1907,16 @@ def _build_textual_app_class() -> type[Any]:
 
         def _open_user_settings(self) -> None:
             def _settings() -> dict[str, Any]:
-                return self.daemon_client.request("settings") if self.external_daemon else self.runtime.user_store.status()
-            def _save(root: str) -> dict[str, Any]:
-                return self.daemon_client.request("save_settings", users_root=root) if self.external_daemon else {"users_root": self.runtime.user_store.set_users_root(root)}
+                base = self.daemon_client.request("settings") if self.external_daemon else self.runtime.user_store.status()
+                memory = self.daemon_client.request("memory_settings", actor_user_id=self.runtime.user).get("settings", {}) if self.external_daemon else self.runtime.memory_settings_store.get().to_dict()
+                return {**base, **(memory if isinstance(memory, dict) else {})}
+            def _save(root: str, max_bytes: int, max_words: int) -> dict[str, Any]:
+                if self.external_daemon:
+                    self.daemon_client.request("save_settings", users_root=root)
+                    return self.daemon_client.request("save_memory_settings", actor_user_id=self.runtime.user, values={"max_ledger_bytes": max_bytes, "compaction_summary_max_words": max_words})
+                self.runtime.user_store.set_users_root(root)
+                from alphonse.agent_v2.memory_settings import MemorySettings
+                return self.runtime.memory_settings_store.save(MemorySettings(max_bytes, max_words)).to_dict()
             try:
                 self.push_screen(UserSettingsScreen(_settings(), _save), callback=lambda _: self._refresh_status())
             except Exception as exc:

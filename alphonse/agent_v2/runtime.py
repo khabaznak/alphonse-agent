@@ -42,6 +42,8 @@ from alphonse.agent_v2.services.project_sessions import ProjectInboundRouter
 from alphonse.agent_v2.services.project_sessions import SQLiteProjectSessionStore
 from alphonse.agent_v2.users import V2UserStore
 from alphonse.agent_v2.web_tools_settings import SQLiteWebToolsSettingsStore
+from alphonse.agent_v2.memory_settings import SQLiteMemorySettingsStore
+from alphonse.agent_v2.core.memory import LedgerMemory
 
 
 @dataclass
@@ -93,6 +95,7 @@ class V2RuntimeHost:
     inbound_router: ProjectInboundRouter
     user_store: V2UserStore
     web_tools_settings_store: SQLiteWebToolsSettingsStore
+    memory_settings_store: SQLiteMemorySettingsStore
     integration_runtimes: list[Any] = field(default_factory=list)
     active_project_id: str = ""
     ui_events: list[CoreUiEvent] = field(default_factory=list)
@@ -118,6 +121,7 @@ def build_runtime_host(
     project_session_store: SQLiteProjectSessionStore | None = None,
     messages: Any | None = None,
     web_tools_settings_store: SQLiteWebToolsSettingsStore | None = None,
+    memory_settings_store: SQLiteMemorySettingsStore | None = None,
 ) -> V2RuntimeHost:
     reset_state()
     queue = messages or InMemoryMessageQueue()
@@ -125,6 +129,9 @@ def build_runtime_host(
     visible_state = InMemoryInternalState()
     processor = processor or PDCAIntelligenceProcessor()
     web_tools_settings_store = web_tools_settings_store or SQLiteWebToolsSettingsStore()
+    # Generic embedded/test hosts are intentionally ephemeral. The daemon
+    # injects the durable store explicitly.
+    memory_settings_store = memory_settings_store or SQLiteMemorySettingsStore()
     tools = tools or build_native_tool_registry(web_tools_settings_store.get())
     inference_settings_store = inference_settings_store or SQLiteInferenceSettingsStore()
     # Persistent daemon/TUI constructors pass `AgentConfigStore.default()`.
@@ -138,6 +145,14 @@ def build_runtime_host(
     outbox = outbox or SQLiteOutboundStore()
     integration_store = integration_store or SQLiteIntegrationStore()
     user_store = user_store or V2UserStore()
+    def _compact_memory(source: str) -> str:
+        from alphonse.agent_v2.core.inference import InferencePurpose, InferenceRequest
+        result = inference.generate_markdown(InferenceRequest(
+            prompt="Summarize this conversation ledger for the next ledger. Preserve active context, decisions, commitments, and unresolved work. Return concise Markdown only.\n\n" + source,
+            purpose=InferencePurpose.MEMORY_COMPACTION,
+        ))
+        return str(result.content or "")
+    memory = LedgerMemory(users_root=user_store.users_root, settings_store=memory_settings_store, summarizer=_compact_memory)
     integration_registry = integration_registry or build_default_integration_registry()
     presence_projector = PresenceProjector()
     presence_projector.register("tui", TuiPresenceAdapter())
@@ -164,7 +179,7 @@ def build_runtime_host(
         tools=tools,
         prompts=AgentConfigPromptLoader.from_store(agent_config_store),
         state=visible_state,
-        memory=NullMemory(),
+        memory=memory,
         inference=inference,
         ui_event_sink=ui_events.append,
         question_store=question_store,
@@ -195,6 +210,7 @@ def build_runtime_host(
         inbound_router=inbound_router,
         user_store=user_store,
         web_tools_settings_store=web_tools_settings_store,
+        memory_settings_store=memory_settings_store,
         ui_events=ui_events,
         activity_events=activity_events,
     )

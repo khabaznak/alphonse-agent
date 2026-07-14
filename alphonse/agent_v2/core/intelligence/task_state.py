@@ -37,6 +37,7 @@ class TaskState:
     goal: str = ""
     facts_md: str = EMPTY_MARKDOWN
     recent_conversation_md: str = EMPTY_MARKDOWN
+    conversation_history_md: str = EMPTY_MARKDOWN
     plan_json: str = EMPTY_MARKDOWN
     acceptance_criteria_md: str = EMPTY_MARKDOWN
     memory_facts_md: str = EMPTY_MARKDOWN
@@ -94,6 +95,7 @@ class TaskState:
             goal=str(value.get("goal") or "").strip(),
             facts_md=_markdown_or_default(value.get("facts_md")),
             recent_conversation_md=_markdown_or_default(value.get("recent_conversation_md")),
+            conversation_history_md=_markdown_or_default(value.get("conversation_history_md")),
             plan_json=_markdown_or_default(
                 value.get("plan_json") if value.get("plan_json") is not None else value.get("plan_md")
             ),
@@ -125,6 +127,7 @@ class TaskState:
             "goal": self.goal,
             "facts_md": self.facts_md,
             "recent_conversation_md": self.recent_conversation_md,
+            "conversation_history_md": self.conversation_history_md,
             "plan_json": self.plan_json,
             "acceptance_criteria_md": self.acceptance_criteria_md,
             "memory_facts_md": self.memory_facts_md,

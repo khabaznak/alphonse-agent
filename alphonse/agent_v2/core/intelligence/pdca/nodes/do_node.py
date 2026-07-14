@@ -44,6 +44,7 @@ def do_node(task: TaskState, context: CoreLoopContext | None = None) -> TaskStat
         return task
 
     try:
+        context.record_memory_event(task, "Tool Call", {"tool_id": tool_id, "tool_name": tool_name, "arguments": arguments})
         context.emit_ui_event(
             "tool_call_started",
             {
@@ -55,6 +56,7 @@ def do_node(task: TaskState, context: CoreLoopContext | None = None) -> TaskStat
         )
         result: Any = _execute_tool(context, task, tool_id, dict(arguments))
     except Exception as exc:
+        context.record_memory_event(task, "Tool Result", {"status": "exception", "error": f"{type(exc).__name__}: {exc}"})
         context.emit_ui_event(
             "tool_call_result",
             {
@@ -71,6 +73,7 @@ def do_node(task: TaskState, context: CoreLoopContext | None = None) -> TaskStat
         return task
 
     if tool_id == ASK_QUESTION_TOOL_ID or _result_waits_for_answer(result):
+        context.record_memory_event(task, "Tool Result", {"status": "waiting", "result": result})
         context.emit_ui_event(
             "tool_call_result",
             {
@@ -98,6 +101,9 @@ def do_node(task: TaskState, context: CoreLoopContext | None = None) -> TaskStat
             "result": result,
         },
     )
+    context.record_memory_event(task, "Tool Result", {"status": "success", "result": result})
+    if tool_id == "native.respond" and isinstance(result, dict):
+        context.record_memory_event(task, "Conversation", f"- Alphonse: {str(result.get('message') or '')}")
     task.record_plan_call_success(call_id, result)
     task.metadata["do_executed_since_last_act"] = True
     task.append_update(f"Do executed planned tool call: {call_id}.")

@@ -48,6 +48,8 @@ from alphonse.agent_v2.interfaces.ag_ui import AgUiAdapter
 from alphonse.agent_v2.services.scheduled_worker import ScheduledTaskWorker
 from alphonse.agent_v2.users import V2UserStore
 from alphonse.agent_v2.web_tools_settings import WebToolsSettings
+from alphonse.agent_v2.memory_settings import MemorySettings
+from alphonse.agent_v2.memory_settings import SQLiteMemorySettingsStore
 from alphonse.agent_v2.web_tools_settings import SQLiteWebToolsSettingsStore
 from alphonse.agent_v2.runtime import refresh_runtime_web_tools
 from alphonse.agent_v2.core.tools.registry.native.web import execute_web_fetch, execute_web_search
@@ -335,6 +337,19 @@ class V2Daemon:
 
     def save_settings(self, *, users_root: str) -> dict[str, object]:
         return {"users_root": self.runtime.user_store.set_users_root(users_root), "warning_repository_path": "/Alphonse/" in str(users_root)}
+
+    def memory_settings(self, *, actor_user_id: str) -> dict[str, object]:
+        self._require_admin(actor_user_id)
+        return self.runtime.memory_settings_store.get().to_dict()
+
+    def save_memory_settings(self, *, actor_user_id: str, values: dict[str, Any]) -> dict[str, object]:
+        self._require_admin(actor_user_id)
+        current = self.runtime.memory_settings_store.get()
+        saved = self.runtime.memory_settings_store.save(MemorySettings(
+            max_ledger_bytes=values.get("max_ledger_bytes", current.max_ledger_bytes),
+            compaction_summary_max_words=values.get("compaction_summary_max_words", current.compaction_summary_max_words),
+        ))
+        return saved.to_dict()
 
     def web_tools_settings(self, *, actor_user_id: str) -> dict[str, object]:
         self._require_admin(actor_user_id)
@@ -624,6 +639,15 @@ class V2Daemon:
             text=text or None,
             payload=payload,
         )
+        if result.handled and result.question is not None:
+            child_id = str(result.question.metadata.get("child_task_id") or "").strip()
+            if child_id:
+                child = self.runtime.question_store.load_task_checkpoint(child_id)
+                if child is not None:
+                    self.runtime.core.memory.event(child, "Conversation", f"- {normalized_user}: {text or _question_answer_text(payload)}")
+                    child.status = "completed"
+                    child.outcome = {"status": "success", "answered_question_id": result.question.question_id}
+                    self.runtime.core.memory.finish_task(child)
         if result.handled and result.resumed_task is not None:
             self.runtime.ui_events.append(
                 CoreUiEvent(
@@ -1027,6 +1051,7 @@ def main() -> None:
             project_store=ProjectStore.default(),
             schedule_store=ScheduledTaskStore.default(),
             web_tools_settings_store=SQLiteWebToolsSettingsStore.default(),
+            memory_settings_store=SQLiteMemorySettingsStore.default(),
             outbox=SQLiteOutboundStore.default(),
             integration_store=SQLiteIntegrationStore.default(),
             inference_settings_store=SQLiteInferenceSettingsStore.default(),

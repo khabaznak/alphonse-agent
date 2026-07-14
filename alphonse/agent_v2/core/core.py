@@ -11,6 +11,7 @@ from datetime import datetime
 from enum import Enum
 from time import sleep
 from typing import TYPE_CHECKING, Any, Callable, Protocol
+from uuid import uuid4
 
 from alphonse.agent_v2.core.state.ddfsm import AVAILABLE
 from alphonse.agent_v2.core.state.ddfsm import ERROR
@@ -181,6 +182,7 @@ class ToolExecutionContext:
     schedule_store: Any | None = None
     delivery_sink: Callable[[dict[str, Any]], Any] | None = None
     user_context_provider: Callable[[str], str] | None = None
+    memory: Any | None = None
 
 
 @dataclass
@@ -198,6 +200,7 @@ class CoreLoopContext:
     schedule_store: Any | None = None
     delivery_sink: Callable[[dict[str, Any]], Any] | None = None
     user_context_provider: Callable[[str], str] | None = None
+    memory: Any | None = None
     consumed_message_ids: list[str] = field(default_factory=list)
 
     def consume_message(self, selector: MessageSelector | None = None) -> QueuedMessage | None:
@@ -232,7 +235,15 @@ class CoreLoopContext:
             project_store=self.project_store,
             schedule_store=self.schedule_store,
             delivery_sink=self.delivery_sink,
+            memory=self.memory,
         )
+
+    def record_memory_event(self, task: TaskState, heading: str, content: Any) -> None:
+        if self.memory is None:
+            return
+        record = getattr(self.memory, "event", None)
+        if callable(record):
+            record(task, heading, content)
 
 
 class IntelligenceProcessor(Protocol):
@@ -368,6 +379,8 @@ class AlphonseCore:
         from alphonse.agent_v2.core.intelligence.task_state import TaskState
 
         task = TaskState.from_queued_message(queued)
+        if not task.task_id:
+            task.task_id = str(uuid4())
 
         def _task_activity_sink(event: CoreActivityEvent) -> None:
             if self.activity_sink is None:
@@ -397,8 +410,17 @@ class AlphonseCore:
                 schedule_store=self.schedule_store,
                 delivery_sink=self.delivery_sink,
                 user_context_provider=self.user_context_provider,
+                memory=self.memory,
             )
+            start_memory = getattr(self.memory, "start_task", None)
+            if callable(start_memory):
+                task.conversation_history_md = str(start_memory(task) or "")
             result = self.intelligence.process(task, context)
+            finish_memory = getattr(self.memory, "finish_task", None)
+            if callable(finish_memory):
+                serialized_task = result.snapshot.metadata.get("task_state") if isinstance(result.snapshot.metadata, dict) else None
+                finished_task = TaskState.from_dict(serialized_task) if isinstance(serialized_task, dict) else task
+                finish_memory(finished_task)
             if result.status != ProcessingStatus.FAILED:
                 context.acknowledge_consumed_messages()
         except Exception as exc:

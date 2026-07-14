@@ -392,6 +392,10 @@ class V2DaemonServer:
             return self.daemon.settings()
         if method == "save_settings":
             return self.daemon.save_settings(users_root=str(params.get("users_root") or ""))
+        if method == "memory_settings":
+            return {"settings": self.daemon.memory_settings(actor_user_id=str(params.get("actor_user_id") or ""))}
+        if method == "save_memory_settings":
+            return {"settings": self.daemon.save_memory_settings(actor_user_id=str(params.get("actor_user_id") or ""), values=dict(params.get("values") or {}))}
         if method == "web_tools_settings":
             return {"settings": self.daemon.web_tools_settings(actor_user_id=str(params.get("actor_user_id") or ""))}
         if method == "save_web_tools_settings":

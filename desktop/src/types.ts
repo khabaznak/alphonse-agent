@@ -41,6 +41,7 @@ export type Project = {
 export type AgentDocument = { file_name: string; display_name: string; content?: string };
 export type InferenceSettings = { provider_key: string; model_id: string; validation_error?: string };
 export type WebToolsSettings = { enabled: boolean; searxng_base_url: string; search_timeout_seconds: number; fetch_timeout_seconds: number; fetch_max_chars: number; configured: boolean; available: boolean };
+export type MemorySettings = { max_ledger_bytes: number; compaction_summary_max_words: number };
 
 export type ChatMessage = {
   id: string;
