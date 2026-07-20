@@ -19,6 +19,8 @@ from alphonse.agent_v2.core.intelligence import PDCAIntelligenceProcessor
 from alphonse.agent_v2.core.io import IntegrationIdentity
 from alphonse.agent_v2.core.io import SQLiteOutboundStore
 from alphonse.agent_v2.core.io import V2IdentityResolver
+from alphonse.agent_v2.core.io import CommunicationRouter
+from alphonse.agent_v2.core.io import SQLiteCommunicationThreadStore
 from alphonse.agent_v2.core.io import build_outbox_delivery_sink
 from alphonse.agent_v2.core.messages import CommunicationChannel
 from alphonse.agent_v2.core.messages import InMemoryMessageQueue
@@ -96,6 +98,7 @@ class V2RuntimeHost:
     user_store: V2UserStore
     web_tools_settings_store: SQLiteWebToolsSettingsStore
     memory_settings_store: SQLiteMemorySettingsStore
+    communication_router: CommunicationRouter
     integration_runtimes: list[Any] = field(default_factory=list)
     active_project_id: str = ""
     ui_events: list[CoreUiEvent] = field(default_factory=list)
@@ -122,6 +125,7 @@ def build_runtime_host(
     messages: Any | None = None,
     web_tools_settings_store: SQLiteWebToolsSettingsStore | None = None,
     memory_settings_store: SQLiteMemorySettingsStore | None = None,
+    communication_thread_store: SQLiteCommunicationThreadStore | None = None,
 ) -> V2RuntimeHost:
     reset_state()
     queue = messages or InMemoryMessageQueue()
@@ -145,6 +149,7 @@ def build_runtime_host(
     outbox = outbox or SQLiteOutboundStore()
     integration_store = integration_store or SQLiteIntegrationStore()
     user_store = user_store or V2UserStore()
+    communication_thread_store = communication_thread_store or SQLiteCommunicationThreadStore()
     def _compact_memory(source: str) -> str:
         from alphonse.agent_v2.core.inference import InferencePurpose, InferenceRequest
         result = inference.generate_markdown(InferenceRequest(
@@ -157,7 +162,8 @@ def build_runtime_host(
     presence_projector = PresenceProjector()
     presence_projector.register("tui", TuiPresenceAdapter())
     identity_resolver = identity_resolver or build_identity_resolver(integration_store, user_store=user_store)
-    delivery_sink = build_outbox_delivery_sink(outbox=outbox, identity_resolver=identity_resolver)
+    communication_router = CommunicationRouter(users=user_store, resolver=identity_resolver, outbox=outbox, threads=communication_thread_store)
+    delivery_sink = build_outbox_delivery_sink(outbox=outbox, identity_resolver=identity_resolver, communication_router=communication_router)
     inbound_router = ProjectInboundRouter(
         channel=channel,
         outbox=outbox,
@@ -165,6 +171,7 @@ def build_runtime_host(
         sessions=project_session_store,
         is_admin=user_store.is_admin,
         managed_root=user_store.managed_project_root,
+        communication_router=communication_router,
     )
     ui_events: list[CoreUiEvent] = []
     activity_events: list[CoreActivityEvent] = []
@@ -211,6 +218,7 @@ def build_runtime_host(
         user_store=user_store,
         web_tools_settings_store=web_tools_settings_store,
         memory_settings_store=memory_settings_store,
+        communication_router=communication_router,
         ui_events=ui_events,
         activity_events=activity_events,
     )
@@ -251,9 +259,11 @@ def build_identity_resolver(store: SQLiteIntegrationStore, *, user_store: V2User
 
 def refresh_runtime_identity_resolver(runtime: V2RuntimeHost) -> None:
     runtime.identity_resolver = build_identity_resolver(runtime.integration_store, user_store=runtime.user_store)
+    runtime.communication_router.resolver = runtime.identity_resolver
     runtime.core.delivery_sink = build_outbox_delivery_sink(
         outbox=runtime.outbox,
         identity_resolver=runtime.identity_resolver,
+        communication_router=runtime.communication_router,
     )
 
 
@@ -283,6 +293,7 @@ def start_runtime_integrations(
                 on_outbox_delivered=on_outbox_delivered,
                 on_outbox_failed=on_outbox_failed,
                 presence_projector=runtime.presence_projector,
+                access_request_store=runtime.user_store,
             )
             integration_runtime.start()
         except Exception:

@@ -418,6 +418,19 @@ class V2DaemonServer:
             return {"address": self.daemon.bind_user_address(**dict(params))}
         if method == "remove_user_address":
             return {"removed": self.daemon.remove_user_address(str(params.get("address_id") or ""))}
+        if method == "set_user_aliases":
+            aliases = params.get("aliases") if isinstance(params.get("aliases"), list) else []
+            return self.daemon.set_user_aliases(user_id=str(params.get("user_id") or ""), aliases=[str(item) for item in aliases])
+        if method == "pending_access_requests":
+            return {"requests": self.daemon.pending_access_requests()}
+        if method == "approve_access_request":
+            return self.daemon.approve_access_request(
+                request_id=str(params.get("request_id") or ""),
+                display_name=str(params.get("display_name") or ""),
+                user_id=str(params.get("user_id") or ""),
+            )
+        if method == "reject_access_request":
+            return {"request": self.daemon.reject_access_request(request_id=str(params.get("request_id") or ""))}
         if method == "projects":
             return {"projects": self.daemon.list_projects(user=str(params.get("user") or ""))}
         if method == "manageable_projects":

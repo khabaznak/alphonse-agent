@@ -159,6 +159,7 @@ class ProjectInboundRouter:
         sessions: SQLiteProjectSessionStore,
         is_admin: Any | None = None,
         managed_root: Any | None = None,
+        communication_router: Any | None = None,
     ) -> None:
         self.channel = channel
         self.outbox = outbox
@@ -166,6 +167,7 @@ class ProjectInboundRouter:
         self.sessions = sessions
         self.is_admin = is_admin or (lambda _user: False)
         self.managed_root = managed_root
+        self.communication_router = communication_router
 
     def ingest(
         self,
@@ -196,6 +198,12 @@ class ProjectInboundRouter:
             thread_id=str(thread_id).strip(),
         )
         key = ProjectSessionKey(address.alphonse_user_id, address.integration_id, address.channel_target, address.thread_id)
+        if self.communication_router is not None and self.communication_router.relay_inbound(
+            sender_user_id=address.alphonse_user_id,
+            address=address,
+            text=prompt,
+        ):
+            return InboundRouteResult(handled_command=True)
         explicit_project = str(project_id or "").strip()
         if not explicit_project:
             command_reply = self._handle_command(prompt, key, address)

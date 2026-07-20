@@ -18,6 +18,7 @@ from alphonse.agent_v2.core.projects import ProjectStore
 from alphonse.agent_v2.services.project_sessions import ProjectInboundRouter
 from alphonse.agent_v2.services.project_sessions import ProjectSessionKey
 from alphonse.agent_v2.services.project_sessions import SQLiteProjectSessionStore
+from alphonse.agent_v2.users import V2UserStore
 
 
 class FakeTelegramClient:
@@ -138,6 +139,49 @@ def test_telegram_unknown_user_notifies_owner_without_queueing_capd_task(tmp_pat
     assert "provider_user_id=missing" in outbound.message
 
 
+def test_telegram_unknown_private_sender_creates_pending_request_and_is_acknowledged(tmp_path: Path) -> None:
+    users = V2UserStore(tmp_path / "users.sqlite3")
+    users.set_users_root(tmp_path / "profiles")
+    client = FakeTelegramClient(
+        [{"update_id": 10, "message": {"message_id": 5, "text": "hello", "chat": {"id": "444", "type": "private"}, "from": {"id": "444", "first_name": "Gaby"}}}]
+    )
+    runtime = _runtime(
+        http_client=client,
+        identity_resolver=V2IdentityResolver((IntegrationIdentity("telegram-home", "telegram"),), user_store=users),
+        access_request_store=users,
+    )
+
+    runtime.poll_once()
+
+    requests = users.list_access_requests()
+    assert len(requests) == 1
+    assert requests[0].display_name == "Gaby"
+    assert requests[0].integration_id == "telegram-home"
+    assert client.sent == [{"chat_id": "444", "text": "Your request to talk to Alphonse has been sent to the administrator. Please wait for approval."}]
+
+
+def test_approving_access_request_binds_the_active_telegram_integration(tmp_path: Path) -> None:
+    users = V2UserStore(tmp_path / "users.sqlite3")
+    users.set_users_root(tmp_path / "profiles")
+    request = users.record_access_request(
+        integration_id="telegram-home",
+        provider_key="telegram",
+        provider_user_id="444",
+        channel_target="444",
+        display_name="Gaby",
+    )
+
+    approved, address = users.approve_access_request(request.request_id)
+
+    assert approved.status == "approved"
+    assert address.integration_id == "telegram-home"
+    assert address.provider_user_id == "444"
+
+    assert users.remove_address(address.address_id) is True
+    resolver = V2IdentityResolver((IntegrationIdentity("telegram-home", "telegram"),), user_store=users)
+    assert resolver.resolve_inbound_user(integration_id="telegram-home", provider_user_id="444").resolved is False
+
+
 def test_telegram_outbound_drains_matching_outbox_message() -> None:
     outbox = SQLiteOutboundStore()
     outbox.enqueue(
@@ -193,6 +237,8 @@ def _runtime(
     http_client: FakeTelegramClient | None = None,
     on_message_queued=None,
     inbound_router=None,
+    identity_resolver=None,
+    access_request_store=None,
 ) -> TelegramIntegrationRuntime:
     store = SQLiteIntegrationStore()
     record = store.upsert(
@@ -207,9 +253,10 @@ def _runtime(
         record=record,
         channel=CommunicationChannel(queue or InMemoryMessageQueue()),
         outbox=outbox or SQLiteOutboundStore(),
-        identity_resolver=V2IdentityResolver((IntegrationIdentity("telegram-home", "telegram"),)),
+        identity_resolver=identity_resolver or V2IdentityResolver((IntegrationIdentity("telegram-home", "telegram"),)),
         owner_user_id="local",
         http_client=http_client or FakeTelegramClient(),
         on_message_queued=on_message_queued,
         inbound_router=inbound_router,
+        access_request_store=access_request_store,
     )

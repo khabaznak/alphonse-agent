@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import shutil
 import sqlite3
+import unicodedata
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -37,6 +38,22 @@ class UserAddress:
     channel_target: str
     is_preferred: bool
     is_active: bool
+
+    def to_dict(self) -> dict[str, object]:
+        return self.__dict__.copy()
+
+
+@dataclass(frozen=True)
+class AccessRequest:
+    request_id: str
+    integration_id: str
+    provider_key: str
+    provider_user_id: str
+    channel_target: str
+    display_name: str
+    status: str
+    created_at: str
+    updated_at: str
 
     def to_dict(self) -> dict[str, object]:
         return self.__dict__.copy()
@@ -181,6 +198,93 @@ class V2UserStore:
         with self._connect() as conn:
             return conn.execute("DELETE FROM v2_user_addresses WHERE address_id=?", (str(address_id),)).rowcount > 0
 
+    def record_access_request(
+        self,
+        *,
+        integration_id: str,
+        provider_key: str,
+        provider_user_id: str,
+        channel_target: str,
+        display_name: str = "",
+    ) -> AccessRequest:
+        """Create or refresh a pending request for an unmapped channel sender."""
+        integration = str(integration_id or "").strip()
+        provider = str(provider_key or "").strip().lower()
+        provider_user = str(provider_user_id or "").strip()
+        target = str(channel_target or provider_user).strip()
+        if not integration or not provider or not provider_user or not target:
+            raise ValueError("access_request_address_required")
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM v2_access_requests WHERE integration_id=? AND provider_user_id=? AND channel_target=?",
+                (integration, provider_user, target),
+            ).fetchone()
+            if row is None:
+                request_id = str(uuid4())
+                now = _now()
+                conn.execute(
+                    "INSERT INTO v2_access_requests (request_id,integration_id,provider_key,provider_user_id,channel_target,display_name,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?)",
+                    (request_id, integration, provider, provider_user, target, str(display_name or "").strip(), "pending", now, now),
+                )
+            elif str(row["status"]) == "pending":
+                conn.execute(
+                    "UPDATE v2_access_requests SET display_name=?, updated_at=? WHERE request_id=?",
+                    (str(display_name or row["display_name"] or "").strip(), _now(), str(row["request_id"])),
+                )
+        return self.get_access_request_by_address(integration, provider_user, target)  # type: ignore[return-value]
+
+    def list_access_requests(self, *, status: str = "pending") -> list[AccessRequest]:
+        query = "SELECT * FROM v2_access_requests"
+        values: tuple[str, ...] = ()
+        if status:
+            query += " WHERE status=?"
+            values = (str(status),)
+        query += " ORDER BY created_at"
+        with self._connect() as conn:
+            rows = conn.execute(query, values).fetchall()
+        return [_access_request(row) for row in rows if _access_request(row) is not None]  # type: ignore[list-item]
+
+    def get_access_request(self, request_id: str) -> AccessRequest | None:
+        with self._connect() as conn:
+            row = conn.execute("SELECT * FROM v2_access_requests WHERE request_id=?", (str(request_id),)).fetchone()
+        return _access_request(row)
+
+    def get_access_request_by_address(self, integration_id: str, provider_user_id: str, channel_target: str) -> AccessRequest | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM v2_access_requests WHERE integration_id=? AND provider_user_id=? AND channel_target=?",
+                (str(integration_id), str(provider_user_id), str(channel_target)),
+            ).fetchone()
+        return _access_request(row)
+
+    def approve_access_request(self, request_id: str, *, display_name: str = "", user_id: str = "") -> tuple[AccessRequest, UserAddress]:
+        request = self.get_access_request(request_id)
+        if request is None:
+            raise KeyError("access_request_not_found")
+        if request.status != "pending":
+            raise ValueError("access_request_not_pending")
+        user = self.get_user(user_id) if str(user_id or "").strip() else None
+        if user is None:
+            user = self.create_user(display_name=str(display_name or request.display_name or "Telegram member").strip())
+        address = self.bind_address(
+            user_id=user.user_id,
+            integration_id=request.integration_id,
+            provider_key=request.provider_key,
+            provider_user_id=request.provider_user_id,
+            channel_target=request.channel_target,
+        )
+        with self._connect() as conn:
+            conn.execute("UPDATE v2_access_requests SET status='approved', updated_at=? WHERE request_id=?", (_now(), request.request_id))
+        return self.get_access_request(request.request_id), address  # type: ignore[return-value]
+
+    def reject_access_request(self, request_id: str) -> AccessRequest:
+        request = self.get_access_request(request_id)
+        if request is None:
+            raise KeyError("access_request_not_found")
+        with self._connect() as conn:
+            conn.execute("UPDATE v2_access_requests SET status='rejected', updated_at=? WHERE request_id=?", (_now(), request.request_id))
+        return self.get_access_request(request.request_id)  # type: ignore[return-value]
+
     def delete_user(self, user_id: str) -> bool:
         """Permanently remove a non-admin user and their managed profile tree."""
         user = self.get_user(user_id)
@@ -191,6 +295,7 @@ class V2UserStore:
         profile = self.users_root() / user.user_id
         with self._connect() as conn:
             conn.execute("DELETE FROM v2_user_addresses WHERE user_id=?", (user.user_id,))
+            conn.execute("DELETE FROM v2_user_aliases WHERE user_id=?", (user.user_id,))
             deleted = conn.execute("DELETE FROM v2_users WHERE user_id=?", (user.user_id,)).rowcount > 0
         if profile.exists():
             shutil.rmtree(profile)
@@ -200,6 +305,50 @@ class V2UserStore:
         with self._connect() as conn:
             rows = conn.execute("SELECT * FROM v2_user_addresses WHERE user_id=? ORDER BY is_preferred DESC, created_at", (str(user_id),)).fetchall()
         return [_address(row) for row in rows if _address(row) is not None]  # type: ignore[list-item]
+
+    def list_aliases(self, user_id: str) -> list[str]:
+        with self._connect() as conn:
+            rows = conn.execute("SELECT alias FROM v2_user_aliases WHERE user_id=? ORDER BY alias", (str(user_id),)).fetchall()
+        return [str(row["alias"]) for row in rows]
+
+    def set_aliases(self, user_id: str, aliases: list[str] | tuple[str, ...]) -> list[str]:
+        """Replace a user's one or two unique household nicknames."""
+        if self.get_user(user_id) is None:
+            raise KeyError("user_not_found")
+        cleaned: list[tuple[str, str]] = []
+        for value in aliases:
+            alias = str(value or "").strip()
+            normalized = _normalize_person_reference(alias)
+            if alias and normalized and normalized not in {item[1] for item in cleaned}:
+                cleaned.append((alias, normalized))
+        if len(cleaned) > 2:
+            raise ValueError("user_alias_limit_exceeded")
+        with self._connect() as conn:
+            for _alias, normalized in cleaned:
+                conflict = conn.execute("SELECT user_id FROM v2_user_aliases WHERE normalized_alias=?", (normalized,)).fetchone()
+                if conflict is not None and str(conflict["user_id"]) != str(user_id):
+                    raise ValueError("user_alias_already_assigned")
+            conn.execute("DELETE FROM v2_user_aliases WHERE user_id=?", (str(user_id),))
+            conn.executemany("INSERT INTO v2_user_aliases (user_id,alias,normalized_alias,created_at) VALUES (?,?,?,?)", [(str(user_id), alias, normalized, _now()) for alias, normalized in cleaned])
+        return self.list_aliases(user_id)
+
+    def resolve_user_reference(self, reference: str) -> tuple[str, list[V2User]]:
+        """Resolve a human name deterministically without guessing ambiguous matches."""
+        needle = _normalize_person_reference(reference)
+        if not needle:
+            return "not_found", []
+        users = self.list_users(active_only=True)
+        exact_alias = [user for user in users if needle in {_normalize_person_reference(alias) for alias in self.list_aliases(user.user_id)}]
+        if exact_alias:
+            return _resolution(exact_alias)
+        exact_name = [user for user in users if _normalize_person_reference(user.display_name) == needle]
+        if exact_name:
+            return _resolution(exact_name)
+        token_matches = [user for user in users if needle in _normalize_person_reference(user.display_name).split()]
+        if token_matches:
+            return _resolution(token_matches)
+        substring_matches = [user for user in users if needle in _normalize_person_reference(user.display_name)]
+        return _resolution(substring_matches)
 
     def normalize_duplicate_addresses(self, integration_ids: set[str]) -> int:
         """Collapse legacy duplicate provider identities toward configured adapters."""
@@ -214,6 +363,37 @@ class V2UserStore:
                         continue
                     removed += conn.execute("DELETE FROM v2_user_addresses WHERE address_id=?", (row["address_id"],)).rowcount
         return removed
+
+    def align_provider_addresses(self, *, provider_key: str, integration_id: str) -> int:
+        """Move legacy provider mappings to the one configured integration instance.
+
+        v1 imported provider mappings used the provider name (for example
+        ``telegram``) as an integration id. v2 delivery requires the configured
+        instance id (for example ``telegram-home``).
+        """
+        provider = str(provider_key or "").strip().lower()
+        target = str(integration_id or "").strip()
+        if not provider or not target:
+            return 0
+        changed = 0
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT address_id,user_id,provider_user_id FROM v2_user_addresses WHERE provider_key=? AND integration_id<>?",
+                (provider, target),
+            ).fetchall()
+            for row in rows:
+                existing = conn.execute(
+                    "SELECT user_id FROM v2_user_addresses WHERE integration_id=? AND provider_user_id=?",
+                    (target, str(row["provider_user_id"])),
+                ).fetchone()
+                if existing is not None and str(existing["user_id"]) != str(row["user_id"]):
+                    continue
+                if existing is not None:
+                    conn.execute("DELETE FROM v2_user_addresses WHERE address_id=?", (str(row["address_id"]),))
+                else:
+                    conn.execute("UPDATE v2_user_addresses SET integration_id=?, updated_at=? WHERE address_id=?", (target, _now(), str(row["address_id"])))
+                changed += 1
+        return changed
 
     def address_for_inbound(self, *, integration_id: str, provider_user_id: str) -> UserAddress | None:
         with self._connect() as conn:
@@ -279,6 +459,9 @@ class V2UserStore:
             CREATE TABLE IF NOT EXISTS v2_user_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT NOT NULL) STRICT;
             CREATE TABLE IF NOT EXISTS v2_user_addresses (address_id TEXT PRIMARY KEY, user_id TEXT NOT NULL, integration_id TEXT NOT NULL, provider_key TEXT NOT NULL, provider_user_id TEXT NOT NULL, channel_target TEXT NOT NULL, is_preferred INTEGER NOT NULL DEFAULT 0, is_active INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, UNIQUE(integration_id, provider_user_id)) STRICT;
             CREATE INDEX IF NOT EXISTS idx_v2_user_addresses_user ON v2_user_addresses(user_id, is_preferred);
+            CREATE TABLE IF NOT EXISTS v2_access_requests (request_id TEXT PRIMARY KEY, integration_id TEXT NOT NULL, provider_key TEXT NOT NULL, provider_user_id TEXT NOT NULL, channel_target TEXT NOT NULL, display_name TEXT NOT NULL DEFAULT '', status TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, UNIQUE(integration_id, provider_user_id, channel_target)) STRICT;
+            CREATE INDEX IF NOT EXISTS idx_v2_access_requests_status ON v2_access_requests(status, created_at);
+            CREATE TABLE IF NOT EXISTS v2_user_aliases (user_id TEXT NOT NULL, alias TEXT NOT NULL, normalized_alias TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL, PRIMARY KEY (user_id, normalized_alias)) STRICT;
             """)
 
 
@@ -290,5 +473,25 @@ class _Connection:
 def _now() -> str: return datetime.now(timezone.utc).isoformat()
 def _user(row: sqlite3.Row | None) -> V2User | None:
     return V2User(str(row["user_id"]), str(row["display_name"]), str(row["role"]), bool(row["is_active"]), str(row["created_at"]), str(row["updated_at"])) if row else None
+
+
+def _access_request(row: sqlite3.Row | None) -> AccessRequest | None:
+    return AccessRequest(
+        str(row["request_id"]), str(row["integration_id"]), str(row["provider_key"]),
+        str(row["provider_user_id"]), str(row["channel_target"]), str(row["display_name"]),
+        str(row["status"]), str(row["created_at"]), str(row["updated_at"]),
+    ) if row else None
+
+
+def _normalize_person_reference(value: str) -> str:
+    decomposed = unicodedata.normalize("NFKD", str(value or ""))
+    cleaned = "".join(char for char in decomposed if not unicodedata.combining(char))
+    return " ".join("".join(char if char.isalnum() else " " for char in cleaned).casefold().split())
+
+
+def _resolution(users: list[V2User]) -> tuple[str, list[V2User]]:
+    if len(users) == 1:
+        return "resolved", users
+    return ("ambiguous", users) if users else ("not_found", [])
 def _address(row: sqlite3.Row | None) -> UserAddress | None:
     return UserAddress(str(row["address_id"]), str(row["user_id"]), str(row["integration_id"]), str(row["provider_key"]), str(row["provider_user_id"]), str(row["channel_target"]), bool(row["is_preferred"]), bool(row["is_active"])) if row else None

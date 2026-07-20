@@ -213,6 +213,38 @@ managed project root under `~/.alphonse/projects/` by default.
 5. Enter the bot token, Telegram user id, allowed chat ids, and enable the integration.
 6. Send a fresh message to the bot.
 
+### Add a household member to Telegram
+
+Telegram bots do not use a person's saved phone number as an identity. A person
+must first open the bot and send it a message (for example `/start`); Telegram
+bots cannot start a private conversation themselves.
+
+For a new private sender, Alphonse records a pending access request and replies
+that administrator approval is required. In the administrator TUI, open
+`/users`, copy the pending request id into the approval field, optionally enter
+the member's display name or an existing Alphonse user id, then select **Approve
+request**. Approval creates the canonical user/address mapping on the active
+Telegram integration and adds that private chat to its allow-list.
+
+The allow-list controls which chats may send messages; the identity mapping
+controls which Alphonse user owns a message. Both are required. Legacy Telegram
+addresses are automatically aligned to the sole active Telegram integration
+when integrations start or restart.
+
+### Message another household member
+
+Administrators and members can ask Alphonse to tell or ask another registered
+person something without naming a channel. Alphonse resolves the person's
+canonical user record and preferred active address, then delivers through that
+integration. A reply to the delivered message is relayed back to the sender's
+original conversation automatically. The visible messages identify people, not
+providers; unrelated messages remain private conversations with Alphonse.
+
+In `/users`, administrators can add up to two unique nicknames for each user.
+Recipient resolution checks nicknames first, then the registered name, unique
+name parts, and finally a unique partial-name match. It ignores case, accents,
+and punctuation, but never guesses when more than one active user matches.
+
 Telegram supports text messages and text responses in the current v2 slice. The
 integration also projects presence through typing indicators and message reactions.
 Provider polling, CAPD processing, and outbound delivery continue when the TUI is closed
@@ -594,9 +626,11 @@ Alphonse uses a two-phase onboarding model:
 Primary onboarding and secondary onboarding are intentionally separated so each can evolve
 independently without mixing first-run bootstrap concerns with household growth flows.
 
-### Introduce + Authorize (Telegram)
+### Introduce + Authorize (Telegram, legacy)
 
-You can introduce and authorize a new user directly inside a Telegram group chat.
+This is a v1 flow. In v2, use the pending-request approval flow above so the
+mapping is created against the active integration id. Group introduction is not
+an onboarding path for v2 yet.
 Alphonse uses the replied-to user's Telegram `user_id` as the stable channel address.
 
 Flow:

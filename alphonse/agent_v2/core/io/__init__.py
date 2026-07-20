@@ -12,13 +12,17 @@ from alphonse.agent_v2.core.io.outbox import OutboundSelector
 from alphonse.agent_v2.core.io.outbox import SQLiteOutboundStore
 from alphonse.agent_v2.core.io.outbox import build_outbox_delivery_sink
 from alphonse.agent_v2.core.io.outbox import project_snapshot_to_outbox
+from alphonse.agent_v2.core.io.communication import CommunicationRouter
+from alphonse.agent_v2.core.io.communication import SQLiteCommunicationThreadStore
 
 __all__ = [
     "ChannelAddress",
+    "CommunicationRouter",
     "IntegrationIdentity",
     "OutboundMessage",
     "OutboundSelector",
     "SQLiteOutboundStore",
+    "SQLiteCommunicationThreadStore",
     "V2IdentityResolver",
     "build_outbox_delivery_sink",
     "channel_address_from_metadata",

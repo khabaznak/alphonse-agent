@@ -988,24 +988,67 @@ def _build_textual_app_class() -> type[Any]:
             self.dismiss(True)
 
     class UsersScreen(ModalScreen[bool]):
-        def __init__(self, users: list[dict[str, Any]], create: Callable[[str, str], Any]) -> None:
-            super().__init__(); self.users = users; self.create = create
+        def __init__(
+            self,
+            users: list[dict[str, Any]],
+            requests: list[dict[str, Any]],
+            create: Callable[[str, str], Any],
+            approve: Callable[[str, str, str], Any],
+            reject: Callable[[str], Any],
+            remove_address: Callable[[str], Any],
+            save_aliases: Callable[[str, str], Any],
+        ) -> None:
+            super().__init__(); self.users = users; self.requests = requests; self.create = create; self.approve = approve; self.reject = reject; self.remove_address = remove_address; self.save_aliases = save_aliases
 
         def compose(self) -> ComposeResult:
-            entries = "\n".join(f"{item.get('display_name')} ({item.get('role')})\n{item.get('user_id')}" for item in self.users) or "No users"
+            entries = "\n".join(
+                f"{item.get('display_name')} ({item.get('role')})\n{item.get('user_id')}"
+                + (f"\naliases: {', '.join(str(alias) for alias in item.get('aliases', []))}" if item.get('aliases') else "")
+                + "".join(f"\n{address.get('provider_key')} {address.get('provider_user_id')} — address: {address.get('address_id')}" for address in item.get('addresses', []) if isinstance(address, dict))
+                for item in self.users
+            ) or "No users"
+            requests = "\n".join(
+                f"{item.get('display_name') or 'Telegram user'} — {item.get('provider_user_id')}\nrequest: {item.get('request_id')}"
+                for item in self.requests
+            ) or "No pending Telegram requests"
             with Vertical(id="project-dialog"):
                 yield Static("Users", classes="dialog-title")
                 yield Static(entries, id="users-list")
                 yield Input(placeholder="Name", id="new-user-name")
                 yield Input(value="member", id="new-user-role")
+                yield Static("Pending Telegram requests", classes="dialog-title")
+                yield Static(requests, id="access-requests-list")
+                yield Input(placeholder="Pending request id", id="access-request-id")
+                yield Input(placeholder="Name for new user (optional)", id="access-request-name")
+                yield Input(placeholder="Existing user id (optional)", id="access-request-user-id")
+                yield Input(placeholder="Address id to revoke", id="remove-address-id")
+                yield Input(placeholder="User id for nicknames", id="alias-user-id")
+                yield Input(placeholder="Up to two nicknames, comma separated", id="user-aliases")
                 with Horizontal(classes="dialog-actions"):
                     yield Button("Add", id="add-user", variant="primary")
+                    yield Button("Approve request", id="approve-access-request", variant="primary")
+                    yield Button("Reject request", id="reject-access-request")
+                    yield Button("Revoke address", id="remove-address")
+                    yield Button("Save nicknames", id="save-user-aliases")
                     yield Button("Close", id="close-users")
 
         def on_button_pressed(self, event: Button.Pressed) -> None:
             if event.button.id == "close-users": self.dismiss(False); return
             try:
-                self.create(self.query_one("#new-user-name", Input).value, self.query_one("#new-user-role", Input).value)
+                if event.button.id == "approve-access-request":
+                    self.approve(
+                        self.query_one("#access-request-id", Input).value,
+                        self.query_one("#access-request-name", Input).value,
+                        self.query_one("#access-request-user-id", Input).value,
+                    )
+                elif event.button.id == "reject-access-request":
+                    self.reject(self.query_one("#access-request-id", Input).value)
+                elif event.button.id == "remove-address":
+                    self.remove_address(self.query_one("#remove-address-id", Input).value)
+                elif event.button.id == "save-user-aliases":
+                    self.save_aliases(self.query_one("#alias-user-id", Input).value, self.query_one("#user-aliases", Input).value)
+                else:
+                    self.create(self.query_one("#new-user-name", Input).value, self.query_one("#new-user-role", Input).value)
             except Exception:
                 return
             self.dismiss(True)
@@ -1927,12 +1970,42 @@ def _build_textual_app_class() -> type[Any]:
                 if self.external_daemon:
                     values = self.daemon_client.request("users").get("users")
                     return [dict(item) for item in values if isinstance(item, dict)] if isinstance(values, list) else []
-                return [user.to_dict() for user in self.runtime.user_store.list_users()]
+                return [{**user.to_dict(), "addresses": [address.to_dict() for address in self.runtime.user_store.list_addresses(user.user_id)], "aliases": self.runtime.user_store.list_aliases(user.user_id)} for user in self.runtime.user_store.list_users()]
+            def _requests() -> list[dict[str, Any]]:
+                if self.external_daemon:
+                    values = self.daemon_client.request("pending_access_requests").get("requests")
+                    return [dict(item) for item in values if isinstance(item, dict)] if isinstance(values, list) else []
+                return [item.to_dict() for item in self.runtime.user_store.list_access_requests()]
             def _create(name: str, role: str) -> Any:
                 if self.external_daemon:
                     return self.daemon_client.request("create_user", display_name=name, role=role)
                 return self.runtime.user_store.create_user(display_name=name, role=role)
-            self.push_screen(UsersScreen(_list(), _create), callback=lambda _: self._refresh_status())
+            def _approve(request_id: str, name: str, user_id: str) -> Any:
+                if self.external_daemon:
+                    return self.daemon_client.request("approve_access_request", request_id=request_id, display_name=name, user_id=user_id)
+                if self.daemon is None:
+                    raise RuntimeError("daemon_required")
+                return self.daemon.approve_access_request(request_id=request_id, display_name=name, user_id=user_id)
+            def _reject(request_id: str) -> Any:
+                if self.external_daemon:
+                    return self.daemon_client.request("reject_access_request", request_id=request_id)
+                if self.daemon is None:
+                    raise RuntimeError("daemon_required")
+                return self.daemon.reject_access_request(request_id=request_id)
+            def _remove_address(address_id: str) -> Any:
+                if self.external_daemon:
+                    return self.daemon_client.request("remove_user_address", address_id=address_id)
+                if self.daemon is None:
+                    raise RuntimeError("daemon_required")
+                return self.daemon.remove_user_address(address_id)
+            def _save_aliases(user_id: str, aliases: str) -> Any:
+                values = [value.strip() for value in aliases.split(",") if value.strip()]
+                if self.external_daemon:
+                    return self.daemon_client.request("set_user_aliases", user_id=user_id, aliases=values)
+                if self.daemon is None:
+                    raise RuntimeError("daemon_required")
+                return self.daemon.set_user_aliases(user_id=user_id, aliases=values)
+            self.push_screen(UsersScreen(_list(), _requests(), _create, _approve, _reject, _remove_address, _save_aliases), callback=lambda _: self._refresh_status())
 
         def _open_scheduled_tasks(self) -> None:
             def _users() -> list[dict[str, Any]]:

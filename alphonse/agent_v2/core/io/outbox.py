@@ -432,12 +432,28 @@ def build_outbox_delivery_sink(
     *,
     outbox: SQLiteOutboundStore,
     identity_resolver: V2IdentityResolver | None = None,
+    communication_router: Any | None = None,
 ) -> Callable[[dict[str, Any]], dict[str, Any]]:
     """Build a delivery sink for tools that already emit delivery events."""
     resolver = identity_resolver or V2IdentityResolver()
 
     def _sink(event: dict[str, Any]) -> dict[str, Any]:
         event_type = str(event.get("event_type") or "").strip()
+        if event_type == "communication.deliver":
+            if communication_router is None:
+                return {"status": "delivery_unavailable"}
+            task = event.get("task") if isinstance(event.get("task"), dict) else {}
+            origin_raw = event.get("origin") if isinstance(event.get("origin"), dict) else {}
+            origin = ChannelAddress(**origin_raw) if origin_raw else channel_address_from_metadata(task.get("metadata") if isinstance(task.get("metadata"), dict) else {})
+            if origin is None:
+                return {"status": "origin_unavailable"}
+            return communication_router.deliver(
+                sender_user_id=str(event.get("sender_user_id") or task.get("user") or "").strip(),
+                origin=origin,
+                recipient_reference=str(event.get("recipient") or "").strip(),
+                message=str(event.get("message") or "").strip(),
+                expects_reply=bool(event.get("expects_reply")),
+            )
         if event_type != "question.deliver":
             return {"ignored": True}
         question = event.get("question") if isinstance(event.get("question"), dict) else {}

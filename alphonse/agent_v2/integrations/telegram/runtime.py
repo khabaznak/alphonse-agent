@@ -102,6 +102,7 @@ class TelegramIntegrationRuntime:
         on_outbox_failed: Callable[[Any, str], None] | None = None,
         presence_projector: PresenceProjector | None = None,
         inbound_router: ProjectInboundRouter | None = None,
+        access_request_store: Any | None = None,
     ) -> None:
         self.record = record
         self.channel = channel
@@ -122,6 +123,7 @@ class TelegramIntegrationRuntime:
         self._on_outbox_failed = on_outbox_failed
         self.presence_projector = presence_projector
         self.inbound_router = inbound_router
+        self.access_request_store = access_request_store
         self.presence_adapter = TelegramPresenceAdapter(
             http_client=self.http_client,
             enabled=bool(config["presence_enabled"]),
@@ -178,8 +180,6 @@ class TelegramIntegrationRuntime:
         chat_id = str(chat.get("id") or message.get("chat_id") or "").strip()
         if not chat_id:
             return False
-        if self.allowed_chat_ids and chat_id not in self.allowed_chat_ids:
-            return False
         from_user = message.get("from") if isinstance(message.get("from"), dict) else {}
         provider_user_id = str(from_user.get("id") or "").strip()
         provider_message_id = str(message.get("message_id") or update.get("update_id") or "").strip()
@@ -193,6 +193,12 @@ class TelegramIntegrationRuntime:
             provider_user_id=provider_user_id,
         )
         if not resolved.resolved:
+            self._record_access_request_if_private(
+                chat=chat,
+                chat_id=chat_id,
+                from_user=from_user,
+                provider_user_id=provider_user_id,
+            )
             self._notify_owner_unresolved_user(
                 provider_user_id=provider_user_id,
                 chat_id=chat_id,
@@ -200,6 +206,8 @@ class TelegramIntegrationRuntime:
                 update=update,
             )
             self._stats = _replace_stats(self._stats, unknown_users=self._stats.unknown_users + 1)
+            return False
+        if self.allowed_chat_ids and chat_id not in self.allowed_chat_ids:
             return False
         values = {
             "prompt": text,
@@ -290,6 +298,32 @@ class TelegramIntegrationRuntime:
             },
         )
 
+    def _record_access_request_if_private(
+        self,
+        *,
+        chat: dict[str, Any],
+        chat_id: str,
+        from_user: dict[str, Any],
+        provider_user_id: str,
+    ) -> None:
+        """Give private senders a safe approval path without admitting their message."""
+        if self.access_request_store is None or str(chat.get("type") or "private") != "private" or not provider_user_id:
+            return
+        try:
+            self.access_request_store.record_access_request(
+                integration_id=self.integration_id,
+                provider_key="telegram",
+                provider_user_id=provider_user_id,
+                channel_target=chat_id,
+                display_name=_telegram_display_name(from_user),
+            )
+            self.http_client.send_message(
+                chat_id=chat_id,
+                text="Your request to talk to Alphonse has been sent to the administrator. Please wait for approval.",
+            )
+        except Exception:
+            return
+
     def _notify_message_queued(self) -> None:
         if self._on_message_queued is None:
             return
@@ -317,6 +351,7 @@ def build_telegram_runtime(
     on_outbox_failed: Callable[[Any, str], None] | None = None,
     presence_projector: PresenceProjector | None = None,
     inbound_router: ProjectInboundRouter | None = None,
+    access_request_store: Any | None = None,
 ) -> TelegramIntegrationRuntime:
     return TelegramIntegrationRuntime(
         record=record,
@@ -329,6 +364,7 @@ def build_telegram_runtime(
         on_outbox_failed=on_outbox_failed,
         presence_projector=presence_projector,
         inbound_router=inbound_router,
+        access_request_store=access_request_store,
     )
 
 
@@ -359,6 +395,12 @@ def _parse_allowed_chat_ids(value: Any) -> set[str]:
     if isinstance(value, (list, tuple, set)):
         return {str(item).strip() for item in value if str(item).strip()}
     return {entry.strip() for entry in str(value or "").split(",") if entry.strip()}
+
+
+def _telegram_display_name(from_user: dict[str, Any]) -> str:
+    parts = [str(from_user.get(key) or "").strip() for key in ("first_name", "last_name")]
+    value = " ".join(part for part in parts if part)
+    return value or str(from_user.get("username") or "").strip()
 
 
 def _parse_float(value: Any, *, default: float) -> float:

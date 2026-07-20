@@ -108,6 +108,7 @@ class V2Daemon:
             # Publish the health socket before optional providers initialize so
             # clients can distinguish a live daemon from a failed startup.
             self.ipc.start()
+            self._align_configured_provider_addresses()
             start_runtime_integrations(
                 self.runtime,
                 on_outbox_delivered=self._on_outbox_delivered,
@@ -134,11 +135,22 @@ class V2Daemon:
         self._release_single_instance_lock()
 
     def restart_integrations(self) -> None:
+        self._align_configured_provider_addresses()
         start_runtime_integrations(
             self.runtime,
             on_outbox_delivered=self._on_outbox_delivered,
             on_outbox_failed=self._on_outbox_failed,
         )
+
+    def _align_configured_provider_addresses(self) -> None:
+        records = self.runtime.integration_store.list_enabled()
+        for record in records:
+            same_provider = [item for item in records if item.provider_key == record.provider_key]
+            if len(same_provider) == 1:
+                self.runtime.user_store.align_provider_addresses(
+                    provider_key=record.provider_key,
+                    integration_id=record.integration_id,
+                )
 
     def update_inference_settings(self, *, provider_key: str, model_id: str) -> dict[str, str]:
         settings = validate_and_save_inference_settings(
@@ -200,7 +212,7 @@ class V2Daemon:
 
     def list_users(self) -> list[dict[str, object]]:
         self.runtime.user_store.normalize_duplicate_addresses({record.integration_id for record in self.runtime.integration_store.list()})
-        return [{**user.to_dict(), "addresses": [address.to_dict() for address in self.runtime.user_store.list_addresses(user.user_id)]} for user in self.runtime.user_store.list_users()]
+        return [{**user.to_dict(), "addresses": [address.to_dict() for address in self.runtime.user_store.list_addresses(user.user_id)], "aliases": self.runtime.user_store.list_aliases(user.user_id)} for user in self.runtime.user_store.list_users()]
 
     def create_user(self, *, display_name: str, role: str = "member") -> dict[str, object]:
         return self.runtime.user_store.create_user(display_name=display_name, role=role).to_dict()
@@ -331,6 +343,40 @@ class V2Daemon:
 
     def remove_user_address(self, address_id: str) -> bool:
         return self.runtime.user_store.remove_address(address_id)
+
+    def set_user_aliases(self, *, user_id: str, aliases: list[str]) -> dict[str, object]:
+        return {"user_id": user_id, "aliases": self.runtime.user_store.set_aliases(user_id, aliases)}
+
+    def pending_access_requests(self) -> list[dict[str, object]]:
+        return [request.to_dict() for request in self.runtime.user_store.list_access_requests()]
+
+    def approve_access_request(self, *, request_id: str, display_name: str = "", user_id: str = "") -> dict[str, object]:
+        request, address = self.runtime.user_store.approve_access_request(
+            request_id,
+            display_name=display_name,
+            user_id=user_id,
+        )
+        if request.provider_key == "telegram":
+            record = self.runtime.integration_store.get(request.integration_id)
+            if record is None:
+                raise ValueError("access_request_integration_not_found")
+            config = dict(record.config)
+            allowed = {str(value).strip() for value in config.get("allowed_chat_ids", []) if str(value).strip()}
+            allowed.add(request.channel_target)
+            self.runtime.integration_store.upsert(
+                integration_id=record.integration_id,
+                provider_key=record.provider_key,
+                display_name=record.display_name,
+                enabled=record.enabled,
+                config={**config, "allowed_chat_ids": sorted(allowed)},
+                secrets=record.secrets,
+            )
+            refresh_runtime_identity_resolver(self.runtime)
+            self.restart_integrations()
+        return {"request": request.to_dict(), "address": address.to_dict()}
+
+    def reject_access_request(self, *, request_id: str) -> dict[str, object]:
+        return self.runtime.user_store.reject_access_request(request_id).to_dict()
 
     def settings(self) -> dict[str, object]:
         return self.runtime.user_store.status()
@@ -980,6 +1026,13 @@ class V2Daemon:
             pass
 
     def _on_outbox_delivered(self, outbound: Any) -> None:
+        message_id = str(getattr(outbound, "outbox_message_id", "") or "")
+        if message_id:
+            delivered = self.runtime.outbox.get(message_id)
+            self.runtime.communication_router.threads.mark_delivered(
+                message_id,
+                str(getattr(delivered, "provider_message_id", "") or ""),
+            )
         metadata = getattr(outbound, "metadata", {}) if outbound is not None else {}
         occurrence_key = str(metadata.get("occurrence_key") or "").strip() if isinstance(metadata, dict) else ""
         if occurrence_key:
@@ -989,6 +1042,17 @@ class V2Daemon:
             )
 
     def _on_outbox_failed(self, outbound: Any, error: str) -> None:
+        message_id = str(getattr(outbound, "outbox_message_id", "") or "")
+        if message_id:
+            thread = self.runtime.communication_router.threads.mark_failed(message_id)
+            if thread is not None:
+                self.runtime.outbox.enqueue(
+                    address=thread.origin,
+                    message="I could not deliver your message. Please try again later.",
+                    kind="communication_delivery_failed",
+                    audience_user_id=thread.sender_user_id,
+                    metadata={"communication_thread_id": thread.thread_id},
+                )
         metadata = getattr(outbound, "metadata", {}) if outbound is not None else {}
         occurrence_key = str(metadata.get("occurrence_key") or "").strip() if isinstance(metadata, dict) else ""
         if occurrence_key:
