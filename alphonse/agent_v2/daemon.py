@@ -440,6 +440,10 @@ class V2Daemon:
         output = result.get("output") if isinstance(result, dict) else {}
         preview = str((output or {}).get("text") or (output or {}).get("file_path") or "")
         error = str((exception or {}).get("message") or "") if isinstance(exception, dict) else ""
+        details = (exception or {}).get("details") if isinstance(exception, dict) else {}
+        detail_error = str((details or {}).get("error") or "") if isinstance(details, dict) else ""
+        if detail_error:
+            error = f"{error}: {detail_error}"
         saved = self.runtime.media_tools_settings_store.mark_verification(kind, ready=not bool(exception), error=error, preview=preview)
         return {"result": result, "settings": saved.to_dict()}
 

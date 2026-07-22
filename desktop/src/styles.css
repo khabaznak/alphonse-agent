@@ -344,6 +344,8 @@ button { border: 0; cursor: pointer; }
 .execution-list { max-height: 160px; overflow-y: auto; border-top: 1px solid #cad3c6; }
 .execution-list p { margin: 0; padding: 8px 0; border-bottom: 1px solid #d9dfd6; color: #526258; font-size: 11px; overflow-wrap: anywhere; }
 .destructive-action { border-color: #c7816b; background: #fff1ea; }
+.verification-spinner { display: inline-block; width: 0.8em; height: 0.8em; margin-right: 5px; border: 2px solid #9baca0; border-top-color: #315441; border-radius: 50%; animation: verification-spin 0.75s linear infinite; vertical-align: -0.05em; }
+@keyframes verification-spin { to { transform: rotate(360deg); } }
 
 @media (max-width: 760px) {
   body { min-width: 0; }

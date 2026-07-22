@@ -1028,10 +1028,26 @@ def _build_textual_app_class() -> type[Any]:
                     self.query_one("#media-tools-notice", Static).update(f"{kind.upper()} saved; verify it to enable readiness.")
                 else:
                     sample = self.query_one(f"#{kind}-sample", Input).value
-                    result = self.verify(kind, sample); self.settings = dict(result.get("settings") or self.settings)
-                    error = ((result.get("result") or {}).get("exception") or {}).get("message") if isinstance(result, dict) else ""
-                    self.query_one("#media-tools-notice", Static).update(str(error or f"{kind.upper()} verified."))
+                    event.button.disabled = True
+                    self.query_one("#media-tools-notice", Static).update(f"Verifying {kind.upper()}… the local model may take a while to load.")
+                    Thread(target=self._verify_in_background, args=(kind, sample, event.button.id), daemon=True).start()
             except Exception as exc: self.query_one("#media-tools-notice", Static).update(str(exc))
+
+        def _verify_in_background(self, kind: str, sample: str, button_id: str | None) -> None:
+            try:
+                result = self.verify(kind, sample)
+            except Exception as exc:
+                self.app.call_from_thread(self._verification_finished, button_id, None, str(exc)); return
+            self.app.call_from_thread(self._verification_finished, button_id, result, "")
+
+        def _verification_finished(self, button_id: str | None, result: dict[str, Any] | None, failure: str) -> None:
+            if button_id:
+                self.query_one(f"#{button_id}", Button).disabled = False
+            if failure:
+                self.query_one("#media-tools-notice", Static).update(failure); return
+            self.settings = dict((result or {}).get("settings") or self.settings)
+            error = (((result or {}).get("result") or {}).get("exception") or {}).get("message")
+            self.query_one("#media-tools-notice", Static).update(str(error or "Verification complete."))
 
     class UsersScreen(ModalScreen[bool]):
         def __init__(
