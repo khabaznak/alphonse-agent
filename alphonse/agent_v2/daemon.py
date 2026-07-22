@@ -51,6 +51,8 @@ from alphonse.agent_v2.web_tools_settings import WebToolsSettings
 from alphonse.agent_v2.memory_settings import MemorySettings
 from alphonse.agent_v2.memory_settings import SQLiteMemorySettingsStore
 from alphonse.agent_v2.web_tools_settings import SQLiteWebToolsSettingsStore
+from alphonse.agent_v2.media_tools_settings import SQLiteMediaToolsSettingsStore
+from alphonse.agent_v2.core.tools.registry.native.media import verify_ocr, verify_stt, verify_tts
 from alphonse.agent_v2.runtime import refresh_runtime_web_tools
 from alphonse.agent_v2.core.tools.registry.native.web import execute_web_fetch, execute_web_search
 
@@ -418,6 +420,28 @@ class V2Daemon:
         if kind == "search": return execute_web_search({"query": "Alphonse SearXNG verification", "limit": 1}, settings=settings)
         if kind == "fetch": return execute_web_fetch({"url": "https://example.com", "max_chars": 200}, settings=settings)
         raise ValueError("web_tools_verify_kind_invalid")
+
+    def media_tools_settings(self, *, actor_user_id: str) -> dict[str, object]:
+        self._require_admin(actor_user_id)
+        return self.runtime.media_tools_settings_store.get().to_dict()
+
+    def save_media_tools_settings(self, *, actor_user_id: str, kind: str, values: dict[str, Any]) -> dict[str, object]:
+        self._require_admin(actor_user_id)
+        return self.runtime.media_tools_settings_store.update(kind, values).to_dict()
+
+    def verify_media_tools(self, *, actor_user_id: str, kind: str, sample: str = "") -> dict[str, Any]:
+        self._require_admin(actor_user_id)
+        settings = self.runtime.media_tools_settings_store.get()
+        if kind == "tts": result = verify_tts(settings.tts, sample_text=sample or "Alphonse text-to-speech verification.")
+        elif kind == "stt": result = verify_stt(settings.stt, sample_path=sample)
+        elif kind == "ocr": result = verify_ocr(settings.ocr, sample_path=sample)
+        else: raise ValueError("media_tools_kind_invalid")
+        exception = result.get("exception") if isinstance(result, dict) else {"message": "verification_failed"}
+        output = result.get("output") if isinstance(result, dict) else {}
+        preview = str((output or {}).get("text") or (output or {}).get("file_path") or "")
+        error = str((exception or {}).get("message") or "") if isinstance(exception, dict) else ""
+        saved = self.runtime.media_tools_settings_store.mark_verification(kind, ready=not bool(exception), error=error, preview=preview)
+        return {"result": result, "settings": saved.to_dict()}
 
     def _require_admin(self, actor_user_id: str) -> None:
         actor = str(actor_user_id or "").strip()
@@ -1115,6 +1139,7 @@ def main() -> None:
             project_store=ProjectStore.default(),
             schedule_store=ScheduledTaskStore.default(),
             web_tools_settings_store=SQLiteWebToolsSettingsStore.default(),
+            media_tools_settings_store=SQLiteMediaToolsSettingsStore.default(),
             memory_settings_store=SQLiteMemorySettingsStore.default(),
             outbox=SQLiteOutboundStore.default(),
             integration_store=SQLiteIntegrationStore.default(),

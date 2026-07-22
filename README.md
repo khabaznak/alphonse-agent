@@ -438,6 +438,12 @@ Example tool-call payload:
 
 ### Qwen TTS Backend Setup
 
+> V2 Desktop: configure and verify local TTS, STT, and OCR in **Settings → Tools**.
+> The admin TUI provides the same controls under `/tools`. Alphonse does not
+> install models or runtimes; a backend becomes ready only after verification.
+> These media backends are intentionally not yet exposed to conversations until
+> v2 attachment ingestion and delivery are implemented.
+
 Use this when you want Alphonse local audio tools to run with Qwen3-TTS instead of macOS `say`.
 
 1. Activate the same virtualenv used to run Alphonse:

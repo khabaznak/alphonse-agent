@@ -44,6 +44,7 @@ from alphonse.agent_v2.services.project_sessions import ProjectInboundRouter
 from alphonse.agent_v2.services.project_sessions import SQLiteProjectSessionStore
 from alphonse.agent_v2.users import V2UserStore
 from alphonse.agent_v2.web_tools_settings import SQLiteWebToolsSettingsStore
+from alphonse.agent_v2.media_tools_settings import SQLiteMediaToolsSettingsStore
 from alphonse.agent_v2.memory_settings import SQLiteMemorySettingsStore
 from alphonse.agent_v2.core.memory import LedgerMemory
 
@@ -97,6 +98,7 @@ class V2RuntimeHost:
     inbound_router: ProjectInboundRouter
     user_store: V2UserStore
     web_tools_settings_store: SQLiteWebToolsSettingsStore
+    media_tools_settings_store: SQLiteMediaToolsSettingsStore
     memory_settings_store: SQLiteMemorySettingsStore
     communication_router: CommunicationRouter
     integration_runtimes: list[Any] = field(default_factory=list)
@@ -124,6 +126,7 @@ def build_runtime_host(
     project_session_store: SQLiteProjectSessionStore | None = None,
     messages: Any | None = None,
     web_tools_settings_store: SQLiteWebToolsSettingsStore | None = None,
+    media_tools_settings_store: SQLiteMediaToolsSettingsStore | None = None,
     memory_settings_store: SQLiteMemorySettingsStore | None = None,
     communication_thread_store: SQLiteCommunicationThreadStore | None = None,
 ) -> V2RuntimeHost:
@@ -133,6 +136,7 @@ def build_runtime_host(
     visible_state = InMemoryInternalState()
     processor = processor or PDCAIntelligenceProcessor()
     web_tools_settings_store = web_tools_settings_store or SQLiteWebToolsSettingsStore()
+    media_tools_settings_store = media_tools_settings_store or SQLiteMediaToolsSettingsStore()
     # Generic embedded/test hosts are intentionally ephemeral. The daemon
     # injects the durable store explicitly.
     memory_settings_store = memory_settings_store or SQLiteMemorySettingsStore()
@@ -217,6 +221,7 @@ def build_runtime_host(
         inbound_router=inbound_router,
         user_store=user_store,
         web_tools_settings_store=web_tools_settings_store,
+        media_tools_settings_store=media_tools_settings_store,
         memory_settings_store=memory_settings_store,
         communication_router=communication_router,
         ui_events=ui_events,

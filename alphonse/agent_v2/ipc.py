@@ -175,6 +175,15 @@ class V2DaemonClient:
     def verify_web_tools(self, *, actor_user_id: str, kind: str) -> dict[str, Any]:
         return self.request("verify_web_tools", actor_user_id=actor_user_id, kind=kind)
 
+    def media_tools_settings(self, *, actor_user_id: str) -> dict[str, Any]:
+        return self.request("media_tools_settings", actor_user_id=actor_user_id)
+
+    def save_media_tools_settings(self, *, actor_user_id: str, kind: str, values: dict[str, Any]) -> dict[str, Any]:
+        return self.request("save_media_tools_settings", actor_user_id=actor_user_id, kind=kind, values=values)
+
+    def verify_media_tools(self, *, actor_user_id: str, kind: str, sample: str = "") -> dict[str, Any]:
+        return self.request("verify_media_tools", actor_user_id=actor_user_id, kind=kind, sample=sample)
+
     def agent_config_documents(self) -> dict[str, Any]:
         return self.request("agent_config_documents")
 
@@ -402,6 +411,12 @@ class V2DaemonServer:
             return {"settings": self.daemon.save_web_tools_settings(actor_user_id=str(params.get("actor_user_id") or ""), values=dict(params.get("values") or {}))}
         if method == "verify_web_tools":
             return {"result": self.daemon.verify_web_tools(actor_user_id=str(params.get("actor_user_id") or ""), kind=str(params.get("kind") or ""))}
+        if method == "media_tools_settings":
+            return {"settings": self.daemon.media_tools_settings(actor_user_id=str(params.get("actor_user_id") or ""))}
+        if method == "save_media_tools_settings":
+            return {"settings": self.daemon.save_media_tools_settings(actor_user_id=str(params.get("actor_user_id") or ""), kind=str(params.get("kind") or ""), values=dict(params.get("values") or {}))}
+        if method == "verify_media_tools":
+            return self.daemon.verify_media_tools(actor_user_id=str(params.get("actor_user_id") or ""), kind=str(params.get("kind") or ""), sample=str(params.get("sample") or ""))
         if method == "users":
             return {"users": self.daemon.list_users()}
         if method == "create_user":

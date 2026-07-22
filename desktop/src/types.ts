@@ -42,6 +42,13 @@ export type AgentDocument = { file_name: string; display_name: string; content?:
 export type InferenceSettings = { provider_key: string; model_id: string; validation_error?: string };
 export type WebToolsSettings = { enabled: boolean; searxng_base_url: string; search_timeout_seconds: number; fetch_timeout_seconds: number; fetch_max_chars: number; configured: boolean; available: boolean };
 export type MemorySettings = { max_ledger_bytes: number; compaction_summary_max_words: number };
+export type VerificationState = { ready: boolean; verified_at: string; error: string; preview: string };
+export type MediaToolsSettings = {
+  platform: string; say_available: boolean;
+  tts: { enabled: boolean; model_id: string; device_map: string; dtype: string; language: string; speaker: string; instruct: string; attn_implementation: string; local_files_only: boolean; available: boolean; verification: VerificationState };
+  stt: { enabled: boolean; executable_path: string; model: string; default_language: string; available: boolean; verification: VerificationState };
+  ocr: { enabled: boolean; ollama_base_url: string; model_id: string; timeout_seconds: number; available: boolean; verification: VerificationState };
+};
 
 export type ChatMessage = {
   id: string;

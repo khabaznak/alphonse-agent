@@ -85,6 +85,7 @@ TUI_SLASH_COMMANDS: tuple[tuple[str, str], ...] = (
     ("/model", "Select and validate an inference model"),
     ("/agent-config", "Edit global agent configuration"),
     ("/scheduled-tasks", "Manage scheduled tasks"),
+    ("/tools", "Configure optional local media tools"),
     ("/settings", "Configure local user data"),
     ("/users", "Manage Alphonse users"),
 )
@@ -241,7 +242,7 @@ def queue_tui_input(runtime: TuiRuntime, prompt: str) -> TuiSubmissionResult:
         )
 
     command = detect_tui_slash_command(raw_prompt)
-    if command in {"project", "project-context", "integrations", "model-provider", "model", "agent-config", "scheduled-tasks", "settings", "users"}:
+    if command in {"project", "project-context", "integrations", "model-provider", "model", "agent-config", "scheduled-tasks", "tools", "settings", "users"}:
         return TuiSubmissionResult(
             prompt=prompt_value,
             response="",
@@ -986,6 +987,51 @@ def _build_textual_app_class() -> type[Any]:
             except Exception as exc:
                 self.query_one("#settings-notice", Static).update(str(exc)); return
             self.dismiss(True)
+
+    class MediaToolsScreen(ModalScreen[bool]):
+        def __init__(self, settings: dict[str, Any], save: Callable[[str, dict[str, Any]], dict[str, Any]], verify: Callable[[str, str], dict[str, Any]]) -> None:
+            super().__init__(); self.settings = settings; self.save = save; self.verify = verify
+
+        def compose(self) -> ComposeResult:
+            tts = dict(self.settings.get("tts") or {}); stt = dict(self.settings.get("stt") or {}); ocr = dict(self.settings.get("ocr") or {})
+            with Vertical(id="project-dialog"):
+                yield Static("Local Media Tools", classes="dialog-title")
+                yield Static(f"TTS ready: {tts.get('available')} | macOS say available: {self.settings.get('say_available')}", id="tts-status")
+                for key in ("enabled", "model_id", "device_map", "dtype", "language", "speaker", "instruct", "attn_implementation", "local_files_only"):
+                    yield Input(value=str(tts.get(key, "")), placeholder=key, id=f"tts-{key}")
+                yield Input(value="Alphonse text-to-speech verification.", id="tts-sample")
+                yield Button("Save TTS", id="save-tts", variant="primary"); yield Button("Verify TTS", id="verify-tts")
+                yield Static(f"STT ready: {stt.get('available')}", id="stt-status")
+                for key in ("enabled", "executable_path", "model", "default_language"):
+                    yield Input(value=str(stt.get(key, "")), placeholder=key, id=f"stt-{key}")
+                yield Input(placeholder="Audio sample path", id="stt-sample")
+                yield Button("Save STT", id="save-stt", variant="primary"); yield Button("Verify STT", id="verify-stt")
+                yield Static(f"OCR ready: {ocr.get('available')}", id="ocr-status")
+                for key in ("enabled", "ollama_base_url", "model_id", "timeout_seconds"):
+                    yield Input(value=str(ocr.get(key, "")), placeholder=key, id=f"ocr-{key}")
+                yield Input(placeholder="Image sample path", id="ocr-sample")
+                yield Button("Save OCR", id="save-ocr", variant="primary"); yield Button("Verify OCR", id="verify-ocr")
+                yield Static("", id="media-tools-notice"); yield Button("Close", id="close-media-tools")
+
+        def on_button_pressed(self, event: Button.Pressed) -> None:
+            action = str(event.button.id or "")
+            if action == "close-media-tools": self.dismiss(True); return
+            kind = action.rsplit("-", 1)[-1]
+            try:
+                if action.startswith("save-"):
+                    keys = {"tts": ("enabled", "model_id", "device_map", "dtype", "language", "speaker", "instruct", "attn_implementation", "local_files_only"), "stt": ("enabled", "executable_path", "model", "default_language"), "ocr": ("enabled", "ollama_base_url", "model_id", "timeout_seconds")}[kind]
+                    values: dict[str, Any] = {key: self.query_one(f"#{kind}-{key}", Input).value for key in keys}
+                    for key in ("enabled", "local_files_only"):
+                        if key in values: values[key] = str(values[key]).strip().lower() in {"1", "true", "yes", "on"}
+                    if kind == "ocr": values["timeout_seconds"] = float(values["timeout_seconds"])
+                    self.settings = self.save(kind, values)
+                    self.query_one("#media-tools-notice", Static).update(f"{kind.upper()} saved; verify it to enable readiness.")
+                else:
+                    sample = self.query_one(f"#{kind}-sample", Input).value
+                    result = self.verify(kind, sample); self.settings = dict(result.get("settings") or self.settings)
+                    error = ((result.get("result") or {}).get("exception") or {}).get("message") if isinstance(result, dict) else ""
+                    self.query_one("#media-tools-notice", Static).update(str(error or f"{kind.upper()} verified."))
+            except Exception as exc: self.query_one("#media-tools-notice", Static).update(str(exc))
 
     class UsersScreen(ModalScreen[bool]):
         def __init__(
@@ -1791,6 +1837,9 @@ def _build_textual_app_class() -> type[Any]:
                 self.query_one("#chat", RichLog).write(Text.assemble((self.runtime.user, "bold cyan"), f": {prompt.strip()}"))
                 self._open_scheduled_tasks()
                 return
+            if command == "tools":
+                self._open_media_tools()
+                return
             if command == "settings":
                 self._open_user_settings()
                 return
@@ -1964,6 +2013,20 @@ def _build_textual_app_class() -> type[Any]:
                 self.push_screen(UserSettingsScreen(_settings(), _save), callback=lambda _: self._refresh_status())
             except Exception as exc:
                 self.query_one("#activity", Static).update(f"Settings unavailable: {exc}")
+
+        def _open_media_tools(self) -> None:
+            try:
+                def load() -> dict[str, Any]:
+                    return self.daemon_client.request("media_tools_settings", actor_user_id=self.runtime.user).get("settings", {}) if self.external_daemon else self.runtime.media_tools_settings_store.get().to_dict()
+                def save(kind: str, values: dict[str, Any]) -> dict[str, Any]:
+                    if self.external_daemon: return self.daemon_client.request("save_media_tools_settings", actor_user_id=self.runtime.user, kind=kind, values=values).get("settings", {})
+                    return self.runtime.media_tools_settings_store.update(kind, values).to_dict()
+                def verify(kind: str, sample: str) -> dict[str, Any]:
+                    if self.external_daemon: return self.daemon_client.request("verify_media_tools", actor_user_id=self.runtime.user, kind=kind, sample=sample)
+                    if self.daemon is None: raise RuntimeError("daemon_required")
+                    return self.daemon.verify_media_tools(actor_user_id=self.runtime.user, kind=kind, sample=sample)
+                self.push_screen(MediaToolsScreen(load(), save, verify), callback=lambda _: self._refresh_status())
+            except Exception as exc: self.query_one("#activity", Static).update(f"Media tools unavailable: {exc}")
 
         def _open_users(self) -> None:
             def _list() -> list[dict[str, Any]]:
