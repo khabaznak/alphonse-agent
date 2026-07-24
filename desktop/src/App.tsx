@@ -1,5 +1,5 @@
 import { FormEvent, KeyboardEvent, ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { daemonRequest, ensureDaemon, stopDaemon } from "./api";
+import { daemonRequest, ensureDaemon, showInFinder, stopDaemon } from "./api";
 import { matchingCommands } from "./commands";
 import { A2uiSurfaceView, applyA2uiEvent, DESKTOP_CATALOG_ID } from "./a2ui";
 import { agentStateLabel, capdActivityLabel, projectKey } from "./layoutState";
@@ -18,6 +18,7 @@ type PollResponse = {
   status: { active_work: Record<string, string>; activity: { state?: string } };
 };
 type HistoryResponse = { messages: ChatMessage[] };
+type RecentFilesResponse = { files: Array<{ name: string; kind: "file" | "directory"; modified_at: string }> };
 type Provider = { provider_key: string; display_name: string; models: Array<{ model_id: string; display_name: string }> };
 
 export default function App() {
@@ -43,6 +44,9 @@ export default function App() {
   const [error, setError] = useState("");
   const [surfaces, setSurfaces] = useState<Record<string, import("./a2ui").A2uiSurface>>({});
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [recentFilesOpen, setRecentFilesOpen] = useState(false);
+  const [recentFiles, setRecentFiles] = useState<RecentFilesResponse["files"]>([]);
+  const [recentFilesError, setRecentFilesError] = useState("");
   const [enterToSend, setEnterToSend] = useState(() => window.localStorage.getItem("alphonse.desktop.enterToSend") !== "false");
   const currentProjectKey = projectKey(project?.project_id);
 
@@ -114,10 +118,27 @@ export default function App() {
     element.style.height = `${Math.min(element.scrollHeight, 4 * 22 + 24)}px`;
   }, [prompt]);
 
+  useEffect(() => {
+    if (!recentFilesOpen || !project) return;
+    let active = true;
+    setRecentFilesError("");
+    void daemonRequest<RecentFilesResponse>("project_recent_files", { user, project_id: project.project_id, limit: 4 })
+      .then((result) => { if (active) setRecentFiles(result.files); })
+      .catch((cause: unknown) => {
+        if (!active) return;
+        setRecentFiles([]);
+        setRecentFilesError(cause instanceof Error ? cause.message : "Recent files could not be loaded");
+      });
+    return () => { active = false; };
+  }, [project, recentFilesOpen, user]);
+
   const selectProject = useCallback(async (next: Project) => {
     const nextKey = projectKey(next.project_id);
     setMessageBuckets((buckets) => ({ ...buckets, [currentProjectKey]: messages }));
     setProject(next);
+    setRecentFilesOpen(false);
+    setRecentFiles([]);
+    setRecentFilesError("");
     setModal(null);
     setSurfaces({});
     setQuestions([]);
@@ -169,6 +190,16 @@ export default function App() {
     void submitPrompt();
   };
 
+  const revealProjectInFinder = async () => {
+    if (!project) return;
+    try {
+      await showInFinder(project.root_path);
+      setRecentFilesError("");
+    } catch (cause) {
+      setRecentFilesError(cause instanceof Error ? cause.message : "Finder could not be opened");
+    }
+  };
+
   const runCommand = async (command: string) => {
     if (command === "/project") return setModal("projects");
     if (command === "/project-context") return setModal("project-context");
@@ -197,7 +228,17 @@ export default function App() {
           <span className="brand-name">Alphonse</span>
           <button className="collapse-toggle" type="button" onClick={() => setSidebarCollapsed((value) => !value)} aria-label={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}>{sidebarCollapsed ? ">" : "<"}</button>
         </div>
-        <button title="Projects" onClick={() => setModal("projects")}><span>Project</span><small>{project?.name || "Home"}</small></button>
+        <section className="project-sidebar-section">
+          <div className="project-sidebar-header">
+            <button className="project-selector" title="Projects" onClick={() => setModal("projects")}><span>Project</span><small>{project?.name || "Home"}</small></button>
+            {project && <button className="project-disclosure" type="button" title={recentFilesOpen ? "Hide recent files" : "Show recent files"} aria-label={recentFilesOpen ? "Hide recent files" : "Show recent files"} aria-expanded={recentFilesOpen} onClick={() => setRecentFilesOpen((open) => !open)}>{recentFilesOpen ? "⌄" : "›"}</button>}
+          </div>
+          {project && recentFilesOpen && <div className="recent-files-panel">
+            <div className="recent-files-heading"><span>Recent files</span><button type="button" onClick={() => void revealProjectInFinder()}>Show in Finder</button></div>
+            {recentFilesError && <p className="recent-files-error" role="alert">{recentFilesError}</p>}
+            {!recentFilesError && (recentFiles.length ? <ul>{recentFiles.map((file) => <li key={`${file.kind}:${file.name}`}><span className="recent-file-icon" aria-hidden="true">{file.kind === "directory" ? "📁" : "📄"}</span><span className="recent-file-name" title={file.name}>{file.name}</span><small>{dateLabel(file.modified_at)}</small></li>)}</ul> : <p className="recent-files-empty">No accessible files yet.</p>)}
+          </div>}
+        </section>
         <button title="Scheduled tasks" onClick={() => setModal("scheduled-tasks")}><span>Scheduled tasks</span></button>
         <button title="Users" onClick={() => setModal("users")}><span>Users</span></button>
         <button title="Settings" onClick={() => { setSettingsTab("general"); setModal("settings"); }}><span>Settings</span></button>

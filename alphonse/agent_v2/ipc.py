@@ -448,6 +448,14 @@ class V2DaemonServer:
             return {"request": self.daemon.reject_access_request(request_id=str(params.get("request_id") or ""))}
         if method == "projects":
             return {"projects": self.daemon.list_projects(user=str(params.get("user") or ""))}
+        if method == "project_recent_files":
+            return {
+                "files": self.daemon.project_recent_files(
+                    user=str(params.get("user") or ""),
+                    project_id=str(params.get("project_id") or ""),
+                    limit=int(params.get("limit") or 4),
+                )
+            }
         if method == "manageable_projects":
             return {"projects": self.daemon.manageable_projects(user=str(params.get("user") or ""), status=str(params.get("status") or ""))}
         if method == "create_project":

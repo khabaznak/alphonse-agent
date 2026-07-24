@@ -50,6 +50,31 @@ async fn stop_daemon() -> Result<(), String> {
     ipc_request("stop", json!({})).await.map(|_| ())
 }
 
+#[tauri::command]
+fn show_in_finder(path: String) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        let root = PathBuf::from(path);
+        if !root.is_dir() {
+            return Err("Project directory is unavailable".into());
+        }
+        let status = Command::new("open")
+            .arg(&root)
+            .status()
+            .map_err(|error| format!("Could not open Finder: {error}"))?;
+        if status.success() {
+            Ok(())
+        } else {
+            Err("Finder could not open the project directory".into())
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = path;
+        Err("Show in Finder is available on macOS only".into())
+    }
+}
+
 async fn ipc_request(method: &str, params: Value) -> Result<Value, String> {
     let mut stream = UnixStream::connect(socket_path())
         .await
@@ -102,7 +127,8 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             ensure_daemon,
             daemon_request,
-            stop_daemon
+            stop_daemon,
+            show_in_finder
         ])
         .run(tauri::generate_context!())
         .expect("error while running Alphonse Desktop");

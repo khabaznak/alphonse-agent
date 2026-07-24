@@ -11,3 +11,7 @@ export async function daemonRequest<T>(method: string, params: Record<string, un
 export async function stopDaemon(): Promise<void> {
   await invoke("stop_daemon");
 }
+
+export async function showInFinder(path: string): Promise<void> {
+  await invoke("show_in_finder", { path });
+}

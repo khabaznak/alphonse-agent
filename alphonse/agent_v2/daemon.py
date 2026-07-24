@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import signal
 import fcntl
+import os
 import sqlite3
 import shutil
 import threading
@@ -585,6 +586,42 @@ class V2Daemon:
     def list_projects(self, *, user: str) -> list[dict[str, str]]:
         normalized = self._admin_user_id(user)
         return [project.to_dict() for project in self.runtime.project_store.list_visible_projects(normalized, requester_is_admin=True)]
+
+    def project_recent_files(self, *, user: str, project_id: str, limit: int = 4) -> list[dict[str, str]]:
+        """Return the newest accessible direct children of an authorized project root."""
+        actor = self._admin_user_id(user)
+        project = self.runtime.project_store.get_project(
+            project_id,
+            requester_user_id=actor,
+            requester_is_admin=True,
+        )
+        if project is None:
+            raise ValueError("project_not_found")
+
+        root = Path(project.root_path).expanduser()
+        if not root.is_dir():
+            return []
+        entries: list[tuple[float, dict[str, str]]] = []
+        try:
+            children = root.iterdir()
+            for child in children:
+                if child.name.startswith(".") or not os.access(child, os.R_OK):
+                    continue
+                try:
+                    stat = child.stat()
+                    kind = "directory" if child.is_dir() else "file"
+                except OSError:
+                    continue
+                entries.append((stat.st_mtime, {
+                    "name": child.name,
+                    "kind": kind,
+                    "modified_at": datetime.fromtimestamp(stat.st_mtime, timezone.utc).isoformat(),
+                }))
+        except OSError:
+            return []
+        entries.sort(key=lambda item: item[0], reverse=True)
+        bounded_limit = max(1, min(int(limit or 4), 4))
+        return [entry for _, entry in entries[:bounded_limit]]
 
     def manageable_projects(self, *, user: str, status: str = "") -> list[dict[str, Any]]:
         actor = self._admin_user_id(user)

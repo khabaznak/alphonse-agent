@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+
 import pytest
 
 from alphonse.agent_v2.core.inference import InferencePurpose
@@ -311,6 +313,44 @@ def test_desktop_project_ipc_uses_the_daemon_owned_store(tmp_path) -> None:
     assert daemon.ipc._dispatch(
         {"method": "project_context", "params": {"user": "alex", "project_id": created["project_id"]}}
     )["content"] == "Focus here."
+
+
+def test_project_recent_files_ipc_lists_newest_visible_direct_children(tmp_path) -> None:
+    runtime = build_runtime_host(inference=_router(), schedule_store=ScheduledTaskStore(":memory:"))
+    daemon = V2Daemon(runtime)
+    project = runtime.project_store.create_project(name="Recent files", root_path=str(tmp_path / "recent-files"), owner_user_id="alex")
+    root = tmp_path / "recent-files"
+    children = [root / "old.txt", root / "notes.md", root / "assets", root / "latest.py", root / "fifth.txt"]
+    children[2].mkdir()
+    for child in children:
+        if child.is_dir():
+            continue
+        child.write_text(child.name, encoding="utf-8")
+    (root / ".hidden.txt").write_text("hidden", encoding="utf-8")
+    nested = root / "assets" / "nested.txt"
+    nested.write_text("nested", encoding="utf-8")
+    for index, child in enumerate(children, start=1):
+        modified_at = 2_000_000_000 + index
+        os.utime(child, (modified_at, modified_at))
+    os.utime(nested, (2_000_000_999, 2_000_000_999))
+
+    result = daemon.ipc._dispatch(
+        {"method": "project_recent_files", "params": {"user": "alex", "project_id": project.project_id, "limit": 99}}
+    )["files"]
+
+    assert [item["name"] for item in result] == ["fifth.txt", "latest.py", "assets", "notes.md"]
+    assert [item["kind"] for item in result] == ["file", "file", "directory", "file"]
+    assert all(not item["name"].startswith(".") for item in result)
+
+
+def test_project_recent_files_ipc_rejects_unknown_project(tmp_path) -> None:
+    runtime = build_runtime_host(inference=_router(), schedule_store=ScheduledTaskStore(":memory:"))
+    daemon = V2Daemon(runtime)
+
+    with pytest.raises(ValueError, match="project_not_found"):
+        daemon.ipc._dispatch(
+            {"method": "project_recent_files", "params": {"user": "alex", "project_id": "missing"}}
+        )
 
 
 def test_scheduled_task_ipc_scopes_owners_and_manages_task_lifecycle(tmp_path) -> None:
