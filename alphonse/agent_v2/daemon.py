@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import signal
+import json
 import fcntl
 import os
 import sqlite3
@@ -60,6 +61,7 @@ from alphonse.agent_v2.runtime import refresh_runtime_media_tools
 from alphonse.agent_v2.core.tools.registry.native.web import execute_web_fetch, execute_web_search
 from alphonse.agent_v2.assets import SQLiteAssetStore
 from alphonse.agent_v2.conversations import SQLiteConversationStore, legacy_ledger_events
+from alphonse.agent_v2.automations import EventAutomationStore
 
 
 @dataclass
@@ -67,8 +69,18 @@ class V2Daemon:
     runtime: V2RuntimeHost
     poll_interval_sec: float = 0.05
     inbound_max_attempts: int = 5
+    event_store: EventAutomationStore | None = None
 
     def __post_init__(self) -> None:
+        schedule_db_path = str(getattr(self.runtime.schedule_store, "db_path", ":memory:"))
+        self.event_store = self.event_store or (
+            EventAutomationStore(":memory:")
+            if schedule_db_path == ":memory:"
+            else EventAutomationStore(
+                os.getenv("ALPHONSE_V2_AUTOMATIONS_DB_PATH")
+                or str(Path(schedule_db_path).with_name("v2-automations.sqlite3"))
+            )
+        )
         self.daemon_id = f"daemon-{uuid4().hex[:12]}"
         if hasattr(self.runtime.queue, "lease_owner"):
             self.runtime.queue.lease_owner = self.daemon_id
@@ -739,6 +751,46 @@ class V2Daemon:
             "project_id": routed.project_id,
         }
 
+    def publish_event(self, **values: Any) -> dict[str, Any]:
+        assert self.event_store is not None
+        result = self.event_store.publish(
+            worker_id=str(values.get("worker_id") or ""), event_id=str(values.get("event_id") or ""),
+            event_type=str(values.get("event_type") or ""), event_version=str(values.get("event_version") or ""),
+            occurred_at=str(values.get("occurred_at") or ""), payload=dict(values.get("payload") or {}),
+        )
+        if not result.get("accepted") or result.get("duplicate"):
+            return result
+        for execution in self.event_store.claim_event_executions():
+            payload = _event_payload(execution)
+            queued = self.runtime.channel.queue_message(
+                prompt=str(execution["prompt"]), user=str(execution["owner_user_id"]), project_id=str(execution["project_id"]),
+                metadata={"source": "event_automation", "automation_id": str(execution["automation_id"]), "automation_execution_id": str(execution["execution_id"]), "event": payload, "channel": _json_object(execution.get("origin_channel_json"))},
+                message_id=f"event:{execution['execution_id']}",
+            )
+            self.event_store.mark_execution_enqueued(str(execution["execution_id"]), queued.message_id)
+        return result
+
+    def register_event_worker(self, **values: Any) -> dict[str, Any]:
+        assert self.event_store is not None
+        return self.event_store.register_worker(worker_id=str(values.get("worker_id") or ""), display_name=str(values.get("display_name") or ""), allowed_event_types=[str(item) for item in values.get("allowed_event_types", []) if str(item)], enabled=bool(values.get("enabled", True))).to_dict()
+
+    def register_event_type(self, **values: Any) -> dict[str, Any]:
+        assert self.event_store is not None
+        return self.event_store.register_event_type(event_type=str(values.get("event_type") or ""), version=str(values.get("version") or ""), schema=dict(values.get("schema") or {}), max_history=int(values.get("max_history") or 500), enabled=bool(values.get("enabled", True))).to_dict()
+
+    def create_event_automation(self, **values: Any) -> dict[str, Any]:
+        assert self.event_store is not None
+        return self.event_store.create_event_automation(owner_user_id=self._admin_user_id(str(values.get("owner_user_id") or values.get("user") or "")), name=str(values.get("name") or ""), prompt=str(values.get("prompt") or ""), event_type=str(values.get("event_type") or ""), event_version=str(values.get("event_version") or ""), filters=dict(values.get("filters") or {}), project_id=str(values.get("project_id") or ""), origin_channel=dict(values.get("origin_channel") or {}), enabled=bool(values.get("enabled", True))).to_dict()
+
+    def automation_catalog(self) -> dict[str, Any]:
+        assert self.event_store is not None
+        schedules = [
+            {"automation_id": task.scheduled_task_id, "name": task.name, "trigger_kind": "schedule", "status": task.status, "trigger": dict(task.schedule)}
+            for task in self.runtime.schedule_store.list_tasks(limit=1000)
+        ]
+        events = [{**item.to_dict(), "trigger_kind": "event"} for item in self.event_store.list_automations()]
+        return {"workers": [item.to_dict() for item in self.event_store.list_workers()], "event_types": [item.to_dict() for item in self.event_store.list_event_types()], "automations": schedules + events, "events": self.event_store.list_events(limit=100)}
+
     def read_project_context(self, *, user: str, project_id: str) -> dict[str, str]:
         user = self._admin_user_id(user)
         project = self.runtime.project_store.get_project(project_id, requester_user_id=user, requester_is_admin=True)
@@ -1243,6 +1295,28 @@ def _event_name(item: dict[str, Any]) -> str:
 def _scheduled_task_id_from_surface(surface_id: str) -> str:
     value = str(surface_id or "").strip()
     return value.removeprefix("scheduled-task:") if value.startswith("scheduled-task:") else ""
+
+
+def _json_object(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return dict(value)
+    try:
+        parsed = json.loads(str(value or "{}"))
+    except (TypeError, ValueError):
+        return {}
+    return dict(parsed) if isinstance(parsed, dict) else {}
+
+
+def _event_payload(execution: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "event_key": str(execution.get("event_key") or ""),
+        "worker_id": str(execution.get("worker_id") or ""),
+        "event_id": str(execution.get("source_event_id") or ""),
+        "event_type": str(execution.get("event_type") or ""),
+        "event_version": str(execution.get("event_version") or ""),
+        "occurred_at": str(execution.get("occurred_at") or ""),
+        "payload": _json_object(execution.get("payload_json")),
+    }
 
 
 def _scheduled_task_result(task_state: Any) -> dict[str, Any] | None:

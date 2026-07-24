@@ -1,4 +1,11 @@
 #!/bin/sh
 # Development fallback. Release packaging replaces this with the PyInstaller
 # executable emitted by ../scripts/build-daemon-sidecar.sh.
-exec alphonse start
+root="$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)"
+python="$root/.venv/bin/python"
+if [ -x "$python" ]; then
+  cd "$root"
+  exec "$python" -m alphonse.agent_v2.daemon
+fi
+cd "$root"
+exec python3 -m alphonse.agent_v2.daemon

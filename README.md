@@ -133,6 +133,7 @@ runtime files are stored under `~/.alphonse/`:
 - `v2-messages.sqlite3` — durable inbound message queue
 - `v2-outbox.sqlite3` — durable outbound message queue
 - `v2-scheduled-tasks.sqlite3` — scheduled task definitions and executions
+- `v2-automations.sqlite3` — registered local workers, event types, event history, and event automations
 - `v2-integrations.sqlite3` — integration configuration and local secrets
 - `v2-inference.sqlite3` — daemon-wide inference provider and model selection
 - `agent-config/` — editable `GlobalContext.md` and `Philosophy.md` snapshots
@@ -147,6 +148,7 @@ ALPHONSE_V2_SOCKET_PATH=
 ALPHONSE_V2_MESSAGES_DB_PATH=
 ALPHONSE_V2_OUTBOX_DB_PATH=
 ALPHONSE_V2_SCHEDULE_DB_PATH=
+ALPHONSE_V2_AUTOMATIONS_DB_PATH=
 ALPHONSE_V2_INTEGRATIONS_DB_PATH=
 ALPHONSE_V2_AGENT_CONFIG_DIR=
 ALPHONSE_V2_PROJECT_SESSION_DB_PATH=
@@ -263,6 +265,28 @@ python -m alphonse.agent_v2.daemon
 The daemon must remain running for scheduled tasks to trigger. The task definition,
 execution record, inbound message, and outbound response are stored separately so
 work can be inspected after a restart.
+
+### Local event workers and automations
+
+Alphonse can also react to external facts without polling every provider. A
+same-host worker (for example, a plant monitor, doorbell listener, or geofence
+sidecar) publishes a typed event through the daemon's owner-only Unix socket.
+Workers never write directly to the queue and cannot submit arbitrary prompts.
+
+Before a worker can publish, an administrator registers its worker ID, the
+event types it may emit, and a versioned JSON Schema for each event payload.
+Accepted events are deduplicated by worker ID plus producer event ID, retained
+in bounded history, and fan out to all matching active event automations.
+Unknown, unauthorized, invalid, or duplicate events are ignored.
+
+An event automation has a fixed prompt and may restrict events with exact
+top-level payload filters. Its validated event data is attached as structured
+metadata when Alphonse processes the task. Manage workers, event types, and
+event automations in Desktop **Settings → Automations**. Existing scheduled
+tasks appear in the same automation catalog and retain their current APIs.
+
+For the local IPC event envelope and an example, see
+[`docs/local_event_workers.md`](docs/local_event_workers.md).
 
 The v2 daemon is the active development runtime. The legacy commands below use
 the v1 Heart and timed-signal pipeline and are retained for v1 compatibility.

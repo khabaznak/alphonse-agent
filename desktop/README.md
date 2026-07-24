@@ -12,14 +12,17 @@ npm run tauri dev
 ```
 
 Desktop first connects to the configured local v2 socket. If no daemon is
-available, development builds run `alphonse start` and wait for it to become
-healthy.
+available, development builds launch the repository's `.venv/bin/python -m
+alphonse.agent_v2.daemon` from the project root, falling back to `python3` when
+no project virtual environment exists, then wait for it to become healthy.
+Install project dependencies first (`.venv/bin/python -m pip install -r
+requirements.txt`), including the event-worker JSON Schema dependency.
 
 ## Release sidecar
 
 Tauri expects a target-specific executable at
 `src-tauri/binaries/alphonse-daemon-<target-triple>`. The committed macOS ARM
-wrapper starts a locally installed daemon for development. Replace it with the
+wrapper starts the daemon from the project virtual environment for development. Replace it with the
 standalone executable before packaging:
 
 ```bash

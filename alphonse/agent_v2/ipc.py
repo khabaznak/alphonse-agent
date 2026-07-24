@@ -57,6 +57,9 @@ class V2DaemonClient:
     def queue_message(self, **message: Any) -> dict[str, Any]:
         return self.request("queue_message", **message)
 
+    def publish_event(self, **event: Any) -> dict[str, Any]:
+        return self.request("publish_event", **event)
+
     def events(self) -> list[dict[str, Any]]:
         result = self.request("events")
         events = result.get("events")
@@ -579,6 +582,16 @@ class V2DaemonServer:
                 channel_target=str(params.get("channel_target") or ""),
                 provider_message_id=str(params.get("provider_message_id") or ""),
             )
+        if method == "publish_event":
+            return self.daemon.publish_event(**params)
+        if method == "register_event_worker":
+            return {"worker": self.daemon.register_event_worker(**params)}
+        if method == "register_event_type":
+            return {"event_type": self.daemon.register_event_type(**params)}
+        if method == "create_event_automation":
+            return {"automation": self.daemon.create_event_automation(**params)}
+        if method == "automation_catalog":
+            return self.daemon.automation_catalog()
         if method == "scheduled_tasks":
             status = str(params.get("status") or "").strip() or None
             return {"tasks": self.daemon.scheduled_tasks(

@@ -18,9 +18,13 @@ async fn ensure_daemon(app: AppHandle) -> Result<(), String> {
     }
 
     if cfg!(debug_assertions) {
-        Command::new("alphonse")
-            .arg("start")
-            .status()
+        let project_root = development_project_root();
+        let python = project_root.join(".venv").join("bin").join("python");
+        let executable = if python.is_file() { python } else { PathBuf::from("python3") };
+        Command::new(executable)
+            .args(["-m", "alphonse.agent_v2.daemon"])
+            .current_dir(project_root)
+            .spawn()
             .map_err(|error| format!("could not start the development daemon: {error}"))?;
     } else {
         app.shell()
@@ -38,6 +42,14 @@ async fn ensure_daemon(app: AppHandle) -> Result<(), String> {
         sleep(Duration::from_millis(150)).await;
     }
     Err("Alphonse daemon did not become ready".into())
+}
+
+fn development_project_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(|path| path.parent())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("."))
 }
 
 #[tauri::command]
