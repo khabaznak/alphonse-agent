@@ -5,7 +5,8 @@ import { A2uiSurfaceView, applyA2uiEvent, DESKTOP_CATALOG_ID } from "./a2ui";
 import { agentStateLabel, capdActivityLabel, projectKey } from "./layoutState";
 import type { ActivityEvent, AgentDocument, ChatMessage, InferenceSettings, MediaToolsSettings, MemorySettings, Project, Question, WebToolsSettings } from "./types";
 
-type Modal = "projects" | "project-settings" | "project-context" | "integrations" | "model" | "agent-config" | "scheduled-tasks" | "settings" | "users" | "onboarding" | null;
+type Modal = "projects" | "project-settings" | "project-context" | "scheduled-tasks" | "settings" | "users" | "onboarding" | null;
+type SettingsTab = "general" | "tools" | "integrations" | "model" | "agent-config";
 type ManagedProject = Project & { owner?: { display_name?: string; user_id?: string } | null };
 type PollResponse = {
   events: ActivityEvent[];
@@ -36,6 +37,7 @@ export default function App() {
   const [project, setProject] = useState<Project | null>(null);
   const [projectForSettings, setProjectForSettings] = useState<ManagedProject | null>(null);
   const [modal, setModal] = useState<Modal>(null);
+  const [settingsTab, setSettingsTab] = useState<SettingsTab>("general");
   const [user, setUser] = useState("");
   const [error, setError] = useState("");
   const [surfaces, setSurfaces] = useState<Record<string, import("./a2ui").A2uiSurface>>({});
@@ -169,11 +171,11 @@ export default function App() {
   const runCommand = async (command: string) => {
     if (command === "/project") return setModal("projects");
     if (command === "/project-context") return setModal("project-context");
-    if (command === "/integrations") return setModal("integrations");
-    if (command === "/model" || command === "/model-provider") return setModal("model");
-    if (command === "/agent-config") return setModal("agent-config");
+    if (command === "/integrations") { setSettingsTab("integrations"); return setModal("settings"); }
+    if (command === "/model" || command === "/model-provider") { setSettingsTab("model"); return setModal("settings"); }
+    if (command === "/agent-config") { setSettingsTab("agent-config"); return setModal("settings"); }
     if (command === "/scheduled-tasks") return setModal("scheduled-tasks");
-    if (command === "/settings") return setModal("settings");
+    if (command === "/settings") { setSettingsTab("general"); return setModal("settings"); }
     if (command === "/users") return setModal("users");
     if (command === "/stop") {
       if (window.confirm("Stop the Alphonse daemon?")) await stopDaemon();
@@ -195,12 +197,9 @@ export default function App() {
           <button className="collapse-toggle" type="button" onClick={() => setSidebarCollapsed((value) => !value)} aria-label={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}>{sidebarCollapsed ? ">" : "<"}</button>
         </div>
         <button title="Projects" onClick={() => setModal("projects")}><span>Project</span><small>{project?.name || "Home"}</small></button>
-        <button title="Integrations" onClick={() => setModal("integrations")}><span>Integrations</span></button>
-        <button title="Model" onClick={() => setModal("model")}><span>Model</span></button>
-        <button title="Agent configuration" onClick={() => setModal("agent-config")}><span>Agent configuration</span></button>
         <button title="Scheduled tasks" onClick={() => setModal("scheduled-tasks")}><span>Scheduled tasks</span></button>
         <button title="Users" onClick={() => setModal("users")}><span>Users</span></button>
-        <button title="Settings" onClick={() => setModal("settings")}><span>Settings</span></button>
+        <button title="Settings" onClick={() => { setSettingsTab("general"); setModal("settings"); }}><span>Settings</span></button>
       </aside>
 
       <section className="conversation">
@@ -212,7 +211,7 @@ export default function App() {
         </header>
         {error && <div className="error" role="alert">{error}</div>}
         <div className="timeline" ref={timelineRef} aria-live="polite">
-          {messages.map((message) => <article className={`message ${message.role}`} key={message.id}>{message.content}</article>)}
+          {messages.map((message) => <article className={`message ${message.role}`} key={message.id}>{message.source && !["desktop", "ledger"].includes(message.source) && <small className="message-source">{message.source}</small>}{message.content}</article>)}
         </div>
         <section className="input-dock">
           {activeSurface ? (
@@ -232,11 +231,8 @@ export default function App() {
       {modal === "projects" && <ProjectsModal user={user} active={project} onSelect={(next) => void selectProject(next)} onSettings={(next) => { setProjectForSettings(next); setModal("project-settings"); }} onClose={() => setModal(null)} />}
       {modal === "project-settings" && projectForSettings && <ProjectSettingsModal user={user} project={projectForSettings} onBack={() => setModal("projects")} onClose={() => setModal(null)} />}
       {modal === "project-context" && <ProjectContextModal user={user} project={project} onClose={() => setModal(null)} />}
-      {modal === "integrations" && <IntegrationsModal user={user} onClose={() => setModal(null)} />}
-      {modal === "model" && <ModelModal onClose={() => setModal(null)} />}
-      {modal === "agent-config" && <AgentConfigModal onClose={() => setModal(null)} />}
       {modal === "scheduled-tasks" && <ScheduledTasksModal actorUserId={user} onClose={() => setModal(null)} />}
-      {modal === "settings" && <SettingsModal enterToSend={enterToSend} onEnterToSendChange={setEnterToSend} onClose={() => setModal(null)} />}
+      {modal === "settings" && <SettingsModal user={user} initialTab={settingsTab} enterToSend={enterToSend} onEnterToSendChange={setEnterToSend} onClose={() => setModal(null)} />}
       {modal === "users" && <UsersModal onClose={() => setModal(null)} />}
       {modal === "onboarding" && <OnboardingModal onComplete={(next) => { setUser(next); setModal(null); void poll(); }} />}
     </main>

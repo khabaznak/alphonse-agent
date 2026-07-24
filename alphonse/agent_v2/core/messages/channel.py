@@ -16,6 +16,7 @@ class CommunicationChannel:
     """Single producer-facing interface for queueing messages."""
 
     messages: MessageQueue
+    conversation_store: Any | None = None
 
     def queue_message(
         self,
@@ -73,9 +74,13 @@ class CommunicationChannel:
             metadata=merged_metadata,
         )
         try:
-            return self.messages.enqueue(message, message_id=message_id)
+            queued = self.messages.enqueue(message, message_id=message_id)
         except TypeError:
-            return self.messages.enqueue(message)
+            queued = self.messages.enqueue(message)
+        if self.conversation_store is not None:
+            channel = merged_metadata.get("channel") if isinstance(merged_metadata.get("channel"), dict) else {}
+            self.conversation_store.record(owner_user_id=user_value, project_id=message.project_id, role="user", content=message.prompt, source=str(channel.get("integration_id") or provider_key), source_message_id=f"inbound:{queued.message_id}", created_at=message.timestamp.isoformat())
+        return queued
 
 
 def _command_metadata(prompt: str) -> dict[str, Any]:

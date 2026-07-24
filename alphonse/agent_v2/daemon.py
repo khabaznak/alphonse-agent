@@ -57,6 +57,7 @@ from alphonse.agent_v2.runtime import refresh_runtime_web_tools
 from alphonse.agent_v2.runtime import refresh_runtime_media_tools
 from alphonse.agent_v2.core.tools.registry.native.web import execute_web_fetch, execute_web_search
 from alphonse.agent_v2.assets import SQLiteAssetStore
+from alphonse.agent_v2.conversations import SQLiteConversationStore, legacy_ledger_events
 
 
 @dataclass
@@ -561,24 +562,21 @@ class V2Daemon:
     def desktop_conversation_history(self, *, user: str, project_id: str = "", limit: int = 100) -> list[dict[str, Any]]:
         normalized_user = self._admin_user_id(user)
         normalized_project = str(project_id or "").strip()
-        deliveries = self.runtime.outbox.list(
-            OutboundSelector(integration_id="desktop", channel_target=normalized_user, status=None),
-            limit=max(1, min(int(limit or 100), 500)),
-        )
-        messages: list[dict[str, Any]] = []
-        for delivery in deliveries:
-            metadata_project = str(delivery.metadata.get("project_id") or "").strip()
-            if metadata_project != normalized_project:
-                continue
-            messages.append(
-                {
-                    "id": delivery.outbox_message_id,
-                    "role": "assistant",
-                    "content": delivery.message,
-                    "created_at": delivery.created_at,
-                }
-            )
-        return messages[-max(1, min(int(limit or 100), 500)):]
+        timeline = self.runtime.conversation_store.list(owner_user_id=normalized_user, project_id=normalized_project, limit=limit)
+        if timeline:
+            return [{"id": event.event_id, "role": event.role, "content": event.content, "source": event.source, "created_at": event.created_at} for event in timeline]
+        if not normalized_project:
+            return []
+        legacy = self.runtime.core.memory.latest_content(user_id=normalized_user, project_id=normalized_project)
+        recovered = legacy_ledger_events(legacy, owner_user_id=normalized_user, project_id=normalized_project, limit=limit)
+        if recovered:
+            return recovered
+        deliveries = self.runtime.outbox.list(OutboundSelector(status=None), limit=max(1, min(int(limit or 100), 500)))
+        return [
+            {"id": delivery.outbox_message_id, "role": "assistant", "content": delivery.message, "created_at": delivery.created_at}
+            for delivery in deliveries
+            if delivery.audience_user_id == normalized_user and str(delivery.metadata.get("project_id") or "").strip() == normalized_project
+        ][-max(1, min(int(limit or 100), 500)):]
 
     def list_projects(self, *, user: str) -> list[dict[str, str]]:
         normalized = self._admin_user_id(user)
@@ -960,6 +958,7 @@ class V2Daemon:
         if step.status in {LoopStepStatus.PROCESSED, LoopStepStatus.PARKED, LoopStepStatus.WAITING}:
             projected = project_snapshot_to_outbox(snapshot=snapshot, outbox=self.runtime.outbox)
             if projected is not None:
+                self.runtime.conversation_store.record(owner_user_id=projected.audience_user_id, project_id=str(projected.metadata.get("project_id") or ""), role="assistant", content=projected.message, source=projected.integration_id, source_message_id=f"outbound:{projected.outbox_message_id}", created_at=projected.created_at)
                 occurrence_key = str(projected.metadata.get("occurrence_key") or "").strip()
                 if occurrence_key:
                     self.runtime.schedule_store.mark_occurrence_response_pending(
@@ -1150,6 +1149,7 @@ def main() -> None:
             web_tools_settings_store=SQLiteWebToolsSettingsStore.default(),
             media_tools_settings_store=SQLiteMediaToolsSettingsStore.default(),
             asset_store=SQLiteAssetStore.default(),
+            conversation_store=SQLiteConversationStore.default(),
             memory_settings_store=SQLiteMemorySettingsStore.default(),
             outbox=SQLiteOutboundStore.default(),
             integration_store=SQLiteIntegrationStore.default(),

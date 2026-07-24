@@ -48,6 +48,7 @@ from alphonse.agent_v2.media_tools_settings import SQLiteMediaToolsSettingsStore
 from alphonse.agent_v2.assets import SQLiteAssetStore
 from alphonse.agent_v2.memory_settings import SQLiteMemorySettingsStore
 from alphonse.agent_v2.core.memory import LedgerMemory
+from alphonse.agent_v2.conversations import SQLiteConversationStore
 
 
 @dataclass
@@ -103,6 +104,7 @@ class V2RuntimeHost:
     asset_store: SQLiteAssetStore
     memory_settings_store: SQLiteMemorySettingsStore
     communication_router: CommunicationRouter
+    conversation_store: SQLiteConversationStore
     integration_runtimes: list[Any] = field(default_factory=list)
     active_project_id: str = ""
     ui_events: list[CoreUiEvent] = field(default_factory=list)
@@ -132,10 +134,12 @@ def build_runtime_host(
     asset_store: SQLiteAssetStore | None = None,
     memory_settings_store: SQLiteMemorySettingsStore | None = None,
     communication_thread_store: SQLiteCommunicationThreadStore | None = None,
+    conversation_store: SQLiteConversationStore | None = None,
 ) -> V2RuntimeHost:
     reset_state()
     queue = messages or InMemoryMessageQueue()
-    channel = CommunicationChannel(queue)
+    conversation_store = conversation_store or SQLiteConversationStore()
+    channel = CommunicationChannel(queue, conversation_store=conversation_store)
     visible_state = InMemoryInternalState()
     processor = processor or PDCAIntelligenceProcessor()
     web_tools_settings_store = web_tools_settings_store or SQLiteWebToolsSettingsStore()
@@ -229,6 +233,7 @@ def build_runtime_host(
         asset_store=asset_store,
         memory_settings_store=memory_settings_store,
         communication_router=communication_router,
+        conversation_store=conversation_store,
         ui_events=ui_events,
         activity_events=activity_events,
     )
