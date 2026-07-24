@@ -11,6 +11,16 @@
 # Goal
 {{ task.goal or "- (none)" }}
 
+# Attachments
+{% set attachments = task.metadata.get("attachments", []) if task.metadata else [] %}
+{% if attachments %}
+{% for attachment in attachments %}
+- Asset ID: {{ attachment.get("asset_id", "") }} | Name: {{ attachment.get("filename", "") }} | MIME: {{ attachment.get("mime_type", "") }} | Kind: {{ attachment.get("kind", "") }} | Status: {{ attachment.get("ingestion_status", "") }} | Caption: {{ attachment.get("caption", "") }}
+{% endfor %}
+{% else %}
+- (none)
+{% endif %}
+
 # Recent Conversation
 {{ task.recent_conversation_md or "- (none)" }}
 

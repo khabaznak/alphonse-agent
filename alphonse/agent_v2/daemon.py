@@ -54,7 +54,9 @@ from alphonse.agent_v2.web_tools_settings import SQLiteWebToolsSettingsStore
 from alphonse.agent_v2.media_tools_settings import SQLiteMediaToolsSettingsStore
 from alphonse.agent_v2.core.tools.registry.native.media import verify_ocr, verify_stt, verify_tts
 from alphonse.agent_v2.runtime import refresh_runtime_web_tools
+from alphonse.agent_v2.runtime import refresh_runtime_media_tools
 from alphonse.agent_v2.core.tools.registry.native.web import execute_web_fetch, execute_web_search
+from alphonse.agent_v2.assets import SQLiteAssetStore
 
 
 @dataclass
@@ -427,7 +429,9 @@ class V2Daemon:
 
     def save_media_tools_settings(self, *, actor_user_id: str, kind: str, values: dict[str, Any]) -> dict[str, object]:
         self._require_admin(actor_user_id)
-        return self.runtime.media_tools_settings_store.update(kind, values).to_dict()
+        saved = self.runtime.media_tools_settings_store.update(kind, values)
+        refresh_runtime_media_tools(self.runtime)
+        return saved.to_dict()
 
     def verify_media_tools(self, *, actor_user_id: str, kind: str, sample: str = "") -> dict[str, Any]:
         self._require_admin(actor_user_id)
@@ -445,6 +449,7 @@ class V2Daemon:
         if detail_error:
             error = f"{error}: {detail_error}"
         saved = self.runtime.media_tools_settings_store.mark_verification(kind, ready=not bool(exception), error=error, preview=preview)
+        refresh_runtime_media_tools(self.runtime)
         return {"result": result, "settings": saved.to_dict()}
 
     def _require_admin(self, actor_user_id: str) -> None:
@@ -1144,6 +1149,7 @@ def main() -> None:
             schedule_store=ScheduledTaskStore.default(),
             web_tools_settings_store=SQLiteWebToolsSettingsStore.default(),
             media_tools_settings_store=SQLiteMediaToolsSettingsStore.default(),
+            asset_store=SQLiteAssetStore.default(),
             memory_settings_store=SQLiteMemorySettingsStore.default(),
             outbox=SQLiteOutboundStore.default(),
             integration_store=SQLiteIntegrationStore.default(),

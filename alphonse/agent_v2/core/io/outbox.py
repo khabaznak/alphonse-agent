@@ -453,6 +453,7 @@ def build_outbox_delivery_sink(
                 recipient_reference=str(event.get("recipient") or "").strip(),
                 message=str(event.get("message") or "").strip(),
                 expects_reply=bool(event.get("expects_reply")),
+                asset_ids=list(event.get("asset_ids") or []),
             )
         if event_type != "question.deliver":
             return {"ignored": True}

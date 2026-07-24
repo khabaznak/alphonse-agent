@@ -104,7 +104,7 @@ class CommunicationRouter:
         self.outbox = outbox
         self.threads = threads
 
-    def deliver(self, *, sender_user_id: str, origin: ChannelAddress, recipient_reference: str, message: str, expects_reply: bool = False) -> dict[str, Any]:
+    def deliver(self, *, sender_user_id: str, origin: ChannelAddress, recipient_reference: str, message: str, expects_reply: bool = False, asset_ids: list[str] | None = None) -> dict[str, Any]:
         recipient = self._resolve_user(recipient_reference)
         if recipient is None:
             return {"status": "recipient_not_found"}
@@ -115,7 +115,7 @@ class CommunicationRouter:
             return {"status": "recipient_unreachable", "reason": resolved.reason}
         sender = self.users.get_user(sender_user_id)
         sender_name = str(getattr(sender, "display_name", "") or sender_user_id)
-        outbound = self.outbox.enqueue(address=resolved.address, message=f"{sender_name} says: {message}", kind="person_message", audience_user_id=recipient, metadata={"communication": True, "expects_reply": bool(expects_reply)})
+        outbound = self.outbox.enqueue(address=resolved.address, message=f"{sender_name} says: {message}", kind="person_message", audience_user_id=recipient, metadata={"communication": True, "expects_reply": bool(expects_reply), "asset_ids": [str(item) for item in (asset_ids or []) if str(item)]})
         thread = self.threads.create(sender_user_id=sender_user_id, recipient_user_id=recipient, origin=origin, recipient=resolved.address, outbox_message_id=outbound.outbox_message_id)
         return {"status": "queued", "thread_id": thread.thread_id, "outbox_message_id": outbound.outbox_message_id, "recipient_user_id": recipient}
 

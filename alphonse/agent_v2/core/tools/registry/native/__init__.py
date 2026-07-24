@@ -13,6 +13,9 @@ from alphonse.agent_v2.core.tools.registry.native.deliver_message import DELIVER
 from alphonse.agent_v2.core.tools.registry.native.deliver_message import DELIVER_MESSAGE_TOOL_NAME
 from alphonse.agent_v2.core.tools.registry.native.deliver_message import build_deliver_message_tool_definition
 from alphonse.agent_v2.core.tools.registry.native.deliver_message import execute_deliver_message
+from alphonse.agent_v2.core.tools.registry.native.send_attachment import build_send_attachment_tool_definition
+from alphonse.agent_v2.core.tools.registry.native.media import ANALYZE_IMAGE_TOOL_ID
+from alphonse.agent_v2.core.tools.registry.native.media import build_analyze_image_tool_definition
 from alphonse.agent_v2.core.tools.registry.native.respond import RESPOND_TOOL_ID
 from alphonse.agent_v2.core.tools.registry.native.respond import RESPOND_TOOL_NAME
 from alphonse.agent_v2.core.tools.registry.native.respond import build_respond_tool_definition
@@ -24,16 +27,20 @@ from alphonse.agent_v2.core.tools.registry.native.scheduled_task import execute_
 from alphonse.agent_v2.core.tools.registry.native.web import build_web_fetch_tool_definition
 from alphonse.agent_v2.core.tools.registry.native.web import build_web_search_tool_definition
 from alphonse.agent_v2.web_tools_settings import WebToolsSettings
+from alphonse.agent_v2.media_tools_settings import MediaToolsSettings
 
 
-def build_native_tool_registry(web_tools_settings: WebToolsSettings | None = None) -> InMemoryToolRegistry:
+def build_native_tool_registry(web_tools_settings: WebToolsSettings | None = None, asset_store: object | None = None, media_tools_settings: MediaToolsSettings | None = None) -> InMemoryToolRegistry:
     """Build the default v2-native tool registry."""
     registry = InMemoryToolRegistry()
     registry.register(build_respond_tool_definition())
     registry.register(build_bash_tool_definition())
     registry.register(build_deliver_message_tool_definition())
+    registry.register(build_send_attachment_tool_definition(asset_store))
     registry.register(build_ask_question_tool_definition())
     registry.register(build_scheduled_task_tool_definition())
+    media = media_tools_settings or MediaToolsSettings()
+    registry.register(build_analyze_image_tool_definition(media.ocr, asset_store))
     settings = web_tools_settings or WebToolsSettings()
     registry.register(build_web_search_tool_definition(settings))
     registry.register(build_web_fetch_tool_definition(settings))
@@ -42,6 +49,7 @@ def build_native_tool_registry(web_tools_settings: WebToolsSettings | None = Non
 
 __all__ = [
     "ASK_QUESTION_TOOL_ID",
+    "ANALYZE_IMAGE_TOOL_ID",
     "ASK_QUESTION_TOOL_NAME",
     "BASH_TOOL_ID",
     "BASH_TOOL_NAME",

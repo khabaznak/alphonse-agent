@@ -13,13 +13,14 @@ from typing import Any
 
 import requests
 
-from alphonse.agent_v2.core.core import ToolDescriptor, ToolKind
+from alphonse.agent_v2.core.core import ToolDescriptor, ToolExecutionContext, ToolKind
 from alphonse.agent_v2.core.tools.registry import ToolDefinition
 from alphonse.agent_v2.media_tools_settings import OcrSettings, SttSettings, TtsSettings
 
 TTS_RENDER_TOOL_ID = "native.tts_render"
 STT_TRANSCRIBE_TOOL_ID = "native.stt_transcribe"
 OCR_EXTRACT_TOOL_ID = "native.ocr_extract_text"
+ANALYZE_IMAGE_TOOL_ID = "native.analyze_image"
 
 
 def build_tts_render_tool_definition(settings: TtsSettings) -> ToolDefinition:
@@ -35,6 +36,33 @@ def build_stt_transcribe_tool_definition(settings: SttSettings) -> ToolDefinitio
 def build_ocr_extract_tool_definition(settings: OcrSettings) -> ToolDefinition:
     descriptor = ToolDescriptor(OCR_EXTRACT_TOOL_ID, "ocr_extract_text", ToolKind.NATIVE, "Extract visible text from a supplied v2 image asset reference.", {"type": "object", "properties": {"asset_path": {"type": "string"}}, "required": ["asset_path"]}, ("media", "ocr"), ("native", "media"))
     return ToolDefinition(descriptor, lambda args: extract_ocr(settings, asset_path=str(args.get("asset_path") or "")), dict(descriptor.argument_schema), enabled=False)
+
+
+def build_analyze_image_tool_definition(settings: OcrSettings, asset_store: Any | None = None) -> ToolDefinition:
+    descriptor = ToolDescriptor(
+        ANALYZE_IMAGE_TOOL_ID,
+        "analyze_image",
+        ToolKind.NATIVE,
+        "Analyze a task-attached image with the configured local Qwen/VL backend.",
+        {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "asset_id": {"type": "string", "description": "ID of an image attached to this task."},
+                "question": {"type": "string", "description": "What to determine from the image."},
+            },
+            "required": ["asset_id", "question"],
+        },
+        ("media", "vision"),
+        ("native", "media", "attachments"),
+    )
+    return ToolDefinition(
+        descriptor,
+        lambda args, *, context=None: analyze_task_image(args, context=context, settings=settings, asset_store=asset_store),
+        dict(descriptor.argument_schema),
+        enabled=settings.available,
+        accepts_context=True,
+    )
 
 
 def verify_tts(settings: TtsSettings, *, sample_text: str) -> dict[str, Any]:
@@ -93,18 +121,38 @@ def verify_ocr(settings: OcrSettings, *, sample_path: str) -> dict[str, Any]:
 
 
 def extract_ocr(settings: OcrSettings, *, asset_path: str) -> dict[str, Any]:
+    return analyze_image(settings, asset_path=asset_path, question="Extract all visible text exactly as written. Preserve line breaks. Do not infer missing text.", empty_code="ocr_text_empty")
+
+
+def analyze_task_image(arguments: dict[str, Any], *, context: ToolExecutionContext | None, settings: OcrSettings, asset_store: Any | None) -> dict[str, Any]:
+    if context is None or asset_store is None:
+        raise ValueError("image_analysis_unavailable")
+    asset_id = str(arguments.get("asset_id") or "").strip()
+    question = str(arguments.get("question") or "").strip()
+    task_asset_ids = context.task.metadata.get("asset_ids") if isinstance(context.task.metadata, dict) else []
+    if not asset_id or not isinstance(task_asset_ids, list) or asset_id not in {str(item) for item in task_asset_ids}:
+        raise ValueError("task_attachment_not_found")
+    asset = asset_store.get(asset_id, requester_user_id=str(context.task.user or ""))
+    if asset is None or not str(getattr(asset, "mime_type", "")).startswith("image/"):
+        raise ValueError("task_image_not_found_or_forbidden")
+    if not question:
+        raise ValueError("image_analysis_question_required")
+    return analyze_image(settings, asset_path=str(asset.path), question=question, empty_code="image_analysis_empty")
+
+
+def analyze_image(settings: OcrSettings, *, asset_path: str, question: str, empty_code: str = "image_analysis_empty") -> dict[str, Any]:
     source = Path(str(asset_path or "")).expanduser()
-    if not source.is_file(): return _failed("ocr_sample_not_found", "Image sample path was not found.")
+    if not source.is_file(): return _failed("image_sample_not_found", "Image sample path was not found.")
     try:
         image = base64.b64encode(source.read_bytes()).decode("ascii")
-        response = requests.post(settings.ollama_base_url.rstrip("/") + "/api/chat", json={"model": settings.model_id, "messages": [{"role": "user", "content": "Extract all visible text exactly as written. Preserve line breaks. Do not infer missing text.", "images": [image]}], "stream": False}, timeout=settings.timeout_seconds)
-    except requests.RequestException as exc: return _failed("ocr_http_error", "Ollama OCR request failed.", details={"error": str(exc)})
-    if response.status_code >= 400: return _failed("ocr_http_error", f"Ollama returned status {response.status_code}.")
+        response = requests.post(settings.ollama_base_url.rstrip("/") + "/api/chat", json={"model": settings.model_id, "messages": [{"role": "user", "content": question, "images": [image]}], "stream": False}, timeout=settings.timeout_seconds)
+    except requests.RequestException as exc: return _failed("image_analysis_http_error", "Ollama image analysis failed.", details={"error": str(exc)})
+    if response.status_code >= 400: return _failed("image_analysis_http_error", f"Ollama returned status {response.status_code}.")
     try: body = response.json()
-    except ValueError: return _failed("ocr_invalid_json", "Ollama did not return JSON.")
+    except ValueError: return _failed("image_analysis_invalid_json", "Ollama did not return JSON.")
     message = body.get("message") if isinstance(body, dict) else {}
     text = str(message.get("content") or "").strip() if isinstance(message, dict) else ""
-    if not text: return _failed("ocr_text_empty", "OCR returned no visible text.")
+    if not text: return _failed(empty_code, "Ollama returned no image analysis.")
     return _ok({"text": text, "model": settings.model_id})
 
 

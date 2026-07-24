@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import threading
 import time
+import mimetypes
 from dataclasses import dataclass
 from typing import Any, Callable
 from urllib import parse, request
@@ -20,6 +21,7 @@ from alphonse.agent_v2.integrations.presence import PresenceState
 from alphonse.agent_v2.integrations.presence import PresenceProjector
 from alphonse.agent_v2.integrations.store import IntegrationConfigRecord
 from alphonse.agent_v2.services.project_sessions import ProjectInboundRouter
+from alphonse.agent_v2.assets import AttachmentDescriptor
 
 
 @dataclass(frozen=True)
@@ -57,6 +59,44 @@ class TelegramHttpClient:
         body = result.get("result") if isinstance(result, dict) else {}
         message_id = body.get("message_id") if isinstance(body, dict) else ""
         return str(message_id or "").strip()
+
+    def describe_inbound(self, raw: dict[str, Any]) -> list[AttachmentDescriptor]:
+        message = raw.get("message") if isinstance(raw.get("message"), dict) else raw
+        caption = str(message.get("caption") or "")
+        entries: list[tuple[str, dict[str, Any]]] = []
+        for key in ("voice", "audio", "document"):
+            if isinstance(message.get(key), dict): entries.append((key, dict(message[key])))
+        photos = message.get("photo")
+        if isinstance(photos, list) and photos and isinstance(photos[-1], dict): entries.append(("photo", dict(photos[-1])))
+        result: list[AttachmentDescriptor] = []
+        for kind, item in entries:
+            mime = str(item.get("mime_type") or ("image/jpeg" if kind == "photo" else "audio/ogg" if kind == "voice" else "application/octet-stream"))
+            name = str(item.get("file_name") or f"telegram-{kind}-{item.get('file_id') or 'attachment'}")
+            result.append(AttachmentDescriptor(name, mime, int(item.get("file_size") or 0), str(item.get("file_id") or ""), caption, kind))
+        return result
+
+    def download(self, descriptor: AttachmentDescriptor) -> bytes:
+        result = self._post("getFile", {"file_id": descriptor.provider_file_id})
+        body = result.get("result") if isinstance(result, dict) else {}
+        path = str(body.get("file_path") or "") if isinstance(body, dict) else ""
+        if not path: raise RuntimeError("telegram_file_path_missing")
+        with self._urlopen(f"https://api.telegram.org/file/bot{self.bot_token}/{path}", timeout=30) as response: return bytes(response.read())
+
+    def send_asset(self, *, chat_id: str, asset: Any, caption: str = "") -> str:
+        mime = str(getattr(asset, "mime_type", "") or "")
+        endpoint, field = ("sendPhoto", "photo") if mime.startswith("image/") else ("sendVoice", "voice") if mime == "audio/ogg" else ("sendDocument", "document")
+        path = str(getattr(asset, "path", "") or "")
+        with open(path, "rb") as handle: result = self._post_multipart(endpoint, {"chat_id": str(chat_id), "caption": str(caption or "")}, field, handle.read(), str(getattr(asset, "filename", "attachment")))
+        body = result.get("result") if isinstance(result, dict) else {}; return str(body.get("message_id") or "") if isinstance(body, dict) else ""
+
+    def _post_multipart(self, endpoint: str, fields: dict[str, str], field: str, content: bytes, name: str) -> dict[str, Any]:
+        boundary = "----alphonseTelegramAttachment"; parts: list[bytes] = []
+        for key, value in fields.items(): parts.extend([f"--{boundary}\r\nContent-Disposition: form-data; name=\"{key}\"\r\n\r\n{value}\r\n".encode()])
+        mime = mimetypes.guess_type(name)[0] or "application/octet-stream"; parts.extend([f"--{boundary}\r\nContent-Disposition: form-data; name=\"{field}\"; filename=\"{name}\"\r\nContent-Type: {mime}\r\n\r\n".encode(), content, b"\r\n", f"--{boundary}--\r\n".encode()])
+        req = request.Request(f"https://api.telegram.org/bot{self.bot_token}/{endpoint}", data=b"".join(parts), method="POST", headers={"Content-Type": f"multipart/form-data; boundary={boundary}"})
+        with self._urlopen(req, timeout=30) as response: parsed = json.loads(response.read().decode("utf-8", errors="ignore"))
+        if not isinstance(parsed, dict) or not parsed.get("ok"): raise RuntimeError(f"telegram_{endpoint}_failed")
+        return parsed
 
     def send_chat_action(self, *, chat_id: str, action: str = "typing") -> None:
         self._post("sendChatAction", {"chat_id": str(chat_id), "action": str(action or "typing")})
@@ -103,6 +143,7 @@ class TelegramIntegrationRuntime:
         presence_projector: PresenceProjector | None = None,
         inbound_router: ProjectInboundRouter | None = None,
         access_request_store: Any | None = None,
+        asset_store: Any | None = None,
     ) -> None:
         self.record = record
         self.channel = channel
@@ -124,6 +165,7 @@ class TelegramIntegrationRuntime:
         self.presence_projector = presence_projector
         self.inbound_router = inbound_router
         self.access_request_store = access_request_store
+        self.asset_store = asset_store
         self.presence_adapter = TelegramPresenceAdapter(
             http_client=self.http_client,
             enabled=bool(config["presence_enabled"]),
@@ -173,9 +215,13 @@ class TelegramIntegrationRuntime:
         message = _telegram_message(update)
         if message is None:
             return False
-        text = str(message.get("text") or "").strip()
-        if not text:
+        text = str(message.get("text") or message.get("caption") or "").strip()
+        describe = getattr(self.http_client, "describe_inbound", None)
+        descriptors = describe(message) if callable(describe) else []
+        if not text and not descriptors:
             return False
+        if not text and descriptors:
+            text = "Please analyze the attached image."
         chat = message.get("chat") if isinstance(message.get("chat"), dict) else {}
         chat_id = str(chat.get("id") or message.get("chat_id") or "").strip()
         if not chat_id:
@@ -209,6 +255,21 @@ class TelegramIntegrationRuntime:
             return False
         if self.allowed_chat_ids and chat_id not in self.allowed_chat_ids:
             return False
+        asset_ids: list[str] = []
+        attachment_metadata: list[dict[str, Any]] = []
+        for descriptor in descriptors:
+            attachment = dict(descriptor.__dict__)
+            attachment["asset_id"] = ""
+            attachment["ingestion_status"] = "not_registered"
+            if self.asset_store is not None:
+                try:
+                    record = self.asset_store.register_bytes(owner_user_id=resolved.alphonse_user_id, descriptor=descriptor, content=self.http_client.download(descriptor), source="telegram")
+                    asset_ids.append(record.asset_id)
+                    attachment["asset_id"] = record.asset_id
+                    attachment["ingestion_status"] = "registered"
+                except Exception:
+                    attachment["ingestion_status"] = "failed"
+            attachment_metadata.append(attachment)
         values = {
             "prompt": text,
             "user": resolved.alphonse_user_id,
@@ -219,7 +280,7 @@ class TelegramIntegrationRuntime:
             "provider_message_id": provider_message_id,
             "reply_to_provider_message_id": reply_to_message_id,
             "thread_id": thread_id,
-            "metadata": {"provider_raw_message": dict(update)},
+            "metadata": {"provider_raw_message": dict(update), "asset_ids": asset_ids, "attachments": attachment_metadata},
             "correlation_id": f"{self.integration_id}:{provider_message_id}" if provider_message_id else "",
         }
         if self.inbound_router is not None:
@@ -240,10 +301,16 @@ class TelegramIntegrationRuntime:
             if outbound is None:
                 break
             try:
+                asset_ids = outbound.metadata.get("asset_ids") if isinstance(outbound.metadata, dict) else []
                 provider_message_id = self.http_client.send_message(
                     chat_id=outbound.channel_target,
                     text=outbound.message,
                 )
+                if asset_ids and self.asset_store is not None:
+                    for asset_id in asset_ids if isinstance(asset_ids, list) else []:
+                        asset = self.asset_store.system_get(str(asset_id))
+                        if asset is None: raise RuntimeError("attachment_not_found")
+                        provider_message_id = self.http_client.send_asset(chat_id=outbound.channel_target, asset=asset, caption="") or provider_message_id
             except Exception as exc:
                 error = f"{type(exc).__name__}: {exc}"
                 self.outbox.mark_failed(outbound.outbox_message_id, error=error)
@@ -352,6 +419,7 @@ def build_telegram_runtime(
     presence_projector: PresenceProjector | None = None,
     inbound_router: ProjectInboundRouter | None = None,
     access_request_store: Any | None = None,
+    asset_store: Any | None = None,
 ) -> TelegramIntegrationRuntime:
     return TelegramIntegrationRuntime(
         record=record,
@@ -365,6 +433,7 @@ def build_telegram_runtime(
         presence_projector=presence_projector,
         inbound_router=inbound_router,
         access_request_store=access_request_store,
+        asset_store=asset_store,
     )
 
 

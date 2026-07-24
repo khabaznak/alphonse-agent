@@ -13,12 +13,14 @@ from alphonse.agent_v2.core.io import V2IdentityResolver
 from alphonse.agent_v2.core.messages import CommunicationChannel
 from alphonse.agent_v2.core.messages import InMemoryMessageQueue
 from alphonse.agent_v2.integrations.store import SQLiteIntegrationStore
-from alphonse.agent_v2.integrations.telegram.runtime import TelegramIntegrationRuntime
+from alphonse.agent_v2.integrations.telegram.runtime import TelegramHttpClient, TelegramIntegrationRuntime
 from alphonse.agent_v2.core.projects import ProjectStore
 from alphonse.agent_v2.services.project_sessions import ProjectInboundRouter
 from alphonse.agent_v2.services.project_sessions import ProjectSessionKey
 from alphonse.agent_v2.services.project_sessions import SQLiteProjectSessionStore
 from alphonse.agent_v2.users import V2UserStore
+from alphonse.agent_v2.assets import SQLiteAssetStore
+from alphonse.agent_v2.assets import AttachmentDescriptor
 
 
 class FakeTelegramClient:
@@ -34,6 +36,25 @@ class FakeTelegramClient:
     def send_message(self, *, chat_id: str, text: str) -> str:
         self.sent.append({"chat_id": chat_id, "text": text})
         return "777"
+
+
+class AttachmentTelegramClient(FakeTelegramClient):
+    def describe_inbound(self, raw: dict) -> list[AttachmentDescriptor]:
+        photo = raw.get("photo") or []
+        item = photo[-1] if photo else {}
+        return [AttachmentDescriptor("telegram-photo.jpg", "image/jpeg", int(item.get("file_size") or 0), str(item.get("file_id") or ""), str(raw.get("caption") or ""), "photo")]
+
+    def download(self, descriptor: AttachmentDescriptor) -> bytes:
+        assert descriptor.provider_file_id == "large"
+        return b"image-bytes"
+
+
+def test_telegram_client_describes_highest_resolution_photo_with_caption() -> None:
+    descriptors = TelegramHttpClient(bot_token="token").describe_inbound({"caption": "Read this", "photo": [{"file_id": "small", "file_size": 1}, {"file_id": "large", "file_size": 2}]})
+
+    assert len(descriptors) == 1
+    assert descriptors[0].provider_file_id == "large"
+    assert descriptors[0].caption == "Read this"
 
 
 def test_telegram_inbound_text_queues_canonical_core_message(tmp_path: Path, monkeypatch) -> None:
@@ -101,6 +122,45 @@ def test_telegram_inbound_text_wakes_processor_after_queueing(tmp_path: Path, mo
 
     assert wakes == ["wake"]
     assert runtime.stats.messages_queued == 1
+
+
+def test_telegram_photo_with_caption_registers_final_size_and_queues_caption(tmp_path: Path, monkeypatch) -> None:
+    db_path = tmp_path / "nerve-db"
+    monkeypatch.setenv("NERVE_DB_PATH", str(db_path))
+    apply_schema(db_path)
+    users_store.upsert_user({"user_id": "u-alex", "display_name": "Alex", "is_active": True})
+    resolvers.upsert_service_resolver(user_id="u-alex", service_id=2, service_user_id="123")
+    queue = InMemoryMessageQueue()
+    asset_store = SQLiteAssetStore(tmp_path / "assets.sqlite3", tmp_path / "assets")
+    client = AttachmentTelegramClient([{"update_id": 10, "message": {"message_id": 5, "caption": "What is in this?", "photo": [{"file_id": "small", "file_size": 1}, {"file_id": "large", "file_size": 2}], "chat": {"id": "999"}, "from": {"id": "123"}}}])
+    runtime = _runtime(queue=queue, http_client=client, asset_store=asset_store)
+
+    runtime.poll_once()
+
+    queued = queue.dequeue()
+    assert queued is not None
+    assert queued.message.prompt == "What is in this?"
+    attachment = queued.message.metadata["attachments"][0]
+    assert attachment["asset_id"]
+    assert attachment["ingestion_status"] == "registered"
+    assert attachment["provider_file_id"] == "large"
+    assert asset_store.get(attachment["asset_id"], requester_user_id="u-alex") is not None
+
+
+def test_telegram_photo_without_caption_queues_image_goal(tmp_path: Path, monkeypatch) -> None:
+    db_path = tmp_path / "nerve-db"
+    monkeypatch.setenv("NERVE_DB_PATH", str(db_path))
+    apply_schema(db_path)
+    users_store.upsert_user({"user_id": "u-alex", "display_name": "Alex", "is_active": True})
+    resolvers.upsert_service_resolver(user_id="u-alex", service_id=2, service_user_id="123")
+    queue = InMemoryMessageQueue()
+    runtime = _runtime(queue=queue, http_client=AttachmentTelegramClient([{"update_id": 10, "message": {"message_id": 5, "photo": [{"file_id": "small"}, {"file_id": "large"}], "chat": {"id": "999"}, "from": {"id": "123"}}}]), asset_store=SQLiteAssetStore(tmp_path / "assets.sqlite3", tmp_path / "assets"))
+
+    runtime.poll_once()
+
+    queued = queue.dequeue()
+    assert queued is not None
+    assert queued.message.prompt == "Please analyze the attached image."
 
 
 def test_telegram_unknown_user_notifies_owner_without_queueing_capd_task(tmp_path: Path, monkeypatch) -> None:
@@ -239,6 +299,7 @@ def _runtime(
     inbound_router=None,
     identity_resolver=None,
     access_request_store=None,
+    asset_store=None,
 ) -> TelegramIntegrationRuntime:
     store = SQLiteIntegrationStore()
     record = store.upsert(
@@ -258,5 +319,6 @@ def _runtime(
         http_client=http_client or FakeTelegramClient(),
         on_message_queued=on_message_queued,
         inbound_router=inbound_router,
+        asset_store=asset_store,
         access_request_store=access_request_store,
     )

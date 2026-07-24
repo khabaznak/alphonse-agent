@@ -45,6 +45,7 @@ from alphonse.agent_v2.services.project_sessions import SQLiteProjectSessionStor
 from alphonse.agent_v2.users import V2UserStore
 from alphonse.agent_v2.web_tools_settings import SQLiteWebToolsSettingsStore
 from alphonse.agent_v2.media_tools_settings import SQLiteMediaToolsSettingsStore
+from alphonse.agent_v2.assets import SQLiteAssetStore
 from alphonse.agent_v2.memory_settings import SQLiteMemorySettingsStore
 from alphonse.agent_v2.core.memory import LedgerMemory
 
@@ -99,6 +100,7 @@ class V2RuntimeHost:
     user_store: V2UserStore
     web_tools_settings_store: SQLiteWebToolsSettingsStore
     media_tools_settings_store: SQLiteMediaToolsSettingsStore
+    asset_store: SQLiteAssetStore
     memory_settings_store: SQLiteMemorySettingsStore
     communication_router: CommunicationRouter
     integration_runtimes: list[Any] = field(default_factory=list)
@@ -127,6 +129,7 @@ def build_runtime_host(
     messages: Any | None = None,
     web_tools_settings_store: SQLiteWebToolsSettingsStore | None = None,
     media_tools_settings_store: SQLiteMediaToolsSettingsStore | None = None,
+    asset_store: SQLiteAssetStore | None = None,
     memory_settings_store: SQLiteMemorySettingsStore | None = None,
     communication_thread_store: SQLiteCommunicationThreadStore | None = None,
 ) -> V2RuntimeHost:
@@ -137,10 +140,11 @@ def build_runtime_host(
     processor = processor or PDCAIntelligenceProcessor()
     web_tools_settings_store = web_tools_settings_store or SQLiteWebToolsSettingsStore()
     media_tools_settings_store = media_tools_settings_store or SQLiteMediaToolsSettingsStore()
+    asset_store = asset_store or SQLiteAssetStore()
     # Generic embedded/test hosts are intentionally ephemeral. The daemon
     # injects the durable store explicitly.
     memory_settings_store = memory_settings_store or SQLiteMemorySettingsStore()
-    tools = tools or build_native_tool_registry(web_tools_settings_store.get())
+    tools = tools or build_native_tool_registry(web_tools_settings_store.get(), asset_store, media_tools_settings_store.get())
     inference_settings_store = inference_settings_store or SQLiteInferenceSettingsStore()
     # Persistent daemon/TUI constructors pass `AgentConfigStore.default()`.
     # Generic test and helper runtimes only need the package defaults.
@@ -222,6 +226,7 @@ def build_runtime_host(
         user_store=user_store,
         web_tools_settings_store=web_tools_settings_store,
         media_tools_settings_store=media_tools_settings_store,
+        asset_store=asset_store,
         memory_settings_store=memory_settings_store,
         communication_router=communication_router,
         ui_events=ui_events,
@@ -231,7 +236,12 @@ def build_runtime_host(
 
 def refresh_runtime_web_tools(runtime: V2RuntimeHost) -> None:
     """Apply Web Tools settings to tasks started after this call."""
-    runtime.core.tools = build_native_tool_registry(runtime.web_tools_settings_store.get())
+    runtime.core.tools = build_native_tool_registry(runtime.web_tools_settings_store.get(), runtime.asset_store, runtime.media_tools_settings_store.get())
+
+
+def refresh_runtime_media_tools(runtime: V2RuntimeHost) -> None:
+    """Apply verified local media-tool settings to tasks started after this call."""
+    runtime.core.tools = build_native_tool_registry(runtime.web_tools_settings_store.get(), runtime.asset_store, runtime.media_tools_settings_store.get())
 
 
 def build_default_runtime_inference_router() -> InferenceRouter:
@@ -299,6 +309,7 @@ def start_runtime_integrations(
                 on_outbox_failed=on_outbox_failed,
                 presence_projector=runtime.presence_projector,
                 access_request_store=runtime.user_store,
+                asset_store=runtime.asset_store,
             )
             integration_runtime.start()
         except Exception:
