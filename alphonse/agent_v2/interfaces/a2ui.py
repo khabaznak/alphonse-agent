@@ -57,6 +57,42 @@ class A2UiAdapter:
         validate_envelope(message)
         return message
 
+    def scheduled_task_created(self, task: dict[str, Any], *, project_name: str = "") -> list[dict[str, Any]]:
+        """Project a persisted scheduled-task record into a trusted confirmation card."""
+        task_id = str(task.get("scheduled_task_id") or "").strip()
+        if not task_id:
+            raise ValueError("scheduled_task_id_required")
+        surface_id = f"scheduled-task:{task_id}"
+        name = str(task.get("name") or "Scheduled task").strip()
+        description = str(task.get("description") or "").strip()
+        schedule = str(task.get("schedule_summary") or "Scheduled").strip()
+        next_run = str(task.get("next_run_at") or "").strip()
+        timezone = str(task.get("timezone") or "UTC").strip() or "UTC"
+        details = [schedule]
+        if next_run:
+            details.append(f"Next: {next_run}")
+        details.append(timezone)
+        if project_name:
+            details.append(f"Project: {project_name}")
+        components: list[dict[str, Any]] = [
+            {"id": "root", "component": "Card", "children": ["title", "name", "details", "view"]},
+            {"id": "title", "component": "Status", "text": "Scheduled"},
+            {"id": "name", "component": "Text", "text": name},
+            {"id": "details", "component": "Text", "text": " · ".join(details)},
+            {"id": "view", "component": "Button", "label": "View task", "action": {"name": "view_scheduled_task", "context": {"scheduled_task_id": task_id}}},
+        ]
+        if description:
+            components[0]["children"].insert(2, "description")
+            components.append({"id": "description", "component": "Text", "text": description})
+        messages = [
+            {"version": A2UI_VERSION, "createSurface": {"surfaceId": surface_id, "catalogId": self.catalog_id, "sendDataModel": False}},
+            {"version": A2UI_VERSION, "updateComponents": {"surfaceId": surface_id, "components": components}},
+            {"version": A2UI_VERSION, "updateDataModel": {"surfaceId": surface_id, "path": "/", "value": {"scheduled_task_id": task_id}}},
+        ]
+        for message in messages:
+            validate_envelope(message)
+        return messages
+
 
 def surface_id_for_question(question_id: str) -> str:
     return f"question:{str(question_id or '').strip()}"

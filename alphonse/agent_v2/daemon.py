@@ -25,6 +25,7 @@ from alphonse.agent_v2.core.messages import SQLiteMessageQueue
 from alphonse.agent_v2.core.projects import ProjectStore
 from alphonse.agent_v2.core.questions import SQLiteQuestionStore
 from alphonse.agent_v2.core.scheduled_tasks import ScheduledTaskStore
+from alphonse.agent_v2.core.scheduled_tasks import schedule_summary
 from alphonse.agent_v2.integrations import SQLiteIntegrationStore
 from alphonse.agent_v2.inference_settings import SQLiteInferenceSettingsStore
 from alphonse.agent_v2.ipc import V2DaemonClient
@@ -540,7 +541,10 @@ class V2Daemon:
             limit=limit,
         )
         if ALPHONSE_DESKTOP_CATALOG_ID in self._desktop_capabilities[normalized_client]:
+            ui_events = self._a2ui_scheduled_task_events(ui_events)
             ui_events.extend(self._sync_question_surfaces(client_id=normalized_client, user=normalized_user))
+        else:
+            ui_events = [item for item in ui_events if _event_name(item) != "scheduled_task_created"]
         return {
             "events": events,
             "next_sequence": next_sequence,
@@ -770,20 +774,26 @@ class V2Daemon:
         context: dict[str, Any] | None = None,
         data_model: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """Perform the sole permitted A2UI mutation: answer or cancel a question."""
+        """Perform a validated action from a server-owned A2UI surface."""
         client = str(client_id or "desktop").strip() or "desktop"
         respondent = self._admin_user_id(user)
         if ALPHONSE_DESKTOP_CATALOG_ID not in self._desktop_capabilities.get(client, set()):
             raise ValueError("a2ui_catalog_not_negotiated")
-        question_id = question_id_from_surface(surface_id)
         values = dict(context or {})
+        action = str(action_name or "").strip()
+        source = str(source_component_id or "").strip()
+        scheduled_task_id = _scheduled_task_id_from_surface(surface_id)
+        if action == "view_scheduled_task":
+            if source != "view" or not scheduled_task_id or scheduled_task_id != str(values.get("scheduled_task_id") or ""):
+                raise ValueError("a2ui_surface_or_context_invalid")
+            self._scheduled_task_for_actor(actor_user_id=respondent, scheduled_task_id=scheduled_task_id)
+            return {"action": "view_scheduled_task", "scheduled_task_id": scheduled_task_id}
+        question_id = question_id_from_surface(surface_id)
         if not question_id or question_id != str(values.get("question_id") or ""):
             raise ValueError("a2ui_surface_or_context_invalid")
         question = self.runtime.question_store.get_question(question_id)
         if question is None or question.status != "pending" or question.respondent_user_id != respondent:
             raise ValueError("a2ui_question_not_available")
-        source = str(source_component_id or "").strip()
-        action = str(action_name or "").strip()
         if action == "cancel_question" and source == "cancel":
             return {"cancelled": self.cancel_question(question_id)}
         if action != "answer_question":
@@ -811,6 +821,21 @@ class V2Daemon:
                 raise ValueError("a2ui_text_invalid")
             payload = {"text": text}
         return self.answer_question(user=respondent, question_id=question_id, text=text, payload=payload)
+
+    def _a2ui_scheduled_task_events(self, events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        rendered: list[dict[str, Any]] = []
+        for item in events:
+            event = item.get("event") if isinstance(item.get("event"), dict) else {}
+            if event.get("type") != "CUSTOM" or event.get("name") != "scheduled_task_created":
+                rendered.append(item)
+                continue
+            payload = event.get("value") if isinstance(event.get("value"), dict) else {}
+            task = payload.get("scheduled_task") if isinstance(payload.get("scheduled_task"), dict) else {}
+            try:
+                rendered.extend({"event": _a2ui_custom(envelope)} for envelope in self._a2ui.scheduled_task_created(task, project_name=str(payload.get("project_name") or "")))
+            except ValueError:
+                continue
+        return rendered
 
     def list_integrations(self) -> list[dict[str, Any]]:
         records = {record.provider_key: record for record in self.runtime.integration_store.list()}
@@ -965,6 +990,7 @@ class V2Daemon:
                         occurrence_key,
                         response_outbox_id=projected.outbox_message_id,
                     )
+            self._emit_scheduled_task_card(snapshot)
             if step.queued_message_id:
                 acknowledge = getattr(self.runtime.queue, "ack", None)
                 if callable(acknowledge):
@@ -1014,6 +1040,32 @@ class V2Daemon:
                 pass
         finally:
             self.stop()
+
+    def _emit_scheduled_task_card(self, snapshot: Any) -> None:
+        metadata = getattr(snapshot, "metadata", {}) or {}
+        task_state = metadata.get("task_state") if isinstance(metadata, dict) else None
+        result = _scheduled_task_result(task_state)
+        if result is None:
+            return
+        task_metadata = task_state.get("metadata") if isinstance(task_state.get("metadata"), dict) else {}
+        channel = task_metadata.get("channel") if isinstance(task_metadata.get("channel"), dict) else {}
+        if str(channel.get("integration_id") or "") != "desktop":
+            return
+        record = self.runtime.schedule_store.get_task(str(result.get("scheduled_task_id") or ""))
+        if record is None:
+            return
+        project_id = str(task_state.get("project_id") or "").strip()
+        project = self.runtime.project_store.get_project(project_id, requester_user_id=str(task_state.get("user") or ""), requester_is_admin=True) if project_id else None
+        self.runtime.ui_events.append(
+            CoreUiEvent(
+                event_type="scheduled_task_created",
+                payload={
+                    "task_state": task_state,
+                    "scheduled_task": {**record.to_dict(), "schedule_summary": schedule_summary(record.schedule)},
+                    "project_name": project.name if project is not None else "",
+                },
+            )
+        )
 
     def _process_loop(self) -> None:
         while not self._stop.is_set():
@@ -1108,6 +1160,37 @@ def _ui_event_user(event: CoreUiEvent) -> str:
 
 def _a2ui_custom(envelope: dict[str, Any]) -> dict[str, Any]:
     return {"type": "CUSTOM", "name": "a2ui.envelope", "value": envelope}
+
+
+def _event_name(item: dict[str, Any]) -> str:
+    event = item.get("event") if isinstance(item.get("event"), dict) else {}
+    return str(event.get("name") or "")
+
+
+def _scheduled_task_id_from_surface(surface_id: str) -> str:
+    value = str(surface_id or "").strip()
+    return value.removeprefix("scheduled-task:") if value.startswith("scheduled-task:") else ""
+
+
+def _scheduled_task_result(task_state: Any) -> dict[str, Any] | None:
+    if not isinstance(task_state, dict):
+        return None
+    calls = task_state.get("plan_json")
+    try:
+        import json
+        calls = json.loads(calls) if isinstance(calls, str) else calls
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(calls, list):
+        return None
+    for call in reversed(calls):
+        if not isinstance(call, dict) or str(call.get("tool_id") or "") != "native.scheduled_task":
+            continue
+        execution = call.get("execution") if isinstance(call.get("execution"), dict) else {}
+        result = execution.get("result") if isinstance(execution.get("result"), dict) else {}
+        if str(execution.get("status") or "") == "success" and str(result.get("scheduled_task_id") or ""):
+            return result
+    return None
 
 
 def _comma_values(value: Any) -> list[str]:

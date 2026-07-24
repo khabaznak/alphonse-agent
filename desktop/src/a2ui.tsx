@@ -45,7 +45,7 @@ export function A2uiSurfaceHost({ surfaces, clientId, user, onDone }: { surfaces
   return <>{Object.values(surfaces).map((surface) => <A2uiSurfaceView key={surface.surfaceId} surface={surface} clientId={clientId} user={user} onDone={onDone} />)}</>;
 }
 
-export function A2uiSurfaceView({ surface, clientId, user, onDone }: { surface: A2uiSurface; clientId: string; user: string; onDone: () => Promise<void> }) {
+export function A2uiSurfaceView({ surface, clientId, user, onDone, onAction }: { surface: A2uiSurface; clientId: string; user: string; onDone: () => Promise<void>; onAction?: (result: Record<string, unknown>) => void }) {
   const [dataModel, setDataModel] = useState(surface.dataModel);
   useEffect(() => setDataModel(surface.dataModel), [surface.dataModel, surface.surfaceId]);
   const component = (id: string): ReactNode => {
@@ -60,10 +60,11 @@ export function A2uiSurfaceView({ surface, clientId, user, onDone }: { surface: 
   };
   const act = async (item: A2uiComponent) => {
     if (!item.action) return;
-    await daemonRequest("a2ui_action", {
+    const result = await daemonRequest<Record<string, unknown>>("a2ui_action", {
       client_id: clientId, user, surface_id: surface.surfaceId, source_component_id: item.id,
       action_name: item.action.name, context: item.action.context, data_model: dataModel,
     });
+    onAction?.(result);
     await onDone();
   };
   return component("root");

@@ -1647,6 +1647,12 @@ def _build_textual_app_class() -> type[Any]:
             color: $text-muted;
         }
 
+        #prompt {
+            min-height: 1;
+            max-height: 4;
+            height: 1;
+        }
+
         #project-dialog {
             width: 70;
             height: auto;
@@ -1769,7 +1775,7 @@ def _build_textual_app_class() -> type[Any]:
                 with Vertical(id="chat-column"):
                     yield RichLog(id="chat", wrap=True, highlight=True)
                     yield Static(id="reply-activity")
-                    yield Input(placeholder="Message Alphonse...", id="prompt")
+                    yield TextArea("", placeholder="Message Alphonse...", id="prompt")
                 with Vertical(id="side-column"):
                     yield Static(id="activity")
                     yield Static(id="status")
@@ -1781,7 +1787,7 @@ def _build_textual_app_class() -> type[Any]:
             self.query_one("#activity", Static).update("Idle: ready")
             self.query_one("#reply-activity", Static).update("")
             self._refresh_status()
-            self.query_one("#prompt", Input).focus()
+            self.query_one("#prompt", TextArea).focus()
             self._begin_onboarding_if_needed()
             self.set_interval(0.1, self._poll_daemon)
             self.set_interval(0.2, self._advance_activity_indicators)
@@ -1808,20 +1814,25 @@ def _build_textual_app_class() -> type[Any]:
                     self.query_one("#activity", Static).update(f"Onboarding failed: {exc}")
             self.push_screen(OnboardingScreen(), callback=_complete)
 
-        def on_input_changed(self, event: Input.Changed) -> None:
-            if event.input.id != "prompt":
+        def on_text_area_changed(self, event: TextArea.Changed) -> None:
+            if event.text_area.id != "prompt":
                 return
-            if event.value == "/":
-                event.input.value = ""
+            prompt = event.text_area
+            prompt.styles.height = min(max(prompt.document.line_count, 1), 4)
+            if prompt.text == "/":
+                prompt.clear()
                 self._open_slash_command_palette()
 
         def on_key(self, event: Any) -> None:
-            _ = event
-
-        def on_input_submitted(self, event: Input.Submitted) -> None:
-            prompt = event.value
-            event.input.value = ""
-            self._handle_prompt_submission(prompt)
+            if event.key != "enter" or getattr(event, "shift", False):
+                return
+            prompt = self.query_one("#prompt", TextArea)
+            event.prevent_default()
+            event.stop()
+            value = prompt.text
+            prompt.clear()
+            prompt.styles.height = 1
+            self._handle_prompt_submission(value)
 
         def _handle_prompt_submission(self, prompt: str) -> None:
             command = detect_tui_slash_command(prompt)

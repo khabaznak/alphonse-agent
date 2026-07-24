@@ -36,6 +36,7 @@ export default function App() {
   const [questions, setQuestions] = useState<Question[]>([]);
   const [project, setProject] = useState<Project | null>(null);
   const [projectForSettings, setProjectForSettings] = useState<ManagedProject | null>(null);
+  const [scheduledTaskForView, setScheduledTaskForView] = useState("");
   const [modal, setModal] = useState<Modal>(null);
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("general");
   const [user, setUser] = useState("");
@@ -110,7 +111,7 @@ export default function App() {
     const element = textareaRef.current;
     if (!element) return;
     element.style.height = "auto";
-    element.style.height = `${Math.min(element.scrollHeight, 10 * 22 + 24)}px`;
+    element.style.height = `${Math.min(element.scrollHeight, 4 * 22 + 24)}px`;
   }, [prompt]);
 
   const selectProject = useCallback(async (next: Project) => {
@@ -215,7 +216,7 @@ export default function App() {
         </div>
         <section className="input-dock">
           {activeSurface ? (
-            <A2uiSurfaceView surface={activeSurface} clientId={clientId} user={user} onDone={poll} />
+            <A2uiSurfaceView surface={activeSurface} clientId={clientId} user={user} onDone={poll} onAction={(result) => { if (result.action === "view_scheduled_task" && typeof result.scheduled_task_id === "string") { setScheduledTaskForView(result.scheduled_task_id); setModal("scheduled-tasks"); } }} />
           ) : fallbackQuestion ? (
             <QuestionCard question={fallbackQuestion} onDone={poll} />
           ) : (
@@ -231,7 +232,7 @@ export default function App() {
       {modal === "projects" && <ProjectsModal user={user} active={project} onSelect={(next) => void selectProject(next)} onSettings={(next) => { setProjectForSettings(next); setModal("project-settings"); }} onClose={() => setModal(null)} />}
       {modal === "project-settings" && projectForSettings && <ProjectSettingsModal user={user} project={projectForSettings} onBack={() => setModal("projects")} onClose={() => setModal(null)} />}
       {modal === "project-context" && <ProjectContextModal user={user} project={project} onClose={() => setModal(null)} />}
-      {modal === "scheduled-tasks" && <ScheduledTasksModal actorUserId={user} onClose={() => setModal(null)} />}
+      {modal === "scheduled-tasks" && <ScheduledTasksModal actorUserId={user} initialTaskId={scheduledTaskForView} onClose={() => { setScheduledTaskForView(""); setModal(null); }} />}
       {modal === "settings" && <SettingsModal user={user} initialTab={settingsTab} enterToSend={enterToSend} onEnterToSendChange={setEnterToSend} onClose={() => setModal(null)} />}
       {modal === "users" && <UsersModal onClose={() => setModal(null)} />}
       {modal === "onboarding" && <OnboardingModal onComplete={(next) => { setUser(next); setModal(null); void poll(); }} />}
@@ -319,7 +320,7 @@ function dateLabel(value: string | null | undefined): string {
   return value ? new Date(value).toLocaleString() : "—";
 }
 
-function ScheduledTasksModal({ actorUserId, onClose }: { actorUserId: string; onClose: () => void }) {
+function ScheduledTasksModal({ actorUserId, initialTaskId = "", onClose }: { actorUserId: string; initialTaskId?: string; onClose: () => void }) {
   const [users, setUsers] = useState<ManagedUser[]>([]); const [ownerId, setOwnerId] = useState(actorUserId); const [status, setStatus] = useState("");
   const [tasks, setTasks] = useState<ScheduledTask[]>([]); const [selected, setSelected] = useState<ScheduledTask | null>(null); const [executions, setExecutions] = useState<ScheduledExecution[]>([]);
   const [name, setName] = useState(""); const [prompt, setPrompt] = useState(""); const [notice, setNotice] = useState(""); const [removeOpen, setRemoveOpen] = useState(false);
@@ -339,6 +340,10 @@ function ScheduledTasksModal({ actorUserId, onClose }: { actorUserId: string; on
     setSelected(task); setName(task.name); setPrompt(task.prompt); setRemoveOpen(false);
     try { const result = await daemonRequest<{ executions: ScheduledExecution[] }>("scheduled_executions", { actor_user_id: actorUserId, scheduled_task_id: task.scheduled_task_id, limit: 8 }); setExecutions(result.executions); } catch (cause) { setNotice(cause instanceof Error ? cause.message : "Execution history could not be loaded."); }
   };
+  useEffect(() => {
+    const task = tasks.find((item) => item.scheduled_task_id === initialTaskId);
+    if (task && selected?.scheduled_task_id !== task.scheduled_task_id) void select(task);
+  }, [initialTaskId, tasks]);
   const mutate = async (method: string, extra: Record<string, unknown> = {}) => {
     if (!selected) return;
     try {

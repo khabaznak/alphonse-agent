@@ -17,6 +17,8 @@ from alphonse.agent_v2.daemon import V2Daemon
 from alphonse.agent_v2.agent_config import AgentConfigStore
 from alphonse.agent_v2.agent_config import GLOBAL_CONTEXT_FILE
 from alphonse.agent_v2.agent_config import PHILOSOPHY_FILE
+from alphonse.agent_v2.interfaces.a2ui import A2UiAdapter
+from alphonse.agent_v2.interfaces.a2ui import ALPHONSE_DESKTOP_CATALOG_ID
 from alphonse.agent_v2.services.project_sessions import SQLiteProjectSessionStore
 from alphonse.agent_v2.runtime import build_runtime_host
 from alphonse.agent_v2.users import V2UserStore
@@ -200,6 +202,42 @@ def test_desktop_conversation_history_is_project_scoped() -> None:
             "created_at": first.created_at,
         }
     ]
+
+
+def test_scheduled_task_confirmation_card_uses_persisted_schedule_fields() -> None:
+    adapter = A2UiAdapter()
+    task = {
+        "scheduled_task_id": "schedule-1",
+        "name": "Charge Tesla",
+        "description": "Before the trip",
+        "schedule_summary": "Once at 2026-07-26T03:00:00+00:00",
+        "next_run_at": "2026-07-26T03:00:00+00:00",
+        "timezone": "America/Mexico_City",
+    }
+
+    envelopes = adapter.scheduled_task_created(task, project_name="Road trip")
+
+    assert envelopes[0]["createSurface"]["surfaceId"] == "scheduled-task:schedule-1"
+    components = {item["id"]: item for item in envelopes[1]["updateComponents"]["components"]}
+    assert components["name"]["text"] == "Charge Tesla"
+    assert "America/Mexico_City" in components["details"]["text"]
+    assert components["view"]["action"] == {"name": "view_scheduled_task", "context": {"scheduled_task_id": "schedule-1"}}
+
+
+def test_scheduled_task_a2ui_action_requires_capability_and_owner(tmp_path) -> None:
+    users = V2UserStore(":memory:")
+    admin = users.onboard(display_name="Admin", users_root=tmp_path / "users")
+    schedules = ScheduledTaskStore(":memory:")
+    task = schedules.create_task(owner_user_id=admin.user_id, project_id="", name="Reminder", description="", prompt="Remember", schedule_kind="once", run_at="2026-07-26T03:00:00+00:00", timezone_name="UTC")
+    daemon = V2Daemon(build_runtime_host(user_store=users, schedule_store=schedules, inference=_router()))
+    daemon._desktop_capabilities["desktop-a"] = {ALPHONSE_DESKTOP_CATALOG_ID}
+
+    result = daemon.a2ui_action(client_id="desktop-a", user=admin.user_id, surface_id=f"scheduled-task:{task.scheduled_task_id}", source_component_id="view", action_name="view_scheduled_task", context={"scheduled_task_id": task.scheduled_task_id})
+    assert result == {"action": "view_scheduled_task", "scheduled_task_id": task.scheduled_task_id}
+    with pytest.raises(ValueError, match="a2ui_surface_or_context_invalid"):
+        daemon.a2ui_action(client_id="desktop-a", user=admin.user_id, surface_id=f"scheduled-task:{task.scheduled_task_id}", source_component_id="view", action_name="view_scheduled_task", context={"scheduled_task_id": "other"})
+    with pytest.raises(ValueError, match="a2ui_catalog_not_negotiated"):
+        daemon.a2ui_action(client_id="desktop-b", user=admin.user_id, surface_id=f"scheduled-task:{task.scheduled_task_id}", source_component_id="view", action_name="view_scheduled_task", context={"scheduled_task_id": task.scheduled_task_id})
 
 
 def test_desktop_a2ui_question_surface_is_negotiated_and_actions_resume_only_the_question() -> None:

@@ -204,7 +204,7 @@ button { border: 0; cursor: pointer; }
 
 .composer textarea {
   min-height: 46px;
-  max-height: 244px;
+  max-height: 112px;
   resize: none;
   overflow-y: auto;
   line-height: 22px;
