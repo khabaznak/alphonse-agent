@@ -922,6 +922,42 @@ class V2Daemon:
         self.restart_integrations()
         return record.to_dict()
 
+    def save_discord_integration(self, *, user: str, values: dict[str, Any]) -> dict[str, Any]:
+        existing = self.runtime.integration_store.get(str(values.get("integration_id") or "")) or self.runtime.integration_store.get_by_provider("discord")
+        secrets = dict(existing.secrets) if existing is not None else {}
+        token = str(values.get("bot_token") or "").strip()
+        if bool(values.get("remove_token")):
+            secrets.pop("bot_token", None)
+        elif token:
+            secrets["bot_token"] = token
+        enabled = bool(values.get("enabled"))
+        if enabled and not str(secrets.get("bot_token") or "").strip():
+            raise ValueError("discord_bot_token_required")
+        integration_id = str(values.get("integration_id") or "discord-home").strip() or "discord-home"
+        provider_user_id = str(values.get("discord_user_id") or "").strip()
+        if provider_user_id:
+            self.runtime.user_store.bind_address(
+                user_id=self._admin_user_id(user), integration_id=integration_id,
+                provider_key="discord", provider_user_id=provider_user_id,
+            )
+        record = self.runtime.integration_store.upsert(
+            integration_id=integration_id,
+            provider_key="discord",
+            display_name=str(values.get("display_name") or "Discord").strip() or "Discord",
+            enabled=enabled,
+            config={
+                "allowed_guild_ids": _comma_values(values.get("allowed_guild_ids")),
+                "allowed_channel_ids": _comma_values(values.get("allowed_channel_ids")),
+                "owner_user_id": self._admin_user_id(user),
+                "discord_user_id": provider_user_id,
+                "presence_enabled": bool(values.get("presence_enabled", True)),
+            },
+            secrets=secrets,
+        )
+        refresh_runtime_identity_resolver(self.runtime)
+        self.restart_integrations()
+        return record.to_dict()
+
     def _collect_activity_events(self) -> None:
         events = list(self.runtime.activity_events)
         self.runtime.activity_events.clear()

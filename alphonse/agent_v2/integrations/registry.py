@@ -32,6 +32,7 @@ class IntegrationRegistry:
 
 
 def build_default_integration_registry() -> IntegrationRegistry:
+    from alphonse.agent_v2.integrations.discord import build_discord_descriptor
     from alphonse.agent_v2.integrations.telegram import build_telegram_descriptor
 
-    return IntegrationRegistry((build_telegram_descriptor(),))
+    return IntegrationRegistry((build_discord_descriptor(), build_telegram_descriptor()))

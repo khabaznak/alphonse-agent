@@ -29,6 +29,7 @@ from alphonse.agent_v2.interfaces.tui import process_tui_queue_once
 from alphonse.agent_v2.interfaces.tui import queue_tui_input
 from alphonse.agent_v2.interfaces.tui import list_integration_options
 from alphonse.agent_v2.interfaces.tui import save_telegram_integration_config
+from alphonse.agent_v2.interfaces.tui import save_discord_integration_config
 from alphonse.agent_v2.interfaces.tui import start_enabled_integration_runtimes
 from alphonse.agent_v2.interfaces.tui import submit_tui_input
 from alphonse.agent_v2.interfaces.tui import TuiProcessorCoordinator
@@ -43,6 +44,23 @@ def test_tui_runtime_factory_wires_core_services() -> None:
     assert runtime.channel.messages is runtime.queue
     assert isinstance(runtime.processor, PDCAIntelligenceProcessor)
     assert runtime.core.inference is not None
+
+
+def test_discord_integration_config_saves_secret_and_address_mapping(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("NERVE_DB_PATH", str(tmp_path / "nerve.sqlite3"))
+    apply_schema(tmp_path / "nerve.sqlite3")
+    runtime = build_tui_runtime(user="alex")
+
+    record = save_discord_integration_config(
+        runtime, integration_id="discord-home", display_name="Home Discord", bot_token="secret",
+        discord_user_id="123", allowed_guild_ids="guild-a", allowed_channel_ids="channel-a",
+        enabled=True,
+    )
+
+    assert record.enabled is True
+    assert record.secrets["bot_token"] == "secret"
+    assert record.config["allowed_guild_ids"] == ["guild-a"]
+    assert record.config["allowed_channel_ids"] == ["channel-a"]
 
 
 def test_submitting_input_queues_steps_and_updates_visible_state() -> None:
@@ -237,7 +255,10 @@ def test_queue_model_commands_open_local_command_flows() -> None:
 def test_tui_integration_options_and_telegram_config_save() -> None:
     runtime = build_tui_runtime(user="alex")
 
-    assert list_integration_options(runtime) == [("Telegram - disabled (telegram-home)", "telegram")]
+    assert list_integration_options(runtime) == [
+        ("Discord - disabled (discord-home)", "discord"),
+        ("Telegram - disabled (telegram-home)", "telegram"),
+    ]
     record = save_telegram_integration_config(
         runtime,
         integration_id="telegram-home",
@@ -253,7 +274,10 @@ def test_tui_integration_options_and_telegram_config_save() -> None:
     assert record.config["poll_interval_sec"] == 2.5
     assert record.config["allowed_chat_ids"] == ["123", "-456"]
     assert record.secrets["bot_token"] == "token"
-    assert list_integration_options(runtime) == [("Telegram - enabled (telegram-home)", "telegram")]
+    assert list_integration_options(runtime) == [
+        ("Discord - disabled (discord-home)", "discord"),
+        ("Telegram - enabled (telegram-home)", "telegram"),
+    ]
 
 
 def test_telegram_config_save_maps_current_tui_user(tmp_path, monkeypatch) -> None:

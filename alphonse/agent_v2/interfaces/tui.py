@@ -414,6 +414,49 @@ def save_telegram_integration_config(
     return record
 
 
+def save_discord_integration_config(
+    runtime: TuiRuntime,
+    *,
+    integration_id: str,
+    display_name: str,
+    bot_token: str = "",
+    allowed_guild_ids: str = "",
+    allowed_channel_ids: str = "",
+    discord_user_id: str = "",
+    enabled: bool = False,
+    remove_token: bool = False,
+    presence_enabled: bool = True,
+) -> IntegrationConfigRecord:
+    existing = runtime.integration_store.get(integration_id) or runtime.integration_store.get_by_provider("discord")
+    secrets = dict(existing.secrets) if existing is not None else {}
+    token = str(bot_token or "").strip()
+    if remove_token:
+        secrets.pop("bot_token", None)
+    elif token:
+        secrets["bot_token"] = token
+    if enabled and not str(secrets.get("bot_token") or "").strip():
+        raise ValueError("discord_bot_token_required")
+    provider_user_id = str(discord_user_id or "").strip()
+    if provider_user_id and runtime.user_store.get_user(runtime.user) is not None:
+        runtime.user_store.bind_address(
+            user_id=runtime.user, integration_id=str(integration_id or "discord-home").strip() or "discord-home",
+            provider_key="discord", provider_user_id=provider_user_id,
+        )
+    record = runtime.integration_store.upsert(
+        integration_id=str(integration_id or "").strip(), provider_key="discord",
+        display_name=str(display_name or "").strip() or "Discord", enabled=enabled,
+        config={
+            "allowed_guild_ids": _parse_chat_ids(allowed_guild_ids),
+            "allowed_channel_ids": _parse_chat_ids(allowed_channel_ids),
+            "owner_user_id": runtime.user,
+            "discord_user_id": provider_user_id,
+            "presence_enabled": presence_enabled,
+        }, secrets=secrets,
+    )
+    refresh_tui_identity_resolver(runtime)
+    return record
+
+
 def _parse_chat_ids(value: str) -> list[str]:
     return [entry.strip() for entry in str(value or "").split(",") if entry.strip()]
 
@@ -1591,6 +1634,74 @@ def _build_textual_app_class() -> type[Any]:
                 return
             self.dismiss(True)
 
+    class DiscordConfigScreen(ModalScreen[bool]):
+        def __init__(self, runtime: TuiRuntime) -> None:
+            super().__init__()
+            self.runtime = runtime
+            self.record = runtime.integration_store.get_by_provider("discord")
+
+        def on_mount(self) -> None:
+            self.query_one("#discord-integration-id", Input).focus()
+
+        def compose(self) -> ComposeResult:
+            descriptor = self.runtime.integration_registry.get("discord")
+            integration_id = self.record.integration_id if self.record is not None else (descriptor.default_integration_id if descriptor is not None else "discord-home")
+            display_name = self.record.display_name if self.record is not None else "Discord"
+            config = self.record.config if self.record is not None else {}
+            has_token = self.record is not None and bool(str(self.record.secrets.get("bot_token") or "").strip())
+            guilds = ", ".join(str(item) for item in config.get("allowed_guild_ids", []) if str(item).strip())
+            channels = ", ".join(str(item) for item in config.get("allowed_channel_ids", []) if str(item).strip())
+            discord_user_id = str(config.get("discord_user_id") or "").strip()
+            enabled = "yes" if self.record is not None and self.record.enabled else "no"
+            presence_enabled = "yes" if config.get("presence_enabled", True) else "no"
+            with Vertical(id="integration-dialog"):
+                yield Static("Discord", classes="dialog-title")
+                yield Input(value=integration_id, placeholder="Integration id", id="discord-integration-id")
+                yield Input(value=display_name, placeholder="Display name", id="discord-display-name")
+                yield Input(placeholder="Bot token" + (" (saved)" if has_token else ""), id="discord-bot-token")
+                yield Input(value=discord_user_id, placeholder="Discord user id for this Alphonse user", id="discord-user-id")
+                yield Input(value=guilds, placeholder="Allowed guild ids (optional), comma separated", id="discord-allowed-guild-ids")
+                yield Input(value=channels, placeholder="Allowed channel ids (optional), comma separated", id="discord-allowed-channel-ids")
+                yield Select(options=[("Enabled", "yes"), ("Disabled", "no")], value=enabled, id="discord-enabled", allow_blank=False)
+                yield Select(options=[("Presence enabled", "yes"), ("Presence disabled", "no")], value=presence_enabled, id="discord-presence-enabled", allow_blank=False)
+                yield Static("", id="discord-config-error")
+                with Horizontal(classes="dialog-actions"):
+                    yield Button("Save", id="save-discord", variant="primary")
+                    yield Button("Disable", id="disable-discord")
+                    yield Button("Remove Token", id="remove-discord-token")
+                    yield Button("Cancel", id="cancel-discord")
+
+        def on_button_pressed(self, event: Button.Pressed) -> None:
+            if event.button.id == "cancel-discord":
+                self.dismiss(False)
+                return
+            integration_id = self.query_one("#discord-integration-id", Input).value
+            if event.button.id == "disable-discord":
+                try:
+                    self.runtime.integration_store.set_enabled(integration_id, False)
+                    refresh_tui_identity_resolver(self.runtime)
+                except Exception as exc:
+                    self.query_one("#discord-config-error", Static).update(str(exc))
+                    return
+                self.dismiss(True)
+                return
+            try:
+                save_discord_integration_config(
+                    self.runtime, integration_id=integration_id,
+                    display_name=self.query_one("#discord-display-name", Input).value,
+                    bot_token=self.query_one("#discord-bot-token", Input).value,
+                    discord_user_id=self.query_one("#discord-user-id", Input).value,
+                    allowed_guild_ids=self.query_one("#discord-allowed-guild-ids", Input).value,
+                    allowed_channel_ids=self.query_one("#discord-allowed-channel-ids", Input).value,
+                    enabled=str(self.query_one("#discord-enabled", Select).value or "no") == "yes",
+                    remove_token=event.button.id == "remove-discord-token",
+                    presence_enabled=str(self.query_one("#discord-presence-enabled", Select).value or "yes") == "yes",
+                )
+            except Exception as exc:
+                self.query_one("#discord-config-error", Static).update(str(exc))
+                return
+            self.dismiss(True)
+
     class AlphonseTuiApp(App[None]):
         CSS = """
         Screen {
@@ -2013,6 +2124,8 @@ def _build_textual_app_class() -> type[Any]:
             def _selected(provider_key: str | None) -> None:
                 if provider_key == "telegram":
                     self.push_screen(TelegramConfigScreen(self.runtime), callback=_updated)
+                elif provider_key == "discord":
+                    self.push_screen(DiscordConfigScreen(self.runtime), callback=_updated)
 
             def _updated(updated: bool) -> None:
                 if updated:

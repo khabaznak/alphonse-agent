@@ -148,6 +148,9 @@ class V2DaemonClient:
     def save_telegram_integration(self, *, user: str, values: dict[str, Any]) -> dict[str, Any]:
         return self.request("save_telegram_integration", user=user, values=dict(values))
 
+    def save_discord_integration(self, *, user: str, values: dict[str, Any]) -> dict[str, Any]:
+        return self.request("save_discord_integration", user=user, values=dict(values))
+
     def restart_integrations(self) -> dict[str, Any]:
         return self.request("restart_integrations")
 
@@ -545,6 +548,13 @@ class V2DaemonServer:
             values = params.get("values") if isinstance(params.get("values"), dict) else {}
             return {
                 "integration": self.daemon.save_telegram_integration(
+                    user=str(params.get("user") or "local"), values=dict(values),
+                )
+            }
+        if method == "save_discord_integration":
+            values = params.get("values") if isinstance(params.get("values"), dict) else {}
+            return {
+                "integration": self.daemon.save_discord_integration(
                     user=str(params.get("user") or "local"), values=dict(values),
                 )
             }
