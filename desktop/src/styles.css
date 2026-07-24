@@ -325,6 +325,27 @@ button { border: 0; cursor: pointer; }
 }
 
 .setting-row input { width: auto; }
+.settings-tabs {
+  display: flex;
+  gap: 4px;
+  overflow-x: auto;
+  margin: 0 -4px 16px;
+  padding: 0 4px 8px;
+  border-bottom: 1px solid #cad3c6;
+}
+.settings-tabs button {
+  flex: 0 0 auto;
+  padding: 8px 10px;
+  color: #526258;
+  background: transparent;
+  border-radius: 5px;
+  font-size: 11px;
+}
+.settings-tabs button:hover { background: #e2e9df; }
+.settings-tabs button.active { color: white; background: #315441; }
+.settings-panel { display: grid; gap: 12px; }
+.settings-panel h3 { margin: 0; }
+.settings-panel label:not(.setting-row) { display: grid; gap: 6px; color: #385046; font-size: 12px; }
 .stack { display: grid; gap: 8px; margin: 10px 0 20px; }
 .stack button { display: grid; gap: 4px; text-align: left; color: #27352e; background: #fbfcf5; border: 1px solid #cad3c6; }
 .stack button.selected { border-color: #315441; }
