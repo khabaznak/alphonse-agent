@@ -478,15 +478,15 @@ function IntegrationsSettingsSection({ user }: { user: string }) {
   const [integrationId, setIntegrationId] = useState("telegram-home"); const [displayName, setDisplayName] = useState("Telegram");
   const [token, setToken] = useState(""); const [telegramUserId, setTelegramUserId] = useState(""); const [allowedChatIds, setAllowedChatIds] = useState("");
   const [pollInterval, setPollInterval] = useState("1"); const [enabled, setEnabled] = useState(false); const [presenceEnabled, setPresenceEnabled] = useState(true); const [notice, setNotice] = useState("");
-  useEffect(() => { void daemonRequest<{ integrations: Array<{ integration: Record<string, unknown> | null }> }>("integrations").then((result) => {
-    const integration = result.integrations[0]?.integration; if (!integration) return;
+  useEffect(() => { void daemonRequest<{ integrations: Array<{ provider_key: string; integration: Record<string, unknown> | null }> }>("integrations").then((result) => {
+    const integration = result.integrations.find((item) => item.provider_key === "telegram")?.integration; if (!integration) return;
     const config = (integration.config as Record<string, unknown> | undefined) ?? {};
     setIntegrationId(String(integration.integration_id || "telegram-home")); setDisplayName(String(integration.display_name || "Telegram")); setEnabled(Boolean(integration.enabled));
     setTelegramUserId(String(config.telegram_user_id || "")); setAllowedChatIds(Array.isArray(config.allowed_chat_ids) ? config.allowed_chat_ids.join(", ") : "");
     setPollInterval(String(config.poll_interval_sec || 1)); setPresenceEnabled(config.presence_enabled !== false);
   }); }, []);
   const save = async () => { await daemonRequest("save_telegram_integration", { user, values: { integration_id: integrationId, display_name: displayName, enabled, bot_token: token, telegram_user_id: telegramUserId, allowed_chat_ids: allowedChatIds, poll_interval_sec: pollInterval, presence_enabled: presenceEnabled } }); setToken(""); setNotice("Saved and integrations restarted."); };
-  return <section className="settings-panel">
+  return <><section className="settings-panel">
     <h3>Telegram integration</h3>
     <div className="form-field">
       <label htmlFor="telegram-integration-id">Integration ID</label>
@@ -520,6 +520,31 @@ function IntegrationsSettingsSection({ user }: { user: string }) {
       <label htmlFor="telegram-presence-enabled"><input id="telegram-presence-enabled" type="checkbox" checked={presenceEnabled} onChange={(event) => setPresenceEnabled(event.target.checked)} /> Show Telegram presence</label>
       <small>Shows typing indicators and status reactions while Alphonse is working on a Telegram message.</small>
     </div>
+    <button onClick={() => void save()}>Save integration</button><p>{notice}</p>
+  </section><DiscordIntegrationSettingsSection user={user} /></>;
+}
+
+function DiscordIntegrationSettingsSection({ user }: { user: string }) {
+  const [integrationId, setIntegrationId] = useState("discord-home"); const [displayName, setDisplayName] = useState("Discord");
+  const [token, setToken] = useState(""); const [discordUserId, setDiscordUserId] = useState(""); const [allowedGuildIds, setAllowedGuildIds] = useState(""); const [allowedChannelIds, setAllowedChannelIds] = useState("");
+  const [enabled, setEnabled] = useState(false); const [presenceEnabled, setPresenceEnabled] = useState(true); const [notice, setNotice] = useState("");
+  useEffect(() => { void daemonRequest<{ integrations: Array<{ provider_key: string; integration: Record<string, unknown> | null }> }>("integrations").then((result) => {
+    const integration = result.integrations.find((item) => item.provider_key === "discord")?.integration; if (!integration) return;
+    const config = (integration.config as Record<string, unknown> | undefined) ?? {};
+    setIntegrationId(String(integration.integration_id || "discord-home")); setDisplayName(String(integration.display_name || "Discord")); setEnabled(Boolean(integration.enabled));
+    setDiscordUserId(String(config.discord_user_id || "")); setAllowedGuildIds(Array.isArray(config.allowed_guild_ids) ? config.allowed_guild_ids.join(", ") : ""); setAllowedChannelIds(Array.isArray(config.allowed_channel_ids) ? config.allowed_channel_ids.join(", ") : ""); setPresenceEnabled(config.presence_enabled !== false);
+  }).catch((cause: unknown) => setNotice(cause instanceof Error ? cause.message : "Discord settings unavailable")); }, []);
+  const save = async () => { try { await daemonRequest("save_discord_integration", { user, values: { integration_id: integrationId, display_name: displayName, enabled, bot_token: token, discord_user_id: discordUserId, allowed_guild_ids: allowedGuildIds, allowed_channel_ids: allowedChannelIds, presence_enabled: presenceEnabled } }); setToken(""); setNotice("Saved and integrations restarted."); } catch (cause) { setNotice(cause instanceof Error ? cause.message : "Save failed"); } };
+  return <section className="settings-panel">
+    <h3>Discord integration</h3>
+    <div className="form-field"><label htmlFor="discord-integration-id">Integration ID</label><input id="discord-integration-id" value={integrationId} onChange={(event) => setIntegrationId(event.target.value)} /></div>
+    <div className="form-field"><label htmlFor="discord-display-name">Display name</label><input id="discord-display-name" value={displayName} onChange={(event) => setDisplayName(event.target.value)} /></div>
+    <div className="form-field"><label htmlFor="discord-bot-token">Bot token <span className="field-help" title="Create a bot token in the Discord Developer Portal. Leave blank to keep the saved token.">?</span></label><input id="discord-bot-token" type="password" value={token} onChange={(event) => setToken(event.target.value)} placeholder="Leave blank to keep the current token" autoComplete="new-password" /></div>
+    <div className="form-field"><label htmlFor="discord-user-id">Discord user ID <span className="field-help" title="The Discord user ID to associate with the selected Alphonse user.">?</span></label><input id="discord-user-id" value={discordUserId} onChange={(event) => setDiscordUserId(event.target.value)} /></div>
+    <div className="form-field"><label htmlFor="discord-allowed-guild-ids">Allowed guild IDs <span className="field-help" title="Optional comma-separated allow-list. Leave blank to allow every guild the bot can read.">?</span></label><input id="discord-allowed-guild-ids" value={allowedGuildIds} onChange={(event) => setAllowedGuildIds(event.target.value)} placeholder="123456789012345678" /></div>
+    <div className="form-field"><label htmlFor="discord-allowed-channel-ids">Allowed channel IDs <span className="field-help" title="Optional comma-separated allow-list. Leave blank to allow every readable channel.">?</span></label><input id="discord-allowed-channel-ids" value={allowedChannelIds} onChange={(event) => setAllowedChannelIds(event.target.value)} placeholder="123456789012345678" /></div>
+    <div className="form-field checkbox-field"><label htmlFor="discord-enabled"><input id="discord-enabled" type="checkbox" checked={enabled} onChange={(event) => setEnabled(event.target.checked)} /> Enable Discord integration</label><small>Starts the Discord Gateway bridge. A bot token and Message Content Intent are required.</small></div>
+    <div className="form-field checkbox-field"><label htmlFor="discord-presence-enabled"><input id="discord-presence-enabled" type="checkbox" checked={presenceEnabled} onChange={(event) => setPresenceEnabled(event.target.checked)} /> Show Discord presence</label><small>Shows typing indicators and status reactions while Alphonse is working.</small></div>
     <button onClick={() => void save()}>Save integration</button><p>{notice}</p>
   </section>;
 }
