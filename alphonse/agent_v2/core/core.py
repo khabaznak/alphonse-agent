@@ -183,6 +183,7 @@ class ToolExecutionContext:
     schedule_store: Any | None = None
     delivery_sink: Callable[[dict[str, Any]], Any] | None = None
     user_context_provider: Callable[[str], str] | None = None
+    user_timezone_provider: Callable[[str], str] | None = None
     memory: Any | None = None
 
 
@@ -201,6 +202,7 @@ class CoreLoopContext:
     schedule_store: Any | None = None
     delivery_sink: Callable[[dict[str, Any]], Any] | None = None
     user_context_provider: Callable[[str], str] | None = None
+    user_timezone_provider: Callable[[str], str] | None = None
     memory: Any | None = None
     consumed_message_ids: list[str] = field(default_factory=list)
 
@@ -237,7 +239,15 @@ class CoreLoopContext:
             schedule_store=self.schedule_store,
             delivery_sink=self.delivery_sink,
             memory=self.memory,
+            user_timezone_provider=self.user_timezone_provider,
         )
+
+    def record_memory_event(self, task: TaskState, heading: str, content: Any) -> None:
+        if self.memory is None:
+            return
+        record = getattr(self.memory, "event", None)
+        if callable(record):
+            record(task, heading, content)
 
 
 _SENSITIVE_PROGRESS_KEYS = ("secret", "token", "password", "authorization", "cookie", "api_key", "apikey")
@@ -283,13 +293,6 @@ def _safe_progress_value(value: Any, *, key: str = "", depth: int = 0) -> Any:
 def _truncate_progress(value: str, limit: int) -> str:
     text = str(value or "").strip()
     return text if len(text) <= limit else f"{text[:limit - 1]}…"
-
-    def record_memory_event(self, task: TaskState, heading: str, content: Any) -> None:
-        if self.memory is None:
-            return
-        record = getattr(self.memory, "event", None)
-        if callable(record):
-            record(task, heading, content)
 
 
 class IntelligenceProcessor(Protocol):
@@ -381,6 +384,7 @@ class AlphonseCore:
     schedule_store: Any | None = None
     delivery_sink: Callable[[dict[str, Any]], Any] | None = None
     user_context_provider: Callable[[str], str] | None = None
+    user_timezone_provider: Callable[[str], str] | None = None
     fsm: DDFSM = field(default_factory=build_default_ddfsm)
     _stop_requested: bool = field(default=False, init=False, repr=False)
 
@@ -457,6 +461,7 @@ class AlphonseCore:
                 schedule_store=self.schedule_store,
                 delivery_sink=self.delivery_sink,
                 user_context_provider=self.user_context_provider,
+                user_timezone_provider=self.user_timezone_provider,
                 memory=self.memory,
             )
             start_memory = getattr(self.memory, "start_task", None)

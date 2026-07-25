@@ -404,8 +404,9 @@ class V2Daemon:
     def settings(self) -> dict[str, object]:
         return self.runtime.user_store.status()
 
-    def save_settings(self, *, users_root: str) -> dict[str, object]:
-        return {"users_root": self.runtime.user_store.set_users_root(users_root), "warning_repository_path": "/Alphonse/" in str(users_root)}
+    def save_settings(self, *, users_root: str, timezone_name: str = "") -> dict[str, object]:
+        timezone_value = self.runtime.user_store.set_timezone(timezone_name) if str(timezone_name).strip() else self.runtime.user_store.timezone()
+        return {"users_root": self.runtime.user_store.set_users_root(users_root), "timezone": timezone_value, "warning_repository_path": "/Alphonse/" in str(users_root)}
 
     def memory_settings(self, *, actor_user_id: str) -> dict[str, object]:
         self._require_admin(actor_user_id)

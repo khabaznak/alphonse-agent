@@ -222,9 +222,16 @@ button { border: 0; cursor: pointer; }
 .message.assistant { background: #fcfcf6; box-shadow: 0 8px 20px #20382d0b; align-self: flex-start; }
 .message.user { background: #315441; color: white; align-self: flex-end; }
 .message.system { background: #e6e7dd; }
-.task-progress-bubble { width: min(620px, 77%); padding: 0; overflow: hidden; border: 1px solid #dfc76f; }
-.task-progress-bubble .question-card { margin: 0; border: 0; border-radius: 0; background: #fff9e5; }
-.task-progress-bubble .a2ui-container { display: grid; }
+.task-progress-bubble { width: min(620px, 77%); padding: 0; overflow: hidden; border: 1px solid #dfc76f; background: #fff9e5; }
+.task-progress-content { display: grid; gap: 10px; padding: 15px 16px; color: #27352e; }
+.task-progress-heading { display: flex; align-items: center; gap: 8px; color: #6e5a19; font-size: 13px; }
+.task-progress-spinner { color: #a07d22; font-size: 18px; animation: task-progress-pulse 1.25s ease-in-out infinite; }
+.task-progress-content p { margin: 0; line-height: 1.45; font-size: 12px; }
+.task-progress-content section { display: grid; gap: 5px; }
+.task-progress-content small { color: #6e5a19; font-size: 10px; letter-spacing: .07em; text-transform: uppercase; }
+.task-progress-content pre { margin: 0; overflow-x: auto; white-space: pre-wrap; overflow-wrap: anywhere; font: 11px/1.45 "DM Mono", monospace; }
+.task-progress-detail { padding: 8px 10px; border-radius: 5px; background: #f0eddb; color: #415b49; }
+@keyframes task-progress-pulse { 50% { opacity: .35; transform: scale(.85); } }
 .message-source { display: block; width: max-content; margin: -2px 0 10px; padding: 3px 6px; border-radius: 999px; background: #e6ece2; color: #526958; font-size: 10px; letter-spacing: .04em; text-transform: uppercase; }
 .message-markdown { white-space: normal; }
 .message-markdown > :first-child { margin-top: 0; }

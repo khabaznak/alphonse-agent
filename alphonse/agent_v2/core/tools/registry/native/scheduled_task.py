@@ -99,6 +99,7 @@ def execute_scheduled_task(
     owner_user_id = str(getattr(task, "user", "") or "").strip()
     if not owner_user_id:
         raise ValueError("scheduled_task_owner_required")
+    default_timezone = context.user_timezone_provider(owner_user_id) if callable(context.user_timezone_provider) else "UTC"
     record = store.create_task(
         owner_user_id=owner_user_id,
         project_id=str(getattr(task, "project_id", "") or "").strip(),
@@ -112,7 +113,7 @@ def execute_scheduled_task(
         origin_channel=dict(task.metadata.get("channel") or {})
         if isinstance(task.metadata.get("channel"), dict)
         else {},
-        timezone_name=str(arguments.get("timezone") or "").strip() or "UTC",
+        timezone_name=str(arguments.get("timezone") or "").strip() or str(default_timezone or "UTC"),
         enabled=bool(arguments.get("enabled", True)),
     )
     return {

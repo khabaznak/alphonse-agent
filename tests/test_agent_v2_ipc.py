@@ -70,6 +70,18 @@ def test_daemon_ipc_exposes_inference_configuration() -> None:
     assert providers[0]["provider_key"] == "openai_codex"
 
 
+def test_daemon_settings_validate_and_persist_timezone(tmp_path) -> None:
+    users = V2UserStore(":memory:")
+    users.onboard(display_name="Admin", users_root=tmp_path / "users")
+    daemon = V2Daemon(build_runtime_host(user_store=users, schedule_store=ScheduledTaskStore(":memory:")))
+
+    saved = daemon.ipc._dispatch({"method": "save_settings", "params": {"users_root": str(tmp_path / "users"), "timezone": "America/Mexico_City"}})
+    assert saved["timezone"] == "America/Mexico_City"
+    assert daemon.ipc._dispatch({"method": "settings"})["timezone"] == "America/Mexico_City"
+    with pytest.raises(ValueError, match="invalid_timezone"):
+        daemon.ipc._dispatch({"method": "save_settings", "params": {"users_root": str(tmp_path / "users"), "timezone": "Not/A_Timezone"}})
+
+
 def test_daemon_ipc_web_tools_require_admin_and_refresh_registry(tmp_path) -> None:
     users = V2UserStore(":memory:")
     admin = users.onboard(display_name="Admin", users_root=tmp_path / "users")

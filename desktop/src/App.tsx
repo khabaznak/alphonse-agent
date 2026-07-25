@@ -3,7 +3,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { daemonRequest, ensureDaemon, showInFinder, stopDaemon } from "./api";
 import { matchingCommands } from "./commands";
-import { A2uiSurfaceView, applyA2uiEvent, DESKTOP_CATALOG_ID } from "./a2ui";
+import { A2uiSurfaceView, applyA2uiEvent, DESKTOP_CATALOG_ID, type A2uiSurface } from "./a2ui";
 import { agentStateLabel, capdActivityLabel, projectKey } from "./layoutState";
 import type { ActivityEvent, AgentDocument, ChatMessage, InferenceSettings, MediaToolsSettings, MemorySettings, Project, Question, WebToolsSettings } from "./types";
 
@@ -28,6 +28,7 @@ export default function App() {
   const sequence = useRef(0);
   const uiSequence = useRef(0);
   const delivered = useRef(new Set<string>());
+  const progressTaskIdsRef = useRef(new Set<string>());
   const timelineRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([{ id: "welcome", role: "assistant", content: "Alphonse Desktop is connected locally." }]);
@@ -50,6 +51,8 @@ export default function App() {
   const [recentFiles, setRecentFiles] = useState<RecentFilesResponse["files"]>([]);
   const [recentFilesError, setRecentFilesError] = useState("");
   const [queueStatus, setQueueStatus] = useState({ ready: 0, processing: 0 });
+  const [progressTaskIds, setProgressTaskIds] = useState<string[]>([]);
+  const [completedProgressMessages, setCompletedProgressMessages] = useState<Record<string, ChatMessage>>({});
   const [enterToSend, setEnterToSend] = useState(() => window.localStorage.getItem("alphonse.desktop.enterToSend") !== "false");
   const currentProjectKey = projectKey(project?.project_id);
 
@@ -77,6 +80,11 @@ export default function App() {
       setError("");
       setQuestions(response.questions);
       setQueueStatus({ ready: response.status.queue?.ready || 0, processing: response.status.queue?.processing || 0 });
+      const newProgressTaskIds = taskProgressIds(response.ui_events || []);
+      if (newProgressTaskIds.length) {
+        newProgressTaskIds.forEach((taskId) => progressTaskIdsRef.current.add(taskId));
+        setProgressTaskIds((current) => [...current, ...newProgressTaskIds.filter((taskId) => !current.includes(taskId))]);
+      }
       setSurfaces((current) => (response.ui_events || []).reduce((next, item) => applyA2uiEvent(next, item.event), current));
       const latest = response.events.at(-1);
       setActivity(capdActivityLabel(latest, response.status.activity.state || "idle"));
@@ -90,6 +98,12 @@ export default function App() {
             delete next[`task-progress:${delivery.task_id}`];
             return next;
           });
+          if (progressTaskIdsRef.current.has(delivery.task_id)) {
+            setCompletedProgressMessages((current) => ({ ...current, [delivery.task_id!]: { id: delivery.outbox_message_id, role: "assistant", content: delivery.message } }));
+            appendMessage({ id: delivery.outbox_message_id, role: "assistant", content: delivery.message });
+            await daemonRequest("desktop_ack_delivery", { client_id: clientId, outbox_message_id: delivery.outbox_message_id });
+            continue;
+          }
         }
         appendMessage({ id: delivery.outbox_message_id, role: "assistant", content: delivery.message });
         await daemonRequest("desktop_ack_delivery", { client_id: clientId, outbox_message_id: delivery.outbox_message_id });
@@ -152,6 +166,9 @@ export default function App() {
     setRecentFilesError("");
     setModal(null);
     setSurfaces({});
+    progressTaskIdsRef.current.clear();
+    setProgressTaskIds([]);
+    setCompletedProgressMessages({});
     setQuestions([]);
     delivered.current.clear();
     setMessages(messageBuckets[nextKey] || []);
@@ -228,7 +245,6 @@ export default function App() {
   };
 
   const suggestions = useMemo(() => matchingCommands(prompt), [prompt]);
-  const taskProgressSurfaces = Object.values(surfaces).filter((surface) => surface.surfaceId.startsWith("task-progress:"));
   const activeSurface = Object.values(surfaces).find((surface) => !surface.surfaceId.startsWith("task-progress:"));
   const fallbackQuestion = questions.find((question) => !surfaces[`question:${question.question_id}`]);
 
@@ -266,11 +282,12 @@ export default function App() {
         </header>
         {error && <div className="error" role="alert">{error}</div>}
         <div className="timeline" ref={timelineRef} aria-live="polite">
-          {messages.map((message) => <article className={`message ${message.role}`} key={message.id}>
-            {message.source && !["desktop", "ledger"].includes(message.source) && <small className="message-source" title={`Sent from ${message.source}`}>↗ {sourceLabel(message.source)}</small>}
-            {message.role === "assistant" ? <div className="message-markdown"><ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown></div> : message.content}
-          </article>)}
-          {taskProgressSurfaces.map((surface) => <article className="message assistant task-progress-bubble" key={surface.surfaceId}><A2uiSurfaceView surface={surface} clientId={clientId} user={user} onDone={poll} /></article>)}
+          {messages.filter((message) => !Object.values(completedProgressMessages).some((completed) => completed.id === message.id)).map((message) => <MessageBubble key={message.id} message={message} />)}
+          {progressTaskIds.map((taskId) => {
+            const surface = surfaces[`task-progress:${taskId}`];
+            const completed = completedProgressMessages[taskId];
+            return surface ? <TaskProgressBubble key={taskId} surface={surface} /> : completed ? <MessageBubble key={completed.id} message={completed} /> : null;
+          })}
         </div>
         <section className="input-dock">
           {activeSurface ? (
@@ -326,20 +343,20 @@ function OnboardingModal({ onComplete }: { onComplete: (userId: string) => void 
 }
 
 function SettingsModal({ user, initialTab, enterToSend, onEnterToSendChange, onClose }: { user: string; initialTab: SettingsTab; enterToSend: boolean; onEnterToSendChange: (value: boolean) => void; onClose: () => void }) {
-  const [root, setRoot] = useState(""); const [notice, setNotice] = useState(""); const [tab, setTab] = useState<SettingsTab>(initialTab);
+  const [root, setRoot] = useState(""); const [timezone, setTimezone] = useState("UTC"); const [notice, setNotice] = useState(""); const [tab, setTab] = useState<SettingsTab>(initialTab);
   const [web, setWeb] = useState<WebToolsSettings | null>(null); const [webNotice, setWebNotice] = useState("");
   const [memory, setMemory] = useState<MemorySettings | null>(null); const [memoryNotice, setMemoryNotice] = useState("");
-  useEffect(() => { void daemonRequest<{ users_root: string }>("settings").then((result) => setRoot(result.users_root)); }, []);
+  useEffect(() => { void daemonRequest<{ users_root: string; timezone?: string }>("settings").then((result) => { setRoot(result.users_root); setTimezone(result.timezone || "UTC"); }); }, []);
   useEffect(() => { setTab(initialTab); }, [initialTab]);
   useEffect(() => { if (tab === "tools") void daemonRequest<{ user: { user_id: string } | null }>("current_user").then(async (current) => { if (!current.user) return; const result = await daemonRequest<{ settings: WebToolsSettings }>("web_tools_settings", { actor_user_id: current.user.user_id }); setWeb(result.settings); }).catch((cause: unknown) => setWebNotice(cause instanceof Error ? cause.message : "Web Tools unavailable")); }, [tab]);
   useEffect(() => { void daemonRequest<{ user: { user_id: string } | null }>("current_user").then(async (current) => { if (!current.user) return; const result = await daemonRequest<{ settings: MemorySettings }>("memory_settings", { actor_user_id: current.user.user_id }); setMemory(result.settings); }).catch((cause: unknown) => setMemoryNotice(cause instanceof Error ? cause.message : "Memory settings unavailable")); }, []);
-  const save = async () => { const result = await daemonRequest<{ users_root: string; warning_repository_path?: boolean }>("save_settings", { users_root: root }); setNotice(result.warning_repository_path ? "Saved. This path is inside the repository; keep it ignored." : "Saved."); };
+  const save = async () => { try { const result = await daemonRequest<{ users_root: string; timezone: string; warning_repository_path?: boolean }>("save_settings", { users_root: root, timezone }); setTimezone(result.timezone); setNotice(result.warning_repository_path ? "Saved. This path is inside the repository; keep it ignored." : "Saved."); } catch (cause) { setNotice(cause instanceof Error ? cause.message : "Settings could not be saved"); } };
   const saveWeb = async () => { if (!web) return; try { const current = await daemonRequest<{ user: { user_id: string } | null }>("current_user"); if (!current.user) return; const result = await daemonRequest<{ settings: WebToolsSettings }>("save_web_tools_settings", { actor_user_id: current.user.user_id, values: web }); setWeb(result.settings); setWebNotice("Saved. Newly started tasks can use enabled Web Tools."); } catch (cause) { setWebNotice(cause instanceof Error ? cause.message : "Save failed"); } };
   const verify = async (kind: "search" | "fetch") => { try { const current = await daemonRequest<{ user: { user_id: string } | null }>("current_user"); if (!current.user) return; const result = await daemonRequest<{ result: { exception?: { message?: string } } }>("verify_web_tools", { actor_user_id: current.user.user_id, kind }); setWebNotice(result.result.exception?.message || `${kind === "search" ? "SearXNG search" : "Public fetch"} verified.`); } catch (cause) { setWebNotice(cause instanceof Error ? cause.message : "Verification failed"); } };
   const saveMemory = async () => { if (!memory) return; try { const current = await daemonRequest<{ user: { user_id: string } | null }>("current_user"); if (!current.user) return; const result = await daemonRequest<{ settings: MemorySettings }>("save_memory_settings", { actor_user_id: current.user.user_id, values: memory }); setMemory(result.settings); setMemoryNotice("Saved. New tasks use these limits."); } catch (cause) { setMemoryNotice(cause instanceof Error ? cause.message : "Memory settings could not be saved"); } };
   return <ModalFrame title="Settings" onClose={onClose}>
     <div className="settings-tabs" role="tablist" aria-label="Settings sections">{(["general", "tools", "artifacts", "integrations", "automations", "model", "agent-config"] as SettingsTab[]).map((item) => <button key={item} type="button" role="tab" aria-selected={tab === item} className={tab === item ? "active" : ""} onClick={() => setTab(item)}>{item === "agent-config" ? "Agent configuration" : item[0].toUpperCase() + item.slice(1)}</button>)}</div>
-    {tab === "general" && <><label className="setting-row"><input type="checkbox" checked={enterToSend} onChange={(event) => onEnterToSendChange(event.target.checked)} /> Enter sends message</label><br/><label>Users root<input value={root} onChange={(event) => setRoot(event.target.value)} /></label><button onClick={() => void save()}>Save</button><p>{notice}</p><section><h3>Conversation Memory</h3>{memory && <><label>Ledger limit (bytes)<input type="number" value={memory.max_ledger_bytes} onChange={(event) => setMemory({ ...memory, max_ledger_bytes: Number(event.target.value) })} /></label><label>Compaction limit (words)<input type="number" value={memory.compaction_summary_max_words} onChange={(event) => setMemory({ ...memory, compaction_summary_max_words: Number(event.target.value) })} /></label><button onClick={() => void saveMemory()}>Save Memory Settings</button></>}<p>{memoryNotice}</p></section></>}
+    {tab === "general" && <><label className="setting-row"><input type="checkbox" checked={enterToSend} onChange={(event) => onEnterToSendChange(event.target.checked)} /> Enter sends message</label><br/><label>Users root<input value={root} onChange={(event) => setRoot(event.target.value)} /></label><label>Timezone<input value={timezone} placeholder="America/Mexico_City" onChange={(event) => setTimezone(event.target.value)} /><small>Use an IANA timezone. New scheduled tasks use this unless a timezone is explicitly specified.</small></label><button onClick={() => void save()}>Save</button><p>{notice}</p><section><h3>Conversation Memory</h3>{memory && <><label>Ledger limit (bytes)<input type="number" value={memory.max_ledger_bytes} onChange={(event) => setMemory({ ...memory, max_ledger_bytes: Number(event.target.value) })} /></label><label>Compaction limit (words)<input type="number" value={memory.compaction_summary_max_words} onChange={(event) => setMemory({ ...memory, compaction_summary_max_words: Number(event.target.value) })} /></label><button onClick={() => void saveMemory()}>Save Memory Settings</button></>}<p>{memoryNotice}</p></section></>}
     {tab === "tools" && <><section><h3>Web Tools</h3><p>Run SearXNG separately in Docker with JSON output enabled. Alphonse connects to it; it does not manage Docker.</p>{web && <><label className="setting-row"><input type="checkbox" checked={web.enabled} onChange={(event) => setWeb({ ...web, enabled: event.target.checked })} /> Enable Web Search and Fetch</label><label>SearXNG URL<input value={web.searxng_base_url} placeholder="http://127.0.0.1:8080" onChange={(event) => setWeb({ ...web, searxng_base_url: event.target.value })} /></label><label>Search timeout (seconds)<input type="number" value={web.search_timeout_seconds} onChange={(event) => setWeb({ ...web, search_timeout_seconds: Number(event.target.value) })} /></label><label>Fetch timeout (seconds)<input type="number" value={web.fetch_timeout_seconds} onChange={(event) => setWeb({ ...web, fetch_timeout_seconds: Number(event.target.value) })} /></label><label>Fetch text limit<input type="number" value={web.fetch_max_chars} onChange={(event) => setWeb({ ...web, fetch_max_chars: Number(event.target.value) })} /></label><button onClick={() => void saveWeb()}>Save Web Tools</button><button onClick={() => void verify("search")}>Verify SearXNG</button><button onClick={() => void verify("fetch")}>Verify Fetch</button></>}<p>{webNotice}</p></section><MediaToolsSettingsSection /></>}
     {tab === "artifacts" && <ArtifactsSettingsSection user={user} />}
     {tab === "integrations" && <IntegrationsSettingsSection user={user} />}
@@ -393,6 +410,37 @@ function dateLabel(value: string | null | undefined): string {
 
 function sourceLabel(source: string): string {
   return source.replace(/[-_]/g, " ").replace(/\b\w/g, (character) => character.toUpperCase());
+}
+
+function taskProgressIds(events: Array<{ event: { type: string; name?: string; value?: unknown } }>): string[] {
+  const ids = new Set<string>();
+  for (const item of events) {
+    const value = item.event.name === "a2ui.envelope" && typeof item.event.value === "object" && item.event.value !== null ? item.event.value as { createSurface?: { surfaceId?: unknown } } : null;
+    const surfaceId = value?.createSurface?.surfaceId;
+    if (typeof surfaceId === "string" && surfaceId.startsWith("task-progress:")) ids.add(surfaceId.slice("task-progress:".length));
+  }
+  return [...ids];
+}
+
+function MessageBubble({ message }: { message: ChatMessage }) {
+  return <article className={`message ${message.role}`}>
+    {message.source && !["desktop", "ledger"].includes(message.source) && <small className="message-source" title={`Sent from ${message.source}`}>↗ {sourceLabel(message.source)}</small>}
+    {message.role === "assistant" ? <div className="message-markdown"><ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown></div> : message.content}
+  </article>;
+}
+
+function TaskProgressBubble({ surface }: { surface: A2uiSurface }) {
+  const text = (id: string) => String(surface.components[id]?.text || "").trim();
+  return <article className="message assistant task-progress-bubble" aria-live="polite">
+    <div className="task-progress-content">
+      <div className="task-progress-heading"><span className="task-progress-spinner" aria-hidden="true">◌</span><strong>{text("status") || "Alphonse is working"}</strong></div>
+      {text("summary") && <p>{text("summary")}</p>}
+      {text("criteria") && <section><small>Acceptance criteria</small><pre>{text("criteria").replace(/^Acceptance criteria\n?/, "")}</pre></section>}
+      {text("tool") && <p className="task-progress-detail">{text("tool")}</p>}
+      {text("arguments") && <pre className="task-progress-detail">{text("arguments")}</pre>}
+      {text("result") && <pre className="task-progress-detail">{text("result")}</pre>}
+    </div>
+  </article>;
 }
 
 function ScheduledTasksModal({ actorUserId, initialTaskId = "", onClose }: { actorUserId: string; initialTaskId?: string; onClose: () => void }) {

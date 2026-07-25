@@ -215,6 +215,7 @@ def build_runtime_host(
         schedule_store=schedule_store,
         delivery_sink=delivery_sink,
         user_context_provider=user_store.read_user_context,
+        user_timezone_provider=lambda _user_id: user_store.timezone(),
         activity_sink=_activity_sink,
     )
     runtime = V2RuntimeHost(

@@ -151,6 +151,26 @@ def test_native_scheduled_task_tool_registers_and_uses_context_owner_project() -
     assert stored.project_id == "alpha"
 
 
+def test_native_scheduled_task_uses_the_configured_user_timezone_by_default() -> None:
+    store = ScheduledTaskStore()
+    context = ToolExecutionContext(
+        task=TaskState(user="alex"),
+        messages=InMemoryMessageQueue(),
+        schedule_store=store,
+        user_timezone_provider=lambda _user_id: "America/Mexico_City",
+    )
+
+    result = execute_scheduled_task(
+        {"name": "Evening reminder", "prompt": "Reminder", "schedule_kind": "once", "run_at": "2026-07-10T20:30:00"},
+        context=context,
+    )
+
+    stored = store.get_task(result["scheduled_task_id"])
+    assert stored is not None
+    assert stored.timezone == "America/Mexico_City"
+    assert stored.next_run_at == "2026-07-11T02:30:00+00:00"
+
+
 def test_native_scheduled_task_tool_rejects_missing_required_fields() -> None:
     context = ToolExecutionContext(
         task=TaskState(user="alex"),

@@ -406,7 +406,7 @@ class V2DaemonServer:
         if method == "settings":
             return self.daemon.settings()
         if method == "save_settings":
-            return self.daemon.save_settings(users_root=str(params.get("users_root") or ""))
+            return self.daemon.save_settings(users_root=str(params.get("users_root") or ""), timezone_name=str(params.get("timezone") or ""))
         if method == "memory_settings":
             return {"settings": self.daemon.memory_settings(actor_user_id=str(params.get("actor_user_id") or ""))}
         if method == "save_memory_settings":

@@ -9,6 +9,7 @@ import unicodedata
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 from uuid import uuid4
 
 USER_CONTEXT_FILENAME = "user_context.md"
@@ -81,7 +82,19 @@ class V2UserStore:
     def status(self) -> dict[str, object]:
         admin = self.admin_user()
         return {"onboarded": admin is not None, "admin_user": admin.to_dict() if admin else None,
-                "users_root": str(self.users_root())}
+                "users_root": str(self.users_root()), "timezone": self.timezone()}
+
+    def timezone(self) -> str:
+        return self._setting("timezone") or "UTC"
+
+    def set_timezone(self, value: str) -> str:
+        rendered = str(value or "").strip() or "UTC"
+        try:
+            ZoneInfo(rendered)
+        except Exception as exc:
+            raise ValueError(f"invalid_timezone: {rendered}") from exc
+        self._set_setting("timezone", rendered)
+        return rendered
 
     def users_root(self) -> Path:
         value = self._setting("users_root")
