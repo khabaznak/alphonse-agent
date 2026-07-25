@@ -408,6 +408,14 @@ class V2Daemon:
         timezone_value = self.runtime.user_store.set_timezone(timezone_name) if str(timezone_name).strip() else self.runtime.user_store.timezone()
         return {"users_root": self.runtime.user_store.set_users_root(users_root), "timezone": timezone_value, "warning_repository_path": "/Alphonse/" in str(users_root)}
 
+    def timezone_settings(self, *, actor_user_id: str) -> dict[str, str]:
+        self._require_admin(actor_user_id)
+        return {"timezone": self.runtime.user_store.timezone()}
+
+    def save_timezone_settings(self, *, actor_user_id: str, timezone_name: str) -> dict[str, str]:
+        self._require_admin(actor_user_id)
+        return {"timezone": self.runtime.user_store.set_timezone(timezone_name)}
+
     def memory_settings(self, *, actor_user_id: str) -> dict[str, object]:
         self._require_admin(actor_user_id)
         return self.runtime.memory_settings_store.get().to_dict()

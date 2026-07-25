@@ -6,6 +6,7 @@ import or adapt v1 agent internals.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field, replace
 from datetime import datetime
 from enum import Enum
@@ -262,13 +263,34 @@ def _task_progress_snapshot(task: Any, extra: dict[str, Any] | None = None) -> d
     latest = latest if isinstance(latest, dict) else None
     selected = planned or latest or {}
     execution = latest.get("execution") if isinstance(latest, dict) and isinstance(latest.get("execution"), dict) else {}
+    try:
+        plan_calls = json.loads(str(getattr(task, "plan_json", "") or ""))
+    except (TypeError, ValueError):
+        plan_calls = []
+    steps = []
+    for call in plan_calls[-10:] if isinstance(plan_calls, list) else []:
+        if not isinstance(call, dict):
+            continue
+        call_execution = call.get("execution") if isinstance(call.get("execution"), dict) else {}
+        steps.append({
+            "intention": _truncate_progress(str(call.get("internal_state") or ""), 500),
+            "tool_name": str(call.get("tool_name") or call.get("tool_id") or "").strip(),
+            "arguments": _safe_progress_value(call.get("arguments")),
+            "status": str(call_execution.get("status") or "planned").strip(),
+            "result": _safe_progress_value(call_execution.get("result")),
+        })
+    acceptance_criteria = str(getattr(task, "acceptance_criteria_md", "") or "").strip()
+    if acceptance_criteria == "- (none)":
+        acceptance_criteria = ""
     return {
         "project_id": str(getattr(task, "project_id", "") or "").strip(),
-        "acceptance_criteria": _truncate_progress(str(getattr(task, "acceptance_criteria_md", "") or ""), 1200),
+        "acceptance_criteria": _truncate_progress(acceptance_criteria, 1200),
         "tool_name": str(selected.get("tool_name") or selected.get("tool_id") or "").strip(),
         "tool_arguments": _safe_progress_value(selected.get("arguments") if isinstance(selected, dict) else {}),
         "tool_result": _safe_progress_value(execution.get("result") if isinstance(execution, dict) else None),
         "tool_status": str(execution.get("status") or "").strip() if isinstance(execution, dict) else "",
+        "intention": _truncate_progress(str(selected.get("internal_state") or ""), 500),
+        "steps": steps,
         "status": str(getattr(task, "status", "") or "").strip(),
         **{str(key): _safe_progress_value(value) for key, value in dict(extra or {}).items()},
     }

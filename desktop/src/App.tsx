@@ -29,8 +29,12 @@ export default function App() {
   const uiSequence = useRef(0);
   const delivered = useRef(new Set<string>());
   const progressTaskIdsRef = useRef(new Set<string>());
+  const progressStartedAtRef = useRef(new Map<string, number>());
+  const progressMeaningfulAtRef = useRef(new Map<string, number>());
+  const progressCompletionTimersRef = useRef(new Map<string, number>());
   const timelineRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const surfacesRef = useRef<Record<string, A2uiSurface>>({});
   const [messages, setMessages] = useState<ChatMessage[]>([{ id: "welcome", role: "assistant", content: "Alphonse Desktop is connected locally." }]);
   const [messageBuckets, setMessageBuckets] = useState<Record<string, ChatMessage[]>>({});
   const [prompt, setPrompt] = useState("");
@@ -53,6 +57,7 @@ export default function App() {
   const [queueStatus, setQueueStatus] = useState({ ready: 0, processing: 0 });
   const [progressTaskIds, setProgressTaskIds] = useState<string[]>([]);
   const [completedProgressMessages, setCompletedProgressMessages] = useState<Record<string, ChatMessage>>({});
+  const [heldProgressSurfaces, setHeldProgressSurfaces] = useState<Record<string, A2uiSurface>>({});
   const [enterToSend, setEnterToSend] = useState(() => window.localStorage.getItem("alphonse.desktop.enterToSend") !== "false");
   const currentProjectKey = projectKey(project?.project_id);
 
@@ -82,10 +87,21 @@ export default function App() {
       setQueueStatus({ ready: response.status.queue?.ready || 0, processing: response.status.queue?.processing || 0 });
       const newProgressTaskIds = taskProgressIds(response.ui_events || []);
       if (newProgressTaskIds.length) {
-        newProgressTaskIds.forEach((taskId) => progressTaskIdsRef.current.add(taskId));
+        newProgressTaskIds.forEach((taskId) => {
+          progressTaskIdsRef.current.add(taskId);
+          if (!progressStartedAtRef.current.has(taskId)) progressStartedAtRef.current.set(taskId, Date.now());
+        });
         setProgressTaskIds((current) => [...current, ...newProgressTaskIds.filter((taskId) => !current.includes(taskId))]);
       }
-      setSurfaces((current) => (response.ui_events || []).reduce((next, item) => applyA2uiEvent(next, item.event), current));
+      const projectedSurfaces = (response.ui_events || []).reduce((next, item) => applyA2uiEvent(next, item.event), surfacesRef.current);
+      surfacesRef.current = projectedSurfaces;
+      setSurfaces(projectedSurfaces);
+      newProgressTaskIds.forEach((taskId) => {
+        const components = projectedSurfaces[`task-progress:${taskId}`]?.components || {};
+        if (["criteria", "intention", "tool", "result"].some((componentId) => String(components[componentId]?.text || "").trim()) || Object.keys(components).some((componentId) => componentId.startsWith("step_"))) {
+          progressMeaningfulAtRef.current.set(taskId, Date.now());
+        }
+      });
       const latest = response.events.at(-1);
       setActivity(capdActivityLabel(latest, response.status.activity.state || "idle"));
       setAgentState(agentStateLabel(true, false, Object.keys(response.status.active_work || {}).length));
@@ -93,14 +109,21 @@ export default function App() {
         if (delivered.current.has(delivery.outbox_message_id)) continue;
         delivered.current.add(delivery.outbox_message_id);
         if (delivery.task_id) {
-          setSurfaces((current) => {
-            const next = { ...current };
-            delete next[`task-progress:${delivery.task_id}`];
-            return next;
-          });
           if (progressTaskIdsRef.current.has(delivery.task_id)) {
-            setCompletedProgressMessages((current) => ({ ...current, [delivery.task_id!]: { id: delivery.outbox_message_id, role: "assistant", content: delivery.message } }));
-            appendMessage({ id: delivery.outbox_message_id, role: "assistant", content: delivery.message });
+            const taskId = delivery.task_id;
+            const progressSurface = surfacesRef.current[`task-progress:${taskId}`];
+            if (progressSurface) setHeldProgressSurfaces((current) => ({ ...current, [taskId]: progressSurface }));
+            const completedMessage: ChatMessage = { id: delivery.outbox_message_id, role: "assistant", content: delivery.message };
+            const visibleSince = progressMeaningfulAtRef.current.get(taskId) || progressStartedAtRef.current.get(taskId) || Date.now();
+            const elapsed = Date.now() - visibleSince;
+            const finish = () => {
+              progressCompletionTimersRef.current.delete(taskId);
+              setCompletedProgressMessages((current) => ({ ...current, [taskId]: completedMessage }));
+              setHeldProgressSurfaces((current) => { const next = { ...current }; delete next[taskId]; return next; });
+              appendMessage(completedMessage);
+            };
+            const remaining = Math.max(0, 1500 - elapsed);
+            if (remaining) progressCompletionTimersRef.current.set(taskId, window.setTimeout(finish, remaining)); else finish();
             await daemonRequest("desktop_ack_delivery", { client_id: clientId, outbox_message_id: delivery.outbox_message_id });
             continue;
           }
@@ -166,9 +189,15 @@ export default function App() {
     setRecentFilesError("");
     setModal(null);
     setSurfaces({});
+    surfacesRef.current = {};
     progressTaskIdsRef.current.clear();
+    progressCompletionTimersRef.current.forEach((timer) => window.clearTimeout(timer));
+    progressCompletionTimersRef.current.clear();
+    progressStartedAtRef.current.clear();
+    progressMeaningfulAtRef.current.clear();
     setProgressTaskIds([]);
     setCompletedProgressMessages({});
+    setHeldProgressSurfaces({});
     setQuestions([]);
     delivered.current.clear();
     setMessages(messageBuckets[nextKey] || []);
@@ -245,7 +274,7 @@ export default function App() {
   };
 
   const suggestions = useMemo(() => matchingCommands(prompt), [prompt]);
-  const activeSurface = Object.values(surfaces).find((surface) => !surface.surfaceId.startsWith("task-progress:"));
+  const activeSurface = Object.values(surfaces).find((surface) => !surface.surfaceId.startsWith("task-progress:") && !progressTaskIds.includes(questionTaskId(surface)));
   const fallbackQuestion = questions.find((question) => !surfaces[`question:${question.question_id}`]);
 
   return (
@@ -284,9 +313,10 @@ export default function App() {
         <div className="timeline" ref={timelineRef} aria-live="polite">
           {messages.filter((message) => !Object.values(completedProgressMessages).some((completed) => completed.id === message.id)).map((message) => <MessageBubble key={message.id} message={message} />)}
           {progressTaskIds.map((taskId) => {
-            const surface = surfaces[`task-progress:${taskId}`];
+            const surface = surfaces[`task-progress:${taskId}`] || heldProgressSurfaces[taskId];
             const completed = completedProgressMessages[taskId];
-            return surface ? <TaskProgressBubble key={taskId} surface={surface} /> : completed ? <MessageBubble key={completed.id} message={completed} /> : null;
+            const questionSurface = Object.values(surfaces).find((candidate) => questionTaskId(candidate) === taskId);
+            return completed ? <MessageBubble key={completed.id} message={completed} /> : questionSurface ? <article className="message assistant task-question-bubble" key={taskId}><A2uiSurfaceView surface={questionSurface} clientId={clientId} user={user} onDone={poll} /></article> : surface ? <TaskProgressBubble key={taskId} surface={surface} /> : null;
           })}
         </div>
         <section className="input-dock">
@@ -346,11 +376,11 @@ function SettingsModal({ user, initialTab, enterToSend, onEnterToSendChange, onC
   const [root, setRoot] = useState(""); const [timezone, setTimezone] = useState("UTC"); const [notice, setNotice] = useState(""); const [tab, setTab] = useState<SettingsTab>(initialTab);
   const [web, setWeb] = useState<WebToolsSettings | null>(null); const [webNotice, setWebNotice] = useState("");
   const [memory, setMemory] = useState<MemorySettings | null>(null); const [memoryNotice, setMemoryNotice] = useState("");
-  useEffect(() => { void daemonRequest<{ users_root: string; timezone?: string }>("settings").then((result) => { setRoot(result.users_root); setTimezone(result.timezone || "UTC"); }); }, []);
+  useEffect(() => { void daemonRequest<{ users_root: string }>("settings").then((result) => setRoot(result.users_root)); void daemonRequest<{ timezone: string }>("timezone_settings", { actor_user_id: user }).then((result) => setTimezone(result.timezone)).catch((cause: unknown) => setNotice(timezoneSettingsError(cause))); }, [user]);
   useEffect(() => { setTab(initialTab); }, [initialTab]);
   useEffect(() => { if (tab === "tools") void daemonRequest<{ user: { user_id: string } | null }>("current_user").then(async (current) => { if (!current.user) return; const result = await daemonRequest<{ settings: WebToolsSettings }>("web_tools_settings", { actor_user_id: current.user.user_id }); setWeb(result.settings); }).catch((cause: unknown) => setWebNotice(cause instanceof Error ? cause.message : "Web Tools unavailable")); }, [tab]);
   useEffect(() => { void daemonRequest<{ user: { user_id: string } | null }>("current_user").then(async (current) => { if (!current.user) return; const result = await daemonRequest<{ settings: MemorySettings }>("memory_settings", { actor_user_id: current.user.user_id }); setMemory(result.settings); }).catch((cause: unknown) => setMemoryNotice(cause instanceof Error ? cause.message : "Memory settings unavailable")); }, []);
-  const save = async () => { try { const result = await daemonRequest<{ users_root: string; timezone: string; warning_repository_path?: boolean }>("save_settings", { users_root: root, timezone }); setTimezone(result.timezone); setNotice(result.warning_repository_path ? "Saved. This path is inside the repository; keep it ignored." : "Saved."); } catch (cause) { setNotice(cause instanceof Error ? cause.message : "Settings could not be saved"); } };
+  const save = async () => { try { const timezoneResult = await daemonRequest<{ timezone: string }>("save_timezone_settings", { actor_user_id: user, timezone }); if (timezoneResult.timezone !== timezone.trim()) throw new Error("The daemon did not persist the requested timezone"); setTimezone(timezoneResult.timezone); const result = await daemonRequest<{ users_root: string; warning_repository_path?: boolean }>("save_settings", { users_root: root }); setNotice(result.warning_repository_path ? "Saved. This path is inside the repository; keep it ignored." : "Saved."); } catch (cause) { setNotice(timezoneSettingsError(cause)); } };
   const saveWeb = async () => { if (!web) return; try { const current = await daemonRequest<{ user: { user_id: string } | null }>("current_user"); if (!current.user) return; const result = await daemonRequest<{ settings: WebToolsSettings }>("save_web_tools_settings", { actor_user_id: current.user.user_id, values: web }); setWeb(result.settings); setWebNotice("Saved. Newly started tasks can use enabled Web Tools."); } catch (cause) { setWebNotice(cause instanceof Error ? cause.message : "Save failed"); } };
   const verify = async (kind: "search" | "fetch") => { try { const current = await daemonRequest<{ user: { user_id: string } | null }>("current_user"); if (!current.user) return; const result = await daemonRequest<{ result: { exception?: { message?: string } } }>("verify_web_tools", { actor_user_id: current.user.user_id, kind }); setWebNotice(result.result.exception?.message || `${kind === "search" ? "SearXNG search" : "Public fetch"} verified.`); } catch (cause) { setWebNotice(cause instanceof Error ? cause.message : "Verification failed"); } };
   const saveMemory = async () => { if (!memory) return; try { const current = await daemonRequest<{ user: { user_id: string } | null }>("current_user"); if (!current.user) return; const result = await daemonRequest<{ settings: MemorySettings }>("save_memory_settings", { actor_user_id: current.user.user_id, values: memory }); setMemory(result.settings); setMemoryNotice("Saved. New tasks use these limits."); } catch (cause) { setMemoryNotice(cause instanceof Error ? cause.message : "Memory settings could not be saved"); } };
@@ -412,6 +442,11 @@ function sourceLabel(source: string): string {
   return source.replace(/[-_]/g, " ").replace(/\b\w/g, (character) => character.toUpperCase());
 }
 
+function timezoneSettingsError(cause: unknown): string {
+  const message = cause instanceof Error ? cause.message : "Timezone settings unavailable";
+  return message.includes("unknown_method") ? "Restart the Alphonse daemon once to enable timezone settings." : message;
+}
+
 function taskProgressIds(events: Array<{ event: { type: string; name?: string; value?: unknown } }>): string[] {
   const ids = new Set<string>();
   for (const item of events) {
@@ -431,16 +466,24 @@ function MessageBubble({ message }: { message: ChatMessage }) {
 
 function TaskProgressBubble({ surface }: { surface: A2uiSurface }) {
   const text = (id: string) => String(surface.components[id]?.text || "").trim();
+  const steps = Object.values(surface.components).filter((component) => component.id.startsWith("step_") && component.text).sort((left, right) => left.id.localeCompare(right.id, undefined, { numeric: true }));
+  const criteria = text("criteria").replace(/^Acceptance criteria\n?/, "").trim();
+  const visibleCriteria = criteria === "- (none)" ? "" : criteria;
+  const hasConcreteProgress = Boolean(visibleCriteria || text("intention") || steps.length || text("tool"));
   return <article className="message assistant task-progress-bubble" aria-live="polite">
     <div className="task-progress-content">
-      <div className="task-progress-heading"><span className="task-progress-spinner" aria-hidden="true">◌</span><strong>{text("status") || "Alphonse is working"}</strong></div>
-      {text("summary") && <p>{text("summary")}</p>}
-      {text("criteria") && <section><small>Acceptance criteria</small><pre>{text("criteria").replace(/^Acceptance criteria\n?/, "")}</pre></section>}
-      {text("tool") && <p className="task-progress-detail">{text("tool")}</p>}
-      {text("arguments") && <pre className="task-progress-detail">{text("arguments")}</pre>}
-      {text("result") && <pre className="task-progress-detail">{text("result")}</pre>}
+      <div className="task-progress-heading"><span className="task-progress-spinner" aria-hidden="true">◌</span><strong>Alphonse is working</strong></div>
+      {!hasConcreteProgress && text("summary") && <p>{text("summary")}</p>}
+      {visibleCriteria && <section><small>Acceptance criteria</small><pre>{visibleCriteria}</pre></section>}
+      {text("intention") && <section><small>Intention</small><p>{text("intention").replace(/^Intention:\s*/, "")}</p></section>}
+      {steps.length ? <section className="task-progress-trace"><small>Work log</small>{steps.map((step) => <pre className="task-progress-detail" key={step.id}>{step.text}</pre>)}</section> : <>{text("tool") && <p className="task-progress-detail">{text("tool")}</p>}{text("arguments") && <pre className="task-progress-detail">{text("arguments")}</pre>}{text("result") && <pre className="task-progress-detail">{text("result")}</pre>}</>}
     </div>
   </article>;
+}
+
+function questionTaskId(surface: A2uiSurface): string {
+  const question = surface.dataModel.question;
+  return typeof question === "object" && question !== null && "task_id" in question ? String((question as { task_id?: unknown }).task_id || "") : "";
 }
 
 function ScheduledTasksModal({ actorUserId, initialTaskId = "", onClose }: { actorUserId: string; initialTaskId?: string; onClose: () => void }) {

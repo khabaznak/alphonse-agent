@@ -30,6 +30,7 @@ class A2UiAdapter:
         data_model = {
             "question": {
                 "id": question.question_id,
+                "task_id": question.task_id,
                 "kind": question.kind,
                 "message": question.message,
                 "choices": [choice.to_dict() for choice in question.choices],
@@ -114,6 +115,10 @@ class A2UiAdapter:
         if criteria:
             children.append("criteria")
             components.append({"id": "criteria", "component": "Text", "text": f"Acceptance criteria\n{criteria}"})
+        intention = str(progress.get("intention") or "").strip()
+        if intention:
+            children.append("intention")
+            components.append({"id": "intention", "component": "Text", "text": f"Intention: {intention}"})
         if tool_name:
             children.append("tool")
             suffix = f" · {tool_status}" if tool_status else ""
@@ -126,6 +131,20 @@ class A2UiAdapter:
         if result not in (None, "", {}, []):
             children.append("result")
             components.append({"id": "result", "component": "Text", "text": f"Output: {_compact_value(result)}"})
+        steps = progress.get("steps") if isinstance(progress.get("steps"), list) else []
+        for index, step in enumerate(steps):
+            if not isinstance(step, dict):
+                continue
+            component_id = f"step_{index}"
+            children.append(component_id)
+            lines = [f"{index + 1}. {str(step.get('tool_name') or 'Tool')} · {str(step.get('status') or 'planned')}"]
+            if str(step.get("intention") or "").strip():
+                lines.append(f"Intention: {str(step.get('intention')).strip()}")
+            if step.get("arguments") not in (None, "", {}, []):
+                lines.append(f"Input: {_compact_value(step.get('arguments'))}")
+            if step.get("result") not in (None, "", {}, []):
+                lines.append(f"Output: {_compact_value(step.get('result'))}")
+            components.append({"id": component_id, "component": "Text", "text": "\n".join(lines)})
         messages = [
             {"version": A2UI_VERSION, "createSurface": {"surfaceId": surface_id, "catalogId": self.catalog_id, "sendDataModel": False}},
             {"version": A2UI_VERSION, "updateComponents": {"surfaceId": surface_id, "components": components}},

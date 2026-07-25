@@ -9,6 +9,16 @@ from alphonse.agent_v2.runtime import build_runtime_host
 from alphonse.agent_v2.users import V2UserStore
 
 
+def test_user_timezone_persists_when_store_is_reopened(tmp_path) -> None:
+    database = tmp_path / "users.sqlite3"
+    store = V2UserStore(database)
+    store.set_timezone("America/Mexico_City")
+
+    reopened = V2UserStore(database)
+
+    assert reopened.timezone() == "America/Mexico_City"
+
+
 def test_onboarding_creates_uuid_admin_profile_and_context(tmp_path: Path) -> None:
     store = V2UserStore(tmp_path / "users.sqlite3")
     admin = store.onboard(display_name="Alex", users_root=tmp_path / "profiles")

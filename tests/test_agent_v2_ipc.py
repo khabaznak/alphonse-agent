@@ -75,11 +75,11 @@ def test_daemon_settings_validate_and_persist_timezone(tmp_path) -> None:
     users.onboard(display_name="Admin", users_root=tmp_path / "users")
     daemon = V2Daemon(build_runtime_host(user_store=users, schedule_store=ScheduledTaskStore(":memory:")))
 
-    saved = daemon.ipc._dispatch({"method": "save_settings", "params": {"users_root": str(tmp_path / "users"), "timezone": "America/Mexico_City"}})
+    saved = daemon.ipc._dispatch({"method": "save_timezone_settings", "params": {"actor_user_id": users.admin_user().user_id, "timezone": "America/Mexico_City"}})
     assert saved["timezone"] == "America/Mexico_City"
-    assert daemon.ipc._dispatch({"method": "settings"})["timezone"] == "America/Mexico_City"
+    assert daemon.ipc._dispatch({"method": "timezone_settings", "params": {"actor_user_id": users.admin_user().user_id}})["timezone"] == "America/Mexico_City"
     with pytest.raises(ValueError, match="invalid_timezone"):
-        daemon.ipc._dispatch({"method": "save_settings", "params": {"users_root": str(tmp_path / "users"), "timezone": "Not/A_Timezone"}})
+        daemon.ipc._dispatch({"method": "save_timezone_settings", "params": {"actor_user_id": users.admin_user().user_id, "timezone": "Not/A_Timezone"}})
 
 
 def test_daemon_ipc_web_tools_require_admin_and_refresh_registry(tmp_path) -> None:
@@ -261,8 +261,8 @@ def test_desktop_task_progress_a2ui_is_admin_desktop_only_and_sanitized(tmp_path
     runtime = build_runtime_host(user_store=users, schedule_store=ScheduledTaskStore(":memory:"), inference=_router())
     daemon = V2Daemon(runtime)
     task = TaskState(task_id="task-progress", user=admin.user_id, goal="Check status", acceptance_criteria_md="1. [ ] Return a safe result")
-    task.metadata["planned_tool_call"] = {"tool_name": "Search", "arguments": {"query": "weather", "api_key": "secret-value"}}
-    task.append_plan_call({"id": "call-1", "tool_name": "Search", "arguments": {"query": "weather"}})
+    task.metadata["planned_tool_call"] = {"tool_name": "Search", "arguments": {"query": "weather", "api_key": "secret-value"}, "internal_state": "Choosing the weather source."}
+    task.append_plan_call({"id": "call-1", "tool_name": "Search", "arguments": {"query": "weather"}, "internal_state": "Choosing the weather source."})
     task.record_plan_call_success("call-1", {"summary": "Sunny", "access_token": "hidden-token"})
     progress = _task_progress_snapshot(task)
     assert progress["tool_arguments"]["api_key"] == "[redacted]"
@@ -284,6 +284,8 @@ def test_desktop_task_progress_a2ui_is_admin_desktop_only_and_sanitized(tmp_path
     envelopes = [item["event"]["value"] for item in rich["ui_events"] if item["event"].get("name") == "a2ui.envelope"]
     assert any(item.get("createSurface", {}).get("surfaceId") == "task-progress:task-progress" for item in envelopes)
     assert "secret-value" not in str(envelopes)
+    assert "Choosing the weather source" in str(envelopes)
+    assert "Sunny" in str(envelopes)
 
     runtime.activity_events.append(CoreActivityEvent(
         phase=ImprovementPhase.PLAN, label="thinking", message="Hidden", task_id="telegram-task", user=admin.user_id,
@@ -291,6 +293,12 @@ def test_desktop_task_progress_a2ui_is_admin_desktop_only_and_sanitized(tmp_path
     ))
     excluded = daemon.ipc._dispatch({"method": "desktop_poll", "params": {"client_id": "rich", "user": admin.user_id, "client_capabilities": {"supportedCatalogIds": [ALPHONSE_DESKTOP_CATALOG_ID]}}})
     assert "telegram-task" not in str(excluded["ui_events"])
+
+
+def test_task_progress_omits_empty_acceptance_criteria_sentinel() -> None:
+    progress = _task_progress_snapshot(TaskState(user="alex"))
+
+    assert progress["acceptance_criteria"] == ""
 
 
 def test_desktop_a2ui_question_surface_is_negotiated_and_actions_resume_only_the_question() -> None:
