@@ -32,6 +32,30 @@ def test_desktop_history_combines_cross_channel_timeline_in_order() -> None:
     assert [(item["role"], item["content"], item["source"]) for item in history] == [("user", "What should we build?", "telegram-home"), ("assistant", "Start with a prototype.", "desktop")]
 
 
+def test_desktop_history_refresh_sees_telegram_turns_without_daemon_restart() -> None:
+    store = SQLiteConversationStore(":memory:")
+    runtime = build_runtime_host(conversation_store=store)
+    daemon = V2Daemon(runtime)
+    store.record(owner_user_id="alex", project_id="innovator", role="assistant", content="Earlier response.", source="desktop", source_message_id="desktop:1")
+
+    first_history = daemon.desktop_conversation_history(user="alex", project_id="innovator")
+    runtime.channel.queue_message(
+        prompt="Telegram arrived after the first project visit.",
+        user="alex",
+        project_id="innovator",
+        integration_id="telegram-home",
+        provider_key="telegram",
+        message_id="telegram:1",
+    )
+    refreshed_history = daemon.desktop_conversation_history(user="alex", project_id="innovator")
+
+    assert [item["content"] for item in first_history] == ["Earlier response."]
+    assert [(item["content"], item["source"]) for item in refreshed_history] == [
+        ("Earlier response.", "desktop"),
+        ("Telegram arrived after the first project visit.", "telegram-home"),
+    ]
+
+
 def test_timestamps_are_canonical_utc_and_sort_true_chronological_order() -> None:
     store = SQLiteConversationStore(":memory:")
     store.record(owner_user_id="alex", project_id="vacations", role="user", content="Pack sunglasses", source="desktop", source_message_id="user-1", created_at="2026-07-24T19:21:42-06:00")

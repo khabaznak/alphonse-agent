@@ -3,6 +3,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { daemonRequest, ensureDaemon, showInFinder, stopDaemon } from "./api";
 import { matchingCommands } from "./commands";
+import { mergeFreshConversationHistory } from "./conversationHistory";
 import { A2uiSurfaceView, applyA2uiEvent, DESKTOP_CATALOG_ID, type A2uiSurface } from "./a2ui";
 import { agentStateLabel, capdActivityLabel, projectKey } from "./layoutState";
 import type { ActivityEvent, AgentDocument, ChatMessage, InferenceSettings, MediaToolsSettings, MemorySettings, Project, Question, WebToolsSettings } from "./types";
@@ -32,6 +33,9 @@ export default function App() {
   const progressStartedAtRef = useRef(new Map<string, number>());
   const progressMeaningfulAtRef = useRef(new Map<string, number>());
   const progressCompletionTimersRef = useRef(new Map<string, number>());
+  const projectHistoryRequestRef = useRef(0);
+  const projectHistoryLoadingRef = useRef(0);
+  const messagesDuringHistoryReloadRef = useRef(new Map<number, ChatMessage[]>());
   const timelineRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const surfacesRef = useRef<Record<string, A2uiSurface>>({});
@@ -62,6 +66,11 @@ export default function App() {
   const currentProjectKey = projectKey(project?.project_id);
 
   const appendMessage = useCallback((message: ChatMessage) => {
+    const loadingRequest = projectHistoryLoadingRef.current;
+    if (loadingRequest) {
+      const pending = messagesDuringHistoryReloadRef.current.get(loadingRequest) || [];
+      messagesDuringHistoryReloadRef.current.set(loadingRequest, [...pending, message]);
+    }
     setMessages((current) => {
       const next = [...current, message];
       setMessageBuckets((buckets) => ({ ...buckets, [currentProjectKey]: next }));
@@ -182,6 +191,12 @@ export default function App() {
 
   const selectProject = useCallback(async (next: Project) => {
     const nextKey = projectKey(next.project_id);
+    const previousHistoryRequest = projectHistoryLoadingRef.current;
+    if (previousHistoryRequest) messagesDuringHistoryReloadRef.current.delete(previousHistoryRequest);
+    const historyRequest = projectHistoryRequestRef.current + 1;
+    projectHistoryRequestRef.current = historyRequest;
+    projectHistoryLoadingRef.current = historyRequest;
+    messagesDuringHistoryReloadRef.current.set(historyRequest, []);
     setMessageBuckets((buckets) => ({ ...buckets, [currentProjectKey]: messages }));
     setProject(next);
     setRecentFilesOpen(false);
@@ -200,15 +215,31 @@ export default function App() {
     setHeldProgressSurfaces({});
     setQuestions([]);
     delivered.current.clear();
-    setMessages(messageBuckets[nextKey] || []);
+    setMessages([]);
     try {
       const history = await daemonRequest<HistoryResponse>("desktop_conversation_history", { user, project_id: next.project_id, limit: 100 });
-      setMessages((current) => current.length > 0 ? current : history.messages);
-      setMessageBuckets((buckets) => ({ ...buckets, [nextKey]: buckets[nextKey]?.length ? buckets[nextKey] : history.messages }));
+      if (projectHistoryRequestRef.current !== historyRequest) {
+        messagesDuringHistoryReloadRef.current.delete(historyRequest);
+        return;
+      }
+      const pending = messagesDuringHistoryReloadRef.current.get(historyRequest) || [];
+      const refreshed = mergeFreshConversationHistory(history.messages, pending);
+      projectHistoryLoadingRef.current = 0;
+      messagesDuringHistoryReloadRef.current.delete(historyRequest);
+      setMessages(refreshed);
+      setMessageBuckets((buckets) => ({ ...buckets, [nextKey]: refreshed }));
     } catch (cause) {
+      if (projectHistoryRequestRef.current !== historyRequest) {
+        messagesDuringHistoryReloadRef.current.delete(historyRequest);
+        return;
+      }
+      const pending = messagesDuringHistoryReloadRef.current.get(historyRequest) || [];
+      projectHistoryLoadingRef.current = 0;
+      messagesDuringHistoryReloadRef.current.delete(historyRequest);
+      setMessages(pending);
       setError(cause instanceof Error ? cause.message : "Conversation history could not be loaded");
     }
-  }, [currentProjectKey, messageBuckets, messages, user]);
+  }, [currentProjectKey, messages, user]);
 
   const submitPrompt = async () => {
     const value = prompt.trim();
