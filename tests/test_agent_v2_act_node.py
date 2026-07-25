@@ -136,6 +136,21 @@ def test_act_node_wip_with_completed_acceptance_criteria_routes_success_to_end()
     assert "mission success" in task.updates_md
 
 
+def test_act_node_does_not_complete_until_silent_bash_confirmation_is_sent() -> None:
+    task = TaskState(
+        goal="Add sunglasses",
+        check_verdict="wip",
+        acceptance_criteria_md="1.- [x] TODO item is added",
+        metadata={"pending_silent_bash_confirmation": {"tool_call_id": "bash-call"}},
+    )
+
+    act_node(task)
+
+    assert task.metadata["act_route"] == "plan"
+    assert task.status != "completed"
+    assert "requires a native.respond confirmation" in task.updates_md
+
+
 def test_act_node_wip_explicit_cancel_routes_failed_to_end() -> None:
     task = TaskState(
         goal="Continue task",

@@ -5,6 +5,8 @@ from pathlib import Path
 from jinja2 import Environment
 from jinja2 import FileSystemLoader
 
+from alphonse.agent_v2.core.intelligence.task_state import TaskState
+
 
 TEMPLATE_DIR = Path("alphonse/agent_v2/core/intelligence/templates")
 
@@ -71,6 +73,8 @@ def test_tool_call_plan_prompt_template_renders_expected_sections() -> None:
     assert "# System Prompt" in rendered
     assert "exactly one next tool call" in rendered
     assert "advance one or more acceptance criteria" in rendered
+    assert "pending_silent_bash_confirmation" in rendered
+    assert "next tool call must be `native.respond`" in rendered
     assert '"id": "string"' in rendered
     assert '"tool_id": "string"' in rendered
     assert '"tool_name": "string"' in rendered
@@ -83,6 +87,24 @@ def test_tool_call_plan_prompt_template_renders_expected_sections() -> None:
     assert "write_file" in rendered
     assert "# Task State" in rendered
     assert "Task state markdown" in rendered
+
+
+def test_task_state_exposes_pending_silent_bash_confirmation_to_planner() -> None:
+    task = TaskState(
+        goal="Add sunglasses",
+        metadata={
+            "pending_silent_bash_confirmation": {
+                "tool_call_id": "bash-call",
+                "internal_state": "Added sunglasses to the TODO list.",
+            }
+        },
+    )
+
+    rendered = task.to_markdown_prompt()
+
+    assert "# Required User Confirmation" in rendered
+    assert "Call `native.respond` next" in rendered
+    assert "Added sunglasses to the TODO list." in rendered
 
 
 def test_criteria_review_prompt_template_renders_expected_sections() -> None:

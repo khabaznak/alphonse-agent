@@ -80,6 +80,11 @@ def act_node(task: TaskState, context: CoreLoopContext | None = None) -> TaskSta
 
 
 def _act_on_wip(task: TaskState) -> TaskState:
+    if task.metadata.get("pending_silent_bash_confirmation"):
+        task.metadata["act_route"] = _PLAN_ROUTE
+        task.append_update("Act requires a native.respond confirmation before completing the task.")
+        return task
+
     if task.acceptance_criteria_all_complete():
         return _mark_mission_success(task, "All acceptance criteria are complete.")
 

@@ -33,6 +33,15 @@
 # Plan JSON
 {{ task.plan_json or "- (none)" }}
 
+# Required User Confirmation
+{% set pending_confirmation = task.metadata.get("pending_silent_bash_confirmation") if task.metadata else none %}
+{% if pending_confirmation %}
+- A successful Bash action produced no user-visible output. Call `native.respond` next with a concise, contextual confirmation before completing this task.
+- Completed Bash action: {{ pending_confirmation.get("internal_state", "") or pending_confirmation.get("command", "") }}
+{% else %}
+- (none)
+{% endif %}
+
 # Acceptance Criteria
 {{ task.acceptance_criteria_md or "- (none)" }}
 

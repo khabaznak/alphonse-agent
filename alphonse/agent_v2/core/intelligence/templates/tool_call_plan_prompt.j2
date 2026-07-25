@@ -13,6 +13,7 @@ For `native.ask_question`, choose the narrowest useful `question_kind`: `yes_no`
 For `native.scheduled_task`, provide explicit `schedule_kind` and either ISO `run_at` for one-off tasks or an RFC 5545 `rrule` plus optional ISO `dtstart` for recurring tasks. Do not pass natural-language dates to this tool.
 For shell-like prompts such as `ls -la`, use `native.bash` with `arguments.command` set to the exact shell command text.
 For `native.bash`, omit `arguments.cwd` unless the user explicitly requested a working directory.
+When Task State contains `pending_silent_bash_confirmation`, your next tool call must be `native.respond`. Use the original request and completed Bash action to give the requester a concise, contextual confirmation; do not use a generic canned confirmation.
 Do not execute tools. Do not write prose. Return only valid JSON with this exact shape:
 
 ```json

@@ -87,12 +87,36 @@ def test_do_node_does_not_judge_acceptance_criteria() -> None:
     assert task.check_verdict == "wip"
 
 
+def test_silent_successful_bash_requires_model_authored_response_before_completion() -> None:
+    task = TaskState(acceptance_criteria_md="1.- [x] TODO item is added", check_verdict="wip")
+    task.append_plan_call(_planned_call("bash-call", tool_id="native.bash", path="ignored"))
+    tools = _ToolRegistry(result={"exit_code": 0, "stdout": "", "stderr": ""})
+    context = CoreLoopContext(messages=InMemoryMessageQueue(), tools=tools)
+
+    do_node(task, context=context)
+
+    assert task.metadata["pending_silent_bash_confirmation"]["tool_call_id"] == "bash-call"
+
+    from alphonse.agent_v2.core.intelligence.pdca.nodes import act_node
+    act_node(task)
+    assert task.metadata["act_route"] == "plan"
+    assert task.status != "completed"
+
+    task.append_plan_call(_planned_call("respond-call", tool_id="native.respond", path="ignored"))
+    tools.result = {"message": "Añadí llevar lentes para el sol a la lista."}
+    do_node(task, context=context)
+
+    assert "pending_silent_bash_confirmation" not in task.metadata
+    act_node(task)
+    assert task.status == "completed"
+
+
 def _planned_call(call_id: str, *, tool_id: str = "tool-1", path: str = "a.txt") -> dict[str, Any]:
     return {
         "id": call_id,
         "tool_id": tool_id,
-        "tool_name": "write_file",
-        "arguments": {"path": path},
+        "tool_name": tool_id,
+        "arguments": {"command": path} if tool_id == "native.bash" else {"path": path},
         "internal_state": "Writing the requested file.",
     }
 

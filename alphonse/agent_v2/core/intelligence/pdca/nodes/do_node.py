@@ -105,6 +105,16 @@ def do_node(task: TaskState, context: CoreLoopContext | None = None) -> TaskStat
     if tool_id == "native.respond" and isinstance(result, dict):
         context.record_memory_event(task, "Conversation", f"- Alphonse: {str(result.get('message') or '')}")
     task.record_plan_call_success(call_id, result)
+    if _is_silent_successful_bash(tool_id, result):
+        task.metadata["pending_silent_bash_confirmation"] = {
+            "tool_call_id": call_id,
+            "command": str(arguments.get("command") or ""),
+            "internal_state": str(planned_call.get("internal_state") or ""),
+        }
+        task.append_update("Do requires a native.respond confirmation for the silent Bash action.")
+    elif tool_id == "native.respond" and task.metadata.get("pending_silent_bash_confirmation"):
+        task.metadata.pop("pending_silent_bash_confirmation", None)
+        task.append_update("Do recorded the required user confirmation for the silent Bash action.")
     task.metadata["do_executed_since_last_act"] = True
     task.append_update(f"Do executed planned tool call: {call_id}.")
     return task
@@ -120,3 +130,16 @@ def _execute_tool(context: CoreLoopContext, task: TaskState, tool_id: str, argum
 
 def _result_waits_for_answer(result: Any) -> bool:
     return isinstance(result, dict) and result.get("waiting_for_answer") is True
+
+
+def _is_silent_successful_bash(tool_id: str, result: Any) -> bool:
+    if tool_id != "native.bash" or not isinstance(result, dict):
+        return False
+    if result.get("timed_out") is True:
+        return False
+    try:
+        if int(result.get("exit_code", 0)) != 0:
+            return False
+    except (TypeError, ValueError):
+        return False
+    return not str(result.get("stdout") or "").strip() and not str(result.get("stderr") or "").strip()

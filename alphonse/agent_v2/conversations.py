@@ -44,7 +44,7 @@ class SQLiteConversationStore:
         normalized_role = str(role or "").strip().lower()
         if not owner or not message or normalized_role not in {"user", "assistant"}:
             return None
-        event = ConversationEvent(str(uuid4()), owner, str(project_id or "").strip(), normalized_role, message, str(source or "unknown").strip() or "unknown", str(source_message_id or "").strip(), created_at or _now())
+        event = ConversationEvent(str(uuid4()), owner, str(project_id or "").strip(), normalized_role, message, str(source or "unknown").strip() or "unknown", str(source_message_id or "").strip(), _canonical_timestamp(created_at or _now()))
         with self._connect() as conn:
             if event.source_message_id:
                 exists = conn.execute("SELECT 1 FROM v2_conversation_events WHERE source_message_id=?", (event.source_message_id,)).fetchone()
@@ -69,6 +69,20 @@ class SQLiteConversationStore:
         with self._connect() as conn:
             conn.execute("CREATE TABLE IF NOT EXISTS v2_conversation_events (event_id TEXT PRIMARY KEY, owner_user_id TEXT NOT NULL, project_id TEXT NOT NULL DEFAULT '', role TEXT NOT NULL CHECK(role IN ('user','assistant')), content TEXT NOT NULL, source TEXT NOT NULL, source_message_id TEXT NOT NULL DEFAULT '' UNIQUE, created_at TEXT NOT NULL) STRICT")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_v2_conversation_events_scope ON v2_conversation_events(owner_user_id, project_id, created_at)")
+            self._normalize_existing_timestamps(conn)
+
+    @staticmethod
+    def _normalize_existing_timestamps(conn: sqlite3.Connection) -> None:
+        """Canonicalize legacy ISO instants without touching malformed values."""
+        rows = conn.execute("SELECT event_id, created_at FROM v2_conversation_events").fetchall()
+        for row in rows:
+            original = str(row["created_at"] or "")
+            normalized = _canonical_timestamp(original)
+            if normalized != original:
+                conn.execute(
+                    "UPDATE v2_conversation_events SET created_at=? WHERE event_id=?",
+                    (normalized, str(row["event_id"])),
+                )
 
 
 def legacy_ledger_events(content: str, *, owner_user_id: str, project_id: str, limit: int = 100) -> list[dict[str, str]]:
@@ -92,3 +106,17 @@ class _Connection:
 
 def _event(row: Any) -> ConversationEvent: return ConversationEvent(**dict(row))
 def _now() -> str: return datetime.now(timezone.utc).isoformat()
+
+
+def _canonical_timestamp(value: str) -> str:
+    """Return an aware ISO timestamp in UTC, preserving non-ISO legacy data."""
+    text = str(value or "").strip()
+    if not text:
+        return text
+    try:
+        parsed = datetime.fromisoformat(f"{text[:-1]}+00:00" if text.endswith("Z") else text)
+    except ValueError:
+        return text
+    if parsed.tzinfo is None:
+        return text
+    return parsed.astimezone(timezone.utc).isoformat()
