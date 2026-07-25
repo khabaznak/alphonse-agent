@@ -104,6 +104,8 @@ class V2Daemon:
         self._ui_event_journal: list[dict[str, Any]] = []
         self._desktop_capabilities: dict[str, set[str]] = {}
         self._desktop_surfaces: dict[tuple[str, str], set[str]] = {}
+        self._desktop_progress_surfaces: dict[tuple[str, str], set[str]] = {}
+        self._desktop_progress_closures: dict[tuple[str, str], set[str]] = {}
         self._ag_ui = AgUiAdapter(question_store=self.runtime.question_store)
         self._a2ui = A2UiAdapter()
         self.scheduler = ScheduledTaskWorker(
@@ -587,6 +589,11 @@ class V2Daemon:
             limit=limit,
         )
         if ALPHONSE_DESKTOP_CATALOG_ID in self._desktop_capabilities[normalized_client]:
+            ui_events = self._a2ui_task_progress_events(
+                events,
+                client_id=normalized_client,
+                user=normalized_user,
+            ) + ui_events
             ui_events = self._a2ui_scheduled_task_events(ui_events)
             ui_events.extend(self._sync_question_surfaces(client_id=normalized_client, user=normalized_user))
         else:
@@ -599,7 +606,7 @@ class V2Daemon:
             "ui_events": ui_events,
             "next_ui_sequence": next_ui_sequence,
             "server_capabilities": self._a2ui.server_capabilities(),
-            "status": {"active_work": self.active_work(), "activity": self.activity_status()},
+            "status": {"active_work": self.active_work(), "activity": self.activity_status(), "queue": self._inbound_queue_status()},
         }
 
     def acknowledge_desktop_delivery(self, *, client_id: str, outbox_message_id: str) -> bool:
@@ -607,7 +614,11 @@ class V2Daemon:
         expected_owner = f"desktop:{str(client_id or 'desktop').strip() or 'desktop'}"
         if delivery is None or delivery.integration_id != "desktop" or delivery.lease_owner != expected_owner:
             return False
-        return self.runtime.outbox.mark_delivered(outbox_message_id)
+        acknowledged = self.runtime.outbox.mark_delivered(outbox_message_id)
+        if acknowledged and delivery.task_id:
+            key = (str(client_id or "desktop").strip() or "desktop", str(delivery.audience_user_id or "").strip())
+            self._desktop_progress_closures.setdefault(key, set()).add(str(delivery.task_id))
+        return acknowledged
 
     def desktop_conversation_history(self, *, user: str, project_id: str = "", limit: int = 100) -> list[dict[str, Any]]:
         normalized_user = self._admin_user_id(user)
@@ -1060,10 +1071,48 @@ class V2Daemon:
                     "user": event.user,
                     "integration_id": event.integration_id,
                     "channel_target": event.channel_target,
+                    "progress": dict(event.progress),
                 }
             )
         if len(self._activity_event_journal) > 2000:
             self._activity_event_journal = self._activity_event_journal[-2000:]
+
+    def _a2ui_task_progress_events(self, events: list[dict[str, Any]], *, client_id: str, user: str) -> list[dict[str, Any]]:
+        """Emit task-progress cards only for the local admin's Desktop work."""
+        admin = self.runtime.user_store.admin_user()
+        if admin is None or user != admin.user_id:
+            return []
+        key = (client_id, user)
+        known = self._desktop_progress_surfaces.setdefault(key, set())
+        closing = self._desktop_progress_closures.pop(key, set())
+        rendered = [
+            {"event": _a2ui_custom(self._a2ui.task_progress_closed(task_id))}
+            for task_id in sorted(closing)
+        ]
+        known.difference_update(closing)
+        for event in events:
+            if event.get("user") != admin.user_id or event.get("integration_id") != "desktop":
+                continue
+            task_id = str(event.get("task_id") or "").strip()
+            progress = event.get("progress") if isinstance(event.get("progress"), dict) else {}
+            if not task_id or not progress:
+                continue
+            payload = {
+                **progress,
+                "phase": str(event.get("phase") or "working"),
+                "label": str(event.get("label") or "Working"),
+                "message": str(event.get("message") or ""),
+            }
+            rendered.extend({"event": _a2ui_custom(envelope)} for envelope in self._a2ui.task_progress(task_id, payload))
+            known.add(task_id)
+        return rendered
+
+    def _inbound_queue_status(self) -> dict[str, int]:
+        counts = getattr(self.runtime.queue, "status_counts", lambda: {})()
+        values = dict(counts) if isinstance(counts, dict) else {}
+        ready = int(self.runtime.queue.size() or 0)
+        processing = int(values.get("processing", 0) or 0)
+        return {"ready": ready, "processing": processing}
 
     def ui_events_since(self, *, after_sequence: int = 0, user: str, limit: int = 100) -> tuple[list[dict[str, Any]], int]:
         """Return ordered AG-UI events without changing TUI activity polling."""

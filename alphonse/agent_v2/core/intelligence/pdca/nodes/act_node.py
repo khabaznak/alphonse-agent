@@ -61,6 +61,12 @@ def act_node(task: TaskState, context: CoreLoopContext | None = None) -> TaskSta
                 context.record_memory_event(task, "Acceptance Criteria", task.acceptance_criteria_md)
             task.metadata["acceptance_criteria_updated"] = True
             task.append_update("Act updated acceptance criteria from LLM result.")
+            if context is not None:
+                context.emit_activity(
+                    phase=ImprovementPhase.ACT,
+                    label="criteria selected",
+                    message="Selected acceptance criteria for the task.",
+                )
         else:
             task.metadata["acceptance_criteria_updated"] = False
             task.append_update(

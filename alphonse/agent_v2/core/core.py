@@ -160,6 +160,7 @@ class CoreActivityEvent:
     user: str = ""
     integration_id: str = ""
     channel_target: str = ""
+    progress: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -216,10 +217,10 @@ class CoreLoopContext:
         for message_id in self.consumed_message_ids:
             acknowledge(message_id)
 
-    def emit_activity(self, *, phase: ImprovementPhase, label: str, message: str) -> None:
+    def emit_activity(self, *, phase: ImprovementPhase, label: str, message: str, progress: dict[str, Any] | None = None) -> None:
         if self.activity_sink is None:
             return
-        self.activity_sink(CoreActivityEvent(phase=phase, label=label, message=message))
+        self.activity_sink(CoreActivityEvent(phase=phase, label=label, message=message, progress=dict(progress or {})))
 
     def emit_ui_event(self, event_type: str, payload: dict[str, Any] | None = None) -> None:
         if self.ui_event_sink is None:
@@ -237,6 +238,51 @@ class CoreLoopContext:
             delivery_sink=self.delivery_sink,
             memory=self.memory,
         )
+
+
+_SENSITIVE_PROGRESS_KEYS = ("secret", "token", "password", "authorization", "cookie", "api_key", "apikey")
+
+
+def _task_progress_snapshot(task: Any, extra: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Create an owner-safe operational trace without model prompts or reasoning."""
+    metadata = getattr(task, "metadata", {}) if isinstance(getattr(task, "metadata", {}), dict) else {}
+    planned = metadata.get("planned_tool_call") if isinstance(metadata.get("planned_tool_call"), dict) else None
+    latest_call = getattr(task, "get_latest_executed_plan_call", None)
+    latest = latest_call() if callable(latest_call) else None
+    latest = latest if isinstance(latest, dict) else None
+    selected = planned or latest or {}
+    execution = latest.get("execution") if isinstance(latest, dict) and isinstance(latest.get("execution"), dict) else {}
+    return {
+        "project_id": str(getattr(task, "project_id", "") or "").strip(),
+        "acceptance_criteria": _truncate_progress(str(getattr(task, "acceptance_criteria_md", "") or ""), 1200),
+        "tool_name": str(selected.get("tool_name") or selected.get("tool_id") or "").strip(),
+        "tool_arguments": _safe_progress_value(selected.get("arguments") if isinstance(selected, dict) else {}),
+        "tool_result": _safe_progress_value(execution.get("result") if isinstance(execution, dict) else None),
+        "tool_status": str(execution.get("status") or "").strip() if isinstance(execution, dict) else "",
+        "status": str(getattr(task, "status", "") or "").strip(),
+        **{str(key): _safe_progress_value(value) for key, value in dict(extra or {}).items()},
+    }
+
+
+def _safe_progress_value(value: Any, *, key: str = "", depth: int = 0) -> Any:
+    if any(marker in key.lower() for marker in _SENSITIVE_PROGRESS_KEYS):
+        return "[redacted]"
+    if depth >= 3:
+        return "[truncated]"
+    if isinstance(value, str):
+        return _truncate_progress(value, 500)
+    if isinstance(value, (int, float, bool)) or value is None:
+        return value
+    if isinstance(value, list):
+        return [_safe_progress_value(item, depth=depth + 1) for item in value[:12]]
+    if isinstance(value, dict):
+        return {str(item_key): _safe_progress_value(item_value, key=str(item_key), depth=depth + 1) for item_key, item_value in list(value.items())[:20]}
+    return _truncate_progress(str(value), 500)
+
+
+def _truncate_progress(value: str, limit: int) -> str:
+    text = str(value or "").strip()
+    return text if len(text) <= limit else f"{text[:limit - 1]}…"
 
     def record_memory_event(self, task: TaskState, heading: str, content: Any) -> None:
         if self.memory is None:
@@ -395,6 +441,7 @@ class AlphonseCore:
                     user=str(task.user or ""),
                     integration_id=str(channel.get("integration_id") or ""),
                     channel_target=str(channel.get("channel_target") or ""),
+                    progress=_task_progress_snapshot(task, event.progress),
                 )
             )
         try:

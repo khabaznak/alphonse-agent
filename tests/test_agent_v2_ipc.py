@@ -11,6 +11,7 @@ from alphonse.agent_v2.core.inference import StubInferenceProvider
 from alphonse.agent_v2.core.core import CoreActivityEvent
 from alphonse.agent_v2.core.core import CoreUiEvent
 from alphonse.agent_v2.core.core import ImprovementPhase
+from alphonse.agent_v2.core.core import _task_progress_snapshot
 from alphonse.agent_v2.core.intelligence.task_state import TaskState
 from alphonse.agent_v2.core.io import ChannelAddress
 from alphonse.agent_v2.core.questions import SQLiteQuestionStore
@@ -240,6 +241,44 @@ def test_scheduled_task_a2ui_action_requires_capability_and_owner(tmp_path) -> N
         daemon.a2ui_action(client_id="desktop-a", user=admin.user_id, surface_id=f"scheduled-task:{task.scheduled_task_id}", source_component_id="view", action_name="view_scheduled_task", context={"scheduled_task_id": "other"})
     with pytest.raises(ValueError, match="a2ui_catalog_not_negotiated"):
         daemon.a2ui_action(client_id="desktop-b", user=admin.user_id, surface_id=f"scheduled-task:{task.scheduled_task_id}", source_component_id="view", action_name="view_scheduled_task", context={"scheduled_task_id": task.scheduled_task_id})
+
+
+def test_desktop_task_progress_a2ui_is_admin_desktop_only_and_sanitized(tmp_path) -> None:
+    users = V2UserStore(":memory:")
+    admin = users.onboard(display_name="Admin", users_root=tmp_path / "users")
+    runtime = build_runtime_host(user_store=users, schedule_store=ScheduledTaskStore(":memory:"), inference=_router())
+    daemon = V2Daemon(runtime)
+    task = TaskState(task_id="task-progress", user=admin.user_id, goal="Check status", acceptance_criteria_md="1. [ ] Return a safe result")
+    task.metadata["planned_tool_call"] = {"tool_name": "Search", "arguments": {"query": "weather", "api_key": "secret-value"}}
+    task.append_plan_call({"id": "call-1", "tool_name": "Search", "arguments": {"query": "weather"}})
+    task.record_plan_call_success("call-1", {"summary": "Sunny", "access_token": "hidden-token"})
+    progress = _task_progress_snapshot(task)
+    assert progress["tool_arguments"]["api_key"] == "[redacted]"
+    assert progress["tool_result"]["access_token"] == "[redacted]"
+    runtime.activity_events.append(CoreActivityEvent(
+        phase=ImprovementPhase.PLAN,
+        label="thinking",
+        message="Selecting a tool.",
+        task_id="task-progress",
+        user=admin.user_id,
+        integration_id="desktop",
+        channel_target=admin.user_id,
+        progress=progress,
+    ))
+
+    plain = daemon.ipc._dispatch({"method": "desktop_poll", "params": {"client_id": "plain", "user": admin.user_id}})
+    assert not any("task-progress:" in str(item) for item in plain["ui_events"])
+    rich = daemon.ipc._dispatch({"method": "desktop_poll", "params": {"client_id": "rich", "user": admin.user_id, "client_capabilities": {"supportedCatalogIds": [ALPHONSE_DESKTOP_CATALOG_ID]}}})
+    envelopes = [item["event"]["value"] for item in rich["ui_events"] if item["event"].get("name") == "a2ui.envelope"]
+    assert any(item.get("createSurface", {}).get("surfaceId") == "task-progress:task-progress" for item in envelopes)
+    assert "secret-value" not in str(envelopes)
+
+    runtime.activity_events.append(CoreActivityEvent(
+        phase=ImprovementPhase.PLAN, label="thinking", message="Hidden", task_id="telegram-task", user=admin.user_id,
+        integration_id="telegram", channel_target=admin.user_id, progress=progress,
+    ))
+    excluded = daemon.ipc._dispatch({"method": "desktop_poll", "params": {"client_id": "rich", "user": admin.user_id, "client_capabilities": {"supportedCatalogIds": [ALPHONSE_DESKTOP_CATALOG_ID]}}})
+    assert "telegram-task" not in str(excluded["ui_events"])
 
 
 def test_desktop_a2ui_question_surface_is_negotiated_and_actions_resume_only_the_question() -> None:

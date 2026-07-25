@@ -93,9 +93,65 @@ class A2UiAdapter:
             validate_envelope(message)
         return messages
 
+    def task_progress(self, task_id: str, progress: dict[str, Any]) -> list[dict[str, Any]]:
+        """Project a sanitized, server-owned task trace into the Desktop catalog."""
+        normalized_task_id = str(task_id or "").strip()
+        if not normalized_task_id:
+            raise ValueError("task_id_required")
+        surface_id = task_progress_surface_id(normalized_task_id)
+        phase = str(progress.get("phase") or "working").strip().title()
+        label = str(progress.get("label") or "Working").strip()
+        message = str(progress.get("message") or "").strip()
+        criteria = str(progress.get("acceptance_criteria") or "").strip()
+        tool_name = str(progress.get("tool_name") or "").strip()
+        tool_status = str(progress.get("tool_status") or "").strip()
+        children = ["status", "summary"]
+        components: list[dict[str, Any]] = [
+            {"id": "root", "component": "Card", "children": children},
+            {"id": "status", "component": "Status", "text": f"Alphonse is working · {phase}"},
+            {"id": "summary", "component": "Text", "text": " · ".join(part for part in (label, message) if part)},
+        ]
+        if criteria:
+            children.append("criteria")
+            components.append({"id": "criteria", "component": "Text", "text": f"Acceptance criteria\n{criteria}"})
+        if tool_name:
+            children.append("tool")
+            suffix = f" · {tool_status}" if tool_status else ""
+            components.append({"id": "tool", "component": "Text", "text": f"Tool: {tool_name}{suffix}"})
+        arguments = progress.get("tool_arguments")
+        if arguments not in (None, "", {}, []):
+            children.append("arguments")
+            components.append({"id": "arguments", "component": "Text", "text": f"Input: {_compact_value(arguments)}"})
+        result = progress.get("tool_result")
+        if result not in (None, "", {}, []):
+            children.append("result")
+            components.append({"id": "result", "component": "Text", "text": f"Output: {_compact_value(result)}"})
+        messages = [
+            {"version": A2UI_VERSION, "createSurface": {"surfaceId": surface_id, "catalogId": self.catalog_id, "sendDataModel": False}},
+            {"version": A2UI_VERSION, "updateComponents": {"surfaceId": surface_id, "components": components}},
+            {"version": A2UI_VERSION, "updateDataModel": {"surfaceId": surface_id, "path": "/", "value": {"task_id": normalized_task_id, "project_id": str(progress.get("project_id") or "")}}},
+        ]
+        for item in messages:
+            validate_envelope(item)
+        return messages
+
+    def task_progress_closed(self, task_id: str) -> dict[str, Any]:
+        message = {"version": A2UI_VERSION, "deleteSurface": {"surfaceId": task_progress_surface_id(task_id)}}
+        validate_envelope(message)
+        return message
+
 
 def surface_id_for_question(question_id: str) -> str:
     return f"question:{str(question_id or '').strip()}"
+
+
+def task_progress_surface_id(task_id: str) -> str:
+    return f"task-progress:{str(task_id or '').strip()}"
+
+
+def _compact_value(value: Any) -> str:
+    text = str(value)
+    return text if len(text) <= 700 else f"{text[:699]}…"
 
 
 def question_id_from_surface(surface_id: str) -> str:

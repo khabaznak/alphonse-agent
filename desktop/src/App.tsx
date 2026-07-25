@@ -15,9 +15,9 @@ type PollResponse = {
   next_sequence: number;
   ui_events?: Array<{ sequence?: number; event: { type: string; name?: string; value?: unknown } }>;
   next_ui_sequence?: number;
-  deliveries: Array<{ outbox_message_id: string; message: string }>;
+  deliveries: Array<{ outbox_message_id: string; message: string; task_id?: string }>;
   questions: Question[];
-  status: { active_work: Record<string, string>; activity: { state?: string } };
+  status: { active_work: Record<string, string>; activity: { state?: string }; queue?: { ready?: number; processing?: number } };
 };
 type HistoryResponse = { messages: ChatMessage[] };
 type RecentFilesResponse = { files: Array<{ name: string; kind: "file" | "directory"; modified_at: string }> };
@@ -49,6 +49,7 @@ export default function App() {
   const [recentFilesOpen, setRecentFilesOpen] = useState(false);
   const [recentFiles, setRecentFiles] = useState<RecentFilesResponse["files"]>([]);
   const [recentFilesError, setRecentFilesError] = useState("");
+  const [queueStatus, setQueueStatus] = useState({ ready: 0, processing: 0 });
   const [enterToSend, setEnterToSend] = useState(() => window.localStorage.getItem("alphonse.desktop.enterToSend") !== "false");
   const currentProjectKey = projectKey(project?.project_id);
 
@@ -75,6 +76,7 @@ export default function App() {
       setConnected(true);
       setError("");
       setQuestions(response.questions);
+      setQueueStatus({ ready: response.status.queue?.ready || 0, processing: response.status.queue?.processing || 0 });
       setSurfaces((current) => (response.ui_events || []).reduce((next, item) => applyA2uiEvent(next, item.event), current));
       const latest = response.events.at(-1);
       setActivity(capdActivityLabel(latest, response.status.activity.state || "idle"));
@@ -82,6 +84,13 @@ export default function App() {
       for (const delivery of response.deliveries) {
         if (delivered.current.has(delivery.outbox_message_id)) continue;
         delivered.current.add(delivery.outbox_message_id);
+        if (delivery.task_id) {
+          setSurfaces((current) => {
+            const next = { ...current };
+            delete next[`task-progress:${delivery.task_id}`];
+            return next;
+          });
+        }
         appendMessage({ id: delivery.outbox_message_id, role: "assistant", content: delivery.message });
         await daemonRequest("desktop_ack_delivery", { client_id: clientId, outbox_message_id: delivery.outbox_message_id });
       }
@@ -219,7 +228,8 @@ export default function App() {
   };
 
   const suggestions = useMemo(() => matchingCommands(prompt), [prompt]);
-  const activeSurface = Object.values(surfaces)[0];
+  const taskProgressSurfaces = Object.values(surfaces).filter((surface) => surface.surfaceId.startsWith("task-progress:"));
+  const activeSurface = Object.values(surfaces).find((surface) => !surface.surfaceId.startsWith("task-progress:"));
   const fallbackQuestion = questions.find((question) => !surfaces[`question:${question.question_id}`]);
 
   return (
@@ -232,7 +242,7 @@ export default function App() {
         </div>
         <section className="project-sidebar-section">
           <div className="project-sidebar-header">
-            <button className="project-selector" title="Projects" onClick={() => setModal("projects")}><span>Project</span><small>{project?.name || "Home"}</small></button>
+            <button className="project-selector" title="Projects" onClick={() => setModal("projects")}><span className="nav-icon" aria-hidden="true">🗂️</span><span className="nav-label">Project</span><small>{project?.name || "Home"}</small></button>
             {project && <button className="project-disclosure" type="button" title={recentFilesOpen ? "Hide recent files" : "Show recent files"} aria-label={recentFilesOpen ? "Hide recent files" : "Show recent files"} aria-expanded={recentFilesOpen} onClick={() => setRecentFilesOpen((open) => !open)}>{recentFilesOpen ? "⌄" : "›"}</button>}
           </div>
           {project && recentFilesOpen && <div className="recent-files-panel">
@@ -241,9 +251,10 @@ export default function App() {
             {!recentFilesError && (recentFiles.length ? <ul>{recentFiles.map((file) => <li key={`${file.kind}:${file.name}`}><span className="recent-file-icon" aria-hidden="true">{file.kind === "directory" ? "📁" : "📄"}</span><span className="recent-file-name" title={file.name}>{file.name}</span><small>{dateLabel(file.modified_at)}</small></li>)}</ul> : <p className="recent-files-empty">No accessible files yet.</p>)}
           </div>}
         </section>
-        <button title="Scheduled tasks" onClick={() => setModal("scheduled-tasks")}><span>Scheduled tasks</span></button>
-        <button title="Users" onClick={() => setModal("users")}><span>Users</span></button>
-        <button title="Settings" onClick={() => { setSettingsTab("general"); setModal("settings"); }}><span>Settings</span></button>
+        <button title="Scheduled tasks" onClick={() => setModal("scheduled-tasks")}><span className="nav-icon" aria-hidden="true">◷</span><span className="nav-label">Scheduled tasks</span></button>
+        <button title="Users" onClick={() => setModal("users")}><span className="nav-icon" aria-hidden="true">♙</span><span className="nav-label">Users</span></button>
+        <button title="Settings" onClick={() => { setSettingsTab("general"); setModal("settings"); }}><span className="nav-icon" aria-hidden="true">⚙</span><span className="nav-label">Settings</span></button>
+        <div className="queue-sidebar-status" title="Inbound message queue"><span className="queue-icon" aria-hidden="true">☷</span><span className="queue-label">Queue</span><small>{queueStatus.ready} waiting{queueStatus.processing ? ` · ${queueStatus.processing} working` : ""}</small></div>
       </aside>
 
       <section className="conversation">
@@ -259,6 +270,7 @@ export default function App() {
             {message.source && !["desktop", "ledger"].includes(message.source) && <small className="message-source" title={`Sent from ${message.source}`}>↗ {sourceLabel(message.source)}</small>}
             {message.role === "assistant" ? <div className="message-markdown"><ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown></div> : message.content}
           </article>)}
+          {taskProgressSurfaces.map((surface) => <article className="message assistant task-progress-bubble" key={surface.surfaceId}><A2uiSurfaceView surface={surface} clientId={clientId} user={user} onDone={poll} /></article>)}
         </div>
         <section className="input-dock">
           {activeSurface ? (

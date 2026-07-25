@@ -68,6 +68,11 @@ def do_node(task: TaskState, context: CoreLoopContext | None = None) -> TaskStat
             },
         )
         task.record_plan_call_exception(call_id, exc)
+        context.emit_activity(
+            phase=ImprovementPhase.DO,
+            label="tool failed",
+            message=f"{tool_name} returned an error.",
+        )
         task.metadata["do_executed_since_last_act"] = True
         task.append_update(f"Do recorded exception from planned tool call: {call_id}.")
         return task
@@ -85,6 +90,11 @@ def do_node(task: TaskState, context: CoreLoopContext | None = None) -> TaskStat
             },
         )
         task.record_plan_call_waiting(call_id, result)
+        context.emit_activity(
+            phase=ImprovementPhase.DO,
+            label="waiting",
+            message=f"{tool_name} needs user input.",
+        )
         task.metadata["do_executed_since_last_act"] = True
         task.metadata["task_parked"] = True
         task.status = "waiting_user"
@@ -105,6 +115,11 @@ def do_node(task: TaskState, context: CoreLoopContext | None = None) -> TaskStat
     if tool_id == "native.respond" and isinstance(result, dict):
         context.record_memory_event(task, "Conversation", f"- Alphonse: {str(result.get('message') or '')}")
     task.record_plan_call_success(call_id, result)
+    context.emit_activity(
+        phase=ImprovementPhase.DO,
+        label="tool completed",
+        message=f"{tool_name} completed.",
+    )
     if _is_silent_successful_bash(tool_id, result):
         task.metadata["pending_silent_bash_confirmation"] = {
             "tool_call_id": call_id,
