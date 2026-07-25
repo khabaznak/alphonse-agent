@@ -140,6 +140,22 @@ def test_snapshot_projection_routes_bash_stdout_to_integration_outbox() -> None:
     assert projected.message == "10:42"
 
 
+def test_snapshot_projection_confirms_successful_artifact_to_origin_channel() -> None:
+    from alphonse.agent_v2.core.core import ImprovementPhase, StateSnapshot
+    from alphonse.agent_v2.core.io import channel_metadata, project_snapshot_to_outbox
+
+    snapshot = StateSnapshot(
+        phase=ImprovementPhase.ACT,
+        metadata={"task_state": {"user": "u-alex", "metadata": {"channel": channel_metadata(integration_id="telegram-home", provider_key="telegram", channel_target="999", provider_message_id="56", alphonse_user_id="u-alex")}, "plan_json": [{"tool_id": "artifact.todo-list", "tool_name": "Add to TODO list", "execution": {"status": "success", "result": {"added": "Remember to pack your goggles"}}}]}},
+    )
+
+    projected = project_snapshot_to_outbox(snapshot=snapshot, outbox=SQLiteOutboundStore())
+
+    assert projected is not None
+    assert projected.integration_id == "telegram-home"
+    assert projected.message == "Completed Add to TODO list."
+
+
 def test_identity_resolver_maps_inbound_and_preferred_outbound_across_providers(
     tmp_path: Path,
     monkeypatch,

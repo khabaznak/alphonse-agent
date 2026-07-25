@@ -584,6 +584,11 @@ def _latest_tool_result_response(task_state: dict[str, Any]) -> str:
             if next_run_at:
                 return f'Scheduled "{name}" for {next_run_at}.'
             return f'Scheduled "{name}".'
+        if tool_id.startswith("artifact."):
+            tool_name = str(call.get("tool_name") or "").strip()
+            if not tool_name:
+                tool_name = tool_id.removeprefix("artifact.").replace("-", " ").replace("_", " ")
+            return f"Completed {tool_name}."
     return ""
 
 
