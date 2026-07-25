@@ -1,4 +1,6 @@
 import { FormEvent, KeyboardEvent, ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { daemonRequest, ensureDaemon, showInFinder, stopDaemon } from "./api";
 import { matchingCommands } from "./commands";
 import { A2uiSurfaceView, applyA2uiEvent, DESKTOP_CATALOG_ID } from "./a2ui";
@@ -253,7 +255,10 @@ export default function App() {
         </header>
         {error && <div className="error" role="alert">{error}</div>}
         <div className="timeline" ref={timelineRef} aria-live="polite">
-          {messages.map((message) => <article className={`message ${message.role}`} key={message.id}>{message.source && !["desktop", "ledger"].includes(message.source) && <small className="message-source">{message.source}</small>}{message.content}</article>)}
+          {messages.map((message) => <article className={`message ${message.role}`} key={message.id}>
+            {message.source && !["desktop", "ledger"].includes(message.source) && <small className="message-source" title={`Sent from ${message.source}`}>↗ {sourceLabel(message.source)}</small>}
+            {message.role === "assistant" ? <div className="message-markdown"><ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown></div> : message.content}
+          </article>)}
         </div>
         <section className="input-dock">
           {activeSurface ? (
@@ -342,6 +347,7 @@ function ArtifactsSettingsSection({ user }: { user: string }) {
   const remove = async (item: Artifact) => { if (!window.confirm(`Unregister ${item.name}? Program files and data will not be deleted.`)) return; try { await daemonRequest("delete_artifact", { actor_user_id: user, artifact_id: item.artifact_id }); await load(); } catch (cause) { setNotice(cause instanceof Error ? cause.message : "Unregister failed"); } };
   return <section className="settings-panel"><h3>Artifacts</h3><p>Registered project-local programs become reusable Alphonse tools. Unregistering leaves their files and data untouched.</p>{items.length ? <div className="stack">{items.map((item, index) => <article key={item.artifact_id} className="project-card"><span className="project-card-summary"><strong>{item.artifact_id}</strong><small>Project: {item.project_id} · Entry point: {item.entrypoint_path}</small><label>Name<input value={item.name} onChange={(event) => setItems((current) => current.map((value, position) => position === index ? { ...value, name: event.target.value } : value))} /></label><label>Description<input value={item.description} onChange={(event) => setItems((current) => current.map((value, position) => position === index ? { ...value, description: event.target.value } : value))} /></label></span><span className="project-card-actions"><button onClick={() => void update(item)}>Save</button><button className="secondary" onClick={() => void toggle(item)}>{item.enabled ? "Turn off" : "Turn on"}</button><button className="secondary" onClick={() => void remove(item)}>Unregister</button></span></article>)}</div> : <p>No artifacts registered. Ask Alphonse to register an executable created in an active project.</p>}<p>{notice}</p></section>;
 }
+
 function MediaToolsSettingsSection() {
   const [settings, setSettings] = useState<MediaToolsSettings | null>(null); const [notice, setNotice] = useState(""); const [verifying, setVerifying] = useState<"" | "tts" | "stt" | "ocr">(""); const [samples, setSamples] = useState<Record<string, string>>({ tts: "Alphonse text-to-speech verification.", stt: "", ocr: "" });
   const load = async () => { const current = await daemonRequest<{ user: { user_id: string } | null }>("current_user"); if (!current.user) return; const result = await daemonRequest<{ settings: MediaToolsSettings }>("media_tools_settings", { actor_user_id: current.user.user_id }); setSettings(result.settings); };
@@ -371,6 +377,10 @@ function scheduleLabel(schedule: Record<string, unknown>): string {
 
 function dateLabel(value: string | null | undefined): string {
   return value ? new Date(value).toLocaleString() : "—";
+}
+
+function sourceLabel(source: string): string {
+  return source.replace(/[-_]/g, " ").replace(/\b\w/g, (character) => character.toUpperCase());
 }
 
 function ScheduledTasksModal({ actorUserId, initialTaskId = "", onClose }: { actorUserId: string; initialTaskId?: string; onClose: () => void }) {
