@@ -58,8 +58,10 @@ from alphonse.agent_v2.media_tools_settings import SQLiteMediaToolsSettingsStore
 from alphonse.agent_v2.core.tools.registry.native.media import verify_ocr, verify_stt, verify_tts
 from alphonse.agent_v2.runtime import refresh_runtime_web_tools
 from alphonse.agent_v2.runtime import refresh_runtime_media_tools
+from alphonse.agent_v2.runtime import refresh_runtime_artifacts
 from alphonse.agent_v2.core.tools.registry.native.web import execute_web_fetch, execute_web_search
 from alphonse.agent_v2.assets import SQLiteAssetStore
+from alphonse.agent_v2.artifacts import SQLiteArtifactStore
 from alphonse.agent_v2.conversations import SQLiteConversationStore, legacy_ledger_events
 from alphonse.agent_v2.automations import EventAutomationStore
 
@@ -416,6 +418,30 @@ class V2Daemon:
         ))
         return saved.to_dict()
 
+    def list_artifacts(self, *, actor_user_id: str) -> list[dict[str, Any]]:
+        actor = str(actor_user_id or "").strip()
+        if not actor: raise PermissionError("artifact_manager_required")
+        owner = "" if self.runtime.user_store.is_admin(actor) else actor
+        return [item.to_dict() for item in self.runtime.artifact_store.list(owner_user_id=owner)]
+
+    def update_artifact(self, *, actor_user_id: str, artifact_id: str, name: str, description: str) -> dict[str, Any]:
+        self._require_artifact_manager(actor_user_id, self.runtime.artifact_store.get(artifact_id))
+        saved = self.runtime.artifact_store.update_metadata(artifact_id, name=name, description=description)
+        refresh_runtime_artifacts(self.runtime)
+        return saved.to_dict()
+
+    def set_artifact_enabled(self, *, actor_user_id: str, artifact_id: str, enabled: bool) -> dict[str, Any]:
+        self._require_artifact_manager(actor_user_id, self.runtime.artifact_store.get(artifact_id))
+        saved = self.runtime.artifact_store.set_enabled(artifact_id, enabled)
+        refresh_runtime_artifacts(self.runtime)
+        return saved.to_dict()
+
+    def delete_artifact(self, *, actor_user_id: str, artifact_id: str) -> dict[str, Any]:
+        self._require_artifact_manager(actor_user_id, self.runtime.artifact_store.get(artifact_id))
+        self.runtime.artifact_store.delete(artifact_id)
+        refresh_runtime_artifacts(self.runtime)
+        return {"deleted": artifact_id}
+
     def web_tools_settings(self, *, actor_user_id: str) -> dict[str, object]:
         self._require_admin(actor_user_id)
         return self.runtime.web_tools_settings_store.get().to_dict()
@@ -471,6 +497,13 @@ class V2Daemon:
         actor = str(actor_user_id or "").strip()
         if not actor or not self.runtime.user_store.is_admin(actor):
             raise PermissionError("admin_required")
+
+    def _require_artifact_manager(self, actor_user_id: str, record: Any) -> None:
+        if record is None:
+            raise KeyError("artifact_not_found")
+        actor = str(actor_user_id or "").strip()
+        if actor != str(record.owner_user_id) and not self.runtime.user_store.is_admin(actor):
+            raise PermissionError("artifact_manager_required")
 
     def list_agent_config(self) -> list[dict[str, str]]:
         return [document.to_dict(include_content=False) for document in self.runtime.agent_config_store.list_documents()]
@@ -1379,6 +1412,7 @@ def main() -> None:
             web_tools_settings_store=SQLiteWebToolsSettingsStore.default(),
             media_tools_settings_store=SQLiteMediaToolsSettingsStore.default(),
             asset_store=SQLiteAssetStore.default(),
+            artifact_store=SQLiteArtifactStore.default(),
             conversation_store=SQLiteConversationStore.default(),
             memory_settings_store=SQLiteMemorySettingsStore.default(),
             outbox=SQLiteOutboundStore.default(),

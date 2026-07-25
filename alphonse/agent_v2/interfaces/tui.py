@@ -86,6 +86,7 @@ TUI_SLASH_COMMANDS: tuple[tuple[str, str], ...] = (
     ("/agent-config", "Edit global agent configuration"),
     ("/scheduled-tasks", "Manage scheduled tasks"),
     ("/tools", "Configure optional local media tools"),
+    ("/artifacts", "Manage registered executable artifacts"),
     ("/settings", "Configure local user data"),
     ("/users", "Manage Alphonse users"),
 )
@@ -1092,6 +1093,50 @@ def _build_textual_app_class() -> type[Any]:
             error = (((result or {}).get("result") or {}).get("exception") or {}).get("message")
             self.query_one("#media-tools-notice", Static).update(str(error or "Verification complete."))
 
+    class ArtifactsScreen(ModalScreen[bool]):
+        def __init__(self, items: list[dict[str, Any]], action: Callable[[str, dict[str, Any]], list[dict[str, Any]]]) -> None:
+            super().__init__(); self.items = items; self.action = action
+
+        def compose(self) -> ComposeResult:
+            options = [(f"{item.get('name')} ({item.get('artifact_id')})", str(item.get("artifact_id"))) for item in self.items]
+            with Vertical(id="project-dialog"):
+                yield Static("Artifacts", classes="dialog-title")
+                yield Select(options=options, id="artifact-select", allow_blank=False)
+                yield Input(placeholder="Name", id="artifact-name")
+                yield Input(placeholder="Description", id="artifact-description")
+                yield Static("", id="artifact-details")
+                with Horizontal(classes="dialog-actions"):
+                    yield Button("Save", id="save-artifact", variant="primary")
+                    yield Button("Turn On/Off", id="toggle-artifact")
+                    yield Button("Unregister", id="delete-artifact")
+                    yield Button("Close", id="close-artifacts")
+
+        def on_mount(self) -> None: self._load_selected()
+        def on_select_changed(self, event: Select.Changed) -> None:
+            if event.select.id == "artifact-select": self._load_selected()
+        def _selected(self) -> dict[str, Any] | None:
+            key = str(self.query_one("#artifact-select", Select).value or "")
+            return next((item for item in self.items if str(item.get("artifact_id")) == key), None)
+        def _load_selected(self) -> None:
+            item = self._selected()
+            if item is None: return
+            self.query_one("#artifact-name", Input).value = str(item.get("name") or "")
+            self.query_one("#artifact-description", Input).value = str(item.get("description") or "")
+            self.query_one("#artifact-details", Static).update(f"Project: {item.get('project_id')} | Entry point: {item.get('entrypoint_path')} | {'enabled' if item.get('enabled') else 'disabled'}")
+        def on_button_pressed(self, event: Button.Pressed) -> None:
+            if event.button.id == "close-artifacts": self.dismiss(True); return
+            item = self._selected()
+            if item is None: return
+            try:
+                action = str(event.button.id or "")
+                if action == "save-artifact": payload = {"artifact_id": item["artifact_id"], "name": self.query_one("#artifact-name", Input).value, "description": self.query_one("#artifact-description", Input).value}
+                elif action == "toggle-artifact": payload = {"artifact_id": item["artifact_id"], "enabled": not bool(item.get("enabled"))}
+                else: payload = {"artifact_id": item["artifact_id"]}
+                self.items = self.action(action, payload)
+                if action == "delete-artifact": self.dismiss(True); return
+                self._load_selected()
+            except Exception as exc: self.query_one("#artifact-details", Static).update(str(exc))
+
     class UsersScreen(ModalScreen[bool]):
         def __init__(
             self,
@@ -1978,6 +2023,9 @@ def _build_textual_app_class() -> type[Any]:
             if command == "tools":
                 self._open_media_tools()
                 return
+            if command == "artifacts":
+                self._open_artifacts()
+                return
             if command == "settings":
                 self._open_user_settings()
                 return
@@ -2167,6 +2215,23 @@ def _build_textual_app_class() -> type[Any]:
                     return self.daemon.verify_media_tools(actor_user_id=self.runtime.user, kind=kind, sample=sample)
                 self.push_screen(MediaToolsScreen(load(), save, verify), callback=lambda _: self._refresh_status())
             except Exception as exc: self.query_one("#activity", Static).update(f"Media tools unavailable: {exc}")
+
+        def _open_artifacts(self) -> None:
+            def action(action_name: str, values: dict[str, Any]) -> list[dict[str, Any]]:
+                if self.external_daemon:
+                    if action_name == "save-artifact": self.daemon_client.request("update_artifact", actor_user_id=self.runtime.user, **values)
+                    elif action_name == "toggle-artifact": self.daemon_client.request("set_artifact_enabled", actor_user_id=self.runtime.user, **values)
+                    else: self.daemon_client.request("delete_artifact", actor_user_id=self.runtime.user, **values)
+                    return list(self.daemon_client.request("artifacts", actor_user_id=self.runtime.user).get("artifacts", []))
+                if self.daemon is None: return []
+                if action_name == "save-artifact": self.daemon.update_artifact(actor_user_id=self.runtime.user, **values)
+                elif action_name == "toggle-artifact": self.daemon.set_artifact_enabled(actor_user_id=self.runtime.user, **values)
+                else: self.daemon.delete_artifact(actor_user_id=self.runtime.user, **values)
+                return self.daemon.list_artifacts(actor_user_id=self.runtime.user)
+            try:
+                items = self.daemon_client.request("artifacts", actor_user_id=self.runtime.user).get("artifacts", []) if self.external_daemon else self.daemon.list_artifacts(actor_user_id=self.runtime.user) if self.daemon else []
+                self.push_screen(ArtifactsScreen(list(items), action), callback=lambda _: self._refresh_status())
+            except Exception as exc: self.query_one("#activity", Static).update(f"Artifacts unavailable: {exc}")
 
         def _open_users(self) -> None:
             def _list() -> list[dict[str, Any]]:

@@ -46,6 +46,8 @@ from alphonse.agent_v2.users import V2UserStore
 from alphonse.agent_v2.web_tools_settings import SQLiteWebToolsSettingsStore
 from alphonse.agent_v2.media_tools_settings import SQLiteMediaToolsSettingsStore
 from alphonse.agent_v2.assets import SQLiteAssetStore
+from alphonse.agent_v2.artifacts import SQLiteArtifactStore
+from alphonse.agent_v2.artifacts import build_artifact_tool_definitions
 from alphonse.agent_v2.memory_settings import SQLiteMemorySettingsStore
 from alphonse.agent_v2.core.memory import LedgerMemory
 from alphonse.agent_v2.conversations import SQLiteConversationStore
@@ -102,6 +104,7 @@ class V2RuntimeHost:
     web_tools_settings_store: SQLiteWebToolsSettingsStore
     media_tools_settings_store: SQLiteMediaToolsSettingsStore
     asset_store: SQLiteAssetStore
+    artifact_store: SQLiteArtifactStore
     memory_settings_store: SQLiteMemorySettingsStore
     communication_router: CommunicationRouter
     conversation_store: SQLiteConversationStore
@@ -132,11 +135,13 @@ def build_runtime_host(
     web_tools_settings_store: SQLiteWebToolsSettingsStore | None = None,
     media_tools_settings_store: SQLiteMediaToolsSettingsStore | None = None,
     asset_store: SQLiteAssetStore | None = None,
+    artifact_store: SQLiteArtifactStore | None = None,
     memory_settings_store: SQLiteMemorySettingsStore | None = None,
     communication_thread_store: SQLiteCommunicationThreadStore | None = None,
     conversation_store: SQLiteConversationStore | None = None,
 ) -> V2RuntimeHost:
     reset_state()
+    provided_tools = tools is not None
     queue = messages or InMemoryMessageQueue()
     conversation_store = conversation_store or SQLiteConversationStore()
     channel = CommunicationChannel(queue, conversation_store=conversation_store)
@@ -145,10 +150,11 @@ def build_runtime_host(
     web_tools_settings_store = web_tools_settings_store or SQLiteWebToolsSettingsStore()
     media_tools_settings_store = media_tools_settings_store or SQLiteMediaToolsSettingsStore()
     asset_store = asset_store or SQLiteAssetStore()
+    artifact_store = artifact_store or SQLiteArtifactStore()
     # Generic embedded/test hosts are intentionally ephemeral. The daemon
     # injects the durable store explicitly.
     memory_settings_store = memory_settings_store or SQLiteMemorySettingsStore()
-    tools = tools or build_native_tool_registry(web_tools_settings_store.get(), asset_store, media_tools_settings_store.get())
+    tools = tools or build_native_tool_registry(web_tools_settings_store.get(), asset_store, media_tools_settings_store.get(), artifact_store)
     inference_settings_store = inference_settings_store or SQLiteInferenceSettingsStore()
     # Persistent daemon/TUI constructors pass `AgentConfigStore.default()`.
     # Generic test and helper runtimes only need the package defaults.
@@ -157,6 +163,9 @@ def build_runtime_host(
     inference = inference or build_inference_router_from_settings(inference_settings_store.get())
     question_store = question_store or SQLiteQuestionStore()
     project_store = project_store or ProjectStore()
+    if tools is not None:
+        for definition in build_artifact_tool_definitions(artifact_store, project_store):
+            tools.register(definition)
     schedule_store = schedule_store or ScheduledTaskStore()
     outbox = outbox or SQLiteOutboundStore()
     integration_store = integration_store or SQLiteIntegrationStore()
@@ -208,7 +217,7 @@ def build_runtime_host(
         user_context_provider=user_store.read_user_context,
         activity_sink=_activity_sink,
     )
-    return V2RuntimeHost(
+    runtime = V2RuntimeHost(
         user=str(user or (user_store.admin_user().user_id if user_store.admin_user() else "local")).strip() or "local",
         queue=queue,
         channel=channel,
@@ -231,22 +240,34 @@ def build_runtime_host(
         web_tools_settings_store=web_tools_settings_store,
         media_tools_settings_store=media_tools_settings_store,
         asset_store=asset_store,
+        artifact_store=artifact_store,
         memory_settings_store=memory_settings_store,
         communication_router=communication_router,
         conversation_store=conversation_store,
         ui_events=ui_events,
         activity_events=activity_events,
     )
+    if not provided_tools:
+        refresh_runtime_artifacts(runtime)
+    return runtime
 
 
 def refresh_runtime_web_tools(runtime: V2RuntimeHost) -> None:
     """Apply Web Tools settings to tasks started after this call."""
-    runtime.core.tools = build_native_tool_registry(runtime.web_tools_settings_store.get(), runtime.asset_store, runtime.media_tools_settings_store.get())
+    refresh_runtime_artifacts(runtime)
 
 
 def refresh_runtime_media_tools(runtime: V2RuntimeHost) -> None:
     """Apply verified local media-tool settings to tasks started after this call."""
-    runtime.core.tools = build_native_tool_registry(runtime.web_tools_settings_store.get(), runtime.asset_store, runtime.media_tools_settings_store.get())
+    refresh_runtime_artifacts(runtime)
+
+
+def refresh_runtime_artifacts(runtime: V2RuntimeHost) -> None:
+    """Rebuild native and enabled artifact definitions for later PDCA planning."""
+    registry = build_native_tool_registry(runtime.web_tools_settings_store.get(), runtime.asset_store, runtime.media_tools_settings_store.get(), runtime.artifact_store, lambda: refresh_runtime_artifacts(runtime))
+    for definition in build_artifact_tool_definitions(runtime.artifact_store, runtime.project_store):
+        registry.register(definition)
+    runtime.core.tools = registry
 
 
 def build_default_runtime_inference_router() -> InferenceRouter:

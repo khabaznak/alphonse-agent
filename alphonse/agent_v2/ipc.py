@@ -411,6 +411,14 @@ class V2DaemonServer:
             return {"settings": self.daemon.memory_settings(actor_user_id=str(params.get("actor_user_id") or ""))}
         if method == "save_memory_settings":
             return {"settings": self.daemon.save_memory_settings(actor_user_id=str(params.get("actor_user_id") or ""), values=dict(params.get("values") or {}))}
+        if method == "artifacts":
+            return {"artifacts": self.daemon.list_artifacts(actor_user_id=str(params.get("actor_user_id") or ""))}
+        if method == "update_artifact":
+            return {"artifact": self.daemon.update_artifact(actor_user_id=str(params.get("actor_user_id") or ""), artifact_id=str(params.get("artifact_id") or ""), name=str(params.get("name") or ""), description=str(params.get("description") or ""))}
+        if method == "set_artifact_enabled":
+            return {"artifact": self.daemon.set_artifact_enabled(actor_user_id=str(params.get("actor_user_id") or ""), artifact_id=str(params.get("artifact_id") or ""), enabled=bool(params.get("enabled")))}
+        if method == "delete_artifact":
+            return self.daemon.delete_artifact(actor_user_id=str(params.get("actor_user_id") or ""), artifact_id=str(params.get("artifact_id") or ""))
         if method == "web_tools_settings":
             return {"settings": self.daemon.web_tools_settings(actor_user_id=str(params.get("actor_user_id") or ""))}
         if method == "save_web_tools_settings":
