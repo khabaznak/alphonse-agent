@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 
 import pytest
 
@@ -14,6 +15,9 @@ from alphonse.agent_v2.core.tools.registry.native import BASH_TOOL_NAME
 from alphonse.agent_v2.core.tools.registry.native import build_bash_tool_definition
 from alphonse.agent_v2.core.tools.registry.native import build_native_tool_registry
 from alphonse.agent_v2.core.tools.registry.native import execute_bash
+from alphonse.agent_v2.core.tools.registry.native.bash import BASH_ARGUMENT_SCHEMA
+from alphonse.agent_v2.core.tools.registry.native.bash import DEFAULT_TIMEOUT_SECONDS
+from alphonse.agent_v2.core.tools.registry.native.bash import MAX_TIMEOUT_SECONDS
 from alphonse.agent_v2.core.tools.registry.native.bash import MAX_OUTPUT_CHARS
 
 
@@ -38,16 +42,34 @@ def test_bash_descriptor_and_schema_are_visible_to_plan_prompt() -> None:
     assert BASH_TOOL_ID in prompt
     assert BASH_TOOL_NAME in prompt
     assert "native" in prompt
+    assert "10-second default" in prompt
+    assert "persistent foreground services" in prompt
+    assert "redirect stdin, stdout, and stderr" in prompt
 
 
 def test_bash_tool_executes_successful_command_and_captures_stdout() -> None:
+    started_at = time.monotonic()
     result = execute_bash({"command": "printf hello"})
+    elapsed = time.monotonic() - started_at
 
     assert result["exit_code"] == 0
     assert result["stdout"] == "hello"
     assert result["stderr"] == ""
     assert result["timed_out"] is False
     assert result["cwd"]
+    assert result["timeout_seconds"] == DEFAULT_TIMEOUT_SECONDS
+    assert result["duration_ms"] >= 0
+    assert elapsed < 2
+
+
+def test_bash_tool_does_not_wait_for_background_process_pipe_eof() -> None:
+    started_at = time.monotonic()
+    result = execute_bash({"command": "sleep 1 &"})
+    elapsed = time.monotonic() - started_at
+
+    assert result["exit_code"] == 0
+    assert result["timed_out"] is False
+    assert elapsed < 0.5
 
 
 def test_bash_tool_captures_stderr_and_nonzero_exit_without_raising() -> None:
@@ -60,11 +82,59 @@ def test_bash_tool_captures_stderr_and_nonzero_exit_without_raising() -> None:
 
 
 def test_bash_tool_enforces_timeout() -> None:
+    started_at = time.monotonic()
     result = execute_bash({"command": "sleep 2", "timeout_seconds": 0.05})
+    elapsed = time.monotonic() - started_at
 
     assert result["exit_code"] == -1
     assert result["timed_out"] is True
     assert "timed out" in result["stderr"]
+    assert result["timeout_seconds"] == 0.05
+    assert result["duration_ms"] < 2_000
+    assert elapsed < 2
+
+
+def test_bash_timeout_kills_children_that_hold_captured_pipes_open() -> None:
+    started_at = time.monotonic()
+    result = execute_bash(
+        {
+            "command": "trap '' TERM; sh -c 'trap \"\" TERM; sleep 60' & wait",
+            "timeout_seconds": 0.05,
+        }
+    )
+    elapsed = time.monotonic() - started_at
+
+    assert result["timed_out"] is True
+    assert elapsed < 2
+
+
+def test_bash_timeout_terminates_entire_process_group(tmp_path) -> None:
+    marker = tmp_path / "child-terminated"
+    command = (
+        "sh -c 'trap \"printf terminated > "
+        f"{marker}"
+        "; exit 0\" TERM; while :; do sleep 1; done' & wait"
+    )
+
+    result = execute_bash({"command": command, "timeout_seconds": 0.2})
+
+    assert result["timed_out"] is True
+    assert marker.read_text() == "terminated"
+
+
+def test_bash_tool_caps_explicit_timeout() -> None:
+    result = execute_bash({"command": "printf capped", "timeout_seconds": 999})
+
+    assert result["stdout"] == "capped"
+    assert result["timeout_seconds"] == MAX_TIMEOUT_SECONDS
+
+
+def test_bash_schema_advertises_timeout_defaults_and_limits() -> None:
+    timeout_schema = BASH_ARGUMENT_SCHEMA["properties"]["timeout_seconds"]
+
+    assert timeout_schema["default"] == DEFAULT_TIMEOUT_SECONDS
+    assert timeout_schema["maximum"] == MAX_TIMEOUT_SECONDS
+    assert "long-running commands" in timeout_schema["description"]
 
 
 def test_bash_tool_rejects_blank_command() -> None:

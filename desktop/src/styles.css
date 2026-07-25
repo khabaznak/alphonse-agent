@@ -231,6 +231,11 @@ button { border: 0; cursor: pointer; }
 .task-progress-content section { display: grid; gap: 5px; }
 .task-progress-content small { color: #6e5a19; font-size: 10px; letter-spacing: .07em; text-transform: uppercase; }
 .task-progress-content pre { margin: 0; overflow-x: auto; white-space: pre-wrap; overflow-wrap: anywhere; font: 11px/1.45 "DM Mono", monospace; }
+.task-progress-checklist { font-size: 12px; line-height: 1.45; }
+.task-progress-checklist ul { display: grid; gap: 5px; margin: 0; padding: 0; list-style: none; }
+.task-progress-checklist li { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 7px; align-items: start; }
+.task-progress-checklist li input { margin: 3px 0 0; accent-color: #52734d; }
+.task-progress-checklist li p { margin: 0; }
 .task-progress-detail { padding: 8px 10px; border-radius: 5px; background: #f0eddb; color: #415b49; }
 .task-progress-trace { gap: 7px !important; }
 .task-question-bubble { flex: 0 0 auto; width: min(620px, 77%); max-width: 77%; padding: 0; overflow: hidden; }

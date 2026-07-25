@@ -67,12 +67,15 @@ def test_check_node_steer_reviews_acceptance_criteria_before_returning(monkeypat
     )
     monkeypatch.setattr(check_node_module, "_call_criteria_review_llm", lambda prompt: "1.- [x] File exists")
 
-    check_node(task, context=CoreLoopContext(messages=queue))
+    events = []
+    check_node(task, context=CoreLoopContext(messages=queue, activity_sink=events.append))
 
     assert task.check_verdict == "steer"
     assert task.acceptance_criteria_md == "1.- [x] File exists"
     assert task.metadata["criteria_review_updated"] is True
     assert "criteria_review_prompt" in task.metadata
+    assert events[-1].label == "criteria refreshed"
+    assert events[-1].progress["acceptance_criteria"] == "1.- [x] File exists"
 
 
 def test_check_node_consumes_same_correlation_id_from_other_user() -> None:

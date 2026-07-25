@@ -22,8 +22,9 @@ plan_node_module = import_module("alphonse.agent_v2.core.intelligence.pdca.nodes
 
 def test_plan_node_renders_tool_call_prompt_with_available_tools() -> None:
     task = TaskState(goal="Write the file", acceptance_criteria_md="1.- [ ] File exists")
+    events = []
 
-    plan_node(task, context=CoreLoopContext(messages=InMemoryMessageQueue(), tools=_ToolRegistry()))
+    plan_node(task, context=CoreLoopContext(messages=InMemoryMessageQueue(), tools=_ToolRegistry(), activity_sink=events.append))
 
     prompt = task.metadata["tool_call_plan_prompt"]
     assert "exactly one next tool call" in prompt
@@ -31,6 +32,8 @@ def test_plan_node_renders_tool_call_prompt_with_available_tools() -> None:
     assert "tool-1" in prompt
     assert "1.- [ ] File exists" in prompt
     assert task.metadata["tool_call_planning_llm_stubbed"] is True
+    assert events[0].label == "criteria ready"
+    assert events[0].progress["acceptance_criteria"] == "1.- [ ] File exists"
 
 
 def test_plan_node_stubbed_llm_leaves_plan_json_unchanged_and_executes_no_tools() -> None:

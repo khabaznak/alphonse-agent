@@ -49,6 +49,13 @@ def check_node(task: TaskState, context: CoreLoopContext | None = None) -> TaskS
         confidence=1.0,
         new_message_count=steering_count,
     )
+    if context is not None:
+        context.emit_activity(
+            phase=ImprovementPhase.CHECK,
+            label="criteria refreshed",
+            message="Acceptance criteria are up to date after review.",
+            progress={"acceptance_criteria": "" if task.acceptance_criteria_md == "- (none)" else task.acceptance_criteria_md},
+        )
     return task
 
 

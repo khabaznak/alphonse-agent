@@ -474,7 +474,7 @@ function TaskProgressBubble({ surface }: { surface: A2uiSurface }) {
     <div className="task-progress-content">
       <div className="task-progress-heading"><span className="task-progress-spinner" aria-hidden="true">◌</span><strong>Alphonse is working</strong></div>
       {!hasConcreteProgress && text("summary") && <p>{text("summary")}</p>}
-      {visibleCriteria && <section><small>Acceptance criteria</small><pre>{visibleCriteria}</pre></section>}
+      {visibleCriteria && <section><small>Acceptance criteria</small><div className="task-progress-checklist"><ReactMarkdown remarkPlugins={[remarkGfm]}>{acceptanceCriteriaMarkdown(visibleCriteria)}</ReactMarkdown></div></section>}
       {text("intention") && <section><small>Intention</small><p>{text("intention").replace(/^Intention:\s*/, "")}</p></section>}
       {steps.length ? <section className="task-progress-trace"><small>Work log</small>{steps.map((step) => <pre className="task-progress-detail" key={step.id}>{step.text}</pre>)}</section> : <>{text("tool") && <p className="task-progress-detail">{text("tool")}</p>}{text("arguments") && <pre className="task-progress-detail">{text("arguments")}</pre>}{text("result") && <pre className="task-progress-detail">{text("result")}</pre>}</>}
     </div>
@@ -484,6 +484,10 @@ function TaskProgressBubble({ surface }: { surface: A2uiSurface }) {
 function questionTaskId(surface: A2uiSurface): string {
   const question = surface.dataModel.question;
   return typeof question === "object" && question !== null && "task_id" in question ? String((question as { task_id?: unknown }).task_id || "") : "";
+}
+
+function acceptanceCriteriaMarkdown(value: string): string {
+  return value.split("\n").map((line) => line.replace(/^\s*\d+\s*\.\s*-?\s*(\[[ xX]\])\s*/, "- $1 ")).join("\n");
 }
 
 function ScheduledTasksModal({ actorUserId, initialTaskId = "", onClose }: { actorUserId: string; initialTaskId?: string; onClose: () => void }) {

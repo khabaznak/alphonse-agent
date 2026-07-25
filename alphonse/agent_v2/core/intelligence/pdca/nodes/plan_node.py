@@ -28,8 +28,9 @@ def plan_node(task: TaskState, context: CoreLoopContext | None = None) -> TaskSt
     if context is not None:
         context.emit_activity(
             phase=ImprovementPhase.PLAN,
-            label="thinking",
-            message="Choosing the next tool call.",
+            label="criteria ready",
+            message="Using the latest acceptance criteria for planning.",
+            progress={"acceptance_criteria": "" if task.acceptance_criteria_md == "- (none)" else task.acceptance_criteria_md},
         )
     tools = _tools_from_context(context)
     prompt = _render_tool_call_plan_prompt(

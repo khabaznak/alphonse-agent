@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import os
+import selectors
+import signal
 import shutil
 import subprocess
+import time
 from pathlib import Path
 from typing import Any
 
@@ -14,9 +18,10 @@ from alphonse.agent_v2.core.tools.registry import ToolDefinition
 
 BASH_TOOL_ID = "native.bash"
 BASH_TOOL_NAME = "bash"
-DEFAULT_TIMEOUT_SECONDS = 30.0
+DEFAULT_TIMEOUT_SECONDS = 10.0
 MAX_TIMEOUT_SECONDS = 120.0
 MAX_OUTPUT_CHARS = 12000
+TERMINATION_GRACE_SECONDS = 0.25
 
 BASH_ARGUMENT_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -32,7 +37,10 @@ BASH_ARGUMENT_SCHEMA: dict[str, Any] = {
         },
         "timeout_seconds": {
             "type": "number",
-            "description": "Optional timeout in seconds.",
+            "minimum": 0.01,
+            "maximum": MAX_TIMEOUT_SECONDS,
+            "default": DEFAULT_TIMEOUT_SECONDS,
+            "description": "Optional total timeout in seconds. Defaults to 10; use a longer explicit value only for expected long-running commands.",
         },
     },
     "required": ["command"],
@@ -71,32 +79,148 @@ def execute_bash(arguments: dict[str, Any], *, context: ToolExecutionContext | N
 
     cwd = _resolve_cwd(arguments.get("cwd"), context=context)
     timeout_seconds = _coerce_timeout(arguments.get("timeout_seconds"))
+    started_at = time.monotonic()
 
     try:
-        completed = subprocess.run(
+        process = subprocess.Popen(
             [bash_bin, "-lc", command],
             cwd=cwd,
-            capture_output=True,
-            text=True,
-            timeout=timeout_seconds,
-            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            start_new_session=True,
         )
+        stdout, stderr = _collect_output_until_exit(process, timeout_seconds)
     except subprocess.TimeoutExpired as exc:
+        stdout, stderr = _stop_process_group(process, exc)
         return {
             "exit_code": -1,
-            "stdout": _truncate_output(_coerce_output(exc.stdout)),
-            "stderr": _truncate_output(_coerce_output(exc.stderr) or f"Command timed out after {timeout_seconds:g} seconds."),
+            "stdout": _truncate_output(stdout),
+            "stderr": _truncate_output(stderr or f"Command timed out after {timeout_seconds:g} seconds."),
             "timed_out": True,
             "cwd": cwd,
+            "timeout_seconds": timeout_seconds,
+            "duration_ms": _duration_ms(started_at),
         }
 
     return {
-        "exit_code": int(completed.returncode),
-        "stdout": _truncate_output(completed.stdout),
-        "stderr": _truncate_output(completed.stderr),
+        "exit_code": int(process.returncode),
+        "stdout": _truncate_output(stdout),
+        "stderr": _truncate_output(stderr),
         "timed_out": False,
         "cwd": cwd,
+        "timeout_seconds": timeout_seconds,
+        "duration_ms": _duration_ms(started_at),
     }
+
+
+def _stop_process_group(
+    process: subprocess.Popen[bytes],
+    timeout_error: subprocess.TimeoutExpired,
+) -> tuple[str, str]:
+    """Stop the shell and every child that inherited its captured streams."""
+    _signal_process_group(process.pid, signal.SIGTERM)
+    try:
+        stdout, stderr = process.communicate(timeout=TERMINATION_GRACE_SECONDS)
+    except subprocess.TimeoutExpired:
+        _signal_process_group(process.pid, signal.SIGKILL)
+        stdout, stderr = process.communicate()
+    else:
+        if _process_group_exists(process.pid):
+            _signal_process_group(process.pid, signal.SIGKILL)
+    return (
+        _merge_output(timeout_error.stdout, stdout),
+        _merge_output(timeout_error.stderr, stderr),
+    )
+
+
+def _collect_output_until_exit(
+    process: subprocess.Popen[bytes],
+    timeout_seconds: float,
+) -> tuple[str, str]:
+    """Read available output until the shell exits, without awaiting orphaned pipe writers."""
+    stdout_chunks: list[bytes] = []
+    stderr_chunks: list[bytes] = []
+    streams = {
+        process.stdout: stdout_chunks,
+        process.stderr: stderr_chunks,
+    }
+    deadline = time.monotonic() + timeout_seconds
+
+    with selectors.DefaultSelector() as selector:
+        for stream in streams:
+            if stream is None:
+                continue
+            os.set_blocking(stream.fileno(), False)
+            selector.register(stream, selectors.EVENT_READ)
+
+        while True:
+            exited = process.poll() is not None
+            remaining = deadline - time.monotonic()
+            if not exited and remaining <= 0:
+                raise subprocess.TimeoutExpired(
+                    process.args,
+                    timeout_seconds,
+                    output=b"".join(stdout_chunks),
+                    stderr=b"".join(stderr_chunks),
+                )
+
+            wait_seconds = 0 if exited else min(remaining, 0.02)
+            ready = selector.select(wait_seconds)
+            for key, _ in ready:
+                stream = key.fileobj
+                chunks = streams[stream]
+                while True:
+                    try:
+                        chunk = os.read(stream.fileno(), 65_536)
+                    except BlockingIOError:
+                        break
+                    if not chunk:
+                        selector.unregister(stream)
+                        break
+                    chunks.append(chunk)
+
+            if exited:
+                # The shell's own writes are buffered by now. Do not wait for EOF
+                # from a background descendant that inherited either pipe.
+                for stream, chunks in streams.items():
+                    if stream is None:
+                        continue
+                    while True:
+                        try:
+                            chunk = os.read(stream.fileno(), 65_536)
+                        except BlockingIOError:
+                            break
+                        if not chunk:
+                            break
+                        chunks.append(chunk)
+                    stream.close()
+                return (
+                    _coerce_output(b"".join(stdout_chunks)),
+                    _coerce_output(b"".join(stderr_chunks)),
+                )
+
+
+def _signal_process_group(process_group_id: int, requested_signal: signal.Signals) -> None:
+    try:
+        os.killpg(process_group_id, requested_signal)
+    except ProcessLookupError:
+        return
+
+
+def _process_group_exists(process_group_id: int) -> bool:
+    try:
+        os.killpg(process_group_id, 0)
+        return True
+    except ProcessLookupError:
+        return False
+
+
+def _duration_ms(started_at: float) -> int:
+    return max(0, round((time.monotonic() - started_at) * 1000))
+
+
+def _merge_output(initial: Any, final: Any) -> str:
+    return _coerce_output(initial) + _coerce_output(final)
 
 
 def _resolve_cwd(raw_cwd: Any, *, context: ToolExecutionContext | None = None) -> str:
