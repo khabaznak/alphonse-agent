@@ -340,7 +340,15 @@ button { border: 0; cursor: pointer; }
 .question-card div,
 .question-card form,
 .a2ui-container { display: flex; gap: 8px; flex-wrap: wrap; }
+.question-card form { align-items: center; }
+.question-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
 .question-card input { flex: 1; min-width: 180px; border: 1px solid #cab768; padding: 8px; border-radius: 5px; }
+.question-card button.question-cancel {
+  border: 1px solid #8b7440;
+  background: transparent;
+  color: #5d4a1e;
+}
+.question-card button.question-cancel:hover { background: #f2dfaa; }
 .a2ui-status { color: #6e5a19; }
 
 .modal-backdrop {

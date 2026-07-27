@@ -208,18 +208,13 @@ def validate_envelope(message: dict[str, Any]) -> None:
 def _question_components(question: QuestionInterrupt) -> list[dict[str, Any]]:
     question_id = question.question_id
     items: list[dict[str, Any]] = [
-        {"id": "root", "component": "Card", "children": ["title", "message", "body", "cancel"]},
+        {"id": "root", "component": "Card", "children": ["title", "message", "body"]},
         {"id": "title", "component": "Status", "text": "Alphonse needs your input"},
         {"id": "message", "component": "Text", "text": question.message},
         {"id": "body", "component": "Container", "children": []},
-        {
-            "id": "cancel",
-            "component": "Button",
-            "label": "Cancel",
-            "action": {"name": "cancel_question", "context": {"question_id": question_id}},
-        },
     ]
     body = items[3]["children"]
+    actions: list[str] = []
     if question.kind == "yes_no":
         for answer, label in ((True, "Yes"), (False, "No")):
             component_id = "answer_yes" if answer else "answer_no"
@@ -231,7 +226,7 @@ def _question_components(question: QuestionInterrupt) -> list[dict[str, Any]]:
                     "action": {"name": "answer_question", "context": {"question_id": question_id, "answer": answer}},
                 }
             )
-            body.append(component_id)
+            actions.append(component_id)
     elif question.kind == "single_choice":
         choice_ids: list[str] = []
         for choice in question.choices:
@@ -259,5 +254,18 @@ def _question_components(question: QuestionInterrupt) -> list[dict[str, Any]]:
                 },
             ]
         )
-        body.extend(["answer_text", "submit"])
+        body.append("answer_text")
+        actions.append("submit")
+    items.extend(
+        [
+            {
+                "id": "cancel",
+                "component": "Button",
+                "label": "Cancel",
+                "action": {"name": "cancel_question", "context": {"question_id": question_id}},
+            },
+            {"id": "actions", "component": "Container", "children": [*actions, "cancel"]},
+        ]
+    )
+    body.append("actions")
     return items

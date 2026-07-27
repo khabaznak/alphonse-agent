@@ -348,6 +348,53 @@ def test_desktop_a2ui_question_surface_is_negotiated_and_actions_resume_only_the
     assert any(event["event"].get("name") == "a2ui.envelope" and "deleteSurface" in event["event"]["value"] for event in after["ui_events"])
 
 
+def test_desktop_a2ui_question_cancel_is_visible_and_cancels_pending_question() -> None:
+    store = SQLiteQuestionStore(":memory:")
+    runtime = build_runtime_host(inference=_router(), schedule_store=ScheduledTaskStore(":memory:"), question_store=store)
+    daemon = V2Daemon(runtime)
+    question = store.create_question(
+        task=TaskState(task_id="task-cancel", goal="Need details", user="alex"),
+        question="What should I use?",
+        kind="open_text",
+    )
+
+    poll = daemon.ipc._dispatch(
+        {
+            "method": "desktop_poll",
+            "params": {
+                "client_id": "a2ui-cancel",
+                "user": "alex",
+                "client_capabilities": {"supportedCatalogIds": ["alphonse.desktop.catalog.v1"]},
+            },
+        }
+    )
+    envelopes = [item["event"]["value"] for item in poll["ui_events"] if item["event"].get("name") == "a2ui.envelope"]
+    components = next(envelope["updateComponents"]["components"] for envelope in envelopes if "updateComponents" in envelope)
+    by_id = {component["id"]: component for component in components}
+
+    assert by_id["body"]["children"] == ["answer_text", "actions"]
+    assert by_id["actions"]["children"] == ["submit", "cancel"]
+    assert by_id["cancel"]["label"] == "Cancel"
+
+    result = daemon.ipc._dispatch(
+        {
+            "method": "a2ui_action",
+            "params": {
+                "client_id": "a2ui-cancel",
+                "user": "alex",
+                "surface_id": f"question:{question.question_id}",
+                "source_component_id": "cancel",
+                "action_name": "cancel_question",
+                "context": {"question_id": question.question_id},
+                "data_model": {},
+            },
+        }
+    )
+
+    assert result["cancelled"] is True
+    assert store.get_question(question.question_id).status == "cancelled"
+
+
 def test_desktop_project_ipc_uses_the_daemon_owned_store(tmp_path) -> None:
     runtime = build_runtime_host(inference=_router(), schedule_store=ScheduledTaskStore(":memory:"))
     daemon = V2Daemon(runtime)

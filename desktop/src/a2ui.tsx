@@ -52,10 +52,10 @@ export function A2uiSurfaceView({ surface, clientId, user, onDone, onAction }: {
     const item = surface.components[id]; if (!item) return null;
     const children = <>{(item.children || []).map(component)}</>;
     if (item.component === "Card") return <section key={id} className="question-card a2ui-card">{children}</section>;
-    if (item.component === "Container" || item.component === "ChoiceList") return <div key={id} className="a2ui-container">{children}</div>;
+    if (item.component === "Container" || item.component === "ChoiceList") return <div key={id} className={`a2ui-container${id === "actions" ? " question-actions" : ""}`}>{children}</div>;
     if (item.component === "Text" || item.component === "Status") return <p key={id} className={item.component === "Status" ? "a2ui-status" : ""}>{item.text}</p>;
     if (item.component === "TextInput") return <input key={id} value={answerText(dataModel)} onChange={(event) => setDataModel({ ...dataModel, answer: { text: event.target.value } })} placeholder={item.label || "Your answer"} />;
-    if (item.component === "Button" && item.action) return <button key={id} onClick={() => void act(item)}>{item.label || "Continue"}</button>;
+    if (item.component === "Button" && item.action) return <button key={id} className={item.action.name === "cancel_question" ? "question-cancel" : ""} onClick={() => void act(item)}>{item.label || "Continue"}</button>;
     return null;
   };
   const act = async (item: A2uiComponent) => {

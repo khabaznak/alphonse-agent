@@ -386,10 +386,14 @@ function QuestionCard({ question, onDone }: { question: Question; onDone: () => 
     await daemonRequest("answer_question", { question_id: question.question_id, payload, text });
     await onDone();
   };
+  const cancel = async () => {
+    await daemonRequest("cancel_question", { question_id: question.question_id });
+    await onDone();
+  };
   return <section className="question-card"><strong>Alphonse needs your input</strong><p>{question.message}</p>
-    {question.kind === "yes_no" && <div><button onClick={() => void answer({ answer: true }, "yes")}>Yes</button><button onClick={() => void answer({ answer: false }, "no")}>No</button></div>}
-    {question.kind === "single_choice" && <div>{question.choices.map((choice) => <button key={choice.id} onClick={() => void answer({ choice_id: choice.id }, choice.label)}>{choice.label}</button>)}</div>}
-    {question.kind === "open_text" && <form onSubmit={(event) => { event.preventDefault(); void answer({ text: value }, value); }}><input value={value} onChange={(event) => setValue(event.target.value)} placeholder="Your answer" /><button>Answer</button></form>}
+    {question.kind === "yes_no" && <div className="question-actions"><button onClick={() => void answer({ answer: true }, "yes")}>Yes</button><button onClick={() => void answer({ answer: false }, "no")}>No</button><button className="question-cancel" onClick={() => void cancel()}>Cancel</button></div>}
+    {question.kind === "single_choice" && <><div>{question.choices.map((choice) => <button key={choice.id} onClick={() => void answer({ choice_id: choice.id }, choice.label)}>{choice.label}</button>)}</div><div className="question-actions"><button className="question-cancel" onClick={() => void cancel()}>Cancel</button></div></>}
+    {question.kind === "open_text" && <form onSubmit={(event) => { event.preventDefault(); void answer({ text: value }, value); }}><input value={value} onChange={(event) => setValue(event.target.value)} placeholder="Your answer" /><span className="question-actions"><button>Answer</button><button type="button" className="question-cancel" onClick={() => void cancel()}>Cancel</button></span></form>}
   </section>;
 }
 
