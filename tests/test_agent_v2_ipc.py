@@ -54,6 +54,8 @@ def test_daemon_ipc_dispatches_ping_status_and_queue_message() -> None:
     assert daemon.ipc._dispatch({"method": "ping"})["status"] == "ready"
     queued = daemon.ipc._dispatch({"method": "queue_message", "params": {"prompt": "hello", "user": "alex"}})
     assert queued["message_id"]
+    assert queued["created_at"]
+    assert queued["conversation_sequence"] == 1
     assert daemon.ipc._dispatch({"method": "status"})["queue_size"] == 1
     daemon.run_once()
     assert daemon.ipc._dispatch({"method": "status"})["queue_size"] == 0
@@ -80,6 +82,25 @@ def test_daemon_settings_validate_and_persist_timezone(tmp_path) -> None:
     assert daemon.ipc._dispatch({"method": "timezone_settings", "params": {"actor_user_id": users.admin_user().user_id}})["timezone"] == "America/Mexico_City"
     with pytest.raises(ValueError, match="invalid_timezone"):
         daemon.ipc._dispatch({"method": "save_timezone_settings", "params": {"actor_user_id": users.admin_user().user_id, "timezone": "Not/A_Timezone"}})
+
+
+def test_daemon_settings_persist_automation_preferred_channel_copy(tmp_path) -> None:
+    users = V2UserStore(":memory:")
+    users.onboard(display_name="Admin", users_root=tmp_path / "users")
+    daemon = V2Daemon(build_runtime_host(user_store=users, schedule_store=ScheduledTaskStore(":memory:")))
+
+    saved = daemon.ipc._dispatch(
+        {
+            "method": "save_settings",
+            "params": {
+                "users_root": str(tmp_path / "users"),
+                "mirror_automation_messages_to_preferred_channel": True,
+            },
+        }
+    )
+
+    assert saved["mirror_automation_messages_to_preferred_channel"] is True
+    assert daemon.ipc._dispatch({"method": "settings"})["mirror_automation_messages_to_preferred_channel"] is True
 
 
 def test_daemon_ipc_web_tools_require_admin_and_refresh_registry(tmp_path) -> None:
@@ -215,6 +236,7 @@ def test_desktop_conversation_history_is_project_scoped() -> None:
             "role": "assistant",
             "content": "Project one response.",
             "created_at": first.created_at,
+            "project_id": "project-one",
         }
     ]
 
@@ -228,6 +250,7 @@ def test_scheduled_task_confirmation_card_uses_persisted_schedule_fields() -> No
         "schedule_summary": "Once at 2026-07-26T03:00:00+00:00",
         "next_run_at": "2026-07-26T03:00:00+00:00",
         "timezone": "America/Mexico_City",
+        "project_id": "road-trip",
     }
 
     envelopes = adapter.scheduled_task_created(task, project_name="Road trip")
@@ -237,6 +260,7 @@ def test_scheduled_task_confirmation_card_uses_persisted_schedule_fields() -> No
     assert components["name"]["text"] == "Charge Tesla"
     assert "America/Mexico_City" in components["details"]["text"]
     assert components["view"]["action"] == {"name": "view_scheduled_task", "context": {"scheduled_task_id": "schedule-1"}}
+    assert envelopes[2]["updateDataModel"]["value"]["project_id"] == "road-trip"
 
 
 def test_scheduled_task_a2ui_action_requires_capability_and_owner(tmp_path) -> None:
@@ -248,7 +272,7 @@ def test_scheduled_task_a2ui_action_requires_capability_and_owner(tmp_path) -> N
     daemon._desktop_capabilities["desktop-a"] = {ALPHONSE_DESKTOP_CATALOG_ID}
 
     result = daemon.a2ui_action(client_id="desktop-a", user=admin.user_id, surface_id=f"scheduled-task:{task.scheduled_task_id}", source_component_id="view", action_name="view_scheduled_task", context={"scheduled_task_id": task.scheduled_task_id})
-    assert result == {"action": "view_scheduled_task", "scheduled_task_id": task.scheduled_task_id}
+    assert result == {"action": "view_scheduled_task", "scheduled_task_id": task.scheduled_task_id, "project_id": ""}
     with pytest.raises(ValueError, match="a2ui_surface_or_context_invalid"):
         daemon.a2ui_action(client_id="desktop-a", user=admin.user_id, surface_id=f"scheduled-task:{task.scheduled_task_id}", source_component_id="view", action_name="view_scheduled_task", context={"scheduled_task_id": "other"})
     with pytest.raises(ValueError, match="a2ui_catalog_not_negotiated"):
@@ -328,6 +352,8 @@ def test_desktop_a2ui_question_surface_is_negotiated_and_actions_resume_only_the
     )
     envelopes = [item["event"]["value"] for item in poll["ui_events"] if item["event"].get("name") == "a2ui.envelope"]
     assert envelopes[0]["createSurface"]["catalogId"] == "alphonse.desktop.catalog.v1"
+    question_model = next(item["updateDataModel"]["value"] for item in envelopes if "updateDataModel" in item)
+    assert question_model["question"]["project_id"] == ""
 
     result = daemon.ipc._dispatch(
         {
@@ -346,6 +372,40 @@ def test_desktop_a2ui_question_surface_is_negotiated_and_actions_resume_only_the
         {"method": "desktop_poll", "params": {"client_id": "a2ui", "user": "alex", "client_capabilities": {"supportedCatalogIds": ["alphonse.desktop.catalog.v1"]}}}
     )
     assert any(event["event"].get("name") == "a2ui.envelope" and "deleteSurface" in event["event"]["value"] for event in after["ui_events"])
+
+
+def test_desktop_questions_and_attention_are_project_scoped() -> None:
+    store = SQLiteQuestionStore(":memory:")
+    runtime = build_runtime_host(inference=_router(), schedule_store=ScheduledTaskStore(":memory:"), question_store=store)
+    daemon = V2Daemon(runtime)
+    alpha = store.create_question(
+        task=TaskState(task_id="task-alpha", goal="Alpha", user="alex", project_id="alpha"),
+        question="Alpha question?",
+    )
+    beta = store.create_question(
+        task=TaskState(task_id="task-beta", goal="Beta", user="alex", project_id="beta"),
+        question="Beta question?",
+    )
+
+    poll = daemon.ipc._dispatch({
+        "method": "desktop_poll",
+        "params": {
+            "client_id": "scoped",
+            "user": "alex",
+            "project_id": "alpha",
+            "client_capabilities": {"supportedCatalogIds": [ALPHONSE_DESKTOP_CATALOG_ID]},
+        },
+    })
+
+    assert [item["question_id"] for item in poll["questions"]] == [alpha.question_id]
+    assert alpha.question_id in str(poll["ui_events"])
+    assert beta.question_id not in str(poll["ui_events"])
+    assert poll["project_attention"]["alpha"]["pending_questions"] == 1
+    assert poll["project_attention"]["beta"]["pending_questions"] == 1
+
+    result = daemon.answer_question(user="alex", question_id=alpha.question_id, text="Alpha answer")
+    assert result["resumed_task"]["project_id"] == "alpha"
+    assert runtime.queue.peek().message.project_id == "alpha"
 
 
 def test_desktop_a2ui_question_cancel_is_visible_and_cancels_pending_question() -> None:

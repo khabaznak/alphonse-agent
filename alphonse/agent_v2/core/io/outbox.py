@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import sqlite3
 from dataclasses import dataclass, field
@@ -15,6 +16,9 @@ from alphonse.agent_v2.core.core import StateSnapshot
 from alphonse.agent_v2.core.io.channels import ChannelAddress
 from alphonse.agent_v2.core.io.channels import channel_address_from_metadata
 from alphonse.agent_v2.core.io.identity import V2IdentityResolver
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -34,6 +38,7 @@ class OutboundMessage:
     reply_to_provider_message_id: str = ""
     task_id: str = ""
     question_id: str = ""
+    project_id: str = ""
     metadata: dict[str, Any] = field(default_factory=dict)
     claimed_at: str = ""
     delivered_at: str = ""
@@ -61,6 +66,7 @@ class OutboundMessage:
             "reply_to_provider_message_id": self.reply_to_provider_message_id,
             "task_id": self.task_id,
             "question_id": self.question_id,
+            "project_id": self.project_id,
             "metadata": dict(self.metadata),
             "claimed_at": self.claimed_at,
             "delivered_at": self.delivered_at,
@@ -84,6 +90,7 @@ class OutboundSelector:
     status: str | None = "pending"
     correlation_id: str | None = None
     audience_user_id: str | None = None
+    project_id: str | None = None
 
 
 class SQLiteOutboundStore:
@@ -111,6 +118,7 @@ class SQLiteOutboundStore:
         correlation_id: str = "",
         task_id: str = "",
         question_id: str = "",
+        project_id: str = "",
         reply_to_provider_message_id: str = "",
         metadata: dict[str, Any] | None = None,
     ) -> OutboundMessage:
@@ -118,6 +126,8 @@ class SQLiteOutboundStore:
         if not text:
             raise ValueError("outbound_message_required")
         now = _now_iso()
+        payload = dict(metadata or {})
+        resolved_project_id = str(project_id or payload.get("project_id") or "").strip()
         record = OutboundMessage(
             outbox_message_id=str(uuid4()),
             integration_id=str(address.integration_id or "").strip(),
@@ -131,7 +141,8 @@ class SQLiteOutboundStore:
             reply_to_provider_message_id=str(reply_to_provider_message_id or address.provider_message_id or "").strip(),
             task_id=str(task_id or "").strip(),
             question_id=str(question_id or "").strip(),
-            metadata=dict(metadata or {}),
+            project_id=resolved_project_id,
+            metadata=payload,
             created_at=now,
             updated_at=now,
         )
@@ -147,9 +158,9 @@ class SQLiteOutboundStore:
                 INSERT INTO v2_outbox (
                   outbox_message_id, integration_id, provider_key, channel_target, message,
                   kind, audience_user_id, correlation_id, status, provider_message_id,
-                  reply_to_provider_message_id, task_id, question_id, metadata_json,
+                  reply_to_provider_message_id, task_id, question_id, project_id, metadata_json,
                   claimed_at, delivered_at, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', '', ?, ?, ?, ?, '', '', ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', '', ?, ?, ?, ?, ?, '', '', ?, ?)
                 """,
                 (
                     record.outbox_message_id,
@@ -163,6 +174,7 @@ class SQLiteOutboundStore:
                     record.reply_to_provider_message_id,
                     record.task_id,
                     record.question_id,
+                    record.project_id,
                     json.dumps(record.metadata, sort_keys=True),
                     record.created_at,
                     record.updated_at,
@@ -220,6 +232,7 @@ class SQLiteOutboundStore:
             status=None if (selector.status or "pending") == "pending" else selector.status,
             correlation_id=selector.correlation_id,
             audience_user_id=selector.audience_user_id,
+            project_id=selector.project_id,
         )
         where, values = _selector_where(pending_selector)
         now = _now()
@@ -393,6 +406,7 @@ class SQLiteOutboundStore:
                   reply_to_provider_message_id TEXT NOT NULL DEFAULT '',
                   task_id TEXT NOT NULL DEFAULT '',
                   question_id TEXT NOT NULL DEFAULT '',
+                  project_id TEXT NOT NULL DEFAULT '',
                   metadata_json TEXT NOT NULL DEFAULT '{}',
                   claimed_at TEXT NOT NULL DEFAULT '',
                   delivered_at TEXT NOT NULL DEFAULT '',
@@ -423,9 +437,26 @@ class SQLiteOutboundStore:
                     "next_attempt_at": "TEXT NOT NULL DEFAULT ''",
                     "last_error": "TEXT NOT NULL DEFAULT ''",
                     "max_attempts": "INTEGER NOT NULL DEFAULT 5",
+                    "project_id": "TEXT NOT NULL DEFAULT ''",
                 },
             )
+            conn.execute(
+                """
+                UPDATE v2_outbox
+                SET project_id = CASE
+                  WHEN json_valid(metadata_json) THEN COALESCE(json_extract(metadata_json, '$.project_id'), '')
+                  ELSE ''
+                END
+                WHERE project_id = ''
+                """
+            )
             _migrate_status_check(conn)
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_v2_outbox_project
+                  ON v2_outbox (audience_user_id, project_id, status, created_at)
+                """
+            )
 
 
 def build_outbox_delivery_sink(
@@ -476,6 +507,7 @@ def build_outbox_delivery_sink(
                     correlation_id=str(task.get("correlation_id") or "").strip(),
                     task_id=str(question.get("task_id") or task.get("task_id") or "").strip(),
                     question_id=str(question.get("question_id") or "").strip(),
+                    project_id=str(question.get("project_id") or task.get("project_id") or "").strip(),
                     metadata={
                         "reason": resolved.reason,
                         "respondent_user_id": respondent,
@@ -503,6 +535,7 @@ def build_outbox_delivery_sink(
             correlation_id=str(task.get("correlation_id") or "").strip(),
             task_id=str(question.get("task_id") or task.get("task_id") or "").strip(),
             question_id=str(question.get("question_id") or "").strip(),
+            project_id=str(question.get("project_id") or task.get("project_id") or "").strip(),
             metadata={
                 "question": dict(question),
                 "origin_channel": origin.to_dict() if origin is not None else {},
@@ -523,6 +556,8 @@ def project_snapshot_to_outbox(
     *,
     snapshot: StateSnapshot,
     outbox: SQLiteOutboundStore,
+    identity_resolver: V2IdentityResolver | None = None,
+    mirror_automation_messages_to_preferred_channel: bool = False,
 ) -> OutboundMessage | None:
     """Project a completed task snapshot response into the outbox."""
     metadata = snapshot.metadata or {}
@@ -539,13 +574,14 @@ def project_snapshot_to_outbox(
     projected = task_metadata.get("outbox_projected")
     if isinstance(projected, dict) and str(projected.get("response")) == response:
         return None
-    return outbox.enqueue(
+    projected = outbox.enqueue(
         address=origin,
         message=response,
         kind="response",
         audience_user_id=str(task_state.get("user") or origin.alphonse_user_id or "").strip(),
         correlation_id=str(task_state.get("correlation_id") or "").strip(),
         task_id=str(task_state.get("task_id") or "").strip(),
+        project_id=str(task_state.get("project_id") or "").strip(),
         metadata={
             "source": "task_result",
             "tool": "respond",
@@ -555,6 +591,68 @@ def project_snapshot_to_outbox(
             "occurrence_key": str(task_metadata.get("occurrence_key") or "").strip(),
         },
     )
+    if mirror_automation_messages_to_preferred_channel and str(task_metadata.get("scheduled_task_id") or "").strip():
+        _enqueue_preferred_automation_copy(
+            outbox=outbox,
+            original=projected,
+            recipient_user_id=str(task_state.get("user") or origin.alphonse_user_id or "").strip(),
+            resolver=identity_resolver,
+        )
+    return projected
+
+
+def _enqueue_preferred_automation_copy(
+    *,
+    outbox: SQLiteOutboundStore,
+    original: OutboundMessage,
+    recipient_user_id: str,
+    resolver: V2IdentityResolver | None,
+) -> None:
+    if resolver is None or not recipient_user_id:
+        logger.info(
+            "automation preferred-channel copy skipped correlation_id=%s reason=%s",
+            original.correlation_id,
+            "identity_resolver_unavailable" if resolver is None else "recipient_missing",
+        )
+        return
+    resolved = resolver.resolve_outbound_address(alphonse_user_id=recipient_user_id)
+    preferred = resolved.address if resolved.resolved else None
+    if preferred is None:
+        logger.info(
+            "automation preferred-channel copy skipped correlation_id=%s reason=%s",
+            original.correlation_id,
+            resolved.reason or "preferred_delivery_not_found",
+        )
+        return
+    if (
+        preferred.integration_id == original.integration_id
+        and preferred.provider_key == original.provider_key
+        and preferred.channel_target == original.channel_target
+    ):
+        logger.info("automation preferred-channel copy skipped correlation_id=%s reason=destination_matches_origin", original.correlation_id)
+        return
+    try:
+        metadata = dict(original.metadata)
+        metadata.pop("occurrence_key", None)
+        metadata["automation_preferred_channel_copy"] = True
+        metadata["automation_copy_origin"] = {
+            "integration_id": original.integration_id,
+            "provider_key": original.provider_key,
+            "channel_target": original.channel_target,
+        }
+        outbox.enqueue(
+            address=preferred,
+            message=original.message,
+            kind=original.kind,
+            audience_user_id=recipient_user_id,
+            correlation_id=original.correlation_id,
+            task_id=original.task_id,
+            project_id=original.project_id,
+            metadata=metadata,
+        )
+        logger.info("automation preferred-channel copy queued correlation_id=%s", original.correlation_id)
+    except Exception:
+        logger.exception("automation preferred-channel copy failed correlation_id=%s", original.correlation_id)
 
 
 def _latest_tool_result_response(task_state: dict[str, Any]) -> str:
@@ -612,6 +710,9 @@ def _selector_where(selector: OutboundSelector | None) -> tuple[str, list[Any]]:
     if selector.audience_user_id is not None:
         filters.append("audience_user_id = ?")
         values.append(str(selector.audience_user_id or "").strip())
+    if selector.project_id is not None:
+        filters.append("project_id = ?")
+        values.append(str(selector.project_id or "").strip())
     return (f"WHERE {' AND '.join(filters)}" if filters else "", values)
 
 
@@ -630,6 +731,7 @@ def _message_from_row(row: sqlite3.Row) -> OutboundMessage:
         reply_to_provider_message_id=str(row["reply_to_provider_message_id"]),
         task_id=str(row["task_id"]),
         question_id=str(row["question_id"]),
+        project_id=str(row["project_id"]),
         metadata=_json_object(row["metadata_json"]),
         claimed_at=str(row["claimed_at"]),
         delivered_at=str(row["delivered_at"]),
@@ -716,6 +818,7 @@ def _migrate_status_check(conn: sqlite3.Connection) -> None:
           reply_to_provider_message_id TEXT NOT NULL DEFAULT '',
           task_id TEXT NOT NULL DEFAULT '',
           question_id TEXT NOT NULL DEFAULT '',
+          project_id TEXT NOT NULL DEFAULT '',
           metadata_json TEXT NOT NULL DEFAULT '{}',
           claimed_at TEXT NOT NULL DEFAULT '',
           delivered_at TEXT NOT NULL DEFAULT '',
@@ -736,7 +839,7 @@ def _migrate_status_check(conn: sqlite3.Connection) -> None:
         INSERT INTO v2_outbox (
           outbox_message_id, integration_id, provider_key, channel_target, message,
           kind, audience_user_id, correlation_id, status, provider_message_id,
-          reply_to_provider_message_id, task_id, question_id, metadata_json,
+          reply_to_provider_message_id, task_id, question_id, project_id, metadata_json,
           claimed_at, delivered_at, created_at, updated_at, attempt_count,
           lease_owner, lease_expires_at, next_attempt_at, last_error, max_attempts
         )
@@ -745,7 +848,7 @@ def _migrate_status_check(conn: sqlite3.Connection) -> None:
           kind, audience_user_id, correlation_id,
           CASE WHEN status IN ('pending', 'claimed', 'delivered', 'failed') THEN status ELSE 'pending' END,
           provider_message_id, reply_to_provider_message_id, task_id, question_id,
-          metadata_json, claimed_at, delivered_at, created_at, updated_at,
+          project_id, metadata_json, claimed_at, delivered_at, created_at, updated_at,
           attempt_count, lease_owner, lease_expires_at, next_attempt_at, last_error, max_attempts
         FROM v2_outbox_legacy
         """

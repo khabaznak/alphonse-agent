@@ -20,6 +20,8 @@ export type Delivery = {
 
 export type Question = {
   question_id: string;
+  project_id: string;
+  created_at?: string;
   message: string;
   kind: "open_text" | "yes_no" | "single_choice";
   choices: Array<{ id: string; label: string }>;
@@ -56,4 +58,6 @@ export type ChatMessage = {
   content: string;
   created_at?: string;
   source?: string;
+  project_id?: string;
+  sequence?: number;
 };

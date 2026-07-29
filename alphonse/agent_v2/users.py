@@ -82,7 +82,19 @@ class V2UserStore:
     def status(self) -> dict[str, object]:
         admin = self.admin_user()
         return {"onboarded": admin is not None, "admin_user": admin.to_dict() if admin else None,
-                "users_root": str(self.users_root()), "timezone": self.timezone()}
+                "users_root": str(self.users_root()), "timezone": self.timezone(),
+                "mirror_automation_messages_to_preferred_channel": self.mirror_automation_messages_to_preferred_channel()}
+
+    def mirror_automation_messages_to_preferred_channel(self) -> bool:
+        """Whether final automation messages should also use a user's preferred address."""
+        return str(self._setting("mirror_automation_messages_to_preferred_channel") or "").strip().lower() in {
+            "1", "true", "yes", "on",
+        }
+
+    def set_mirror_automation_messages_to_preferred_channel(self, enabled: bool) -> bool:
+        value = bool(enabled)
+        self._set_setting("mirror_automation_messages_to_preferred_channel", "true" if value else "false")
+        return value
 
     def timezone(self) -> str:
         return self._setting("timezone") or "UTC"

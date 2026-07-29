@@ -88,6 +88,7 @@ button { border: 0; cursor: pointer; }
 .project-sidebar-section { border-radius: 7px; }
 .project-sidebar-header { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: stretch; }
 .project-selector {
+  position: relative;
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
   column-gap: 9px;
@@ -102,6 +103,21 @@ button { border: 0; cursor: pointer; }
 }
 .project-selector:hover, .project-disclosure:hover { background: #365342; }
 .project-selector .nav-icon { grid-row: span 2; }
+.attention-badge {
+  display: inline-flex;
+  min-width: 18px;
+  height: 18px;
+  margin-left: 7px;
+  padding: 0 5px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: #d7b669;
+  color: #20382d;
+  font: 700 10px/1 "DM Mono", monospace;
+  vertical-align: middle;
+}
+.project-selector > .attention-badge { position: absolute; top: 5px; right: 5px; margin: 0; }
 .project-disclosure { width: 34px; color: inherit; background: transparent; border-radius: 7px; font-size: 20px; }
 .recent-files-panel { margin: 2px 4px 8px; padding: 8px; border-radius: 6px; background: #1a3026; }
 .recent-files-heading { display: flex; justify-content: space-between; gap: 8px; align-items: center; color: #b9c6b9; font-size: 10px; text-transform: uppercase; letter-spacing: .08em; }
@@ -223,6 +239,15 @@ button { border: 0; cursor: pointer; }
 .message.assistant { background: #fcfcf6; box-shadow: 0 8px 20px #20382d0b; align-self: flex-start; }
 .message.user { background: #315441; color: white; align-self: flex-end; }
 .message.system { background: #e6e7dd; }
+.message-timestamp {
+  display: block;
+  margin-top: 7px;
+  color: #748278;
+  font: 10px/1.2 "DM Mono", monospace;
+  text-align: right;
+  white-space: nowrap;
+}
+.message.user .message-timestamp { color: #d4dfd6; }
 .task-progress-bubble { width: min(620px, 77%); padding: 0; overflow: hidden; border: 1px solid #dfc76f; background: #fff9e5; }
 .task-progress-content { display: grid; gap: 10px; padding: 15px 16px; color: #27352e; }
 .task-progress-heading { display: flex; align-items: center; gap: 8px; color: #6e5a19; font-size: 13px; }

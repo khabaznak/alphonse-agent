@@ -19,6 +19,17 @@ def test_user_timezone_persists_when_store_is_reopened(tmp_path) -> None:
     assert reopened.timezone() == "America/Mexico_City"
 
 
+def test_automation_preferred_channel_copy_setting_defaults_off_and_persists(tmp_path) -> None:
+    database = tmp_path / "users.sqlite3"
+    store = V2UserStore(database)
+
+    assert store.mirror_automation_messages_to_preferred_channel() is False
+    assert store.set_mirror_automation_messages_to_preferred_channel(True) is True
+
+    reopened = V2UserStore(database)
+    assert reopened.status()["mirror_automation_messages_to_preferred_channel"] is True
+
+
 def test_onboarding_creates_uuid_admin_profile_and_context(tmp_path: Path) -> None:
     store = V2UserStore(tmp_path / "users.sqlite3")
     admin = store.onboard(display_name="Alex", users_root=tmp_path / "profiles")

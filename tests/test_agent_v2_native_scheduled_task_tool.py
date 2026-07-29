@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -98,6 +99,29 @@ def test_store_pause_resume_cancel_complete_and_execution_history() -> None:
     assert cancelled.status == "cancelled"
 
 
+def test_scheduled_execution_project_migration_backfills_parent_idempotently(tmp_path) -> None:
+    db_path = tmp_path / "schedules.sqlite3"
+    store = ScheduledTaskStore(db_path)
+    task = store.create_task(
+        owner_user_id="alex",
+        project_id="alpha",
+        name="Migrate",
+        prompt="Run",
+        schedule_kind="once",
+        run_at="2026-07-10T09:00:00+00:00",
+    )
+    store.record_execution(scheduled_task_id=task.scheduled_task_id, run_id="run-migrate", status="queued")
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("DROP INDEX idx_v2_scheduled_task_executions_project")
+        conn.execute("ALTER TABLE v2_scheduled_task_executions DROP COLUMN project_id")
+
+    migrated = ScheduledTaskStore(db_path)
+    restarted = ScheduledTaskStore(db_path)
+
+    assert migrated.list_executions(scheduled_task_id=task.scheduled_task_id)[0].project_id == "alpha"
+    assert restarted.list_executions(scheduled_task_id=task.scheduled_task_id)[0].project_id == "alpha"
+
+
 def test_store_updates_only_editable_tasks_and_permanently_deletes_execution_history() -> None:
     store = ScheduledTaskStore()
     task = store.create_task(
@@ -146,6 +170,7 @@ def test_native_scheduled_task_tool_registers_and_uses_context_owner_project() -
     assert descriptor is not None
     assert descriptor.tool_id == SCHEDULED_TASK_TOOL_ID
     assert result["next_run_at"] == "2026-07-10T09:00:00+00:00"
+    assert result["project_id"] == "alpha"
     assert stored is not None
     assert stored.owner_user_id == "alex"
     assert stored.project_id == "alpha"
@@ -240,6 +265,8 @@ def test_runner_queues_due_one_off_task_and_marks_completed() -> None:
     assert queued.message.project_id == "alpha"
     assert queued.message.metadata["source"] == "scheduled_task"
     assert queued.message.metadata["scheduled_task_id"] == task.scheduled_task_id
+    assert queued.message.metadata["project_id"] == "alpha"
+    assert store.list_executions(scheduled_task_id=task.scheduled_task_id)[0].project_id == "alpha"
     assert updated is not None
     assert updated.status == "completed"
     assert updated.next_run_at is None

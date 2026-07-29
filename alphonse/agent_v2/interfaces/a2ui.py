@@ -31,8 +31,10 @@ class A2UiAdapter:
             "question": {
                 "id": question.question_id,
                 "task_id": question.task_id,
+                "project_id": question.project_id,
                 "kind": question.kind,
                 "message": question.message,
+                "created_at": question.created_at,
                 "choices": [choice.to_dict() for choice in question.choices],
             },
             "answer": {"text": ""},
@@ -88,7 +90,18 @@ class A2UiAdapter:
         messages = [
             {"version": A2UI_VERSION, "createSurface": {"surfaceId": surface_id, "catalogId": self.catalog_id, "sendDataModel": False}},
             {"version": A2UI_VERSION, "updateComponents": {"surfaceId": surface_id, "components": components}},
-            {"version": A2UI_VERSION, "updateDataModel": {"surfaceId": surface_id, "path": "/", "value": {"scheduled_task_id": task_id}}},
+            {
+                "version": A2UI_VERSION,
+                "updateDataModel": {
+                    "surfaceId": surface_id,
+                    "path": "/",
+                    "value": {
+                        "scheduled_task_id": task_id,
+                        "project_id": str(task.get("project_id") or "").strip(),
+                        "created_at": str(task.get("created_at") or "").strip(),
+                    },
+                },
+            },
         ]
         for message in messages:
             validate_envelope(message)

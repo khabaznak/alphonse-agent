@@ -111,6 +111,7 @@ class ScheduledTaskWorker:
             metadata: dict[str, Any] = {
                 "source": "scheduled_task",
                 "scheduled_task_id": occurrence.task.scheduled_task_id,
+                "project_id": occurrence.task.project_id,
                 "scheduled_run_id": occurrence.run_id,
                 "occurrence_key": occurrence.occurrence_key,
             }
@@ -132,6 +133,7 @@ class ScheduledTaskWorker:
             self.store.update_after_run(occurrence.task, now=now)
             return {
                 "scheduled_task_id": occurrence.task.scheduled_task_id,
+                "project_id": occurrence.task.project_id,
                 "occurrence_key": occurrence.occurrence_key,
                 "status": "queued",
                 "queued_message_id": queued.message_id,

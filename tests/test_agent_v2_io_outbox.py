@@ -52,6 +52,38 @@ def test_outbox_selector_isolates_tui_messages() -> None:
     assert store.list_pending(OutboundSelector(integration_id="telegram-home"))[0].message == "hello telegram"
 
 
+def test_outbox_promotes_project_id_and_filters_it_directly() -> None:
+    store = SQLiteOutboundStore()
+    address = ChannelAddress(integration_id="desktop", provider_key="tui", channel_target="alex", alphonse_user_id="alex")
+    alpha = store.enqueue(address=address, message="Alpha", project_id="alpha")
+    store.enqueue(address=address, message="Beta", metadata={"project_id": "beta"})
+
+    selected = store.list(OutboundSelector(integration_id="desktop", project_id="alpha"))
+
+    assert [item.outbox_message_id for item in selected] == [alpha.outbox_message_id]
+    assert selected[0].project_id == "alpha"
+    assert store.list(OutboundSelector(project_id="beta"))[0].project_id == "beta"
+
+
+def test_outbox_project_migration_backfills_metadata_idempotently(tmp_path: Path) -> None:
+    db_path = tmp_path / "outbox.sqlite3"
+    store = SQLiteOutboundStore(db_path)
+    message = store.enqueue(
+        address=ChannelAddress(integration_id="desktop", provider_key="tui", channel_target="alex", alphonse_user_id="alex"),
+        message="Migrated",
+        metadata={"project_id": "alpha"},
+    )
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("DROP INDEX idx_v2_outbox_project")
+        conn.execute("ALTER TABLE v2_outbox DROP COLUMN project_id")
+
+    migrated = SQLiteOutboundStore(db_path)
+    restarted = SQLiteOutboundStore(db_path)
+
+    assert migrated.get(message.outbox_message_id).project_id == "alpha"
+    assert restarted.get(message.outbox_message_id).project_id == "alpha"
+
+
 def test_outbox_retries_failed_delivery_before_terminal_failure() -> None:
     store = SQLiteOutboundStore()
     store.enqueue(
@@ -154,6 +186,100 @@ def test_snapshot_projection_confirms_successful_artifact_to_origin_channel() ->
     assert projected is not None
     assert projected.integration_id == "telegram-home"
     assert projected.message == "Completed Add to TODO list."
+
+
+def test_scheduled_task_final_response_is_copied_to_preferred_channel(tmp_path: Path) -> None:
+    from alphonse.agent_v2.core.core import ImprovementPhase, StateSnapshot
+    from alphonse.agent_v2.core.io import channel_metadata, project_snapshot_to_outbox
+    from alphonse.agent_v2.users import V2UserStore
+
+    users = V2UserStore(tmp_path / "users.sqlite3")
+    alex = users.onboard(display_name="Alex", users_root=tmp_path / "profiles")
+    users.bind_address(
+        user_id=alex.user_id,
+        integration_id="telegram-home",
+        provider_key="telegram",
+        provider_user_id="123",
+        channel_target="123",
+        is_preferred=False,
+    )
+    users.bind_address(
+        user_id=alex.user_id,
+        integration_id="teams-work",
+        provider_key="teams",
+        provider_user_id="teams-alex",
+        channel_target="teams-alex",
+        is_preferred=True,
+    )
+    resolver = V2IdentityResolver(
+        (IntegrationIdentity("telegram-home", "telegram"), IntegrationIdentity("teams-work", "teams")),
+        user_store=users,
+    )
+    snapshot = StateSnapshot(
+        phase=ImprovementPhase.ACT,
+        metadata={
+            "task_state": {
+                "user": alex.user_id,
+                "correlation_id": "scheduled:1",
+                "metadata": {
+                    "scheduled_task_id": "scheduled_task_1",
+                    "scheduled_run_id": "scheduled_run_1",
+                    "occurrence_key": "scheduled_task_1:scheduled_run_1",
+                    "channel": channel_metadata(
+                        integration_id="telegram-home",
+                        provider_key="telegram",
+                        channel_target="123",
+                        alphonse_user_id=alex.user_id,
+                    ),
+                },
+                "plan_json": [{"tool_id": "native.respond", "execution": {"status": "success", "result": {"message": "Time to stretch."}}}],
+            }
+        },
+    )
+    outbox = SQLiteOutboundStore()
+
+    projected = project_snapshot_to_outbox(
+        snapshot=snapshot,
+        outbox=outbox,
+        identity_resolver=resolver,
+        mirror_automation_messages_to_preferred_channel=True,
+    )
+
+    assert projected is not None
+    assert projected.integration_id == "telegram-home"
+    copies = outbox.list(OutboundSelector(status=None))
+    assert {(item.integration_id, item.channel_target) for item in copies} == {
+        ("telegram-home", "123"),
+        ("teams-work", "teams-alex"),
+    }
+    copy = next(item for item in copies if item.integration_id == "teams-work")
+    assert copy.metadata["automation_preferred_channel_copy"] is True
+    assert "occurrence_key" not in copy.metadata
+
+
+def test_scheduled_task_copy_is_not_duplicated_for_matching_preferred_destination(tmp_path: Path) -> None:
+    from alphonse.agent_v2.core.core import ImprovementPhase, StateSnapshot
+    from alphonse.agent_v2.core.io import channel_metadata, project_snapshot_to_outbox
+    from alphonse.agent_v2.users import V2UserStore
+
+    users = V2UserStore(tmp_path / "users.sqlite3")
+    alex = users.onboard(display_name="Alex", users_root=tmp_path / "profiles")
+    users.bind_address(user_id=alex.user_id, integration_id="telegram-home", provider_key="telegram", provider_user_id="123", channel_target="123")
+    resolver = V2IdentityResolver((IntegrationIdentity("telegram-home", "telegram"),), user_store=users)
+    snapshot = StateSnapshot(
+        phase=ImprovementPhase.ACT,
+        metadata={"task_state": {"user": alex.user_id, "metadata": {"scheduled_task_id": "scheduled_task_1", "channel": channel_metadata(integration_id="telegram-home", provider_key="telegram", channel_target="123", alphonse_user_id=alex.user_id)}, "plan_json": [{"tool_id": "native.respond", "execution": {"status": "success", "result": {"message": "One copy only."}}}]}},
+    )
+    outbox = SQLiteOutboundStore()
+
+    project_snapshot_to_outbox(
+        snapshot=snapshot,
+        outbox=outbox,
+        identity_resolver=resolver,
+        mirror_automation_messages_to_preferred_channel=True,
+    )
+
+    assert len(outbox.list(OutboundSelector(status=None))) == 1
 
 
 def test_identity_resolver_maps_inbound_and_preferred_outbound_across_providers(

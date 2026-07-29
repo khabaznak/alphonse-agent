@@ -37,11 +37,14 @@ class QuestionInterrupt:
     thread_id: str
     respondent_user_id: str
     originator_user_id: str
+    project_id: str
     message: str
     kind: QuestionKind
     choices: tuple[QuestionChoice, ...] = ()
     status: QuestionStatus = "pending"
     expires_at: str = ""
+    created_at: str = ""
+    updated_at: str = ""
     metadata: dict[str, Any] = field(default_factory=dict)
 
     @property
@@ -80,12 +83,15 @@ class QuestionInterrupt:
             "thread_id": self.thread_id,
             "respondent_user_id": self.respondent_user_id,
             "originator_user_id": self.originator_user_id,
+            "project_id": self.project_id,
             "message": self.message,
             "kind": self.kind,
             "choices": [choice.to_dict() for choice in self.choices],
             "response_schema": self.response_schema,
             "status": self.status,
             "expires_at": self.expires_at,
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
             "metadata": dict(self.metadata),
         }
 
@@ -98,11 +104,14 @@ class QuestionInterrupt:
             thread_id=str(value.get("thread_id") or "").strip(),
             respondent_user_id=str(value.get("respondent_user_id") or "").strip(),
             originator_user_id=str(value.get("originator_user_id") or "").strip(),
+            project_id=str(value.get("project_id") or "").strip(),
             message=str(value.get("message") or "").strip(),
             kind=_normalize_kind(value.get("kind")),
             choices=tuple(_normalize_choices(value.get("choices"), require_for_choice=False)),
             status=_normalize_status(value.get("status")),
             expires_at=str(value.get("expires_at") or "").strip(),
+            created_at=str(value.get("created_at") or "").strip(),
+            updated_at=str(value.get("updated_at") or "").strip(),
             metadata=dict(value.get("metadata")) if isinstance(value.get("metadata"), dict) else {},
         )
 
@@ -122,6 +131,7 @@ class QuestionAnswerResult:
             "handled": self.handled,
             "question_id": self.question.question_id if self.question is not None else None,
             "task_id": self.question.task_id if self.question is not None else None,
+            "project_id": self.question.project_id if self.question is not None else None,
             "answer": dict(self.answer or {}),
             "message": self.message,
             "ambiguous": self.ambiguous,
@@ -177,11 +187,14 @@ class SQLiteQuestionStore:
             thread_id=thread_id,
             respondent_user_id=respondent,
             originator_user_id=originator,
+            project_id=str(task.project_id or "").strip(),
             message=message,
             kind=normalized_kind,
             choices=normalized_choices,
             status="pending",
             expires_at=(now + timedelta(seconds=ttl)).isoformat(),
+            created_at=now.isoformat(),
+            updated_at=now.isoformat(),
             metadata={
                 "delivery": dict(delivery_metadata or {}),
                 "child_task_id": child_task_id,
@@ -199,9 +212,9 @@ class SQLiteQuestionStore:
                 """
                 INSERT INTO v2_questions (
                   question_id, task_id, run_id, thread_id, respondent_user_id,
-                  originator_user_id, message, kind, choices_json, response_schema_json,
+                  originator_user_id, project_id, message, kind, choices_json, response_schema_json,
                   status, expires_at, answer_json, delivery_metadata_json, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, NULL, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, NULL, ?, ?, ?)
                 """,
                 (
                     interrupt.question_id,
@@ -210,6 +223,7 @@ class SQLiteQuestionStore:
                     interrupt.thread_id,
                     interrupt.respondent_user_id,
                     interrupt.originator_user_id,
+                    interrupt.project_id,
                     interrupt.message,
                     interrupt.kind,
                     json.dumps([choice.to_dict() for choice in interrupt.choices], sort_keys=True),
@@ -322,18 +336,36 @@ class SQLiteQuestionStore:
             ).fetchone()
         return _question_from_row(row) if row is not None else None
 
-    def list_pending_for_respondent(self, respondent_user_id: str) -> list[QuestionInterrupt]:
+    def list_pending_for_respondent(self, respondent_user_id: str, *, project_id: str | None = None) -> list[QuestionInterrupt]:
+        self.expire_questions()
+        project_filter = " AND project_id = ?" if project_id is not None else ""
+        values: tuple[str, ...] = (str(respondent_user_id or "").strip(),)
+        if project_id is not None:
+            values += (str(project_id or "").strip(),)
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT * FROM v2_questions
+                WHERE respondent_user_id = ? AND status = 'pending'
+                  {project_filter}
+                ORDER BY created_at ASC
+                """,
+                values,
+            ).fetchall()
+        return [_question_from_row(row) for row in rows]
+
+    def pending_counts_by_project(self, respondent_user_id: str) -> dict[str, int]:
         self.expire_questions()
         with self._connect() as conn:
             rows = conn.execute(
                 """
-                SELECT * FROM v2_questions
-                WHERE respondent_user_id = ? AND status = 'pending'
-                ORDER BY created_at ASC
+                SELECT project_id,COUNT(*) AS pending FROM v2_questions
+                WHERE respondent_user_id=? AND status='pending'
+                GROUP BY project_id
                 """,
                 (str(respondent_user_id or "").strip(),),
             ).fetchall()
-        return [_question_from_row(row) for row in rows]
+        return {str(row["project_id"] or ""): int(row["pending"] or 0) for row in rows}
 
     def route_answer(
         self,
@@ -514,6 +546,7 @@ class SQLiteQuestionStore:
                   thread_id TEXT NOT NULL,
                   respondent_user_id TEXT NOT NULL,
                   originator_user_id TEXT NOT NULL,
+                  project_id TEXT NOT NULL DEFAULT '',
                   message TEXT NOT NULL,
                   kind TEXT NOT NULL,
                   choices_json TEXT NOT NULL,
@@ -543,6 +576,20 @@ class SQLiteQuestionStore:
                 ) STRICT;
                 """
             )
+            columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(v2_questions)").fetchall()}
+            if "project_id" not in columns:
+                conn.execute("ALTER TABLE v2_questions ADD COLUMN project_id TEXT NOT NULL DEFAULT ''")
+                conn.execute(
+                    """
+                    UPDATE v2_questions SET project_id=COALESCE(
+                      (SELECT project_id FROM v2_task_checkpoints c WHERE c.task_id=v2_questions.task_id),
+                      ''
+                    )
+                    """
+                )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_v2_questions_respondent_project_status ON v2_questions(respondent_user_id,project_id,status,created_at)"
+            )
 
 
 class _ConnectionProxy:
@@ -567,11 +614,14 @@ def _question_from_row(row: sqlite3.Row) -> QuestionInterrupt:
         thread_id=str(row["thread_id"]),
         respondent_user_id=str(row["respondent_user_id"]),
         originator_user_id=str(row["originator_user_id"]),
+        project_id=str(row["project_id"] or ""),
         message=str(row["message"]),
         kind=_normalize_kind(row["kind"]),
         choices=tuple(_normalize_choices(_json_list(row["choices_json"]), require_for_choice=False)),
         status=_normalize_status(row["status"]),
         expires_at=str(row["expires_at"]),
+        created_at=str(row["created_at"]),
+        updated_at=str(row["updated_at"]),
         metadata={"delivery": _json_object(row["delivery_metadata_json"])},
     )
 

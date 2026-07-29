@@ -5,12 +5,24 @@ export function mergeFreshConversationHistory(
   messagesReceivedDuringReload: ChatMessage[],
 ): ChatMessage[] {
   const merged = [...history];
+  const knownIds = new Set(merged.map((message) => message.id));
   for (const message of messagesReceivedDuringReload) {
-    const alreadyPresent = merged.some((candidate) =>
-      candidate.id === message.id
-      || (candidate.role === message.role && candidate.content === message.content),
-    );
-    if (!alreadyPresent) merged.push(message);
+    if (knownIds.has(message.id)) continue;
+    knownIds.add(message.id);
+    merged.push(message);
   }
-  return merged;
+  return orderConversationMessages(merged);
+}
+
+export function orderConversationMessages(messages: ChatMessage[]): ChatMessage[] {
+  const sequenced = messages
+    .map((message, index) => ({ message, index }))
+    .filter(({ message }) => typeof message.sequence === "number" && message.sequence > 0)
+    .sort((left, right) => (left.message.sequence || 0) - (right.message.sequence || 0) || left.index - right.index)
+    .map(({ message }) => message);
+  let sequenceIndex = 0;
+  return messages.map((message) => {
+    if (typeof message.sequence !== "number" || message.sequence <= 0) return message;
+    return sequenced[sequenceIndex++];
+  });
 }

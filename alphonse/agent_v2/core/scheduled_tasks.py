@@ -71,6 +71,7 @@ class ScheduledTaskRecord:
 @dataclass(frozen=True)
 class ScheduledTaskExecutionRecord:
     scheduled_task_id: str
+    project_id: str
     run_id: str
     status: ExecutionStatus
     queued_message_id: str | None
@@ -90,6 +91,7 @@ class ScheduledTaskExecutionRecord:
     def to_dict(self) -> dict[str, Any]:
         return {
             "scheduled_task_id": self.scheduled_task_id,
+            "project_id": self.project_id,
             "run_id": self.run_id,
             "status": self.status,
             "queued_message_id": self.queued_message_id,
@@ -344,8 +346,10 @@ class ScheduledTaskStore:
         finished_at: str | None = None,
         error: str = "",
     ) -> ScheduledTaskExecutionRecord:
+        task = self._require_task(scheduled_task_id)
         record = ScheduledTaskExecutionRecord(
             scheduled_task_id=str(scheduled_task_id or "").strip(),
+            project_id=task.project_id,
             run_id=str(run_id or "").strip(),
             status=_normalize_execution_status(status),
             queued_message_id=str(queued_message_id or "").strip() or None,
@@ -362,12 +366,13 @@ class ScheduledTaskStore:
             conn.execute(
                 """
                 INSERT INTO v2_scheduled_task_executions (
-                  scheduled_task_id, occurrence_key, run_id, status, queued_message_id,
+                  scheduled_task_id, project_id, occurrence_key, run_id, status, queued_message_id,
                   started_at, finished_at, error, attempt_count, last_error, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     record.scheduled_task_id,
+                    record.project_id,
                     record.occurrence_key,
                     record.run_id,
                     record.status,
@@ -436,13 +441,13 @@ class ScheduledTaskStore:
                     conn.execute(
                         """
                         INSERT INTO v2_scheduled_task_executions (
-                          scheduled_task_id, occurrence_key, run_id, status, queued_message_id,
+                          scheduled_task_id, project_id, occurrence_key, run_id, status, queued_message_id,
                           started_at, finished_at, error, attempt_count, lease_owner,
                           lease_expires_at, next_attempt_at, response_outbox_id, last_error,
                           created_at, updated_at
-                        ) VALUES (?, ?, ?, 'pending', '', ?, '', '', 0, '', '', '', '', '', ?, ?)
+                        ) VALUES (?, ?, ?, ?, 'pending', '', ?, '', '', 0, '', '', '', '', '', ?, ?)
                         """,
-                        (task.scheduled_task_id, occurrence_key, run_id, now_text, now_text, now_text),
+                        (task.scheduled_task_id, task.project_id, occurrence_key, run_id, now_text, now_text, now_text),
                     )
                     existing = conn.execute(
                         "SELECT * FROM v2_scheduled_task_executions WHERE occurrence_key = ?",
@@ -783,6 +788,7 @@ class ScheduledTaskStore:
                 CREATE TABLE IF NOT EXISTS v2_scheduled_task_executions (
                   id INTEGER PRIMARY KEY AUTOINCREMENT,
                   scheduled_task_id TEXT NOT NULL,
+                  project_id TEXT NOT NULL DEFAULT '',
                   occurrence_key TEXT NOT NULL DEFAULT '',
                   run_id TEXT NOT NULL,
                   status TEXT NOT NULL,
@@ -820,6 +826,7 @@ class ScheduledTaskStore:
                     CREATE TABLE v2_scheduled_task_executions (
                       id INTEGER PRIMARY KEY AUTOINCREMENT,
                       scheduled_task_id TEXT NOT NULL,
+                      project_id TEXT NOT NULL DEFAULT '',
                       occurrence_key TEXT NOT NULL DEFAULT '',
                       run_id TEXT NOT NULL,
                       status TEXT NOT NULL,
@@ -842,10 +849,10 @@ class ScheduledTaskStore:
                 conn.execute(
                     """
                     INSERT INTO v2_scheduled_task_executions (
-                      scheduled_task_id, occurrence_key, run_id, status, queued_message_id,
+                      scheduled_task_id, project_id, occurrence_key, run_id, status, queued_message_id,
                       started_at, finished_at, error, attempt_count, created_at, updated_at
                     )
-                    SELECT scheduled_task_id, scheduled_task_id || ':' || run_id, run_id,
+                    SELECT scheduled_task_id, '', scheduled_task_id || ':' || run_id, run_id,
                            CASE status WHEN 'queued' THEN 'enqueued' ELSE 'failed' END,
                            queued_message_id, started_at, finished_at, error, 1, started_at,
                            COALESCE(finished_at, started_at)
@@ -853,6 +860,29 @@ class ScheduledTaskStore:
                     """
                 )
                 conn.execute("DROP TABLE v2_scheduled_task_executions_legacy")
+                execution_columns.add("project_id")
+            if "project_id" not in execution_columns:
+                conn.execute("ALTER TABLE v2_scheduled_task_executions ADD COLUMN project_id TEXT NOT NULL DEFAULT ''")
+            conn.execute(
+                """
+                UPDATE v2_scheduled_task_executions
+                SET project_id=COALESCE(
+                  (SELECT project_id FROM v2_scheduled_tasks t
+                   WHERE t.scheduled_task_id=v2_scheduled_task_executions.scheduled_task_id),
+                  ''
+                )
+                WHERE project_id=''
+                """
+            )
+            conn.execute(
+                "DELETE FROM v2_scheduled_task_executions WHERE occurrence_key!='' AND id NOT IN (SELECT MAX(id) FROM v2_scheduled_task_executions WHERE occurrence_key!='' GROUP BY occurrence_key)"
+            )
+            conn.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_v2_scheduled_task_executions_occurrence ON v2_scheduled_task_executions(occurrence_key) WHERE occurrence_key!=''"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_v2_scheduled_task_executions_project ON v2_scheduled_task_executions(project_id,started_at)"
+            )
 
 
 class ScheduledTaskRunner:
@@ -880,6 +910,7 @@ class ScheduledTaskRunner:
                 metadata={
                     "source": "scheduled_task",
                     "scheduled_task_id": task.scheduled_task_id,
+                    "project_id": task.project_id,
                     "scheduled_run_id": run_id,
                     "channel": dict(task.origin_channel),
                 },
@@ -895,6 +926,7 @@ class ScheduledTaskRunner:
             updated = self.store.update_after_run(task, now=now)
             return {
                 "scheduled_task_id": task.scheduled_task_id,
+                "project_id": task.project_id,
                 "run_id": run_id,
                 "status": "queued",
                 "queued_message_id": queued.message_id,
@@ -912,6 +944,7 @@ class ScheduledTaskRunner:
             )
             return {
                 "scheduled_task_id": task.scheduled_task_id,
+                "project_id": task.project_id,
                 "run_id": run_id,
                 "status": "error",
                 "error": error,
@@ -1036,6 +1069,7 @@ def _execution_from_row(row: sqlite3.Row | None) -> ScheduledTaskExecutionRecord
         return None
     return ScheduledTaskExecutionRecord(
         scheduled_task_id=str(row["scheduled_task_id"]),
+        project_id=str(row["project_id"] or ""),
         run_id=str(row["run_id"]),
         status=_normalize_execution_status(row["status"]),
         queued_message_id=_optional_text(row["queued_message_id"]),

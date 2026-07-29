@@ -118,6 +118,7 @@ def execute_scheduled_task(
     )
     return {
         "scheduled_task_id": record.scheduled_task_id,
+        "project_id": record.project_id,
         "name": record.name,
         "status": record.status,
         "next_run_at": record.next_run_at,

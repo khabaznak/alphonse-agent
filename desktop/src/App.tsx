@@ -4,8 +4,10 @@ import remarkGfm from "remark-gfm";
 import { daemonRequest, ensureDaemon, showInFinder, stopDaemon } from "./api";
 import { matchingCommands } from "./commands";
 import { mergeFreshConversationHistory } from "./conversationHistory";
+import { buildConversationTimeline } from "./conversationTimeline";
 import { A2uiSurfaceView, applyA2uiEvent, DESKTOP_CATALOG_ID, type A2uiSurface } from "./a2ui";
 import { agentStateLabel, capdActivityLabel, projectKey } from "./layoutState";
+import { formatMessageTime } from "./messageTime";
 import type { ActivityEvent, AgentDocument, ChatMessage, InferenceSettings, MediaToolsSettings, MemorySettings, Project, Question, WebToolsSettings } from "./types";
 
 type Modal = "projects" | "project-settings" | "project-context" | "scheduled-tasks" | "settings" | "users" | "onboarding" | null;
@@ -16,13 +18,15 @@ type PollResponse = {
   next_sequence: number;
   ui_events?: Array<{ sequence?: number; event: { type: string; name?: string; value?: unknown } }>;
   next_ui_sequence?: number;
-  deliveries: Array<{ outbox_message_id: string; message: string; task_id?: string }>;
+  deliveries: Array<{ outbox_message_id: string; message: string; task_id?: string; project_id: string; created_at: string; conversation_sequence: number }>;
   questions: Question[];
+  project_attention?: ProjectAttention;
   status: { active_work: Record<string, string>; activity: { state?: string }; queue?: { ready?: number; processing?: number } };
 };
 type HistoryResponse = { messages: ChatMessage[] };
 type RecentFilesResponse = { files: Array<{ name: string; kind: "file" | "directory"; modified_at: string }> };
 type Provider = { provider_key: string; display_name: string; models: Array<{ model_id: string; display_name: string }> };
+type ProjectAttention = Record<string, { unread_messages: number; pending_questions: number; total: number }>;
 
 export default function App() {
   const clientId = useRef(crypto.randomUUID()).current;
@@ -35,6 +39,8 @@ export default function App() {
   const progressCompletionTimersRef = useRef(new Map<string, number>());
   const projectHistoryRequestRef = useRef(0);
   const projectHistoryLoadingRef = useRef(0);
+  const activeHistoryRefreshRef = useRef(false);
+  const activeProjectKeyRef = useRef(projectKey());
   const messagesDuringHistoryReloadRef = useRef(new Map<number, ChatMessage[]>());
   const timelineRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
@@ -59,30 +65,37 @@ export default function App() {
   const [recentFiles, setRecentFiles] = useState<RecentFilesResponse["files"]>([]);
   const [recentFilesError, setRecentFilesError] = useState("");
   const [queueStatus, setQueueStatus] = useState({ ready: 0, processing: 0 });
+  const [projectAttention, setProjectAttention] = useState<ProjectAttention>({});
+  const [timezone, setTimezone] = useState("UTC");
   const [progressTaskIds, setProgressTaskIds] = useState<string[]>([]);
-  const [completedProgressMessages, setCompletedProgressMessages] = useState<Record<string, ChatMessage>>({});
+  const [pendingProgressMessages, setPendingProgressMessages] = useState<Record<string, ChatMessage>>({});
+  const [morphedMessageTaskIds, setMorphedMessageTaskIds] = useState<Record<string, string>>({});
   const [heldProgressSurfaces, setHeldProgressSurfaces] = useState<Record<string, A2uiSurface>>({});
   const [enterToSend, setEnterToSend] = useState(() => window.localStorage.getItem("alphonse.desktop.enterToSend") !== "false");
   const currentProjectKey = projectKey(project?.project_id);
+  activeProjectKeyRef.current = currentProjectKey;
 
   const appendMessage = useCallback((message: ChatMessage) => {
+    const activeKey = activeProjectKeyRef.current;
     const loadingRequest = projectHistoryLoadingRef.current;
     if (loadingRequest) {
       const pending = messagesDuringHistoryReloadRef.current.get(loadingRequest) || [];
       messagesDuringHistoryReloadRef.current.set(loadingRequest, [...pending, message]);
     }
     setMessages((current) => {
-      const next = [...current, message];
-      setMessageBuckets((buckets) => ({ ...buckets, [currentProjectKey]: next }));
+      const next = mergeFreshConversationHistory(current, [message]);
+      setMessageBuckets((buckets) => ({ ...buckets, [activeKey]: next }));
       return next;
     });
-  }, [currentProjectKey]);
+  }, []);
 
   const poll = useCallback(async () => {
     try {
+      const requestedProjectId = project?.project_id || "";
       const response = await daemonRequest<PollResponse>("desktop_poll", {
         client_id: clientId,
         user,
+        project_id: requestedProjectId,
         after_sequence: sequence.current,
         after_ui_sequence: uiSequence.current,
         client_capabilities: { supportedCatalogIds: [DESKTOP_CATALOG_ID] },
@@ -92,9 +105,11 @@ export default function App() {
       uiSequence.current = response.next_ui_sequence ?? uiSequence.current;
       setConnected(true);
       setError("");
-      setQuestions(response.questions);
+      const responseIsForActiveProject = projectKey(requestedProjectId) === activeProjectKeyRef.current;
+      if (responseIsForActiveProject) setQuestions(response.questions);
+      setProjectAttention(response.project_attention || {});
       setQueueStatus({ ready: response.status.queue?.ready || 0, processing: response.status.queue?.processing || 0 });
-      const newProgressTaskIds = taskProgressIds(response.ui_events || []);
+      const newProgressTaskIds = responseIsForActiveProject ? taskProgressIds(response.ui_events || []) : [];
       if (newProgressTaskIds.length) {
         newProgressTaskIds.forEach((taskId) => {
           progressTaskIdsRef.current.add(taskId);
@@ -102,9 +117,13 @@ export default function App() {
         });
         setProgressTaskIds((current) => [...current, ...newProgressTaskIds.filter((taskId) => !current.includes(taskId))]);
       }
-      const projectedSurfaces = (response.ui_events || []).reduce((next, item) => applyA2uiEvent(next, item.event), surfacesRef.current);
-      surfacesRef.current = projectedSurfaces;
-      setSurfaces(projectedSurfaces);
+      const projectedSurfaces = responseIsForActiveProject
+        ? (response.ui_events || []).reduce((next, item) => applyA2uiEvent(next, item.event), surfacesRef.current)
+        : surfacesRef.current;
+      if (responseIsForActiveProject) {
+        surfacesRef.current = projectedSurfaces;
+        setSurfaces(projectedSurfaces);
+      }
       newProgressTaskIds.forEach((taskId) => {
         const components = projectedSurfaces[`task-progress:${taskId}`]?.components || {};
         if (["criteria", "intention", "tool", "result"].some((componentId) => String(components[componentId]?.text || "").trim()) || Object.keys(components).some((componentId) => componentId.startsWith("step_"))) {
@@ -117,28 +136,60 @@ export default function App() {
       for (const delivery of response.deliveries) {
         if (delivered.current.has(delivery.outbox_message_id)) continue;
         delivered.current.add(delivery.outbox_message_id);
-        if (delivery.task_id) {
+        const deliveryProjectKey = projectKey(delivery.project_id);
+        const completedMessage: ChatMessage = {
+          id: delivery.outbox_message_id,
+          role: "assistant",
+          content: delivery.message,
+          created_at: delivery.created_at,
+          project_id: delivery.project_id,
+          sequence: delivery.conversation_sequence,
+        };
+        if (delivery.task_id && deliveryProjectKey === activeProjectKeyRef.current) {
           if (progressTaskIdsRef.current.has(delivery.task_id)) {
             const taskId = delivery.task_id;
             const progressSurface = surfacesRef.current[`task-progress:${taskId}`];
             if (progressSurface) setHeldProgressSurfaces((current) => ({ ...current, [taskId]: progressSurface }));
-            const completedMessage: ChatMessage = { id: delivery.outbox_message_id, role: "assistant", content: delivery.message };
+            setPendingProgressMessages((current) => ({ ...current, [taskId]: completedMessage }));
             const visibleSince = progressMeaningfulAtRef.current.get(taskId) || progressStartedAtRef.current.get(taskId) || Date.now();
             const elapsed = Date.now() - visibleSince;
             const finish = () => {
               progressCompletionTimersRef.current.delete(taskId);
-              setCompletedProgressMessages((current) => ({ ...current, [taskId]: completedMessage }));
+              progressTaskIdsRef.current.delete(taskId);
+              progressStartedAtRef.current.delete(taskId);
+              progressMeaningfulAtRef.current.delete(taskId);
+              setMorphedMessageTaskIds((current) => ({ ...current, [completedMessage.id]: taskId }));
+              setProgressTaskIds((current) => current.filter((value) => value !== taskId));
+              setPendingProgressMessages((current) => {
+                const next = { ...current };
+                delete next[taskId];
+                return next;
+              });
               setHeldProgressSurfaces((current) => { const next = { ...current }; delete next[taskId]; return next; });
+              const nextSurfaces = { ...surfacesRef.current };
+              delete nextSurfaces[`task-progress:${taskId}`];
+              surfacesRef.current = nextSurfaces;
+              setSurfaces(nextSurfaces);
               appendMessage(completedMessage);
             };
             const remaining = Math.max(0, 1500 - elapsed);
             if (remaining) progressCompletionTimersRef.current.set(taskId, window.setTimeout(finish, remaining)); else finish();
             await daemonRequest("desktop_ack_delivery", { client_id: clientId, outbox_message_id: delivery.outbox_message_id });
+            await daemonRequest("desktop_mark_project_seen", { user, project_id: delivery.project_id, through_sequence: delivery.conversation_sequence });
+            setProjectAttention((current) => clearUnreadAttention(current, delivery.project_id));
             continue;
           }
         }
-        appendMessage({ id: delivery.outbox_message_id, role: "assistant", content: delivery.message });
+        if (deliveryProjectKey === activeProjectKeyRef.current) appendMessage(completedMessage);
+        else setMessageBuckets((current) => ({
+          ...current,
+          [deliveryProjectKey]: mergeFreshConversationHistory(current[deliveryProjectKey] || [], [completedMessage]),
+        }));
         await daemonRequest("desktop_ack_delivery", { client_id: clientId, outbox_message_id: delivery.outbox_message_id });
+        if (deliveryProjectKey === activeProjectKeyRef.current) {
+          await daemonRequest("desktop_mark_project_seen", { user, project_id: delivery.project_id, through_sequence: delivery.conversation_sequence });
+          setProjectAttention((current) => clearUnreadAttention(current, delivery.project_id));
+        }
       }
     } catch (cause) {
       setConnected(false);
@@ -146,7 +197,7 @@ export default function App() {
       setActivity("idle");
       setAgentState("Disconnected");
     }
-  }, [appendMessage, clientId, user]);
+  }, [appendMessage, clientId, project?.project_id, user]);
 
   useEffect(() => {
     ensureDaemon().then(async () => {
@@ -161,6 +212,39 @@ export default function App() {
   useEffect(() => {
     window.localStorage.setItem("alphonse.desktop.enterToSend", String(enterToSend));
   }, [enterToSend]);
+
+  useEffect(() => {
+    if (!user) return;
+    void daemonRequest<{ timezone: string }>("timezone_settings", { actor_user_id: user })
+      .then((result) => setTimezone(result.timezone || "UTC"))
+      .catch(() => setTimezone("UTC"));
+  }, [user]);
+
+  useEffect(() => {
+    const activeProjectId = project?.project_id || "";
+    if (!user || !(projectAttention[activeProjectId]?.unread_messages > 0) || activeHistoryRefreshRef.current || projectHistoryLoadingRef.current) return;
+    activeHistoryRefreshRef.current = true;
+    void daemonRequest<HistoryResponse>("desktop_conversation_history", { user, project_id: activeProjectId, limit: 100 })
+      .then(async (history) => {
+        setMessages((current) => {
+          const refreshed = mergeFreshConversationHistory(history.messages, current);
+          setMessageBuckets((buckets) => ({ ...buckets, [projectKey(activeProjectId)]: refreshed }));
+          return refreshed;
+        });
+        const throughSequence = history.messages.reduce((latest, message) => Math.max(latest, message.sequence || 0), 0);
+        await daemonRequest("desktop_mark_project_seen", { user, project_id: activeProjectId, through_sequence: throughSequence });
+        setProjectAttention((current) => ({
+          ...current,
+          [activeProjectId]: {
+            unread_messages: 0,
+            pending_questions: current[activeProjectId]?.pending_questions || 0,
+            total: current[activeProjectId]?.pending_questions || 0,
+          },
+        }));
+      })
+      .catch((cause: unknown) => setError(cause instanceof Error ? cause.message : "Conversation history could not be refreshed"))
+      .finally(() => { activeHistoryRefreshRef.current = false; });
+  }, [project?.project_id, projectAttention, user]);
 
   useEffect(() => {
     const element = timelineRef.current;
@@ -191,6 +275,7 @@ export default function App() {
 
   const selectProject = useCallback(async (next: Project) => {
     const nextKey = projectKey(next.project_id);
+    activeProjectKeyRef.current = nextKey;
     const previousHistoryRequest = projectHistoryLoadingRef.current;
     if (previousHistoryRequest) messagesDuringHistoryReloadRef.current.delete(previousHistoryRequest);
     const historyRequest = projectHistoryRequestRef.current + 1;
@@ -211,7 +296,8 @@ export default function App() {
     progressStartedAtRef.current.clear();
     progressMeaningfulAtRef.current.clear();
     setProgressTaskIds([]);
-    setCompletedProgressMessages({});
+    setPendingProgressMessages({});
+    setMorphedMessageTaskIds({});
     setHeldProgressSurfaces({});
     setQuestions([]);
     delivered.current.clear();
@@ -228,6 +314,20 @@ export default function App() {
       messagesDuringHistoryReloadRef.current.delete(historyRequest);
       setMessages(refreshed);
       setMessageBuckets((buckets) => ({ ...buckets, [nextKey]: refreshed }));
+      const throughSequence = refreshed.reduce((latest, message) => Math.max(latest, message.sequence || 0), 0);
+      await daemonRequest("desktop_mark_project_seen", {
+        user,
+        project_id: next.project_id,
+        through_sequence: throughSequence,
+      });
+      setProjectAttention((current) => ({
+        ...current,
+        [next.project_id]: {
+          unread_messages: 0,
+          pending_questions: current[next.project_id]?.pending_questions || 0,
+          total: current[next.project_id]?.pending_questions || 0,
+        },
+      }));
     } catch (cause) {
       if (projectHistoryRequestRef.current !== historyRequest) {
         messagesDuringHistoryReloadRef.current.delete(historyRequest);
@@ -249,9 +349,8 @@ export default function App() {
       await runCommand(value.split(/\s+/, 1)[0]);
       return;
     }
-    appendMessage({ id: crypto.randomUUID(), role: "user", content: value });
     try {
-      await daemonRequest("queue_message", {
+      const queued = await daemonRequest<{ message_id: string; project_id: string; created_at: string; conversation_sequence: number }>("queue_message", {
         prompt: value,
         user,
         project_id: project?.project_id || "",
@@ -259,6 +358,15 @@ export default function App() {
         provider_key: "tui",
         channel_target: user,
       });
+      appendMessage({
+        id: queued.message_id,
+        role: "user",
+        content: value,
+        created_at: queued.created_at,
+        project_id: queued.project_id,
+        sequence: queued.conversation_sequence,
+      });
+      await daemonRequest("desktop_mark_project_seen", { user, project_id: queued.project_id, through_sequence: queued.conversation_sequence });
       setActivity("doing");
       await poll();
     } catch (cause) {
@@ -307,6 +415,20 @@ export default function App() {
   const suggestions = useMemo(() => matchingCommands(prompt), [prompt]);
   const activeSurface = Object.values(surfaces).find((surface) => !surface.surfaceId.startsWith("task-progress:") && !progressTaskIds.includes(questionTaskId(surface)));
   const fallbackQuestion = questions.find((question) => !surfaces[`question:${question.question_id}`]);
+  const timelineNodes: ReactNode[] = buildConversationTimeline(
+    messages,
+    progressTaskIds,
+    pendingProgressMessages,
+    morphedMessageTaskIds,
+  ).map((item) => {
+    if (item.kind === "message") return <MessageBubble key={item.key} message={item.message} timezone={timezone} />;
+    const surface = surfaces[`task-progress:${item.taskId}`] || heldProgressSurfaces[item.taskId];
+    const questionSurface = Object.values(surfaces).find((candidate) => questionTaskId(candidate) === item.taskId);
+    if (questionSurface) {
+      return <article className="message assistant task-question-bubble" key={item.key}><A2uiSurfaceView surface={questionSurface} clientId={clientId} user={user} onDone={poll} /></article>;
+    }
+    return surface ? <TaskProgressBubble key={item.key} surface={surface} /> : null;
+  });
 
   return (
     <main className={`app-shell ${sidebarCollapsed ? "sidebar-collapsed" : ""}`}>
@@ -318,7 +440,7 @@ export default function App() {
         </div>
         <section className="project-sidebar-section">
           <div className="project-sidebar-header">
-            <button className="project-selector" title="Projects" onClick={() => setModal("projects")}><span className="nav-icon" aria-hidden="true">🗂️</span><span className="nav-label">Project</span><small>{project?.name || "Home"}</small></button>
+            <button className="project-selector" title="Projects" onClick={() => setModal("projects")}><span className="nav-icon" aria-hidden="true">🗂️</span><span className="nav-label">Project</span><small>{project?.name || "Home"}</small>{attentionTotal(projectAttention) > 0 && <span className="attention-badge" aria-label={`${attentionTotal(projectAttention)} project items need attention`}>{attentionTotal(projectAttention)}</span>}</button>
             {project && <button className="project-disclosure" type="button" title={recentFilesOpen ? "Hide recent files" : "Show recent files"} aria-label={recentFilesOpen ? "Hide recent files" : "Show recent files"} aria-expanded={recentFilesOpen} onClick={() => setRecentFilesOpen((open) => !open)}>{recentFilesOpen ? "⌄" : "›"}</button>}
           </div>
           {project && recentFilesOpen && <div className="recent-files-panel">
@@ -342,13 +464,7 @@ export default function App() {
         </header>
         {error && <div className="error" role="alert">{error}</div>}
         <div className="timeline" ref={timelineRef} aria-live="polite">
-          {messages.filter((message) => !Object.values(completedProgressMessages).some((completed) => completed.id === message.id)).map((message) => <MessageBubble key={message.id} message={message} />)}
-          {progressTaskIds.map((taskId) => {
-            const surface = surfaces[`task-progress:${taskId}`] || heldProgressSurfaces[taskId];
-            const completed = completedProgressMessages[taskId];
-            const questionSurface = Object.values(surfaces).find((candidate) => questionTaskId(candidate) === taskId);
-            return completed ? <MessageBubble key={completed.id} message={completed} /> : questionSurface ? <article className="message assistant task-question-bubble" key={taskId}><A2uiSurfaceView surface={questionSurface} clientId={clientId} user={user} onDone={poll} /></article> : surface ? <TaskProgressBubble key={taskId} surface={surface} /> : null;
-          })}
+          {timelineNodes}
         </div>
         <section className="input-dock">
           {activeSurface ? (
@@ -365,11 +481,11 @@ export default function App() {
         </section>
       </section>
 
-      {modal === "projects" && <ProjectsModal user={user} active={project} onSelect={(next) => void selectProject(next)} onSettings={(next) => { setProjectForSettings(next); setModal("project-settings"); }} onClose={() => setModal(null)} />}
+      {modal === "projects" && <ProjectsModal user={user} active={project} attention={projectAttention} onSelect={(next) => void selectProject(next)} onSettings={(next) => { setProjectForSettings(next); setModal("project-settings"); }} onClose={() => setModal(null)} />}
       {modal === "project-settings" && projectForSettings && <ProjectSettingsModal user={user} project={projectForSettings} onBack={() => setModal("projects")} onClose={() => setModal(null)} />}
       {modal === "project-context" && <ProjectContextModal user={user} project={project} onClose={() => setModal(null)} />}
       {modal === "scheduled-tasks" && <ScheduledTasksModal actorUserId={user} initialTaskId={scheduledTaskForView} onClose={() => { setScheduledTaskForView(""); setModal(null); }} />}
-      {modal === "settings" && <SettingsModal user={user} initialTab={settingsTab} enterToSend={enterToSend} onEnterToSendChange={setEnterToSend} onClose={() => setModal(null)} />}
+      {modal === "settings" && <SettingsModal user={user} initialTab={settingsTab} enterToSend={enterToSend} onEnterToSendChange={setEnterToSend} onTimezoneChange={setTimezone} onClose={() => setModal(null)} />}
       {modal === "users" && <UsersModal onClose={() => setModal(null)} />}
       {modal === "onboarding" && <OnboardingModal onComplete={(next) => { setUser(next); setModal(null); void poll(); }} />}
     </main>
@@ -407,7 +523,7 @@ function OnboardingModal({ onComplete }: { onComplete: (userId: string) => void 
   return <ModalFrame title="Set up Alphonse" onClose={() => undefined}><p>Create the local administrator and choose where user data is stored.</p><input value={name} onChange={(event) => setName(event.target.value)} placeholder="Your name" /><input value={root} onChange={(event) => setRoot(event.target.value)} placeholder="Users root" /><label><input type="checkbox" checked={importV1} onChange={(event) => setImportV1(event.target.checked)} /> Import existing v1 identity data</label><button onClick={() => void save()}>Create administrator</button><p>{error}</p></ModalFrame>;
 }
 
-function SettingsModal({ user, initialTab, enterToSend, onEnterToSendChange, onClose }: { user: string; initialTab: SettingsTab; enterToSend: boolean; onEnterToSendChange: (value: boolean) => void; onClose: () => void }) {
+function SettingsModal({ user, initialTab, enterToSend, onEnterToSendChange, onTimezoneChange, onClose }: { user: string; initialTab: SettingsTab; enterToSend: boolean; onEnterToSendChange: (value: boolean) => void; onTimezoneChange: (value: string) => void; onClose: () => void }) {
   const [root, setRoot] = useState(""); const [timezone, setTimezone] = useState("UTC"); const [notice, setNotice] = useState(""); const [tab, setTab] = useState<SettingsTab>(initialTab);
   const [web, setWeb] = useState<WebToolsSettings | null>(null); const [webNotice, setWebNotice] = useState("");
   const [memory, setMemory] = useState<MemorySettings | null>(null); const [memoryNotice, setMemoryNotice] = useState("");
@@ -415,7 +531,7 @@ function SettingsModal({ user, initialTab, enterToSend, onEnterToSendChange, onC
   useEffect(() => { setTab(initialTab); }, [initialTab]);
   useEffect(() => { if (tab === "tools") void daemonRequest<{ user: { user_id: string } | null }>("current_user").then(async (current) => { if (!current.user) return; const result = await daemonRequest<{ settings: WebToolsSettings }>("web_tools_settings", { actor_user_id: current.user.user_id }); setWeb(result.settings); }).catch((cause: unknown) => setWebNotice(cause instanceof Error ? cause.message : "Web Tools unavailable")); }, [tab]);
   useEffect(() => { void daemonRequest<{ user: { user_id: string } | null }>("current_user").then(async (current) => { if (!current.user) return; const result = await daemonRequest<{ settings: MemorySettings }>("memory_settings", { actor_user_id: current.user.user_id }); setMemory(result.settings); }).catch((cause: unknown) => setMemoryNotice(cause instanceof Error ? cause.message : "Memory settings unavailable")); }, []);
-  const save = async () => { try { const timezoneResult = await daemonRequest<{ timezone: string }>("save_timezone_settings", { actor_user_id: user, timezone }); if (timezoneResult.timezone !== timezone.trim()) throw new Error("The daemon did not persist the requested timezone"); setTimezone(timezoneResult.timezone); const result = await daemonRequest<{ users_root: string; warning_repository_path?: boolean }>("save_settings", { users_root: root }); setNotice(result.warning_repository_path ? "Saved. This path is inside the repository; keep it ignored." : "Saved."); } catch (cause) { setNotice(timezoneSettingsError(cause)); } };
+  const save = async () => { try { const timezoneResult = await daemonRequest<{ timezone: string }>("save_timezone_settings", { actor_user_id: user, timezone }); if (timezoneResult.timezone !== timezone.trim()) throw new Error("The daemon did not persist the requested timezone"); setTimezone(timezoneResult.timezone); onTimezoneChange(timezoneResult.timezone); const result = await daemonRequest<{ users_root: string; warning_repository_path?: boolean }>("save_settings", { users_root: root }); setNotice(result.warning_repository_path ? "Saved. This path is inside the repository; keep it ignored." : "Saved."); } catch (cause) { setNotice(timezoneSettingsError(cause)); } };
   const saveWeb = async () => { if (!web) return; try { const current = await daemonRequest<{ user: { user_id: string } | null }>("current_user"); if (!current.user) return; const result = await daemonRequest<{ settings: WebToolsSettings }>("save_web_tools_settings", { actor_user_id: current.user.user_id, values: web }); setWeb(result.settings); setWebNotice("Saved. Newly started tasks can use enabled Web Tools."); } catch (cause) { setWebNotice(cause instanceof Error ? cause.message : "Save failed"); } };
   const verify = async (kind: "search" | "fetch") => { try { const current = await daemonRequest<{ user: { user_id: string } | null }>("current_user"); if (!current.user) return; const result = await daemonRequest<{ result: { exception?: { message?: string } } }>("verify_web_tools", { actor_user_id: current.user.user_id, kind }); setWebNotice(result.result.exception?.message || `${kind === "search" ? "SearXNG search" : "Public fetch"} verified.`); } catch (cause) { setWebNotice(cause instanceof Error ? cause.message : "Verification failed"); } };
   const saveMemory = async () => { if (!memory) return; try { const current = await daemonRequest<{ user: { user_id: string } | null }>("current_user"); if (!current.user) return; const result = await daemonRequest<{ settings: MemorySettings }>("save_memory_settings", { actor_user_id: current.user.user_id, values: memory }); setMemory(result.settings); setMemoryNotice("Saved. New tasks use these limits."); } catch (cause) { setMemoryNotice(cause instanceof Error ? cause.message : "Memory settings could not be saved"); } };
@@ -477,6 +593,18 @@ function sourceLabel(source: string): string {
   return source.replace(/[-_]/g, " ").replace(/\b\w/g, (character) => character.toUpperCase());
 }
 
+function attentionTotal(attention: ProjectAttention): number {
+  return Object.values(attention).reduce((total, item) => total + item.total, 0);
+}
+
+function clearUnreadAttention(attention: ProjectAttention, projectId: string): ProjectAttention {
+  const pending = attention[projectId]?.pending_questions || 0;
+  return {
+    ...attention,
+    [projectId]: { unread_messages: 0, pending_questions: pending, total: pending },
+  };
+}
+
 function timezoneSettingsError(cause: unknown): string {
   const message = cause instanceof Error ? cause.message : "Timezone settings unavailable";
   return message.includes("unknown_method") ? "Restart the Alphonse daemon once to enable timezone settings." : message;
@@ -492,10 +620,12 @@ function taskProgressIds(events: Array<{ event: { type: string; name?: string; v
   return [...ids];
 }
 
-function MessageBubble({ message }: { message: ChatMessage }) {
+function MessageBubble({ message, timezone }: { message: ChatMessage; timezone: string }) {
+  const timestamp = message.created_at ? formatMessageTime(message.created_at, timezone) : null;
   return <article className={`message ${message.role}`}>
     {message.source && !["desktop", "ledger"].includes(message.source) && <small className="message-source" title={`Sent from ${message.source}`}>↗ {sourceLabel(message.source)}</small>}
     {message.role === "assistant" ? <div className="message-markdown"><ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown></div> : message.content}
+    {timestamp && <time className="message-timestamp" dateTime={message.created_at} title={timestamp.tooltip}>{timestamp.visible}</time>}
   </article>;
 }
 
@@ -604,7 +734,7 @@ function UsersModal({ onClose }: { onClose: () => void }) {
   </ModalFrame>;
 }
 
-function ProjectsModal({ user, active, onSelect, onSettings, onClose }: { user: string; active: Project | null; onSelect: (project: Project) => void; onSettings: (project: ManagedProject) => void; onClose: () => void }) {
+function ProjectsModal({ user, active, attention, onSelect, onSettings, onClose }: { user: string; active: Project | null; attention: ProjectAttention; onSelect: (project: Project) => void; onSettings: (project: ManagedProject) => void; onClose: () => void }) {
   const [projects, setProjects] = useState<ManagedProject[]>([]); const [status, setStatus] = useState(""); const [showCreate, setShowCreate] = useState(false);
   const [name, setName] = useState(""); const [description, setDescription] = useState(""); const [visibility, setVisibility] = useState<"private" | "shared">("private"); const [rootPath, setRootPath] = useState(""); const [mode, setMode] = useState<"create" | "import">("create"); const [notice, setNotice] = useState("");
   const load = useCallback(async () => { try { const result = await daemonRequest<{ projects: ManagedProject[] }>("manageable_projects", { user, status }); setProjects(result.projects); } catch (cause) { setNotice(cause instanceof Error ? cause.message : "Projects could not be loaded."); } }, [status, user]);
@@ -613,7 +743,7 @@ function ProjectsModal({ user, active, onSelect, onSettings, onClose }: { user: 
   return <ModalFrame title="Projects" onClose={onClose}>
     <div className="project-list-toolbar"><div className="form-field"><label htmlFor="project-status-filter">Show</label><select id="project-status-filter" value={status} onChange={(event) => setStatus(event.target.value)}><option value="">All projects</option><option value="active">Active</option><option value="archived">Archived</option></select></div><button onClick={() => setShowCreate((value) => !value)}>{showCreate ? "Cancel" : "New project"}</button></div>
     {showCreate && <form className="project-create" onSubmit={createOrImport}><h3>{mode === "import" ? "Import existing folder" : "New project"}</h3><div className="dialog-actions"><button type="button" onClick={() => setMode("create")}>New</button><button type="button" onClick={() => setMode("import")}>Import</button></div><div className="form-field"><label htmlFor="new-project-name">Name</label><input id="new-project-name" value={name} onChange={(event) => setName(event.target.value)} required /></div><div className="form-field"><label htmlFor="new-project-description">Description</label><input id="new-project-description" value={description} onChange={(event) => setDescription(event.target.value)} /></div><div className="form-field"><label htmlFor="new-project-visibility">Visibility</label><select id="new-project-visibility" value={visibility} onChange={(event) => setVisibility(event.target.value as "private" | "shared")}><option value="private">Private</option><option value="shared">Shared</option></select></div><div className="form-field"><label htmlFor="new-project-path">{mode === "import" ? "Existing folder" : "Parent directory (optional)"}</label><input id="new-project-path" value={rootPath} onChange={(event) => setRootPath(event.target.value)} required={mode === "import"} /></div><button>{mode === "import" ? "Import project" : "Create project"}</button></form>}
-    <div className="stack project-list">{projects.length ? projects.map((item) => <article className={item.project_id === active?.project_id ? "selected project-card" : "project-card"} key={item.project_id}><span className="project-card-icon" aria-hidden="true">🗂️</span><span className="project-card-summary"><strong>{item.name}</strong><small>👤 {item.owner?.display_name || item.owner_user_id}</small><small>{item.status} · {item.visibility} · Updated {dateLabel(item.updated_at)}</small></span><span className="project-card-actions">{item.status === "active" && <button onClick={() => onSelect(item)}>Open project</button>}<button className="secondary" onClick={() => onSettings(item)}>Settings</button></span></article>) : <p>No projects match this filter.</p>}</div>
+    <div className="stack project-list">{projects.length ? projects.map((item) => <article className={item.project_id === active?.project_id ? "selected project-card" : "project-card"} key={item.project_id}><span className="project-card-icon" aria-hidden="true">🗂️</span><span className="project-card-summary"><strong>{item.name}{(attention[item.project_id]?.total || 0) > 0 && <span className="attention-badge">{attention[item.project_id].total}</span>}</strong><small>👤 {item.owner?.display_name || item.owner_user_id}</small><small>{item.status} · {item.visibility} · Updated {dateLabel(item.updated_at)}</small>{(attention[item.project_id]?.total || 0) > 0 && <small>{attention[item.project_id].unread_messages} new message{attention[item.project_id].unread_messages === 1 ? "" : "s"} · {attention[item.project_id].pending_questions} pending question{attention[item.project_id].pending_questions === 1 ? "" : "s"}</small>}</span><span className="project-card-actions">{item.status === "active" && <button onClick={() => onSelect(item)}>Open project</button>}<button className="secondary" onClick={() => onSettings(item)}>Settings</button></span></article>) : <p>No projects match this filter.</p>}</div>
     <p>{notice}</p>
   </ModalFrame>;
 }

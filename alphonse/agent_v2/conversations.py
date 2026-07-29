@@ -14,6 +14,7 @@ from uuid import uuid4
 
 @dataclass(frozen=True)
 class ConversationEvent:
+    sequence: int
     event_id: str
     owner_user_id: str
     project_id: str
@@ -23,7 +24,7 @@ class ConversationEvent:
     source_message_id: str
     created_at: str
 
-    def to_dict(self) -> dict[str, str]:
+    def to_dict(self) -> dict[str, Any]:
         return self.__dict__.copy()
 
 
@@ -44,19 +45,73 @@ class SQLiteConversationStore:
         normalized_role = str(role or "").strip().lower()
         if not owner or not message or normalized_role not in {"user", "assistant"}:
             return None
-        event = ConversationEvent(str(uuid4()), owner, str(project_id or "").strip(), normalized_role, message, str(source or "unknown").strip() or "unknown", str(source_message_id or "").strip(), _canonical_timestamp(created_at or _now()))
+        event_id = str(uuid4())
+        project = str(project_id or "").strip()
+        source_value = str(source or "unknown").strip() or "unknown"
+        source_id = str(source_message_id or "").strip()
+        timestamp = _canonical_timestamp(created_at or _now())
         with self._connect() as conn:
-            if event.source_message_id:
-                exists = conn.execute("SELECT 1 FROM v2_conversation_events WHERE source_message_id=?", (event.source_message_id,)).fetchone()
+            if source_id:
+                exists = conn.execute("SELECT * FROM v2_conversation_events WHERE source_message_id=?", (source_id,)).fetchone()
                 if exists is not None:
                     return None
-            conn.execute("INSERT INTO v2_conversation_events(event_id,owner_user_id,project_id,role,content,source,source_message_id,created_at) VALUES (?,?,?,?,?,?,?,?)", tuple(event.__dict__.values()))
-        return event
+            cursor = conn.execute(
+                "INSERT INTO v2_conversation_events(event_id,owner_user_id,project_id,role,content,source,source_message_id,created_at) VALUES (?,?,?,?,?,?,?,?)",
+                (event_id, owner, project, normalized_role, message, source_value, source_id, timestamp),
+            )
+            sequence = int(cursor.lastrowid)
+        return ConversationEvent(sequence, event_id, owner, project, normalized_role, message, source_value, source_id, timestamp)
 
     def list(self, *, owner_user_id: str, project_id: str = "", limit: int = 100) -> list[ConversationEvent]:
         with self._connect() as conn:
-            rows = conn.execute("SELECT * FROM v2_conversation_events WHERE owner_user_id=? AND project_id=? ORDER BY created_at DESC, event_id DESC LIMIT ?", (str(owner_user_id or "").strip(), str(project_id or "").strip(), max(1, min(int(limit or 100), 500)))).fetchall()
+            rows = conn.execute("SELECT * FROM v2_conversation_events WHERE owner_user_id=? AND project_id=? ORDER BY sequence DESC LIMIT ?", (str(owner_user_id or "").strip(), str(project_id or "").strip(), max(1, min(int(limit or 100), 500)))).fetchall()
         return [_event(row) for row in reversed(rows)]
+
+    def sequence_for_source_message_id(self, source_message_id: str) -> int:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT sequence FROM v2_conversation_events WHERE source_message_id=?",
+                (str(source_message_id or "").strip(),),
+            ).fetchone()
+        return int(row["sequence"] or 0) if row is not None else 0
+
+    def mark_project_seen(self, *, owner_user_id: str, project_id: str, through_sequence: int | None = None) -> int:
+        owner, project = str(owner_user_id or "").strip(), str(project_id or "").strip()
+        with self._connect() as conn:
+            if through_sequence is None:
+                row = conn.execute(
+                    "SELECT COALESCE(MAX(sequence), 0) AS latest FROM v2_conversation_events WHERE owner_user_id=? AND project_id=?",
+                    (owner, project),
+                ).fetchone()
+                through_sequence = int(row["latest"] or 0)
+            applied = max(0, int(through_sequence or 0))
+            conn.execute(
+                """
+                INSERT INTO v2_desktop_project_cursors(owner_user_id,project_id,last_seen_sequence,updated_at)
+                VALUES (?,?,?,?)
+                ON CONFLICT(owner_user_id,project_id) DO UPDATE SET
+                  last_seen_sequence=MAX(last_seen_sequence,excluded.last_seen_sequence),
+                  updated_at=excluded.updated_at
+                """,
+                (owner, project, applied, _now()),
+            )
+        return applied
+
+    def project_unread_counts(self, *, owner_user_id: str) -> dict[str, int]:
+        owner = str(owner_user_id or "").strip()
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT e.project_id, COUNT(*) AS unread
+                FROM v2_conversation_events e
+                LEFT JOIN v2_desktop_project_cursors c
+                  ON c.owner_user_id=e.owner_user_id AND c.project_id=e.project_id
+                WHERE e.owner_user_id=? AND e.sequence>COALESCE(c.last_seen_sequence,0)
+                GROUP BY e.project_id
+                """,
+                (owner,),
+            ).fetchall()
+        return {str(row["project_id"] or ""): int(row["unread"] or 0) for row in rows}
 
     def _connect(self):
         if self._memory is not None:
@@ -67,9 +122,62 @@ class SQLiteConversationStore:
 
     def _ensure_schema(self) -> None:
         with self._connect() as conn:
-            conn.execute("CREATE TABLE IF NOT EXISTS v2_conversation_events (event_id TEXT PRIMARY KEY, owner_user_id TEXT NOT NULL, project_id TEXT NOT NULL DEFAULT '', role TEXT NOT NULL CHECK(role IN ('user','assistant')), content TEXT NOT NULL, source TEXT NOT NULL, source_message_id TEXT NOT NULL DEFAULT '' UNIQUE, created_at TEXT NOT NULL) STRICT")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_v2_conversation_events_scope ON v2_conversation_events(owner_user_id, project_id, created_at)")
+            existed = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='v2_conversation_events'").fetchone() is not None
+            cursor_existed = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='v2_desktop_project_cursors'").fetchone() is not None
+            if existed:
+                columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(v2_conversation_events)").fetchall()}
+                if "sequence" not in columns:
+                    rows = conn.execute("SELECT * FROM v2_conversation_events ORDER BY created_at,rowid").fetchall()
+                    conn.execute("ALTER TABLE v2_conversation_events RENAME TO v2_conversation_events_legacy")
+                    self._create_events_table(conn)
+                    for row in rows:
+                        conn.execute(
+                            "INSERT INTO v2_conversation_events(event_id,owner_user_id,project_id,role,content,source,source_message_id,created_at) VALUES (?,?,?,?,?,?,?,?)",
+                            (row["event_id"], row["owner_user_id"], row["project_id"], row["role"], row["content"], row["source"], row["source_message_id"], row["created_at"]),
+                        )
+                    conn.execute("DROP TABLE v2_conversation_events_legacy")
+            else:
+                self._create_events_table(conn)
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_v2_conversation_events_scope ON v2_conversation_events(owner_user_id, project_id, sequence)")
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS v2_desktop_project_cursors (
+                  owner_user_id TEXT NOT NULL,
+                  project_id TEXT NOT NULL DEFAULT '',
+                  last_seen_sequence INTEGER NOT NULL DEFAULT 0,
+                  updated_at TEXT NOT NULL,
+                  PRIMARY KEY(owner_user_id,project_id)
+                ) STRICT
+                """
+            )
+            if existed and not cursor_existed:
+                conn.execute(
+                    """
+                    INSERT INTO v2_desktop_project_cursors(owner_user_id,project_id,last_seen_sequence,updated_at)
+                    SELECT owner_user_id,project_id,MAX(sequence),? FROM v2_conversation_events
+                    GROUP BY owner_user_id,project_id
+                    """,
+                    (_now(),),
+                )
             self._normalize_existing_timestamps(conn)
+
+    @staticmethod
+    def _create_events_table(conn: sqlite3.Connection) -> None:
+        conn.execute(
+            """
+            CREATE TABLE v2_conversation_events (
+              sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+              event_id TEXT NOT NULL UNIQUE,
+              owner_user_id TEXT NOT NULL,
+              project_id TEXT NOT NULL DEFAULT '',
+              role TEXT NOT NULL CHECK(role IN ('user','assistant')),
+              content TEXT NOT NULL,
+              source TEXT NOT NULL,
+              source_message_id TEXT NOT NULL DEFAULT '' UNIQUE,
+              created_at TEXT NOT NULL
+            ) STRICT
+            """
+        )
 
     @staticmethod
     def _normalize_existing_timestamps(conn: sqlite3.Connection) -> None:

@@ -812,7 +812,7 @@ def _build_textual_app_class() -> type[Any]:
         from textual.app import App, ComposeResult
         from textual.screen import ModalScreen
         from textual.containers import Horizontal, Vertical
-        from textual.widgets import Button, Footer, Header, Input, OptionList, RichLog, Select, Static, TextArea
+        from textual.widgets import Button, Checkbox, Footer, Header, Input, OptionList, RichLog, Select, Static, TextArea
         from textual.widgets.option_list import Option
         from rich.text import Text
     except ModuleNotFoundError as exc:
@@ -1007,7 +1007,7 @@ def _build_textual_app_class() -> type[Any]:
             self.dismiss(True)
 
     class UserSettingsScreen(ModalScreen[bool]):
-        def __init__(self, settings: dict[str, Any], save: Callable[[str, int, int], dict[str, Any]]) -> None:
+        def __init__(self, settings: dict[str, Any], save: Callable[[str, int, int, bool], dict[str, Any]]) -> None:
             super().__init__()
             self.settings = settings
             self.save = save
@@ -1018,6 +1018,11 @@ def _build_textual_app_class() -> type[Any]:
                 yield Input(value=str(self.settings.get("users_root") or ""), id="users-root")
                 yield Input(value=str(self.settings.get("max_ledger_bytes") or 512000), id="memory-max-ledger-bytes")
                 yield Input(value=str(self.settings.get("compaction_summary_max_words") or 500), id="memory-summary-max-words")
+                yield Checkbox(
+                    "Also send final reminders and scheduled-task messages to the recipient's preferred channel",
+                    value=bool(self.settings.get("mirror_automation_messages_to_preferred_channel")),
+                    id="mirror-automation-messages",
+                )
                 yield Static("", id="settings-notice")
                 with Horizontal(classes="dialog-actions"):
                     yield Button("Save", id="save-settings", variant="primary")
@@ -1027,7 +1032,12 @@ def _build_textual_app_class() -> type[Any]:
             if event.button.id == "cancel-settings":
                 self.dismiss(False); return
             try:
-                self.save(self.query_one("#users-root", Input).value, int(self.query_one("#memory-max-ledger-bytes", Input).value), int(self.query_one("#memory-summary-max-words", Input).value))
+                self.save(
+                    self.query_one("#users-root", Input).value,
+                    int(self.query_one("#memory-max-ledger-bytes", Input).value),
+                    int(self.query_one("#memory-summary-max-words", Input).value),
+                    self.query_one("#mirror-automation-messages", Checkbox).value,
+                )
             except Exception as exc:
                 self.query_one("#settings-notice", Static).update(str(exc)); return
             self.dismiss(True)
@@ -2190,11 +2200,16 @@ def _build_textual_app_class() -> type[Any]:
                 base = self.daemon_client.request("settings") if self.external_daemon else self.runtime.user_store.status()
                 memory = self.daemon_client.request("memory_settings", actor_user_id=self.runtime.user).get("settings", {}) if self.external_daemon else self.runtime.memory_settings_store.get().to_dict()
                 return {**base, **(memory if isinstance(memory, dict) else {})}
-            def _save(root: str, max_bytes: int, max_words: int) -> dict[str, Any]:
+            def _save(root: str, max_bytes: int, max_words: int, mirror_automation_messages: bool) -> dict[str, Any]:
                 if self.external_daemon:
-                    self.daemon_client.request("save_settings", users_root=root)
+                    self.daemon_client.request(
+                        "save_settings",
+                        users_root=root,
+                        mirror_automation_messages_to_preferred_channel=mirror_automation_messages,
+                    )
                     return self.daemon_client.request("save_memory_settings", actor_user_id=self.runtime.user, values={"max_ledger_bytes": max_bytes, "compaction_summary_max_words": max_words})
                 self.runtime.user_store.set_users_root(root)
+                self.runtime.user_store.set_mirror_automation_messages_to_preferred_channel(mirror_automation_messages)
                 from alphonse.agent_v2.memory_settings import MemorySettings
                 return self.runtime.memory_settings_store.save(MemorySettings(max_bytes, max_words)).to_dict()
             try:

@@ -5,6 +5,7 @@ from __future__ import annotations
 import signal
 import json
 import fcntl
+import logging
 import os
 import sqlite3
 import shutil
@@ -66,6 +67,9 @@ from alphonse.agent_v2.conversations import SQLiteConversationStore, legacy_ledg
 from alphonse.agent_v2.automations import EventAutomationStore
 
 
+logger = logging.getLogger(__name__)
+
+
 @dataclass
 class V2Daemon:
     runtime: V2RuntimeHost
@@ -103,7 +107,7 @@ class V2Daemon:
         self._ui_event_sequence = 0
         self._ui_event_journal: list[dict[str, Any]] = []
         self._desktop_capabilities: dict[str, set[str]] = {}
-        self._desktop_surfaces: dict[tuple[str, str], set[str]] = {}
+        self._desktop_surfaces: dict[tuple[str, str, str], set[str]] = {}
         self._desktop_progress_surfaces: dict[tuple[str, str], set[str]] = {}
         self._desktop_progress_closures: dict[tuple[str, str], set[str]] = {}
         self._ag_ui = AgUiAdapter(question_store=self.runtime.question_store)
@@ -404,9 +408,24 @@ class V2Daemon:
     def settings(self) -> dict[str, object]:
         return self.runtime.user_store.status()
 
-    def save_settings(self, *, users_root: str, timezone_name: str = "") -> dict[str, object]:
+    def save_settings(
+        self,
+        *,
+        users_root: str,
+        timezone_name: str = "",
+        mirror_automation_messages_to_preferred_channel: bool | None = None,
+    ) -> dict[str, object]:
         timezone_value = self.runtime.user_store.set_timezone(timezone_name) if str(timezone_name).strip() else self.runtime.user_store.timezone()
-        return {"users_root": self.runtime.user_store.set_users_root(users_root), "timezone": timezone_value, "warning_repository_path": "/Alphonse/" in str(users_root)}
+        if mirror_automation_messages_to_preferred_channel is not None:
+            self.runtime.user_store.set_mirror_automation_messages_to_preferred_channel(
+                mirror_automation_messages_to_preferred_channel
+            )
+        return {
+            "users_root": self.runtime.user_store.set_users_root(users_root),
+            "timezone": timezone_value,
+            "mirror_automation_messages_to_preferred_channel": self.runtime.user_store.mirror_automation_messages_to_preferred_channel(),
+            "warning_repository_path": "/Alphonse/" in str(users_root),
+        }
 
     def timezone_settings(self, *, actor_user_id: str) -> dict[str, str]:
         self._require_admin(actor_user_id)
@@ -565,6 +584,7 @@ class V2Daemon:
         *,
         client_id: str,
         user: str,
+        project_id: str = "",
         after_sequence: int = 0,
         after_ui_sequence: int = 0,
         client_capabilities: dict[str, Any] | None = None,
@@ -572,6 +592,7 @@ class V2Daemon:
     ) -> dict[str, Any]:
         """Collect Desktop activity and atomically lease its pending messages."""
         normalized_user = self._admin_user_id(user)
+        normalized_project = str(project_id or "").strip()
         normalized_client = str(client_id or "desktop").strip() or "desktop"
         capabilities = dict(client_capabilities or {})
         catalogs = capabilities.get("supportedCatalogIds")
@@ -590,8 +611,19 @@ class V2Daemon:
             delivery = self.runtime.outbox.claim_next(selector, lease_owner=f"desktop:{normalized_client}", lease_seconds=120)
             if delivery is None:
                 break
-            deliveries.append(delivery.to_dict())
-        questions = [question.to_dict() for question in self.runtime.question_store.list_pending_for_respondent(normalized_user)]
+            deliveries.append({
+                **delivery.to_dict(),
+                "conversation_sequence": self.runtime.conversation_store.sequence_for_source_message_id(
+                    f"outbound:{delivery.outbox_message_id}"
+                ),
+            })
+        questions = [
+            question.to_dict()
+            for question in self.runtime.question_store.list_pending_for_respondent(
+                normalized_user,
+                project_id=normalized_project,
+            )
+        ]
         ui_events, next_ui_sequence = self.ui_events_since(
             after_sequence=after_ui_sequence,
             user=normalized_user,
@@ -602,9 +634,16 @@ class V2Daemon:
                 events,
                 client_id=normalized_client,
                 user=normalized_user,
+                project_id=normalized_project,
             ) + ui_events
-            ui_events = self._a2ui_scheduled_task_events(ui_events)
-            ui_events.extend(self._sync_question_surfaces(client_id=normalized_client, user=normalized_user))
+            ui_events = self._a2ui_scheduled_task_events(ui_events, project_id=normalized_project)
+            ui_events.extend(
+                self._sync_question_surfaces(
+                    client_id=normalized_client,
+                    user=normalized_user,
+                    project_id=normalized_project,
+                )
+            )
         else:
             ui_events = [item for item in ui_events if _event_name(item) != "scheduled_task_created"]
         return {
@@ -615,6 +654,7 @@ class V2Daemon:
             "ui_events": ui_events,
             "next_ui_sequence": next_ui_sequence,
             "server_capabilities": self._a2ui.server_capabilities(),
+            "project_attention": self._desktop_project_attention(normalized_user),
             "status": {"active_work": self.active_work(), "activity": self.activity_status(), "queue": self._inbound_queue_status()},
         }
 
@@ -634,7 +674,18 @@ class V2Daemon:
         normalized_project = str(project_id or "").strip()
         timeline = self.runtime.conversation_store.list(owner_user_id=normalized_user, project_id=normalized_project, limit=limit)
         if timeline:
-            return [{"id": event.event_id, "role": event.role, "content": event.content, "source": event.source, "created_at": event.created_at} for event in timeline]
+            return [
+                {
+                    "id": _conversation_message_id(event.source_message_id, event.event_id),
+                    "role": event.role,
+                    "content": event.content,
+                    "source": event.source,
+                    "created_at": event.created_at,
+                    "project_id": event.project_id,
+                    "sequence": event.sequence,
+                }
+                for event in timeline
+            ]
         if not normalized_project:
             return []
         legacy = self.runtime.core.memory.latest_content(user_id=normalized_user, project_id=normalized_project)
@@ -643,10 +694,38 @@ class V2Daemon:
             return recovered
         deliveries = self.runtime.outbox.list(OutboundSelector(status=None), limit=max(1, min(int(limit or 100), 500)))
         return [
-            {"id": delivery.outbox_message_id, "role": "assistant", "content": delivery.message, "created_at": delivery.created_at}
+            {
+                "id": delivery.outbox_message_id,
+                "role": "assistant",
+                "content": delivery.message,
+                "created_at": delivery.created_at,
+                "project_id": delivery.project_id,
+            }
             for delivery in deliveries
-            if delivery.audience_user_id == normalized_user and str(delivery.metadata.get("project_id") or "").strip() == normalized_project
+            if delivery.audience_user_id == normalized_user and delivery.project_id == normalized_project
         ][-max(1, min(int(limit or 100), 500)):]
+
+    def mark_desktop_project_seen(self, *, user: str, project_id: str, through_sequence: int | None = None) -> dict[str, Any]:
+        normalized_user = self._admin_user_id(user)
+        normalized_project = str(project_id or "").strip()
+        sequence = self.runtime.conversation_store.mark_project_seen(
+            owner_user_id=normalized_user,
+            project_id=normalized_project,
+            through_sequence=through_sequence,
+        )
+        return {"project_id": normalized_project, "seen_through_sequence": sequence}
+
+    def _desktop_project_attention(self, user: str) -> dict[str, dict[str, int]]:
+        unread = self.runtime.conversation_store.project_unread_counts(owner_user_id=user)
+        questions = self.runtime.question_store.pending_counts_by_project(user)
+        return {
+            project_id: {
+                "unread_messages": int(unread.get(project_id, 0)),
+                "pending_questions": int(questions.get(project_id, 0)),
+                "total": int(unread.get(project_id, 0)) + int(questions.get(project_id, 0)),
+            }
+            for project_id in sorted(set(unread) | set(questions))
+        }
 
     def list_projects(self, *, user: str) -> list[dict[str, str]]:
         normalized = self._admin_user_id(user)
@@ -802,6 +881,10 @@ class V2Daemon:
             "message_id": routed.queued.message_id if routed.queued is not None else "",
             "handled_command": routed.handled_command,
             "project_id": routed.project_id,
+            "created_at": routed.queued.message.timestamp.isoformat() if routed.queued is not None else "",
+            "conversation_sequence": self.runtime.conversation_store.sequence_for_source_message_id(
+                f"inbound:{routed.queued.message_id}"
+            ) if routed.queued is not None else 0,
         }
 
     def publish_event(self, **values: Any) -> dict[str, Any]:
@@ -928,8 +1011,12 @@ class V2Daemon:
         if action == "view_scheduled_task":
             if source != "view" or not scheduled_task_id or scheduled_task_id != str(values.get("scheduled_task_id") or ""):
                 raise ValueError("a2ui_surface_or_context_invalid")
-            self._scheduled_task_for_actor(actor_user_id=respondent, scheduled_task_id=scheduled_task_id)
-            return {"action": "view_scheduled_task", "scheduled_task_id": scheduled_task_id}
+            task = self._scheduled_task_for_actor(actor_user_id=respondent, scheduled_task_id=scheduled_task_id)
+            return {
+                "action": "view_scheduled_task",
+                "scheduled_task_id": scheduled_task_id,
+                "project_id": task.project_id,
+            }
         question_id = question_id_from_surface(surface_id)
         if not question_id or question_id != str(values.get("question_id") or ""):
             raise ValueError("a2ui_surface_or_context_invalid")
@@ -964,7 +1051,7 @@ class V2Daemon:
             payload = {"text": text}
         return self.answer_question(user=respondent, question_id=question_id, text=text, payload=payload)
 
-    def _a2ui_scheduled_task_events(self, events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    def _a2ui_scheduled_task_events(self, events: list[dict[str, Any]], *, project_id: str) -> list[dict[str, Any]]:
         rendered: list[dict[str, Any]] = []
         for item in events:
             event = item.get("event") if isinstance(item.get("event"), dict) else {}
@@ -973,6 +1060,8 @@ class V2Daemon:
                 continue
             payload = event.get("value") if isinstance(event.get("value"), dict) else {}
             task = payload.get("scheduled_task") if isinstance(payload.get("scheduled_task"), dict) else {}
+            if str(task.get("project_id") or "").strip() != project_id:
+                continue
             try:
                 rendered.extend({"event": _a2ui_custom(envelope)} for envelope in self._a2ui.scheduled_task_created(task, project_name=str(payload.get("project_name") or "")))
             except ValueError:
@@ -1086,7 +1175,14 @@ class V2Daemon:
         if len(self._activity_event_journal) > 2000:
             self._activity_event_journal = self._activity_event_journal[-2000:]
 
-    def _a2ui_task_progress_events(self, events: list[dict[str, Any]], *, client_id: str, user: str) -> list[dict[str, Any]]:
+    def _a2ui_task_progress_events(
+        self,
+        events: list[dict[str, Any]],
+        *,
+        client_id: str,
+        user: str,
+        project_id: str,
+    ) -> list[dict[str, Any]]:
         """Emit task-progress cards only for the local admin's Desktop work."""
         admin = self.runtime.user_store.admin_user()
         if admin is None or user != admin.user_id:
@@ -1104,7 +1200,7 @@ class V2Daemon:
                 continue
             task_id = str(event.get("task_id") or "").strip()
             progress = event.get("progress") if isinstance(event.get("progress"), dict) else {}
-            if not task_id or not progress:
+            if not task_id or not progress or str(progress.get("project_id") or "").strip() != project_id:
                 continue
             payload = {
                 **progress,
@@ -1151,15 +1247,15 @@ class V2Daemon:
         if len(self._ui_event_journal) > 2000:
             self._ui_event_journal = self._ui_event_journal[-2000:]
 
-    def _sync_question_surfaces(self, *, client_id: str, user: str) -> list[dict[str, Any]]:
+    def _sync_question_surfaces(self, *, client_id: str, user: str, project_id: str) -> list[dict[str, Any]]:
         """Reconcile trusted question surfaces per Desktop client.
 
         This is deliberately state based: a reconnect (and question expiry) is
         recoverable even if a prior poll response was lost.
         """
-        key = (client_id, user)
+        key = (client_id, user, project_id)
         known = self._desktop_surfaces.setdefault(key, set())
-        pending = self.runtime.question_store.list_pending_for_respondent(user)
+        pending = self.runtime.question_store.list_pending_for_respondent(user, project_id=project_id)
         expected = {surface_id_for_question(question.question_id): question for question in pending}
         events: list[dict[str, Any]] = []
         for surface_id in sorted(known - set(expected)):
@@ -1197,9 +1293,14 @@ class V2Daemon:
                 )
         snapshot = self.runtime.visible_state.snapshot()
         if step.status in {LoopStepStatus.PROCESSED, LoopStepStatus.PARKED, LoopStepStatus.WAITING}:
-            projected = project_snapshot_to_outbox(snapshot=snapshot, outbox=self.runtime.outbox)
+            projected = project_snapshot_to_outbox(
+                snapshot=snapshot,
+                outbox=self.runtime.outbox,
+                identity_resolver=self.runtime.identity_resolver,
+                mirror_automation_messages_to_preferred_channel=self.runtime.user_store.mirror_automation_messages_to_preferred_channel(),
+            )
             if projected is not None:
-                self.runtime.conversation_store.record(owner_user_id=projected.audience_user_id, project_id=str(projected.metadata.get("project_id") or ""), role="assistant", content=projected.message, source=projected.integration_id, source_message_id=f"outbound:{projected.outbox_message_id}", created_at=projected.created_at)
+                self.runtime.conversation_store.record(owner_user_id=projected.audience_user_id, project_id=projected.project_id, role="assistant", content=projected.message, source=projected.integration_id, source_message_id=f"outbound:{projected.outbox_message_id}", created_at=projected.created_at)
                 occurrence_key = str(projected.metadata.get("occurrence_key") or "").strip()
                 if occurrence_key:
                     self.runtime.schedule_store.mark_occurrence_response_pending(
@@ -1354,6 +1455,13 @@ class V2Daemon:
                     metadata={"communication_thread_id": thread.thread_id},
                 )
         metadata = getattr(outbound, "metadata", {}) if outbound is not None else {}
+        if isinstance(metadata, dict) and metadata.get("automation_preferred_channel_copy"):
+            logger.warning(
+                "automation preferred-channel copy delivery failed correlation_id=%s error=%s",
+                str(getattr(outbound, "correlation_id", "") or ""),
+                error,
+            )
+            return
         occurrence_key = str(metadata.get("occurrence_key") or "").strip() if isinstance(metadata, dict) else ""
         if occurrence_key:
             self.runtime.schedule_store.mark_occurrence_failed(occurrence_key, error=error)
@@ -1361,6 +1469,14 @@ class V2Daemon:
 
 def _without_sequence(event: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in event.items() if key != "sequence"}
+
+
+def _conversation_message_id(source_message_id: str, fallback_event_id: str) -> str:
+    value = str(source_message_id or "").strip()
+    for prefix in ("inbound:", "outbound:"):
+        if value.startswith(prefix):
+            return value.removeprefix(prefix)
+    return value or str(fallback_event_id or "").strip()
 
 
 def _ui_event_user(event: CoreUiEvent) -> str:

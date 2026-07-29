@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from datetime import datetime
 from importlib import import_module
 
@@ -26,6 +27,24 @@ def test_native_registry_registers_ask_question_tool() -> None:
     assert descriptor.tool_id == ASK_QUESTION_TOOL_ID
     assert descriptor.argument_schema["required"] == ["question", "question_kind"]
     assert "interrupt" in descriptor.capabilities
+
+
+def test_question_project_migration_backfills_checkpoint_idempotently(tmp_path) -> None:
+    db_path = tmp_path / "questions.sqlite3"
+    store = SQLiteQuestionStore(db_path)
+    question = store.create_question(
+        task=TaskState(task_id="task-migrate", goal="Migrate", user="alex", project_id="alpha"),
+        question="Continue?",
+    )
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("DROP INDEX idx_v2_questions_respondent_project_status")
+        conn.execute("ALTER TABLE v2_questions DROP COLUMN project_id")
+
+    migrated = SQLiteQuestionStore(db_path)
+    restarted = SQLiteQuestionStore(db_path)
+
+    assert migrated.get_question(question.question_id).project_id == "alpha"
+    assert restarted.get_question(question.question_id).project_id == "alpha"
 
 
 def test_do_node_executes_ask_question_and_parks_task() -> None:
