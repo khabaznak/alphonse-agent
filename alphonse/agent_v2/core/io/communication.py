@@ -13,6 +13,7 @@ from uuid import uuid4
 from alphonse.agent_v2.core.io.channels import ChannelAddress
 from alphonse.agent_v2.core.io.identity import V2IdentityResolver
 from alphonse.agent_v2.core.io.outbox import SQLiteOutboundStore
+from alphonse.agent_v2.database import connect_database, default_database_path
 
 
 @dataclass(frozen=True)
@@ -38,7 +39,7 @@ class SQLiteCommunicationThreadStore:
 
     @classmethod
     def default(cls) -> "SQLiteCommunicationThreadStore":
-        return cls(Path.home() / ".alphonse" / "v2-communication-threads.sqlite3")
+        return cls(default_database_path())
 
     def create(self, *, sender_user_id: str, recipient_user_id: str, origin: ChannelAddress, recipient: ChannelAddress, outbox_message_id: str) -> CommunicationThread:
         now = _now()
@@ -87,9 +88,7 @@ class SQLiteCommunicationThreadStore:
         if self._memory is not None:
             return self._memory
         Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-        return conn
+        return connect_database(self.db_path)
 
     def _ensure_schema(self) -> None:
         with self._connect() as conn:

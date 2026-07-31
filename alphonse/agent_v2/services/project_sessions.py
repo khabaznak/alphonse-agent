@@ -17,6 +17,7 @@ from alphonse.agent_v2.core.messages import CommunicationChannel
 from alphonse.agent_v2.core.messages.queue import QueuedMessage
 from alphonse.agent_v2.core.projects import ProjectRecord
 from alphonse.agent_v2.core.projects import ProjectStore
+from alphonse.agent_v2.database import connect_database, default_database_path
 
 
 @dataclass(frozen=True)
@@ -57,8 +58,7 @@ class SQLiteProjectSessionStore:
 
     @classmethod
     def default(cls) -> "SQLiteProjectSessionStore":
-        configured = os.getenv("ALPHONSE_V2_PROJECT_SESSION_DB_PATH") or os.getenv("ALPHONSE_V2_PROJECT_DB_PATH")
-        return cls(configured or Path.home() / ".alphonse" / "v2-project-sessions.sqlite3")
+        return cls(default_database_path())
 
     def get(self, key: ProjectSessionKey) -> ProjectSession | None:
         with self._connect() as conn:
@@ -118,9 +118,7 @@ class SQLiteProjectSessionStore:
             return _ConnectionProxy(self._memory_connection)
         path = Path(self.db_path)
         path.parent.mkdir(parents=True, exist_ok=True)
-        conn = sqlite3.connect(path)
-        conn.row_factory = sqlite3.Row
-        return conn
+        return connect_database(path)
 
     def _ensure_schema(self) -> None:
         with self._connect() as conn:

@@ -21,6 +21,7 @@ from uuid import uuid4
 from alphonse.agent_v2.core.core import CoreUiEvent
 from alphonse.agent_v2.core.core import LoopStepStatus
 from alphonse.agent_v2.core.io import OutboundSelector
+from alphonse.agent_v2.core.io import SQLiteCommunicationThreadStore
 from alphonse.agent_v2.core.io import upsert_provider_user_mapping
 from alphonse.agent_v2.core.io import project_snapshot_to_outbox
 from alphonse.agent_v2.core.io import SQLiteOutboundStore
@@ -29,6 +30,7 @@ from alphonse.agent_v2.core.projects import ProjectStore
 from alphonse.agent_v2.core.questions import SQLiteQuestionStore
 from alphonse.agent_v2.core.scheduled_tasks import ScheduledTaskStore
 from alphonse.agent_v2.core.scheduled_tasks import schedule_summary
+from alphonse.agent_v2.database import connect_database, transaction
 from alphonse.agent_v2.integrations import SQLiteIntegrationStore
 from alphonse.agent_v2.inference_settings import SQLiteInferenceSettingsStore
 from alphonse.agent_v2.ipc import V2DaemonClient
@@ -65,9 +67,31 @@ from alphonse.agent_v2.assets import SQLiteAssetStore
 from alphonse.agent_v2.artifacts import SQLiteArtifactStore
 from alphonse.agent_v2.conversations import SQLiteConversationStore, legacy_ledger_events
 from alphonse.agent_v2.automations import EventAutomationStore
+from alphonse.agent_v2.storage_migration import migrate_legacy_databases
+from alphonse.agent_v2.retention import prune_operational_data
 
 
 logger = logging.getLogger(__name__)
+
+
+def _claim_single_instance_lock(daemon_id: str) -> Any:
+    lock_path = default_socket_path().with_suffix(".lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    lock_file = lock_path.open("a+")
+    try:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        lock_file.close()
+        try:
+            V2DaemonClient(default_socket_path(), timeout_sec=0.5).ping()
+        except Exception as exc:
+            raise RuntimeError("alphonse_v2_daemon_lock_held") from exc
+        raise RuntimeError("alphonse_v2_daemon_already_running")
+    lock_file.seek(0)
+    lock_file.truncate()
+    lock_file.write(daemon_id)
+    lock_file.flush()
+    return lock_file
 
 
 @dataclass
@@ -76,18 +100,16 @@ class V2Daemon:
     poll_interval_sec: float = 0.05
     inbound_max_attempts: int = 5
     event_store: EventAutomationStore | None = None
+    daemon_id: str = ""
 
     def __post_init__(self) -> None:
         schedule_db_path = str(getattr(self.runtime.schedule_store, "db_path", ":memory:"))
         self.event_store = self.event_store or (
             EventAutomationStore(":memory:")
             if schedule_db_path == ":memory:"
-            else EventAutomationStore(
-                os.getenv("ALPHONSE_V2_AUTOMATIONS_DB_PATH")
-                or str(Path(schedule_db_path).with_name("v2-automations.sqlite3"))
-            )
+            else EventAutomationStore(schedule_db_path)
         )
-        self.daemon_id = f"daemon-{uuid4().hex[:12]}"
+        self.daemon_id = str(self.daemon_id or "").strip() or f"daemon-{uuid4().hex[:12]}"
         if hasattr(self.runtime.queue, "lease_owner"):
             self.runtime.queue.lease_owner = self.daemon_id
         self._stop = threading.Event()
@@ -110,6 +132,7 @@ class V2Daemon:
         self._desktop_surfaces: dict[tuple[str, str, str], set[str]] = {}
         self._desktop_progress_surfaces: dict[tuple[str, str], set[str]] = {}
         self._desktop_progress_closures: dict[tuple[str, str], set[str]] = {}
+        self._last_retention_at: datetime | None = None
         self._ag_ui = AgUiAdapter(question_store=self.runtime.question_store)
         self._a2ui = A2UiAdapter()
         self.scheduler = ScheduledTaskWorker(
@@ -132,6 +155,7 @@ class V2Daemon:
             reclaim_expired = getattr(self.runtime.queue, "reclaim_expired", None)
             if callable(reclaim_expired):
                 reclaim_expired()
+            self._run_retention_if_due(force=True)
             # Publish the health socket before optional providers initialize so
             # clients can distinguish a live daemon from a failed startup.
             self.ipc.start()
@@ -221,7 +245,7 @@ class V2Daemon:
             self.runtime.integration_store.upsert(integration_id=record.integration_id, provider_key=record.provider_key, display_name=record.display_name, enabled=record.enabled, config=config, secrets=dict(record.secrets))
             integrations += 1
         if getattr(self.runtime.schedule_store, "db_path", ":memory:") != ":memory:":
-            with sqlite3.connect(self.runtime.schedule_store.db_path) as conn:
+            with connect_database(self.runtime.schedule_store.db_path) as conn:
                 schedules = conn.execute("UPDATE v2_scheduled_tasks SET owner_user_id=? WHERE owner_user_id='local'", (admin_user_id,)).rowcount
         return {"local_projects_migrated": projects, "local_sessions_migrated": sessions, "local_integrations_migrated": integrations, "local_schedules_migrated": schedules}
 
@@ -673,37 +697,39 @@ class V2Daemon:
         normalized_user = self._admin_user_id(user)
         normalized_project = str(project_id or "").strip()
         timeline = self.runtime.conversation_store.list(owner_user_id=normalized_user, project_id=normalized_project, limit=limit)
-        if timeline:
-            return [
-                {
-                    "id": _conversation_message_id(event.source_message_id, event.event_id),
-                    "role": event.role,
-                    "content": event.content,
-                    "source": event.source,
-                    "created_at": event.created_at,
-                    "project_id": event.project_id,
-                    "sequence": event.sequence,
-                }
-                for event in timeline
-            ]
-        if not normalized_project:
-            return []
-        legacy = self.runtime.core.memory.latest_content(user_id=normalized_user, project_id=normalized_project)
-        recovered = legacy_ledger_events(legacy, owner_user_id=normalized_user, project_id=normalized_project, limit=limit)
-        if recovered:
-            return recovered
-        deliveries = self.runtime.outbox.list(OutboundSelector(status=None), limit=max(1, min(int(limit or 100), 500)))
+        if not timeline and not self.runtime.conversation_store.legacy_import_completed(
+            owner_user_id=normalized_user,
+            project_id=normalized_project,
+        ):
+            legacy = self.runtime.core.memory.latest_content(user_id=normalized_user, project_id=normalized_project)
+            recovered = legacy_ledger_events(
+                legacy,
+                owner_user_id=normalized_user,
+                project_id=normalized_project,
+                limit=limit,
+            )
+            self.runtime.conversation_store.import_legacy_events(
+                owner_user_id=normalized_user,
+                project_id=normalized_project,
+                events=recovered,
+            )
+            timeline = self.runtime.conversation_store.list(
+                owner_user_id=normalized_user,
+                project_id=normalized_project,
+                limit=limit,
+            )
         return [
             {
-                "id": delivery.outbox_message_id,
-                "role": "assistant",
-                "content": delivery.message,
-                "created_at": delivery.created_at,
-                "project_id": delivery.project_id,
+                "id": _conversation_message_id(event.source_message_id, event.event_id),
+                "role": event.role,
+                "content": event.content,
+                "source": event.source,
+                "created_at": event.created_at,
+                "project_id": event.project_id,
+                "sequence": event.sequence,
             }
-            for delivery in deliveries
-            if delivery.audience_user_id == normalized_user and delivery.project_id == normalized_project
-        ][-max(1, min(int(limit or 100), 500)):]
+            for event in timeline
+        ]
 
     def mark_desktop_project_seen(self, *, user: str, project_id: str, through_sequence: int | None = None) -> dict[str, Any]:
         normalized_user = self._admin_user_id(user)
@@ -954,6 +980,7 @@ class V2Daemon:
                     child.status = "completed"
                     child.outcome = {"status": "success", "answered_question_id": result.question.question_id}
                     self.runtime.core.memory.finish_task(child)
+                    self.runtime.question_store.mark_task_checkpoint_terminal(child_id, status="done")
         if result.handled and result.resumed_task is not None:
             self.runtime.ui_events.append(
                 CoreUiEvent(
@@ -1275,6 +1302,7 @@ class V2Daemon:
             return dict(self._activity_status)
 
     def run_once(self) -> Any:
+        self._run_retention_if_due()
         queued = self.runtime.queue.peek()
         self._set_active_work(queued)
         if queued is not None:
@@ -1293,25 +1321,23 @@ class V2Daemon:
                 )
         snapshot = self.runtime.visible_state.snapshot()
         if step.status in {LoopStepStatus.PROCESSED, LoopStepStatus.PARKED, LoopStepStatus.WAITING}:
-            projected = project_snapshot_to_outbox(
-                snapshot=snapshot,
-                outbox=self.runtime.outbox,
-                identity_resolver=self.runtime.identity_resolver,
-                mirror_automation_messages_to_preferred_channel=self.runtime.user_store.mirror_automation_messages_to_preferred_channel(),
-            )
-            if projected is not None:
-                self.runtime.conversation_store.record(owner_user_id=projected.audience_user_id, project_id=projected.project_id, role="assistant", content=projected.message, source=projected.integration_id, source_message_id=f"outbound:{projected.outbox_message_id}", created_at=projected.created_at)
-                occurrence_key = str(projected.metadata.get("occurrence_key") or "").strip()
-                if occurrence_key:
-                    self.runtime.schedule_store.mark_occurrence_response_pending(
-                        occurrence_key,
-                        response_outbox_id=projected.outbox_message_id,
-                    )
+            outbox_path = str(getattr(self.runtime.outbox, "db_path", ":memory:"))
+            conversation_path = str(getattr(self.runtime.conversation_store, "db_path", ":memory:"))
+            schedule_path = str(getattr(self.runtime.schedule_store, "db_path", ":memory:"))
+            if outbox_path != ":memory:" and outbox_path == conversation_path == schedule_path:
+                with transaction(outbox_path, immediate=True) as connection:
+                    projected = self._project_snapshot_delivery(snapshot, connection=connection)
+                    self._mark_projected_occurrence(projected, connection=connection)
+            else:
+                projected = self._project_snapshot_delivery(snapshot)
+                self._mark_projected_occurrence(projected)
             self._emit_scheduled_task_card(snapshot)
             if step.queued_message_id:
                 acknowledge = getattr(self.runtime.queue, "ack", None)
                 if callable(acknowledge):
                     acknowledge(step.queued_message_id, lease_owner=self.daemon_id)
+            if step.status == LoopStepStatus.PROCESSED:
+                self._mark_snapshot_checkpoint_terminal(snapshot, status="done")
         elif step.status == LoopStepStatus.FAILED and step.queued_message_id:
             retry = getattr(self.runtime.queue, "retry", None)
             if callable(retry):
@@ -1332,6 +1358,64 @@ class V2Daemon:
             }.get(step.status, "idle")
             self._set_activity_status(terminal_state)
         return step
+
+    def _project_snapshot_delivery(
+        self,
+        snapshot: Any,
+        *,
+        connection: sqlite3.Connection | None = None,
+    ) -> Any:
+        projected = project_snapshot_to_outbox(
+            snapshot=snapshot,
+            outbox=self.runtime.outbox,
+            identity_resolver=self.runtime.identity_resolver,
+            mirror_automation_messages_to_preferred_channel=self.runtime.user_store.mirror_automation_messages_to_preferred_channel(),
+            connection=connection,
+        )
+        if projected is not None:
+            self.runtime.conversation_store.record(
+                owner_user_id=projected.audience_user_id,
+                project_id=projected.project_id,
+                role="assistant",
+                content=projected.message,
+                source=projected.integration_id,
+                source_message_id=f"outbound:{projected.outbox_message_id}",
+                created_at=projected.created_at,
+                connection=connection,
+            )
+        return projected
+
+    def _mark_projected_occurrence(
+        self,
+        projected: Any,
+        *,
+        connection: sqlite3.Connection | None = None,
+    ) -> None:
+        if projected is None:
+            return
+        occurrence_key = str(projected.metadata.get("occurrence_key") or "").strip()
+        if occurrence_key:
+            arguments = {"response_outbox_id": projected.outbox_message_id}
+            if connection is not None:
+                arguments["connection"] = connection
+            self.runtime.schedule_store.mark_occurrence_response_pending(occurrence_key, **arguments)
+
+    def _run_retention_if_due(self, *, force: bool = False) -> None:
+        now = datetime.now(timezone.utc)
+        if not force and self._last_retention_at is not None and now - self._last_retention_at < timedelta(days=1):
+            return
+        db_path = str(getattr(self.runtime.user_store, "db_path", ":memory:"))
+        if db_path != ":memory:":
+            deleted = prune_operational_data(db_path, now=now)
+            logger.info("operational retention completed deleted=%s", deleted)
+        self._last_retention_at = now
+
+    def _mark_snapshot_checkpoint_terminal(self, snapshot: Any, *, status: str) -> None:
+        metadata = getattr(snapshot, "metadata", {}) if snapshot is not None else {}
+        task_state = metadata.get("task_state") if isinstance(metadata, dict) else None
+        task_id = str(task_state.get("task_id") or "").strip() if isinstance(task_state, dict) else ""
+        if task_id:
+            self.runtime.question_store.mark_task_checkpoint_terminal(task_id, status=status)
 
     def _set_activity_status(self, state: str) -> None:
         with self._active_work_lock:
@@ -1398,21 +1482,9 @@ class V2Daemon:
                 self._stop.wait(max(0.01, self.poll_interval_sec))
 
     def _acquire_single_instance_lock(self) -> None:
-        lock_path = default_socket_path().with_suffix(".lock")
-        lock_path.parent.mkdir(parents=True, exist_ok=True)
-        self._lock_file = lock_path.open("a+")
-        try:
-            fcntl.flock(self._lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
-            try:
-                V2DaemonClient(default_socket_path(), timeout_sec=0.5).ping()
-            except Exception as exc:
-                raise RuntimeError("alphonse_v2_daemon_lock_held") from exc
-            raise RuntimeError("alphonse_v2_daemon_already_running")
-        self._lock_file.seek(0)
-        self._lock_file.truncate()
-        self._lock_file.write(self.daemon_id)
-        self._lock_file.flush()
+        if self._lock_file is not None:
+            return
+        self._lock_file = _claim_single_instance_lock(self.daemon_id)
 
     def _release_single_instance_lock(self) -> None:
         with self._lifecycle_lock:
@@ -1574,28 +1646,45 @@ def _question_answer_text(payload: dict[str, Any] | None) -> str:
 
 def main() -> None:
     daemon_id = f"daemon-{uuid4().hex[:12]}"
-    user_store = V2UserStore.default()
-    daemon = V2Daemon(
-        build_runtime_host(
-            user=user_store.admin_user().user_id if user_store.admin_user() else "",
-            user_store=user_store,
-            messages=SQLiteMessageQueue.default(lease_owner=daemon_id),
-            question_store=SQLiteQuestionStore.default(),
-            project_store=ProjectStore.default(),
-            schedule_store=ScheduledTaskStore.default(),
-            web_tools_settings_store=SQLiteWebToolsSettingsStore.default(),
-            media_tools_settings_store=SQLiteMediaToolsSettingsStore.default(),
-            asset_store=SQLiteAssetStore.default(),
-            artifact_store=SQLiteArtifactStore.default(),
-            conversation_store=SQLiteConversationStore.default(),
-            memory_settings_store=SQLiteMemorySettingsStore.default(),
-            outbox=SQLiteOutboundStore.default(),
-            integration_store=SQLiteIntegrationStore.default(),
-            inference_settings_store=SQLiteInferenceSettingsStore.default(),
-            agent_config_store=AgentConfigStore.default(),
-            project_session_store=SQLiteProjectSessionStore.default(),
+    startup_lock = _claim_single_instance_lock(daemon_id)
+    try:
+        migration = migrate_legacy_databases()
+        logger.info(
+            "storage migration status=%s target=%s sources=%s",
+            migration.get("status"),
+            migration.get("target"),
+            len(migration.get("sources") or []),
         )
-    )
+        user_store = V2UserStore.default()
+        daemon = V2Daemon(
+            build_runtime_host(
+                user=user_store.admin_user().user_id if user_store.admin_user() else "",
+                user_store=user_store,
+                messages=SQLiteMessageQueue.default(lease_owner=daemon_id),
+                question_store=SQLiteQuestionStore.default(),
+                project_store=ProjectStore.default(),
+                schedule_store=ScheduledTaskStore.default(),
+                web_tools_settings_store=SQLiteWebToolsSettingsStore.default(),
+                media_tools_settings_store=SQLiteMediaToolsSettingsStore.default(),
+                asset_store=SQLiteAssetStore.default(),
+                artifact_store=SQLiteArtifactStore.default(),
+                conversation_store=SQLiteConversationStore.default(),
+                memory_settings_store=SQLiteMemorySettingsStore.default(),
+                outbox=SQLiteOutboundStore.default(),
+                integration_store=SQLiteIntegrationStore.default(),
+                inference_settings_store=SQLiteInferenceSettingsStore.default(),
+                agent_config_store=AgentConfigStore.default(),
+                project_session_store=SQLiteProjectSessionStore.default(),
+                communication_thread_store=SQLiteCommunicationThreadStore.default(),
+            ),
+            daemon_id=daemon_id,
+        )
+        daemon._lock_file = startup_lock
+        startup_lock = None
+    finally:
+        if startup_lock is not None:
+            fcntl.flock(startup_lock.fileno(), fcntl.LOCK_UN)
+            startup_lock.close()
     previous = {}
 
     def _request_stop(signum: int, frame: Any) -> None:

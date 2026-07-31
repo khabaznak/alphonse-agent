@@ -10,6 +10,8 @@ import traceback
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+from alphonse.agent_v2.retention import storage_metrics
 from uuid import uuid4
 
 
@@ -325,6 +327,8 @@ class V2DaemonServer:
                 status_error = status_error or f"outbox_status: {type(exc).__name__}: {exc}"
             queue_counts = getattr(runtime.queue, "status_counts", lambda: {})()
             outbox_counts = getattr(runtime.outbox, "status_counts", lambda: {})()
+            db_path = str(getattr(runtime.user_store, "db_path", ":memory:"))
+            persistence = storage_metrics(db_path) if db_path != ":memory:" else {"database_path": ":memory:"}
             processor_thread = getattr(self.daemon, "_processor_thread", None)
             return {
                 "service": "alphonse-v2-daemon",
@@ -340,6 +344,7 @@ class V2DaemonServer:
                 "last_processor_error": str(getattr(self.daemon, "_last_processor_error", "") or ""),
                 "status_error": status_error,
                 "scheduler": self.daemon.scheduler.stats.__dict__,
+                "persistence": persistence,
             }
         if method == "stop":
             threading.Thread(target=self.daemon.stop, name="alphonse-v2-stop", daemon=True).start()

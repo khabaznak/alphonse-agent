@@ -8,6 +8,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
+from alphonse.agent_v2.database import connect_database, default_database_path
+
 
 DEFAULT_MAX_LEDGER_BYTES = 500 * 1024
 DEFAULT_COMPACTION_SUMMARY_MAX_WORDS = 500
@@ -33,7 +35,7 @@ class SQLiteMemorySettingsStore:
 
     @classmethod
     def default(cls) -> "SQLiteMemorySettingsStore":
-        return cls(os.getenv("ALPHONSE_V2_MEMORY_SETTINGS_DB_PATH") or os.getenv("ALPHONSE_V2_DB_PATH") or Path.home() / ".alphonse" / "v2-memory-settings.sqlite3")
+        return cls(default_database_path())
 
     def get(self) -> MemorySettings:
         with self._connect() as conn:
@@ -53,8 +55,7 @@ class SQLiteMemorySettingsStore:
         if self._memory is not None:
             return _Connection(self._memory)
         path = Path(self.db_path); path.parent.mkdir(parents=True, exist_ok=True)
-        conn = sqlite3.connect(path); conn.row_factory = sqlite3.Row
-        return conn
+        return connect_database(path)
 
     def _ensure_schema(self) -> None:
         with self._connect() as conn:

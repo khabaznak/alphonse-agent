@@ -16,6 +16,7 @@ from jsonschema.exceptions import SchemaError, ValidationError
 
 from alphonse.agent_v2.core.core import ToolDescriptor, ToolKind
 from alphonse.agent_v2.core.tools.registry import ToolDefinition
+from alphonse.agent_v2.database import connect_database, default_database_path
 
 DEFAULT_TIMEOUT_SECONDS = 30.0
 MAX_TIMEOUT_SECONDS = 120.0
@@ -57,7 +58,7 @@ class SQLiteArtifactStore:
 
     @classmethod
     def default(cls) -> "SQLiteArtifactStore":
-        return cls(os.getenv("ALPHONSE_V2_ARTIFACTS_DB_PATH") or str(Path.home() / ".alphonse" / "v2-artifacts.sqlite3"))
+        return cls(default_database_path())
 
     def register(self, *, artifact_id: str, name: str, description: str, project_id: str, owner_user_id: str, entrypoint_path: str, argument_schema: dict[str, Any], timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS) -> ArtifactRecord:
         _validate_schema(argument_schema)
@@ -112,9 +113,7 @@ class SQLiteArtifactStore:
     def _connect(self) -> sqlite3.Connection:
         if self._memory is not None: return self._memory
         Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-        return conn
+        return connect_database(self.db_path)
 
     def _ensure_schema(self) -> None:
         with self._connect() as conn:

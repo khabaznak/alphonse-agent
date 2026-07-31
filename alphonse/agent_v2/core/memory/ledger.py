@@ -2,13 +2,20 @@
 
 from __future__ import annotations
 
+import logging
 import re
 import tempfile
 from pathlib import Path
+from threading import Lock, RLock
 from typing import Any, Callable
 
 from alphonse.agent_v2.memory_settings import MemorySettings
 from alphonse.agent_v2.memory_settings import SQLiteMemorySettingsStore
+
+
+logger = logging.getLogger(__name__)
+_SCOPE_LOCKS: dict[str, RLock] = {}
+_SCOPE_LOCKS_GUARD = Lock()
 
 
 class LedgerMemory:
@@ -20,23 +27,26 @@ class LedgerMemory:
         self._summarizer = summarizer
 
     def start_task(self, task: Any) -> str:
-        path = self._current_path(task, rollover=True)
-        task_id = str(task.task_id or task.message_id or "task").strip()
-        self._append(path, f"\n### Task {task_id}\n- User: {task.user or ''}\n- Project ID: {task.project_id or 'generic'}\n\n#### Conversation\n- User: {task.goal}\n")
-        return path.read_text(encoding="utf-8")
+        with self._scope_lock(str(task.user or "unknown"), str(task.project_id or "")):
+            path = self._current_path(task, rollover=True)
+            task_id = str(task.task_id or task.message_id or "task").strip()
+            self._append(path, f"\n### Task {task_id}\n- User: {task.user or ''}\n- Project ID: {task.project_id or 'generic'}\n\n#### Conversation\n- User: {task.goal}\n")
+            return path.read_text(encoding="utf-8")
 
     def event(self, task: Any, heading: str, content: Any) -> None:
-        path = self._current_path(task, rollover=False)
-        text = _render(content)
-        self._append(path, f"\n#### {heading}\n{text}\n")
+        with self._scope_lock(str(task.user or "unknown"), str(task.project_id or "")):
+            path = self._current_path(task, rollover=False)
+            text = _render(content)
+            self._append(path, f"\n#### {heading}\n{text}\n")
 
     def finish_task(self, task: Any) -> None:
         outcome = task.outcome if task.outcome is not None else {"status": task.status}
         self.event(task, "Outcome", outcome)
 
     def latest_content(self, *, user_id: str, project_id: str = "") -> str:
-        path = self._latest_path(user_id, project_id)
-        return path.read_text(encoding="utf-8") if path is not None else ""
+        with self._scope_lock(user_id, project_id):
+            path = self._latest_path(user_id, project_id)
+            return path.read_text(encoding="utf-8") if path is not None else ""
 
     def ensure_project_scope(self, *, user_id: str, project_id: str) -> Path:
         return self._scope_dir(user_id, project_id)
@@ -82,7 +92,24 @@ class LedgerMemory:
         temporary = path.with_suffix(".tmp")
         temporary.write_text(f"# Memory Ledger\n\n## Header\n- Compacted from {previous.name}\n\n## Previous Ledger\n[{previous.name}]({previous.name})\n\n## Compaction Summary\n{summary}\n\n## Memory\n", encoding="utf-8")
         temporary.replace(path)
+        logger.info(
+            "memory ledger rolled over user_id=%s project_id=%s previous=%s successor=%s previous_bytes=%s",
+            user_id,
+            project_id,
+            previous.name,
+            path.name,
+            previous.stat().st_size,
+        )
         return path
+
+    def _scope_lock(self, user_id: str, project_id: str) -> RLock:
+        key = str((Path(self._users_root()).expanduser().resolve() / user_id / project_id).resolve())
+        with _SCOPE_LOCKS_GUARD:
+            lock = _SCOPE_LOCKS.get(key)
+            if lock is None:
+                lock = RLock()
+                _SCOPE_LOCKS[key] = lock
+            return lock
 
     @staticmethod
     def _append(path: Path, content: str) -> None:

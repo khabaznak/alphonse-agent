@@ -143,6 +143,12 @@ class TaskState:
             "metadata": dict(self.metadata or {}),
         }
 
+    def to_checkpoint_dict(self) -> dict[str, Any]:
+        """Serialize resumable state without duplicating the project memory ledger."""
+        checkpoint = self.to_dict()
+        checkpoint["conversation_history_md"] = EMPTY_MARKDOWN
+        return checkpoint
+
     def to_markdown_prompt(self) -> str:
         """Render this task state into the markdown prompt container."""
         env = Environment(

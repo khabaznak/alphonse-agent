@@ -11,6 +11,8 @@ from pathlib import Path
 from typing import Literal
 from uuid import uuid4
 
+from alphonse.agent_v2.database import connect_database, default_database_path
+
 ProjectVisibility = Literal["private", "shared"]
 ProjectStatus = Literal["active", "archived"]
 PROJECT_CONTEXT_FILENAME = "project_context.md"
@@ -297,9 +299,7 @@ class ProjectStore:
             return _ConnectionProxy(self._memory_connection)
         path = Path(self.db_path)
         path.parent.mkdir(parents=True, exist_ok=True)
-        conn = sqlite3.connect(path)
-        conn.row_factory = sqlite3.Row
-        return conn
+        return connect_database(path)
 
     def _ensure_schema(self) -> None:
         with self._connect() as conn:
@@ -397,8 +397,4 @@ def _now_iso() -> str:
 
 
 def _default_project_db_path() -> str:
-    return (
-        os.getenv("ALPHONSE_V2_PROJECT_DB_PATH")
-        or os.getenv("ALPHONSE_V2_DB_PATH")
-        or str(Path.home() / ".alphonse" / "v2-projects.sqlite3")
-    )
+    return str(default_database_path())

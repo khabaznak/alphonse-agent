@@ -13,6 +13,7 @@ from typing import Any
 from alphonse.agent_v2.core.core import CoreMessage
 from alphonse.agent_v2.core.messages.queue import MessageSelector
 from alphonse.agent_v2.core.messages.queue import QueuedMessage
+from alphonse.agent_v2.database import connect_database, default_database_path
 
 
 class SQLiteMessageQueue:
@@ -29,12 +30,7 @@ class SQLiteMessageQueue:
 
     @classmethod
     def default(cls, *, lease_owner: str = "default") -> "SQLiteMessageQueue":
-        return cls(
-            os.getenv("ALPHONSE_V2_MESSAGES_DB_PATH")
-            or os.getenv("ALPHONSE_V2_DB_PATH")
-            or str(Path.home() / ".alphonse" / "v2-messages.sqlite3"),
-            lease_owner=lease_owner,
-        )
+        return cls(default_database_path(), lease_owner=lease_owner)
 
     def enqueue(self, message: CoreMessage, *, message_id: str | None = None) -> QueuedMessage:
         queued = QueuedMessage(message=message, message_id=str(message_id or QueuedMessage(message).message_id))
@@ -242,9 +238,7 @@ class SQLiteMessageQueue:
             return _ConnectionProxy(self._memory_connection)
         path = Path(self.db_path)
         path.parent.mkdir(parents=True, exist_ok=True)
-        conn = sqlite3.connect(path)
-        conn.row_factory = sqlite3.Row
-        return conn
+        return connect_database(path)
 
     def _ensure_schema(self) -> None:
         with self._connect() as conn:

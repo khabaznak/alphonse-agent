@@ -8,6 +8,8 @@ from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 
+from alphonse.agent_v2.database import connect_database, default_database_path
+
 
 @dataclass(frozen=True)
 class VerificationState:
@@ -83,7 +85,7 @@ class SQLiteMediaToolsSettingsStore:
 
     @classmethod
     def default(cls) -> "SQLiteMediaToolsSettingsStore":
-        return cls(os.getenv("ALPHONSE_V2_MEDIA_TOOLS_DB_PATH") or os.getenv("ALPHONSE_V2_DB_PATH") or str(Path.home() / ".alphonse" / "v2-media-tools.sqlite3"))
+        return cls(default_database_path())
 
     def get(self) -> MediaToolsSettings:
         with self._connect() as conn:
@@ -119,8 +121,7 @@ class SQLiteMediaToolsSettingsStore:
     def _connect(self):
         if self._memory is not None: return _Connection(self._memory)
         path = Path(self.db_path); path.parent.mkdir(parents=True, exist_ok=True)
-        conn = sqlite3.connect(path); conn.row_factory = sqlite3.Row
-        return conn
+        return connect_database(path)
 
     def _ensure_schema(self) -> None:
         with self._connect() as conn:

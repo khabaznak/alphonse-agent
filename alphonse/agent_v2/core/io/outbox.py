@@ -16,6 +16,7 @@ from alphonse.agent_v2.core.core import StateSnapshot
 from alphonse.agent_v2.core.io.channels import ChannelAddress
 from alphonse.agent_v2.core.io.channels import channel_address_from_metadata
 from alphonse.agent_v2.core.io.identity import V2IdentityResolver
+from alphonse.agent_v2.database import connect_database, default_database_path
 
 
 logger = logging.getLogger(__name__)
@@ -121,6 +122,7 @@ class SQLiteOutboundStore:
         project_id: str = "",
         reply_to_provider_message_id: str = "",
         metadata: dict[str, Any] | None = None,
+        connection: sqlite3.Connection | None = None,
     ) -> OutboundMessage:
         text = str(message or "").strip()
         if not text:
@@ -152,35 +154,42 @@ class SQLiteOutboundStore:
             raise ValueError("outbound_provider_key_required")
         if not record.channel_target:
             raise ValueError("outbound_channel_target_required")
-        with self._connect() as conn:
-            conn.execute(
-                """
-                INSERT INTO v2_outbox (
-                  outbox_message_id, integration_id, provider_key, channel_target, message,
-                  kind, audience_user_id, correlation_id, status, provider_message_id,
-                  reply_to_provider_message_id, task_id, question_id, project_id, metadata_json,
-                  claimed_at, delivered_at, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', '', ?, ?, ?, ?, ?, '', '', ?, ?)
-                """,
-                (
-                    record.outbox_message_id,
-                    record.integration_id,
-                    record.provider_key,
-                    record.channel_target,
-                    record.message,
-                    record.kind,
-                    record.audience_user_id,
-                    record.correlation_id,
-                    record.reply_to_provider_message_id,
-                    record.task_id,
-                    record.question_id,
-                    record.project_id,
-                    json.dumps(record.metadata, sort_keys=True),
-                    record.created_at,
-                    record.updated_at,
-                ),
-            )
+        if connection is not None:
+            self._insert(connection, record)
+        else:
+            with self._connect() as conn:
+                self._insert(conn, record)
         return record
+
+    @staticmethod
+    def _insert(conn: sqlite3.Connection, record: OutboundMessage) -> None:
+        conn.execute(
+            """
+            INSERT INTO v2_outbox (
+              outbox_message_id, integration_id, provider_key, channel_target, message,
+              kind, audience_user_id, correlation_id, status, provider_message_id,
+              reply_to_provider_message_id, task_id, question_id, project_id, metadata_json,
+              claimed_at, delivered_at, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', '', ?, ?, ?, ?, ?, '', '', ?, ?)
+            """,
+            (
+                record.outbox_message_id,
+                record.integration_id,
+                record.provider_key,
+                record.channel_target,
+                record.message,
+                record.kind,
+                record.audience_user_id,
+                record.correlation_id,
+                record.reply_to_provider_message_id,
+                record.task_id,
+                record.question_id,
+                record.project_id,
+                json.dumps(record.metadata, sort_keys=True),
+                record.created_at,
+                record.updated_at,
+            ),
+        )
 
     def list_pending(self, selector: OutboundSelector | None = None, *, limit: int = 100) -> list[OutboundMessage]:
         return self.list(selector or OutboundSelector(), limit=limit)
@@ -384,9 +393,7 @@ class SQLiteOutboundStore:
             return _ConnectionProxy(self._memory_connection)
         path = Path(self.db_path)
         path.parent.mkdir(parents=True, exist_ok=True)
-        conn = sqlite3.connect(path)
-        conn.row_factory = sqlite3.Row
-        return conn
+        return connect_database(path)
 
     def _ensure_schema(self) -> None:
         with self._connect() as conn:
@@ -558,6 +565,7 @@ def project_snapshot_to_outbox(
     outbox: SQLiteOutboundStore,
     identity_resolver: V2IdentityResolver | None = None,
     mirror_automation_messages_to_preferred_channel: bool = False,
+    connection: sqlite3.Connection | None = None,
 ) -> OutboundMessage | None:
     """Project a completed task snapshot response into the outbox."""
     metadata = snapshot.metadata or {}
@@ -590,6 +598,7 @@ def project_snapshot_to_outbox(
             "scheduled_run_id": str(task_metadata.get("scheduled_run_id") or "").strip(),
             "occurrence_key": str(task_metadata.get("occurrence_key") or "").strip(),
         },
+        connection=connection,
     )
     if mirror_automation_messages_to_preferred_channel and str(task_metadata.get("scheduled_task_id") or "").strip():
         _enqueue_preferred_automation_copy(
@@ -597,6 +606,7 @@ def project_snapshot_to_outbox(
             original=projected,
             recipient_user_id=str(task_state.get("user") or origin.alphonse_user_id or "").strip(),
             resolver=identity_resolver,
+            connection=connection,
         )
     return projected
 
@@ -607,6 +617,7 @@ def _enqueue_preferred_automation_copy(
     original: OutboundMessage,
     recipient_user_id: str,
     resolver: V2IdentityResolver | None,
+    connection: sqlite3.Connection | None = None,
 ) -> None:
     if resolver is None or not recipient_user_id:
         logger.info(
@@ -649,6 +660,7 @@ def _enqueue_preferred_automation_copy(
             task_id=original.task_id,
             project_id=original.project_id,
             metadata=metadata,
+            connection=connection,
         )
         logger.info("automation preferred-channel copy queued correlation_id=%s", original.correlation_id)
     except Exception:
@@ -866,7 +878,4 @@ def _migrate_status_check(conn: sqlite3.Connection) -> None:
 
 
 def _default_outbox_db_path() -> str:
-    configured = os.getenv("ALPHONSE_V2_OUTBOX_DB_PATH") or os.getenv("ALPHONSE_V2_DB_PATH")
-    if configured:
-        return configured
-    return str(Path.home() / ".alphonse" / "v2-outbox.sqlite3")
+    return str(default_database_path())

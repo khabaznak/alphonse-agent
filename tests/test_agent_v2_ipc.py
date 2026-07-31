@@ -214,16 +214,21 @@ def test_desktop_poll_is_cursor_based_and_acknowledges_only_its_delivery() -> No
 def test_desktop_conversation_history_is_project_scoped() -> None:
     runtime = build_runtime_host(inference=_router(), schedule_store=ScheduledTaskStore(":memory:"))
     daemon = V2Daemon(runtime)
-    first = runtime.outbox.enqueue(
-        address=ChannelAddress("desktop", "tui", "alex", alphonse_user_id="alex"),
-        message="Project one response.",
-        metadata={"project_id": "project-one"},
+    first = runtime.conversation_store.record(
+        owner_user_id="alex",
+        project_id="project-one",
+        role="assistant",
+        content="Project one response.",
+        source="desktop",
+        source_message_id="outbound:first",
     )
-    runtime.outbox.mark_delivered(first.outbox_message_id)
-    runtime.outbox.enqueue(
-        address=ChannelAddress("desktop", "tui", "alex", alphonse_user_id="alex"),
-        message="Project two response.",
-        metadata={"project_id": "project-two"},
+    runtime.conversation_store.record(
+        owner_user_id="alex",
+        project_id="project-two",
+        role="assistant",
+        content="Project two response.",
+        source="desktop",
+        source_message_id="outbound:second",
     )
 
     history = daemon.ipc._dispatch(
@@ -232,11 +237,13 @@ def test_desktop_conversation_history_is_project_scoped() -> None:
 
     assert history == [
         {
-            "id": first.outbox_message_id,
+            "id": "first",
             "role": "assistant",
             "content": "Project one response.",
+            "source": "desktop",
             "created_at": first.created_at,
             "project_id": "project-one",
+            "sequence": first.sequence,
         }
     ]
 

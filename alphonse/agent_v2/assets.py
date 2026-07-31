@@ -13,6 +13,8 @@ from pathlib import Path
 from typing import Any, Callable, Protocol
 from uuid import uuid4
 
+from alphonse.agent_v2.database import connect_database, default_database_path
+
 MAX_ATTACHMENT_BYTES = 50 * 1024 * 1024
 SUPPORTED_MIME_PREFIXES = ("image/", "audio/")
 SUPPORTED_MIME_TYPES = {"application/pdf", "audio/ogg"}
@@ -50,7 +52,7 @@ class SQLiteAssetStore:
     @classmethod
     def default(cls) -> "SQLiteAssetStore":
         base = Path(os.getenv("ALPHONSE_V2_ASSETS_ROOT") or Path.home() / ".alphonse" / "assets")
-        return cls(os.getenv("ALPHONSE_V2_ASSETS_DB_PATH") or Path.home() / ".alphonse" / "v2-assets.sqlite3", base)
+        return cls(default_database_path(), base)
     def register_bytes(self, *, owner_user_id: str, descriptor: AttachmentDescriptor, content: bytes, source: str) -> AssetRecord:
         if len(content) > MAX_ATTACHMENT_BYTES: raise ValueError("attachment_too_large")
         if not _supported(descriptor.mime_type): raise ValueError("attachment_type_unsupported")
@@ -76,7 +78,7 @@ class SQLiteAssetStore:
         shutil.rmtree(Path(record.path).parent, ignore_errors=True); return True
     def _connect(self):
         if self._memory is not None: return _Connection(self._memory)
-        Path(self.db_path).parent.mkdir(parents=True, exist_ok=True); conn = sqlite3.connect(self.db_path); conn.row_factory = sqlite3.Row; return conn
+        return connect_database(self.db_path)
     def _ensure_schema(self) -> None:
         with self._connect() as conn: conn.execute("CREATE TABLE IF NOT EXISTS v2_assets (asset_id TEXT PRIMARY KEY, owner_user_id TEXT NOT NULL, filename TEXT NOT NULL, mime_type TEXT NOT NULL, size_bytes INTEGER NOT NULL, sha256 TEXT NOT NULL, path TEXT NOT NULL, source TEXT NOT NULL, extracted_text TEXT NOT NULL DEFAULT '', processing_status TEXT NOT NULL DEFAULT 'unindexed', created_at TEXT NOT NULL) STRICT")
 

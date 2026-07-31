@@ -76,3 +76,27 @@ deterministic auth gates, timed follow-ups, and testing), see:
 For graph-layer observability design, retention policy, and operational diagnostics:
 
 - `docs/observability_and_harness.md`
+
+## V2 Persistence
+
+Alphonse v2 uses one local, WAL-enabled SQLite database for relational state. Separate
+tables retain their own schemas and lifecycles: identity and settings, projects and
+channel sessions, inbound and outbound queues, conversation events and cursors,
+questions and task checkpoints, scheduled tasks and executions, automations,
+communication threads, integrations, asset metadata, and artifacts.
+
+SQLite conversation events are the canonical user-visible timeline. Markdown ledgers
+are intentionally a different projection: compactable model context stored on disk
+under a user/project scope. Binary attachments, project files, user/project context,
+and agent configuration also remain on disk; relational tables store their metadata
+and paths.
+
+The daemon evaluates a fixed 30-day retention policy daily for terminal operational
+rows. Pending and retryable work, conversation events, and Markdown memory are never
+removed by this policy. Checkpoints store actionable task state but do not embed the
+Markdown ledger; resumed tasks reload the current scoped ledger when processing
+starts.
+
+Users and projects can enqueue concurrently. SQLite WAL, a busy timeout, consistent
+transactions, and per-scope ledger locks protect those writes. CAPD task execution is
+still serial; parallel CAPD processing is a separate future capability.

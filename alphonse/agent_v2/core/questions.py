@@ -11,6 +11,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
+from alphonse.agent_v2.database import connect_database, default_database_path
+
 if TYPE_CHECKING:
     from alphonse.agent_v2.core.intelligence.task_state import TaskState
 
@@ -205,9 +207,9 @@ class SQLiteQuestionStore:
         task.metadata["pending_question_id"] = interrupt.question_id
         task.metadata["question_interrupt"] = interrupt.to_dict()
         task.append_update(f"Task parked waiting for answer to question {interrupt.question_id}.")
-        self.save_task_checkpoint(task, status="waiting_user")
 
         with self._connect() as conn:
+            self._save_task_checkpoint(conn, task, status="waiting_user")
             conn.execute(
                 """
                 INSERT INTO v2_questions (
@@ -288,35 +290,44 @@ class SQLiteQuestionStore:
             return cursor.rowcount == 1
 
     def save_task_checkpoint(self, task: TaskState, *, status: str | None = None) -> int:
+        with self._connect() as conn:
+            return self._save_task_checkpoint(conn, task, status=status)
+
+    def _save_task_checkpoint(
+        self,
+        conn: sqlite3.Connection,
+        task: TaskState,
+        *,
+        status: str | None = None,
+    ) -> int:
         task_id = _ensure_task_id(task)
         now = _now().isoformat()
-        with self._connect() as conn:
-            existing = conn.execute(
-                "SELECT version, created_at FROM v2_task_checkpoints WHERE task_id = ?",
-                (task_id,),
-            ).fetchone()
-            version = int(existing["version"]) + 1 if existing is not None else 1
-            created_at = str(existing["created_at"]) if existing is not None else now
-            conn.execute(
-                """
-                INSERT OR REPLACE INTO v2_task_checkpoints (
-                  task_id, task_state_json, status, owner_id, project_id, correlation_id,
-                  version, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    task_id,
-                    json.dumps(task.to_dict(), sort_keys=True),
-                    str(status or task.status or "running"),
-                    str(task.user or ""),
-                    task.project_id,
-                    task.correlation_id,
-                    version,
-                    created_at,
-                    now,
-                ),
-            )
-            return version
+        existing = conn.execute(
+            "SELECT version, created_at FROM v2_task_checkpoints WHERE task_id = ?",
+            (task_id,),
+        ).fetchone()
+        version = int(existing["version"]) + 1 if existing is not None else 1
+        created_at = str(existing["created_at"]) if existing is not None else now
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO v2_task_checkpoints (
+              task_id, task_state_json, status, owner_id, project_id, correlation_id,
+              version, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                task_id,
+                json.dumps(task.to_checkpoint_dict(), sort_keys=True),
+                str(status or task.status or "running"),
+                str(task.user or ""),
+                task.project_id,
+                task.correlation_id,
+                version,
+                created_at,
+                now,
+            ),
+        )
+        return version
 
     def load_task_checkpoint(self, task_id: str) -> TaskState | None:
         with self._connect() as conn:
@@ -327,6 +338,21 @@ class SQLiteQuestionStore:
         if row is None:
             return None
         return _task_state_cls().from_dict(_json_object(row["task_state_json"]))
+
+    def mark_task_checkpoint_terminal(self, task_id: str, *, status: str) -> bool:
+        normalized = str(status or "").strip().lower()
+        if normalized not in {"done", "failed", "cancelled"}:
+            raise ValueError("task_checkpoint_terminal_status_invalid")
+        with self._connect() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE v2_task_checkpoints
+                SET status=?, updated_at=?
+                WHERE task_id=? AND status IN ('queued','running','waiting_user')
+                """,
+                (normalized, _now().isoformat(), str(task_id or "").strip()),
+            )
+        return cursor.rowcount == 1
 
     def get_question(self, question_id: str) -> QuestionInterrupt | None:
         with self._connect() as conn:
@@ -438,7 +464,7 @@ class SQLiteQuestionStore:
                 """,
                 (now, question.question_id),
             )
-        self.save_task_checkpoint(task, status="queued")
+            self._save_task_checkpoint(conn, task, status="queued")
         answered = QuestionInterrupt.from_dict({**question.to_dict(), "status": "answered"})
         return QuestionAnswerResult(
             handled=True,
@@ -450,15 +476,31 @@ class SQLiteQuestionStore:
 
     def cancel_question(self, question_id: str) -> bool:
         now = _now().isoformat()
+        normalized_question_id = str(question_id or "").strip()
         with self._connect() as conn:
+            row = conn.execute(
+                "SELECT task_id FROM v2_questions WHERE question_id = ? AND status = 'pending'",
+                (normalized_question_id,),
+            ).fetchone()
             cursor = conn.execute(
                 "UPDATE v2_questions SET status = 'cancelled', updated_at = ? WHERE question_id = ? AND status = 'pending'",
-                (now, str(question_id or "").strip()),
+                (now, normalized_question_id),
             )
             if cursor.rowcount == 1:
                 conn.execute(
                     "UPDATE v2_task_dependencies SET status = 'cancelled', updated_at = ? WHERE question_id = ?",
-                    (now, str(question_id or "").strip()),
+                    (now, normalized_question_id),
+                )
+                conn.execute(
+                    """
+                    UPDATE v2_task_checkpoints SET status='cancelled', updated_at=?
+                    WHERE status='waiting_user' AND (
+                      task_id=? OR task_id IN (
+                        SELECT child_task_id FROM v2_task_dependencies WHERE question_id=?
+                      )
+                    )
+                    """,
+                    (now, str(row["task_id"]) if row is not None else "", normalized_question_id),
                 )
             return cursor.rowcount == 1
 
@@ -469,10 +511,31 @@ class SQLiteQuestionStore:
                 "SELECT * FROM v2_questions WHERE status = 'pending' AND expires_at <= ?",
                 (current,),
             ).fetchall()
+            task_ids = [str(row["task_id"]) for row in rows]
+            question_ids = [str(row["question_id"]) for row in rows]
             conn.execute(
                 "UPDATE v2_questions SET status = 'expired', updated_at = ? WHERE status = 'pending' AND expires_at <= ?",
                 (current, current),
             )
+            for task_id, question_id in zip(task_ids, question_ids):
+                conn.execute(
+                    """
+                    UPDATE v2_task_checkpoints SET status='cancelled', updated_at=?
+                    WHERE status='waiting_user' AND (
+                      task_id=? OR task_id IN (
+                        SELECT child_task_id FROM v2_task_dependencies WHERE question_id=?
+                      )
+                    )
+                    """,
+                    (current, task_id, question_id),
+                )
+                conn.execute(
+                    """
+                    UPDATE v2_task_dependencies SET status='expired', updated_at=?
+                    WHERE question_id=? AND status='pending'
+                    """,
+                    (current, question_id),
+                )
         return [_question_from_row(row) for row in rows]
 
     def _select_question(
@@ -518,9 +581,7 @@ class SQLiteQuestionStore:
             return _ConnectionProxy(self._memory_connection)
         path = Path(self.db_path)
         path.parent.mkdir(parents=True, exist_ok=True)
-        conn = sqlite3.connect(path)
-        conn.row_factory = sqlite3.Row
-        return conn
+        return connect_database(path)
 
     def _ensure_schema(self) -> None:
         with self._connect() as conn:
@@ -819,11 +880,4 @@ def _task_state_cls() -> Any:
 
 
 def _default_db_path() -> str:
-    configured = (
-        os.getenv("ALPHONSE_V2_QUESTION_DB_PATH")
-        or os.getenv("ALPHONSE_V2_DB_PATH")
-        or os.getenv("NERVE_DB_PATH")
-    )
-    if configured:
-        return configured
-    return str(Path.home() / ".alphonse" / "v2-questions.sqlite3")
+    return str(default_database_path())

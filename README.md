@@ -130,31 +130,32 @@ The daemon uses a local Unix socket for interface communication. Its default
 runtime files are stored under `~/.alphonse/`:
 
 - `v2-daemon.sock` — local daemon IPC socket
-- `v2-messages.sqlite3` — durable inbound message queue
-- `v2-outbox.sqlite3` — durable outbound message queue
-- `v2-scheduled-tasks.sqlite3` — scheduled task definitions and executions
-- `v2-automations.sqlite3` — registered local workers, event types, event history, and event automations
-- `v2-integrations.sqlite3` — integration configuration and local secrets
-- `v2-inference.sqlite3` — daemon-wide inference provider and model selection
+- `alphonse-v2.sqlite3` — the canonical WAL-enabled relational database for users,
+  projects, queues, conversations, questions, checkpoints, schedules, deliveries,
+  integrations, assets metadata, artifacts, and settings
 - `agent-config/` — editable `GlobalContext.md` and `Philosophy.md` snapshots
-- `v2-project-sessions.sqlite3` — active project selections by channel conversation
-- `v2-users.sqlite3` — canonical users, admin role, and channel address mappings
-- `users/` — local user profiles and managed non-admin projects
+- `users/` — user/project context, managed projects, attachments, and scoped Markdown
+  memory ledgers
+
+Conversation events in SQLite are the canonical UI timeline. Markdown ledgers remain
+the model-facing, portable prompt memory and are isolated by `(user_id, project_id)`.
+They are not a second UI-history store.
 
 Override paths with these environment variables when needed:
 
 ```dotenv
 ALPHONSE_V2_SOCKET_PATH=
-ALPHONSE_V2_MESSAGES_DB_PATH=
-ALPHONSE_V2_OUTBOX_DB_PATH=
-ALPHONSE_V2_SCHEDULE_DB_PATH=
-ALPHONSE_V2_AUTOMATIONS_DB_PATH=
-ALPHONSE_V2_INTEGRATIONS_DB_PATH=
+ALPHONSE_V2_DB_PATH=
 ALPHONSE_V2_AGENT_CONFIG_DIR=
-ALPHONSE_V2_PROJECT_SESSION_DB_PATH=
 ALPHONSE_V2_MANAGED_PROJECTS_DIR=
-ALPHONSE_V2_USERS_DB_PATH=
 ```
+
+On the first daemon startup after upgrading, Alphonse backs up and imports legacy
+store-specific SQLite files into the unified database, validates the result, and
+records the migration. The old store-specific `ALPHONSE_V2_*_DB_PATH` variables are
+read only as legacy migration sources and are deprecated. Stop the daemon before the
+upgrade so no legacy file is being written during the import. Timestamped backups are
+kept under `~/.alphonse/backups/`.
 
 ### Start the v2 TUI
 

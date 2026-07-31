@@ -163,11 +163,21 @@ def test_legacy_ledger_recovers_only_visible_turns() -> None:
     assert [(event["role"], event["content"]) for event in events] == [("user", "What is this?"), ("assistant", "It is a prototype.")]
 
 
-def test_desktop_history_uses_legacy_ledger_when_timeline_is_empty(monkeypatch) -> None:
+def test_desktop_history_imports_legacy_ledger_only_once(monkeypatch) -> None:
     runtime = build_runtime_host(conversation_store=SQLiteConversationStore(":memory:"))
     daemon = V2Daemon(runtime)
-    monkeypatch.setattr(runtime.core.memory, "latest_content", lambda **_: "### Task one\n#### Conversation\n- User: Restore me\n#### Conversation\n- Alphonse: Restored.")
+    reads = 0
+
+    def ledger(**_) -> str:
+        nonlocal reads
+        reads += 1
+        return "### Task one\n#### Conversation\n- User: Restore me\n#### Conversation\n- Alphonse: Restored."
+
+    monkeypatch.setattr(runtime.core.memory, "latest_content", ledger)
 
     history = daemon.desktop_conversation_history(user="alex", project_id="innovator")
+    repeated = daemon.desktop_conversation_history(user="alex", project_id="innovator")
 
     assert [(item["role"], item["content"]) for item in history] == [("user", "Restore me"), ("assistant", "Restored.")]
+    assert repeated == history
+    assert reads == 1

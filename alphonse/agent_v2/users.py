@@ -10,6 +10,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
+
+from alphonse.agent_v2.database import connect_database, default_database_path
 from uuid import uuid4
 
 USER_CONTEXT_FILENAME = "user_context.md"
@@ -72,8 +74,7 @@ class V2UserStore:
 
     @classmethod
     def default(cls) -> "V2UserStore":
-        path = os.getenv("ALPHONSE_V2_USERS_DB_PATH") or os.getenv("ALPHONSE_V2_DB_PATH") or str(Path.home() / ".alphonse" / "v2-users.sqlite3")
-        return cls(path)
+        return cls(default_database_path())
 
     @property
     def is_ephemeral(self) -> bool:
@@ -474,8 +475,7 @@ class V2UserStore:
         if self._memory is not None:
             return _Connection(self._memory)
         path = Path(self.db_path); path.parent.mkdir(parents=True, exist_ok=True)
-        conn = sqlite3.connect(path); conn.row_factory = sqlite3.Row
-        return conn
+        return connect_database(path)
 
     def _ensure_schema(self) -> None:
         with self._connect() as conn:

@@ -16,6 +16,7 @@ from zoneinfo import ZoneInfo
 from dateutil.rrule import rrulestr
 
 from alphonse.agent_v2.core.messages import CommunicationChannel
+from alphonse.agent_v2.database import connect_database, default_database_path
 
 ScheduleKind = Literal["once", "rrule"]
 ScheduledTaskStatus = Literal["active", "paused", "completed", "cancelled", "failed"]
@@ -651,13 +652,20 @@ class ScheduledTaskStore:
             lease_expires_at="",
         )
 
-    def mark_occurrence_response_pending(self, occurrence_key: str, *, response_outbox_id: str = "") -> bool:
+    def mark_occurrence_response_pending(
+        self,
+        occurrence_key: str,
+        *,
+        response_outbox_id: str = "",
+        connection: sqlite3.Connection | None = None,
+    ) -> bool:
         return self._update_occurrence(
             occurrence_key,
             status="response_pending",
             response_outbox_id=str(response_outbox_id or "").strip(),
             lease_owner="",
             lease_expires_at="",
+            connection=connection,
         )
 
     def mark_occurrence_failed(self, occurrence_key: str, *, error: str) -> bool:
@@ -670,7 +678,14 @@ class ScheduledTaskStore:
             lease_expires_at="",
         )
 
-    def _update_occurrence(self, occurrence_key: str, *, worker_id: str = "", **values: Any) -> bool:
+    def _update_occurrence(
+        self,
+        occurrence_key: str,
+        *,
+        worker_id: str = "",
+        connection: sqlite3.Connection | None = None,
+        **values: Any,
+    ) -> bool:
         allowed = {
             "status", "queued_message_id", "lease_expires_at", "lease_owner", "last_error",
             "error", "next_attempt_at", "response_outbox_id",
@@ -683,12 +698,18 @@ class ScheduledTaskStore:
         if worker_id:
             where += " AND lease_owner = ?"
             params.append(str(worker_id).strip())
+        if connection is not None:
+            cursor = connection.execute(
+                f"UPDATE v2_scheduled_task_executions SET {assignments} WHERE {where}",
+                tuple(params),
+            )
+            return cursor.rowcount == 1
         with self._connect() as conn:
             cursor = conn.execute(
                 f"UPDATE v2_scheduled_task_executions SET {assignments} WHERE {where}",
                 tuple(params),
             )
-            return cursor.rowcount == 1
+        return cursor.rowcount == 1
 
     def _set_status(self, scheduled_task_id: str, status: ScheduledTaskStatus, *, clear_next: bool) -> ScheduledTaskRecord:
         task = self._require_task(scheduled_task_id)
@@ -753,9 +774,7 @@ class ScheduledTaskStore:
             return _ConnectionProxy(self._memory_connection)
         path = Path(self.db_path)
         path.parent.mkdir(parents=True, exist_ok=True)
-        conn = sqlite3.connect(path)
-        conn.row_factory = sqlite3.Row
-        return conn
+        return connect_database(path)
 
     def _ensure_schema(self) -> None:
         with self._connect() as conn:
@@ -1179,8 +1198,4 @@ def _now_iso() -> str:
 
 
 def _default_schedule_db_path() -> str:
-    return (
-        os.getenv("ALPHONSE_V2_SCHEDULE_DB_PATH")
-        or os.getenv("ALPHONSE_V2_DB_PATH")
-        or str(Path.home() / ".alphonse" / "v2-scheduled-tasks.sqlite3")
-    )
+    return str(default_database_path())

@@ -14,6 +14,8 @@ from uuid import uuid4
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import SchemaError, ValidationError
 
+from alphonse.agent_v2.database import connect_database, default_database_path
+
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -57,7 +59,7 @@ class EventAutomationStore:
 
     @classmethod
     def default(cls) -> "EventAutomationStore":
-        return cls(os.getenv("ALPHONSE_V2_AUTOMATIONS_DB_PATH") or str(Path.home() / ".alphonse" / "v2-automations.sqlite3"))
+        return cls(default_database_path())
 
     def register_worker(self, *, worker_id: str, display_name: str, allowed_event_types: list[str], enabled: bool = True) -> WorkerRecord:
         worker = str(worker_id or "").strip(); name = str(display_name or "").strip()
@@ -161,7 +163,7 @@ class EventAutomationStore:
 
     def _connect(self):
         if self._memory is not None: return _Connection(self._memory)
-        path = Path(self.db_path); path.parent.mkdir(parents=True, exist_ok=True); conn = sqlite3.connect(path); conn.row_factory = sqlite3.Row; return conn
+        return connect_database(self.db_path)
 
     def _ensure_schema(self) -> None:
         with self._connect() as conn: conn.executescript("""

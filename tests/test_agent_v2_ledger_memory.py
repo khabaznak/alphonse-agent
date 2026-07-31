@@ -1,5 +1,6 @@
 from pathlib import Path
 from types import SimpleNamespace
+from concurrent.futures import ThreadPoolExecutor
 
 from alphonse.agent_v2.core.memory import LedgerMemory
 from alphonse.agent_v2.memory_settings import MemorySettings
@@ -43,3 +44,17 @@ def test_generic_and_project_memory_do_not_mix(tmp_path: Path) -> None:
     memory.start_task(_task(project=""))
     memory.start_task(_task(project="home"))
     assert memory.latest_content(user_id="alex", project_id="") != memory.latest_content(user_id="alex", project_id="home")
+
+
+def test_concurrent_ledger_appends_do_not_interleave_or_drop_events(tmp_path: Path) -> None:
+    memory = _memory(tmp_path)
+    task = _task(project="shared")
+    memory.start_task(task)
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        list(executor.map(lambda index: memory.event(task, "Conversation", f"- User: event-{index:03d}"), range(100)))
+
+    content = memory.latest_content(user_id="alex", project_id="shared")
+
+    for index in range(100):
+        assert content.count(f"event-{index:03d}") == 1

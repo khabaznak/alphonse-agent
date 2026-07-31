@@ -6,12 +6,13 @@ import { matchingCommands } from "./commands";
 import { mergeFreshConversationHistory } from "./conversationHistory";
 import { buildConversationTimeline } from "./conversationTimeline";
 import { A2uiSurfaceView, applyA2uiEvent, DESKTOP_CATALOG_ID, type A2uiSurface } from "./a2ui";
+import { DESKTOP_STYLE_STORAGE_KEY, parseDesktopStyle, type DesktopStyle } from "./desktopStyle";
 import { agentStateLabel, capdActivityLabel, projectKey } from "./layoutState";
 import { formatMessageTime } from "./messageTime";
 import type { ActivityEvent, AgentDocument, ChatMessage, InferenceSettings, MediaToolsSettings, MemorySettings, Project, Question, WebToolsSettings } from "./types";
 
 type Modal = "projects" | "project-settings" | "project-context" | "scheduled-tasks" | "settings" | "users" | "onboarding" | null;
-type SettingsTab = "general" | "tools" | "artifacts" | "integrations" | "automations" | "model" | "agent-config";
+type SettingsTab = "general" | "appearance" | "tools" | "artifacts" | "integrations" | "automations" | "model" | "agent-config";
 type ManagedProject = Project & { owner?: { display_name?: string; user_id?: string } | null };
 type PollResponse = {
   events: ActivityEvent[];
@@ -72,6 +73,7 @@ export default function App() {
   const [morphedMessageTaskIds, setMorphedMessageTaskIds] = useState<Record<string, string>>({});
   const [heldProgressSurfaces, setHeldProgressSurfaces] = useState<Record<string, A2uiSurface>>({});
   const [enterToSend, setEnterToSend] = useState(() => window.localStorage.getItem("alphonse.desktop.enterToSend") !== "false");
+  const [desktopStyle, setDesktopStyle] = useState<DesktopStyle>(() => parseDesktopStyle(window.localStorage.getItem(DESKTOP_STYLE_STORAGE_KEY)));
   const currentProjectKey = projectKey(project?.project_id);
   activeProjectKeyRef.current = currentProjectKey;
 
@@ -212,6 +214,11 @@ export default function App() {
   useEffect(() => {
     window.localStorage.setItem("alphonse.desktop.enterToSend", String(enterToSend));
   }, [enterToSend]);
+
+  useEffect(() => {
+    window.localStorage.setItem(DESKTOP_STYLE_STORAGE_KEY, desktopStyle);
+    document.documentElement.dataset.alphonseStyle = desktopStyle;
+  }, [desktopStyle]);
 
   useEffect(() => {
     if (!user) return;
@@ -485,7 +492,7 @@ export default function App() {
       {modal === "project-settings" && projectForSettings && <ProjectSettingsModal user={user} project={projectForSettings} onBack={() => setModal("projects")} onClose={() => setModal(null)} />}
       {modal === "project-context" && <ProjectContextModal user={user} project={project} onClose={() => setModal(null)} />}
       {modal === "scheduled-tasks" && <ScheduledTasksModal actorUserId={user} initialTaskId={scheduledTaskForView} onClose={() => { setScheduledTaskForView(""); setModal(null); }} />}
-      {modal === "settings" && <SettingsModal user={user} initialTab={settingsTab} enterToSend={enterToSend} onEnterToSendChange={setEnterToSend} onTimezoneChange={setTimezone} onClose={() => setModal(null)} />}
+      {modal === "settings" && <SettingsModal user={user} initialTab={settingsTab} enterToSend={enterToSend} desktopStyle={desktopStyle} onDesktopStyleChange={setDesktopStyle} onEnterToSendChange={setEnterToSend} onTimezoneChange={setTimezone} onClose={() => setModal(null)} />}
       {modal === "users" && <UsersModal onClose={() => setModal(null)} />}
       {modal === "onboarding" && <OnboardingModal onComplete={(next) => { setUser(next); setModal(null); void poll(); }} />}
     </main>
@@ -523,7 +530,7 @@ function OnboardingModal({ onComplete }: { onComplete: (userId: string) => void 
   return <ModalFrame title="Set up Alphonse" onClose={() => undefined}><p>Create the local administrator and choose where user data is stored.</p><input value={name} onChange={(event) => setName(event.target.value)} placeholder="Your name" /><input value={root} onChange={(event) => setRoot(event.target.value)} placeholder="Users root" /><label><input type="checkbox" checked={importV1} onChange={(event) => setImportV1(event.target.checked)} /> Import existing v1 identity data</label><button onClick={() => void save()}>Create administrator</button><p>{error}</p></ModalFrame>;
 }
 
-function SettingsModal({ user, initialTab, enterToSend, onEnterToSendChange, onTimezoneChange, onClose }: { user: string; initialTab: SettingsTab; enterToSend: boolean; onEnterToSendChange: (value: boolean) => void; onTimezoneChange: (value: string) => void; onClose: () => void }) {
+function SettingsModal({ user, initialTab, enterToSend, desktopStyle, onDesktopStyleChange, onEnterToSendChange, onTimezoneChange, onClose }: { user: string; initialTab: SettingsTab; enterToSend: boolean; desktopStyle: DesktopStyle; onDesktopStyleChange: (value: DesktopStyle) => void; onEnterToSendChange: (value: boolean) => void; onTimezoneChange: (value: string) => void; onClose: () => void }) {
   const [root, setRoot] = useState(""); const [timezone, setTimezone] = useState("UTC"); const [notice, setNotice] = useState(""); const [tab, setTab] = useState<SettingsTab>(initialTab);
   const [web, setWeb] = useState<WebToolsSettings | null>(null); const [webNotice, setWebNotice] = useState("");
   const [memory, setMemory] = useState<MemorySettings | null>(null); const [memoryNotice, setMemoryNotice] = useState("");
@@ -536,8 +543,9 @@ function SettingsModal({ user, initialTab, enterToSend, onEnterToSendChange, onT
   const verify = async (kind: "search" | "fetch") => { try { const current = await daemonRequest<{ user: { user_id: string } | null }>("current_user"); if (!current.user) return; const result = await daemonRequest<{ result: { exception?: { message?: string } } }>("verify_web_tools", { actor_user_id: current.user.user_id, kind }); setWebNotice(result.result.exception?.message || `${kind === "search" ? "SearXNG search" : "Public fetch"} verified.`); } catch (cause) { setWebNotice(cause instanceof Error ? cause.message : "Verification failed"); } };
   const saveMemory = async () => { if (!memory) return; try { const current = await daemonRequest<{ user: { user_id: string } | null }>("current_user"); if (!current.user) return; const result = await daemonRequest<{ settings: MemorySettings }>("save_memory_settings", { actor_user_id: current.user.user_id, values: memory }); setMemory(result.settings); setMemoryNotice("Saved. New tasks use these limits."); } catch (cause) { setMemoryNotice(cause instanceof Error ? cause.message : "Memory settings could not be saved"); } };
   return <ModalFrame title="Settings" onClose={onClose}>
-    <div className="settings-tabs" role="tablist" aria-label="Settings sections">{(["general", "tools", "artifacts", "integrations", "automations", "model", "agent-config"] as SettingsTab[]).map((item) => <button key={item} type="button" role="tab" aria-selected={tab === item} className={tab === item ? "active" : ""} onClick={() => setTab(item)}>{item === "agent-config" ? "Agent configuration" : item[0].toUpperCase() + item.slice(1)}</button>)}</div>
+    <div className="settings-tabs" role="tablist" aria-label="Settings sections">{(["general", "appearance", "tools", "artifacts", "integrations", "automations", "model", "agent-config"] as SettingsTab[]).map((item) => <button key={item} type="button" role="tab" aria-selected={tab === item} className={tab === item ? "active" : ""} onClick={() => setTab(item)}>{item === "agent-config" ? "Agent configuration" : item[0].toUpperCase() + item.slice(1)}</button>)}</div>
     {tab === "general" && <><label className="setting-row"><input type="checkbox" checked={enterToSend} onChange={(event) => onEnterToSendChange(event.target.checked)} /> Enter sends message</label><br/><label>Users root<input value={root} onChange={(event) => setRoot(event.target.value)} /></label><label>Timezone<input value={timezone} placeholder="America/Mexico_City" onChange={(event) => setTimezone(event.target.value)} /><small>Use an IANA timezone. New scheduled tasks use this unless a timezone is explicitly specified.</small></label><button onClick={() => void save()}>Save</button><p>{notice}</p><section><h3>Conversation Memory</h3>{memory && <><label>Ledger limit (bytes)<input type="number" value={memory.max_ledger_bytes} onChange={(event) => setMemory({ ...memory, max_ledger_bytes: Number(event.target.value) })} /></label><label>Compaction limit (words)<input type="number" value={memory.compaction_summary_max_words} onChange={(event) => setMemory({ ...memory, compaction_summary_max_words: Number(event.target.value) })} /></label><button onClick={() => void saveMemory()}>Save Memory Settings</button></>}<p>{memoryNotice}</p></section></>}
+    {tab === "appearance" && <AppearanceSettingsSection value={desktopStyle} onChange={onDesktopStyleChange} />}
     {tab === "tools" && <><section><h3>Web Tools</h3><p>Run SearXNG separately in Docker with JSON output enabled. Alphonse connects to it; it does not manage Docker.</p>{web && <><label className="setting-row"><input type="checkbox" checked={web.enabled} onChange={(event) => setWeb({ ...web, enabled: event.target.checked })} /> Enable Web Search and Fetch</label><label>SearXNG URL<input value={web.searxng_base_url} placeholder="http://127.0.0.1:8080" onChange={(event) => setWeb({ ...web, searxng_base_url: event.target.value })} /></label><label>Search timeout (seconds)<input type="number" value={web.search_timeout_seconds} onChange={(event) => setWeb({ ...web, search_timeout_seconds: Number(event.target.value) })} /></label><label>Fetch timeout (seconds)<input type="number" value={web.fetch_timeout_seconds} onChange={(event) => setWeb({ ...web, fetch_timeout_seconds: Number(event.target.value) })} /></label><label>Fetch text limit<input type="number" value={web.fetch_max_chars} onChange={(event) => setWeb({ ...web, fetch_max_chars: Number(event.target.value) })} /></label><button onClick={() => void saveWeb()}>Save Web Tools</button><button onClick={() => void verify("search")}>Verify SearXNG</button><button onClick={() => void verify("fetch")}>Verify Fetch</button></>}<p>{webNotice}</p></section><MediaToolsSettingsSection /></>}
     {tab === "artifacts" && <ArtifactsSettingsSection user={user} />}
     {tab === "integrations" && <IntegrationsSettingsSection user={user} />}
@@ -545,6 +553,23 @@ function SettingsModal({ user, initialTab, enterToSend, onEnterToSendChange, onT
     {tab === "model" && <ModelSettingsSection />}
     {tab === "agent-config" && <AgentConfigSettingsSection />}
   </ModalFrame>;
+}
+
+function AppearanceSettingsSection({ value, onChange }: { value: DesktopStyle; onChange: (value: DesktopStyle) => void }) {
+  const options: Array<{ value: DesktopStyle; label: string; description: string }> = [
+    { value: "classic", label: "Classic", description: "The current green editorial style with Fraunces and DM Mono." },
+    { value: "modern", label: "Modern", description: "A crisp Helvetica interface with neutral surfaces and teal accents." },
+  ];
+  return <section className="settings-panel appearance-settings">
+    <div><h3>Appearance</h3><p>Choose how Alphonse Desktop looks on this Mac. Your selection applies immediately.</p></div>
+    <div className="style-picker" role="radiogroup" aria-label="Desktop style">
+      {options.map((option) => <button key={option.value} type="button" role="radio" aria-checked={value === option.value} className={`style-preview ${option.value}${value === option.value ? " selected" : ""}`} onClick={() => onChange(option.value)}>
+        <span className="style-preview-window" aria-hidden="true"><span className="style-preview-sidebar" /><span className="style-preview-content"><span /><span /><i /></span></span>
+        <span className="style-preview-copy"><strong>{option.label}</strong><small>{option.description}</small></span>
+        <span className="style-preview-selected">{value === option.value ? "Selected" : "Select"}</span>
+      </button>)}
+    </div>
+  </section>;
 }
 
 type Artifact = { artifact_id: string; name: string; description: string; project_id: string; entrypoint_path: string; enabled: boolean; timeout_seconds: number };
