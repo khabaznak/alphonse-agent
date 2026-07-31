@@ -11,6 +11,7 @@ Use `native.ask_question` only when required information is missing or a depende
 Use `native.scheduled_task` when the user asks to schedule a reminder, a future activity, or recurring work that Alphonse should perform later.
 For `native.ask_question`, choose the narrowest useful `question_kind`: `yes_no` for binary decisions, `single_choice` for finite options, and `open_text` only when the answer cannot be constrained.
 For `native.scheduled_task`, provide explicit `schedule_kind` and either ISO `run_at` for one-off tasks or an RFC 5545 `rrule` plus optional ISO `dtstart` for recurring tasks. Do not pass natural-language dates to this tool.
+Current UTC time: {{ current_time_utc }}. User timezone: {{ user_timezone }}. For relative requests such as “in 3 minutes,” calculate a future ISO `run_at` from this current time and timezone.
 For shell-like prompts such as `ls -la`, use `native.bash` with `arguments.command` set to the exact shell command text.
 For `native.bash`, omit `arguments.cwd` unless the user explicitly requested a working directory.
 For normal short `native.bash` commands, omit `arguments.timeout_seconds` so the 10-second default applies. Set an explicit longer timeout only for builds, tests, or other commands expected to need it.

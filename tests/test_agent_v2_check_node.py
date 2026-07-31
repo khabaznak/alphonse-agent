@@ -56,6 +56,28 @@ def test_check_node_consumes_same_user_same_project_steering() -> None:
     assert queue.size() == 1
 
 
+def test_check_node_leaves_scheduled_occurrences_for_independent_processing() -> None:
+    queue = InMemoryMessageQueue()
+    channel = CommunicationChannel(queue)
+    channel.queue_message(
+        prompt="Time to drink water.",
+        user="alex",
+        project_id="alpha",
+        metadata={"source": "scheduled_task", "scheduled_task_id": "scheduled-task-1"},
+    )
+    task = TaskState(
+        goal="Continue task",
+        user="alex",
+        project_id="alpha",
+        acceptance_criteria_md="- Feature works",
+    )
+
+    check_node(task, context=CoreLoopContext(messages=queue))
+
+    assert task.check_new_message_count == 0
+    assert queue.size() == 1
+
+
 def test_check_node_steer_reviews_acceptance_criteria_before_returning(monkeypatch) -> None:
     queue = InMemoryMessageQueue()
     CommunicationChannel(queue).queue_message(prompt="The file exists now", user="alex", project_id="alpha")

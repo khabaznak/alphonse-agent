@@ -194,6 +194,14 @@ def _consume_steering_messages(task: TaskState, context: CoreLoopContext | None)
 def _consume_matching(task: TaskState, context: CoreLoopContext, selector: MessageSelector) -> int:
     consumed = 0
     while True:
+        pending = context.messages.peek(selector)
+        if pending is None:
+            return consumed
+        metadata = pending.message.metadata if isinstance(pending.message.metadata, dict) else {}
+        if str(metadata.get("source") or "") == "scheduled_task":
+            # Automation occurrences must be processed as independent tasks so
+            # their delivery metadata survives through outbox projection.
+            return consumed
         queued = context.consume_message(selector)
         if queued is None:
             return consumed

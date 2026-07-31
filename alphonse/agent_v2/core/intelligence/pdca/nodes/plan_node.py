@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, TYPE_CHECKING
 from uuid import uuid4
+from datetime import datetime, timezone
 
 from jinja2 import Environment
 from jinja2 import FileSystemLoader
@@ -40,6 +41,8 @@ def plan_node(task: TaskState, context: CoreLoopContext | None = None) -> TaskSt
         project_context_md=_project_context_md(task, context),
         philosophy_md=_agent_prompt_md(context, "Philosophy.md"),
         global_context_md=_agent_prompt_md(context, "GlobalContext.md"),
+        current_time_utc=datetime.now(timezone.utc).isoformat(),
+        user_timezone=_user_timezone(task, context),
     )
     task.metadata["tool_call_plan_prompt"] = prompt
 
@@ -72,6 +75,8 @@ def _render_tool_call_plan_prompt(
     project_context_md: str = "",
     philosophy_md: str = "",
     global_context_md: str = "",
+    current_time_utc: str = "",
+    user_timezone: str = "UTC",
 ) -> str:
     env = Environment(
         loader=FileSystemLoader(_TEMPLATE_DIR),
@@ -87,6 +92,8 @@ def _render_tool_call_plan_prompt(
         project_context_md=project_context_md,
         philosophy_md=philosophy_md,
         global_context_md=global_context_md,
+        current_time_utc=current_time_utc,
+        user_timezone=user_timezone,
         task_state_md=task.to_markdown_prompt(),
     ).strip()
 
@@ -122,6 +129,15 @@ def _user_context_md(task: TaskState, context: CoreLoopContext | None) -> str:
         return str(context.user_context_provider(task.user) or "").strip()
     except (OSError, KeyError):
         return ""
+
+
+def _user_timezone(task: TaskState, context: CoreLoopContext | None) -> str:
+    if context is None or not callable(context.user_timezone_provider):
+        return "UTC"
+    try:
+        return str(context.user_timezone_provider(str(task.user or "")) or "UTC")
+    except (OSError, KeyError):
+        return "UTC"
 
 
 def _agent_prompt_md(context: CoreLoopContext | None, name: str) -> str:

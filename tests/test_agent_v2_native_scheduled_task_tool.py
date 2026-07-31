@@ -196,6 +196,25 @@ def test_native_scheduled_task_uses_the_configured_user_timezone_by_default() ->
     assert stored.next_run_at == "2026-07-11T02:30:00+00:00"
 
 
+def test_native_scheduled_task_resolves_relative_duration_at_execution_time() -> None:
+    store = ScheduledTaskStore()
+    context = ToolExecutionContext(
+        task=TaskState(user="alex", goal="Remind me to drink water in 3min"),
+        messages=InMemoryMessageQueue(),
+        schedule_store=store,
+    )
+    before = datetime.now(timezone.utc)
+
+    result = execute_scheduled_task(
+        {"name": "Drink water", "prompt": "Remind Alex to drink water.", "schedule_kind": "once", "run_at": "2026-07-10T09:00:00+00:00"},
+        context=context,
+    )
+    after = datetime.now(timezone.utc)
+    scheduled = datetime.fromisoformat(str(result["next_run_at"]))
+
+    assert before + timedelta(minutes=2, seconds=59) <= scheduled <= after + timedelta(minutes=3, seconds=1)
+
+
 def test_native_scheduled_task_tool_rejects_missing_required_fields() -> None:
     context = ToolExecutionContext(
         task=TaskState(user="alex"),

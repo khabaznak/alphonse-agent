@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import re
+from datetime import datetime
+from datetime import timedelta
+from datetime import timezone
 from typing import Any
 
 from alphonse.agent_v2.core.core import ToolDescriptor
@@ -100,14 +104,16 @@ def execute_scheduled_task(
     if not owner_user_id:
         raise ValueError("scheduled_task_owner_required")
     default_timezone = context.user_timezone_provider(owner_user_id) if callable(context.user_timezone_provider) else "UTC"
+    schedule_kind = str(arguments.get("schedule_kind") or "").strip()
+    run_at = _relative_run_at_from_goal(str(getattr(task, "goal", "") or "")) or _optional_text(arguments.get("run_at"))
     record = store.create_task(
         owner_user_id=owner_user_id,
         project_id=str(getattr(task, "project_id", "") or "").strip(),
         name=str(arguments.get("name") or "").strip(),
         description=str(arguments.get("description") or "").strip(),
         prompt=str(arguments.get("prompt") or "").strip(),
-        schedule_kind=str(arguments.get("schedule_kind") or "").strip(),  # type: ignore[arg-type]
-        run_at=_optional_text(arguments.get("run_at")),
+        schedule_kind=schedule_kind,  # type: ignore[arg-type]
+        run_at=run_at,
         rrule=_optional_text(arguments.get("rrule")),
         dtstart=_optional_text(arguments.get("dtstart")),
         origin_channel=dict(task.metadata.get("channel") or {})
@@ -129,3 +135,29 @@ def execute_scheduled_task(
 def _optional_text(value: Any) -> str | None:
     rendered = str(value or "").strip()
     return rendered or None
+
+
+def _relative_run_at_from_goal(goal: str) -> str | None:
+    """Resolve explicit relative reminder durations against the execution clock.
+
+    The model still supplies ISO datetimes for all other schedules, but a phrase
+    such as ``in 3min`` must never depend on a stale prompt timestamp.
+    """
+    match = re.search(
+        r"\b(?:in|en)\s+(\d+(?:\.\d+)?)\s*(seconds?|secs?|mins?|minutes?|minutos?|hours?|hrs?|horas?)\b",
+        str(goal or ""),
+        flags=re.IGNORECASE,
+    )
+    if match is None:
+        return None
+    amount = float(match.group(1))
+    unit = match.group(2).lower()
+    if not 0 < amount <= 365 * 24 * 60:
+        return None
+    if unit.startswith(("second", "sec")):
+        delay = timedelta(seconds=amount)
+    elif unit.startswith(("hour", "hr", "hora")):
+        delay = timedelta(hours=amount)
+    else:
+        delay = timedelta(minutes=amount)
+    return (datetime.now(timezone.utc) + delay).isoformat()
