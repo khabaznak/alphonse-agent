@@ -531,23 +531,26 @@ button { border: 0; cursor: pointer; }
 .modal {
   width: min(620px, 100%);
   max-height: min(680px, calc(100dvh - 180px));
-  overflow: auto;
-  padding: 24px;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  overflow: hidden;
   background: var(--canvas);
   border-radius: 8px;
   box-shadow: 0 24px 60px #13251c66;
 }
 
-.modal header { display: flex; align-items: center; justify-content: space-between; border: 0; padding: 0 0 18px; }
+.modal header { display: flex; align-items: center; justify-content: space-between; border: 0; padding: 24px 24px 18px; }
 .modal h2 { font: 650 27px var(--font-display); margin: 0; }
 .modal header button { background: transparent; color: var(--accent); }
-.modal > textarea,
-.modal > input,
-.modal > select,
-.modal > button,
-.modal > p,
-.modal > label,
-.modal > .form-field { margin-top: 12px; }
+.modal-content { grid-row: 3; min-height: 0; overflow: auto; padding: 0 24px 24px; }
+.modal-content > textarea,
+.modal-content > input,
+.modal-content > select,
+.modal-content > button,
+.modal-content > p,
+.modal-content > label,
+.modal-content > .form-field { margin-top: 12px; }
 
 .form-field {
   display: grid;
@@ -594,10 +597,10 @@ button { border: 0; cursor: pointer; }
   display: flex;
   gap: 4px;
   overflow-x: auto;
-  margin: 0 -4px 16px;
   padding: 0 4px 8px;
   border-bottom: 1px solid var(--border);
 }
+.modal-tabs { min-width: 0; padding: 0 24px 8px; }
 .settings-tabs button {
   flex: 0 0 auto;
   padding: 8px 10px;
@@ -611,6 +614,14 @@ button { border: 0; cursor: pointer; }
 .settings-panel { display: grid; gap: 12px; }
 .settings-panel h3 { margin: 0; }
 .settings-panel label:not(.setting-row) { display: grid; gap: 6px; color: #385046; font-size: 12px; }
+.general-settings { display: grid; gap: 14px; }
+.setting-group { display: grid; gap: 12px; padding: 16px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-raised); }
+.setting-group-heading { display: grid; gap: 5px; }
+.setting-group-heading h3 { margin: 0; font: 650 18px var(--font-display); }
+.setting-group-heading p, .settings-save-actions p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.45; }
+.general-settings label:not(.setting-row) { display: grid; gap: 6px; color: #385046; font-size: 12px; }
+.general-settings > .setting-group > small { color: var(--muted); font-size: 11px; line-height: 1.45; }
+.settings-save-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding-top: 2px; }
 .appearance-settings > div > p { margin: 6px 0 0; color: var(--muted); font-size: 12px; line-height: 1.45; }
 .style-picker { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 .style-preview {
