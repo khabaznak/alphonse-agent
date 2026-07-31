@@ -625,8 +625,28 @@ function scheduleLabel(schedule: Record<string, unknown>): string {
   return schedule.kind === "once" ? `Once at ${String(schedule.run_at || "unknown")}` : `Repeats: ${String(schedule.rrule || "unknown")}`;
 }
 
-function dateLabel(value: string | null | undefined): string {
-  return value ? new Date(value).toLocaleString() : "—";
+function dateLabel(value: string | null | undefined, timezone?: string): string {
+  if (!value) return "—";
+  try {
+    return new Date(value).toLocaleString(undefined, timezone ? { timeZone: timezone } : undefined);
+  } catch {
+    return new Date(value).toLocaleString();
+  }
+}
+
+function calendarDateLabel(value: string | null | undefined, timezone: string): { month: string; day: string; pending: boolean } {
+  if (!value) return { month: "CAL", day: "—", pending: true };
+  try {
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) throw new Error("invalid date");
+    return {
+      month: new Intl.DateTimeFormat(undefined, { month: "short", timeZone: timezone || "UTC" }).format(date).toUpperCase(),
+      day: new Intl.DateTimeFormat(undefined, { day: "numeric", timeZone: timezone || "UTC" }).format(date),
+      pending: false,
+    };
+  } catch {
+    return { month: "CAL", day: "—", pending: true };
+  }
 }
 
 function sourceLabel(source: string): string {
@@ -732,7 +752,13 @@ function ScheduledTasksModal({ actorUserId, initialTaskId = "", onClose }: { act
   return <ModalFrame title="Scheduled tasks" onClose={onClose}>
     {isAdmin && <div className="form-field"><label htmlFor="scheduled-owner">User</label><select id="scheduled-owner" value={ownerId} onChange={(event) => { setOwnerId(event.target.value); setSelected(null); setExecutions([]); }}>{users.map((item) => <option key={item.user_id} value={item.user_id}>{item.display_name}</option>)}</select></div>}
     <div className="form-field"><label htmlFor="scheduled-status">Status</label><select id="scheduled-status" value={status} onChange={(event) => { setStatus(event.target.value); setSelected(null); setExecutions([]); }}><option value="">All statuses</option>{["active", "paused", "completed", "cancelled", "failed"].map((value) => <option key={value} value={value}>{value}</option>)}</select></div>
-    <div className="stack scheduled-task-list">{tasks.length ? tasks.map((task) => <button className={task.scheduled_task_id === selected?.scheduled_task_id ? "selected" : ""} key={task.scheduled_task_id} onClick={() => void select(task)}><strong>{task.name}</strong><small>Owner: {users.find((item) => item.user_id === task.owner_user_id)?.display_name || task.owner_user_id}</small><small>{task.status} · {scheduleLabel(task.schedule)} · next {dateLabel(task.next_run_at)}</small><small>Latest execution: {task.latest_execution?.status || "not run"}</small></button>) : <p>No scheduled tasks match this filter.</p>}</div>
+    <div className="stack scheduled-task-list">{tasks.length ? tasks.map((task) => {
+      const calendar = calendarDateLabel(task.next_run_at, task.timezone);
+      return <button className={`scheduled-task-row${task.scheduled_task_id === selected?.scheduled_task_id ? " selected" : ""}`} key={task.scheduled_task_id} onClick={() => void select(task)}>
+        <span className="scheduled-task-row-calendar" aria-label={calendar.pending ? "Schedule pending" : `Next run on ${calendar.month} ${calendar.day}`}><span>{calendar.month}</span><strong>{calendar.day}</strong></span>
+        <span className="scheduled-task-row-summary"><span className="scheduled-task-row-title"><strong>{task.name}</strong><small className="scheduled-task-row-status">{task.status}</small></span><small>{calendar.pending ? "Schedule pending" : `Next: ${dateLabel(task.next_run_at, task.timezone)}`}</small><small>{scheduleLabel(task.schedule)} · {task.timezone}</small><small>Owner: {users.find((item) => item.user_id === task.owner_user_id)?.display_name || task.owner_user_id} · Latest: {task.latest_execution?.status || "not run"}</small></span>
+      </button>;
+    }) : <p>No scheduled tasks match this filter.</p>}</div>
     {selected && <section className="scheduled-task-detail">
       <div className="form-field"><label htmlFor="scheduled-name">Task name</label><input id="scheduled-name" value={name} disabled={!editable} onChange={(event) => setName(event.target.value)} /></div>
       <div className="form-field"><label htmlFor="scheduled-prompt">Stored prompt</label><textarea id="scheduled-prompt" value={prompt} disabled={!editable} onChange={(event) => setPrompt(event.target.value)} rows={6} /></div>

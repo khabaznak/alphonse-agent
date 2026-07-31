@@ -451,14 +451,14 @@ button { border: 0; cursor: pointer; }
   background: #f7f8f1;
   text-align: center;
 }
-.scheduled-task-card .a2ui-calendar-month {
+.scheduled-task-card .a2ui-calendar_month {
   padding: 5px 4px 4px;
   background: var(--accent);
   color: var(--accent-contrast);
   font: 700 10px/1 var(--font-mono);
   letter-spacing: .12em;
 }
-.scheduled-task-card .a2ui-calendar-day {
+.scheduled-task-card .a2ui-calendar_day {
   display: grid;
   place-items: center;
   padding: 4px 5px 6px;
@@ -671,7 +671,44 @@ button { border: 0; cursor: pointer; }
 .back-button { padding: 0 !important; color: var(--accent) !important; background: transparent !important; }
 .project-detail, .project-create { display: grid; gap: 12px; margin-top: 14px; }
 .scheduled-task-list { max-height: 230px; overflow-y: auto; }
-.scheduled-task-list strong { font-size: 13px; }
+.stack .scheduled-task-row {
+  grid-template-columns: 58px minmax(0, 1fr);
+  align-items: stretch;
+  gap: 10px;
+  padding: 10px;
+  border-radius: 9px;
+}
+.stack .scheduled-task-row.selected { border-color: var(--accent); box-shadow: inset 3px 0 var(--accent); }
+.scheduled-task-row-calendar {
+  display: grid;
+  grid-template-rows: auto 1fr;
+  min-height: 58px;
+  overflow: hidden;
+  border: 1px solid #bdc9b7;
+  border-radius: 8px;
+  background: #f7f8f1;
+  text-align: center;
+}
+.scheduled-task-row-calendar > span {
+  padding: 4px 3px 3px;
+  background: var(--accent);
+  color: var(--accent-contrast);
+  font: 700 9px/1 var(--font-mono);
+  letter-spacing: .11em;
+}
+.scheduled-task-row-calendar > strong {
+  display: grid;
+  place-items: center;
+  padding: 3px;
+  color: var(--text);
+  font: 800 29px/.9 var(--font-display);
+  letter-spacing: -.04em;
+}
+.scheduled-task-row-summary { display: grid; align-content: center; gap: 3px; min-width: 0; }
+.scheduled-task-row-title { display: flex; align-items: center; gap: 7px; min-width: 0; }
+.scheduled-task-row-title > strong { overflow: hidden; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
+.scheduled-task-row-status { flex: none; padding: 2px 5px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); font-size: 9px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; }
+.scheduled-task-row-summary > small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .scheduled-task-detail { display: grid; gap: 12px; margin-top: 14px; }
 .task-readonly { gap: 4px; }
 .execution-list { max-height: 160px; overflow-y: auto; border-top: 1px solid #cad3c6; }
@@ -716,7 +753,7 @@ html[data-alphonse-style="modern"] .modal-backdrop { background: #10282788; }
   .scheduled-task-card { padding: 14px; }
   .scheduled-task-card .a2ui-header { grid-template-columns: 58px minmax(0, 1fr); gap: 10px; }
   .scheduled-task-card .a2ui-calendar { min-height: 64px; }
-  .scheduled-task-card .a2ui-calendar-day { font-size: 30px; }
+  .scheduled-task-card .a2ui-calendar_day { font-size: 30px; }
   .scheduled-task-card .a2ui-actions { display: grid; grid-template-columns: 1fr 1fr; }
   .scheduled-task-card .a2ui-actions button { width: 100%; }
 }
