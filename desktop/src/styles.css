@@ -423,6 +423,100 @@ button { border: 0; cursor: pointer; }
 .question-card button.question-cancel:hover { background: #f2dfaa; }
 .a2ui-status { color: #6e5a19; }
 
+.scheduled-task-card {
+  display: grid;
+  gap: 14px;
+  width: 100%;
+  padding: 18px;
+  border-color: #bfcbb9;
+  background: var(--surface-raised);
+  box-shadow: 0 10px 26px var(--shadow);
+  color: var(--text);
+}
+.scheduled-task-card p { margin: 0; }
+.scheduled-task-card .a2ui-header {
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr);
+  gap: 14px;
+  align-items: stretch;
+}
+.scheduled-task-card .a2ui-calendar {
+  display: grid;
+  grid-template-rows: auto 1fr;
+  gap: 0;
+  overflow: hidden;
+  min-height: 72px;
+  border: 1px solid #bdc9b7;
+  border-radius: 9px;
+  background: #f7f8f1;
+  text-align: center;
+}
+.scheduled-task-card .a2ui-calendar-month {
+  padding: 5px 4px 4px;
+  background: var(--accent);
+  color: var(--accent-contrast);
+  font: 700 10px/1 var(--font-mono);
+  letter-spacing: .12em;
+}
+.scheduled-task-card .a2ui-calendar-day {
+  display: grid;
+  place-items: center;
+  padding: 5px;
+  color: var(--text);
+  font: 700 27px/1 var(--font-display);
+}
+.scheduled-task-card .a2ui-summary {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 3px;
+  align-content: center;
+  min-width: 0;
+}
+.scheduled-task-card .a2ui-title {
+  width: max-content;
+  padding: 3px 7px;
+  border-radius: 999px;
+  background: #e5eadf;
+  color: #526958;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+.scheduled-task-card .a2ui-name {
+  overflow-wrap: anywhere;
+  font: 700 17px/1.25 var(--font-display);
+}
+.scheduled-task-card .a2ui-when { font-size: 13px; font-weight: 650; }
+.scheduled-task-card .a2ui-details { color: var(--muted); font-size: 11px; line-height: 1.4; }
+.scheduled-task-card .a2ui-body {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 5px;
+  padding: 11px 12px;
+  border-radius: 7px;
+  background: var(--surface-subtle);
+}
+.scheduled-task-card .a2ui-prompt-label {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+.scheduled-task-card .a2ui-prompt {
+  max-height: 5.6em;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 13px;
+  line-height: 1.4;
+}
+.scheduled-task-card .a2ui-description { color: var(--muted); font-size: 11px; }
+.scheduled-task-card .a2ui-actions { justify-content: flex-end; align-items: center; }
+.scheduled-task-card .a2ui-dismiss { background: transparent; color: var(--text); border: 1px solid var(--input-border); }
+.scheduled-task-card .a2ui-dismiss:hover { background: var(--surface-subtle); }
+
 .modal-backdrop {
   position: fixed;
   inset: 0;
@@ -610,10 +704,20 @@ html[data-alphonse-style="modern"] .task-progress-detail { background: #e7f2f1; 
 html[data-alphonse-style="modern"] .question-card { border-color: #7acdc6; background: #effaf8; }
 html[data-alphonse-style="modern"] .question-card input { border-color: #9ecfc9; }
 html[data-alphonse-style="modern"] .question-card button.question-cancel { border-color: #4d8c87; color: #17645f; }
+html[data-alphonse-style="modern"] .scheduled-task-card { border-color: #9ecfc9; background: var(--surface-raised); }
+html[data-alphonse-style="modern"] .scheduled-task-card .a2ui-calendar { border-color: #9ecfc9; background: #f4fbfa; }
+html[data-alphonse-style="modern"] .scheduled-task-card .a2ui-title { background: #dff3f1; color: #087f78; }
+html[data-alphonse-style="modern"] .scheduled-task-card .a2ui-dismiss { border-color: #87bdb8; color: #17645f; }
 html[data-alphonse-style="modern"] .modal-backdrop { background: #10282788; }
 
 @media (max-width: 520px) {
   .style-picker { grid-template-columns: 1fr; }
+  .scheduled-task-card { padding: 14px; }
+  .scheduled-task-card .a2ui-header { grid-template-columns: 58px minmax(0, 1fr); gap: 10px; }
+  .scheduled-task-card .a2ui-calendar { min-height: 64px; }
+  .scheduled-task-card .a2ui-calendar-day { font-size: 23px; }
+  .scheduled-task-card .a2ui-actions { display: grid; grid-template-columns: 1fr 1fr; }
+  .scheduled-task-card .a2ui-actions button { width: 100%; }
 }
 
 @media (max-width: 760px) {

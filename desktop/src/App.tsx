@@ -7,6 +7,7 @@ import { mergeFreshConversationHistory } from "./conversationHistory";
 import { buildConversationTimeline } from "./conversationTimeline";
 import { A2uiSurfaceView, applyA2uiEvent, DESKTOP_CATALOG_ID, type A2uiSurface } from "./a2ui";
 import { DESKTOP_STYLE_STORAGE_KEY, parseDesktopStyle, type DesktopStyle } from "./desktopStyle";
+import { readDismissedScheduledSurfaces, rememberDismissedScheduledSurface, withoutDismissedSurfaces, withoutSurface } from "./dismissedSurfaces";
 import { agentStateLabel, capdActivityLabel, projectKey } from "./layoutState";
 import { formatMessageTime } from "./messageTime";
 import type { ActivityEvent, AgentDocument, ChatMessage, InferenceSettings, MediaToolsSettings, MemorySettings, Project, Question, WebToolsSettings } from "./types";
@@ -46,6 +47,7 @@ export default function App() {
   const timelineRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const surfacesRef = useRef<Record<string, A2uiSurface>>({});
+  const dismissedScheduledSurfacesRef = useRef(readDismissedScheduledSurfaces(window.localStorage));
   const [messages, setMessages] = useState<ChatMessage[]>([{ id: "welcome", role: "assistant", content: "Alphonse Desktop is connected locally." }]);
   const [messageBuckets, setMessageBuckets] = useState<Record<string, ChatMessage[]>>({});
   const [prompt, setPrompt] = useState("");
@@ -76,6 +78,16 @@ export default function App() {
   const [desktopStyle, setDesktopStyle] = useState<DesktopStyle>(() => parseDesktopStyle(window.localStorage.getItem(DESKTOP_STYLE_STORAGE_KEY)));
   const currentProjectKey = projectKey(project?.project_id);
   activeProjectKeyRef.current = currentProjectKey;
+
+  const dismissScheduledSurface = useCallback((surfaceId: string) => {
+    dismissedScheduledSurfacesRef.current = rememberDismissedScheduledSurface(
+      window.localStorage,
+      dismissedScheduledSurfacesRef.current,
+      surfaceId,
+    );
+    surfacesRef.current = withoutSurface(surfacesRef.current, surfaceId);
+    setSurfaces((current) => withoutSurface(current, surfaceId));
+  }, []);
 
   const appendMessage = useCallback((message: ChatMessage) => {
     const activeKey = activeProjectKeyRef.current;
@@ -120,7 +132,10 @@ export default function App() {
         setProgressTaskIds((current) => [...current, ...newProgressTaskIds.filter((taskId) => !current.includes(taskId))]);
       }
       const projectedSurfaces = responseIsForActiveProject
-        ? (response.ui_events || []).reduce((next, item) => applyA2uiEvent(next, item.event), surfacesRef.current)
+        ? withoutDismissedSurfaces(
+            (response.ui_events || []).reduce((next, item) => applyA2uiEvent(next, item.event), surfacesRef.current),
+            dismissedScheduledSurfacesRef.current,
+          )
         : surfacesRef.current;
       if (responseIsForActiveProject) {
         surfacesRef.current = projectedSurfaces;
@@ -475,7 +490,7 @@ export default function App() {
         </div>
         <section className="input-dock">
           {activeSurface ? (
-            <A2uiSurfaceView surface={activeSurface} clientId={clientId} user={user} onDone={poll} onAction={(result) => { if (result.action === "view_scheduled_task" && typeof result.scheduled_task_id === "string") { setScheduledTaskForView(result.scheduled_task_id); setModal("scheduled-tasks"); } }} />
+            <A2uiSurfaceView surface={activeSurface} clientId={clientId} user={user} onDone={poll} onDismiss={dismissScheduledSurface} onAction={(result) => { if (result.action === "view_scheduled_task" && typeof result.scheduled_task_id === "string") { dismissScheduledSurface(activeSurface.surfaceId); setScheduledTaskForView(result.scheduled_task_id); setModal("scheduled-tasks"); } }} />
           ) : fallbackQuestion ? (
             <QuestionCard question={fallbackQuestion} onDone={poll} />
           ) : (

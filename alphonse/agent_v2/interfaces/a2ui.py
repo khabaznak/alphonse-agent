@@ -6,7 +6,9 @@ does not accept model-authored component trees or permit arbitrary actions.
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from alphonse.agent_v2.core.questions import QuestionInterrupt
 
@@ -68,24 +70,37 @@ class A2UiAdapter:
         surface_id = f"scheduled-task:{task_id}"
         name = str(task.get("name") or "Scheduled task").strip()
         description = str(task.get("description") or "").strip()
-        schedule = str(task.get("schedule_summary") or "Scheduled").strip()
+        prompt = str(task.get("prompt") or "").strip()
+        schedule_summary = str(task.get("schedule_summary") or "Scheduled").strip()
+        raw_schedule = dict(task.get("schedule")) if isinstance(task.get("schedule"), dict) else {}
         next_run = str(task.get("next_run_at") or "").strip()
         timezone = str(task.get("timezone") or "UTC").strip() or "UTC"
-        details = [schedule]
-        if next_run:
-            details.append(f"Next: {next_run}")
-        details.append(timezone)
+        month, day, when = _scheduled_date_display(next_run, timezone)
+        schedule_detail = "One-time reminder" if str(raw_schedule.get("kind") or "") == "once" else schedule_summary
+        details = [schedule_detail, timezone]
         if project_name:
             details.append(f"Project: {project_name}")
+        body_children = ["prompt_label", "prompt"]
         components: list[dict[str, Any]] = [
-            {"id": "root", "component": "Card", "children": ["title", "name", "details", "view"]},
+            {"id": "root", "component": "Card", "children": ["header", "body", "actions"]},
+            {"id": "header", "component": "Container", "children": ["calendar", "summary"]},
+            {"id": "calendar", "component": "Container", "children": ["calendar_month", "calendar_day"]},
+            {"id": "calendar_month", "component": "Text", "text": month},
+            {"id": "calendar_day", "component": "Text", "text": day},
+            {"id": "summary", "component": "Container", "children": ["title", "name", "when", "details"]},
             {"id": "title", "component": "Status", "text": "Scheduled"},
             {"id": "name", "component": "Text", "text": name},
+            {"id": "when", "component": "Text", "text": when},
             {"id": "details", "component": "Text", "text": " · ".join(details)},
+            {"id": "body", "component": "Container", "children": body_children},
+            {"id": "prompt_label", "component": "Text", "text": "What Alphonse will do"},
+            {"id": "prompt", "component": "Text", "text": prompt or "No action description was provided."},
+            {"id": "actions", "component": "Container", "children": ["view", "dismiss"]},
             {"id": "view", "component": "Button", "label": "View task", "action": {"name": "view_scheduled_task", "context": {"scheduled_task_id": task_id}}},
+            {"id": "dismiss", "component": "Button", "label": "Close", "action": {"name": "dismiss_surface", "context": {"surface_id": surface_id}}},
         ]
         if description:
-            components[0]["children"].insert(2, "description")
+            body_children.append("description")
             components.append({"id": "description", "component": "Text", "text": description})
         messages = [
             {"version": A2UI_VERSION, "createSurface": {"surfaceId": surface_id, "catalogId": self.catalog_id, "sendDataModel": False}},
@@ -97,7 +112,16 @@ class A2UiAdapter:
                     "path": "/",
                     "value": {
                         "scheduled_task_id": task_id,
+                        "name": name,
+                        "description": description,
+                        "prompt": prompt,
+                        "schedule": raw_schedule,
+                        "schedule_summary": schedule_summary,
+                        "next_run_at": next_run,
+                        "timezone": timezone,
+                        "status": str(task.get("status") or "").strip(),
                         "project_id": str(task.get("project_id") or "").strip(),
+                        "project_name": project_name,
                         "created_at": str(task.get("created_at") or "").strip(),
                     },
                 },
@@ -179,6 +203,21 @@ def surface_id_for_question(question_id: str) -> str:
 
 def task_progress_surface_id(task_id: str) -> str:
     return f"task-progress:{str(task_id or '').strip()}"
+
+
+def _scheduled_date_display(next_run_at: str, timezone_name: str) -> tuple[str, str, str]:
+    try:
+        source = str(next_run_at or "").strip()
+        if not source:
+            raise ValueError("next_run_at_missing")
+        parsed = datetime.fromisoformat(f"{source[:-1]}+00:00" if source.endswith("Z") else source)
+        if parsed.tzinfo is None:
+            raise ValueError("next_run_at_timezone_missing")
+        local = parsed.astimezone(ZoneInfo(str(timezone_name or "").strip()))
+    except (ValueError, TypeError, ZoneInfoNotFoundError):
+        return "CAL", "—", "Schedule pending"
+    clock = local.strftime("%I:%M %p").lstrip("0")
+    return local.strftime("%b").upper(), str(local.day), f"{local.strftime('%A, %B')} {local.day} at {clock}"
 
 
 def _compact_value(value: Any) -> str:

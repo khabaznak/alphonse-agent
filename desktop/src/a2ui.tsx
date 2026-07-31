@@ -41,25 +41,33 @@ export function applyA2uiEvent(surfaces: Record<string, A2uiSurface>, event: AgU
   return surfaces;
 }
 
-export function A2uiSurfaceHost({ surfaces, clientId, user, onDone }: { surfaces: Record<string, A2uiSurface>; clientId: string; user: string; onDone: () => Promise<void> }) {
-  return <>{Object.values(surfaces).map((surface) => <A2uiSurfaceView key={surface.surfaceId} surface={surface} clientId={clientId} user={user} onDone={onDone} />)}</>;
+export function A2uiSurfaceHost({ surfaces, clientId, user, onDone, onDismiss }: { surfaces: Record<string, A2uiSurface>; clientId: string; user: string; onDone: () => Promise<void>; onDismiss?: (surfaceId: string) => void }) {
+  return <>{Object.values(surfaces).map((surface) => <A2uiSurfaceView key={surface.surfaceId} surface={surface} clientId={clientId} user={user} onDone={onDone} onDismiss={onDismiss} />)}</>;
 }
 
-export function A2uiSurfaceView({ surface, clientId, user, onDone, onAction }: { surface: A2uiSurface; clientId: string; user: string; onDone: () => Promise<void>; onAction?: (result: Record<string, unknown>) => void }) {
+export function A2uiSurfaceView({ surface, clientId, user, onDone, onAction, onDismiss }: { surface: A2uiSurface; clientId: string; user: string; onDone: () => Promise<void>; onAction?: (result: Record<string, unknown>) => void; onDismiss?: (surfaceId: string) => void }) {
   const [dataModel, setDataModel] = useState(surface.dataModel);
   useEffect(() => setDataModel(surface.dataModel), [surface.dataModel, surface.surfaceId]);
+  const scheduled = surface.surfaceId.startsWith("scheduled-task:");
   const component = (id: string): ReactNode => {
     const item = surface.components[id]; if (!item) return null;
     const children = <>{(item.children || []).map(component)}</>;
-    if (item.component === "Card") return <section key={id} className="question-card a2ui-card">{children}</section>;
-    if (item.component === "Container" || item.component === "ChoiceList") return <div key={id} className={`a2ui-container${id === "actions" ? " question-actions" : ""}`}>{children}</div>;
-    if (item.component === "Text" || item.component === "Status") return <p key={id} className={item.component === "Status" ? "a2ui-status" : ""}>{item.text}</p>;
+    const itemClass = `a2ui-${cssIdentifier(id)}`;
+    if (item.component === "Card") return <section key={id} className={`question-card a2ui-card ${itemClass}${scheduled ? " scheduled-task-card" : ""}`}>{children}</section>;
+    if (item.component === "Container" || item.component === "ChoiceList") return <div key={id} className={`a2ui-container ${itemClass}${id === "actions" ? " question-actions" : ""}`}>{children}</div>;
+    if (item.component === "Text" || item.component === "Status") return <p key={id} className={`${itemClass}${item.component === "Status" ? " a2ui-status" : ""}`}>{item.text}</p>;
     if (item.component === "TextInput") return <input key={id} value={answerText(dataModel)} onChange={(event) => setDataModel({ ...dataModel, answer: { text: event.target.value } })} placeholder={item.label || "Your answer"} />;
-    if (item.component === "Button" && item.action) return <button key={id} className={item.action.name === "cancel_question" ? "question-cancel" : ""} onClick={() => void act(item)}>{item.label || "Continue"}</button>;
+    if (item.component === "Button" && item.action) return <button type="button" key={id} className={`${itemClass}${["cancel_question", "dismiss_surface"].includes(item.action.name) ? " question-cancel" : ""}`} onClick={() => void act(item)}>{item.label || "Continue"}</button>;
     return null;
   };
   const act = async (item: A2uiComponent) => {
     if (!item.action) return;
+    if (item.action.name === "dismiss_surface") {
+      const dismissedSurfaceId = localDismissSurfaceId(surface, item);
+      if (!dismissedSurfaceId) return;
+      onDismiss?.(dismissedSurfaceId);
+      return;
+    }
     const result = await daemonRequest<Record<string, unknown>>("a2ui_action", {
       client_id: clientId, user, surface_id: surface.surfaceId, source_component_id: item.id,
       action_name: item.action.name, context: item.action.context, data_model: dataModel,
@@ -76,4 +84,10 @@ function answerText(dataModel: Record<string, unknown>): string {
 function isRecord(value: unknown): value is Record<string, any> { return typeof value === "object" && value !== null && !Array.isArray(value); }
 function isComponent(value: unknown): value is A2uiComponent {
   return isRecord(value) && typeof value.id === "string" && ["Card", "Container", "Text", "Button", "ChoiceList", "TextInput", "Status"].includes(String(value.component));
+}
+function cssIdentifier(value: string): string { return value.replace(/[^a-zA-Z0-9_-]/g, "-"); }
+
+export function localDismissSurfaceId(surface: A2uiSurface, item: A2uiComponent): string | null {
+  if (!surface.surfaceId.startsWith("scheduled-task:") || item.id !== "dismiss" || item.action?.name !== "dismiss_surface") return null;
+  return item.action.context.surface_id === surface.surfaceId ? surface.surfaceId : null;
 }

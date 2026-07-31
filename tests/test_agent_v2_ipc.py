@@ -254,9 +254,12 @@ def test_scheduled_task_confirmation_card_uses_persisted_schedule_fields() -> No
         "scheduled_task_id": "schedule-1",
         "name": "Charge Tesla",
         "description": "Before the trip",
+        "prompt": "Check the battery level and remind me to charge the Tesla.",
+        "schedule": {"kind": "once", "run_at": "2026-07-26T03:00:00+00:00"},
         "schedule_summary": "Once at 2026-07-26T03:00:00+00:00",
         "next_run_at": "2026-07-26T03:00:00+00:00",
         "timezone": "America/Mexico_City",
+        "status": "active",
         "project_id": "road-trip",
     }
 
@@ -265,9 +268,40 @@ def test_scheduled_task_confirmation_card_uses_persisted_schedule_fields() -> No
     assert envelopes[0]["createSurface"]["surfaceId"] == "scheduled-task:schedule-1"
     components = {item["id"]: item for item in envelopes[1]["updateComponents"]["components"]}
     assert components["name"]["text"] == "Charge Tesla"
+    assert components["calendar_month"]["text"] == "JUL"
+    assert components["calendar_day"]["text"] == "25"
+    assert components["when"]["text"] == "Saturday, July 25 at 9:00 PM"
     assert "America/Mexico_City" in components["details"]["text"]
+    assert components["prompt"]["text"] == "Check the battery level and remind me to charge the Tesla."
     assert components["view"]["action"] == {"name": "view_scheduled_task", "context": {"scheduled_task_id": "schedule-1"}}
-    assert envelopes[2]["updateDataModel"]["value"]["project_id"] == "road-trip"
+    assert components["dismiss"]["action"] == {"name": "dismiss_surface", "context": {"surface_id": "scheduled-task:schedule-1"}}
+    data_model = envelopes[2]["updateDataModel"]["value"]
+    assert data_model["project_id"] == "road-trip"
+    assert data_model["prompt"] == "Check the battery level and remind me to charge the Tesla."
+    assert data_model["schedule"] == {"kind": "once", "run_at": "2026-07-26T03:00:00+00:00"}
+    assert data_model["next_run_at"] == "2026-07-26T03:00:00+00:00"
+    assert data_model["timezone"] == "America/Mexico_City"
+
+
+def test_scheduled_task_confirmation_card_shows_recurrence_and_safe_pending_date() -> None:
+    adapter = A2UiAdapter()
+    task = {
+        "scheduled_task_id": "schedule-recurring",
+        "name": "Weekly planning",
+        "prompt": "Prepare the weekly planning summary.",
+        "schedule": {"kind": "rrule", "rrule": "FREQ=WEEKLY;BYDAY=MO"},
+        "schedule_summary": "Every Monday at 09:00",
+        "next_run_at": "not-a-date",
+        "timezone": "Not/A-Timezone",
+    }
+
+    envelopes = adapter.scheduled_task_created(task)
+
+    components = {item["id"]: item for item in envelopes[1]["updateComponents"]["components"]}
+    assert components["calendar_month"]["text"] == "CAL"
+    assert components["calendar_day"]["text"] == "—"
+    assert components["when"]["text"] == "Schedule pending"
+    assert "Every Monday at 09:00" in components["details"]["text"]
 
 
 def test_scheduled_task_a2ui_action_requires_capability_and_owner(tmp_path) -> None:
@@ -284,6 +318,9 @@ def test_scheduled_task_a2ui_action_requires_capability_and_owner(tmp_path) -> N
         daemon.a2ui_action(client_id="desktop-a", user=admin.user_id, surface_id=f"scheduled-task:{task.scheduled_task_id}", source_component_id="view", action_name="view_scheduled_task", context={"scheduled_task_id": "other"})
     with pytest.raises(ValueError, match="a2ui_catalog_not_negotiated"):
         daemon.a2ui_action(client_id="desktop-b", user=admin.user_id, surface_id=f"scheduled-task:{task.scheduled_task_id}", source_component_id="view", action_name="view_scheduled_task", context={"scheduled_task_id": task.scheduled_task_id})
+    with pytest.raises(ValueError, match="a2ui_surface_or_context_invalid"):
+        daemon.a2ui_action(client_id="desktop-a", user=admin.user_id, surface_id=f"scheduled-task:{task.scheduled_task_id}", source_component_id="dismiss", action_name="dismiss_surface", context={"surface_id": f"scheduled-task:{task.scheduled_task_id}"})
+    assert schedules.get_task(task.scheduled_task_id).status == "active"
 
 
 def test_desktop_task_progress_a2ui_is_admin_desktop_only_and_sanitized(tmp_path) -> None:
