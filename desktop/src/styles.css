@@ -623,6 +623,13 @@ button { border: 0; cursor: pointer; }
 .general-settings label:not(.setting-row) { display: grid; gap: 6px; color: #385046; font-size: 12px; }
 .general-settings > .setting-group > small { color: var(--muted); font-size: 11px; line-height: 1.45; }
 .settings-save-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding-top: 2px; }
+.automation-table-wrap { max-height: 360px; overflow: auto; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-raised); }
+.automation-table { width: 100%; min-width: 540px; border-collapse: collapse; font-size: 11px; }
+.automation-table th, .automation-table td { padding: 9px 10px; border-bottom: 1px solid var(--border); text-align: left; vertical-align: top; }
+.automation-table th { position: sticky; top: 0; z-index: 1; color: var(--muted); background: var(--surface-subtle); font-size: 10px; letter-spacing: .05em; text-transform: uppercase; }
+.automation-table tbody tr:last-child td { border-bottom: 0; }
+.automation-table td { overflow-wrap: anywhere; }
+.automation-table code { font: inherit; color: var(--accent); }
 .appearance-settings > div > p { margin: 6px 0 0; color: var(--muted); font-size: 12px; line-height: 1.45; }
 .style-picker { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 .style-preview {
