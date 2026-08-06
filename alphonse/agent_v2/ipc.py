@@ -202,6 +202,9 @@ class V2DaemonClient:
     def verify_media_tools(self, *, actor_user_id: str, kind: str, sample: str = "") -> dict[str, Any]:
         return self.request("verify_media_tools", actor_user_id=actor_user_id, kind=kind, sample=sample)
 
+    def verify_stt_recording(self, *, actor_user_id: str, audio_base64: str, mime_type: str, duration_ms: int) -> dict[str, Any]:
+        return self.request("verify_stt_recording", actor_user_id=actor_user_id, audio_base64=audio_base64, mime_type=mime_type, duration_ms=duration_ms)
+
     def agent_config_documents(self) -> dict[str, Any]:
         return self.request("agent_config_documents")
 
@@ -463,6 +466,13 @@ class V2DaemonServer:
             return {"settings": self.daemon.save_media_tools_settings(actor_user_id=str(params.get("actor_user_id") or ""), kind=str(params.get("kind") or ""), values=dict(params.get("values") or {}))}
         if method == "verify_media_tools":
             return self.daemon.verify_media_tools(actor_user_id=str(params.get("actor_user_id") or ""), kind=str(params.get("kind") or ""), sample=str(params.get("sample") or ""))
+        if method == "verify_stt_recording":
+            return self.daemon.verify_stt_recording(
+                actor_user_id=str(params.get("actor_user_id") or ""),
+                audio_base64=str(params.get("audio_base64") or ""),
+                mime_type=str(params.get("mime_type") or ""),
+                duration_ms=int(params.get("duration_ms") or 0),
+            )
         if method == "users":
             return {"users": self.daemon.list_users()}
         if method == "create_user":

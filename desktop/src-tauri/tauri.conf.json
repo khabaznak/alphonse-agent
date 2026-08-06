@@ -25,6 +25,9 @@
     "active": true,
     "targets": "app",
     "icon": [],
-    "externalBin": ["binaries/alphonse-daemon"]
+    "externalBin": ["binaries/alphonse-daemon"],
+    "macOS": {
+      "infoPlist": "Info.plist"
+    }
   }
 }

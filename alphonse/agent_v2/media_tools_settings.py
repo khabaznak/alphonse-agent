@@ -3,12 +3,20 @@
 from __future__ import annotations
 
 import os
+import shutil
 import sqlite3
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 
 from alphonse.agent_v2.database import connect_database, default_database_path
+
+
+def _default_whisper_executable() -> str:
+    known_path = Path.home() / "miniforge3" / "bin" / "whisper"
+    if known_path.is_file():
+        return str(known_path)
+    return str(shutil.which("whisper") or "")
 
 
 @dataclass(frozen=True)
@@ -39,7 +47,7 @@ class TtsSettings:
 @dataclass(frozen=True)
 class SttSettings:
     enabled: bool = False
-    executable_path: str = ""
+    executable_path: str = _default_whisper_executable()
     model: str = "base"
     default_language: str = ""
     verification: VerificationState = VerificationState()
@@ -140,17 +148,22 @@ def _from_dict(value: object) -> MediaToolsSettings:
     def state(item: object) -> VerificationState:
         raw = item if isinstance(item, dict) else {}; return VerificationState(**{key: raw.get(key, getattr(VerificationState(), key)) for key in VerificationState.__dataclass_fields__})
     def part(cls, key: str):
-        raw = source.get(key) if isinstance(source.get(key), dict) else {}; defaults = cls(); values = {field: raw.get(field, getattr(defaults, field)) for field in cls.__dataclass_fields__ if field != "verification"}; values["verification"] = state(raw.get("verification")); return cls(**values)
+        raw = source.get(key) if isinstance(source.get(key), dict) else {}; defaults = cls(); values = {field: raw.get(field, getattr(defaults, field)) for field in cls.__dataclass_fields__ if field != "verification"}; values["verification"] = state(raw.get("verification"));
+        if cls is SttSettings and not str(values.get("executable_path") or "").strip(): values["executable_path"] = _default_whisper_executable()
+        return cls(**values)
     return MediaToolsSettings(tts=part(TtsSettings, "tts"), stt=part(SttSettings, "stt"), ocr=part(OcrSettings, "ocr"))
 
 
 def _verify_reset() -> VerificationState: return VerificationState()
 def _tts_from_values(current: TtsSettings, values: dict[str, object]) -> TtsSettings:
-    return replace(current, enabled=bool(values.get("enabled", current.enabled)), model_id=str(values.get("model_id", current.model_id)).strip(), device_map=str(values.get("device_map", current.device_map)).strip(), dtype=str(values.get("dtype", current.dtype)).strip().lower(), language=str(values.get("language", current.language)).strip(), speaker=str(values.get("speaker", current.speaker)).strip(), instruct=str(values.get("instruct", current.instruct)).strip(), attn_implementation=str(values.get("attn_implementation", current.attn_implementation)).strip(), local_files_only=bool(values.get("local_files_only", current.local_files_only)), verification=_verify_reset())
+    candidate = replace(current, enabled=bool(values.get("enabled", current.enabled)), model_id=str(values.get("model_id", current.model_id)).strip(), device_map=str(values.get("device_map", current.device_map)).strip(), dtype=str(values.get("dtype", current.dtype)).strip().lower(), language=str(values.get("language", current.language)).strip(), speaker=str(values.get("speaker", current.speaker)).strip(), instruct=str(values.get("instruct", current.instruct)).strip(), attn_implementation=str(values.get("attn_implementation", current.attn_implementation)).strip(), local_files_only=bool(values.get("local_files_only", current.local_files_only)))
+    return candidate if candidate == current else replace(candidate, verification=_verify_reset())
 def _stt_from_values(current: SttSettings, values: dict[str, object]) -> SttSettings:
-    return replace(current, enabled=bool(values.get("enabled", current.enabled)), executable_path=str(values.get("executable_path", current.executable_path)).strip(), model=str(values.get("model", current.model)).strip(), default_language=str(values.get("default_language", current.default_language)).strip(), verification=_verify_reset())
+    candidate = replace(current, enabled=bool(values.get("enabled", current.enabled)), executable_path=str(values.get("executable_path", current.executable_path)).strip(), model=str(values.get("model", current.model)).strip(), default_language=str(values.get("default_language", current.default_language)).strip())
+    return candidate if candidate == current else replace(candidate, verification=_verify_reset())
 def _ocr_from_values(current: OcrSettings, values: dict[str, object]) -> OcrSettings:
-    return replace(current, enabled=bool(values.get("enabled", current.enabled)), ollama_base_url=str(values.get("ollama_base_url", current.ollama_base_url)).strip().rstrip("/"), model_id=str(values.get("model_id", current.model_id)).strip(), timeout_seconds=float(values.get("timeout_seconds", current.timeout_seconds)), verification=_verify_reset())
+    candidate = replace(current, enabled=bool(values.get("enabled", current.enabled)), ollama_base_url=str(values.get("ollama_base_url", current.ollama_base_url)).strip().rstrip("/"), model_id=str(values.get("model_id", current.model_id)).strip(), timeout_seconds=float(values.get("timeout_seconds", current.timeout_seconds)))
+    return candidate if candidate == current else replace(candidate, verification=_verify_reset())
 def _validate(settings: MediaToolsSettings) -> MediaToolsSettings:
     if settings.tts.dtype not in {"", "float16", "float32", "bfloat16"}: raise ValueError("media_tools_tts_dtype_invalid")
     if settings.tts.enabled and not settings.tts.model_id: raise ValueError("media_tools_tts_model_required")

@@ -149,7 +149,8 @@ def build_runtime_host(
     processor = processor or PDCAIntelligenceProcessor()
     web_tools_settings_store = web_tools_settings_store or SQLiteWebToolsSettingsStore()
     media_tools_settings_store = media_tools_settings_store or SQLiteMediaToolsSettingsStore()
-    asset_store = asset_store or SQLiteAssetStore()
+    user_store = user_store or V2UserStore()
+    asset_store = asset_store or SQLiteAssetStore(users_root=user_store.users_root)
     artifact_store = artifact_store or SQLiteArtifactStore()
     # Generic embedded/test hosts are intentionally ephemeral. The daemon
     # injects the durable store explicitly.
@@ -169,7 +170,6 @@ def build_runtime_host(
     schedule_store = schedule_store or ScheduledTaskStore()
     outbox = outbox or SQLiteOutboundStore()
     integration_store = integration_store or SQLiteIntegrationStore()
-    user_store = user_store or V2UserStore()
     communication_thread_store = communication_thread_store or SQLiteCommunicationThreadStore()
     def _compact_memory(source: str) -> str:
         from alphonse.agent_v2.core.inference import InferencePurpose, InferenceRequest
@@ -337,6 +337,7 @@ def start_runtime_integrations(
                 presence_projector=runtime.presence_projector,
                 access_request_store=runtime.user_store,
                 asset_store=runtime.asset_store,
+                stt_settings_provider=lambda: runtime.media_tools_settings_store.get().stt,
             )
             integration_runtime.start()
         except Exception:

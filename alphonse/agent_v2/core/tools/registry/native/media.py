@@ -21,6 +21,15 @@ TTS_RENDER_TOOL_ID = "native.tts_render"
 STT_TRANSCRIBE_TOOL_ID = "native.stt_transcribe"
 OCR_EXTRACT_TOOL_ID = "native.ocr_extract_text"
 ANALYZE_IMAGE_TOOL_ID = "native.analyze_image"
+MAX_STT_VERIFICATION_BYTES = 4 * 1024 * 1024
+MAX_STT_VERIFICATION_DURATION_MS = 30_000
+_STT_VERIFICATION_SUFFIXES = {
+    "audio/webm": ".webm",
+    "audio/ogg": ".ogg",
+    "audio/wav": ".wav",
+    "audio/x-wav": ".wav",
+    "audio/mp4": ".m4a",
+}
 
 
 def build_tts_render_tool_definition(settings: TtsSettings) -> ToolDefinition:
@@ -95,6 +104,33 @@ def render_tts(settings: TtsSettings, *, text: str, output_dir: str | None = Non
 
 def verify_stt(settings: SttSettings, *, sample_path: str) -> dict[str, Any]:
     return transcribe_stt(settings, asset_path=sample_path)
+
+
+def verify_stt_recording(
+    settings: SttSettings,
+    *,
+    audio_base64: str,
+    mime_type: str,
+    duration_ms: int,
+) -> dict[str, Any]:
+    normalized_mime = str(mime_type or "").strip().lower().split(";", 1)[0]
+    suffix = _STT_VERIFICATION_SUFFIXES.get(normalized_mime)
+    if suffix is None:
+        return _failed("stt_recording_type_unsupported", "The recording format is not supported.")
+    if not 0 < int(duration_ms or 0) <= MAX_STT_VERIFICATION_DURATION_MS:
+        return _failed("stt_recording_duration_invalid", "Record a message between 1 and 30 seconds.")
+    try:
+        audio = base64.b64decode(str(audio_base64 or ""), validate=True)
+    except (ValueError, TypeError):
+        return _failed("stt_recording_invalid", "The recording could not be read.")
+    if not audio:
+        return _failed("stt_recording_empty", "Record a short message before verifying.")
+    if len(audio) > MAX_STT_VERIFICATION_BYTES:
+        return _failed("stt_recording_too_large", "The recording is too large; keep it under 30 seconds.")
+    with tempfile.TemporaryDirectory(prefix="alphonse-v2-stt-recording-") as root:
+        source = Path(root) / f"recording{suffix}"
+        source.write_bytes(audio)
+        return transcribe_stt(settings, asset_path=str(source))
 
 
 def transcribe_stt(settings: SttSettings, *, asset_path: str) -> dict[str, Any]:

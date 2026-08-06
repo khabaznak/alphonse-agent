@@ -44,20 +44,25 @@ class AttachmentAdapter(Protocol):
 
 
 class SQLiteAssetStore:
-    def __init__(self, db_path: str | Path = ":memory:", root: str | Path | None = None) -> None:
-        self.db_path = str(db_path); self.root = Path(root or Path.home() / ".alphonse" / "assets")
+    def __init__(self, db_path: str | Path = ":memory:", root: str | Path | None = None, *, users_root: Callable[[], Path] | None = None) -> None:
+        self.db_path = str(db_path)
+        # ``root`` is retained for explicit standalone/test stores and for
+        # locating legacy assets. The daemon supplies ``users_root`` so each
+        # attachment belongs to its owner's private profile directory.
+        self.root = Path(root or Path.home() / ".alphonse" / "assets")
+        self._users_root = users_root
         self._memory = sqlite3.connect(":memory:", check_same_thread=False) if self.db_path == ":memory:" else None
         if self._memory is not None: self._memory.row_factory = sqlite3.Row
         self._ensure_schema()
     @classmethod
-    def default(cls) -> "SQLiteAssetStore":
+    def default(cls, *, users_root: Callable[[], Path] | None = None) -> "SQLiteAssetStore":
         base = Path(os.getenv("ALPHONSE_V2_ASSETS_ROOT") or Path.home() / ".alphonse" / "assets")
-        return cls(default_database_path(), base)
+        return cls(default_database_path(), base, users_root=users_root)
     def register_bytes(self, *, owner_user_id: str, descriptor: AttachmentDescriptor, content: bytes, source: str) -> AssetRecord:
         if len(content) > MAX_ATTACHMENT_BYTES: raise ValueError("attachment_too_large")
         if not _supported(descriptor.mime_type): raise ValueError("attachment_type_unsupported")
         asset_id = str(uuid4()); digest = hashlib.sha256(content).hexdigest(); suffix = Path(descriptor.filename).suffix or mimetypes.guess_extension(descriptor.mime_type) or ""
-        folder = self.root / str(owner_user_id) / asset_id; folder.mkdir(parents=True, exist_ok=False); path = folder / f"original{suffix}"
+        folder = self._folder_for(owner_user_id, asset_id); folder.mkdir(parents=True, exist_ok=False); path = folder / f"original{suffix}"
         path.write_bytes(content); record = AssetRecord(asset_id, str(owner_user_id), _safe_name(descriptor.filename), descriptor.mime_type, len(content), digest, str(path), str(source), created_at=_now())
         with self._connect() as conn: conn.execute("INSERT INTO v2_assets(asset_id,owner_user_id,filename,mime_type,size_bytes,sha256,path,source,extracted_text,processing_status,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)", (*record.__dict__.values(),))
         return record
@@ -76,6 +81,44 @@ class SQLiteAssetStore:
         if record is None: return False
         with self._connect() as conn: conn.execute("DELETE FROM v2_assets WHERE asset_id=?", (record.asset_id,))
         shutil.rmtree(Path(record.path).parent, ignore_errors=True); return True
+    def migrate_to_user_directories(self) -> dict[str, int]:
+        """Move existing attachment files into their owners' profile folders.
+
+        The database stays authoritative. Files are copied to the destination
+        before the source is removed, so an interrupted migration never loses
+        the only stored attachment.
+        """
+        if self._users_root is None:
+            return {"migrated": 0, "missing": 0}
+        with self._connect() as conn:
+            records = [_record(row) for row in conn.execute("SELECT * FROM v2_assets").fetchall()]
+        migrated = missing = 0
+        for record in (item for item in records if item is not None):
+            source = Path(record.path)
+            target = self._folder_for(record.owner_user_id, record.asset_id) / source.name
+            if source == target:
+                continue
+            if not source.is_file():
+                missing += 1
+                continue
+            target.parent.mkdir(parents=True, exist_ok=True)
+            if not target.exists():
+                shutil.copy2(source, target)
+            with self._connect() as conn:
+                conn.execute("UPDATE v2_assets SET path=? WHERE asset_id=?", (str(target), record.asset_id))
+            source.unlink()
+            try:
+                source.parent.rmdir()
+                source.parent.parent.rmdir()
+            except OSError:
+                pass
+            migrated += 1
+        return {"migrated": migrated, "missing": missing}
+
+    def _folder_for(self, owner_user_id: str, asset_id: str) -> Path:
+        if self._users_root is not None:
+            return Path(self._users_root()).expanduser().resolve() / str(owner_user_id) / "assets" / str(asset_id)
+        return self.root / str(owner_user_id) / str(asset_id)
     def _connect(self):
         if self._memory is not None: return _Connection(self._memory)
         return connect_database(self.db_path)

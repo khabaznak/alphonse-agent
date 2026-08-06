@@ -21,6 +21,7 @@ from alphonse.agent_v2.services.project_sessions import SQLiteProjectSessionStor
 from alphonse.agent_v2.users import V2UserStore
 from alphonse.agent_v2.assets import SQLiteAssetStore
 from alphonse.agent_v2.assets import AttachmentDescriptor
+from alphonse.agent_v2.media_tools_settings import SttSettings, VerificationState
 
 
 class FakeTelegramClient:
@@ -47,6 +48,16 @@ class AttachmentTelegramClient(FakeTelegramClient):
     def download(self, descriptor: AttachmentDescriptor) -> bytes:
         assert descriptor.provider_file_id == "large"
         return b"image-bytes"
+
+
+class VoiceAttachmentTelegramClient(FakeTelegramClient):
+    def describe_inbound(self, raw: dict) -> list[AttachmentDescriptor]:
+        voice = raw.get("voice") or {}
+        return [AttachmentDescriptor("telegram-voice.ogg", "audio/ogg", int(voice.get("file_size") or 0), str(voice.get("file_id") or ""), str(raw.get("caption") or ""), "voice")]
+
+    def download(self, descriptor: AttachmentDescriptor) -> bytes:
+        assert descriptor.provider_file_id == "voice-file"
+        return b"ogg-bytes"
 
 
 def test_telegram_client_describes_highest_resolution_photo_with_caption() -> None:
@@ -161,6 +172,61 @@ def test_telegram_photo_without_caption_queues_image_goal(tmp_path: Path, monkey
     queued = queue.dequeue()
     assert queued is not None
     assert queued.message.prompt == "Please analyze the attached image."
+
+
+def test_telegram_voice_without_caption_queues_whisper_transcript(tmp_path: Path, monkeypatch) -> None:
+    db_path = tmp_path / "nerve-db"
+    monkeypatch.setenv("NERVE_DB_PATH", str(db_path))
+    apply_schema(db_path)
+    users_store.upsert_user({"user_id": "u-alex", "display_name": "Alex", "is_active": True})
+    resolvers.upsert_service_resolver(user_id="u-alex", service_id=2, service_user_id="123")
+    queue = InMemoryMessageQueue()
+    client = VoiceAttachmentTelegramClient([{"update_id": 10, "message": {"message_id": 5, "voice": {"file_id": "voice-file", "file_size": 9}, "chat": {"id": "999"}, "from": {"id": "123"}}}])
+    settings = SttSettings(enabled=True, verification=VerificationState(ready=True))
+    calls: list[str] = []
+
+    runtime = _runtime(
+        queue=queue,
+        http_client=client,
+        asset_store=SQLiteAssetStore(tmp_path / "assets.sqlite3", tmp_path / "assets"),
+        stt_settings_provider=lambda: settings,
+        transcribe_audio=lambda configured, *, asset_path: calls.append(asset_path) or {"output": {"text": "probando uno dos tres", "segments": [{"text": "probando"}]}, "exception": None},
+    )
+
+    runtime.poll_once()
+
+    queued = queue.dequeue()
+    assert queued is not None
+    assert queued.message.prompt == "probando uno dos tres"
+    attachment = queued.message.metadata["attachments"][0]
+    assert attachment["transcription_status"] == "transcribed"
+    assert attachment["transcript"] == "probando uno dos tres"
+    assert attachment["transcription_segments"] == [{"text": "probando"}]
+    assert calls
+
+
+def test_telegram_voice_without_ready_stt_never_uses_image_prompt(tmp_path: Path, monkeypatch) -> None:
+    db_path = tmp_path / "nerve-db"
+    monkeypatch.setenv("NERVE_DB_PATH", str(db_path))
+    apply_schema(db_path)
+    users_store.upsert_user({"user_id": "u-alex", "display_name": "Alex", "is_active": True})
+    resolvers.upsert_service_resolver(user_id="u-alex", service_id=2, service_user_id="123")
+    queue = InMemoryMessageQueue()
+    client = VoiceAttachmentTelegramClient([{"update_id": 10, "message": {"message_id": 5, "voice": {"file_id": "voice-file"}, "chat": {"id": "999"}, "from": {"id": "123"}}}])
+
+    runtime = _runtime(
+        queue=queue,
+        http_client=client,
+        asset_store=SQLiteAssetStore(tmp_path / "assets.sqlite3", tmp_path / "assets"),
+        stt_settings_provider=lambda: SttSettings(enabled=True),
+    )
+
+    runtime.poll_once()
+
+    queued = queue.dequeue()
+    assert queued is not None
+    assert queued.message.prompt == "Tell the user that speech-to-text is not ready to transcribe the attached audio."
+    assert queued.message.metadata["attachments"][0]["transcription_status"] == "unavailable"
 
 
 def test_telegram_unknown_user_notifies_owner_without_queueing_capd_task(tmp_path: Path, monkeypatch) -> None:
@@ -300,6 +366,8 @@ def _runtime(
     identity_resolver=None,
     access_request_store=None,
     asset_store=None,
+    stt_settings_provider=None,
+    transcribe_audio=None,
 ) -> TelegramIntegrationRuntime:
     store = SQLiteIntegrationStore()
     record = store.upsert(
@@ -321,4 +389,6 @@ def _runtime(
         inbound_router=inbound_router,
         asset_store=asset_store,
         access_request_store=access_request_store,
+        stt_settings_provider=stt_settings_provider,
+        transcribe_audio=transcribe_audio,
     )

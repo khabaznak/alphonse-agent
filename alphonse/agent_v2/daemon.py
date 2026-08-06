@@ -58,7 +58,7 @@ from alphonse.agent_v2.memory_settings import MemorySettings
 from alphonse.agent_v2.memory_settings import SQLiteMemorySettingsStore
 from alphonse.agent_v2.web_tools_settings import SQLiteWebToolsSettingsStore
 from alphonse.agent_v2.media_tools_settings import SQLiteMediaToolsSettingsStore
-from alphonse.agent_v2.core.tools.registry.native.media import verify_ocr, verify_stt, verify_tts
+from alphonse.agent_v2.core.tools.registry.native.media import verify_ocr, verify_stt, verify_stt_recording, verify_tts
 from alphonse.agent_v2.runtime import refresh_runtime_web_tools
 from alphonse.agent_v2.runtime import refresh_runtime_media_tools
 from alphonse.agent_v2.runtime import refresh_runtime_artifacts
@@ -228,6 +228,7 @@ class V2Daemon:
             imported = {}
         self.runtime.user = admin.user_id
         migrated = self._migrate_legacy_local(admin.user_id)
+        self.runtime.asset_store.migrate_to_user_directories()
         refresh_runtime_identity_resolver(self.runtime)
         return {"admin_user": admin.to_dict(), "migration": {**imported, **migrated}, "users_root": str(store.users_root())}
 
@@ -444,8 +445,10 @@ class V2Daemon:
             self.runtime.user_store.set_mirror_automation_messages_to_preferred_channel(
                 mirror_automation_messages_to_preferred_channel
             )
+        saved_users_root = self.runtime.user_store.set_users_root(users_root)
+        self.runtime.asset_store.migrate_to_user_directories()
         return {
-            "users_root": self.runtime.user_store.set_users_root(users_root),
+            "users_root": saved_users_root,
             "timezone": timezone_value,
             "mirror_automation_messages_to_preferred_channel": self.runtime.user_store.mirror_automation_messages_to_preferred_channel(),
             "warning_repository_path": "/Alphonse/" in str(users_root),
@@ -544,6 +547,36 @@ class V2Daemon:
         if detail_error:
             error = f"{error}: {detail_error}"
         saved = self.runtime.media_tools_settings_store.mark_verification(kind, ready=not bool(exception), error=error, preview=preview)
+        refresh_runtime_media_tools(self.runtime)
+        return {"result": result, "settings": saved.to_dict()}
+
+    def verify_stt_recording(
+        self,
+        *,
+        actor_user_id: str,
+        audio_base64: str,
+        mime_type: str,
+        duration_ms: int,
+    ) -> dict[str, Any]:
+        self._require_admin(actor_user_id)
+        settings = self.runtime.media_tools_settings_store.get()
+        result = verify_stt_recording(
+            settings.stt,
+            audio_base64=audio_base64,
+            mime_type=mime_type,
+            duration_ms=duration_ms,
+        )
+        exception = result.get("exception") if isinstance(result, dict) else {"message": "verification_failed"}
+        output = result.get("output") if isinstance(result, dict) else {}
+        preview = str((output or {}).get("text") or "")
+        error = str((exception or {}).get("message") or "") if isinstance(exception, dict) else ""
+        details = (exception or {}).get("details") if isinstance(exception, dict) else {}
+        detail_error = str((details or {}).get("error") or "") if isinstance(details, dict) else ""
+        if detail_error:
+            error = f"{error}: {detail_error}"
+        saved = self.runtime.media_tools_settings_store.mark_verification(
+            "stt", ready=not bool(exception), error=error, preview=preview,
+        )
         refresh_runtime_media_tools(self.runtime)
         return {"result": result, "settings": saved.to_dict()}
 
@@ -1656,6 +1689,8 @@ def main() -> None:
             len(migration.get("sources") or []),
         )
         user_store = V2UserStore.default()
+        asset_store = SQLiteAssetStore.default(users_root=user_store.users_root)
+        asset_store.migrate_to_user_directories()
         daemon = V2Daemon(
             build_runtime_host(
                 user=user_store.admin_user().user_id if user_store.admin_user() else "",
@@ -1666,7 +1701,7 @@ def main() -> None:
                 schedule_store=ScheduledTaskStore.default(),
                 web_tools_settings_store=SQLiteWebToolsSettingsStore.default(),
                 media_tools_settings_store=SQLiteMediaToolsSettingsStore.default(),
-                asset_store=SQLiteAssetStore.default(),
+                asset_store=asset_store,
                 artifact_store=SQLiteArtifactStore.default(),
                 conversation_store=SQLiteConversationStore.default(),
                 memory_settings_store=SQLiteMemorySettingsStore.default(),

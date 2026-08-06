@@ -144,6 +144,8 @@ class TelegramIntegrationRuntime:
         inbound_router: ProjectInboundRouter | None = None,
         access_request_store: Any | None = None,
         asset_store: Any | None = None,
+        stt_settings_provider: Callable[[], Any] | None = None,
+        transcribe_audio: Callable[..., dict[str, Any]] | None = None,
     ) -> None:
         self.record = record
         self.channel = channel
@@ -166,6 +168,10 @@ class TelegramIntegrationRuntime:
         self.inbound_router = inbound_router
         self.access_request_store = access_request_store
         self.asset_store = asset_store
+        # Resolve settings when each message arrives so a verification or
+        # configuration change takes effect without restarting Telegram.
+        self._stt_settings_provider = stt_settings_provider
+        self._transcribe_audio = transcribe_audio or _transcribe_stt
         self.presence_adapter = TelegramPresenceAdapter(
             http_client=self.http_client,
             enabled=bool(config["presence_enabled"]),
@@ -220,8 +226,6 @@ class TelegramIntegrationRuntime:
         descriptors = describe(message) if callable(describe) else []
         if not text and not descriptors:
             return False
-        if not text and descriptors:
-            text = "Please analyze the attached image."
         chat = message.get("chat") if isinstance(message.get("chat"), dict) else {}
         chat_id = str(chat.get("id") or message.get("chat_id") or "").strip()
         if not chat_id:
@@ -257,6 +261,9 @@ class TelegramIntegrationRuntime:
             return False
         asset_ids: list[str] = []
         attachment_metadata: list[dict[str, Any]] = []
+        transcripts: list[str] = []
+        audio_transcription_unavailable = False
+        audio_transcription_failed = False
         for descriptor in descriptors:
             attachment = dict(descriptor.__dict__)
             attachment["asset_id"] = ""
@@ -267,9 +274,39 @@ class TelegramIntegrationRuntime:
                     asset_ids.append(record.asset_id)
                     attachment["asset_id"] = record.asset_id
                     attachment["ingestion_status"] = "registered"
+                    if _is_audio_attachment(descriptor):
+                        transcript = self._transcribe_attachment(record=record, attachment=attachment)
+                        if transcript:
+                            transcripts.append(transcript)
+                        elif attachment.get("transcription_status") == "unavailable":
+                            audio_transcription_unavailable = True
+                        else:
+                            audio_transcription_failed = True
                 except Exception:
                     attachment["ingestion_status"] = "failed"
+                    if _is_audio_attachment(descriptor):
+                        attachment["transcription_status"] = "failed"
+                        attachment["transcription_error"] = "The audio attachment could not be downloaded."
+                        audio_transcription_failed = True
+            elif _is_audio_attachment(descriptor):
+                attachment["transcription_status"] = "unavailable"
+                attachment["transcription_error"] = "Audio transcription needs the local asset store."
+                audio_transcription_unavailable = True
             attachment_metadata.append(attachment)
+        if not text:
+            if transcripts:
+                text = "\n\n".join(transcripts)
+            elif any(_is_image_attachment(descriptor) for descriptor in descriptors):
+                text = "Please analyze the attached image."
+            elif any(_is_audio_attachment(descriptor) for descriptor in descriptors):
+                if audio_transcription_unavailable:
+                    text = "Tell the user that speech-to-text is not ready to transcribe the attached audio."
+                elif audio_transcription_failed:
+                    text = "Tell the user that the attached audio could not be transcribed."
+                else:
+                    text = "Tell the user that the attached audio could not be transcribed."
+            else:
+                text = "Please review the attached file."
         values = {
             "prompt": text,
             "user": resolved.alphonse_user_id,
@@ -293,6 +330,33 @@ class TelegramIntegrationRuntime:
             self._stats = _replace_stats(self._stats, messages_queued=self._stats.messages_queued + 1)
             self._notify_message_queued()
         return True
+
+    def _transcribe_attachment(self, *, record: Any, attachment: dict[str, Any]) -> str:
+        settings = self._stt_settings_provider() if self._stt_settings_provider is not None else None
+        if settings is None or not bool(getattr(settings, "available", False)):
+            attachment["transcription_status"] = "unavailable"
+            attachment["transcription_error"] = "Speech-to-text is not enabled and verified."
+            return ""
+        try:
+            result = self._transcribe_audio(settings, asset_path=str(getattr(record, "path", "") or ""))
+        except Exception as exc:
+            attachment["transcription_status"] = "failed"
+            attachment["transcription_error"] = f"Speech-to-text failed: {type(exc).__name__}."
+            return ""
+        output = result.get("output") if isinstance(result, dict) else None
+        transcript = str(output.get("text") or "").strip() if isinstance(output, dict) else ""
+        if transcript:
+            attachment["transcription_status"] = "transcribed"
+            attachment["transcript"] = transcript
+            segments = output.get("segments") if isinstance(output, dict) else None
+            if isinstance(segments, list):
+                attachment["transcription_segments"] = segments
+            return transcript
+        exception = result.get("exception") if isinstance(result, dict) else None
+        message = str(exception.get("message") or "Speech-to-text returned no transcript.") if isinstance(exception, dict) else "Speech-to-text returned no transcript."
+        attachment["transcription_status"] = "failed"
+        attachment["transcription_error"] = message
+        return ""
 
     def drain_outbox_once(self, *, limit: int = 20) -> TelegramRuntimeStats:
         selector = OutboundSelector(integration_id=self.integration_id, status="pending")
@@ -420,6 +484,7 @@ def build_telegram_runtime(
     inbound_router: ProjectInboundRouter | None = None,
     access_request_store: Any | None = None,
     asset_store: Any | None = None,
+    stt_settings_provider: Callable[[], Any] | None = None,
 ) -> TelegramIntegrationRuntime:
     return TelegramIntegrationRuntime(
         record=record,
@@ -434,6 +499,7 @@ def build_telegram_runtime(
         inbound_router=inbound_router,
         access_request_store=access_request_store,
         asset_store=asset_store,
+        stt_settings_provider=stt_settings_provider,
     )
 
 
@@ -456,6 +522,22 @@ def _telegram_message(update: dict[str, Any]) -> dict[str, Any] | None:
         if isinstance(value, dict):
             return value
     return None
+
+
+def _is_audio_attachment(descriptor: AttachmentDescriptor) -> bool:
+    return descriptor.kind in {"audio", "voice"} or str(descriptor.mime_type or "").lower().startswith("audio/")
+
+
+def _is_image_attachment(descriptor: AttachmentDescriptor) -> bool:
+    return descriptor.kind == "photo" or str(descriptor.mime_type or "").lower().startswith("image/")
+
+
+def _transcribe_stt(settings: Any, *, asset_path: str) -> dict[str, Any]:
+    # Import lazily: loading the native registry while Telegram is being
+    # registered creates an otherwise avoidable package import cycle.
+    from alphonse.agent_v2.core.tools.registry.native.media import transcribe_stt
+
+    return transcribe_stt(settings, asset_path=asset_path)
 
 
 def _parse_allowed_chat_ids(value: Any) -> set[str]:
