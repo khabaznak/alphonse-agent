@@ -540,6 +540,7 @@ button { border: 0; cursor: pointer; }
   box-shadow: 0 24px 60px #13251c66;
 }
 .projects-modal { width: min(940px, 100%); max-height: min(760px, calc(100dvh - 80px)); }
+.settings-modal { width: min(940px, 100%); max-height: min(760px, calc(100dvh - 80px)); }
 
 .modal header { display: flex; align-items: center; justify-content: space-between; border: 0; padding: 24px 24px 18px; }
 .modal h2 { font: 650 27px var(--font-display); margin: 0; }
@@ -669,6 +670,8 @@ button { border: 0; cursor: pointer; }
 .user-card > span:last-child { display: grid; gap: 4px; min-width: 0; }
 .project-list { grid-template-columns: repeat(2, minmax(0, 1fr)); max-height: 500px; overflow-y: auto; }
 .project-list > p { grid-column: 1 / -1; }
+.artifact-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.artifact-list > p { grid-column: 1 / -1; }
 .project-list-toolbar { display: flex; align-items: end; justify-content: space-between; gap: 12px; margin: 10px 0; }
 .project-list-toolbar .form-field { flex: 1; }
 .project-list-toolbar > button { white-space: nowrap; }
@@ -697,6 +700,20 @@ button { border: 0; cursor: pointer; }
 .project-updates { color: var(--accent) !important; font-size: 11px; white-space: nowrap; }
 .project-card-actions { display: flex; justify-self: end; align-items: end; gap: 7px; min-height: 42px; margin-top: 5px; }
 .project-card-actions button { padding: 8px 10px; white-space: nowrap; }
+.stack .artifact-card { display: grid; grid-template-rows: minmax(0, 1fr) 42px; gap: 5px; min-width: 0; padding: 14px; color: var(--text); background: var(--surface-raised); border: 1px solid var(--border); border-radius: 7px; }
+.artifact-card-summary { display: grid; align-content: start; gap: 8px; min-width: 0; }
+.artifact-card-title { display: flex; align-items: center; gap: 7px; min-width: 0; }
+.artifact-card-title strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.artifact-description { min-height: 17px; margin: 0; color: var(--muted); font-size: 12px; line-height: 1.4; }
+.artifact-description.empty { font-style: italic; }
+.artifact-project-label { display: inline-flex; align-items: center; width: fit-content; min-height: 26px; gap: 6px; padding: 5px 9px; border-radius: 999px; background: var(--surface-subtle); color: var(--muted); font-size: 11px; line-height: 1; }
+.artifact-project-label strong { color: var(--text); }
+.artifact-entrypoint { overflow: hidden; color: var(--muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.artifact-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.artifact-fields.editing { grid-template-columns: minmax(0, 1fr); }
+.artifact-fields label { display: grid; min-width: 0; gap: 6px; color: #385046; font-size: 12px; }
+.artifact-card-actions { display: flex; justify-self: end; align-items: end; gap: 7px; min-height: 42px; }
+.artifact-card-actions button { padding: 8px 10px; white-space: nowrap; }
 .modal button.secondary { color: var(--accent); background: var(--accent-soft); }
 .back-button { padding: 0 !important; color: var(--accent) !important; background: transparent !important; }
 .project-detail, .project-create { display: grid; gap: 12px; margin-top: 14px; }
