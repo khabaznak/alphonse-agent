@@ -86,7 +86,7 @@ button { border: 0; cursor: pointer; }
 
 .brand {
   display: grid;
-  grid-template-columns: 35px 1fr auto;
+  grid-template-columns: 40px 1fr auto;
   align-items: center;
   gap: 10px;
   font-family: var(--font-display);
@@ -94,15 +94,10 @@ button { border: 0; cursor: pointer; }
   margin-bottom: 16px;
 }
 
-.mark {
-  width: 35px;
-  height: 35px;
-  border-radius: 50%;
-  display: grid;
-  place-items: center;
-  background: var(--highlight);
-  color: var(--sidebar);
-  font-size: 19px;
+.brand-mascot {
+  width: 40px;
+  height: 40px;
+  object-fit: contain;
 }
 
 .collapse-toggle {
@@ -177,7 +172,7 @@ button { border: 0; cursor: pointer; }
 .recent-files-empty, .recent-files-error { margin: 8px 0 0; color: var(--sidebar-muted); font-size: 11px; line-height: 1.35; }
 .recent-files-error { color: #f0b7a6; }
 
-.sidebar-collapsed .brand { grid-template-columns: 35px; justify-content: center; }
+.sidebar-collapsed .brand { grid-template-columns: 40px; justify-content: center; }
 .sidebar-collapsed .brand-name,
 .sidebar-collapsed .sidebar > button .nav-label,
 .sidebar-collapsed .sidebar > button small,

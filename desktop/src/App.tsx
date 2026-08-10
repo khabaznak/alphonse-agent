@@ -456,7 +456,7 @@ export default function App() {
     <main className={`app-shell ${sidebarCollapsed ? "sidebar-collapsed" : ""}`}>
       <aside className="sidebar" aria-label="Alphonse navigation">
         <div className="brand">
-          <span className="mark">A</span>
+          <img className="brand-mascot" src="/alphonse-mascot.png" alt="" />
           <span className="brand-name">Alphonse</span>
           <button className="collapse-toggle" type="button" onClick={() => setSidebarCollapsed((value) => !value)} aria-label={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}>{sidebarCollapsed ? ">" : "<"}</button>
         </div>
