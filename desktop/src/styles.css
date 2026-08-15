@@ -65,7 +65,7 @@ button { border: 0; cursor: pointer; }
   height: 100dvh;
   min-height: 100%;
   display: grid;
-  grid-template-columns: 240px minmax(520px, 1fr);
+  grid-template-columns: 300px minmax(520px, 1fr);
   overflow: hidden;
   background: radial-gradient(circle at 72% 12%, var(--canvas-highlight), transparent 32%), var(--canvas);
 }
