@@ -12,6 +12,16 @@ use tokio::time::{sleep, Duration, Instant};
 const PROTOCOL_VERSION: u8 = 1;
 
 #[tauri::command]
+fn desktop_diagnostic_mode() -> String {
+    env::var("ALPHONSE_DESKTOP_DIAGNOSTIC_MODE").unwrap_or_else(|_| "normal".to_owned())
+}
+
+#[tauri::command]
+fn desktop_diagnostic_project_id() -> String {
+    env::var("ALPHONSE_DESKTOP_DIAGNOSTIC_PROJECT_ID").unwrap_or_default()
+}
+
+#[tauri::command]
 async fn ensure_daemon(app: AppHandle) -> Result<(), String> {
     if ipc_request("ping", json!({})).await.is_ok() {
         return Ok(());
@@ -137,6 +147,8 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .invoke_handler(tauri::generate_handler![
+            desktop_diagnostic_mode,
+            desktop_diagnostic_project_id,
             ensure_daemon,
             daemon_request,
             stop_daemon,

@@ -24,8 +24,12 @@ export function rememberDismissedScheduledSurface(storage: Pick<Storage, "setIte
 
 export function withoutDismissedSurfaces(surfaces: Record<string, A2uiSurface>, dismissed: Set<string>): Record<string, A2uiSurface> {
   if (!dismissed.size) return surfaces;
-  const next = { ...surfaces };
-  dismissed.forEach((surfaceId) => { delete next[surfaceId]; });
+  let next = surfaces;
+  dismissed.forEach((surfaceId) => {
+    if (!(surfaceId in next)) return;
+    if (next === surfaces) next = { ...surfaces };
+    delete next[surfaceId];
+  });
   return next;
 }
 

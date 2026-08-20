@@ -1,4 +1,4 @@
-import { FormEvent, KeyboardEvent, ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, KeyboardEvent, memo, ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { daemonRequest, ensureDaemon, showInFinder, stopDaemon } from "./api";
@@ -7,9 +7,11 @@ import { mergeFreshConversationHistory } from "./conversationHistory";
 import { buildConversationTimeline } from "./conversationTimeline";
 import { A2uiSurfaceView, applyA2uiEvent, DESKTOP_CATALOG_ID, type A2uiSurface } from "./a2ui";
 import { DESKTOP_STYLE_STORAGE_KEY, parseDesktopStyle, type DesktopStyle } from "./desktopStyle";
+import { desktopDiagnosticBehavior, type DesktopDiagnosticMode } from "./diagnosticMode";
 import { readDismissedScheduledSurfaces, rememberDismissedScheduledSurface, withoutDismissedSurfaces, withoutSurface } from "./dismissedSurfaces";
 import { agentStateLabel, capdActivityLabel, projectKey } from "./layoutState";
 import { formatMessageTime } from "./messageTime";
+import { reuseProjectAttention, reuseQuestions, reuseQueueStatus, type ProjectAttention } from "./pollState";
 import type { ActivityEvent, AgentDocument, ChatMessage, InferenceSettings, MediaToolsSettings, MemorySettings, Project, Question, WebToolsSettings } from "./types";
 
 type Modal = "projects" | "project-settings" | "project-context" | "scheduled-tasks" | "settings" | "users" | "onboarding" | null;
@@ -28,9 +30,10 @@ type PollResponse = {
 type HistoryResponse = { messages: ChatMessage[] };
 type RecentFilesResponse = { files: Array<{ name: string; kind: "file" | "directory"; modified_at: string }> };
 type Provider = { provider_key: string; display_name: string; models: Array<{ model_id: string; display_name: string }> };
-type ProjectAttention = Record<string, { unread_messages: number; pending_questions: number; total: number }>;
+const REMARK_PLUGINS = [remarkGfm];
 
-export default function App() {
+export default function App({ diagnosticMode = "normal", diagnosticProjectId = "" }: { diagnosticMode?: DesktopDiagnosticMode; diagnosticProjectId?: string }) {
+  const diagnosticBehavior = useMemo(() => desktopDiagnosticBehavior(diagnosticMode), [diagnosticMode]);
   const clientId = useRef(crypto.randomUUID()).current;
   const sequence = useRef(0);
   const uiSequence = useRef(0);
@@ -76,6 +79,7 @@ export default function App() {
   const [heldProgressSurfaces, setHeldProgressSurfaces] = useState<Record<string, A2uiSurface>>({});
   const [enterToSend, setEnterToSend] = useState(() => window.localStorage.getItem("alphonse.desktop.enterToSend") !== "false");
   const [desktopStyle, setDesktopStyle] = useState<DesktopStyle>(() => parseDesktopStyle(window.localStorage.getItem(DESKTOP_STYLE_STORAGE_KEY)));
+  const [diagnosticRenderTick, forceDiagnosticRender] = useState(0);
   const currentProjectKey = projectKey(project?.project_id);
   activeProjectKeyRef.current = currentProjectKey;
 
@@ -103,10 +107,9 @@ export default function App() {
     });
   }, []);
 
-  const poll = useCallback(async () => {
-    try {
-      const requestedProjectId = project?.project_id || "";
-      const response = await daemonRequest<PollResponse>("desktop_poll", {
+  const pollTransport = useCallback(async () => {
+    const requestedProjectId = project?.project_id || "";
+    const response = await daemonRequest<PollResponse>("desktop_poll", {
         client_id: clientId,
         user,
         project_id: requestedProjectId,
@@ -114,15 +117,22 @@ export default function App() {
         after_ui_sequence: uiSequence.current,
         client_capabilities: { supportedCatalogIds: [DESKTOP_CATALOG_ID] },
         limit: 50,
-      });
-      sequence.current = response.next_sequence;
-      uiSequence.current = response.next_ui_sequence ?? uiSequence.current;
+    });
+    sequence.current = response.next_sequence;
+    uiSequence.current = response.next_ui_sequence ?? uiSequence.current;
+    return { requestedProjectId, response };
+  }, [clientId, project?.project_id, user]);
+
+  const poll = useCallback(async () => {
+    try {
+      const { requestedProjectId, response } = await pollTransport();
+      if (!diagnosticBehavior.commitsPollResponses) return;
       setConnected(true);
       setError("");
       const responseIsForActiveProject = projectKey(requestedProjectId) === activeProjectKeyRef.current;
-      if (responseIsForActiveProject) setQuestions(response.questions);
-      setProjectAttention(response.project_attention || {});
-      setQueueStatus({ ready: response.status.queue?.ready || 0, processing: response.status.queue?.processing || 0 });
+      if (responseIsForActiveProject) setQuestions((current) => reuseQuestions(current, response.questions));
+      setProjectAttention((current) => reuseProjectAttention(current, response.project_attention || {}));
+      setQueueStatus((current) => reuseQueueStatus(current, { ready: response.status.queue?.ready || 0, processing: response.status.queue?.processing || 0 }));
       const newProgressTaskIds = responseIsForActiveProject ? taskProgressIds(response.ui_events || []) : [];
       if (newProgressTaskIds.length) {
         newProgressTaskIds.forEach((taskId) => {
@@ -209,22 +219,49 @@ export default function App() {
         }
       }
     } catch (cause) {
+      if (!diagnosticBehavior.commitsPollResponses) return;
       setConnected(false);
       setError(cause instanceof Error ? cause.message : "Daemon connection lost");
       setActivity("idle");
       setAgentState("Disconnected");
     }
-  }, [appendMessage, clientId, project?.project_id, user]);
+  }, [appendMessage, clientId, diagnosticBehavior.commitsPollResponses, pollTransport, user]);
 
   useEffect(() => {
-    ensureDaemon().then(async () => {
-      const current = await daemonRequest<{ onboarded: boolean; user: { user_id: string } | null }>("current_user");
-      if (!current.onboarded || !current.user) setModal("onboarding"); else setUser(current.user.user_id);
-      await poll();
-    }).catch((cause: unknown) => setError(cause instanceof Error ? cause.message : "Unable to start daemon"));
-    const timer = window.setInterval(() => void poll(), 800);
-    return () => window.clearInterval(timer);
-  }, [poll]);
+    const runCycle = diagnosticBehavior.cycle === "ping"
+      ? () => daemonRequest("ping")
+      : diagnosticBehavior.cycle === "poll" ? poll : null;
+    if (diagnosticBehavior.startsDaemon) void ensureDaemon().then(async () => {
+      if (diagnosticBehavior.loadsHistory) {
+        const current = await daemonRequest<{ onboarded: boolean; user: { user_id: string } | null }>("current_user");
+        if (!current.user) throw new Error("Diagnostic history requires an onboarded user");
+        const history = await daemonRequest<HistoryResponse>("desktop_conversation_history", {
+          user: current.user.user_id,
+          project_id: diagnosticProjectId,
+          limit: 100,
+        });
+        setUser(current.user.user_id);
+        setMessages(history.messages);
+        setMessageBuckets({ [projectKey(diagnosticProjectId)]: history.messages });
+      } else if (diagnosticMode === "normal") {
+        const current = await daemonRequest<{ onboarded: boolean; user: { user_id: string } | null }>("current_user");
+        if (!current.onboarded || !current.user) setModal("onboarding"); else setUser(current.user.user_id);
+      }
+      if (runCycle) await runCycle();
+    }).catch((cause: unknown) => {
+      if (diagnosticBehavior.commitsPollResponses || diagnosticBehavior.loadsHistory) {
+        setError(cause instanceof Error ? cause.message : "Unable to start daemon");
+      }
+    });
+    if (diagnosticBehavior.cycle === "render") {
+      const timer = window.setInterval(() => forceDiagnosticRender((current) => current + 1), 800);
+      return () => window.clearInterval(timer);
+    }
+    if (runCycle) {
+      const timer = window.setInterval(() => void runCycle(), 800);
+      return () => window.clearInterval(timer);
+    }
+  }, [diagnosticBehavior, diagnosticMode, diagnosticProjectId, poll]);
 
   useEffect(() => {
     window.localStorage.setItem("alphonse.desktop.enterToSend", String(enterToSend));
@@ -437,20 +474,24 @@ export default function App() {
   const suggestions = useMemo(() => matchingCommands(prompt), [prompt]);
   const activeSurface = Object.values(surfaces).find((surface) => !surface.surfaceId.startsWith("task-progress:") && !progressTaskIds.includes(questionTaskId(surface)));
   const fallbackQuestion = questions.find((question) => !surfaces[`question:${question.question_id}`]);
-  const timelineNodes: ReactNode[] = buildConversationTimeline(
-    messages,
-    progressTaskIds,
-    pendingProgressMessages,
-    morphedMessageTaskIds,
-  ).map((item) => {
-    if (item.kind === "message") return <MessageBubble key={item.key} message={item.message} timezone={timezone} />;
-    const surface = surfaces[`task-progress:${item.taskId}`] || heldProgressSurfaces[item.taskId];
-    const questionSurface = Object.values(surfaces).find((candidate) => questionTaskId(candidate) === item.taskId);
-    if (questionSurface) {
-      return <article className="message assistant task-question-bubble" key={item.key}><A2uiSurfaceView surface={questionSurface} clientId={clientId} user={user} onDone={poll} /></article>;
-    }
-    return surface ? <TaskProgressBubble key={item.key} surface={surface} /> : null;
-  });
+  const timelineRenderVersion = diagnosticBehavior.memoizesTimeline ? 0 : diagnosticRenderTick;
+  const timelineNodes: ReactNode[] = useMemo(() => buildConversationTimeline(
+      messages,
+      progressTaskIds,
+      pendingProgressMessages,
+      morphedMessageTaskIds,
+    ).map((item) => {
+      if (item.kind === "message") {
+        const Bubble = diagnosticBehavior.memoizesMessages ? MemoizedMessageBubble : MessageBubble;
+        return <Bubble key={item.key} message={item.message} timezone={timezone} renderMarkdown={!diagnosticBehavior.plainTextMessages} />;
+      }
+      const surface = surfaces[`task-progress:${item.taskId}`] || heldProgressSurfaces[item.taskId];
+      const questionSurface = Object.values(surfaces).find((candidate) => questionTaskId(candidate) === item.taskId);
+      if (questionSurface) {
+        return <article className="message assistant task-question-bubble" key={item.key}><A2uiSurfaceView surface={questionSurface} clientId={clientId} user={user} onDone={poll} /></article>;
+      }
+      return surface ? <TaskProgressBubble key={item.key} surface={surface} /> : null;
+    }), [clientId, diagnosticBehavior.memoizesMessages, diagnosticBehavior.plainTextMessages, heldProgressSurfaces, messages, morphedMessageTaskIds, pendingProgressMessages, poll, progressTaskIds, surfaces, timelineRenderVersion, timezone, user]);
 
   return (
     <main className={`app-shell ${sidebarCollapsed ? "sidebar-collapsed" : ""}`}>
@@ -738,14 +779,16 @@ function taskProgressIds(events: Array<{ event: { type: string; name?: string; v
   return [...ids];
 }
 
-function MessageBubble({ message, timezone }: { message: ChatMessage; timezone: string }) {
+function MessageBubble({ message, timezone, renderMarkdown = true }: { message: ChatMessage; timezone: string; renderMarkdown?: boolean }) {
   const timestamp = message.created_at ? formatMessageTime(message.created_at, timezone) : null;
   return <article className={`message ${message.role}`}>
     {message.source && !["desktop", "ledger"].includes(message.source) && <small className="message-source" title={`Sent from ${message.source}`}>↗ {sourceLabel(message.source)}</small>}
-    {message.role === "assistant" ? <div className="message-markdown"><ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown></div> : message.content}
+    {message.role === "assistant" && renderMarkdown ? <div className="message-markdown"><ReactMarkdown remarkPlugins={REMARK_PLUGINS}>{message.content}</ReactMarkdown></div> : message.content}
     {timestamp && <time className="message-timestamp" dateTime={message.created_at} title={timestamp.tooltip}>{timestamp.visible}</time>}
   </article>;
 }
+
+const MemoizedMessageBubble = memo(MessageBubble);
 
 function TaskProgressBubble({ surface }: { surface: A2uiSurface }) {
   const text = (id: string) => String(surface.components[id]?.text || "").trim();

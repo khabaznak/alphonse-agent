@@ -55,4 +55,9 @@ describe("dismissed scheduled-task surfaces", () => {
   it("recovers safely from malformed local storage", () => {
     expect(readDismissedScheduledSurfaces(memoryStorage("not-json"))).toEqual(new Set());
   });
+
+  it("preserves surface identity when dismissed cards are already absent", () => {
+    const surfaces = { "question:q1": surface("question:q1") };
+    expect(withoutDismissedSurfaces(surfaces, new Set(["scheduled-task:old"]))).toBe(surfaces);
+  });
 });
