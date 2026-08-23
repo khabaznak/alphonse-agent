@@ -1,4 +1,7 @@
 import { FormEvent, KeyboardEvent, memo, ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { CalendarClock, ChevronDown, ChevronLeft, ChevronRight, FileText, Folder, FolderKanban, ListTodo, Plus, Settings, UsersRound, X } from "lucide-react";
+import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { daemonRequest, ensureDaemon, showInFinder, stopDaemon } from "./api";
@@ -12,7 +15,7 @@ import { readDismissedScheduledSurfaces, rememberDismissedScheduledSurface, with
 import { agentStateLabel, capdActivityLabel, projectKey } from "./layoutState";
 import { formatMessageTime } from "./messageTime";
 import { reuseProjectAttention, reuseQuestions, reuseQueueStatus, type ProjectAttention } from "./pollState";
-import type { ActivityEvent, AgentDocument, ChatMessage, InferenceSettings, MediaToolsSettings, MemorySettings, Project, Question, WebToolsSettings } from "./types";
+import type { ActivityEvent, AgentDocument, ChatMessage, CodeModeSettings, InferenceSettings, MediaToolsSettings, MemorySettings, Project, Question, WebToolsSettings } from "./types";
 
 type Modal = "projects" | "project-settings" | "project-context" | "scheduled-tasks" | "settings" | "users" | "onboarding" | null;
 type SettingsTab = "general" | "appearance" | "tools" | "artifacts" | "integrations" | "automations" | "model" | "agent-config";
@@ -29,8 +32,10 @@ type PollResponse = {
 };
 type HistoryResponse = { messages: ChatMessage[] };
 type RecentFilesResponse = { files: Array<{ name: string; kind: "file" | "directory"; modified_at: string }> };
+type DesktopProjectFile = { filename: string; mime_type: string; size_bytes: number; project_path: string; relative_path: string };
 type Provider = { provider_key: string; display_name: string; models: Array<{ model_id: string; display_name: string }> };
 const REMARK_PLUGINS = [remarkGfm];
+const fileNameFromPath = (path: string) => path.split(/[\\/]/).pop() || "attachment";
 
 export default function App({ diagnosticMode = "normal", diagnosticProjectId = "" }: { diagnosticMode?: DesktopDiagnosticMode; diagnosticProjectId?: string }) {
   const diagnosticBehavior = useMemo(() => desktopDiagnosticBehavior(diagnosticMode), [diagnosticMode]);
@@ -39,6 +44,7 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
   const uiSequence = useRef(0);
   const delivered = useRef(new Set<string>());
   const progressTaskIdsRef = useRef(new Set<string>());
+  const autoScrolledProgressTaskIdsRef = useRef(new Set<string>());
   const progressStartedAtRef = useRef(new Map<string, number>());
   const progressMeaningfulAtRef = useRef(new Map<string, number>());
   const progressCompletionTimersRef = useRef(new Map<string, number>());
@@ -49,11 +55,14 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
   const messagesDuringHistoryReloadRef = useRef(new Map<number, ChatMessage[]>());
   const timelineRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const composerRef = useRef<HTMLFormElement | null>(null);
   const surfacesRef = useRef<Record<string, A2uiSurface>>({});
   const dismissedScheduledSurfacesRef = useRef(readDismissedScheduledSurfaces(window.localStorage));
   const [messages, setMessages] = useState<ChatMessage[]>([{ id: "welcome", role: "assistant", content: "Alphonse Desktop is connected locally." }]);
   const [messageBuckets, setMessageBuckets] = useState<Record<string, ChatMessage[]>>({});
   const [prompt, setPrompt] = useState("");
+  const [attachmentPaths, setAttachmentPaths] = useState<string[]>([]);
+  const [composerDragActive, setComposerDragActive] = useState(false);
   const [connected, setConnected] = useState(false);
   const [activity, setActivity] = useState("idle");
   const [agentState, setAgentState] = useState<"Idle" | "Working" | "Error" | "Disconnected">("Disconnected");
@@ -131,6 +140,17 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
       setError("");
       const responseIsForActiveProject = projectKey(requestedProjectId) === activeProjectKeyRef.current;
       if (responseIsForActiveProject) setQuestions((current) => reuseQuestions(current, response.questions));
+      if (responseIsForActiveProject) {
+        response.questions.forEach((question) => appendMessage({
+          id: `question:${question.question_id}`,
+          role: "assistant",
+          content: question.message,
+          source: "desktop",
+          created_at: question.created_at,
+          project_id: question.project_id,
+          sequence: question.conversation_sequence,
+        }));
+      }
       setProjectAttention((current) => reuseProjectAttention(current, response.project_attention || {}));
       setQueueStatus((current) => reuseQueueStatus(current, { ready: response.status.queue?.ready || 0, processing: response.status.queue?.processing || 0 }));
       const newProgressTaskIds = responseIsForActiveProject ? taskProgressIds(response.ui_events || []) : [];
@@ -312,6 +332,17 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
   }, [messages]);
 
   useEffect(() => {
+    const unseen = progressTaskIds.filter((taskId) => !autoScrolledProgressTaskIdsRef.current.has(taskId));
+    if (!unseen.length) return;
+    unseen.forEach((taskId) => autoScrolledProgressTaskIdsRef.current.add(taskId));
+    const frame = window.requestAnimationFrame(() => {
+      const element = timelineRef.current;
+      element?.scrollTo({ top: element.scrollHeight, behavior: "smooth" });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [progressTaskIds]);
+
+  useEffect(() => {
     const element = textareaRef.current;
     if (!element) return;
     element.style.height = "auto";
@@ -332,7 +363,49 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
     return () => { active = false; };
   }, [project, recentFilesOpen, user]);
 
+  const queueAttachmentPaths = useCallback((paths: string[]) => {
+    if (!project) {
+      setError("Select a project before attaching files.");
+      return;
+    }
+    const normalized = paths.map((path) => path.trim()).filter(Boolean);
+    if (!normalized.length) return;
+    setAttachmentPaths((current) => [...new Set([...current, ...normalized])]);
+    setError("");
+  }, [project]);
+
+  const chooseAttachments = async () => {
+    if (!project) {
+      setError("Select a project before attaching files.");
+      return;
+    }
+    try {
+      const selected = await openFileDialog({ title: "Attach files to this project", multiple: true, directory: false });
+      queueAttachmentPaths(selected ? (Array.isArray(selected) ? selected : [selected]) : []);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "File picker could not be opened");
+    }
+  };
+
+  useEffect(() => {
+    if (!("__TAURI_INTERNALS__" in window)) return;
+    let unlisten: (() => void) | undefined;
+    void getCurrentWindow().onDragDropEvent((event) => {
+      const composer = composerRef.current;
+      const scale = window.devicePixelRatio || 1;
+      const point = "position" in event.payload ? event.payload.position : null;
+      const rect = composer?.getBoundingClientRect();
+      const overComposer = Boolean(point && rect && point.x / scale >= rect.left && point.x / scale <= rect.right && point.y / scale >= rect.top && point.y / scale <= rect.bottom);
+      if (event.payload.type === "leave") { setComposerDragActive(false); return; }
+      if (event.payload.type === "enter" || event.payload.type === "over") { setComposerDragActive(overComposer); return; }
+      setComposerDragActive(false);
+      if (event.payload.type === "drop" && overComposer) queueAttachmentPaths(event.payload.paths);
+    }).then((stop) => { unlisten = stop; }).catch(() => undefined);
+    return () => { unlisten?.(); };
+  }, [queueAttachmentPaths]);
+
   const selectProject = useCallback(async (next: Project) => {
+    if (attachmentPaths.length && next.project_id !== project?.project_id && !window.confirm("Remove the files queued for the current project before switching projects?")) return;
     const nextKey = projectKey(next.project_id);
     activeProjectKeyRef.current = nextKey;
     const previousHistoryRequest = projectHistoryLoadingRef.current;
@@ -343,6 +416,7 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
     messagesDuringHistoryReloadRef.current.set(historyRequest, []);
     setMessageBuckets((buckets) => ({ ...buckets, [currentProjectKey]: messages }));
     setProject(next);
+    setAttachmentPaths([]);
     setRecentFilesOpen(false);
     setRecentFiles([]);
     setRecentFilesError("");
@@ -350,6 +424,7 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
     setSurfaces({});
     surfacesRef.current = {};
     progressTaskIdsRef.current.clear();
+    autoScrolledProgressTaskIdsRef.current.clear();
     progressCompletionTimersRef.current.forEach((timer) => window.clearTimeout(timer));
     progressCompletionTimersRef.current.clear();
     progressStartedAtRef.current.clear();
@@ -398,29 +473,44 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
       setMessages(pending);
       setError(cause instanceof Error ? cause.message : "Conversation history could not be loaded");
     }
-  }, [currentProjectKey, messages, user]);
+  }, [attachmentPaths.length, currentProjectKey, messages, project?.project_id, user]);
 
   const submitPrompt = async () => {
     const value = prompt.trim();
-    if (!value) return;
-    setPrompt("");
+    if (!value && !attachmentPaths.length) return;
     if (value.startsWith("/")) {
+      if (attachmentPaths.length) {
+        setError("Commands cannot be sent with file attachments.");
+        return;
+      }
+      setPrompt("");
       await runCommand(value.split(/\s+/, 1)[0]);
       return;
     }
+    if (attachmentPaths.length && !project) {
+      setError("Select a project before sending files.");
+      return;
+    }
     try {
+      const files = attachmentPaths.length
+        ? await daemonRequest<{ files: DesktopProjectFile[] }>("copy_desktop_project_files", { user, project_id: project?.project_id || "", source_paths: attachmentPaths })
+        : { files: [] };
+      const messagePrompt = value || "Please analyze the attached files.";
       const queued = await daemonRequest<{ message_id: string; project_id: string; created_at: string; conversation_sequence: number }>("queue_message", {
-        prompt: value,
+        prompt: messagePrompt,
         user,
         project_id: project?.project_id || "",
         integration_id: "desktop",
         provider_key: "tui",
         channel_target: user,
+        metadata: files.files.length ? { attachments: files.files, project_files: files.files } : {},
       });
+      setPrompt("");
+      setAttachmentPaths([]);
       appendMessage({
         id: queued.message_id,
         role: "user",
-        content: value,
+        content: messagePrompt,
         created_at: queued.created_at,
         project_id: queued.project_id,
         sequence: queued.conversation_sequence,
@@ -475,13 +565,17 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
   const activeSurface = Object.values(surfaces).find((surface) => !surface.surfaceId.startsWith("task-progress:") && !progressTaskIds.includes(questionTaskId(surface)));
   const fallbackQuestion = questions.find((question) => !surfaces[`question:${question.question_id}`]);
   const timelineRenderVersion = diagnosticBehavior.memoizesTimeline ? 0 : diagnosticRenderTick;
+  const questionTaskIds = new Set(questions.filter((question) => surfaces[`question:${question.question_id}`]).map((question) => question.task_id));
   const timelineNodes: ReactNode[] = useMemo(() => buildConversationTimeline(
       messages,
-      progressTaskIds,
+      progressTaskIds.filter((taskId) => !questionTaskIds.has(taskId)),
       pendingProgressMessages,
       morphedMessageTaskIds,
     ).map((item) => {
       if (item.kind === "message") {
+        const question = questions.find((candidate) => item.message.id === `question:${candidate.question_id}`);
+        const questionSurface = question ? surfaces[`question:${question.question_id}`] : undefined;
+        if (questionSurface) return <article className="message assistant task-question-bubble" key={item.key}><A2uiSurfaceView surface={questionSurface} clientId={clientId} user={user} onDone={poll} /></article>;
         const Bubble = diagnosticBehavior.memoizesMessages ? MemoizedMessageBubble : MessageBubble;
         return <Bubble key={item.key} message={item.message} timezone={timezone} renderMarkdown={!diagnosticBehavior.plainTextMessages} />;
       }
@@ -491,7 +585,7 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
         return <article className="message assistant task-question-bubble" key={item.key}><A2uiSurfaceView surface={questionSurface} clientId={clientId} user={user} onDone={poll} /></article>;
       }
       return surface ? <TaskProgressBubble key={item.key} surface={surface} /> : null;
-    }), [clientId, diagnosticBehavior.memoizesMessages, diagnosticBehavior.plainTextMessages, heldProgressSurfaces, messages, morphedMessageTaskIds, pendingProgressMessages, poll, progressTaskIds, surfaces, timelineRenderVersion, timezone, user]);
+    }), [clientId, diagnosticBehavior.memoizesMessages, diagnosticBehavior.plainTextMessages, heldProgressSurfaces, messages, morphedMessageTaskIds, pendingProgressMessages, poll, progressTaskIds, questionTaskIds, questions, surfaces, timelineRenderVersion, timezone, user]);
 
   return (
     <main className={`app-shell ${sidebarCollapsed ? "sidebar-collapsed" : ""}`}>
@@ -499,23 +593,23 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
         <div className="brand">
           <img className="brand-mascot" src="/alphonse-mascot.png" alt="" />
           <span className="brand-name">Alphonse</span>
-          <button className="collapse-toggle" type="button" onClick={() => setSidebarCollapsed((value) => !value)} aria-label={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}>{sidebarCollapsed ? ">" : "<"}</button>
+          <button className="collapse-toggle" type="button" onClick={() => setSidebarCollapsed((value) => !value)} aria-label={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}>{sidebarCollapsed ? <ChevronRight aria-hidden="true" /> : <ChevronLeft aria-hidden="true" />}</button>
         </div>
         <section className="project-sidebar-section">
           <div className="project-sidebar-header">
-            <button className="project-selector" title="Projects" onClick={() => setModal("projects")}><span className="nav-icon" aria-hidden="true">🗂️</span><span className="nav-label">Project</span><small>{project?.name || "Home"}</small>{attentionTotal(projectAttention) > 0 && <span className="attention-badge" aria-label={`${attentionTotal(projectAttention)} project items need attention`}>{attentionTotal(projectAttention)}</span>}</button>
-            {project && <button className="project-disclosure" type="button" title={recentFilesOpen ? "Hide recent files" : "Show recent files"} aria-label={recentFilesOpen ? "Hide recent files" : "Show recent files"} aria-expanded={recentFilesOpen} onClick={() => setRecentFilesOpen((open) => !open)}>{recentFilesOpen ? "⌄" : "›"}</button>}
+            <button className="project-selector" title="Projects" onClick={() => setModal("projects")}><span className="nav-icon" aria-hidden="true"><FolderKanban /></span><span className="nav-label">Project</span><small>{project?.name || "Home"}</small>{attentionTotal(projectAttention) > 0 && <span className="attention-badge" aria-label={`${attentionTotal(projectAttention)} project items need attention`}>{attentionTotal(projectAttention)}</span>}</button>
+            {project && <button className="project-disclosure" type="button" title={recentFilesOpen ? "Hide recent files" : "Show recent files"} aria-label={recentFilesOpen ? "Hide recent files" : "Show recent files"} aria-expanded={recentFilesOpen} onClick={() => setRecentFilesOpen((open) => !open)}>{recentFilesOpen ? <ChevronDown aria-hidden="true" /> : <ChevronRight aria-hidden="true" />}</button>}
           </div>
           {project && recentFilesOpen && <div className="recent-files-panel">
             <div className="recent-files-heading"><span>Recent files</span><button type="button" onClick={() => void revealProjectInFinder()}>Show in Finder</button></div>
             {recentFilesError && <p className="recent-files-error" role="alert">{recentFilesError}</p>}
-            {!recentFilesError && (recentFiles.length ? <ul>{recentFiles.map((file) => <li key={`${file.kind}:${file.name}`}><span className="recent-file-icon" aria-hidden="true">{file.kind === "directory" ? "📁" : "📄"}</span><span className="recent-file-name" title={file.name}>{file.name}</span><small>{dateLabel(file.modified_at)}</small></li>)}</ul> : <p className="recent-files-empty">No accessible files yet.</p>)}
+            {!recentFilesError && (recentFiles.length ? <ul>{recentFiles.map((file) => <li key={`${file.kind}:${file.name}`}><span className="recent-file-icon" aria-hidden="true">{file.kind === "directory" ? <Folder /> : <FileText />}</span><span className="recent-file-name" title={file.name}>{file.name}</span><small>{dateLabel(file.modified_at)}</small></li>)}</ul> : <p className="recent-files-empty">No accessible files yet.</p>)}
           </div>}
         </section>
-        <button title="Scheduled tasks" onClick={() => setModal("scheduled-tasks")}><span className="nav-icon" aria-hidden="true">◷</span><span className="nav-label">Scheduled tasks</span></button>
-        <button title="Users" onClick={() => setModal("users")}><span className="nav-icon" aria-hidden="true">♙</span><span className="nav-label">Users</span></button>
-        <button title="Settings" onClick={() => { setSettingsTab("general"); setModal("settings"); }}><span className="nav-icon" aria-hidden="true">⚙</span><span className="nav-label">Settings</span></button>
-        <div className="queue-sidebar-status" title="Inbound message queue"><span className="queue-icon" aria-hidden="true">☷</span><span className="queue-label">Queue</span><small>{queueStatus.ready} waiting{queueStatus.processing ? ` · ${queueStatus.processing} working` : ""}</small></div>
+        <button title="Scheduled tasks" onClick={() => setModal("scheduled-tasks")}><span className="nav-icon" aria-hidden="true"><CalendarClock /></span><span className="nav-label">Scheduled tasks</span></button>
+        <button title="Users" onClick={() => setModal("users")}><span className="nav-icon" aria-hidden="true"><UsersRound /></span><span className="nav-label">Users</span></button>
+        <button title="Settings" onClick={() => { setSettingsTab("general"); setModal("settings"); }}><span className="nav-icon" aria-hidden="true"><Settings /></span><span className="nav-label">Settings</span></button>
+        <div className="queue-sidebar-status" title="Inbound message queue"><span className="queue-icon" aria-hidden="true"><ListTodo /></span><span className="queue-label">Queue</span><small>{queueStatus.ready} waiting{queueStatus.processing ? ` · ${queueStatus.processing} working` : ""}</small></div>
       </aside>
 
       <section className="conversation">
@@ -535,8 +629,10 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
           ) : fallbackQuestion ? (
             <QuestionCard question={fallbackQuestion} onDone={poll} />
           ) : (
-            <form className="composer" onSubmit={submit}>
+            <form ref={composerRef} className={`composer${composerDragActive ? " drag-active" : ""}`} onSubmit={submit}>
               {suggestions.length > 0 && <div className="suggestions">{suggestions.map((item) => <button type="button" key={item} onClick={() => setPrompt(item)}>{item}</button>)}</div>}
+              {attachmentPaths.length > 0 && <div className="composer-attachments" aria-label="Files ready to send">{attachmentPaths.map((path) => <span className="attachment-chip" key={path}><FileText aria-hidden="true" /><span title={path}>{fileNameFromPath(path)}</span><button type="button" aria-label={`Remove ${fileNameFromPath(path)}`} onClick={() => setAttachmentPaths((current) => current.filter((item) => item !== path))}><X aria-hidden="true" /></button></span>)}</div>}
+              <button className="attach-files" type="button" onClick={() => void chooseAttachments()} title={project ? "Attach files" : "Select a project to attach files"} aria-label={project ? "Attach files" : "Select a project to attach files"}><Plus aria-hidden="true" /></button>
               <textarea ref={textareaRef} value={prompt} onKeyDown={onComposerKeyDown} onChange={(event) => setPrompt(event.target.value)} placeholder="Message Alphonse... Type / for commands" rows={1} />
               <button className="send" type="submit">Send</button>
             </form>
@@ -561,6 +657,7 @@ function StatusPill({ label, value, tone = "" }: { label: string; value: string;
 
 function QuestionCard({ question, onDone }: { question: Question; onDone: () => Promise<void> }) {
   const [value, setValue] = useState("");
+  const [selected, setSelected] = useState<string[]>([]);
   const answer = async (payload: Record<string, unknown>, text = "") => {
     await daemonRequest("answer_question", { question_id: question.question_id, payload, text });
     await onDone();
@@ -572,6 +669,8 @@ function QuestionCard({ question, onDone }: { question: Question; onDone: () => 
   return <section className="question-card"><strong>Alphonse needs your input</strong><p>{question.message}</p>
     {question.kind === "yes_no" && <div className="question-actions"><button onClick={() => void answer({ answer: true }, "yes")}>Yes</button><button onClick={() => void answer({ answer: false }, "no")}>No</button><button className="question-cancel" onClick={() => void cancel()}>Cancel</button></div>}
     {question.kind === "single_choice" && <><div>{question.choices.map((choice) => <button key={choice.id} onClick={() => void answer({ choice_id: choice.id }, choice.label)}>{choice.label}</button>)}</div><div className="question-actions"><button className="question-cancel" onClick={() => void cancel()}>Cancel</button></div></>}
+    {question.kind === "multi_choice" && <form onSubmit={(event) => { event.preventDefault(); void answer({ choice_ids: selected }, selected.join(", ")); }}><fieldset className="a2ui-choice-picker"><legend>Choose one or more options</legend>{question.choices.map((choice) => <label key={choice.id}><input type="checkbox" checked={selected.includes(choice.id)} onChange={(event) => setSelected((current) => event.target.checked ? [...current, choice.id] : current.filter((id) => id !== choice.id))} />{choice.label}</label>)}</fieldset><span className="question-actions"><button disabled={!selected.length}>Answer</button><button type="button" className="question-cancel" onClick={() => void cancel()}>Cancel</button></span></form>}
+    {question.kind === "datetime" && <form onSubmit={(event) => { event.preventDefault(); void answer({ datetime: value }, value); }}><input type="datetime-local" value={value} onChange={(event) => setValue(event.target.value)} aria-label="Date and time" /><span className="question-actions"><button disabled={!value}>Answer</button><button type="button" className="question-cancel" onClick={() => void cancel()}>Cancel</button></span></form>}
     {question.kind === "open_text" && <form onSubmit={(event) => { event.preventDefault(); void answer({ text: value }, value); }}><input value={value} onChange={(event) => setValue(event.target.value)} placeholder="Your answer" /><span className="question-actions"><button>Answer</button><button type="button" className="question-cancel" onClick={() => void cancel()}>Cancel</button></span></form>}
   </section>;
 }
@@ -623,13 +722,82 @@ function SettingsModal({ user, initialTab, enterToSend, desktopStyle, onDesktopS
       </section>
     </div>}
     {tab === "appearance" && <AppearanceSettingsSection value={desktopStyle} onChange={onDesktopStyleChange} />}
-    {tab === "tools" && <><section><h3>Web Tools</h3><p>Run SearXNG separately in Docker with JSON output enabled. Alphonse connects to it; it does not manage Docker.</p>{web && <><label className="setting-row"><input type="checkbox" checked={web.enabled} onChange={(event) => setWeb({ ...web, enabled: event.target.checked })} /> Enable Web Search and Fetch</label><label>SearXNG URL<input value={web.searxng_base_url} placeholder="http://127.0.0.1:8080" onChange={(event) => setWeb({ ...web, searxng_base_url: event.target.value })} /></label><label>Search timeout (seconds)<input type="number" value={web.search_timeout_seconds} onChange={(event) => setWeb({ ...web, search_timeout_seconds: Number(event.target.value) })} /></label><label>Fetch timeout (seconds)<input type="number" value={web.fetch_timeout_seconds} onChange={(event) => setWeb({ ...web, fetch_timeout_seconds: Number(event.target.value) })} /></label><label>Fetch text limit<input type="number" value={web.fetch_max_chars} onChange={(event) => setWeb({ ...web, fetch_max_chars: Number(event.target.value) })} /></label><button onClick={() => void saveWeb()}>Save Web Tools</button><button onClick={() => void verify("search")}>Verify SearXNG</button><button onClick={() => void verify("fetch")}>Verify Fetch</button></>}<p>{webNotice}</p></section><MediaToolsSettingsSection /></>}
+    {tab === "tools" && <div className="tools-settings">
+      <CodeModeSettingsSection user={user} />
+      <section className="setting-group">
+        <div className="setting-group-heading"><h3>Web Tools</h3><p>Run SearXNG separately in Docker with JSON output enabled. Alphonse connects to it; it does not manage Docker.</p></div>
+        {web && <>
+          <label className="setting-row"><input type="checkbox" checked={web.enabled} onChange={(event) => setWeb({ ...web, enabled: event.target.checked })} /> Enable Web Search and Fetch</label>
+          <div className="input-row"><label>SearXNG URL<input value={web.searxng_base_url} placeholder="http://127.0.0.1:8080" onChange={(event) => setWeb({ ...web, searxng_base_url: event.target.value })} /></label></div>
+          <div className="input-row"><label>Search timeout (seconds)<input type="number" value={web.search_timeout_seconds} onChange={(event) => setWeb({ ...web, search_timeout_seconds: Number(event.target.value) })} /></label></div>
+          <div className="input-row"><label>Fetch timeout (seconds)<input type="number" value={web.fetch_timeout_seconds} onChange={(event) => setWeb({ ...web, fetch_timeout_seconds: Number(event.target.value) })} /></label></div>
+          <div className="input-row"><label>Fetch text limit<input type="number" value={web.fetch_max_chars} onChange={(event) => setWeb({ ...web, fetch_max_chars: Number(event.target.value) })} /></label></div>
+          <div className="settings-save-actions"><button onClick={() => void saveWeb()}>Save Web Tools</button><button onClick={() => void verify("search")}>Verify SearXNG</button><button onClick={() => void verify("fetch")}>Verify Fetch</button>{webNotice && <p role="status">{webNotice}</p>}</div>
+        </>}
+        {!web && webNotice && <p role="status">{webNotice}</p>}
+      </section>
+      <div className="setting-group"><MediaToolsSettingsSection /></div>
+    </div>}
     {tab === "artifacts" && <ArtifactsSettingsSection user={user} />}
     {tab === "integrations" && <IntegrationsSettingsSection user={user} />}
     {tab === "automations" && <AutomationsSettingsSection user={user} />}
     {tab === "model" && <ModelSettingsSection />}
     {tab === "agent-config" && <AgentConfigSettingsSection />}
   </ModalFrame>;
+}
+
+function CodeModeSettingsSection({ user }: { user: string }) {
+  const [settings, setSettings] = useState<CodeModeSettings | null>(null);
+  const [notice, setNotice] = useState("");
+  const [verifying, setVerifying] = useState(false);
+  const load = async () => {
+    const result = await daemonRequest<{ settings: CodeModeSettings }>("code_mode_settings", { actor_user_id: user });
+    setSettings(result.settings);
+  };
+  useEffect(() => { void load().catch((cause: unknown) => setNotice(cause instanceof Error ? cause.message : "Code Mode settings unavailable")); }, [user]);
+  const save = async () => {
+    if (!settings) return;
+    const weakened = [!settings.network_disabled && "network access", !settings.read_only_filesystem && "a writable container filesystem", !settings.run_as_non_root && "root container user", !settings.drop_all_capabilities && "Linux capabilities", !settings.no_new_privileges && "privilege escalation protection"].filter(Boolean) as string[];
+    if (weakened.length && !window.confirm(`Advanced Sandbox Config weakens: ${weakened.join(", ")}. Generated programs may gain access to local resources. Save this configuration?`)) return;
+    try {
+      const result = await daemonRequest<{ settings: CodeModeSettings }>("save_code_mode_settings", { actor_user_id: user, values: settings, acknowledge_unsafe: weakened.length > 0 });
+      setSettings(result.settings); setNotice("Saved. New program phases use this configuration.");
+    } catch (cause) { setNotice(cause instanceof Error ? cause.message : "Code Mode settings could not be saved"); }
+  };
+  const verify = async () => {
+    setVerifying(true); setNotice("Verifying Docker and the configured Python image…");
+    try {
+      const result = await daemonRequest<{ settings: CodeModeSettings; result: { ready: boolean; error?: string; preview?: string } }>("verify_code_mode", { actor_user_id: user });
+      setSettings(result.settings); setNotice(result.result.ready ? (result.result.preview || "Docker verified.") : (result.result.error || "Docker verification failed."));
+    } catch (cause) { setNotice(cause instanceof Error ? cause.message : "Docker verification failed"); } finally { setVerifying(false); }
+  };
+  const restoreSafeDefaults = () => {
+    if (!settings || !window.confirm("Restore all Code Mode settings to their safe defaults? Save afterward to apply them.")) return;
+    setSettings({ ...settings, enabled: false, docker_bin: "docker", image: "python:3.11-slim", timeout_seconds: 60, max_tool_calls: 16, max_parallel_calls: 4, memory_mb: 256, cpu_count: 0.5, pid_limit: 64, tmpfs_mb: 64, network_disabled: true, read_only_filesystem: true, run_as_non_root: true, drop_all_capabilities: true, no_new_privileges: true, weakened_protections: [] });
+    setNotice("Safe defaults restored locally. Save to apply them.");
+  };
+  const toggle = (field: "network_disabled" | "read_only_filesystem" | "run_as_non_root" | "drop_all_capabilities" | "no_new_privileges", label: string) => settings && <label className="setting-row"><input type="checkbox" checked={settings[field]} onChange={(event) => setSettings({ ...settings, [field]: event.target.checked })} /> {label}</label>;
+  if (!settings) return <section className="setting-group"><div className="setting-group-heading"><h3>Code Mode</h3><p>{notice || "Loading…"}</p></div></section>;
+  return <section className="setting-group">
+    <div className="setting-group-heading"><h3>Code Mode</h3><p>Run a bounded Python program that can call Alphonse’s host-side tools. Docker is required; no `.env` credentials are used.</p></div>
+    <label className="setting-row"><input type="checkbox" checked={settings.enabled} onChange={(event) => setSettings({ ...settings, enabled: event.target.checked })} /> Enable Code Mode</label>
+    <p role="status">Docker status: {settings.verification_ready ? "verified" : "not verified"}{settings.verification_error ? ` — ${settings.verification_error}` : ""}</p>
+    <div className="input-row"><label>Docker binary<input value={settings.docker_bin} onChange={(event) => setSettings({ ...settings, docker_bin: event.target.value })} /></label></div>
+    <div className="input-row"><label>Python image<input value={settings.image} onChange={(event) => setSettings({ ...settings, image: event.target.value })} /></label></div>
+    <div className="input-row"><label>Program timeout (seconds)<input type="number" value={settings.timeout_seconds} onChange={(event) => setSettings({ ...settings, timeout_seconds: Number(event.target.value) })} /></label></div>
+    <div className="input-row"><label>Tool-call limit<input type="number" value={settings.max_tool_calls} onChange={(event) => setSettings({ ...settings, max_tool_calls: Number(event.target.value) })} /></label></div>
+    <div className="input-row"><label>Parallel-call limit<input type="number" value={settings.max_parallel_calls} onChange={(event) => setSettings({ ...settings, max_parallel_calls: Number(event.target.value) })} /></label></div>
+    <section className="advanced-sandbox-config" aria-labelledby="advanced-sandbox-config-title">
+      <div className="advanced-sandbox-config-heading"><h4 id="advanced-sandbox-config-title">Advanced Sandbox Config</h4><p role="alert">Warning: weakening these protections can expose the local machine, network, credentials, or family data to generated programs. Each unsafe save requires confirmation.</p></div>
+      <div className="input-row"><label>Memory limit (MB)<input type="number" value={settings.memory_mb} onChange={(event) => setSettings({ ...settings, memory_mb: Number(event.target.value) })} /></label></div>
+      <div className="input-row"><label>CPU limit<input type="number" step="0.1" value={settings.cpu_count} onChange={(event) => setSettings({ ...settings, cpu_count: Number(event.target.value) })} /></label></div>
+      <div className="input-row"><label>PID limit<input type="number" value={settings.pid_limit} onChange={(event) => setSettings({ ...settings, pid_limit: Number(event.target.value) })} /></label></div>
+      <div className="input-row"><label>Temporary filesystem (MB)<input type="number" value={settings.tmpfs_mb} onChange={(event) => setSettings({ ...settings, tmpfs_mb: Number(event.target.value) })} /></label></div>
+      <div className="sandbox-protections">{toggle("network_disabled", "Disable network access")}{toggle("read_only_filesystem", "Use a read-only container filesystem")}{toggle("run_as_non_root", "Run as a non-root user")}{toggle("drop_all_capabilities", "Drop all Linux capabilities")}{toggle("no_new_privileges", "Prevent new privileges")}</div>
+      <div className="sandbox-restore-actions"><button type="button" onClick={restoreSafeDefaults}>Restore safe defaults</button></div>
+    </section>
+    <div className="settings-save-actions"><button onClick={() => void save()}>Save Code Mode</button><button disabled={verifying} onClick={() => void verify()}>{verifying ? "Verifying Docker…" : "Verify Docker"}</button>{notice && <p role="status">{notice}</p>}</div>
+  </section>;
 }
 
 function AppearanceSettingsSection({ value, onChange }: { value: DesktopStyle; onChange: (value: DesktopStyle) => void }) {
@@ -668,7 +836,7 @@ function MediaToolsSettingsSection() {
   const load = async () => { const current = await daemonRequest<{ user: { user_id: string } | null }>("current_user"); if (!current.user) return; const result = await daemonRequest<{ settings: MediaToolsSettings }>("media_tools_settings", { actor_user_id: current.user.user_id }); setSettings(result.settings); };
   useEffect(() => { void load().catch((cause: unknown) => setNotice(cause instanceof Error ? cause.message : "Media Tools unavailable")); }, []);
   const save = async (kind: "tts" | "stt" | "ocr") => { if (!settings) return; try { const current = await daemonRequest<{ user: { user_id: string } | null }>("current_user"); if (!current.user) return; const result = await daemonRequest<{ settings: MediaToolsSettings }>("save_media_tools_settings", { actor_user_id: current.user.user_id, kind, values: settings[kind] }); setSettings(result.settings); setNotice(`${kind.toUpperCase()} saved; verify it to mark it ready.`); } catch (cause) { setNotice(cause instanceof Error ? cause.message : "Save failed"); } };
-  const verify = async (kind: "tts" | "stt" | "ocr") => { setVerifying(kind); setNotice(`Verifying ${kind.toUpperCase()}… this may take a while while the local model loads.`); try { const current = await daemonRequest<{ user: { user_id: string } | null }>("current_user"); if (!current.user) return; const result = await daemonRequest<{ settings: MediaToolsSettings; result: { exception?: { message?: string } } }>("verify_media_tools", { actor_user_id: current.user.user_id, kind, sample: samples[kind] }); setSettings(result.settings); setNotice(result.result.exception?.message || `${kind.toUpperCase()} verified.`); } catch (cause) { setNotice(cause instanceof Error ? cause.message : "Verification failed"); } finally { setVerifying(""); } };
+  const verify = async (kind: "tts" | "stt" | "ocr") => { setVerifying(kind); setNotice(kind === "ocr" ? "Verifying OCR with the selected image…" : `Verifying ${kind.toUpperCase()}… this may take a while while the local model loads.`); try { const current = await daemonRequest<{ user: { user_id: string } | null }>("current_user"); if (!current.user) return; const result = await daemonRequest<{ settings: MediaToolsSettings; result: { exception?: { message?: string } } }>("verify_media_tools", { actor_user_id: current.user.user_id, kind, sample: samples[kind] }); setSettings(result.settings); setNotice(result.result.exception?.message || `${kind.toUpperCase()} verified.`); } catch (cause) { setNotice(cause instanceof Error ? cause.message : "Verification failed"); } finally { setVerifying(""); } };
   const stopTracks = (stream: MediaStream | null) => stream?.getTracks().forEach((track) => track.stop());
   const stopRecording = () => { if (recordingTimeout.current !== null) { window.clearTimeout(recordingTimeout.current); recordingTimeout.current = null; } if (recorder.current?.state === "recording") recorder.current.stop(); };
   const startRecording = async () => {
@@ -698,11 +866,32 @@ function MediaToolsSettingsSection() {
   };
   useEffect(() => () => { if (recordingTimeout.current !== null) window.clearTimeout(recordingTimeout.current); stopRecording(); }, []);
   if (!settings) return <section><h3>Local Media Tools</h3><p>{notice || "Loading…"}</p></section>;
-  const field = (kind: "tts" | "stt" | "ocr", key: string, label: string, type = "text") => <label>{label}<input type={type} value={String((settings[kind] as Record<string, unknown>)[key] ?? "")} onChange={(event) => setSettings({ ...settings, [kind]: { ...settings[kind], [key]: type === "number" ? Number(event.target.value) : event.target.value } })} /></label>;
+  const field = (kind: "tts" | "stt" | "ocr", key: string, label: string, type = "text") => <div className="input-row"><label>{label}<input type={type} value={String((settings[kind] as Record<string, unknown>)[key] ?? "")} onChange={(event) => setSettings({ ...settings, [kind]: { ...settings[kind], [key]: type === "number" ? Number(event.target.value) : event.target.value } })} /></label></div>;
   const toggle = (kind: "tts" | "stt" | "ocr", key: string, label: string) => <label className="setting-row"><input type="checkbox" checked={Boolean((settings[kind] as Record<string, unknown>)[key])} onChange={(event) => setSettings({ ...settings, [kind]: { ...settings[kind], [key]: event.target.checked } })} /> {label}</label>;
   const verification = (kind: "tts" | "stt" | "ocr") => <p>{verifying === kind && <><span className="verification-spinner" aria-label="Verifying" /> Verifying {kind.toUpperCase()}… </>}Ready: {String(settings[kind].available)}. {settings[kind].verification.error || settings[kind].verification.preview || "Not yet verified."}</p>;
   const verifyLabel = (kind: "tts" | "stt" | "ocr", label: string) => verifying === kind ? `Verifying ${kind.toUpperCase()}…` : label;
-  return <section><h3>Local Media Tools</h3><p>Install models and runtimes separately, then save and verify each backend. These tools are not yet exposed to conversations.</p><h4>Qwen TTS</h4>{toggle("tts", "enabled", "Enable Qwen TTS")}{field("tts", "model_id", "Model ID or local path")}{field("tts", "device_map", "Device map")}{field("tts", "dtype", "Precision")}{field("tts", "language", "Language")}{field("tts", "speaker", "Speaker")}{field("tts", "instruct", "Voice instruction")}{field("tts", "attn_implementation", "Attention implementation")}{toggle("tts", "local_files_only", "Use local model files only")}{verification("tts")}<label>Test phrase<input disabled={verifying !== ""} value={samples.tts} onChange={(event) => setSamples({ ...samples, tts: event.target.value })} /></label><button disabled={verifying !== ""} onClick={() => void save("tts")}>Save TTS</button><button disabled={verifying !== ""} onClick={() => void verify("tts")}>{verifyLabel("tts", "Verify Qwen TTS")}</button>{settings.platform === "darwin" && <p>macOS say fallback: {settings.say_available ? "available" : "not found"}.</p>}<h4>Whisper STT</h4>{toggle("stt", "enabled", "Enable Whisper STT")}{field("stt", "executable_path", "Whisper executable")}{field("stt", "model", "Model")}{field("stt", "default_language", "Default language")}{verification("stt")}<p>Record a short message to confirm that Whisper can hear and transcribe it. The recording is deleted immediately after verification.</p><button disabled={verifying !== ""} onClick={() => void (recording ? stopRecording() : startRecording())}>{recording ? "Stop & verify recording" : "Start microphone test"}</button><label>Audio sample path (advanced)<input disabled={verifying !== "" || recording} value={samples.stt} onChange={(event) => setSamples({ ...samples, stt: event.target.value })} /></label><button disabled={verifying !== "" || recording} onClick={() => void save("stt")}>Save STT</button><button disabled={verifying !== "" || recording} onClick={() => void verify("stt")}>{verifyLabel("stt", "Verify Whisper file")}</button><h4>Ollama OCR</h4>{toggle("ocr", "enabled", "Enable OCR")}{field("ocr", "ollama_base_url", "Ollama URL")}{field("ocr", "model_id", "Vision model")}{field("ocr", "timeout_seconds", "Timeout seconds", "number")}{verification("ocr")}<label>Image sample path<input disabled={verifying !== ""} value={samples.ocr} onChange={(event) => setSamples({ ...samples, ocr: event.target.value })} /></label><button disabled={verifying !== ""} onClick={() => void save("ocr")}>Save OCR</button><button disabled={verifying !== ""} onClick={() => void verify("ocr")}>{verifyLabel("ocr", "Verify OCR")}</button><p>{notice}</p></section>;
+  return <section className="media-tools-settings">
+    <div className="setting-group-heading"><h3>Local Media Tools</h3><p>Install models and runtimes separately, then save and verify each backend. These tools are not yet exposed to conversations.</p></div>
+    <section className="media-tool-panel">
+      <div className="media-tool-panel-heading"><h4>Qwen TTS</h4><span className={`feature-status ${settings.tts.enabled ? "enabled" : "disabled"}`}>{settings.tts.enabled ? "Enabled" : "Disabled"}</span></div>{toggle("tts", "enabled", "Enable Qwen TTS")}{field("tts", "model_id", "Model ID or local path")}{field("tts", "device_map", "Device map")}{field("tts", "dtype", "Precision")}{field("tts", "language", "Language")}{field("tts", "speaker", "Speaker")}{field("tts", "instruct", "Voice instruction")}{field("tts", "attn_implementation", "Attention implementation")}{toggle("tts", "local_files_only", "Use local model files only")}{verification("tts")}
+      <div className="input-row"><label>Test phrase<input disabled={verifying !== ""} value={samples.tts} onChange={(event) => setSamples({ ...samples, tts: event.target.value })} /></label></div>
+      <div className="settings-save-actions"><button disabled={verifying !== ""} onClick={() => void save("tts")}>Save TTS</button><button disabled={verifying !== ""} onClick={() => void verify("tts")}>{verifyLabel("tts", "Verify Qwen TTS")}</button></div>
+      {settings.platform === "darwin" && <p>macOS say fallback: {settings.say_available ? "available" : "not found"}.</p>}
+    </section>
+    <section className="media-tool-panel">
+      <div className="media-tool-panel-heading"><h4>Whisper STT</h4><span className={`feature-status ${settings.stt.enabled ? "enabled" : "disabled"}`}>{settings.stt.enabled ? "Enabled" : "Disabled"}</span></div>{toggle("stt", "enabled", "Enable Whisper STT")}{field("stt", "executable_path", "Whisper executable")}{field("stt", "model", "Model")}{field("stt", "default_language", "Default language")}{verification("stt")}
+      <p>Record a short message to confirm that Whisper can hear and transcribe it. The recording is deleted immediately after verification.</p>
+      <div className="settings-save-actions"><button disabled={verifying !== ""} onClick={() => void (recording ? stopRecording() : startRecording())}>{recording ? "Stop & verify recording" : "Start microphone test"}</button></div>
+      <div className="input-row"><label>Audio sample path (advanced)<input disabled={verifying !== "" || recording} value={samples.stt} onChange={(event) => setSamples({ ...samples, stt: event.target.value })} /></label></div>
+      <div className="settings-save-actions"><button disabled={verifying !== "" || recording} onClick={() => void save("stt")}>Save STT</button><button disabled={verifying !== "" || recording} onClick={() => void verify("stt")}>{verifyLabel("stt", "Verify Whisper file")}</button></div>
+    </section>
+    <section className="media-tool-panel">
+      <div className="media-tool-panel-heading"><div className="media-tool-panel-title"><h4>Ollama OCR</h4>{notice.startsWith("OCR") && <p className="media-tool-notice" role="status">{notice}</p>}</div><span className={`feature-status ${settings.ocr.enabled ? "enabled" : "disabled"}`}>{settings.ocr.enabled ? "Enabled" : "Disabled"}</span></div>{toggle("ocr", "enabled", "Enable OCR")}{field("ocr", "ollama_base_url", "Ollama URL")}{field("ocr", "model_id", "Vision model")}{field("ocr", "timeout_seconds", "Timeout seconds", "number")}{verification("ocr")}
+      <div className="input-row"><label>Image sample path<input disabled={verifying !== ""} value={samples.ocr} onChange={(event) => setSamples({ ...samples, ocr: event.target.value })} /></label></div>
+      <div className="settings-save-actions"><button disabled={verifying !== ""} onClick={() => void save("ocr")}>Save OCR</button><button disabled={verifying !== ""} onClick={() => void verify("ocr")}>{verifyLabel("ocr", "Verify OCR")}</button></div>
+    </section>
+    {notice && !notice.startsWith("OCR") && <p role="status">{notice}</p>}
+  </section>;
 }
 
 async function blobToBase64(blob: Blob): Promise<string> {

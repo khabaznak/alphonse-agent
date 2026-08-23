@@ -191,3 +191,22 @@ def test_qwen_image_analysis_uses_caption_question_and_returns_result(tmp_path: 
     assert result["output"]["text"] == "A red bicycle."
     assert captured["json"]["messages"][0]["content"] == "What is in this image?"
     assert captured["json"]["messages"][0]["images"]
+    assert captured["json"]["think"] is False
+    assert isinstance(result["output"]["latency_ms"], int)
+
+
+def test_dedicated_deepseek_ocr_uses_its_minimal_prompt(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    class Response:
+        status_code = 200
+        def json(self): return {"message": {"content": "Extracted text"}}
+
+    captured = {}
+    monkeypatch.setattr("alphonse.agent_v2.core.tools.registry.native.media.requests.post", lambda url, json, timeout: captured.update({"json": json}) or Response())
+    settings = SQLiteMediaToolsSettingsStore(":memory:").get().ocr
+    image = tmp_path / "document.png"
+    image.write_bytes(b"png")
+
+    result = __import__("alphonse.agent_v2.core.tools.registry.native.media", fromlist=["extract_ocr"]).extract_ocr(settings, asset_path=str(image))
+
+    assert result["output"]["text"] == "Extracted text"
+    assert captured["json"]["messages"][0]["content"] == "Free OCR."

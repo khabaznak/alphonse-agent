@@ -26,6 +26,7 @@ from alphonse.agent_v2.services.project_sessions import SQLiteProjectSessionStor
 from alphonse.agent_v2.runtime import build_runtime_host
 from alphonse.agent_v2.users import V2UserStore
 from alphonse.agent_v2.web_tools_settings import SQLiteWebToolsSettingsStore
+from alphonse.agent_v2.code_mode_settings import SQLiteCodeModeSettingsStore
 
 
 def _router() -> InferenceRouter:
@@ -113,6 +114,16 @@ def test_daemon_ipc_web_tools_require_admin_and_refresh_registry(tmp_path) -> No
     saved = daemon.ipc._dispatch({"method": "save_web_tools_settings", "params": {"actor_user_id": admin.user_id, "values": {"enabled": True, "searxng_base_url": "http://127.0.0.1:8080", "search_timeout_seconds": 10, "fetch_timeout_seconds": 10, "fetch_max_chars": 12000}}})["settings"]
     assert saved["available"] is True
     assert runtime.core.tools.get("web_search") is not None
+
+
+def test_daemon_ipc_code_mode_settings_require_admin(tmp_path) -> None:
+    users = V2UserStore(":memory:")
+    admin = users.onboard(display_name="Admin", users_root=tmp_path / "users")
+    daemon = V2Daemon(build_runtime_host(user_store=users, code_mode_settings_store=SQLiteCodeModeSettingsStore(":memory:")))
+    with pytest.raises(PermissionError, match="admin_required"):
+        daemon.ipc._dispatch({"method": "code_mode_settings", "params": {"actor_user_id": "not-admin"}})
+    saved = daemon.ipc._dispatch({"method": "save_code_mode_settings", "params": {"actor_user_id": admin.user_id, "values": {"enabled": True}}})["settings"]
+    assert saved["enabled"] is True
 
 
 def test_model_settings_request_uses_validation_timeout(monkeypatch) -> None:
@@ -390,12 +401,12 @@ def test_desktop_a2ui_question_surface_is_negotiated_and_actions_resume_only_the
             "method": "desktop_poll",
             "params": {
                 "client_id": "a2ui", "user": "alex",
-                "client_capabilities": {"supportedCatalogIds": ["alphonse.desktop.catalog.v1"]},
+                "client_capabilities": {"supportedCatalogIds": [ALPHONSE_DESKTOP_CATALOG_ID]},
             },
         }
     )
     envelopes = [item["event"]["value"] for item in poll["ui_events"] if item["event"].get("name") == "a2ui.envelope"]
-    assert envelopes[0]["createSurface"]["catalogId"] == "alphonse.desktop.catalog.v1"
+    assert envelopes[0]["createSurface"]["catalogId"] == ALPHONSE_DESKTOP_CATALOG_ID
     question_model = next(item["updateDataModel"]["value"] for item in envelopes if "updateDataModel" in item)
     assert question_model["question"]["project_id"] == ""
 
@@ -404,8 +415,8 @@ def test_desktop_a2ui_question_surface_is_negotiated_and_actions_resume_only_the
             "method": "a2ui_action",
             "params": {
                 "client_id": "a2ui", "user": "alex", "surface_id": f"question:{question.question_id}",
-                "source_component_id": "answer_yes", "action_name": "answer_question",
-                "context": {"question_id": question.question_id, "answer": True}, "data_model": {},
+                "source_component_id": "submit", "action_name": "answer_question",
+                "context": {"question_id": question.question_id}, "data_model": {"answer": {"answer": True}},
             },
         }
     )
@@ -413,7 +424,7 @@ def test_desktop_a2ui_question_surface_is_negotiated_and_actions_resume_only_the
     assert store.get_question(question.question_id).status == "answered"
 
     after = daemon.ipc._dispatch(
-        {"method": "desktop_poll", "params": {"client_id": "a2ui", "user": "alex", "client_capabilities": {"supportedCatalogIds": ["alphonse.desktop.catalog.v1"]}}}
+        {"method": "desktop_poll", "params": {"client_id": "a2ui", "user": "alex", "client_capabilities": {"supportedCatalogIds": [ALPHONSE_DESKTOP_CATALOG_ID]}}}
     )
     assert any(event["event"].get("name") == "a2ui.envelope" and "deleteSurface" in event["event"]["value"] for event in after["ui_events"])
 
@@ -450,6 +461,12 @@ def test_desktop_questions_and_attention_are_project_scoped() -> None:
     result = daemon.answer_question(user="alex", question_id=alpha.question_id, text="Alpha answer")
     assert result["resumed_task"]["project_id"] == "alpha"
     assert runtime.queue.peek().message.project_id == "alpha"
+    history = daemon.desktop_conversation_history(user="alex", project_id="alpha")
+    assert [(item["role"], item["content"]) for item in history] == [
+        ("assistant", "Alpha question?"),
+        ("user", "Alpha answer"),
+    ]
+    assert history[0]["sequence"] < history[1]["sequence"]
 
 
 def test_desktop_a2ui_question_cancel_is_visible_and_cancels_pending_question() -> None:
@@ -468,7 +485,7 @@ def test_desktop_a2ui_question_cancel_is_visible_and_cancels_pending_question() 
             "params": {
                 "client_id": "a2ui-cancel",
                 "user": "alex",
-                "client_capabilities": {"supportedCatalogIds": ["alphonse.desktop.catalog.v1"]},
+                "client_capabilities": {"supportedCatalogIds": [ALPHONSE_DESKTOP_CATALOG_ID]},
             },
         }
     )
@@ -497,6 +514,22 @@ def test_desktop_a2ui_question_cancel_is_visible_and_cancels_pending_question() 
 
     assert result["cancelled"] is True
     assert store.get_question(question.question_id).status == "cancelled"
+
+
+def test_desktop_a2ui_choice_question_projects_without_poll_failure() -> None:
+    store = SQLiteQuestionStore(":memory:")
+    runtime = build_runtime_host(inference=_router(), schedule_store=ScheduledTaskStore(":memory:"), question_store=store)
+    daemon = V2Daemon(runtime)
+    question = store.create_question(
+        task=TaskState(task_id="task-choice", goal="Choose", user="alex", project_id="project-choice"),
+        question="Which environments?", kind="multi_choice",
+        choices=[{"id": "dev", "label": "Development"}, {"id": "prod", "label": "Production"}],
+    )
+    poll = daemon.ipc._dispatch({"method": "desktop_poll", "params": {"client_id": "choice-client", "user": "alex", "project_id": "project-choice", "client_capabilities": {"supportedCatalogIds": [ALPHONSE_DESKTOP_CATALOG_ID]}}})
+    components = next(item["event"]["value"]["updateComponents"]["components"] for item in poll["ui_events"] if "updateComponents" in item["event"]["value"])
+    picker = next(component for component in components if component["id"] == "choices")
+    assert picker["options"] == [{"label": "Development", "value": "dev"}, {"label": "Production", "value": "prod"}]
+    assert question.question_id in str(poll["ui_events"])
 
 
 def test_desktop_project_ipc_uses_the_daemon_owned_store(tmp_path) -> None:
@@ -561,6 +594,43 @@ def test_project_recent_files_ipc_rejects_unknown_project(tmp_path) -> None:
         daemon.ipc._dispatch(
             {"method": "project_recent_files", "params": {"user": "alex", "project_id": "missing"}}
         )
+
+
+def test_copy_desktop_project_files_copies_only_when_requested_and_renames_conflicts(tmp_path) -> None:
+    runtime = build_runtime_host(inference=_router(), schedule_store=ScheduledTaskStore(":memory:"))
+    daemon = V2Daemon(runtime)
+    project = runtime.project_store.create_project(name="Uploads", root_path=str(tmp_path / "project"), owner_user_id="alex")
+    source = tmp_path / "notes.txt"
+    source.write_text("desktop upload", encoding="utf-8")
+
+    assert not (tmp_path / "project" / "notes.txt").exists()
+    first = daemon.ipc._dispatch({"method": "copy_desktop_project_files", "params": {"user": "alex", "project_id": project.project_id, "source_paths": [str(source)]}})["files"]
+    second = daemon.ipc._dispatch({"method": "copy_desktop_project_files", "params": {"user": "alex", "project_id": project.project_id, "source_paths": [str(source)]}})["files"]
+
+    assert first[0]["filename"] == "notes.txt"
+    assert second[0]["filename"] == "notes (1).txt"
+    assert (tmp_path / "project" / "notes.txt").read_text(encoding="utf-8") == "desktop upload"
+    assert (tmp_path / "project" / "notes (1).txt").is_file()
+    assert first[0]["project_path"].endswith("notes.txt")
+    assert first[0]["ingestion_status"] == "copied"
+
+
+def test_copy_desktop_project_files_rejects_missing_directories_and_large_files(tmp_path) -> None:
+    runtime = build_runtime_host(inference=_router(), schedule_store=ScheduledTaskStore(":memory:"))
+    daemon = V2Daemon(runtime)
+    project = runtime.project_store.create_project(name="Uploads", root_path=str(tmp_path / "project"), owner_user_id="alex")
+    directory = tmp_path / "folder"
+    directory.mkdir()
+
+    with pytest.raises(ValueError, match="desktop_attachment_file_unavailable"):
+        daemon.ipc._dispatch({"method": "copy_desktop_project_files", "params": {"user": "alex", "project_id": project.project_id, "source_paths": [str(directory)]}})
+    with pytest.raises(ValueError, match="project_required"):
+        daemon.ipc._dispatch({"method": "copy_desktop_project_files", "params": {"user": "alex", "project_id": "", "source_paths": [str(directory)]}})
+    large = tmp_path / "large.bin"
+    large.touch()
+    os.truncate(large, 50 * 1024 * 1024 + 1)
+    with pytest.raises(ValueError, match="desktop_attachment_too_large"):
+        daemon.ipc._dispatch({"method": "copy_desktop_project_files", "params": {"user": "alex", "project_id": project.project_id, "source_paths": [str(large)]}})
 
 
 def test_scheduled_task_ipc_scopes_owners_and_manages_task_lifecycle(tmp_path) -> None:

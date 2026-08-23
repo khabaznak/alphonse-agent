@@ -30,6 +30,8 @@ class ToolDefinition:
             capabilities=tuple(self.descriptor.capabilities),
             tags=tuple(self.descriptor.tags),
             metadata=dict(self.descriptor.metadata),
+            program_behavior=self.descriptor.program_behavior,
+            read_only=self.descriptor.read_only,
         )
 
 

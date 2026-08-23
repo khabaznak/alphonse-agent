@@ -3,7 +3,7 @@ import { reuseProjectAttention, reuseQuestions, reuseQueueStatus } from "./pollS
 
 describe("idle desktop poll state", () => {
   it("preserves question identity when contents are unchanged", () => {
-    const current = [{ question_id: "q1", project_id: "p1", message: "Continue?", kind: "yes_no" as const, choices: [] }];
+    const current = [{ question_id: "q1", task_id: "task-1", project_id: "p1", message: "Continue?", kind: "yes_no" as const, choices: [] }];
     expect(reuseQuestions(current, current.map((question) => ({ ...question })))).toBe(current);
     expect(reuseQuestions(current, [{ ...current[0], message: "Ready?" }])).not.toBe(current);
   });

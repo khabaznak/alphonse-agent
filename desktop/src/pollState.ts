@@ -8,8 +8,10 @@ export function reuseQuestions(current: Question[], next: Question[]): Question[
   const unchanged = current.every((question, index) => {
     const candidate = next[index];
     return question.question_id === candidate.question_id
+      && question.task_id === candidate.task_id
       && question.project_id === candidate.project_id
       && question.created_at === candidate.created_at
+      && question.conversation_sequence === candidate.conversation_sequence
       && question.message === candidate.message
       && question.kind === candidate.kind
       && question.choices.length === candidate.choices.length

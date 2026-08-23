@@ -18,11 +18,18 @@ export function orderConversationMessages(messages: ChatMessage[]): ChatMessage[
   const sequenced = messages
     .map((message, index) => ({ message, index }))
     .filter(({ message }) => typeof message.sequence === "number" && message.sequence > 0)
-    .sort((left, right) => (left.message.sequence || 0) - (right.message.sequence || 0) || left.index - right.index)
+    .sort((left, right) => conversationOrder(left.message, right.message) || left.index - right.index)
     .map(({ message }) => message);
   let sequenceIndex = 0;
   return messages.map((message) => {
     if (typeof message.sequence !== "number" || message.sequence <= 0) return message;
     return sequenced[sequenceIndex++];
   });
+}
+
+function conversationOrder(left: ChatMessage, right: ChatMessage): number {
+  const leftTime = Date.parse(left.created_at || "");
+  const rightTime = Date.parse(right.created_at || "");
+  if (!Number.isNaN(leftTime) && !Number.isNaN(rightTime) && leftTime !== rightTime) return leftTime - rightTime;
+  return (left.sequence || 0) - (right.sequence || 0);
 }

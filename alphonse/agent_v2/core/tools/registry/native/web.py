@@ -31,11 +31,11 @@ WEB_FETCH_ARGUMENT_SCHEMA: dict[str, Any] = {"type": "object", "additionalProper
 
 
 def build_web_search_tool_definition(settings: WebToolsSettings) -> ToolDefinition:
-    return ToolDefinition(ToolDescriptor(WEB_SEARCH_TOOL_ID, WEB_SEARCH_TOOL_NAME, ToolKind.NATIVE, "Search the web through the configured SearXNG service.", dict(WEB_SEARCH_ARGUMENT_SCHEMA), ("web", "search"), ("native", "web")), lambda arguments: execute_web_search(arguments, settings=settings), dict(WEB_SEARCH_ARGUMENT_SCHEMA), enabled=settings.available)
+    return ToolDefinition(ToolDescriptor(WEB_SEARCH_TOOL_ID, WEB_SEARCH_TOOL_NAME, ToolKind.NATIVE, "Search the web through the configured SearXNG service.", dict(WEB_SEARCH_ARGUMENT_SCHEMA), ("web", "search"), ("native", "web"), read_only=True), lambda arguments: execute_web_search(arguments, settings=settings), dict(WEB_SEARCH_ARGUMENT_SCHEMA), enabled=settings.available)
 
 
 def build_web_fetch_tool_definition(settings: WebToolsSettings) -> ToolDefinition:
-    return ToolDefinition(ToolDescriptor(WEB_FETCH_TOOL_ID, WEB_FETCH_TOOL_NAME, ToolKind.NATIVE, "Fetch readable text from a public web page after search.", dict(WEB_FETCH_ARGUMENT_SCHEMA), ("web", "fetch"), ("native", "web")), lambda arguments: execute_web_fetch(arguments, settings=settings), dict(WEB_FETCH_ARGUMENT_SCHEMA), enabled=settings.available)
+    return ToolDefinition(ToolDescriptor(WEB_FETCH_TOOL_ID, WEB_FETCH_TOOL_NAME, ToolKind.NATIVE, "Fetch readable text from a public web page after search.", dict(WEB_FETCH_ARGUMENT_SCHEMA), ("web", "fetch"), ("native", "web"), read_only=True), lambda arguments: execute_web_fetch(arguments, settings=settings), dict(WEB_FETCH_ARGUMENT_SCHEMA), enabled=settings.available)
 
 
 def execute_web_search(arguments: dict[str, Any], *, settings: WebToolsSettings) -> dict[str, Any]:

@@ -6,10 +6,11 @@ The selected tool call must advance one or more acceptance criteria.
 Use `native.respond` for greetings, conversational replies, status answers, presenting completed work, or when the user expects a direct answer.
 When an image attachment is present and the user's request depends on its contents, use `native.analyze_image` with that attachment's Asset ID before responding. Do not ask the user to resend an attached image.
 Use `native.deliver_message` when the user asks you to tell, ask, or message another registered person. Pass the person's name as `recipient`, the content as `message`, and set `expects_reply=true` when the sender is asking for an answer. Do not mention, infer, or choose communication channels; delivery resolves them deterministically.
-Use `native.bash` only when a shell command or filesystem/process inspection is actually needed.
+Use `native.bash` only when one direct local shell command or filesystem/process inspection is actually needed. Do not use Bash to orchestrate multiple Alphonse tools.
+Choose `execution_mode: "program"` only when this bounded Do phase needs multiple tool calls with intermediate values, branching, loops, aggregation, or independent concurrent read-only work. Python programs receive a `tools` object with `await tools.call(tool_id, arguments)` and `await tools.gather([{ "tool_id": "...", "arguments": {} }])`; programs must define `async def main(tools):` and return one JSON object. Use direct mode for one atomic tool operation.
 Use `native.ask_question` only when required information is missing or a dependent person's answer is necessary before the task can continue.
 Use `native.scheduled_task` when the user asks to schedule a reminder, a future activity, or recurring work that Alphonse should perform later.
-For `native.ask_question`, choose the narrowest useful `question_kind`: `yes_no` for binary decisions, `single_choice` for finite options, and `open_text` only when the answer cannot be constrained.
+For `native.ask_question`, choose the narrowest useful `question_kind`: `yes_no` for binary decisions, `single_choice` for one finite option, `multi_choice` for one or more finite options, `datetime` for a date and time, and `open_text` only when the answer cannot be constrained.
 For `native.scheduled_task`, provide explicit `schedule_kind` and either ISO `run_at` for one-off tasks or an RFC 5545 `rrule` plus optional ISO `dtstart` for recurring tasks. Do not pass natural-language dates to this tool.
 Current UTC time: {{ current_time_utc }}. User timezone: {{ user_timezone }}. For relative requests such as “in 3 minutes,” calculate a future ISO `run_at` from this current time and timezone.
 For shell-like prompts such as `ls -la`, use `native.bash` with `arguments.command` set to the exact shell command text.
@@ -22,9 +23,21 @@ Do not execute tools. Do not write prose. Return only valid JSON with this exact
 ```json
 {
   "id": "string",
+  "execution_mode": "direct",
   "tool_id": "string",
   "tool_name": "string",
   "arguments": {},
+  "internal_state": "short user-visible status message, 256 chars max"
+}
+```
+
+For program mode return exactly:
+
+```json
+{
+  "id": "string",
+  "execution_mode": "program",
+  "program": {"language": "python", "source": "async def main(tools):\n    return {}"},
   "internal_state": "short user-visible status message, 256 chars max"
 }
 ```

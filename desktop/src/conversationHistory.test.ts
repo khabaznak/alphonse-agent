@@ -44,6 +44,16 @@ describe("mergeFreshConversationHistory", () => {
     ]);
   });
 
+  it("uses timestamps to position a question backfilled after its answer", () => {
+    const messages: ChatMessage[] = [
+      { id: "answer", role: "user", content: "The token is configured.", sequence: 12, created_at: "2026-08-22T05:54:00Z" },
+      { id: "question", role: "assistant", content: "Where is the token?", sequence: 14, created_at: "2026-08-22T05:53:00Z" },
+      { id: "final", role: "assistant", content: "I found it.", sequence: 13, created_at: "2026-08-22T05:57:00Z" },
+    ];
+
+    expect(orderConversationMessages(messages).map((message) => message.id)).toEqual(["question", "answer", "final"]);
+  });
+
   it("keeps repeated identical messages when their canonical ids differ", () => {
     const repeated: ChatMessage[] = [
       { id: "one", role: "user", content: "Continue", sequence: 1 },

@@ -97,6 +97,10 @@ class ToolDescriptor:
     capabilities: tuple[str, ...] = ()
     tags: tuple[str, ...] = ()
     metadata: dict[str, Any] = field(default_factory=dict)
+    # Program mode uses these explicit semantics instead of inferring safety
+    # from a tool name or description.
+    program_behavior: str = "normal"
+    read_only: bool = False
 
 
 @dataclass(frozen=True)
@@ -205,6 +209,7 @@ class CoreLoopContext:
     user_context_provider: Callable[[str], str] | None = None
     user_timezone_provider: Callable[[str], str] | None = None
     memory: Any | None = None
+    program_runner: Any | None = None
     consumed_message_ids: list[str] = field(default_factory=list)
 
     def consume_message(self, selector: MessageSelector | None = None) -> QueuedMessage | None:
@@ -407,6 +412,7 @@ class AlphonseCore:
     delivery_sink: Callable[[dict[str, Any]], Any] | None = None
     user_context_provider: Callable[[str], str] | None = None
     user_timezone_provider: Callable[[str], str] | None = None
+    program_runner: Any | None = None
     fsm: DDFSM = field(default_factory=build_default_ddfsm)
     _stop_requested: bool = field(default=False, init=False, repr=False)
 
@@ -485,6 +491,7 @@ class AlphonseCore:
                 user_context_provider=self.user_context_provider,
                 user_timezone_provider=self.user_timezone_provider,
                 memory=self.memory,
+                program_runner=self.program_runner,
             )
             start_memory = getattr(self.memory, "start_task", None)
             if callable(start_memory):

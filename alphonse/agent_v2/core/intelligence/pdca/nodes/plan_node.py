@@ -46,7 +46,11 @@ def plan_node(task: TaskState, context: CoreLoopContext | None = None) -> TaskSt
     )
     task.metadata["tool_call_plan_prompt"] = prompt
 
-    planned_tool_call = _normalize_tool_call(_call_tool_planning_inference(prompt, task, tools, context), tools)
+    planned_tool_call = _normalize_tool_call(
+        _call_tool_planning_inference(prompt, task, tools, context),
+        tools,
+        program_available=_program_mode_available(context),
+    )
     if planned_tool_call is None:
         task.metadata["tool_call_planning_llm_stubbed"] = True
         task.append_update("Plan prepared one-tool-call prompt; LLM execution is stubbed.")
@@ -102,7 +106,7 @@ def _render_tools_md(tools: tuple[ToolDescriptor, ...]) -> str:
     if not tools:
         return "- (none)"
     return "\n".join(
-        f"- {tool.tool_id} | {tool.name} | {tool.kind.value} | {tool.description or '(no description)'}"
+        f"- {tool.tool_id} | {tool.name} | {tool.kind.value} | {tool.description or '(no description)'} | schema={tool.argument_schema}"
         for tool in tools
     )
 
@@ -181,26 +185,53 @@ def _call_tool_planning_llm(prompt: str) -> dict[str, Any] | None:
     return None
 
 
-def _normalize_tool_call(value: dict[str, Any] | None, tools: tuple[ToolDescriptor, ...]) -> dict[str, Any] | None:
+def _normalize_tool_call(
+    value: dict[str, Any] | None,
+    tools: tuple[ToolDescriptor, ...],
+    *,
+    program_available: bool = True,
+) -> dict[str, Any] | None:
     if value is None:
         return None
     planned_id = str(value.get("id") or "").strip() or f"plan-call-{uuid4()}"
+    execution_mode = str(value.get("execution_mode") or "direct").strip().lower()
+    internal_state = str(value.get("internal_state") or "").strip()
+    if execution_mode == "program":
+        if not program_available:
+            return None
+        program = value.get("program")
+        if not isinstance(program, dict) or not internal_state:
+            return None
+        language = str(program.get("language") or "python").strip().lower()
+        source = str(program.get("source") or "").strip()
+        if language != "python" or not source or len(source) > 100_000:
+            return None
+        return {
+            "id": planned_id,
+            "execution_mode": "program",
+            "program": {"language": "python", "source": source},
+            "internal_state": internal_state[:256],
+        }
+    if execution_mode != "direct":
+        return None
     tool_id = str(value.get("tool_id") or "").strip()
     tool_name = str(value.get("tool_name") or "").strip()
     arguments = value.get("arguments")
-    internal_state = str(value.get("internal_state") or "").strip()
     if not tool_id or not tool_name or not isinstance(arguments, dict) or not internal_state:
         return None
     if tools and tool_id not in {tool.tool_id for tool in tools}:
         return None
     normalized_arguments = _normalize_tool_arguments(tool_id, arguments)
-    return {
+    normalized = {
         "id": planned_id,
         "tool_id": tool_id,
         "tool_name": tool_name,
         "arguments": normalized_arguments,
         "internal_state": internal_state[:256],
     }
+    if "execution_mode" in value:
+        normalized["execution_mode"] = "direct"
+    return normalized
 
 
 def _normalize_tool_arguments(tool_id: str, arguments: dict[str, Any]) -> dict[str, Any]:
@@ -219,3 +250,14 @@ def _drop_codex_temp_cwd(arguments: dict[str, Any]) -> None:
         return
     if any(str(part).startswith("alphonse-codex-") for part in cwd.parts):
         arguments.pop("cwd", None)
+
+
+def _program_mode_available(context: CoreLoopContext | None) -> bool:
+    runner = getattr(context, "program_runner", None) if context is not None else None
+    available = getattr(runner, "available", None)
+    if not callable(available):
+        return False
+    try:
+        return bool(available())
+    except (OSError, RuntimeError):
+        return False

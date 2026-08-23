@@ -187,6 +187,15 @@ class V2DaemonClient:
     def web_tools_settings(self, *, actor_user_id: str) -> dict[str, Any]:
         return self.request("web_tools_settings", actor_user_id=actor_user_id)
 
+    def code_mode_settings(self, *, actor_user_id: str) -> dict[str, Any]:
+        return self.request("code_mode_settings", actor_user_id=actor_user_id)
+
+    def save_code_mode_settings(self, *, actor_user_id: str, values: dict[str, Any], acknowledge_unsafe: bool = False) -> dict[str, Any]:
+        return self.request("save_code_mode_settings", actor_user_id=actor_user_id, values=values, acknowledge_unsafe=acknowledge_unsafe)
+
+    def verify_code_mode(self, *, actor_user_id: str) -> dict[str, Any]:
+        return self.request("verify_code_mode", actor_user_id=actor_user_id)
+
     def save_web_tools_settings(self, *, actor_user_id: str, values: dict[str, Any]) -> dict[str, Any]:
         return self.request("save_web_tools_settings", actor_user_id=actor_user_id, values=values)
 
@@ -456,6 +465,12 @@ class V2DaemonServer:
             return self.daemon.delete_artifact(actor_user_id=str(params.get("actor_user_id") or ""), artifact_id=str(params.get("artifact_id") or ""))
         if method == "web_tools_settings":
             return {"settings": self.daemon.web_tools_settings(actor_user_id=str(params.get("actor_user_id") or ""))}
+        if method == "code_mode_settings":
+            return {"settings": self.daemon.code_mode_settings(actor_user_id=str(params.get("actor_user_id") or ""))}
+        if method == "save_code_mode_settings":
+            return {"settings": self.daemon.save_code_mode_settings(actor_user_id=str(params.get("actor_user_id") or ""), values=dict(params.get("values") or {}), acknowledge_unsafe=bool(params.get("acknowledge_unsafe")))}
+        if method == "verify_code_mode":
+            return self.daemon.verify_code_mode(actor_user_id=str(params.get("actor_user_id") or ""))
         if method == "save_web_tools_settings":
             return {"settings": self.daemon.save_web_tools_settings(actor_user_id=str(params.get("actor_user_id") or ""), values=dict(params.get("values") or {}))}
         if method == "verify_web_tools":
@@ -510,6 +525,15 @@ class V2DaemonServer:
                     user=str(params.get("user") or ""),
                     project_id=str(params.get("project_id") or ""),
                     limit=int(params.get("limit") or 4),
+                )
+            }
+        if method == "copy_desktop_project_files":
+            source_paths = params.get("source_paths") if isinstance(params.get("source_paths"), list) else []
+            return {
+                "files": self.daemon.copy_desktop_project_files(
+                    user=str(params.get("user") or ""),
+                    project_id=str(params.get("project_id") or ""),
+                    source_paths=[str(item) for item in source_paths],
                 )
             }
         if method == "manageable_projects":

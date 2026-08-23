@@ -24,12 +24,12 @@ ASK_QUESTION_ARGUMENT_SCHEMA: dict[str, Any] = {
         },
         "question_kind": {
             "type": "string",
-            "enum": ["open_text", "yes_no", "single_choice"],
+            "enum": ["open_text", "yes_no", "single_choice", "multi_choice", "datetime"],
             "description": "The answer form to present.",
         },
         "choices": {
             "type": "array",
-            "description": "Choices for single_choice questions.",
+            "description": "Choices for single_choice and multi_choice questions.",
             "items": {
                 "type": "object",
                 "additionalProperties": False,
@@ -66,6 +66,7 @@ def build_ask_question_tool_definition() -> ToolDefinition:
         argument_schema=dict(ASK_QUESTION_ARGUMENT_SCHEMA),
         capabilities=("conversation", "interrupt", "user_input", "task_parking"),
         tags=("native", "conversation", "interrupt"),
+        program_behavior="interrupt",
     )
     return ToolDefinition(
         descriptor=descriptor,

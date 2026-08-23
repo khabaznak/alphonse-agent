@@ -53,7 +53,11 @@ def build_bash_tool_definition() -> ToolDefinition:
         tool_id=BASH_TOOL_ID,
         name=BASH_TOOL_NAME,
         kind=ToolKind.NATIVE,
-        description="Execute a bounded local bash command and capture stdout/stderr.",
+        description=(
+            "Execute one bounded Bash command on the local host and return stdout/stderr. "
+            "Use for direct filesystem, process, build, test, or diagnostic work; do not use "
+            "for multi-tool orchestration or aggregation of tool results."
+        ),
         argument_schema=dict(BASH_ARGUMENT_SCHEMA),
         capabilities=("shell", "local_execution"),
         tags=("native", "shell"),

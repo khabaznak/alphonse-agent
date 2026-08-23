@@ -29,6 +29,7 @@ from alphonse.agent_v2.core.questions import SQLiteQuestionStore
 from alphonse.agent_v2.core.scheduled_tasks import ScheduledTaskStore
 from alphonse.agent_v2.core.state import reset_state
 from alphonse.agent_v2.core.tools.registry.native import build_native_tool_registry
+from alphonse.agent_v2.core.programs import ProgramRunner
 from alphonse.agent_v2.integrations import IntegrationRegistry
 from alphonse.agent_v2.integrations import SQLiteIntegrationStore
 from alphonse.agent_v2.integrations import build_default_integration_registry
@@ -44,6 +45,7 @@ from alphonse.agent_v2.services.project_sessions import ProjectInboundRouter
 from alphonse.agent_v2.services.project_sessions import SQLiteProjectSessionStore
 from alphonse.agent_v2.users import V2UserStore
 from alphonse.agent_v2.web_tools_settings import SQLiteWebToolsSettingsStore
+from alphonse.agent_v2.code_mode_settings import SQLiteCodeModeSettingsStore
 from alphonse.agent_v2.media_tools_settings import SQLiteMediaToolsSettingsStore
 from alphonse.agent_v2.assets import SQLiteAssetStore
 from alphonse.agent_v2.artifacts import SQLiteArtifactStore
@@ -102,6 +104,7 @@ class V2RuntimeHost:
     inbound_router: ProjectInboundRouter
     user_store: V2UserStore
     web_tools_settings_store: SQLiteWebToolsSettingsStore
+    code_mode_settings_store: SQLiteCodeModeSettingsStore
     media_tools_settings_store: SQLiteMediaToolsSettingsStore
     asset_store: SQLiteAssetStore
     artifact_store: SQLiteArtifactStore
@@ -133,6 +136,7 @@ def build_runtime_host(
     project_session_store: SQLiteProjectSessionStore | None = None,
     messages: Any | None = None,
     web_tools_settings_store: SQLiteWebToolsSettingsStore | None = None,
+    code_mode_settings_store: SQLiteCodeModeSettingsStore | None = None,
     media_tools_settings_store: SQLiteMediaToolsSettingsStore | None = None,
     asset_store: SQLiteAssetStore | None = None,
     artifact_store: SQLiteArtifactStore | None = None,
@@ -148,6 +152,7 @@ def build_runtime_host(
     visible_state = InMemoryInternalState()
     processor = processor or PDCAIntelligenceProcessor()
     web_tools_settings_store = web_tools_settings_store or SQLiteWebToolsSettingsStore()
+    code_mode_settings_store = code_mode_settings_store or SQLiteCodeModeSettingsStore()
     media_tools_settings_store = media_tools_settings_store or SQLiteMediaToolsSettingsStore()
     user_store = user_store or V2UserStore()
     asset_store = asset_store or SQLiteAssetStore(users_root=user_store.users_root)
@@ -216,6 +221,7 @@ def build_runtime_host(
         delivery_sink=delivery_sink,
         user_context_provider=user_store.read_user_context,
         user_timezone_provider=lambda _user_id: user_store.timezone(),
+        program_runner=ProgramRunner(settings_provider=code_mode_settings_store.get),
         activity_sink=_activity_sink,
     )
     runtime = V2RuntimeHost(
@@ -239,6 +245,7 @@ def build_runtime_host(
         inbound_router=inbound_router,
         user_store=user_store,
         web_tools_settings_store=web_tools_settings_store,
+        code_mode_settings_store=code_mode_settings_store,
         media_tools_settings_store=media_tools_settings_store,
         asset_store=asset_store,
         artifact_store=artifact_store,

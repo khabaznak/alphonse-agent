@@ -100,6 +100,20 @@ def test_question_answer_resumes_serialized_task_state() -> None:
     }
 
 
+def test_question_store_normalizes_multi_choice_and_datetime_answers() -> None:
+    store = SQLiteQuestionStore()
+    multi = store.create_question(
+        task=TaskState(task_id="task-multi", goal="Choose", user="alex"), question="Pick", kind="multi_choice",
+        choices=[{"id": "one", "label": "One"}, {"id": "two", "label": "Two"}],
+    )
+    multi_result = store.route_answer(respondent_user_id="alex", question_id=multi.question_id, payload={"choice_ids": ["one", "two"]})
+    assert multi_result.answer == {"choice_ids": ["one", "two"], "labels": ["One", "Two"]}
+
+    moment = store.create_question(task=TaskState(task_id="task-time", goal="When", user="alex"), question="When?", kind="datetime")
+    time_result = store.route_answer(respondent_user_id="alex", question_id=moment.question_id, payload={"datetime": "2026-08-20T12:00:00-06:00"})
+    assert time_result.answer == {"datetime": "2026-08-20T18:00:00Z"}
+
+
 def test_multiple_pending_questions_are_ambiguous_without_direct_reference() -> None:
     store = SQLiteQuestionStore()
     store.create_question(task=TaskState(task_id="task-1", goal="One", user="alex"), question="One?", kind="open_text")

@@ -20,10 +20,12 @@ export type Delivery = {
 
 export type Question = {
   question_id: string;
+  task_id: string;
   project_id: string;
   created_at?: string;
+  conversation_sequence?: number;
   message: string;
-  kind: "open_text" | "yes_no" | "single_choice";
+  kind: "open_text" | "yes_no" | "single_choice" | "multi_choice" | "datetime";
   choices: Array<{ id: string; label: string }>;
 };
 
@@ -43,6 +45,12 @@ export type Project = {
 export type AgentDocument = { file_name: string; display_name: string; content?: string };
 export type InferenceSettings = { provider_key: string; model_id: string; validation_error?: string };
 export type WebToolsSettings = { enabled: boolean; searxng_base_url: string; search_timeout_seconds: number; fetch_timeout_seconds: number; fetch_max_chars: number; configured: boolean; available: boolean };
+export type CodeModeSettings = {
+  enabled: boolean; docker_bin: string; image: string; timeout_seconds: number; max_tool_calls: number; max_parallel_calls: number;
+  memory_mb: number; cpu_count: number; pid_limit: number; tmpfs_mb: number;
+  network_disabled: boolean; read_only_filesystem: boolean; run_as_non_root: boolean; drop_all_capabilities: boolean; no_new_privileges: boolean;
+  verification_ready: boolean; verification_error: string; verified_at: string; available: boolean; weakened_protections: string[];
+};
 export type MemorySettings = { max_ledger_bytes: number; compaction_summary_max_words: number };
 export type VerificationState = { ready: boolean; verified_at: string; error: string; preview: string };
 export type MediaToolsSettings = {

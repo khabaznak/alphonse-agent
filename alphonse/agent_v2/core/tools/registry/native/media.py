@@ -8,6 +8,7 @@ import platform
 import shutil
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 from typing import Any
 
@@ -64,6 +65,7 @@ def build_analyze_image_tool_definition(settings: OcrSettings, asset_store: Any 
         },
         ("media", "vision"),
         ("native", "media", "attachments"),
+        read_only=True,
     )
     return ToolDefinition(
         descriptor,
@@ -157,7 +159,7 @@ def verify_ocr(settings: OcrSettings, *, sample_path: str) -> dict[str, Any]:
 
 
 def extract_ocr(settings: OcrSettings, *, asset_path: str) -> dict[str, Any]:
-    return analyze_image(settings, asset_path=asset_path, question="Extract all visible text exactly as written. Preserve line breaks. Do not infer missing text.", empty_code="ocr_text_empty")
+    return analyze_image(settings, asset_path=asset_path, question=_ocr_prompt(settings), empty_code="ocr_text_empty")
 
 
 def analyze_task_image(arguments: dict[str, Any], *, context: ToolExecutionContext | None, settings: OcrSettings, asset_store: Any | None) -> dict[str, Any]:
@@ -181,7 +183,19 @@ def analyze_image(settings: OcrSettings, *, asset_path: str, question: str, empt
     if not source.is_file(): return _failed("image_sample_not_found", "Image sample path was not found.")
     try:
         image = base64.b64encode(source.read_bytes()).decode("ascii")
-        response = requests.post(settings.ollama_base_url.rstrip("/") + "/api/chat", json={"model": settings.model_id, "messages": [{"role": "user", "content": question, "images": [image]}], "stream": False}, timeout=settings.timeout_seconds)
+        started_at = time.monotonic()
+        response = requests.post(
+            settings.ollama_base_url.rstrip("/") + "/api/chat",
+            json={
+                "model": settings.model_id,
+                "messages": [{"role": "user", "content": question, "images": [image]}],
+                "stream": False,
+                # OCR needs extracted text, not a model's chain of thought.
+                "think": False,
+            },
+            timeout=settings.timeout_seconds,
+        )
+        latency_ms = round((time.monotonic() - started_at) * 1000)
     except requests.RequestException as exc: return _failed("image_analysis_http_error", "Ollama image analysis failed.", details={"error": str(exc)})
     if response.status_code >= 400: return _failed("image_analysis_http_error", f"Ollama returned status {response.status_code}.")
     try: body = response.json()
@@ -189,7 +203,15 @@ def analyze_image(settings: OcrSettings, *, asset_path: str, question: str, empt
     message = body.get("message") if isinstance(body, dict) else {}
     text = str(message.get("content") or "").strip() if isinstance(message, dict) else ""
     if not text: return _failed(empty_code, "Ollama returned no image analysis.")
-    return _ok({"text": text, "model": settings.model_id})
+    return _ok({"text": text, "model": settings.model_id, "latency_ms": latency_ms})
+
+
+def _ocr_prompt(settings: OcrSettings) -> str:
+    if settings.model_id.strip().lower().startswith("deepseek-ocr"):
+        # DeepSeek-OCR's template is sensitive to extra wording; this is its
+        # documented prompt for a plain text extraction.
+        return "Free OCR."
+    return "Extract all visible text exactly as written. Preserve line breaks. Do not infer missing text."
 
 
 def _render_say(text: str, *, output_dir: str | None, fallback_error: str) -> dict[str, Any]:

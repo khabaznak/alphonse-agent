@@ -16,7 +16,7 @@ from alphonse.agent_v2.database import connect_database, default_database_path
 if TYPE_CHECKING:
     from alphonse.agent_v2.core.intelligence.task_state import TaskState
 
-QuestionKind = Literal["open_text", "yes_no", "single_choice"]
+QuestionKind = Literal["open_text", "yes_no", "single_choice", "multi_choice", "datetime"]
 QuestionStatus = Literal["pending", "answered", "expired", "cancelled"]
 
 DEFAULT_EXPIRES_IN_SECONDS = 24 * 60 * 60
@@ -70,6 +70,10 @@ class QuestionInterrupt:
                 },
                 "required": ["choice_id"],
             }
+        if self.kind == "multi_choice":
+            return {"type": "object", "additionalProperties": False, "properties": {"choice_ids": {"type": "array", "minItems": 1, "uniqueItems": True, "items": {"type": "string", "enum": [choice.id for choice in self.choices]}}}, "required": ["choice_ids"]}
+        if self.kind == "datetime":
+            return {"type": "object", "additionalProperties": False, "properties": {"datetime": {"type": "string", "format": "date-time"}}, "required": ["datetime"]}
         return {
             "type": "object",
             "additionalProperties": False,
@@ -173,7 +177,7 @@ class SQLiteQuestionStore:
             raise ValueError("question_required")
 
         normalized_kind = _normalize_kind(kind)
-        normalized_choices = tuple(_normalize_choices(choices, require_for_choice=normalized_kind == "single_choice"))
+        normalized_choices = tuple(_normalize_choices(choices, require_for_choice=normalized_kind in {"single_choice", "multi_choice"}))
         task_id = _ensure_task_id(task)
         originator = str(task.user or "").strip() or "unknown"
         respondent = str(respondent_user_id or originator).strip() or originator
@@ -377,6 +381,19 @@ class SQLiteQuestionStore:
                 ORDER BY created_at ASC
                 """,
                 values,
+            ).fetchall()
+        return [_question_from_row(row) for row in rows]
+
+    def list_for_conversation(self, respondent_user_id: str, *, project_id: str) -> list[QuestionInterrupt]:
+        """Return the questions that belong in a project's durable conversation."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM v2_questions
+                WHERE respondent_user_id = ? AND project_id = ?
+                ORDER BY created_at ASC
+                """,
+                (str(respondent_user_id or "").strip(), str(project_id or "").strip()),
             ).fetchall()
         return [_question_from_row(row) for row in rows]
 
@@ -618,7 +635,7 @@ class SQLiteQuestionStore:
                   delivery_metadata_json TEXT NOT NULL DEFAULT '{}',
                   created_at TEXT NOT NULL,
                   updated_at TEXT NOT NULL,
-                  CHECK (kind IN ('open_text', 'yes_no', 'single_choice')),
+                  CHECK (kind IN ('open_text', 'yes_no', 'single_choice', 'multi_choice', 'datetime')),
                   CHECK (status IN ('pending', 'answered', 'expired', 'cancelled'))
                 ) STRICT;
 
@@ -648,6 +665,12 @@ class SQLiteQuestionStore:
                     )
                     """
                 )
+            schema = str(conn.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='v2_questions'").fetchone()[0] or "")
+            if "multi_choice" not in schema or "datetime" not in schema:
+                conn.execute("ALTER TABLE v2_questions RENAME TO v2_questions_legacy")
+                conn.execute("""CREATE TABLE v2_questions (question_id TEXT PRIMARY KEY, task_id TEXT NOT NULL, run_id TEXT NOT NULL, thread_id TEXT NOT NULL, respondent_user_id TEXT NOT NULL, originator_user_id TEXT NOT NULL, project_id TEXT NOT NULL DEFAULT '', message TEXT NOT NULL, kind TEXT NOT NULL, choices_json TEXT NOT NULL, response_schema_json TEXT NOT NULL, status TEXT NOT NULL, expires_at TEXT NOT NULL, answer_json TEXT, delivery_metadata_json TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL, updated_at TEXT NOT NULL, CHECK (kind IN ('open_text', 'yes_no', 'single_choice', 'multi_choice', 'datetime')), CHECK (status IN ('pending', 'answered', 'expired', 'cancelled'))) STRICT""")
+                conn.execute("INSERT INTO v2_questions SELECT question_id,task_id,run_id,thread_id,respondent_user_id,originator_user_id,project_id,message,kind,choices_json,response_schema_json,status,expires_at,answer_json,delivery_metadata_json,created_at,updated_at FROM v2_questions_legacy")
+                conn.execute("DROP TABLE v2_questions_legacy")
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_v2_questions_respondent_project_status ON v2_questions(respondent_user_id,project_id,status,created_at)"
             )
@@ -769,7 +792,7 @@ def _ensure_task_id(task: TaskState) -> str:
 
 def _normalize_kind(value: Any) -> QuestionKind:
     rendered = str(value or "open_text").strip().lower()
-    if rendered not in {"open_text", "yes_no", "single_choice"}:
+    if rendered not in {"open_text", "yes_no", "single_choice", "multi_choice", "datetime"}:
         raise ValueError(f"invalid_question_kind: {rendered}")
     return rendered  # type: ignore[return-value]
 
@@ -784,7 +807,7 @@ def _normalize_status(value: Any) -> QuestionStatus:
 def _normalize_choices(value: Any, *, require_for_choice: bool) -> list[QuestionChoice]:
     if value is None:
         if require_for_choice:
-            raise ValueError("single_choice_choices_required")
+            raise ValueError("choice_choices_required")
         return []
     if not isinstance(value, list):
         raise ValueError("question_choices_must_be_list")
@@ -798,7 +821,7 @@ def _normalize_choices(value: Any, *, require_for_choice: bool) -> list[Question
             raise ValueError("question_choice_id_and_label_required")
         choices.append(QuestionChoice(id=choice_id, label=label))
     if require_for_choice and not choices:
-        raise ValueError("single_choice_choices_required")
+        raise ValueError("choice_choices_required")
     return choices
 
 
@@ -823,6 +846,24 @@ def _normalize_answer(
         if lowered in {"no", "n", "false", "0"}:
             return {"answer": False}
         return None
+    if question.kind == "multi_choice":
+        raw_choices = value.get("choice_ids")
+        if not isinstance(raw_choices, list) or not raw_choices:
+            return None
+        valid = {choice.id: choice.label for choice in question.choices}
+        selected = [str(item).strip() for item in raw_choices]
+        if len(selected) != len(set(selected)) or any(item not in valid for item in selected):
+            return None
+        return {"choice_ids": selected, "labels": [valid[item] for item in selected]}
+    if question.kind == "datetime":
+        rendered = str(value.get("datetime") or raw_text).strip()
+        try:
+            parsed = datetime.fromisoformat(rendered.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        if parsed.tzinfo is None:
+            return None
+        return {"datetime": parsed.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")}
     raw_choice = str(value.get("choice_id") or raw_text).strip()
     for choice in question.choices:
         if raw_choice == choice.id or raw_choice.lower() == choice.label.lower():
@@ -836,6 +877,10 @@ def _invalid_answer_message(question: QuestionInterrupt) -> str:
     if question.kind == "single_choice":
         options = ", ".join(choice.label for choice in question.choices)
         return f"Please choose one of: {options}."
+    if question.kind == "multi_choice":
+        return "Please choose one or more valid options."
+    if question.kind == "datetime":
+        return "Please provide a valid date and time."
     return "Please provide a non-empty answer."
 
 
@@ -846,6 +891,10 @@ def _answer_text(answer: dict[str, Any]) -> str:
         return "yes" if bool(answer.get("answer")) else "no"
     if "label" in answer:
         return str(answer.get("label") or "")
+    if "labels" in answer:
+        return ", ".join(str(label) for label in answer.get("labels") or [])
+    if "datetime" in answer:
+        return str(answer.get("datetime") or "")
     return json.dumps(answer, sort_keys=True)
 
 

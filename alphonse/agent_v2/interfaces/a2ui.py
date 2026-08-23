@@ -14,8 +14,9 @@ from alphonse.agent_v2.core.questions import QuestionInterrupt
 
 
 A2UI_VERSION = "v0.9.1"
-ALPHONSE_DESKTOP_CATALOG_ID = "alphonse.desktop.catalog.v1"
-SUPPORTED_COMPONENTS = frozenset({"Card", "Container", "Text", "Button", "ChoiceList", "TextInput", "Status"})
+ALPHONSE_DESKTOP_CATALOG_ID = "alphonse.desktop.catalog.v2"
+SUPPORTED_COMPONENTS = frozenset({"Card", "Row", "Column", "List", "Text", "Button", "TextInput", "Status", "Divider", "Icon", "CheckBox", "ChoicePicker", "DateTimeInput", "Table"})
+SUPPORTED_ICONS = frozenset({"check", "info", "warning", "error", "calendar", "clock", "list", "progress"})
 
 
 class A2UiAdapter:
@@ -26,7 +27,7 @@ class A2UiAdapter:
     def server_capabilities(self) -> dict[str, Any]:
         return {"supportedCatalogIds": [self.catalog_id], "inlineCatalogs": False}
 
-    def question_opened(self, question: QuestionInterrupt) -> list[dict[str, Any]]:
+    def question_opened(self, question: QuestionInterrupt, *, timezone: str = "UTC") -> list[dict[str, Any]]:
         surface_id = surface_id_for_question(question.question_id)
         components = _question_components(question)
         data_model = {
@@ -39,7 +40,8 @@ class A2UiAdapter:
                 "created_at": question.created_at,
                 "choices": [choice.to_dict() for choice in question.choices],
             },
-            "answer": {"text": ""},
+            "answer": _initial_answer(question),
+            "timezone": str(timezone or "UTC"),
         }
         messages = [
             {
@@ -83,19 +85,19 @@ class A2UiAdapter:
         body_children = ["prompt_label", "prompt"]
         components: list[dict[str, Any]] = [
             {"id": "root", "component": "Card", "children": ["header", "body", "actions"]},
-            {"id": "header", "component": "Container", "children": ["calendar", "summary"]},
-            {"id": "calendar", "component": "Container", "children": ["calendar_month", "calendar_day"]},
+            {"id": "header", "component": "Row", "children": ["calendar", "summary"], "align": "center"},
+            {"id": "calendar", "component": "Column", "children": ["calendar_month", "calendar_day"]},
             {"id": "calendar_month", "component": "Text", "text": month},
             {"id": "calendar_day", "component": "Text", "text": day},
-            {"id": "summary", "component": "Container", "children": ["title", "name", "when", "details"]},
+            {"id": "summary", "component": "Column", "children": ["title", "name", "when", "details"]},
             {"id": "title", "component": "Status", "text": "Scheduled"},
             {"id": "name", "component": "Text", "text": name},
             {"id": "when", "component": "Text", "text": when},
             {"id": "details", "component": "Text", "text": " · ".join(details)},
-            {"id": "body", "component": "Container", "children": body_children},
+            {"id": "body", "component": "Column", "children": body_children},
             {"id": "prompt_label", "component": "Text", "text": "What Alphonse will do"},
             {"id": "prompt", "component": "Text", "text": prompt or "No action description was provided."},
-            {"id": "actions", "component": "Container", "children": ["view", "dismiss"]},
+            {"id": "actions", "component": "Row", "children": ["view", "dismiss"], "align": "center"},
             {"id": "view", "component": "Button", "label": "View task", "action": {"name": "view_scheduled_task", "context": {"scheduled_task_id": task_id}}},
             {"id": "dismiss", "component": "Button", "label": "Close", "action": {"name": "dismiss_surface", "context": {"surface_id": surface_id}}},
         ]
@@ -169,11 +171,13 @@ class A2UiAdapter:
             children.append("result")
             components.append({"id": "result", "component": "Text", "text": f"Output: {_compact_value(result)}"})
         steps = progress.get("steps") if isinstance(progress.get("steps"), list) else []
+        step_ids: list[str] = []
+        table_rows: list[dict[str, Any]] = []
         for index, step in enumerate(steps):
             if not isinstance(step, dict):
                 continue
             component_id = f"step_{index}"
-            children.append(component_id)
+            step_ids.append(component_id)
             lines = [f"{index + 1}. {str(step.get('tool_name') or 'Tool')} · {str(step.get('status') or 'planned')}"]
             if str(step.get("intention") or "").strip():
                 lines.append(f"Intention: {str(step.get('intention')).strip()}")
@@ -182,6 +186,11 @@ class A2UiAdapter:
             if step.get("result") not in (None, "", {}, []):
                 lines.append(f"Output: {_compact_value(step.get('result'))}")
             components.append({"id": component_id, "component": "Text", "text": "\n".join(lines)})
+            table_rows.append({"cells": {"step": index + 1, "tool": str(step.get("tool_name") or "Tool"), "status": str(step.get("status") or "planned")}})
+        if step_ids:
+            components.append({"id": "steps", "component": "List", "children": step_ids, "direction": "vertical"})
+            components.append({"id": "step_table", "component": "Table", "columns": [{"id": "step", "label": "Step", "align": "right"}, {"id": "tool", "label": "Tool"}, {"id": "status", "label": "Status"}], "rows": table_rows})
+            children.extend(["steps", "step_table"])
         messages = [
             {"version": A2UI_VERSION, "createSurface": {"surfaceId": surface_id, "catalogId": self.catalog_id, "sendDataModel": False}},
             {"version": A2UI_VERSION, "updateComponents": {"surfaceId": surface_id, "components": components}},
@@ -254,6 +263,25 @@ def validate_envelope(message: dict[str, Any]) -> None:
             kind = str(component.get("component") or "").strip()
             if not component_id or component_id in identifiers or kind not in SUPPORTED_COMPONENTS:
                 raise ValueError("a2ui_component_not_allowed")
+            if kind == "Icon" and str(component.get("name") or "") not in SUPPORTED_ICONS:
+                raise ValueError("a2ui_icon_not_allowed")
+            if kind in {"TextInput", "CheckBox", "DateTimeInput", "ChoicePicker"}:
+                value = component.get("value")
+                if not isinstance(value, dict) or not str(value.get("path") or "").startswith("/"):
+                    raise ValueError("a2ui_binding_invalid")
+            if kind == "ChoicePicker":
+                options = component.get("options")
+                if not isinstance(options, list) or not options or any(not isinstance(option, dict) or not str(option.get("value") or "") or not str(option.get("label") or "") for option in options):
+                    raise ValueError("a2ui_choices_invalid")
+            if kind == "Table":
+                columns, rows = component.get("columns"), component.get("rows")
+                if not isinstance(columns, list) or not columns or not isinstance(rows, list):
+                    raise ValueError("a2ui_table_invalid")
+                column_ids = {str(column.get("id") or "") for column in columns if isinstance(column, dict)}
+                if len(column_ids) != len(columns) or "" in column_ids or any(not isinstance(column, dict) or not str(column.get("label") or "") for column in columns):
+                    raise ValueError("a2ui_table_invalid")
+                if any(not isinstance(row, dict) or not isinstance(row.get("cells"), dict) or any(key not in column_ids or not isinstance(cell, (str, int, float, bool, type(None))) for key, cell in row["cells"].items()) for row in rows):
+                    raise ValueError("a2ui_table_invalid")
             identifiers.add(component_id)
 
 
@@ -263,51 +291,27 @@ def _question_components(question: QuestionInterrupt) -> list[dict[str, Any]]:
         {"id": "root", "component": "Card", "children": ["title", "message", "body"]},
         {"id": "title", "component": "Status", "text": "Alphonse needs your input"},
         {"id": "message", "component": "Text", "text": question.message},
-        {"id": "body", "component": "Container", "children": []},
+        {"id": "body", "component": "Column", "children": []},
     ]
     body = items[3]["children"]
     actions: list[str] = []
     if question.kind == "yes_no":
-        for answer, label in ((True, "Yes"), (False, "No")):
-            component_id = "answer_yes" if answer else "answer_no"
-            items.append(
-                {
-                    "id": component_id,
-                    "component": "Button",
-                    "label": label,
-                    "action": {"name": "answer_question", "context": {"question_id": question_id, "answer": answer}},
-                }
-            )
-            actions.append(component_id)
-    elif question.kind == "single_choice":
-        choice_ids: list[str] = []
-        for choice in question.choices:
-            component_id = f"choice_{choice.id}"
-            choice_ids.append(component_id)
-            items.append(
-                {
-                    "id": component_id,
-                    "component": "Button",
-                    "label": choice.label,
-                    "action": {"name": "answer_question", "context": {"question_id": question_id, "choice_id": choice.id}},
-                }
-            )
-        items.append({"id": "choices", "component": "ChoiceList", "children": choice_ids})
+        items.append({"id": "answer_boolean", "component": "CheckBox", "label": "Yes", "value": {"path": "/answer/answer"}})
+        body.append("answer_boolean")
+        actions.append("submit")
+    elif question.kind in {"single_choice", "multi_choice"}:
+        items.append({"id": "choices", "component": "ChoicePicker", "label": "Choose an option" if question.kind == "single_choice" else "Choose one or more options", "options": [{"label": choice.label, "value": choice.id} for choice in question.choices], "value": {"path": "/answer/choice_ids"}, "maxAllowedSelections": 1 if question.kind == "single_choice" else len(question.choices)})
         body.append("choices")
+        actions.append("submit")
+    elif question.kind == "datetime":
+        items.append({"id": "answer_datetime", "component": "DateTimeInput", "label": "Date and time", "value": {"path": "/answer/datetime"}, "enableDate": True, "enableTime": True})
+        body.append("answer_datetime")
+        actions.append("submit")
     else:
-        items.extend(
-            [
-                {"id": "answer_text", "component": "TextInput", "label": "Your answer", "value": {"path": "/answer/text"}},
-                {
-                    "id": "submit",
-                    "component": "Button",
-                    "label": "Answer",
-                    "action": {"name": "answer_question", "context": {"question_id": question_id}},
-                },
-            ]
-        )
+        items.append({"id": "answer_text", "component": "TextInput", "label": "Your answer", "value": {"path": "/answer/text"}})
         body.append("answer_text")
         actions.append("submit")
+    items.append({"id": "submit", "component": "Button", "label": "Answer", "action": {"name": "answer_question", "context": {"question_id": question_id}}})
     items.extend(
         [
             {
@@ -316,8 +320,18 @@ def _question_components(question: QuestionInterrupt) -> list[dict[str, Any]]:
                 "label": "Cancel",
                 "action": {"name": "cancel_question", "context": {"question_id": question_id}},
             },
-            {"id": "actions", "component": "Container", "children": [*actions, "cancel"]},
+            {"id": "actions", "component": "Row", "children": [*actions, "cancel"], "align": "center"},
         ]
     )
     body.append("actions")
     return items
+
+
+def _initial_answer(question: QuestionInterrupt) -> dict[str, Any]:
+    if question.kind == "yes_no":
+        return {"answer": False}
+    if question.kind in {"single_choice", "multi_choice"}:
+        return {"choice_ids": []}
+    if question.kind == "datetime":
+        return {"datetime": ""}
+    return {"text": ""}

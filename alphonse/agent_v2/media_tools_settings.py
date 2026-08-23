@@ -60,7 +60,7 @@ class SttSettings:
 class OcrSettings:
     enabled: bool = False
     ollama_base_url: str = "http://localhost:11434"
-    model_id: str = "qwen3-vl:4b"
+    model_id: str = "deepseek-ocr:3b"
     timeout_seconds: float = 60.0
     verification: VerificationState = VerificationState()
 

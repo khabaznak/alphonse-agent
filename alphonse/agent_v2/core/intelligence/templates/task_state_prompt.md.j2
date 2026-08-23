@@ -15,8 +15,12 @@
 {% set attachments = task.metadata.get("attachments", []) if task.metadata else [] %}
 {% if attachments %}
 {% for attachment in attachments %}
-- Asset ID: {{ attachment.get("asset_id", "") }} | Name: {{ attachment.get("filename", "") }} | MIME: {{ attachment.get("mime_type", "") }} | Kind: {{ attachment.get("kind", "") }} | Status: {{ attachment.get("ingestion_status", "") }} | Caption: {{ attachment.get("caption", "") }}
+- Asset ID: {{ attachment.get("asset_id", "") }} | Name: {{ attachment.get("filename", "") }} | MIME: {{ attachment.get("mime_type", "") }} | Kind: {{ attachment.get("kind", "") }} | Status: {{ attachment.get("ingestion_status", "") }} | Project path: {{ attachment.get("project_path", "") }} | Caption: {{ attachment.get("caption", "") }}
 {% endfor %}
+{% set project_files = attachments | selectattr("kind", "equalto", "desktop_project_file") | list %}
+{% if project_files %}
+- Desktop project files above have been copied into the selected project directory. Inspect them with normal local tools when needed; their final filenames and project paths are listed above.
+{% endif %}
 {% else %}
 - (none)
 {% endif %}

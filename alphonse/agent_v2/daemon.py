@@ -6,6 +6,7 @@ import signal
 import json
 import fcntl
 import logging
+import mimetypes
 import os
 import sqlite3
 import shutil
@@ -14,6 +15,7 @@ import time
 import traceback
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -54,6 +56,8 @@ from alphonse.agent_v2.interfaces.ag_ui import AgUiAdapter
 from alphonse.agent_v2.services.scheduled_worker import ScheduledTaskWorker
 from alphonse.agent_v2.users import V2UserStore
 from alphonse.agent_v2.web_tools_settings import WebToolsSettings
+from alphonse.agent_v2.code_mode_settings import CodeModeSettings
+from alphonse.agent_v2.code_mode_settings import SQLiteCodeModeSettingsStore
 from alphonse.agent_v2.memory_settings import MemorySettings
 from alphonse.agent_v2.memory_settings import SQLiteMemorySettingsStore
 from alphonse.agent_v2.web_tools_settings import SQLiteWebToolsSettingsStore
@@ -503,6 +507,30 @@ class V2Daemon:
         self._require_admin(actor_user_id)
         return self.runtime.web_tools_settings_store.get().to_dict()
 
+    def code_mode_settings(self, *, actor_user_id: str) -> dict[str, object]:
+        self._require_admin(actor_user_id)
+        return self.runtime.code_mode_settings_store.get().to_dict()
+
+    def save_code_mode_settings(self, *, actor_user_id: str, values: dict[str, Any], acknowledge_unsafe: bool = False) -> dict[str, object]:
+        self._require_admin(actor_user_id)
+        current = self.runtime.code_mode_settings_store.get()
+        saved = CodeModeSettings(
+            enabled=bool(values.get("enabled", current.enabled)), docker_bin=str(values.get("docker_bin", current.docker_bin)), image=str(values.get("image", current.image)),
+            timeout_seconds=values.get("timeout_seconds", current.timeout_seconds), max_tool_calls=values.get("max_tool_calls", current.max_tool_calls), max_parallel_calls=values.get("max_parallel_calls", current.max_parallel_calls),
+            memory_mb=values.get("memory_mb", current.memory_mb), cpu_count=values.get("cpu_count", current.cpu_count), pid_limit=values.get("pid_limit", current.pid_limit), tmpfs_mb=values.get("tmpfs_mb", current.tmpfs_mb),
+            network_disabled=bool(values.get("network_disabled", current.network_disabled)), read_only_filesystem=bool(values.get("read_only_filesystem", current.read_only_filesystem)),
+            run_as_non_root=bool(values.get("run_as_non_root", current.run_as_non_root)), drop_all_capabilities=bool(values.get("drop_all_capabilities", current.drop_all_capabilities)), no_new_privileges=bool(values.get("no_new_privileges", current.no_new_privileges)),
+        )
+        if saved.weakened_protections and not acknowledge_unsafe:
+            raise ValueError("code_mode_unsafe_configuration_confirmation_required")
+        return self.runtime.code_mode_settings_store.save(saved).to_dict()
+
+    def verify_code_mode(self, *, actor_user_id: str) -> dict[str, object]:
+        self._require_admin(actor_user_id)
+        result = self.runtime.core.program_runner.verify()
+        settings = self.runtime.code_mode_settings_store.mark_verification(ready=bool(result.get("ready")), error=str(result.get("error") or ""))
+        return {"result": result, "settings": settings.to_dict()}
+
     def save_web_tools_settings(self, *, actor_user_id: str, values: dict[str, Any]) -> dict[str, object]:
         self._require_admin(actor_user_id)
         current = self.runtime.web_tools_settings_store.get()
@@ -541,6 +569,8 @@ class V2Daemon:
         exception = result.get("exception") if isinstance(result, dict) else {"message": "verification_failed"}
         output = result.get("output") if isinstance(result, dict) else {}
         preview = str((output or {}).get("text") or (output or {}).get("file_path") or "")
+        if kind == "ocr" and isinstance(output, dict) and isinstance(output.get("latency_ms"), (int, float)):
+            preview = f"Verified in {float(output['latency_ms']) / 1000:.1f}s: {preview}"
         error = str((exception or {}).get("message") or "") if isinstance(exception, dict) else ""
         details = (exception or {}).get("details") if isinstance(exception, dict) else {}
         detail_error = str((details or {}).get("error") or "") if isinstance(details, dict) else ""
@@ -674,13 +704,18 @@ class V2Daemon:
                     f"outbound:{delivery.outbox_message_id}"
                 ),
             })
-        questions = [
-            question.to_dict()
-            for question in self.runtime.question_store.list_pending_for_respondent(
-                normalized_user,
-                project_id=normalized_project,
-            )
-        ]
+        questions = []
+        for question in self.runtime.question_store.list_pending_for_respondent(
+            normalized_user,
+            project_id=normalized_project,
+        ):
+            event = self._record_question_conversation_event(question)
+            questions.append({
+                **question.to_dict(),
+                "conversation_sequence": event.sequence if event is not None else self.runtime.conversation_store.sequence_for_source_message_id(
+                    f"question:{question.question_id}"
+                ),
+            })
         ui_events, next_ui_sequence = self.ui_events_since(
             after_sequence=after_ui_sequence,
             user=normalized_user,
@@ -729,6 +764,11 @@ class V2Daemon:
     def desktop_conversation_history(self, *, user: str, project_id: str = "", limit: int = 100) -> list[dict[str, Any]]:
         normalized_user = self._admin_user_id(user)
         normalized_project = str(project_id or "").strip()
+        for question in self.runtime.question_store.list_for_conversation(
+            normalized_user,
+            project_id=normalized_project,
+        ):
+            self._record_question_conversation_event(question)
         timeline = self.runtime.conversation_store.list(owner_user_id=normalized_user, project_id=normalized_project, limit=limit)
         if not timeline and not self.runtime.conversation_store.legacy_import_completed(
             owner_user_id=normalized_user,
@@ -825,6 +865,84 @@ class V2Daemon:
         entries.sort(key=lambda item: item[0], reverse=True)
         bounded_limit = max(1, min(int(limit or 4), 4))
         return [entry for _, entry in entries[:bounded_limit]]
+
+    def copy_desktop_project_files(self, *, user: str, project_id: str, source_paths: list[str]) -> list[dict[str, Any]]:
+        """Copy user-selected Desktop files into an authorized project root at send time."""
+        actor = self._admin_user_id(user)
+        project = self.runtime.project_store.get_project(
+            str(project_id or "").strip(), requester_user_id=actor, requester_is_admin=True,
+        )
+        if project is None:
+            raise ValueError("project_required")
+        root = Path(project.root_path).expanduser().resolve()
+        if not root.is_dir():
+            raise ValueError("project_directory_unavailable")
+        paths = [str(item or "").strip() for item in source_paths]
+        if not paths:
+            return []
+
+        max_bytes = 50 * 1024 * 1024
+        sources: list[tuple[Path, os.stat_result]] = []
+        for raw_path in paths:
+            source = Path(raw_path).expanduser()
+            if not raw_path or source.is_symlink() or not source.is_file() or not os.access(source, os.R_OK):
+                raise ValueError("desktop_attachment_file_unavailable")
+            try:
+                stat = source.stat()
+            except OSError as exc:
+                raise ValueError("desktop_attachment_file_unavailable") from exc
+            if stat.st_size > max_bytes:
+                raise ValueError("desktop_attachment_too_large")
+            sources.append((source, stat))
+
+        created: list[Path] = []
+        descriptors: list[dict[str, Any]] = []
+        try:
+            for source, stat in sources:
+                destination = self._copy_desktop_file_to_project(source, root)
+                created.append(destination)
+                mime_type = mimetypes.guess_type(destination.name)[0] or "application/octet-stream"
+                descriptors.append({
+                    "asset_id": "",
+                    "filename": destination.name,
+                    "mime_type": mime_type,
+                    "size_bytes": stat.st_size,
+                    "kind": "desktop_project_file",
+                    "ingestion_status": "copied",
+                    "project_path": str(destination),
+                    "relative_path": destination.name,
+                    "caption": "",
+                })
+        except Exception:
+            for destination in created:
+                try:
+                    destination.unlink()
+                except OSError:
+                    pass
+            raise
+        return descriptors
+
+    @staticmethod
+    def _copy_desktop_file_to_project(source: Path, root: Path) -> Path:
+        safe_name = source.name[:180] or "attachment"
+        stem, suffix = Path(safe_name).stem, Path(safe_name).suffix
+        temporary = root / f".alphonse-upload-{uuid4().hex}.tmp"
+        shutil.copy2(source, temporary)
+        try:
+            for index in range(10_000):
+                candidate_name = safe_name if index == 0 else f"{stem} ({index}){suffix}"
+                destination = root / candidate_name
+                try:
+                    os.link(temporary, destination)
+                except FileExistsError:
+                    continue
+                return destination
+            raise RuntimeError("desktop_attachment_name_conflict")
+        finally:
+            try:
+                temporary.unlink()
+            except OSError:
+                pass
 
     def manageable_projects(self, *, user: str, status: str = "") -> list[dict[str, Any]]:
         actor = self._admin_user_id(user)
@@ -998,6 +1116,17 @@ class V2Daemon:
 
     def answer_question(self, *, user: str, question_id: str, text: str = "", payload: dict[str, Any] | None = None) -> dict[str, Any]:
         normalized_user = self._admin_user_id(user)
+        question = self.runtime.question_store.get_question(question_id)
+        if question is not None:
+            self._record_question_conversation_event(question)
+        if question is not None and question.kind == "datetime" and isinstance(payload, dict):
+            raw = str(payload.get("datetime") or "").strip()
+            try:
+                parsed = datetime.fromisoformat(raw)
+                if parsed.tzinfo is None:
+                    payload = {**payload, "datetime": _local_datetime_to_utc(parsed, timezone_name=self.runtime.user_store.timezone())}
+            except (ValueError, TypeError):
+                pass
         result = self.runtime.question_store.route_answer(
             respondent_user_id=normalized_user,
             question_id=question_id,
@@ -1035,6 +1164,18 @@ class V2Daemon:
             payload_result["message_id"] = queued.message_id
             return payload_result
         return result.to_dict()
+
+    def _record_question_conversation_event(self, question: Any) -> Any:
+        """Make an interrupt question a durable assistant turn exactly once."""
+        return self.runtime.conversation_store.record(
+            owner_user_id=str(question.respondent_user_id or "").strip(),
+            project_id=str(question.project_id or "").strip(),
+            role="assistant",
+            content=str(question.message or "").strip(),
+            source="desktop",
+            source_message_id=f"question:{str(question.question_id or '').strip()}",
+            created_at=str(question.created_at or ""),
+        )
 
     def cancel_question(self, question_id: str) -> bool:
         question = self.runtime.question_store.get_question(question_id)
@@ -1090,25 +1231,44 @@ class V2Daemon:
         payload: dict[str, Any]
         text = ""
         if question.kind == "yes_no":
-            answer = values.get("answer")
-            if source not in {"answer_yes", "answer_no"} or not isinstance(answer, bool):
+            model = dict(data_model or {})
+            answer = model.get("answer") if isinstance(model.get("answer"), dict) else {}
+            if source != "submit" or not isinstance(answer.get("answer"), bool):
                 raise ValueError("a2ui_answer_invalid")
-            if (source == "answer_yes") != answer:
-                raise ValueError("a2ui_source_invalid")
-            payload, text = {"answer": answer}, "yes" if answer else "no"
-        elif question.kind == "single_choice":
-            choice_id = str(values.get("choice_id") or "")
-            if source != f"choice_{choice_id}" or choice_id not in {choice.id for choice in question.choices}:
+            payload, text = {"answer": answer["answer"]}, "yes" if answer["answer"] else "no"
+        elif question.kind in {"single_choice", "multi_choice"}:
+            model = dict(data_model or {})
+            answer = model.get("answer") if isinstance(model.get("answer"), dict) else {}
+            selected = answer.get("choice_ids") if isinstance(answer.get("choice_ids"), list) else []
+            selected_ids = [str(item) for item in selected]
+            valid = {choice.id: choice.label for choice in question.choices}
+            if source != "submit" or not selected_ids or len(selected_ids) != len(set(selected_ids)) or any(choice_id not in valid for choice_id in selected_ids):
                 raise ValueError("a2ui_choice_invalid")
-            label = next(choice.label for choice in question.choices if choice.id == choice_id)
-            payload, text = {"choice_id": choice_id}, label
+            if question.kind == "single_choice" and len(selected_ids) != 1:
+                raise ValueError("a2ui_choice_invalid")
+            payload = {"choice_id": selected_ids[0]} if question.kind == "single_choice" else {"choice_ids": selected_ids}
+            text = ", ".join(valid[choice_id] for choice_id in selected_ids)
+        elif question.kind == "datetime":
+            model = dict(data_model or {})
+            answer = model.get("answer") if isinstance(model.get("answer"), dict) else {}
+            raw = str(answer.get("datetime") or "").strip()
+            try:
+                local = datetime.fromisoformat(raw)
+                if local.tzinfo is not None:
+                    raise ValueError
+                converted = _local_datetime_to_utc(local, timezone_name=self.runtime.user_store.timezone())
+            except (ValueError, TypeError):
+                raise ValueError("a2ui_datetime_invalid") from None
+            if source != "submit":
+                raise ValueError("a2ui_datetime_invalid")
+            payload, text = {"datetime": converted}, converted
         else:
             model = dict(data_model or {})
             answer = model.get("answer") if isinstance(model.get("answer"), dict) else {}
             text = str(answer.get("text") or "").strip()
+            payload = {"text": text}
             if source != "submit" or not text:
                 raise ValueError("a2ui_text_invalid")
-            payload = {"text": text}
         return self.answer_question(user=respondent, question_id=question_id, text=text, payload=payload)
 
     def _a2ui_scheduled_task_events(self, events: list[dict[str, Any]], *, project_id: str) -> list[dict[str, Any]]:
@@ -1322,7 +1482,7 @@ class V2Daemon:
             events.append({"event": _a2ui_custom(self._a2ui.question_closed(question_id_from_surface(surface_id)))})
         for surface_id, question in expected.items():
             if surface_id not in known:
-                events.extend({"event": _a2ui_custom(message)} for message in self._a2ui.question_opened(question))
+                events.extend({"event": _a2ui_custom(message)} for message in self._a2ui.question_opened(question, timezone=self.runtime.user_store.timezone()))
         self._desktop_surfaces[key] = set(expected)
         return events
 
@@ -1371,6 +1531,7 @@ class V2Daemon:
                     acknowledge(step.queued_message_id, lease_owner=self.daemon_id)
             if step.status == LoopStepStatus.PROCESSED:
                 self._mark_snapshot_checkpoint_terminal(snapshot, status="done")
+                self._close_terminal_task_progress(snapshot)
         elif step.status == LoopStepStatus.FAILED and step.queued_message_id:
             retry = getattr(self.runtime.queue, "retry", None)
             if callable(retry):
@@ -1449,6 +1610,20 @@ class V2Daemon:
         task_id = str(task_state.get("task_id") or "").strip() if isinstance(task_state, dict) else ""
         if task_id:
             self.runtime.question_store.mark_task_checkpoint_terminal(task_id, status=status)
+
+    def _close_terminal_task_progress(self, snapshot: Any) -> None:
+        """Close Desktop progress cards even when CAPD produces no outbound reply."""
+        metadata = getattr(snapshot, "metadata", {}) if snapshot is not None else {}
+        task_state = metadata.get("task_state") if isinstance(metadata, dict) else None
+        if not isinstance(task_state, dict):
+            return
+        task_id = str(task_state.get("task_id") or "").strip()
+        owner = str(task_state.get("user") or "").strip()
+        if not task_id or not owner:
+            return
+        for key, known in self._desktop_progress_surfaces.items():
+            if key[1] == owner and task_id in known:
+                self._desktop_progress_closures.setdefault(key, set()).add(task_id)
 
     def _set_activity_status(self, state: str) -> None:
         with self._active_work_lock:
@@ -1604,6 +1779,19 @@ def _event_name(item: dict[str, Any]) -> str:
     return str(event.get("name") or "")
 
 
+def _local_datetime_to_utc(value: datetime, *, timezone_name: str) -> str:
+    """Convert an unambiguous local wall time to a canonical UTC instant."""
+    zone = ZoneInfo(str(timezone_name or "UTC"))
+    candidates = {
+        candidate.astimezone(timezone.utc)
+        for fold in (0, 1)
+        if (candidate := value.replace(tzinfo=zone, fold=fold)).astimezone(timezone.utc).astimezone(zone).replace(tzinfo=None) == value
+    }
+    if len(candidates) != 1:
+        raise ValueError("local_datetime_ambiguous_or_invalid")
+    return next(iter(candidates)).isoformat().replace("+00:00", "Z")
+
+
 def _scheduled_task_id_from_surface(surface_id: str) -> str:
     value = str(surface_id or "").strip()
     return value.removeprefix("scheduled-task:") if value.startswith("scheduled-task:") else ""
@@ -1672,6 +1860,10 @@ def _question_answer_text(payload: dict[str, Any] | None) -> str:
         return str(value["text"] or "")
     if "choice_id" in value:
         return str(value["choice_id"] or "")
+    if "choice_ids" in value:
+        return ", ".join(str(item) for item in value["choice_ids"] or [])
+    if "datetime" in value:
+        return str(value["datetime"] or "")
     if "answer" in value:
         return "yes" if bool(value["answer"]) else "no"
     return "answer"
@@ -1700,6 +1892,7 @@ def main() -> None:
                 project_store=ProjectStore.default(),
                 schedule_store=ScheduledTaskStore.default(),
                 web_tools_settings_store=SQLiteWebToolsSettingsStore.default(),
+                code_mode_settings_store=SQLiteCodeModeSettingsStore.default(),
                 media_tools_settings_store=SQLiteMediaToolsSettingsStore.default(),
                 asset_store=asset_store,
                 artifact_store=SQLiteArtifactStore.default(),

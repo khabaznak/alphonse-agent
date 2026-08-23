@@ -124,8 +124,9 @@ def _tool_planning_envelope(request: InferenceRequest) -> str:
     return _render_envelope(
         request,
         instructions=(
-            "Return one valid JSON object only. Select exactly one tool from the available tools. "
-            "The object must contain tool_id, tool_name, arguments, and internal_state."
+            "Return one valid JSON object only. Select exactly one next execution strategy from the available tools. "
+            "For direct mode, the object must contain execution_mode='direct', tool_id, tool_name, arguments, and internal_state. "
+            "For program mode, the object must contain execution_mode='program', a program object with language='python' and source, and internal_state."
         ),
         tools=request.tools,
     )
