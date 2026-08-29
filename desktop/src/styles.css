@@ -100,7 +100,14 @@ button { border: 0; cursor: pointer; }
   width: 80px;
   height: 80px;
   object-fit: contain;
+  animation: brand-mascot-enter .3s ease-out both;
 }
+
+.brand-avatar { display: grid; width: 80px; justify-items: center; gap: 3px; animation: brand-mascot-bob 4s ease-in-out infinite; }
+.brand-avatar-status { color: #f0b7a6; font: 500 9px/1.2 var(--font-mono); white-space: nowrap; }
+
+@keyframes brand-mascot-enter { from { opacity: 0; transform: scale(.94); } to { opacity: 1; transform: scale(1); } }
+@keyframes brand-mascot-bob { 50% { transform: translateY(-3px); } }
 
 .collapse-toggle {
   width: 32px;
@@ -185,7 +192,9 @@ button { border: 0; cursor: pointer; }
 .recent-files-error { color: #f0b7a6; }
 
 .sidebar-collapsed .brand { grid-template-columns: 32px; justify-content: center; }
+.sidebar-collapsed .brand-avatar { width: 32px; }
 .sidebar-collapsed .brand-mascot { width: 32px; height: 32px; }
+.sidebar-collapsed .brand-avatar-status { width: 72px; font-size: 8px; }
 .sidebar-collapsed .brand-name,
 .sidebar-collapsed .sidebar > button .nav-label,
 .sidebar-collapsed .sidebar > button small,
@@ -232,7 +241,7 @@ button { border: 0; cursor: pointer; }
   min-height: 56px;
   max-height: 80px;
   display: grid;
-  grid-template-columns: minmax(160px, 1fr) repeat(3, minmax(110px, auto));
+  grid-template-columns: minmax(160px, 1fr);
   align-items: center;
   gap: 12px;
   border-bottom: 1px solid var(--border);
@@ -243,23 +252,6 @@ button { border: 0; cursor: pointer; }
 .topbar-project { min-width: 0; }
 .eyebrow { color: var(--muted); font-size: 10px; margin: 0 0 4px; letter-spacing: .14em; text-transform: uppercase; }
 .conversation h1 { font: 650 28px/1 var(--font-display); margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-
-.status-pill {
-  min-width: 110px;
-  display: grid;
-  gap: 3px;
-  justify-items: end;
-  color: var(--muted);
-  font-size: 11px;
-}
-
-.status-pill span { text-transform: uppercase; letter-spacing: .08em; }
-.status-pill strong { color: var(--text); font-size: 13px; font-weight: 500; text-transform: capitalize; }
-.status-pill.online strong { color: #426b2a; }
-.status-pill.offline strong,
-.status-pill.disconnected strong,
-.status-pill.error strong { color: #9b3f25; }
-.status-pill.working strong { color: #795a12; }
 
 .error {
   grid-area: error;
@@ -870,13 +862,19 @@ html[data-alphonse-style="modern"] .modal-backdrop { background: #10282788; }
   .app-shell { grid-template-columns: 64px minmax(0, 1fr); }
   .app-shell.sidebar-collapsed { grid-template-columns: 64px minmax(0, 1fr); }
   .conversation { padding: 14px; }
-  .topbar { grid-template-columns: minmax(90px, 1fr) repeat(3, minmax(58px, auto)); gap: 6px; }
-  .status-pill { min-width: 0; font-size: 9px; }
-  .status-pill strong { font-size: 10px; }
+  .topbar { grid-template-columns: minmax(90px, 1fr); gap: 6px; }
   .conversation h1 { font-size: 24px; }
   .sidebar { padding: 14px 10px; }
   .brand { grid-template-columns: 35px; }
+  .brand-avatar { width: 35px; }
+  .brand-mascot { width: 35px; height: 35px; }
+  .brand-avatar-status { width: 64px; font-size: 8px; }
   .brand-name,
   .sidebar > button span,
   .sidebar > button small { display: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .brand-avatar,
+  .brand-mascot { animation: none; }
 }

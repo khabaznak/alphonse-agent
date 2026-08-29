@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { agentStateLabel, capdActivityLabel, projectKey } from "./layoutState";
+import { avatarState, avatarStateLabel, capdActivityLabel, projectKey } from "./layoutState";
 
 describe("Desktop layout state helpers", () => {
   it("maps CAPD activity into compact node labels", () => {
@@ -9,11 +9,15 @@ describe("Desktop layout state helpers", () => {
     expect(capdActivityLabel({ phase: "act", label: "" })).toBe("acting");
   });
 
-  it("maps connection and work into top-bar state labels", () => {
-    expect(agentStateLabel(false, false, 0)).toBe("Disconnected");
-    expect(agentStateLabel(true, true, 0)).toBe("Error");
-    expect(agentStateLabel(true, false, 1)).toBe("Working");
-    expect(agentStateLabel(true, false, 0)).toBe("Idle");
+  it("resolves avatar states with connection and error precedence", () => {
+    expect(avatarState(false, "", "planning")).toBe("disconnected");
+    expect(avatarState(true, "Request failed", "doing")).toBe("error");
+    expect(avatarState(true, "", "planning")).toBe("planning");
+    expect(avatarState(true, "", "doing")).toBe("doing");
+    expect(avatarState(true, "", "checking")).toBe("checking");
+    expect(avatarState(true, "", "acting")).toBe("acting");
+    expect(avatarState(true, "", "unknown")).toBe("idle");
+    expect(avatarStateLabel("checking")).toBe("Checking");
   });
 
   it("uses a stable home bucket for blank projects", () => {

@@ -12,7 +12,7 @@ import { A2uiSurfaceView, applyA2uiEvent, DESKTOP_CATALOG_ID, type A2uiSurface }
 import { DESKTOP_STYLE_STORAGE_KEY, parseDesktopStyle, type DesktopStyle } from "./desktopStyle";
 import { desktopDiagnosticBehavior, type DesktopDiagnosticMode } from "./diagnosticMode";
 import { readDismissedScheduledSurfaces, rememberDismissedScheduledSurface, withoutDismissedSurfaces, withoutSurface } from "./dismissedSurfaces";
-import { agentStateLabel, capdActivityLabel, projectKey } from "./layoutState";
+import { avatarState, avatarStateLabel, capdActivityLabel, projectKey } from "./layoutState";
 import { formatMessageTime } from "./messageTime";
 import { reuseProjectAttention, reuseQuestions, reuseQueueStatus, type ProjectAttention } from "./pollState";
 import type { ActivityEvent, AgentDocument, ChatMessage, CodeModeSettings, InferenceSettings, MediaToolsSettings, MemorySettings, Project, Question, WebToolsSettings } from "./types";
@@ -65,7 +65,6 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
   const [composerDragActive, setComposerDragActive] = useState(false);
   const [connected, setConnected] = useState(false);
   const [activity, setActivity] = useState("idle");
-  const [agentState, setAgentState] = useState<"Idle" | "Working" | "Error" | "Disconnected">("Disconnected");
   const [questions, setQuestions] = useState<Question[]>([]);
   const [project, setProject] = useState<Project | null>(null);
   const [projectForSettings, setProjectForSettings] = useState<ManagedProject | null>(null);
@@ -90,6 +89,8 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
   const [desktopStyle, setDesktopStyle] = useState<DesktopStyle>(() => parseDesktopStyle(window.localStorage.getItem(DESKTOP_STYLE_STORAGE_KEY)));
   const [diagnosticRenderTick, forceDiagnosticRender] = useState(0);
   const currentProjectKey = projectKey(project?.project_id);
+  const currentAvatarState = avatarState(connected, error, activity);
+  const currentAvatarStateLabel = avatarStateLabel(currentAvatarState);
   activeProjectKeyRef.current = currentProjectKey;
 
   const dismissScheduledSurface = useCallback((surfaceId: string) => {
@@ -179,7 +180,6 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
       });
       const latest = response.events.at(-1);
       setActivity(capdActivityLabel(latest, response.status.activity.state || "idle"));
-      setAgentState(agentStateLabel(true, false, Object.keys(response.status.active_work || {}).length));
       for (const delivery of response.deliveries) {
         if (delivered.current.has(delivery.outbox_message_id)) continue;
         delivered.current.add(delivery.outbox_message_id);
@@ -243,7 +243,6 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
       setConnected(false);
       setError(cause instanceof Error ? cause.message : "Daemon connection lost");
       setActivity("idle");
-      setAgentState("Disconnected");
     }
   }, [appendMessage, clientId, diagnosticBehavior.commitsPollResponses, pollTransport, user]);
 
@@ -520,7 +519,6 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
       await poll();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Message could not be queued");
-      setAgentState("Error");
     }
   };
 
@@ -591,7 +589,10 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
     <main className={`app-shell ${sidebarCollapsed ? "sidebar-collapsed" : ""}`}>
       <aside className="sidebar" aria-label="Alphonse navigation">
         <div className="brand">
-          <img className="brand-mascot" src="/alphonse-mascot.png" alt="" />
+          <div className="brand-avatar" title={`Alphonse is ${currentAvatarStateLabel}`}>
+            <img key={currentAvatarState} className="brand-mascot" src={`/alphonse-states/${currentAvatarState}.png`} alt={`Alphonse is ${currentAvatarStateLabel}.`} />
+            {currentAvatarState === "disconnected" && <span className="brand-avatar-status">Disconnected</span>}
+          </div>
           <span className="brand-name">Alphonse</span>
           <button className="collapse-toggle" type="button" onClick={() => setSidebarCollapsed((value) => !value)} aria-label={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}>{sidebarCollapsed ? <ChevronRight aria-hidden="true" /> : <ChevronLeft aria-hidden="true" />}</button>
         </div>
@@ -615,9 +616,6 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
       <section className="conversation">
         <header className="topbar">
           <div className="topbar-project"><p className="eyebrow">Project</p><h1>{project?.name || "Home"}</h1></div>
-          <StatusPill label="Activity" value={activity} />
-          <StatusPill label="State" value={agentState} tone={agentState.toLowerCase()} />
-          <StatusPill label="Connection" value={connected ? "Connected" : "Disconnected"} tone={connected ? "online" : "offline"} />
         </header>
         {error && <div className="error" role="alert">{error}</div>}
         <div className="timeline" ref={timelineRef} aria-live="polite">
@@ -649,10 +647,6 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
       {modal === "onboarding" && <OnboardingModal onComplete={(next) => { setUser(next); setModal(null); void poll(); }} />}
     </main>
   );
-}
-
-function StatusPill({ label, value, tone = "" }: { label: string; value: string; tone?: string }) {
-  return <div className={`status-pill ${tone}`}><span>{label}</span><strong>{value}</strong></div>;
 }
 
 function QuestionCard({ question, onDone }: { question: Question; onDone: () => Promise<void> }) {
