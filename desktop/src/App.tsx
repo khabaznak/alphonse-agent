@@ -1,5 +1,5 @@
 import { FormEvent, KeyboardEvent, memo, ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { CalendarClock, ChevronDown, ChevronLeft, ChevronRight, FileText, Folder, FolderKanban, ListTodo, Plus, Settings, UsersRound, X } from "lucide-react";
+import { CalendarClock, ChevronDown, ChevronLeft, ChevronRight, FileText, Folder, FolderKanban, Plus, Settings, UsersRound, X } from "lucide-react";
 import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import ReactMarkdown from "react-markdown";
@@ -14,7 +14,9 @@ import { desktopDiagnosticBehavior, type DesktopDiagnosticMode } from "./diagnos
 import { readDismissedScheduledSurfaces, rememberDismissedScheduledSurface, withoutDismissedSurfaces, withoutSurface } from "./dismissedSurfaces";
 import { avatarState, avatarStateLabel, capdActivityLabel, projectKey } from "./layoutState";
 import { formatMessageTime } from "./messageTime";
-import { reuseProjectAttention, reuseQuestions, reuseQueueStatus, type ProjectAttention } from "./pollState";
+import { reuseProjectAttention, reuseQuestions, type ProjectAttention } from "./pollState";
+import { QueueWorkloadChart } from "./QueueWorkloadChart";
+import { appendQueueSample, type QueueSample } from "./queueHistory";
 import type { ActivityEvent, AgentDocument, ChatMessage, CodeModeSettings, InferenceSettings, MediaToolsSettings, MemorySettings, Project, Question, WebToolsSettings } from "./types";
 
 type Modal = "projects" | "project-settings" | "project-context" | "scheduled-tasks" | "settings" | "users" | "onboarding" | null;
@@ -78,7 +80,7 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
   const [recentFilesOpen, setRecentFilesOpen] = useState(false);
   const [recentFiles, setRecentFiles] = useState<RecentFilesResponse["files"]>([]);
   const [recentFilesError, setRecentFilesError] = useState("");
-  const [queueStatus, setQueueStatus] = useState({ ready: 0, processing: 0 });
+  const [queueHistory, setQueueHistory] = useState<QueueSample[]>([]);
   const [projectAttention, setProjectAttention] = useState<ProjectAttention>({});
   const [timezone, setTimezone] = useState("UTC");
   const [progressTaskIds, setProgressTaskIds] = useState<string[]>([]);
@@ -153,7 +155,10 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
         }));
       }
       setProjectAttention((current) => reuseProjectAttention(current, response.project_attention || {}));
-      setQueueStatus((current) => reuseQueueStatus(current, { ready: response.status.queue?.ready || 0, processing: response.status.queue?.processing || 0 }));
+      setQueueHistory((current) => appendQueueSample(current, {
+        ready: response.status.queue?.ready || 0,
+        processing: response.status.queue?.processing || 0,
+      }, Date.now()));
       const newProgressTaskIds = responseIsForActiveProject ? taskProgressIds(response.ui_events || []) : [];
       if (newProgressTaskIds.length) {
         newProgressTaskIds.forEach((taskId) => {
@@ -610,7 +615,7 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
         <button title="Scheduled tasks" onClick={() => setModal("scheduled-tasks")}><span className="nav-icon" aria-hidden="true"><CalendarClock /></span><span className="nav-label">Scheduled tasks</span></button>
         <button title="Users" onClick={() => setModal("users")}><span className="nav-icon" aria-hidden="true"><UsersRound /></span><span className="nav-label">Users</span></button>
         <button title="Settings" onClick={() => { setSettingsTab("general"); setModal("settings"); }}><span className="nav-icon" aria-hidden="true"><Settings /></span><span className="nav-label">Settings</span></button>
-        <div className="queue-sidebar-status" title="Inbound message queue"><span className="queue-icon" aria-hidden="true"><ListTodo /></span><span className="queue-label">Queue</span><small>{queueStatus.ready} waiting{queueStatus.processing ? ` · ${queueStatus.processing} working` : ""}</small></div>
+        <QueueWorkloadChart samples={queueHistory} />
       </aside>
 
       <section className="conversation">
