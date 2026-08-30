@@ -23,3 +23,7 @@ export async function stopDaemon(): Promise<void> {
 export async function showInFinder(path: string): Promise<void> {
   await invoke("show_in_finder", { path });
 }
+
+export async function playAlertSound(path = ""): Promise<void> {
+  await invoke("play_alert_sound", { path });
+}

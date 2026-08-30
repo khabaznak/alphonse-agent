@@ -97,6 +97,36 @@ fn show_in_finder(path: String) -> Result<(), String> {
     }
 }
 
+#[tauri::command]
+fn play_alert_sound(path: String) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        let configured = path.trim();
+        let mut command = if configured.is_empty() {
+            let mut command = Command::new("osascript");
+            command.args(["-e", "beep 1"]);
+            command
+        } else {
+            let sound = PathBuf::from(configured);
+            if !sound.is_file() {
+                return Err("Selected notification sound is unavailable".into());
+            }
+            let mut command = Command::new("afplay");
+            command.arg(sound);
+            command
+        };
+        command
+            .spawn()
+            .map(|_| ())
+            .map_err(|error| format!("Could not play alert sound: {error}"))
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = path;
+        Ok(())
+    }
+}
+
 async fn ipc_request(method: &str, params: Value) -> Result<Value, String> {
     let mut stream = UnixStream::connect(socket_path())
         .await
@@ -147,13 +177,15 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_notification::init())
         .invoke_handler(tauri::generate_handler![
             desktop_diagnostic_mode,
             desktop_diagnostic_project_id,
             ensure_daemon,
             daemon_request,
             stop_daemon,
-            show_in_finder
+            show_in_finder,
+            play_alert_sound
         ])
         .run(tauri::generate_context!())
         .expect("error while running Alphonse Desktop");

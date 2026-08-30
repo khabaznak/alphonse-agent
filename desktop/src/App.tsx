@@ -2,15 +2,17 @@ import { FormEvent, KeyboardEvent, memo, ReactNode, useCallback, useEffect, useM
 import { CalendarClock, ChevronDown, ChevronLeft, ChevronRight, FileText, Folder, FolderKanban, Plus, Settings, UsersRound, X } from "lucide-react";
 import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { onAction } from "@tauri-apps/plugin-notification";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { daemonRequest, ensureDaemon, showInFinder, stopDaemon } from "./api";
+import { daemonRequest, ensureDaemon, playAlertSound, showInFinder, stopDaemon } from "./api";
 import { matchingCommands } from "./commands";
 import { mergeFreshConversationHistory } from "./conversationHistory";
 import { buildConversationTimeline } from "./conversationTimeline";
 import { A2uiSurfaceView, applyA2uiEvent, DESKTOP_CATALOG_ID, type A2uiSurface } from "./a2ui";
 import { DESKTOP_STYLE_STORAGE_KEY, parseDesktopStyle, type DesktopStyle } from "./desktopStyle";
 import { desktopDiagnosticBehavior, type DesktopDiagnosticMode } from "./diagnosticMode";
+import { createDesktopNotifier, DESKTOP_NOTIFICATION_PREFERENCES_KEY, notificationForCompletion, notificationForQuestion, readDesktopNotificationPreferences, type DesktopNotificationPreferences } from "./desktopNotifications";
 import { readDismissedScheduledSurfaces, rememberDismissedScheduledSurface, withoutDismissedSurfaces, withoutSurface } from "./dismissedSurfaces";
 import { avatarState, avatarStateLabel, capdActivityLabel, projectKey } from "./layoutState";
 import { formatMessageTime } from "./messageTime";
@@ -60,6 +62,12 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
   const composerRef = useRef<HTMLFormElement | null>(null);
   const surfacesRef = useRef<Record<string, A2uiSurface>>({});
   const dismissedScheduledSurfacesRef = useRef(readDismissedScheduledSurfaces(window.localStorage));
+  const windowFocusedRef = useRef(document.hasFocus());
+  const desktopNotifierRef = useRef(createDesktopNotifier({
+    isFocused: () => windowFocusedRef.current,
+    isNativeRuntime: () => "__TAURI_INTERNALS__" in window,
+    playSound: playAlertSound,
+  }));
   const [messages, setMessages] = useState<ChatMessage[]>([{ id: "welcome", role: "assistant", content: "Alphonse Desktop is connected locally." }]);
   const [messageBuckets, setMessageBuckets] = useState<Record<string, ChatMessage[]>>({});
   const [prompt, setPrompt] = useState("");
@@ -89,6 +97,7 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
   const [heldProgressSurfaces, setHeldProgressSurfaces] = useState<Record<string, A2uiSurface>>({});
   const [enterToSend, setEnterToSend] = useState(() => window.localStorage.getItem("alphonse.desktop.enterToSend") !== "false");
   const [desktopStyle, setDesktopStyle] = useState<DesktopStyle>(() => parseDesktopStyle(window.localStorage.getItem(DESKTOP_STYLE_STORAGE_KEY)));
+  const [desktopNotifications, setDesktopNotifications] = useState<DesktopNotificationPreferences>(() => readDesktopNotificationPreferences(window.localStorage));
   const [diagnosticRenderTick, forceDiagnosticRender] = useState(0);
   const currentProjectKey = projectKey(project?.project_id);
   const currentAvatarState = avatarState(connected, error, activity);
@@ -153,6 +162,12 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
           project_id: question.project_id,
           sequence: question.conversation_sequence,
         }));
+        response.questions.forEach((question) => {
+          void desktopNotifierRef.current.notify(
+            notificationForQuestion(question, question.project_id === project?.project_id ? project.name : ""),
+            desktopNotifications,
+          );
+        });
       }
       setProjectAttention((current) => reuseProjectAttention(current, response.project_attention || {}));
       setQueueHistory((current) => appendQueueSample(current, {
@@ -189,6 +204,10 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
         if (delivered.current.has(delivery.outbox_message_id)) continue;
         delivered.current.add(delivery.outbox_message_id);
         const deliveryProjectKey = projectKey(delivery.project_id);
+        void desktopNotifierRef.current.notify(
+          notificationForCompletion(delivery, delivery.project_id === project?.project_id ? project.name : ""),
+          desktopNotifications,
+        );
         const completedMessage: ChatMessage = {
           id: delivery.outbox_message_id,
           role: "assistant",
@@ -249,7 +268,7 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
       setError(cause instanceof Error ? cause.message : "Daemon connection lost");
       setActivity("idle");
     }
-  }, [appendMessage, clientId, diagnosticBehavior.commitsPollResponses, pollTransport, user]);
+  }, [appendMessage, clientId, desktopNotifications, diagnosticBehavior.commitsPollResponses, pollTransport, project, user]);
 
   useEffect(() => {
     const runCycle = diagnosticBehavior.cycle === "ping"
@@ -295,6 +314,32 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
     window.localStorage.setItem(DESKTOP_STYLE_STORAGE_KEY, desktopStyle);
     document.documentElement.dataset.alphonseStyle = desktopStyle;
   }, [desktopStyle]);
+
+  useEffect(() => {
+    window.localStorage.setItem(DESKTOP_NOTIFICATION_PREFERENCES_KEY, JSON.stringify(desktopNotifications));
+  }, [desktopNotifications]);
+
+  useEffect(() => {
+    const setFocused = (focused: boolean) => { windowFocusedRef.current = focused; };
+    const focus = () => setFocused(true);
+    const blur = () => setFocused(false);
+    window.addEventListener("focus", focus);
+    window.addEventListener("blur", blur);
+    if (!("__TAURI_INTERNALS__" in window)) return () => {
+      window.removeEventListener("focus", focus);
+      window.removeEventListener("blur", blur);
+    };
+    let unlistenFocus: (() => void) | undefined;
+    let notificationActionListener: { unregister: () => Promise<void> } | undefined;
+    void getCurrentWindow().onFocusChanged(({ payload }) => setFocused(payload)).then((stop) => { unlistenFocus = stop; }).catch(() => undefined);
+    void onAction(() => { void getCurrentWindow().show().then(() => getCurrentWindow().setFocus()); }).then((listener) => { notificationActionListener = listener; }).catch(() => undefined);
+    return () => {
+      window.removeEventListener("focus", focus);
+      window.removeEventListener("blur", blur);
+      unlistenFocus?.();
+      void notificationActionListener?.unregister();
+    };
+  }, []);
 
   useEffect(() => {
     if (!user) return;
@@ -647,7 +692,7 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
       {modal === "project-settings" && projectForSettings && <ProjectSettingsModal user={user} project={projectForSettings} onBack={() => setModal("projects")} onClose={() => setModal(null)} />}
       {modal === "project-context" && <ProjectContextModal user={user} project={project} onClose={() => setModal(null)} />}
       {modal === "scheduled-tasks" && <ScheduledTasksModal actorUserId={user} initialTaskId={scheduledTaskForView} onClose={() => { setScheduledTaskForView(""); setModal(null); }} />}
-      {modal === "settings" && <SettingsModal user={user} initialTab={settingsTab} enterToSend={enterToSend} desktopStyle={desktopStyle} onDesktopStyleChange={setDesktopStyle} onEnterToSendChange={setEnterToSend} onTimezoneChange={setTimezone} onClose={() => setModal(null)} />}
+      {modal === "settings" && <SettingsModal user={user} initialTab={settingsTab} enterToSend={enterToSend} desktopStyle={desktopStyle} desktopNotifications={desktopNotifications} onDesktopStyleChange={setDesktopStyle} onDesktopNotificationsChange={setDesktopNotifications} onEnterToSendChange={setEnterToSend} onTimezoneChange={setTimezone} onTestDesktopNotification={() => void desktopNotifierRef.current.notify({ id: `test:${Date.now()}`, title: "Alphonse test alert", body: "Desktop notifications are ready." }, { ...desktopNotifications, onlyWhenUnfocused: false })} onClose={() => setModal(null)} />}
       {modal === "users" && <UsersModal onClose={() => setModal(null)} />}
       {modal === "onboarding" && <OnboardingModal onComplete={(next) => { setUser(next); setModal(null); void poll(); }} />}
     </main>
@@ -684,7 +729,7 @@ function OnboardingModal({ onComplete }: { onComplete: (userId: string) => void 
   return <ModalFrame title="Set up Alphonse" onClose={() => undefined}><p>Create the local administrator and choose where user data is stored.</p><input value={name} onChange={(event) => setName(event.target.value)} placeholder="Your name" /><input value={root} onChange={(event) => setRoot(event.target.value)} placeholder="Users root" /><label><input type="checkbox" checked={importV1} onChange={(event) => setImportV1(event.target.checked)} /> Import existing v1 identity data</label><button onClick={() => void save()}>Create administrator</button><p>{error}</p></ModalFrame>;
 }
 
-function SettingsModal({ user, initialTab, enterToSend, desktopStyle, onDesktopStyleChange, onEnterToSendChange, onTimezoneChange, onClose }: { user: string; initialTab: SettingsTab; enterToSend: boolean; desktopStyle: DesktopStyle; onDesktopStyleChange: (value: DesktopStyle) => void; onEnterToSendChange: (value: boolean) => void; onTimezoneChange: (value: string) => void; onClose: () => void }) {
+function SettingsModal({ user, initialTab, enterToSend, desktopStyle, desktopNotifications, onDesktopStyleChange, onDesktopNotificationsChange, onEnterToSendChange, onTimezoneChange, onTestDesktopNotification, onClose }: { user: string; initialTab: SettingsTab; enterToSend: boolean; desktopStyle: DesktopStyle; desktopNotifications: DesktopNotificationPreferences; onDesktopStyleChange: (value: DesktopStyle) => void; onDesktopNotificationsChange: (value: DesktopNotificationPreferences) => void; onEnterToSendChange: (value: boolean) => void; onTimezoneChange: (value: string) => void; onTestDesktopNotification: () => void; onClose: () => void }) {
   const [root, setRoot] = useState(""); const [timezone, setTimezone] = useState("UTC"); const [mirrorAutomationMessages, setMirrorAutomationMessages] = useState(false); const [notice, setNotice] = useState(""); const [tab, setTab] = useState<SettingsTab>(initialTab);
   const [web, setWeb] = useState<WebToolsSettings | null>(null); const [webNotice, setWebNotice] = useState("");
   const [memory, setMemory] = useState<MemorySettings | null>(null); const [memoryNotice, setMemoryNotice] = useState("");
@@ -694,6 +739,15 @@ function SettingsModal({ user, initialTab, enterToSend, desktopStyle, onDesktopS
   useEffect(() => { void daemonRequest<{ user: { user_id: string } | null }>("current_user").then(async (current) => { if (!current.user) return; const result = await daemonRequest<{ settings: MemorySettings }>("memory_settings", { actor_user_id: current.user.user_id }); setMemory(result.settings); }).catch((cause: unknown) => setMemoryNotice(cause instanceof Error ? cause.message : "Memory settings unavailable")); }, []);
   const save = async () => { try { const timezoneResult = await daemonRequest<{ timezone: string }>("save_timezone_settings", { actor_user_id: user, timezone }); if (timezoneResult.timezone !== timezone.trim()) throw new Error("The daemon did not persist the requested timezone"); setTimezone(timezoneResult.timezone); onTimezoneChange(timezoneResult.timezone); const result = await daemonRequest<{ users_root: string; warning_repository_path?: boolean; mirror_automation_messages_to_preferred_channel: boolean }>("save_settings", { users_root: root, mirror_automation_messages_to_preferred_channel: mirrorAutomationMessages }); setMirrorAutomationMessages(Boolean(result.mirror_automation_messages_to_preferred_channel)); setNotice(result.warning_repository_path ? "Saved. This path is inside the repository; keep it ignored." : "Saved."); } catch (cause) { setNotice(timezoneSettingsError(cause)); } };
   const saveWeb = async () => { if (!web) return; try { const current = await daemonRequest<{ user: { user_id: string } | null }>("current_user"); if (!current.user) return; const result = await daemonRequest<{ settings: WebToolsSettings }>("save_web_tools_settings", { actor_user_id: current.user.user_id, values: web }); setWeb(result.settings); setWebNotice("Saved. Newly started tasks can use enabled Web Tools."); } catch (cause) { setWebNotice(cause instanceof Error ? cause.message : "Save failed"); } };
+  const chooseNotificationSound = async () => {
+    const selected = await openFileDialog({
+      title: "Choose notification sound",
+      multiple: false,
+      directory: false,
+      filters: [{ name: "Audio", extensions: ["aif", "aiff", "caf", "m4a", "mp3", "wav"] }],
+    });
+    if (typeof selected === "string") onDesktopNotificationsChange({ ...desktopNotifications, soundFile: selected });
+  };
   const verify = async (kind: "search" | "fetch") => { try { const current = await daemonRequest<{ user: { user_id: string } | null }>("current_user"); if (!current.user) return; const result = await daemonRequest<{ result: { exception?: { message?: string } } }>("verify_web_tools", { actor_user_id: current.user.user_id, kind }); setWebNotice(result.result.exception?.message || `${kind === "search" ? "SearXNG search" : "Public fetch"} verified.`); } catch (cause) { setWebNotice(cause instanceof Error ? cause.message : "Verification failed"); } };
   const saveMemory = async () => { if (!memory) return; try { const current = await daemonRequest<{ user: { user_id: string } | null }>("current_user"); if (!current.user) return; const result = await daemonRequest<{ settings: MemorySettings }>("save_memory_settings", { actor_user_id: current.user.user_id, values: memory }); setMemory(result.settings); setMemoryNotice("Saved. New tasks use these limits."); } catch (cause) { setMemoryNotice(cause instanceof Error ? cause.message : "Memory settings could not be saved"); } };
   const tabs = <div className="settings-tabs" role="tablist" aria-label="Settings sections">{(["general", "appearance", "tools", "artifacts", "integrations", "automations", "model", "agent-config"] as SettingsTab[]).map((item) => <button key={item} type="button" role="tab" aria-selected={tab === item} className={tab === item ? "active" : ""} onClick={() => setTab(item)}>{item === "agent-config" ? "Agent configuration" : item[0].toUpperCase() + item.slice(1)}</button>)}</div>;
@@ -702,6 +756,15 @@ function SettingsModal({ user, initialTab, enterToSend, desktopStyle, onDesktopS
       <section className="setting-group">
         <div className="setting-group-heading"><h3>Messaging</h3><p>Choose how messages are sent from the desktop conversation.</p></div>
         <label className="setting-row"><input type="checkbox" checked={enterToSend} onChange={(event) => onEnterToSendChange(event.target.checked)} /> Enter sends message</label>
+      </section>
+      <section className="setting-group">
+        <div className="setting-group-heading"><h3>Desktop alerts</h3><p>When Alphonse needs your input or completes a task, notify you while this window is in the background.</p></div>
+        <label className="setting-row"><input type="checkbox" checked={desktopNotifications.enabled} onChange={(event) => onDesktopNotificationsChange({ ...desktopNotifications, enabled: event.target.checked })} /> Show native notifications</label>
+        <label className="setting-row"><input type="checkbox" checked={desktopNotifications.sound} disabled={!desktopNotifications.enabled} onChange={(event) => onDesktopNotificationsChange({ ...desktopNotifications, sound: event.target.checked })} /> Play an alert sound</label>
+        <div className="input-row"><label>Notification sound<input readOnly value={desktopNotifications.soundFile || "Use macOS default alert sound"} aria-label="Notification sound" /></label></div>
+        <div className="settings-save-actions"><button type="button" disabled={!desktopNotifications.enabled || !desktopNotifications.sound} onClick={() => void chooseNotificationSound()}>Choose sound file</button><button type="button" disabled={!desktopNotifications.enabled || !desktopNotifications.sound || !desktopNotifications.soundFile} onClick={() => onDesktopNotificationsChange({ ...desktopNotifications, soundFile: "" })}>Use macOS default</button></div>
+        <label className="setting-row"><input type="checkbox" checked={desktopNotifications.onlyWhenUnfocused} disabled={!desktopNotifications.enabled} onChange={(event) => onDesktopNotificationsChange({ ...desktopNotifications, onlyWhenUnfocused: event.target.checked })} /> Notify only when Alphonse is not focused</label>
+        <div className="settings-save-actions"><button type="button" disabled={!desktopNotifications.enabled} onClick={onTestDesktopNotification}>Test alert</button></div>
       </section>
       <section className="setting-group">
         <div className="setting-group-heading"><h3>Workspace &amp; time</h3><p>Set where Alphonse stores user data and the default timezone for new scheduled tasks.</p></div>

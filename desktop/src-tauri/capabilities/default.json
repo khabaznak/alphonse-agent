@@ -6,6 +6,7 @@
   "permissions": [
     "core:default",
     "dialog:allow-open",
+    "notification:default",
     {
       "identifier": "shell:allow-spawn",
       "allow": [{ "name": "binaries/alphonse-daemon", "sidecar": true }]
