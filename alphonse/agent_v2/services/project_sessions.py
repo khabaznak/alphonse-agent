@@ -158,6 +158,7 @@ class ProjectInboundRouter:
         is_admin: Any | None = None,
         managed_root: Any | None = None,
         communication_router: Any | None = None,
+        kill_switch_handler: Any | None = None,
     ) -> None:
         self.channel = channel
         self.outbox = outbox
@@ -166,6 +167,7 @@ class ProjectInboundRouter:
         self.is_admin = is_admin or (lambda _user: False)
         self.managed_root = managed_root
         self.communication_router = communication_router
+        self.kill_switch_handler = kill_switch_handler
 
     def ingest(
         self,
@@ -196,6 +198,10 @@ class ProjectInboundRouter:
             thread_id=str(thread_id).strip(),
         )
         key = ProjectSessionKey(address.alphonse_user_id, address.integration_id, address.channel_target, address.thread_id)
+        kill_switch_reply = self._handle_kill_switch(prompt, key, address)
+        if kill_switch_reply is not None:
+            self._reply(address, kill_switch_reply, correlation_id=correlation_id)
+            return InboundRouteResult(handled_command=True)
         if self.communication_router is not None and self.communication_router.relay_inbound(
             sender_user_id=address.alphonse_user_id,
             address=address,
@@ -330,6 +336,17 @@ class ProjectInboundRouter:
             owner_user_id=user,
             project_id=project_id,
         )
+
+    def _handle_kill_switch(self, prompt: str, key: ProjectSessionKey, address: ChannelAddress) -> str | None:
+        text = str(prompt or "").strip()
+        if not text.startswith("/"):
+            return None
+        command, _, arguments = text.partition(" ")
+        if command.lower() != "/killswitch":
+            return None
+        if self.kill_switch_handler is None:
+            return "Kill switch is unavailable."
+        return str(self.kill_switch_handler(user_id=key.alphonse_user_id, address=address, arguments=arguments.strip()) or "")
 
     def _reply(self, address: ChannelAddress, message: str, *, correlation_id: str) -> None:
         self.outbox.enqueue(

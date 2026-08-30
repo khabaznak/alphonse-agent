@@ -15,6 +15,11 @@ if TYPE_CHECKING:
 
 def do_node(task: TaskState, context: CoreLoopContext | None = None) -> TaskState:
     """Execute the planned work for the current PDCA pass."""
+    if context is not None and context.is_cancelled():
+        task.status = "cancelled"
+        task.metadata["kill_switch_cancelled"] = True
+        task.append_update("Do skipped work because the administrator kill switch was engaged.")
+        return task
     planned_call = task.get_next_planned_call()
     if planned_call is None:
         task.append_update("Do found no unexecuted planned tool call.")
@@ -46,6 +51,11 @@ def do_node(task: TaskState, context: CoreLoopContext | None = None) -> TaskStat
         return task
 
     try:
+        if context.is_cancelled():
+            task.status = "cancelled"
+            task.metadata["kill_switch_cancelled"] = True
+            task.append_update("Do skipped tool execution because the administrator kill switch was engaged.")
+            return task
         context.record_memory_event(task, "Tool Call", {"tool_id": tool_id, "tool_name": tool_name, "arguments": arguments})
         context.emit_ui_event(
             "tool_call_started",
@@ -142,6 +152,11 @@ def _execute_program(task: TaskState, context: CoreLoopContext | None, planned_c
         task.record_plan_call_exception(call_id, "Program execution is not available.")
         task.metadata["do_executed_since_last_act"] = True
         task.append_update("Do could not execute program mode because the program runner is unavailable.")
+        return task
+    if context.is_cancelled():
+        task.status = "cancelled"
+        task.metadata["kill_switch_cancelled"] = True
+        task.append_update("Do skipped program execution because the administrator kill switch was engaged.")
         return task
     program = planned_call.get("program") if isinstance(planned_call.get("program"), dict) else {}
     source = str(program.get("source") or "").strip()

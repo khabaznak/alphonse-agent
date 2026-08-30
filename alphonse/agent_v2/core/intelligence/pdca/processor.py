@@ -18,7 +18,9 @@ class PDCAIntelligenceProcessor:
         context.emit_ui_event("run_started", {"task": task.to_dict()})
         result = run_pdca_once(task, context=context)
         status = (
-            ProcessingStatus.PARKED
+            ProcessingStatus.CANCELLED
+            if str(result.status or "").strip().lower() == "cancelled"
+            else ProcessingStatus.PARKED
             if str(result.status or "").strip().lower() == "waiting_user"
             else ProcessingStatus.COMPLETED
         )

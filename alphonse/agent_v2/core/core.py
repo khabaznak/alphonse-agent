@@ -58,6 +58,7 @@ class ProcessingStatus(str, Enum):
     PARKED = "parked"
     WAITING = "waiting"
     FAILED = "failed"
+    CANCELLED = "cancelled"
 
 
 class LoopStepStatus(str, Enum):
@@ -70,6 +71,7 @@ class LoopStepStatus(str, Enum):
     PARKED = "parked"
     WAITING = "waiting"
     FAILED = "failed"
+    CANCELLED = "cancelled"
 
 
 @dataclass(frozen=True)
@@ -210,6 +212,7 @@ class CoreLoopContext:
     user_timezone_provider: Callable[[str], str] | None = None
     memory: Any | None = None
     program_runner: Any | None = None
+    cancellation_checker: Callable[[], bool] | None = None
     consumed_message_ids: list[str] = field(default_factory=list)
 
     def consume_message(self, selector: MessageSelector | None = None) -> QueuedMessage | None:
@@ -247,6 +250,9 @@ class CoreLoopContext:
             memory=self.memory,
             user_timezone_provider=self.user_timezone_provider,
         )
+
+    def is_cancelled(self) -> bool:
+        return bool(self.cancellation_checker and self.cancellation_checker())
 
     def record_memory_event(self, task: TaskState, heading: str, content: Any) -> None:
         if self.memory is None:
@@ -413,6 +419,8 @@ class AlphonseCore:
     user_context_provider: Callable[[str], str] | None = None
     user_timezone_provider: Callable[[str], str] | None = None
     program_runner: Any | None = None
+    cancellation_checker: Callable[[str], bool] | None = None
+    active_task_callback: Callable[[QueuedMessage, TaskState], None] | None = None
     fsm: DDFSM = field(default_factory=build_default_ddfsm)
     _stop_requested: bool = field(default=False, init=False, repr=False)
 
@@ -459,6 +467,8 @@ class AlphonseCore:
         task = TaskState.from_queued_message(queued)
         if not task.task_id:
             task.task_id = str(uuid4())
+        if self.active_task_callback is not None:
+            self.active_task_callback(queued, task)
 
         def _task_activity_sink(event: CoreActivityEvent) -> None:
             if self.activity_sink is None:
@@ -492,6 +502,7 @@ class AlphonseCore:
                 user_timezone_provider=self.user_timezone_provider,
                 memory=self.memory,
                 program_runner=self.program_runner,
+                cancellation_checker=(lambda: bool(self.cancellation_checker and self.cancellation_checker(queued.message_id))),
             )
             start_memory = getattr(self.memory, "start_task", None)
             if callable(start_memory):
@@ -502,7 +513,7 @@ class AlphonseCore:
                 serialized_task = result.snapshot.metadata.get("task_state") if isinstance(result.snapshot.metadata, dict) else None
                 finished_task = TaskState.from_dict(serialized_task) if isinstance(serialized_task, dict) else task
                 finish_memory(finished_task)
-            if result.status != ProcessingStatus.FAILED:
+            if result.status not in {ProcessingStatus.FAILED, ProcessingStatus.CANCELLED}:
                 context.acknowledge_consumed_messages()
         except Exception as exc:
             result = ProcessingResult(
@@ -565,6 +576,8 @@ def _signal_for_processing_status(status: ProcessingStatus) -> str:
         return PROCESSOR_COMPLETED
     if status == ProcessingStatus.WAITING:
         return PROCESSOR_WAITING
+    if status == ProcessingStatus.CANCELLED:
+        return PROCESSOR_COMPLETED
     return PROCESSOR_FAILED
 
 
@@ -575,4 +588,6 @@ def _loop_status_for_processing_status(status: ProcessingStatus) -> LoopStepStat
         return LoopStepStatus.PARKED
     if status == ProcessingStatus.WAITING:
         return LoopStepStatus.WAITING
+    if status == ProcessingStatus.CANCELLED:
+        return LoopStepStatus.CANCELLED
     return LoopStepStatus.FAILED

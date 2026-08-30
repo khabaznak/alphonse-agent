@@ -28,10 +28,10 @@ def build_pdca_graph(context: CoreLoopContext | None = None) -> Any:
     before planning work.
     """
     graph = StateGraph(TaskState)
-    graph.add_node(CHECK_NODE, lambda task: check_node(task, context=context))
-    graph.add_node(PLAN_NODE, lambda task: plan_node(task, context=context))
-    graph.add_node(DO_NODE, lambda task: do_node(task, context=context))
-    graph.add_node(ACT_NODE, lambda task: act_node(task, context=context))
+    graph.add_node(CHECK_NODE, lambda task: _run_node(task, context, check_node))
+    graph.add_node(PLAN_NODE, lambda task: _run_node(task, context, plan_node))
+    graph.add_node(DO_NODE, lambda task: _run_node(task, context, do_node))
+    graph.add_node(ACT_NODE, lambda task: _run_node(task, context, act_node))
 
     graph.set_entry_point(CHECK_NODE)
     graph.add_edge(CHECK_NODE, ACT_NODE)
@@ -62,12 +62,30 @@ def run_pdca_once(task: TaskState, context: CoreLoopContext | None = None) -> Ta
 
 
 def _route_after_act(task: TaskState) -> str:
+    if _is_cancelled(task):
+        return END
     if task.metadata.get("act_route") == PLAN_NODE:
         return PLAN_NODE
     return END
 
 
 def _route_after_do(task: TaskState) -> str:
+    if _is_cancelled(task):
+        return END
     if str(task.status or "").strip().lower() == "waiting_user" or task.metadata.get("task_parked") is True:
         return END
     return CHECK_NODE
+
+
+def _run_node(task: TaskState, context: CoreLoopContext | None, node: Any) -> TaskState:
+    if context is not None and context.is_cancelled():
+        task.status = "cancelled"
+        task.metadata["kill_switch_cancelled"] = True
+        task.metadata["act_route"] = "end"
+        task.append_update("Task cancelled by administrator kill switch.")
+        return task
+    return node(task, context=context)
+
+
+def _is_cancelled(task: TaskState) -> bool:
+    return str(task.status or "").strip().lower() == "cancelled" or task.metadata.get("kill_switch_cancelled") is True

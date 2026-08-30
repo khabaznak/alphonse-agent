@@ -23,6 +23,7 @@ from uuid import uuid4
 from alphonse.agent_v2.core.core import CoreUiEvent
 from alphonse.agent_v2.core.core import LoopStepStatus
 from alphonse.agent_v2.core.io import OutboundSelector
+from alphonse.agent_v2.core.io import channel_address_from_metadata
 from alphonse.agent_v2.core.io import SQLiteCommunicationThreadStore
 from alphonse.agent_v2.core.io import upsert_provider_user_mapping
 from alphonse.agent_v2.core.io import project_snapshot_to_outbox
@@ -54,6 +55,8 @@ from alphonse.agent_v2.interfaces.a2ui import question_id_from_surface
 from alphonse.agent_v2.interfaces.a2ui import surface_id_for_question
 from alphonse.agent_v2.interfaces.ag_ui import AgUiAdapter
 from alphonse.agent_v2.services.scheduled_worker import ScheduledTaskWorker
+from alphonse.agent_v2.services.killswitch import KillSwitchAuditStore
+from alphonse.agent_v2.services.killswitch import KillSwitchCoordinator
 from alphonse.agent_v2.users import V2UserStore
 from alphonse.agent_v2.web_tools_settings import WebToolsSettings
 from alphonse.agent_v2.code_mode_settings import CodeModeSettings
@@ -124,6 +127,12 @@ class V2Daemon:
         self._last_processor_error = ""
         self._active_work_lock = threading.RLock()
         self._active_work: dict[str, str] = {}
+        self.kill_switch = KillSwitchCoordinator()
+        audit_path = str(getattr(self.runtime.outbox, "db_path", ":memory:"))
+        self.kill_switch_audit = KillSwitchAuditStore(audit_path)
+        self.runtime.core.cancellation_checker = self.kill_switch.is_cancelled
+        self.runtime.core.active_task_callback = self._activate_kill_switch_task
+        self.runtime.inbound_router.kill_switch_handler = self._handle_kill_switch_command
         self._activity_status: dict[str, str] = {"state": "idle", "updated_at": datetime.now(timezone.utc).isoformat()}
         self._event_lock = threading.RLock()
         self._activity_event_sequence = 0
@@ -196,6 +205,68 @@ class V2Daemon:
             on_outbox_delivered=self._on_outbox_delivered,
             on_outbox_failed=self._on_outbox_failed,
         )
+
+    def _activate_kill_switch_task(self, queued: Any, task: Any) -> None:
+        message = getattr(queued, "message", None)
+        self.kill_switch.activate(
+            message_id=str(getattr(queued, "message_id", "") or ""),
+            task_id=str(getattr(task, "task_id", "") or ""),
+            user_id=str(getattr(task, "user", "") or ""),
+            project_id=str(getattr(task, "project_id", "") or ""),
+            metadata=dict(getattr(message, "metadata", {}) or {}),
+        )
+
+    def _handle_kill_switch_command(self, *, user_id: str, address: Any, arguments: str) -> str:
+        if str(arguments or "").strip():
+            return "Usage: /killswitch"
+        result = self.trigger_killswitch(actor_user_id=user_id, source=address.to_dict())
+        if result["status"] == "denied":
+            return "Access denied: administrator privileges are required."
+        if result["status"] == "no_active_task":
+            return "Kill switch checked: no active task is running."
+        notice = "queued" if result.get("notification_outbox_id") else "could not be queued"
+        return f"Kill switch engaged. Active task cancelled; owner security notice {notice}. Audit: {result['audit_id']}."
+
+    def trigger_killswitch(self, *, actor_user_id: str, source: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Cancel the one task actively executing in this daemon, if authorized."""
+        actor = str(actor_user_id or "").strip()
+        source_value = dict(source or {})
+        if not self.runtime.user_store.is_admin(actor):
+            return {"authorized": False, "status": "denied", "active_task": {}, "audit_id": ""}
+        active = self.kill_switch.request_cancel()
+        if active is None:
+            audit_id = self.kill_switch_audit.record(actor_user_id=actor, source=source_value, active=None, status="no_active_task")
+            return {"authorized": True, "status": "no_active_task", "active_task": {}, "audit_id": audit_id}
+        notification_outbox_id, notification_error = self._queue_killswitch_notice(active)
+        audit_id = self.kill_switch_audit.record(
+            actor_user_id=actor, source=source_value, active=active, status="cancel_requested",
+            notification_outbox_id=notification_outbox_id, notification_error=notification_error,
+        )
+        return {
+            "authorized": True, "status": "cancel_requested", "active_task": {
+                "message_id": active.message_id, "task_id": active.task_id, "user_id": active.user_id,
+                "project_id": active.project_id,
+            }, "notification_outbox_id": notification_outbox_id, "notification_error": notification_error,
+            "audit_id": audit_id,
+        }
+
+    def _queue_killswitch_notice(self, active: Any) -> tuple[str, str]:
+        fallback = channel_address_from_metadata(active.metadata)
+        resolved = self.runtime.identity_resolver.resolve_outbound_address(
+            alphonse_user_id=active.user_id, fallback_address=fallback,
+        )
+        if not resolved.resolved or resolved.address is None:
+            return "", str(resolved.reason or "owner_delivery_unavailable")
+        try:
+            outbound = self.runtime.outbox.enqueue(
+                address=resolved.address,
+                message="Your task was eliminated for security reasons. Please try later or contact Alphonse’s Admin.",
+                kind="security_notice", audience_user_id=active.user_id, task_id=active.task_id,
+                project_id=active.project_id, metadata={"killswitch": True, "target_message_id": active.message_id},
+            )
+        except Exception as exc:
+            return "", f"{type(exc).__name__}: {exc}"
+        return outbound.outbox_message_id, ""
 
     def _align_configured_provider_addresses(self) -> None:
         records = self.runtime.integration_store.list_enabled()
@@ -1506,6 +1577,7 @@ class V2Daemon:
                 LoopStepStatus.PROCESSED,
                 LoopStepStatus.PARKED,
                 LoopStepStatus.WAITING,
+                LoopStepStatus.CANCELLED,
                 LoopStepStatus.FAILED,
             }:
                 self.runtime.presence_projector.finish(
@@ -1532,6 +1604,12 @@ class V2Daemon:
             if step.status == LoopStepStatus.PROCESSED:
                 self._mark_snapshot_checkpoint_terminal(snapshot, status="done")
                 self._close_terminal_task_progress(snapshot)
+        elif step.status == LoopStepStatus.CANCELLED and step.queued_message_id:
+            acknowledge = getattr(self.runtime.queue, "ack", None)
+            if callable(acknowledge):
+                acknowledge(step.queued_message_id, lease_owner=self.daemon_id)
+            self._mark_snapshot_checkpoint_terminal(snapshot, status="cancelled")
+            self._close_terminal_task_progress(snapshot)
         elif step.status == LoopStepStatus.FAILED and step.queued_message_id:
             retry = getattr(self.runtime.queue, "retry", None)
             if callable(retry):
@@ -1544,6 +1622,7 @@ class V2Daemon:
                 )
             self.runtime.core.clear_failure()
         if step.status != LoopStepStatus.BUSY:
+            self.kill_switch.clear(str(step.queued_message_id or ""))
             self._set_active_work(None)
             terminal_state = {
                 LoopStepStatus.WAITING: "waiting",

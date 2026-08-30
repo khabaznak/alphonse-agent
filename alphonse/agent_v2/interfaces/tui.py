@@ -89,6 +89,7 @@ TUI_SLASH_COMMANDS: tuple[tuple[str, str], ...] = (
     ("/artifacts", "Manage registered executable artifacts"),
     ("/settings", "Configure local user data"),
     ("/users", "Manage Alphonse users"),
+    ("/killswitch", "Cancel the active task (administrator only)"),
 )
 
 
