@@ -643,7 +643,11 @@ def _route_pending_question_answer(runtime: TuiRuntime, prompt_value: str) -> Tu
         user=runtime.user,
         project_id=result.resumed_task.project_id,
         correlation_id=result.resumed_task.correlation_id,
-        metadata={"task_state": result.resumed_task.to_dict(), "answered_question_id": result.question.question_id if result.question else ""},
+        metadata={
+            "task_state": result.resumed_task.to_dict(),
+            "answered_question_id": result.question.question_id if result.question else "",
+            "routing_disposition": "correlated_response",
+        },
     )
     return TuiSubmissionResult(
         prompt=prompt_value,

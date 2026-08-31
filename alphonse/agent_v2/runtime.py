@@ -183,7 +183,14 @@ def build_runtime_host(
             purpose=InferencePurpose.MEMORY_COMPACTION,
         ))
         return str(result.content or "")
-    memory = LedgerMemory(users_root=user_store.users_root, settings_store=memory_settings_store, summarizer=_compact_memory)
+    memory = LedgerMemory(
+        users_root=user_store.users_root,
+        settings_store=memory_settings_store,
+        summarizer=_compact_memory,
+        project_root_provider=lambda project_id: (
+            project.root_path if (project := project_store.get_project(project_id, requester_is_admin=True)) is not None else None
+        ),
+    )
     integration_registry = integration_registry or build_default_integration_registry()
     presence_projector = PresenceProjector()
     presence_projector.register("tui", TuiPresenceAdapter())
@@ -198,6 +205,10 @@ def build_runtime_host(
         is_admin=user_store.is_admin,
         managed_root=user_store.managed_project_root,
         communication_router=communication_router,
+        correlation_authorizer=lambda correlation_id, respondent_user_id: question_store.is_pending_correlation_respondent(
+            correlation_id=correlation_id,
+            respondent_user_id=respondent_user_id,
+        ),
     )
     ui_events: list[CoreUiEvent] = []
     activity_events: list[CoreActivityEvent] = []

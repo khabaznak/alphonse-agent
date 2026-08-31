@@ -55,6 +55,7 @@ def test_store_creates_rrule_task_and_computes_next_run() -> None:
 
     task = store.create_task(
         owner_user_id="alex",
+        project_id="home",
         name="Daily report",
         prompt="Prepare the daily report.",
         schedule_kind="rrule",
@@ -72,6 +73,7 @@ def test_store_pause_resume_cancel_complete_and_execution_history() -> None:
     store = ScheduledTaskStore()
     task = store.create_task(
         owner_user_id="alex",
+        project_id="home",
         name="One",
         prompt="Do it.",
         schedule_kind="once",
@@ -126,6 +128,7 @@ def test_store_updates_only_editable_tasks_and_permanently_deletes_execution_his
     store = ScheduledTaskStore()
     task = store.create_task(
         owner_user_id="alex",
+        project_id="home",
         name="Original",
         prompt="Original prompt.",
         schedule_kind="once",
@@ -179,7 +182,7 @@ def test_native_scheduled_task_tool_registers_and_uses_context_owner_project() -
 def test_native_scheduled_task_uses_the_configured_user_timezone_by_default() -> None:
     store = ScheduledTaskStore()
     context = ToolExecutionContext(
-        task=TaskState(user="alex"),
+        task=TaskState(user="alex", project_id="home"),
         messages=InMemoryMessageQueue(),
         schedule_store=store,
         user_timezone_provider=lambda _user_id: "America/Mexico_City",
@@ -199,7 +202,7 @@ def test_native_scheduled_task_uses_the_configured_user_timezone_by_default() ->
 def test_native_scheduled_task_resolves_relative_duration_at_execution_time() -> None:
     store = ScheduledTaskStore()
     context = ToolExecutionContext(
-        task=TaskState(user="alex", goal="Remind me to drink water in 3min"),
+        task=TaskState(user="alex", project_id="home", goal="Remind me to drink water in 3min"),
         messages=InMemoryMessageQueue(),
         schedule_store=store,
     )
@@ -296,6 +299,7 @@ def test_runner_queues_due_rrule_task_and_advances_next_run() -> None:
     queue = InMemoryMessageQueue()
     task = store.create_task(
         owner_user_id="alex",
+        project_id="home",
         name="Daily",
         prompt="Run daily.",
         schedule_kind="rrule",
@@ -322,6 +326,7 @@ def test_runner_ignores_not_due_and_inactive_tasks() -> None:
     queue = InMemoryMessageQueue()
     future = store.create_task(
         owner_user_id="alex",
+        project_id="home",
         name="Future",
         prompt="Later.",
         schedule_kind="once",
@@ -329,6 +334,7 @@ def test_runner_ignores_not_due_and_inactive_tasks() -> None:
     )
     paused = store.create_task(
         owner_user_id="alex",
+        project_id="home",
         name="Paused",
         prompt="No.",
         schedule_kind="once",
@@ -382,7 +388,7 @@ def test_stub_inference_can_select_scheduled_task_tool() -> None:
         default_profile=ModelProfile(provider="stub", model="stub", profile_id="stub"),
     )
     store = ScheduledTaskStore()
-    task = TaskState(user="alex", goal="Remind me", acceptance_criteria_md="1.- [ ] Reminder scheduled")
+    task = TaskState(user="alex", project_id="home", goal="Remind me", acceptance_criteria_md="1.- [ ] Reminder scheduled")
 
     plan_node(
         task,

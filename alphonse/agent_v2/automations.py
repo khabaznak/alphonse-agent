@@ -103,8 +103,10 @@ class EventAutomationStore:
     def create_event_automation(self, *, owner_user_id: str, name: str, prompt: str, event_type: str, event_version: str, filters: dict[str, Any] | None = None, project_id: str = "", origin_channel: dict[str, Any] | None = None, enabled: bool = True) -> AutomationRecord:
         owner, title, text = str(owner_user_id or "").strip(), str(name or "").strip(), str(prompt or "").strip()
         if not owner or not title or not text: raise ValueError("automation_owner_name_prompt_required")
+        project = str(project_id or "").strip()
+        if not project: raise ValueError("automation_project_required")
         if self.get_event_type(event_type, event_version) is None: raise ValueError("event_type_not_registered")
-        now = _now(); record = AutomationRecord(f"automation_{uuid4().hex[:16]}", owner, str(project_id or "").strip(), title, text, "event", {"event_type": str(event_type), "event_version": str(event_version), "filters": dict(filters or {})}, dict(origin_channel or {}), "active" if enabled else "paused", now, now)
+        now = _now(); record = AutomationRecord(f"automation_{uuid4().hex[:16]}", owner, project, title, text, "event", {"event_type": str(event_type), "event_version": str(event_version), "filters": dict(filters or {})}, dict(origin_channel or {}), "active" if enabled else "paused", now, now)
         with self._connect() as conn: conn.execute("INSERT INTO v2_automations(automation_id,owner_user_id,project_id,name,prompt,trigger_kind,trigger_json,origin_channel_json,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)", _automation_values(record))
         return record
 

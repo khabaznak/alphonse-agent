@@ -65,6 +65,18 @@ class InMemoryMessageQueue:
         with self._lock:
             return sum(1 for message in self._messages if _matches(message, selector))
 
+    def turns_ahead(self, message_id: str) -> int:
+        with self._lock:
+            target = next((item for item in self._messages if item.message_id == str(message_id)), None)
+            if target is None:
+                return 0
+            return sum(
+                1
+                for item in self._messages
+                if item.sequence < target.sequence
+                and str(item.message.metadata.get("routing_disposition") or "pdca_task") == "pdca_task"
+            )
+
     def _next_matching(self, selector: MessageSelector | None) -> QueuedMessage | None:
         matches = (message for message in self._messages if _matches(message, selector))
         return min(matches, key=_selection_key, default=None)

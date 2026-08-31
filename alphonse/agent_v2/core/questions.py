@@ -410,6 +410,28 @@ class SQLiteQuestionStore:
             ).fetchall()
         return {str(row["project_id"] or ""): int(row["pending"] or 0) for row in rows}
 
+    def is_pending_correlation_respondent(self, *, correlation_id: str, respondent_user_id: str) -> bool:
+        """Whether this user is currently authorized to answer this task correlation."""
+        correlation = str(correlation_id or "").strip()
+        respondent = str(respondent_user_id or "").strip()
+        if not correlation or not respondent:
+            return False
+        self.expire_questions()
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT 1
+                FROM v2_questions question
+                JOIN v2_task_checkpoints checkpoint ON checkpoint.task_id = question.task_id
+                WHERE checkpoint.correlation_id = ?
+                  AND question.respondent_user_id = ?
+                  AND question.status = 'pending'
+                LIMIT 1
+                """,
+                (correlation, respondent),
+            ).fetchone()
+        return row is not None
+
     def route_answer(
         self,
         *,

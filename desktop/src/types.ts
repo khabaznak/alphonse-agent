@@ -40,6 +40,7 @@ export type Project = {
   archived_at: string | null;
   created_at: string;
   updated_at: string;
+  is_system_home?: boolean;
 };
 
 export type AgentDocument = { file_name: string; display_name: string; content?: string };

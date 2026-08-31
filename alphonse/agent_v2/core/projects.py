@@ -8,7 +8,7 @@ import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 from uuid import uuid4
 
 from alphonse.agent_v2.database import connect_database, default_database_path
@@ -30,12 +30,13 @@ class ProjectRecord:
     archived_at: str | None
     created_at: str
     updated_at: str
+    is_system_home: bool = False
 
     @property
     def context_path(self) -> str:
         return str(Path(self.root_path) / PROJECT_CONTEXT_FILENAME)
 
-    def to_dict(self) -> dict[str, str | None]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "project_id": self.project_id,
             "name": self.name,
@@ -48,6 +49,7 @@ class ProjectRecord:
             "created_at": self.created_at,
             "updated_at": self.updated_at,
             "context_path": self.context_path,
+            "is_system_home": self.is_system_home,
         }
 
 
@@ -75,6 +77,7 @@ class ProjectStore:
         visibility: ProjectVisibility = "private",
         owner_user_id: str,
         project_id: str | None = None,
+        is_system_home: bool = False,
     ) -> ProjectRecord:
         name_value = str(name or "").strip()
         owner_value = str(owner_user_id or "").strip()
@@ -101,14 +104,15 @@ class ProjectStore:
             archived_at=None,
             created_at=now,
             updated_at=now,
+            is_system_home=bool(is_system_home),
         )
         with self._connect() as conn:
             conn.execute(
                 """
                 INSERT INTO v2_projects (
                   project_id, name, description, root_path, visibility,
-                  owner_user_id, status, archived_at, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                  owner_user_id, status, archived_at, created_at, updated_at, is_system_home
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     record.project_id,
@@ -121,9 +125,54 @@ class ProjectStore:
                     record.archived_at,
                     record.created_at,
                     record.updated_at,
+                    int(bool(record.is_system_home)),
                 ),
             )
         return record
+
+    def ensure_home_project(self, user_id: str, *, root_path: str) -> ProjectRecord:
+        """Return the user's protected Home project, creating it once if needed."""
+        owner = str(user_id or "").strip()
+        if not owner:
+            raise ValueError("project_owner_required")
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM v2_projects WHERE owner_user_id=? AND is_system_home=1",
+                (owner,),
+            ).fetchone()
+        existing = _project_from_row(row)
+        if existing is not None:
+            return existing
+        # The uniqueness constraint resolves concurrent startup reconciliation.
+        project_id = f"home-{uuid4().hex}"
+        try:
+            return self.create_project(
+                name="Home",
+                description="Default project for personal tasks.",
+                root_path=root_path,
+                visibility="private",
+                owner_user_id=owner,
+                project_id=project_id,
+                is_system_home=True,
+            )
+        except sqlite3.IntegrityError:
+            with self._connect() as conn:
+                row = conn.execute(
+                    "SELECT * FROM v2_projects WHERE owner_user_id=? AND is_system_home=1",
+                    (owner,),
+                ).fetchone()
+            resolved = _project_from_row(row)
+            if resolved is None:
+                raise
+            return resolved
+
+    def home_project(self, user_id: str) -> ProjectRecord | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM v2_projects WHERE owner_user_id=? AND is_system_home=1 AND status='active'",
+                (str(user_id or "").strip(),),
+            ).fetchone()
+        return _project_from_row(row)
 
     def get_project(self, project_id: str, *, requester_user_id: str | None = None, requester_is_admin: bool = False, include_archived: bool = False) -> ProjectRecord | None:
         project_id_value = str(project_id or "").strip()
@@ -179,6 +228,8 @@ class ProjectStore:
 
     def update_project(self, project_id: str, *, name: str, description: str, visibility: ProjectVisibility, requester_user_id: str, requester_is_admin: bool = False) -> ProjectRecord:
         project = self._require_manageable(project_id, requester_user_id=requester_user_id, requester_is_admin=requester_is_admin)
+        if project.is_system_home:
+            raise ValueError("system_home_project_protected")
         name_value = str(name or "").strip()
         if not name_value:
             raise ValueError("project_name_required")
@@ -189,6 +240,8 @@ class ProjectStore:
 
     def archive_project(self, project_id: str, *, requester_user_id: str, requester_is_admin: bool = False) -> ProjectRecord:
         project = self._require_manageable(project_id, requester_user_id=requester_user_id, requester_is_admin=requester_is_admin)
+        if project.is_system_home:
+            raise ValueError("system_home_project_protected")
         if project.status != "active": raise ValueError("project_not_active")
         now = _now_iso()
         with self._connect() as conn:
@@ -205,6 +258,8 @@ class ProjectStore:
 
     def delete_project(self, project_id: str, *, requester_user_id: str, requester_is_admin: bool = False) -> ProjectRecord:
         project = self._require_manageable(project_id, requester_user_id=requester_user_id, requester_is_admin=requester_is_admin)
+        if project.is_system_home:
+            raise ValueError("system_home_project_protected")
         with self._connect() as conn:
             conn.execute("DELETE FROM v2_project_members WHERE project_id=?", (project.project_id,))
             conn.execute("DELETE FROM v2_projects WHERE project_id=?", (project.project_id,))
@@ -316,6 +371,7 @@ class ProjectStore:
                   archived_at TEXT,
                   created_at TEXT NOT NULL,
                   updated_at TEXT NOT NULL,
+                  is_system_home INTEGER NOT NULL DEFAULT 0,
                   CHECK (visibility IN ('private', 'shared'))
                 ) STRICT;
 
@@ -332,6 +388,12 @@ class ProjectStore:
                 conn.execute("ALTER TABLE v2_projects ADD COLUMN status TEXT NOT NULL DEFAULT 'active'")
             if "archived_at" not in columns:
                 conn.execute("ALTER TABLE v2_projects ADD COLUMN archived_at TEXT")
+            if "is_system_home" not in columns:
+                conn.execute("ALTER TABLE v2_projects ADD COLUMN is_system_home INTEGER NOT NULL DEFAULT 0")
+            conn.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_v2_projects_one_system_home "
+                "ON v2_projects(owner_user_id) WHERE is_system_home=1"
+            )
 
 
 class _ConnectionProxy:
@@ -362,6 +424,7 @@ def _project_from_row(row: sqlite3.Row | None) -> ProjectRecord | None:
         archived_at=str(row["archived_at"] or "") or None,
         created_at=str(row["created_at"]),
         updated_at=str(row["updated_at"]),
+        is_system_home=bool(row["is_system_home"]) if "is_system_home" in row.keys() else False,
     )
 
 

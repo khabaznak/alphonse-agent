@@ -10,26 +10,24 @@ from alphonse.agent_v2.core.messages import InMemoryMessageQueue
 from alphonse.agent_v2.core.messages import MessageSelector
 
 
-def test_queue_message_uses_mandatory_prompt_and_user() -> None:
+def test_queue_message_requires_project_provenance() -> None:
     queue = InMemoryMessageQueue()
     channel = CommunicationChannel(queue)
 
-    queued = channel.queue_message(prompt="hello", user="alex")
+    queued = channel.queue_message(prompt="hello", user="alex", project_id="home")
 
     assert queued.message.prompt == "hello"
     assert queued.message.user == "alex"
     assert queue.size() == 1
 
 
-def test_queue_message_defaults_project_id_and_tag_to_empty_strings() -> None:
-    queued = CommunicationChannel(InMemoryMessageQueue()).queue_message(prompt="hello", user="alex")
-
-    assert queued.message.project_id == ""
-    assert queued.message.tag == ""
+def test_queue_message_rejects_blank_project_id() -> None:
+    with pytest.raises(ValueError, match="project_id_required"):
+        CommunicationChannel(InMemoryMessageQueue()).queue_message(prompt="hello", user="alex")
 
 
 def test_queue_message_generates_timezone_aware_local_timestamp() -> None:
-    queued = CommunicationChannel(InMemoryMessageQueue()).queue_message(prompt="hello", user="alex")
+    queued = CommunicationChannel(InMemoryMessageQueue()).queue_message(prompt="hello", user="alex", project_id="home")
 
     assert queued.message.timestamp.tzinfo is not None
     assert queued.message.timestamp.utcoffset() is not None
@@ -41,6 +39,7 @@ def test_queue_message_preserves_explicit_timestamp() -> None:
     queued = CommunicationChannel(InMemoryMessageQueue()).queue_message(
         prompt="hello",
         user="alex",
+        project_id="home",
         timestamp=timestamp,
     )
 
@@ -62,8 +61,8 @@ def test_selector_dequeues_by_user_project_id_and_tag() -> None:
 def test_queue_message_preserves_correlation_id_for_selector_lookup() -> None:
     queue = InMemoryMessageQueue()
     channel = CommunicationChannel(queue)
-    channel.queue_message(prompt="one", user="alex", correlation_id="task-1")
-    channel.queue_message(prompt="two", user="gaby", correlation_id="task-2")
+    channel.queue_message(prompt="one", user="alex", project_id="home", correlation_id="task-1")
+    channel.queue_message(prompt="two", user="gaby", project_id="home", correlation_id="task-2")
 
     selected = queue.dequeue(MessageSelector(correlation_id="task-2"))
 
@@ -75,9 +74,9 @@ def test_queue_message_preserves_correlation_id_for_selector_lookup() -> None:
 def test_slash_command_detected_only_at_prompt_start() -> None:
     channel = CommunicationChannel(InMemoryMessageQueue())
 
-    command = channel.queue_message(prompt="/project new", user="alex").message
-    indented = channel.queue_message(prompt=" /project new", user="alex").message
-    sentence = channel.queue_message(prompt="please /project new", user="alex").message
+    command = channel.queue_message(prompt="/project new", user="alex", project_id="home").message
+    indented = channel.queue_message(prompt=" /project new", user="alex", project_id="home").message
+    sentence = channel.queue_message(prompt="please /project new", user="alex", project_id="home").message
 
     assert command.metadata["is_command"] is True
     assert command.metadata["command"] == "project"
@@ -101,6 +100,7 @@ def test_queue_message_accepts_explicit_channel_metadata() -> None:
     message = CommunicationChannel(InMemoryMessageQueue()).queue_message(
         prompt="hello",
         user="u-alex",
+        project_id="home",
         integration_id="telegram-home",
         provider_key="telegram",
         provider_user_id="123",
@@ -124,7 +124,7 @@ def test_queue_message_accepts_explicit_channel_metadata() -> None:
 
 def test_legacy_slash_command_metadata_shape_is_still_available() -> None:
     channel = CommunicationChannel(InMemoryMessageQueue())
-    command = channel.queue_message(prompt="/project new", user="alex").message
+    command = channel.queue_message(prompt="/project new", user="alex", project_id="home").message
 
     assert {key: command.metadata[key] for key in ("is_command", "command", "command_args")} == {
         "is_command": True,
@@ -137,6 +137,6 @@ def test_blank_prompt_or_user_raises_value_error() -> None:
     channel = CommunicationChannel(InMemoryMessageQueue())
 
     with pytest.raises(ValueError, match="prompt_required"):
-        channel.queue_message(prompt=" ", user="alex")
+        channel.queue_message(prompt=" ", user="alex", project_id="home")
     with pytest.raises(ValueError, match="user_required"):
-        channel.queue_message(prompt="hello", user="")
+        channel.queue_message(prompt="hello", user="", project_id="home")

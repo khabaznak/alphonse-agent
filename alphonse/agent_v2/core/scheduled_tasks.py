@@ -163,6 +163,9 @@ class ScheduledTaskStore:
             raise ValueError("scheduled_task_name_required")
         if not prompt_value:
             raise ValueError("scheduled_task_prompt_required")
+        project_value = str(project_id or "").strip()
+        if not project_value:
+            raise ValueError("scheduled_task_project_required")
         timezone_value = _normalize_timezone(timezone_name)
         schedule = _build_schedule(
             schedule_kind=schedule_kind,
@@ -177,7 +180,7 @@ class ScheduledTaskStore:
         record = ScheduledTaskRecord(
             scheduled_task_id=f"scheduled_task_{uuid4().hex[:16]}",
             owner_user_id=owner,
-            project_id=str(project_id or "").strip(),
+            project_id=project_value,
             name=name_value,
             description=str(description or "").strip(),
             prompt=prompt_value,

@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import re
 import sqlite3
+import tempfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -143,6 +144,8 @@ class InboundRouteResult:
     queued: QueuedMessage | None = None
     handled_command: bool = False
     project_id: str = ""
+    disposition: str = ""
+    turns_ahead: int = 0
 
 
 class ProjectInboundRouter:
@@ -159,6 +162,8 @@ class ProjectInboundRouter:
         managed_root: Any | None = None,
         communication_router: Any | None = None,
         kill_switch_handler: Any | None = None,
+        active_task_lookup: Any | None = None,
+        correlation_authorizer: Any | None = None,
     ) -> None:
         self.channel = channel
         self.outbox = outbox
@@ -168,6 +173,8 @@ class ProjectInboundRouter:
         self.managed_root = managed_root
         self.communication_router = communication_router
         self.kill_switch_handler = kill_switch_handler
+        self.active_task_lookup = active_task_lookup or (lambda: {})
+        self.correlation_authorizer = correlation_authorizer or (lambda _correlation_id, _user: False)
 
     def ingest(
         self,
@@ -216,13 +223,29 @@ class ProjectInboundRouter:
                 return InboundRouteResult(handled_command=True)
             active = self.active_project(key)
             explicit_project = active.project_id if active is not None else ""
+        project = self.projects.get_project(
+            explicit_project,
+            requester_user_id=address.alphonse_user_id,
+            requester_is_admin=bool(self.is_admin(address.alphonse_user_id)),
+        )
+        if project is None:
+            raise ValueError("project_not_accessible")
+        merged_metadata = dict(metadata or {})
+        disposition = self._disposition_for(
+            user=address.alphonse_user_id,
+            project_id=project.project_id,
+            correlation_id=correlation_id,
+            prompt=prompt,
+            metadata=merged_metadata,
+        )
+        merged_metadata["routing_disposition"] = disposition
         queued = self.channel.queue_message(
             prompt=prompt,
             user=address.alphonse_user_id,
-            project_id=explicit_project,
+            project_id=project.project_id,
             tag=tag,
             correlation_id=correlation_id,
-            metadata=metadata,
+            metadata=merged_metadata,
             integration_id=address.integration_id,
             provider_key=address.provider_key,
             provider_user_id=address.provider_user_id,
@@ -232,15 +255,22 @@ class ProjectInboundRouter:
             thread_id=address.thread_id,
             message_id=message_id,
         )
-        return InboundRouteResult(queued=queued, project_id=explicit_project)
+        turns_ahead = self._turns_ahead(queued.message_id) if disposition == "pdca_task" else 0
+        if turns_ahead > 0 and not str(merged_metadata.get("source") or "").strip():
+            self._queue_waiting_notice(address, project.project_id, queued.message_id, turns_ahead)
+        return InboundRouteResult(queued=queued, project_id=project.project_id, disposition=disposition, turns_ahead=turns_ahead)
 
     def active_project(self, key: ProjectSessionKey) -> ProjectRecord | None:
         session = self.sessions.get(key)
         if session is None:
-            return None
+            home = self._home_project(key.alphonse_user_id)
+            self.sessions.set(key, home)
+            return home
         project = self.projects.get_project(session.active_project_id, requester_user_id=key.alphonse_user_id, requester_is_admin=bool(self.is_admin(key.alphonse_user_id)))
         if project is None:
-            self.sessions.clear(key)
+            home = self._home_project(key.alphonse_user_id)
+            self.sessions.set(key, home)
+            return home
         return project
 
     def select_project(self, key: ProjectSessionKey, project_id_or_name: str) -> ProjectRecord:
@@ -259,7 +289,7 @@ class ProjectInboundRouter:
         if command == "/projects":
             return self._list_projects(key)
         if command != "/project":
-            return None
+            return f"Unsupported command: {command}."
         if not arguments:
             return self._project_status(key)
         if arguments.casefold() == "none":
@@ -336,6 +366,64 @@ class ProjectInboundRouter:
             owner_user_id=user,
             project_id=project_id,
         )
+
+    def _home_project(self, user: str) -> ProjectRecord:
+        owner = str(user or "").strip()
+        if not owner:
+            raise ValueError("user_required")
+        fallback = Path(tempfile.gettempdir()) / "alphonse-v2-projects" / _safe_segment(owner) / "home"
+        try:
+            root = Path(self.managed_root(owner)) / "home" if self.managed_root is not None else fallback
+            root.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            root = fallback
+            root.mkdir(parents=True, exist_ok=True)
+        return self.projects.ensure_home_project(owner, root_path=str(root))
+
+    def _disposition_for(self, *, user: str, project_id: str, correlation_id: str, prompt: str, metadata: dict[str, Any]) -> str:
+        if str(metadata.get("source") or "") in {"scheduled_task", "event_automation"}:
+            return "pdca_task"
+        if str(prompt or "").startswith("/"):
+            return "non_pdca_command"
+        active = self.active_task_lookup()
+        if not isinstance(active, dict):
+            return "pdca_task"
+        if str(correlation_id or "").strip() and str(correlation_id) == str(active.get("correlation_id") or ""):
+            # Pending questions are routed through the question store; an owner
+            # response is safe to attach while an active task is still running.
+            if str(active.get("user") or "") == str(user) or bool(self.correlation_authorizer(str(correlation_id), str(user))):
+                return "correlated_response"
+        if (
+            str(active.get("routing_disposition") or "pdca_task") == "pdca_task"
+            and str(active.get("user") or "") == str(user)
+            and str(active.get("project_id") or "") == str(project_id)
+        ):
+            return "steering"
+        return "pdca_task"
+
+    def _turns_ahead(self, message_id: str) -> int:
+        counter = getattr(self.channel.messages, "turns_ahead", None)
+        return max(0, int(counter(message_id))) if callable(counter) else 0
+
+    def _queue_waiting_notice(self, address: ChannelAddress, project_id: str, inbound_message_id: str, turns_ahead: int) -> None:
+        message = f"I’m working on another task. Yours is queued and will start after {turns_ahead} task{'s' if turns_ahead != 1 else ''} ahead of it."
+        outbound = self.outbox.enqueue(
+            address=address,
+            message=message,
+            kind="queue_waiting_notice",
+            audience_user_id=address.alphonse_user_id,
+            project_id=project_id,
+            metadata={"inbound_message_id": inbound_message_id, "turns_ahead": turns_ahead},
+        )
+        if self.channel.conversation_store is not None:
+            self.channel.conversation_store.record(
+                owner_user_id=address.alphonse_user_id,
+                project_id=project_id,
+                role="assistant",
+                content=message,
+                source=address.integration_id,
+                source_message_id=f"outbound:{outbound.outbox_message_id}",
+            )
 
     def _handle_kill_switch(self, prompt: str, key: ProjectSessionKey, address: ChannelAddress) -> str | None:
         text = str(prompt or "").strip()

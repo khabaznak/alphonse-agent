@@ -39,10 +39,12 @@ def test_project_session_isolated_by_user_channel_and_thread(tmp_path) -> None:
     router.ingest(prompt="Routine?", user="alex", integration_id="telegram-home", provider_key="telegram", channel_target="chat-1", thread_id="topic-2")
 
     assert queue.dequeue().message.project_id == project.project_id
-    assert queue.dequeue().message.project_id == ""
-    assert queue.dequeue().message.project_id == ""
-    assert router.active_project(tui) is None
-    assert router.active_project(thread) is None
+    home = projects.home_project("alex")
+    assert home is not None and home.is_system_home
+    assert queue.dequeue().message.project_id == home.project_id
+    assert queue.dequeue().message.project_id == home.project_id
+    assert router.active_project(tui) == home
+    assert router.active_project(thread) == home
 
 
 def test_project_commands_are_deterministic_and_do_not_queue_capd_work(tmp_path, monkeypatch) -> None:
@@ -64,7 +66,7 @@ def test_project_commands_are_deterministic_and_do_not_queue_capd_work(tmp_path,
     assert any(project.project_id in message for message in messages)
 
 
-def test_project_context_mutation_requires_owner_and_unknown_slash_reaches_capd(tmp_path) -> None:
+def test_project_context_mutation_requires_owner_and_unknown_slash_bypasses_capd(tmp_path) -> None:
     router, queue, outbox, projects = _router()
     shared = projects.create_project(name="Shared", root_path=str(tmp_path / "shared"), owner_user_id="alex", visibility="shared")
     gaby = ProjectSessionKey("gaby", "telegram-home", "chat")
@@ -74,6 +76,7 @@ def test_project_context_mutation_requires_owner_and_unknown_slash_reaches_capd(
     normal = router.ingest(prompt="/agent-config", user="gaby", integration_id="telegram-home", provider_key="telegram", channel_target="chat")
 
     assert denied.handled_command
-    assert "Only the project owner" in outbox.list()[-1].message
-    assert normal.queued is not None
-    assert queue.dequeue().message.project_id == shared.project_id
+    assert normal.handled_command
+    assert "Only the project owner" in outbox.list()[-2].message
+    assert "Unsupported command: /agent-config." in outbox.list()[-1].message
+    assert queue.size() == 0

@@ -38,7 +38,7 @@ def test_check_node_marks_existing_task_without_steering_as_wip() -> None:
 def test_check_node_consumes_same_user_same_project_steering() -> None:
     queue = InMemoryMessageQueue()
     channel = CommunicationChannel(queue)
-    channel.queue_message(prompt="Add tests too", user="alex", project_id="alpha")
+    channel.queue_message(prompt="Add tests too", user="alex", project_id="alpha", metadata={"routing_disposition": "steering"})
     channel.queue_message(prompt="Different project", user="alex", project_id="beta")
     task = TaskState(
         goal="Continue task",
@@ -80,7 +80,7 @@ def test_check_node_leaves_scheduled_occurrences_for_independent_processing() ->
 
 def test_check_node_steer_reviews_acceptance_criteria_before_returning(monkeypatch) -> None:
     queue = InMemoryMessageQueue()
-    CommunicationChannel(queue).queue_message(prompt="The file exists now", user="alex", project_id="alpha")
+    CommunicationChannel(queue).queue_message(prompt="The file exists now", user="alex", project_id="alpha", metadata={"routing_disposition": "steering"})
     task = TaskState(
         goal="Create a file",
         user="alex",
@@ -103,7 +103,7 @@ def test_check_node_steer_reviews_acceptance_criteria_before_returning(monkeypat
 def test_check_node_consumes_same_correlation_id_from_other_user() -> None:
     queue = InMemoryMessageQueue()
     channel = CommunicationChannel(queue)
-    channel.queue_message(prompt="No coffee today", user="Gaby", project_id="home", correlation_id="coffee-1")
+    channel.queue_message(prompt="No coffee today", user="Gaby", project_id="home", correlation_id="coffee-1", metadata={"routing_disposition": "correlated_response"})
     task = TaskState(
         goal="Ask Gaby about coffee",
         user="Alex",
@@ -207,7 +207,7 @@ def _task_with_successful_tool_execution() -> TaskState:
 
 def test_check_node_keeps_new_verdict_after_consuming_steering() -> None:
     queue = InMemoryMessageQueue()
-    CommunicationChannel(queue).queue_message(prompt="Add this detail", user="alex", project_id="alpha")
+    CommunicationChannel(queue).queue_message(prompt="Add this detail", user="alex", project_id="alpha", metadata={"routing_disposition": "steering"})
     task = TaskState(goal="New task", user="alex", project_id="alpha")
 
     check_node(task, context=CoreLoopContext(messages=queue))
@@ -221,7 +221,7 @@ def test_check_node_keeps_new_verdict_after_consuming_steering() -> None:
 def test_check_node_does_not_convert_consumed_messages_into_task_states(monkeypatch) -> None:
     queue = InMemoryMessageQueue()
     channel = CommunicationChannel(queue)
-    channel.queue_message(prompt="Steering", user="alex", project_id="alpha")
+    channel.queue_message(prompt="Steering", user="alex", project_id="alpha", metadata={"routing_disposition": "steering"})
     task = TaskState(
         goal="Existing task",
         user="alex",

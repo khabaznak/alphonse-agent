@@ -524,6 +524,17 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
     }
   }, [attachmentPaths.length, currentProjectKey, messages, project?.project_id, user]);
 
+  useEffect(() => {
+    if (!user || project) return;
+    void daemonRequest<{ projects: Project[] }>("manageable_projects", { user })
+      .then((result) => {
+        const home = result.projects.find((item) => item.is_system_home);
+        if (home) return selectProject(home);
+        return undefined;
+      })
+      .catch((cause: unknown) => setError(cause instanceof Error ? cause.message : "Home project could not be opened"));
+  }, [project, selectProject, user]);
+
   const submitPrompt = async () => {
     const value = prompt.trim();
     if (!value && !attachmentPaths.length) return;

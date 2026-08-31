@@ -44,11 +44,15 @@ class CommunicationChannel:
             raise ValueError("prompt_required")
         if not user_value:
             raise ValueError("user_required")
+        project_value = str(project_id or "").strip()
+        if not project_value:
+            raise ValueError("project_id_required")
 
         merged_metadata = {
             **_command_metadata(raw_prompt),
             **dict(metadata or {}),
         }
+        merged_metadata.setdefault("routing_disposition", "pdca_task")
         merged_metadata.setdefault(
             "channel",
             channel_metadata(
@@ -68,7 +72,7 @@ class CommunicationChannel:
             timestamp=timestamp or datetime.now().astimezone(),
             prompt=prompt_value,
             user=user_value,
-            project_id=str(project_id or ""),
+            project_id=project_value,
             tag=str(tag or ""),
             correlation_id=str(correlation_id or ""),
             metadata=merged_metadata,

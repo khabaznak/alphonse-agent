@@ -21,10 +21,11 @@ _SCOPE_LOCKS_GUARD = Lock()
 class LedgerMemory:
     """Append-only v2 conversation memory; the latest ledger is the prompt context."""
 
-    def __init__(self, *, users_root: Any, settings_store: SQLiteMemorySettingsStore, summarizer: Callable[[str], str] | None = None) -> None:
+    def __init__(self, *, users_root: Any, settings_store: SQLiteMemorySettingsStore, summarizer: Callable[[str], str] | None = None, project_root_provider: Callable[[str], str | Path | None] | None = None) -> None:
         self._users_root = users_root
         self._settings_store = settings_store
         self._summarizer = summarizer
+        self._project_root_provider = project_root_provider
 
     def start_task(self, task: Any) -> str:
         with self._scope_lock(str(task.user or "unknown"), str(task.project_id or "")):
@@ -51,6 +52,40 @@ class LedgerMemory:
     def ensure_project_scope(self, *, user_id: str, project_id: str) -> Path:
         return self._scope_dir(user_id, project_id)
 
+    def migrate_legacy_project_ledgers(self, project_id: str, *, include_generic: bool = False) -> bool:
+        """Merge pre-shared per-user ledgers into the canonical project ledger once."""
+        project = str(project_id or "").strip()
+        if not project or self._project_root_provider is None:
+            return False
+        root = self._project_root_provider(project)
+        if not root:
+            return False
+        target = Path(root).expanduser().resolve() / ".alphonse" / "memory"
+        marker = target / ".legacy-ledgers-migrated"
+        if marker.exists():
+            return False
+        target.mkdir(parents=True, exist_ok=True)
+        ledger = target / "ledger-0001.md"
+        if not ledger.exists():
+            ledger.write_text("# Memory Ledger\n\n## Memory\n", encoding="utf-8")
+        legacy_root = Path(self._users_root()).expanduser().resolve()
+        sections: list[str] = []
+        for source in sorted(legacy_root.glob(f"*/projects/{project}/memory/ledger-*.md")):
+            try:
+                sections.append(f"\n## Migrated legacy ledger: {source.parent.parent.parent.name}/{source.name}\n{source.read_text(encoding='utf-8')}\n")
+            except OSError:
+                continue
+        if include_generic:
+            for source in sorted(legacy_root.glob("*/memory/generic/ledger-*.md")):
+                try:
+                    sections.append(f"\n## Migrated legacy Home ledger: {source.parent.parent.name}/{source.name}\n{source.read_text(encoding='utf-8')}\n")
+                except OSError:
+                    continue
+        if sections:
+            self._append(ledger, "".join(sections))
+        marker.write_text("migrated\n", encoding="utf-8")
+        return bool(sections)
+
     def _current_path(self, task: Any, *, rollover: bool) -> Path:
         user_id, project_id = str(task.user or "unknown"), str(task.project_id or "")
         latest = self._latest_path(user_id, project_id)
@@ -61,6 +96,12 @@ class LedgerMemory:
         return latest
 
     def _scope_dir(self, user_id: str, project_id: str = "") -> Path:
+        if project_id and self._project_root_provider is not None:
+            root = self._project_root_provider(project_id)
+            if root:
+                path = Path(root).expanduser().resolve() / ".alphonse" / "memory"
+                path.mkdir(parents=True, exist_ok=True)
+                return path
         root = Path(self._users_root()).expanduser().resolve() / str(user_id)
         path = root / "memory" / "generic" if not project_id else root / "projects" / str(project_id) / "memory"
         try:
@@ -103,7 +144,9 @@ class LedgerMemory:
         return path
 
     def _scope_lock(self, user_id: str, project_id: str) -> RLock:
-        key = str((Path(self._users_root()).expanduser().resolve() / user_id / project_id).resolve())
+        # Project-backed scopes are shared across collaborators, so the lock key
+        # must follow the resolved ledger directory instead of the initiating user.
+        key = str(self._scope_dir(user_id, project_id).resolve())
         with _SCOPE_LOCKS_GUARD:
             lock = _SCOPE_LOCKS.get(key)
             if lock is None:

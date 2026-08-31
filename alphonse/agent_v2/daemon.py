@@ -133,6 +133,7 @@ class V2Daemon:
         self.runtime.core.cancellation_checker = self.kill_switch.is_cancelled
         self.runtime.core.active_task_callback = self._activate_kill_switch_task
         self.runtime.inbound_router.kill_switch_handler = self._handle_kill_switch_command
+        self.runtime.inbound_router.active_task_lookup = self.active_work
         self._activity_status: dict[str, str] = {"state": "idle", "updated_at": datetime.now(timezone.utc).isoformat()}
         self._event_lock = threading.RLock()
         self._activity_event_sequence = 0
@@ -165,6 +166,8 @@ class V2Daemon:
             self._acquire_single_instance_lock()
         try:
             self._stop.clear()
+            self._ensure_home_projects()
+            self._migrate_blank_project_records()
             reclaim_expired = getattr(self.runtime.queue, "reclaim_expired", None)
             if callable(reclaim_expired):
                 reclaim_expired()
@@ -302,7 +305,13 @@ class V2Daemon:
             admin = store.onboard(display_name=display_name, users_root=users_root)
             imported = {}
         self.runtime.user = admin.user_id
+        self._ensure_home_projects()
+        self._migrate_blank_project_records()
         migrated = self._migrate_legacy_local(admin.user_id)
+        # Legacy-local ownership becomes resolvable only after the ownership
+        # migration, so run the idempotent provenance pass once more.
+        self._ensure_home_projects()
+        self._migrate_blank_project_records()
         self.runtime.asset_store.migrate_to_user_directories()
         refresh_runtime_identity_resolver(self.runtime)
         return {"admin_user": admin.to_dict(), "migration": {**imported, **migrated}, "users_root": str(store.users_root())}
@@ -342,7 +351,10 @@ class V2Daemon:
         return [{**user.to_dict(), "addresses": [address.to_dict() for address in self.runtime.user_store.list_addresses(user.user_id)], "aliases": self.runtime.user_store.list_aliases(user.user_id)} for user in self.runtime.user_store.list_users()]
 
     def create_user(self, *, display_name: str, role: str = "member") -> dict[str, object]:
-        return self.runtime.user_store.create_user(display_name=display_name, role=role).to_dict()
+        user = self.runtime.user_store.create_user(display_name=display_name, role=role)
+        self._ensure_home_projects()
+        self._migrate_blank_project_records()
+        return user.to_dict()
 
     def scheduled_tasks(
         self,
@@ -483,6 +495,8 @@ class V2Daemon:
             display_name=display_name,
             user_id=user_id,
         )
+        self._ensure_home_projects()
+        self._migrate_blank_project_records()
         if request.provider_key == "telegram":
             record = self.runtime.integration_store.get(request.integration_id)
             if record is None:
@@ -501,6 +515,78 @@ class V2Daemon:
             refresh_runtime_identity_resolver(self.runtime)
             self.restart_integrations()
         return {"request": request.to_dict(), "address": address.to_dict()}
+
+    def _ensure_home_projects(self) -> None:
+        """Reconcile the protected default project for every active user."""
+        for user in self.runtime.user_store.list_users():
+            if not user.is_active:
+                continue
+            root = self.runtime.user_store.managed_project_root(user.user_id) / "home"
+            project = self.runtime.project_store.ensure_home_project(user.user_id, root_path=str(root))
+            migrate = getattr(self.runtime.core.memory, "migrate_legacy_project_ledgers", None)
+            if callable(migrate):
+                migrate(project.project_id, include_generic=True)
+        migrate = getattr(self.runtime.core.memory, "migrate_legacy_project_ledgers", None)
+        if callable(migrate):
+            for project in self.runtime.project_store.list_manageable_projects("", requester_is_admin=True):
+                migrate(project.project_id)
+
+    def _migrate_blank_project_records(self) -> None:
+        """Assign legacy unscoped records to their known owner's Home project."""
+        path = str(getattr(self.runtime.queue, "db_path", ":memory:"))
+        if path == ":memory:":
+            return
+        homes = {user.user_id: self.runtime.project_store.home_project(user.user_id) for user in self.runtime.user_store.list_users()}
+        ids = {user: project.project_id for user, project in homes.items() if project is not None}
+        if not ids:
+            return
+        with connect_database(path) as conn:
+            tables = {str(row[0]) for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+            def update(table: str, owner_column: str) -> None:
+                if table not in tables:
+                    return
+                for owner, project_id in ids.items():
+                    conn.execute(
+                        f"UPDATE {table} SET project_id=? WHERE (project_id='' OR project_id IS NULL) AND {owner_column}=?",
+                        (project_id, owner),
+                    )
+            update("v2_inbound_messages", "user_id")
+            update("v2_conversation_events", "owner_user_id")
+            update("v2_scheduled_tasks", "owner_user_id")
+            update("v2_automations", "owner_user_id")
+            update("v2_task_checkpoints", "owner_id")
+            update("v2_outbox", "audience_user_id")
+            if "v2_project_sessions" in tables:
+                for owner, project_id in ids.items():
+                    conn.execute(
+                        "UPDATE v2_project_sessions SET active_project_id=?, project_name='Home' WHERE active_project_id='' AND alphonse_user_id=?",
+                        (project_id, owner),
+                    )
+            if "v2_scheduled_task_executions" in tables:
+                conn.execute("UPDATE v2_scheduled_task_executions SET project_id=(SELECT project_id FROM v2_scheduled_tasks t WHERE t.scheduled_task_id=v2_scheduled_task_executions.scheduled_task_id) WHERE project_id='' OR project_id IS NULL")
+            if "v2_automation_executions" in tables:
+                # Executions derive project provenance from their automation; no independent project column exists.
+                pass
+            if "v2_questions" in tables:
+                conn.execute("UPDATE v2_questions SET project_id=(SELECT project_id FROM v2_task_checkpoints c WHERE c.task_id=v2_questions.task_id) WHERE project_id='' OR project_id IS NULL")
+            if "v2_inbound_messages" in tables:
+                conn.execute(
+                    "UPDATE v2_inbound_messages SET metadata_json=json_set(COALESCE(metadata_json, '{}'), '$.routing_disposition', 'pdca_task') "
+                    "WHERE json_extract(COALESCE(metadata_json, '{}'), '$.routing_disposition') IS NULL"
+                )
+            unresolved: dict[str, int] = {}
+            for table in (
+                "v2_inbound_messages", "v2_conversation_events", "v2_scheduled_tasks",
+                "v2_automations", "v2_task_checkpoints", "v2_outbox", "v2_questions",
+            ):
+                if table in tables:
+                    count = conn.execute(
+                        f"SELECT COUNT(*) FROM {table} WHERE project_id='' OR project_id IS NULL"
+                    ).fetchone()[0]
+                    if count:
+                        unresolved[table] = int(count)
+            if unresolved:
+                logger.warning("project provenance migration left rows unresolved: %s", unresolved)
 
     def reject_access_request(self, *, request_id: str) -> dict[str, object]:
         return self.runtime.user_store.reject_access_request(request_id).to_dict()
@@ -1129,6 +1215,8 @@ class V2Daemon:
             "message_id": routed.queued.message_id if routed.queued is not None else "",
             "handled_command": routed.handled_command,
             "project_id": routed.project_id,
+            "routing_disposition": routed.disposition,
+            "turns_ahead": routed.turns_ahead,
             "created_at": routed.queued.message.timestamp.isoformat() if routed.queued is not None else "",
             "conversation_sequence": self.runtime.conversation_store.sequence_for_source_message_id(
                 f"inbound:{routed.queued.message_id}"
@@ -1164,7 +1252,12 @@ class V2Daemon:
 
     def create_event_automation(self, **values: Any) -> dict[str, Any]:
         assert self.event_store is not None
-        return self.event_store.create_event_automation(owner_user_id=self._admin_user_id(str(values.get("owner_user_id") or values.get("user") or "")), name=str(values.get("name") or ""), prompt=str(values.get("prompt") or ""), event_type=str(values.get("event_type") or ""), event_version=str(values.get("event_version") or ""), filters=dict(values.get("filters") or {}), project_id=str(values.get("project_id") or ""), origin_channel=dict(values.get("origin_channel") or {}), enabled=bool(values.get("enabled", True))).to_dict()
+        owner = self._admin_user_id(str(values.get("owner_user_id") or values.get("user") or ""))
+        project_id = str(values.get("project_id") or "").strip()
+        project = self.runtime.project_store.get_project(project_id, requester_user_id=owner, requester_is_admin=self.runtime.user_store.is_admin(owner))
+        if project is None:
+            raise ValueError("automation_project_not_accessible")
+        return self.event_store.create_event_automation(owner_user_id=owner, name=str(values.get("name") or ""), prompt=str(values.get("prompt") or ""), event_type=str(values.get("event_type") or ""), event_version=str(values.get("event_version") or ""), filters=dict(values.get("filters") or {}), project_id=project.project_id, origin_channel=dict(values.get("origin_channel") or {}), enabled=bool(values.get("enabled", True))).to_dict()
 
     def automation_catalog(self) -> dict[str, Any]:
         assert self.event_store is not None
@@ -1226,7 +1319,11 @@ class V2Daemon:
                 user=normalized_user,
                 project_id=result.resumed_task.project_id,
                 correlation_id=result.resumed_task.correlation_id,
-                metadata={"task_state": result.resumed_task.to_dict(), "answered_question_id": result.question.question_id if result.question else ""},
+                metadata={
+                    "task_state": result.resumed_task.to_dict(),
+                    "answered_question_id": result.question.question_id if result.question else "",
+                    "routing_disposition": "correlated_response",
+                },
                 integration_id="desktop",
                 provider_key="tui",
                 channel_target=normalized_user,
@@ -1717,7 +1814,10 @@ class V2Daemon:
             self._active_work = {
                 "message_id": str(getattr(queued, "message_id", "") or ""),
                 "user": str(getattr(message, "user", "") or ""),
+                "project_id": str(getattr(message, "project_id", "") or ""),
+                "correlation_id": str(getattr(message, "correlation_id", "") or ""),
                 "prompt": str(getattr(message, "prompt", "") or ""),
+                "routing_disposition": str((getattr(message, "metadata", {}) or {}).get("routing_disposition") or "pdca_task"),
                 "started_at": datetime.now(timezone.utc).isoformat(),
             }
 

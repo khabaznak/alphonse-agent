@@ -233,6 +233,26 @@ class SQLiteMessageQueue:
                 counts[status] = int(row["count"] or 0)
         return counts
 
+    def turns_ahead(self, message_id: str) -> int:
+        """Count independently runnable PDCA tasks ahead of a queued message."""
+        with self._connect() as conn:
+            target = conn.execute(
+                "SELECT sequence FROM v2_inbound_messages WHERE message_id=?",
+                (str(message_id or "").strip(),),
+            ).fetchone()
+            if target is None:
+                return 0
+            row = conn.execute(
+                """
+                SELECT COUNT(*) AS count FROM v2_inbound_messages
+                WHERE sequence < ?
+                  AND status IN ('pending', 'processing', 'retry_wait')
+                  AND json_extract(metadata_json, '$.routing_disposition') = 'pdca_task'
+                """,
+                (int(target["sequence"]),),
+            ).fetchone()
+        return int(row["count"] or 0) if row is not None else 0
+
     def _connect(self) -> sqlite3.Connection:
         if self._memory_connection is not None:
             return _ConnectionProxy(self._memory_connection)
