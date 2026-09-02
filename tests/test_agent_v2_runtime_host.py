@@ -48,6 +48,7 @@ def test_scheduled_worker_dispatches_due_task_and_records_stats() -> None:
     now = datetime(2026, 7, 10, 12, 30, tzinfo=timezone.utc)
     task = store.create_task(
         owner_user_id="u-alex",
+        project_id="home",
         name="Reminder",
         prompt="Remind Alex",
         schedule_kind="once",
@@ -66,11 +67,40 @@ def test_scheduled_worker_dispatches_due_task_and_records_stats() -> None:
     assert runtime.queue.size() == 1
 
 
+def test_scheduled_worker_delivers_plain_reminders_without_queueing_pdca() -> None:
+    store = ScheduledTaskStore(":memory:")
+    now = datetime(2026, 7, 10, 12, 30, tzinfo=timezone.utc)
+    task = store.create_task(
+        owner_user_id="u-alex",
+        project_id="home",
+        name="Drink water",
+        prompt="Reminder to drink water",
+        schedule_kind="once",
+        run_at=(now - timedelta(seconds=1)).isoformat(),
+        timezone_name="UTC",
+        delivery_mode="direct",
+        now=now - timedelta(minutes=1),
+    )
+    runtime = build_runtime_host(schedule_store=store)
+    worker = ScheduledTaskWorker(
+        store=store,
+        messages=runtime.queue,
+        on_direct_delivery=lambda _occurrence: "outbox-1",
+    )
+
+    outcomes = worker.run_once(now=now)
+
+    assert outcomes[0]["status"] == "delivered"
+    assert runtime.queue.size() == 0
+    assert store.list_executions(scheduled_task_id=task.scheduled_task_id)[0].status == "response_pending"
+
+
 def test_scheduled_occurrence_is_claimed_by_one_worker_only() -> None:
     store = ScheduledTaskStore(":memory:")
     now = datetime(2026, 7, 10, 12, 30, tzinfo=timezone.utc)
     task = store.create_task(
         owner_user_id="u-alex",
+        project_id="home",
         name="Reminder",
         prompt="Remind Alex",
         schedule_kind="once",
@@ -92,6 +122,7 @@ def test_scheduled_occurrence_expired_lease_is_reclaimed() -> None:
     now = datetime(2026, 7, 10, 12, 30, tzinfo=timezone.utc)
     store.create_task(
         owner_user_id="u-alex",
+        project_id="home",
         name="Reminder",
         prompt="Remind Alex",
         schedule_kind="once",
@@ -119,7 +150,7 @@ def test_daemon_processes_host_queue_without_tui() -> None:
     )
     daemon = V2Daemon(runtime)
 
-    runtime.channel.queue_message(prompt="hello", user="local")
+    runtime.channel.queue_message(prompt="hello", user="local", project_id="home")
     result = daemon.run_once()
 
     assert result.queued_message_id is not None
@@ -141,6 +172,7 @@ def test_daemon_marks_scheduled_occurrence_delivered_after_outbox_delivery() -> 
     now = datetime(2026, 7, 10, 12, 30, tzinfo=timezone.utc)
     task = store.create_task(
         owner_user_id="u-alex",
+        project_id="home",
         name="Reminder",
         prompt="Remind Alex",
         schedule_kind="once",

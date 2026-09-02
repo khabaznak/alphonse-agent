@@ -154,6 +154,7 @@ class V2Daemon:
             messages=self.runtime.queue,
             worker_id=self.daemon_id,
             on_message_queued=lambda: None,
+            on_direct_delivery=self._deliver_scheduled_reminder,
         )
         self.ipc = V2DaemonServer(self)
 
@@ -1769,6 +1770,40 @@ class V2Daemon:
             if connection is not None:
                 arguments["connection"] = connection
             self.runtime.schedule_store.mark_occurrence_response_pending(occurrence_key, **arguments)
+
+    def _deliver_scheduled_reminder(self, occurrence: Any) -> str:
+        """Deliver notification-only schedules without starting an LLM/PDCA run."""
+        task = occurrence.task
+        origin = channel_address_from_metadata({"channel": dict(task.origin_channel)})
+        if origin is None:
+            resolved = self.runtime.identity_resolver.resolve_outbound_address(
+                alphonse_user_id=task.owner_user_id,
+            )
+            origin = resolved.address if resolved.resolved else None
+        if origin is None:
+            raise RuntimeError("scheduled_reminder_delivery_unresolved")
+        message = str(task.description or task.name or "Reminder").strip()
+        outbound = self.runtime.outbox.enqueue(
+            address=origin,
+            message=f"Reminder: {message}",
+            kind="scheduled_reminder",
+            audience_user_id=task.owner_user_id,
+            project_id=task.project_id,
+            metadata={
+                "source": "scheduled_reminder",
+                "scheduled_task_id": task.scheduled_task_id,
+                "occurrence_key": occurrence.occurrence_key,
+            },
+        )
+        self.runtime.conversation_store.record(
+            owner_user_id=task.owner_user_id,
+            project_id=task.project_id,
+            role="assistant",
+            content=outbound.message,
+            source=origin.integration_id,
+            source_message_id=f"outbound:{outbound.outbox_message_id}",
+        )
+        return outbound.outbox_message_id
 
     def _run_retention_if_due(self, *, force: bool = False) -> None:
         now = datetime.now(timezone.utc)

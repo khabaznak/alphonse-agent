@@ -259,6 +259,32 @@ def test_do_node_records_scheduled_task_result_in_execution_result_not_metadata(
     assert execution["status"] == "success"
     assert execution["result"]["scheduled_task_id"]
     assert "scheduled_task_id" not in task.metadata
+    assert task.status == "completed"
+    assert task.metadata["terminal_after_do"] is True
+
+
+def test_scheduled_task_is_idempotent_and_plain_reminders_use_direct_delivery() -> None:
+    store = ScheduledTaskStore()
+    task = TaskState(
+        user="alex",
+        project_id="home",
+        message_id="message-1",
+        goal="Recuérdame en 10 min enviar un mensaje a mi jefa.",
+    )
+    context = ToolExecutionContext(task=task, messages=InMemoryMessageQueue(), schedule_store=store)
+    arguments = {
+        "name": "Mensaje a mi jefa",
+        "prompt": "Recordar a Alex enviar un mensaje a su jefa.",
+        "schedule_kind": "once",
+        "run_at": "2026-07-10T09:00:00+00:00",
+    }
+
+    first = execute_scheduled_task(arguments, context=context)
+    second = execute_scheduled_task(arguments, context=context)
+
+    assert first["scheduled_task_id"] == second["scheduled_task_id"]
+    assert first["delivery_mode"] == "direct"
+    assert len(store.list_tasks(owner_user_id="alex")) == 1
 
 
 def test_runner_queues_due_one_off_task_and_marks_completed() -> None:

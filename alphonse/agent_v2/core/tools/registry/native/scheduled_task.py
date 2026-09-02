@@ -59,6 +59,11 @@ SCHEDULED_TASK_ARGUMENT_SCHEMA: dict[str, Any] = {
             "type": "boolean",
             "description": "Whether the scheduled task starts active.",
         },
+        "delivery_mode": {
+            "type": "string",
+            "enum": ["direct", "pdca"],
+            "description": "Use direct for a plain reminder; use pdca only for deferred agent work such as device control.",
+        },
     },
     "required": ["name", "prompt", "schedule_kind"],
 }
@@ -105,7 +110,11 @@ def execute_scheduled_task(
         raise ValueError("scheduled_task_owner_required")
     default_timezone = context.user_timezone_provider(owner_user_id) if callable(context.user_timezone_provider) else "UTC"
     schedule_kind = str(arguments.get("schedule_kind") or "").strip()
-    run_at = _relative_run_at_from_goal(str(getattr(task, "goal", "") or "")) or _optional_text(arguments.get("run_at"))
+    goal = str(getattr(task, "goal", "") or "")
+    run_at = _relative_run_at_from_goal(goal) or _optional_text(arguments.get("run_at"))
+    delivery_mode = str(arguments.get("delivery_mode") or "").strip().lower()
+    if not delivery_mode:
+        delivery_mode = "direct" if _is_plain_reminder(goal) else "pdca"
     record = store.create_task(
         owner_user_id=owner_user_id,
         project_id=str(getattr(task, "project_id", "") or "").strip(),
@@ -121,6 +130,8 @@ def execute_scheduled_task(
         else {},
         timezone_name=str(arguments.get("timezone") or "").strip() or str(default_timezone or "UTC"),
         enabled=bool(arguments.get("enabled", True)),
+        delivery_mode=delivery_mode,
+        idempotency_key=f"schedule:{str(getattr(task, 'message_id', '') or getattr(task, 'task_id', '')).strip()}",
     )
     return {
         "scheduled_task_id": record.scheduled_task_id,
@@ -129,6 +140,7 @@ def execute_scheduled_task(
         "status": record.status,
         "next_run_at": record.next_run_at,
         "schedule_summary": schedule_summary(record.schedule),
+        "delivery_mode": record.delivery_mode,
     }
 
 
@@ -161,3 +173,14 @@ def _relative_run_at_from_goal(goal: str) -> str | None:
     else:
         delay = timedelta(minutes=amount)
     return (datetime.now(timezone.utc) + delay).isoformat()
+
+
+def _is_plain_reminder(goal: str) -> bool:
+    """Keep notification-only reminders out of an LLM pass when they fire."""
+    text = str(goal or "").casefold()
+    reminder_language = ("recuérdame", "recordatorio", "reminder", "remind me")
+    deferred_action_language = (
+        "enciende", "apaga", "prende", "envía", "enviale", "manda",
+        "turn on", "turn off", "send ", "controla", "control ",
+    )
+    return any(token in text for token in reminder_language) and not any(token in text for token in deferred_action_language)

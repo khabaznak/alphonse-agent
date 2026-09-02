@@ -41,6 +41,8 @@ class ScheduledTaskRecord:
     name: str
     description: str
     prompt: str
+    delivery_mode: str
+    idempotency_key: str
     origin_channel: dict[str, Any]
     schedule: dict[str, Any]
     timezone: str
@@ -58,6 +60,8 @@ class ScheduledTaskRecord:
             "name": self.name,
             "description": self.description,
             "prompt": self.prompt,
+            "delivery_mode": self.delivery_mode,
+            "idempotency_key": self.idempotency_key,
             "origin_channel": dict(self.origin_channel),
             "schedule": dict(self.schedule),
             "timezone": self.timezone,
@@ -152,6 +156,8 @@ class ScheduledTaskStore:
         origin_channel: dict[str, Any] | None = None,
         timezone_name: str = "UTC",
         enabled: bool = True,
+        delivery_mode: str = "pdca",
+        idempotency_key: str = "",
         now: datetime | None = None,
     ) -> ScheduledTaskRecord:
         owner = str(owner_user_id or "").strip()
@@ -166,6 +172,19 @@ class ScheduledTaskStore:
         project_value = str(project_id or "").strip()
         if not project_value:
             raise ValueError("scheduled_task_project_required")
+        mode = str(delivery_mode or "pdca").strip().lower()
+        if mode not in {"pdca", "direct"}:
+            raise ValueError("scheduled_task_delivery_mode_invalid")
+        key = str(idempotency_key or "").strip()
+        if key:
+            with self._connect() as conn:
+                row = conn.execute(
+                    "SELECT * FROM v2_scheduled_tasks WHERE idempotency_key=?",
+                    (key,),
+                ).fetchone()
+            existing = _task_from_row(row)
+            if existing is not None:
+                return existing
         timezone_value = _normalize_timezone(timezone_name)
         schedule = _build_schedule(
             schedule_kind=schedule_kind,
@@ -184,6 +203,8 @@ class ScheduledTaskStore:
             name=name_value,
             description=str(description or "").strip(),
             prompt=prompt_value,
+            delivery_mode=mode,
+            idempotency_key=key,
             origin_channel=dict(origin_channel or {}),
             schedule=schedule,
             timezone=timezone_value,
@@ -194,15 +215,28 @@ class ScheduledTaskStore:
             updated_at=now_text,
         )
         with self._connect() as conn:
-            conn.execute(
-                """
-                INSERT INTO v2_scheduled_tasks (
-                  scheduled_task_id, owner_user_id, project_id, name, description, prompt,
-                  schedule_json, origin_channel_json, timezone, status, next_run_at, last_run_at, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                _task_values(record),
-            )
+            try:
+                conn.execute(
+                    """
+                    INSERT INTO v2_scheduled_tasks (
+                      scheduled_task_id, owner_user_id, project_id, name, description, prompt,
+                      schedule_json, origin_channel_json, timezone, status, next_run_at, last_run_at, created_at, updated_at,
+                      delivery_mode, idempotency_key
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    _task_values(record),
+                )
+            except sqlite3.IntegrityError:
+                if not key:
+                    raise
+                row = conn.execute(
+                    "SELECT * FROM v2_scheduled_tasks WHERE idempotency_key=?",
+                    (key,),
+                ).fetchone()
+                existing = _task_from_row(row)
+                if existing is None:
+                    raise
+                return existing
         return record
 
     def get_task(self, scheduled_task_id: str) -> ScheduledTaskRecord | None:
@@ -798,6 +832,8 @@ class ScheduledTaskStore:
                   last_run_at TEXT,
                   created_at TEXT NOT NULL,
                   updated_at TEXT NOT NULL,
+                  delivery_mode TEXT NOT NULL DEFAULT 'pdca',
+                  idempotency_key TEXT NOT NULL DEFAULT '',
                   CHECK (status IN ('active', 'paused', 'completed', 'cancelled', 'failed'))
                 ) STRICT;
 
@@ -838,6 +874,14 @@ class ScheduledTaskStore:
                 conn.execute(
                     "ALTER TABLE v2_scheduled_tasks ADD COLUMN origin_channel_json TEXT NOT NULL DEFAULT '{}'"
                 )
+            if "delivery_mode" not in columns:
+                conn.execute("ALTER TABLE v2_scheduled_tasks ADD COLUMN delivery_mode TEXT NOT NULL DEFAULT 'pdca'")
+            if "idempotency_key" not in columns:
+                conn.execute("ALTER TABLE v2_scheduled_tasks ADD COLUMN idempotency_key TEXT NOT NULL DEFAULT ''")
+            conn.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_v2_scheduled_tasks_idempotency "
+                "ON v2_scheduled_tasks(idempotency_key) WHERE idempotency_key!=''"
+            )
             execution_columns = {
                 str(row[1]) for row in conn.execute("PRAGMA table_info(v2_scheduled_task_executions)").fetchall()
             }
@@ -934,6 +978,7 @@ class ScheduledTaskRunner:
                     "scheduled_task_id": task.scheduled_task_id,
                     "project_id": task.project_id,
                     "scheduled_run_id": run_id,
+                    "delivery_mode": task.delivery_mode,
                     "channel": dict(task.origin_channel),
                 },
             )
@@ -1075,6 +1120,8 @@ def _task_from_row(row: sqlite3.Row | None) -> ScheduledTaskRecord | None:
         name=str(row["name"]),
         description=str(row["description"] or ""),
         prompt=str(row["prompt"]),
+        delivery_mode=str(row["delivery_mode"] or "pdca"),
+        idempotency_key=str(row["idempotency_key"] or ""),
         origin_channel=dict(origin_channel) if isinstance(origin_channel, dict) else {},
         schedule=dict(schedule) if isinstance(schedule, dict) else {},
         timezone=str(row["timezone"] or "UTC"),
@@ -1126,6 +1173,8 @@ def _task_values(record: ScheduledTaskRecord) -> tuple[Any, ...]:
         record.last_run_at,
         record.created_at,
         record.updated_at,
+        record.delivery_mode,
+        record.idempotency_key,
     )
 
 
@@ -1139,6 +1188,8 @@ def _replace_task(task: ScheduledTaskRecord, **values: Any) -> ScheduledTaskReco
         name=str(data["name"]),
         description=str(data["description"] or ""),
         prompt=str(data["prompt"]),
+        delivery_mode=str(data.get("delivery_mode") or "pdca"),
+        idempotency_key=str(data.get("idempotency_key") or ""),
         origin_channel=dict(data.get("origin_channel") or {}),
         schedule=dict(data["schedule"]),
         timezone=str(data["timezone"] or "UTC"),

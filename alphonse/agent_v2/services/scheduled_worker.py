@@ -37,6 +37,7 @@ class ScheduledTaskWorker:
         max_attempts: int = 5,
         worker_id: str | None = None,
         on_failure: Callable[[ScheduledOccurrence, str], None] | None = None,
+        on_direct_delivery: Callable[[ScheduledOccurrence], str] | None = None,
     ) -> None:
         self.store = store
         self.messages = messages
@@ -47,6 +48,7 @@ class ScheduledTaskWorker:
         self.max_attempts = max(1, int(max_attempts))
         self.worker_id = str(worker_id or f"scheduler-{uuid.uuid4().hex[:12]}")
         self.on_failure = on_failure
+        self.on_direct_delivery = on_direct_delivery
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._stats = ScheduledWorkerStats()
@@ -108,6 +110,29 @@ class ScheduledTaskWorker:
 
     def _dispatch(self, occurrence: ScheduledOccurrence, now: datetime) -> dict[str, Any]:
         try:
+            if occurrence.task.delivery_mode == "direct":
+                if self.on_direct_delivery is None:
+                    raise RuntimeError("scheduled_direct_delivery_unavailable")
+                outbox_message_id = str(self.on_direct_delivery(occurrence) or "").strip()
+                if not outbox_message_id:
+                    raise RuntimeError("scheduled_direct_delivery_unavailable")
+                self.store.mark_occurrence_enqueued(
+                    occurrence.occurrence_key,
+                    worker_id=self.worker_id,
+                    message_id=f"direct:{occurrence.occurrence_key}",
+                )
+                self.store.mark_occurrence_response_pending(
+                    occurrence.occurrence_key,
+                    response_outbox_id=outbox_message_id,
+                )
+                self.store.update_after_run(occurrence.task, now=now)
+                return {
+                    "scheduled_task_id": occurrence.task.scheduled_task_id,
+                    "project_id": occurrence.task.project_id,
+                    "occurrence_key": occurrence.occurrence_key,
+                    "status": "delivered",
+                    "response_outbox_id": outbox_message_id,
+                }
             metadata: dict[str, Any] = {
                 "source": "scheduled_task",
                 "scheduled_task_id": occurrence.task.scheduled_task_id,

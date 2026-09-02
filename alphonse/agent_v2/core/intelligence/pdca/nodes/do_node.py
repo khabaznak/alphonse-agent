@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any
 from alphonse.agent_v2.core.core import ImprovementPhase
 from alphonse.agent_v2.core.intelligence.task_state import TaskState
 from alphonse.agent_v2.core.tools.registry.native.ask_question import ASK_QUESTION_TOOL_ID
+from alphonse.agent_v2.core.tools.registry.native.scheduled_task import SCHEDULED_TASK_TOOL_ID
 from alphonse.agent_v2.core.tools.invocation import ToolInvocationService
 
 if TYPE_CHECKING:
@@ -127,6 +128,14 @@ def do_node(task: TaskState, context: CoreLoopContext | None = None) -> TaskStat
     if tool_id == "native.respond" and isinstance(result, dict):
         context.record_memory_event(task, "Conversation", f"- Alphonse: {str(result.get('message') or '')}")
     task.record_plan_call_success(call_id, result)
+    if tool_id == SCHEDULED_TASK_TOOL_ID:
+        # Persisting a future occurrence completes the setup task. The worker
+        # owns the clock; CAPD must not keep working until the trigger time.
+        task.status = "completed"
+        task.outcome = {"status": "success", "scheduled_task": result}
+        task.metadata["terminal_after_do"] = True
+        task.metadata["act_route"] = "end"
+        task.append_update("Do completed the task after persisting its scheduled occurrence.")
     context.emit_activity(
         phase=ImprovementPhase.DO,
         label="tool completed",
