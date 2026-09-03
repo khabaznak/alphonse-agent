@@ -80,3 +80,31 @@ def test_project_context_mutation_requires_owner_and_unknown_slash_bypasses_capd
     assert "Only the project owner" in outbox.list()[-2].message
     assert "Unsupported command: /agent-config." in outbox.list()[-1].message
     assert queue.size() == 0
+
+
+def test_project_commands_do_not_grant_admins_access_to_other_users_private_projects(tmp_path) -> None:
+    queue = InMemoryMessageQueue()
+    outbox = SQLiteOutboundStore()
+    projects = ProjectStore(":memory:")
+    router = ProjectInboundRouter(
+        channel=CommunicationChannel(queue),
+        outbox=outbox,
+        projects=projects,
+        sessions=SQLiteProjectSessionStore(":memory:"),
+        is_admin=lambda user: user == "alex",
+    )
+    owned = projects.create_project(name="Alex private", root_path=str(tmp_path / "alex"), owner_user_id="alex")
+    private = projects.create_project(name="Gaby private", root_path=str(tmp_path / "gaby"), owner_user_id="gaby")
+    shared = projects.create_project(name="Shared", root_path=str(tmp_path / "shared"), owner_user_id="gaby", visibility="shared")
+
+    router.ingest(prompt="/projects", user="alex", integration_id="telegram-home", provider_key="telegram", channel_target="chat")
+    listed = outbox.list()[-1].message
+    router.ingest(prompt=f"/project {private.project_id}", user="alex", integration_id="telegram-home", provider_key="telegram", channel_target="chat")
+    denied = outbox.list()[-1].message
+    router.ingest(prompt=f"/project {shared.project_id}", user="alex", integration_id="telegram-home", provider_key="telegram", channel_target="chat")
+
+    assert owned.project_id in listed
+    assert shared.project_id in listed
+    assert private.project_id not in listed
+    assert "Project not found or not visible" in denied
+    assert f"Active project: {shared.name}." in outbox.list()[-1].message

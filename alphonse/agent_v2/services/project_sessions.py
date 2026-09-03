@@ -266,7 +266,7 @@ class ProjectInboundRouter:
             home = self._home_project(key.alphonse_user_id)
             self.sessions.set(key, home)
             return home
-        project = self.projects.get_project(session.active_project_id, requester_user_id=key.alphonse_user_id, requester_is_admin=bool(self.is_admin(key.alphonse_user_id)))
+        project = self.projects.get_project(session.active_project_id, requester_user_id=key.alphonse_user_id)
         if project is None:
             home = self._home_project(key.alphonse_user_id)
             self.sessions.set(key, home)
@@ -326,7 +326,7 @@ class ProjectInboundRouter:
         return f"Active project: {project.name}."
 
     def _list_projects(self, key: ProjectSessionKey) -> str:
-        projects = self.projects.list_visible_projects(key.alphonse_user_id, requester_is_admin=bool(self.is_admin(key.alphonse_user_id)))
+        projects = self.projects.list_visible_projects(key.alphonse_user_id)
         active = self.active_project(key)
         if not projects:
             return "No visible projects. Create one with /project create <name>."
@@ -343,7 +343,7 @@ class ProjectInboundRouter:
 
     def _resolve_visible_project(self, user: str, value: str) -> ProjectRecord:
         rendered = str(value or "").strip()
-        visible = self.projects.list_visible_projects(user, requester_is_admin=bool(self.is_admin(user)))
+        visible = self.projects.list_visible_projects(user)
         for project in visible:
             if project.project_id == rendered:
                 return project
