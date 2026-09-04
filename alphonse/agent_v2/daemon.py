@@ -296,15 +296,11 @@ class V2Daemon:
 
     def onboard(self, *, display_name: str, users_root: str, import_v1: bool = False) -> dict[str, object]:
         store = self.runtime.user_store
-        if import_v1:
-            store.set_users_root(users_root)
-            imported = store.import_v1()
-            admin = store.admin_user()
-            if admin is None:
-                admin = store.onboard(display_name=display_name, users_root=users_root)
-        else:
-            admin = store.onboard(display_name=display_name, users_root=users_root)
-            imported = {}
+        # Kept as an ignored IPC parameter so an already-installed desktop client
+        # can complete onboarding after the v1 code has been removed.
+        del import_v1
+        admin = store.onboard(display_name=display_name, users_root=users_root)
+        imported = {}
         self.runtime.user = admin.user_id
         self._ensure_home_projects()
         self._migrate_blank_project_records()

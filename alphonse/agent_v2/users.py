@@ -434,34 +434,6 @@ class V2UserStore:
                 row = conn.execute("SELECT * FROM v2_user_addresses WHERE user_id=? AND is_active=1 ORDER BY is_preferred DESC, updated_at DESC LIMIT 1", (str(user_id),)).fetchone()
         return _address(row)
 
-    def import_v1(self) -> dict[str, object]:
-        """Explicit compatibility import. v1 is never read by normal v2 routing."""
-        from alphonse.agent import identity
-        imported = 0
-        mappings = 0
-        admin = identity.get_active_admin_user()
-        for legacy in identity.list_users(active_only=False):
-            uid = str(legacy.get("user_id") or "").strip()
-            if not uid or self.get_user(uid):
-                continue
-            self.create_user(display_name=str(legacy.get("display_name") or uid), role=str(legacy.get("role") or ("admin" if legacy.get("is_admin") else "member")), user_id=uid, is_active=bool(legacy.get("is_active", True)))
-            imported += 1
-        if self.admin_user() is None and isinstance(admin, dict) and admin.get("user_id"):
-            self._set_setting("admin_user_id", str(admin["user_id"]))
-            self._set_setting("onboarded", "1")
-        # Service rows are intentionally copied through public v1 resolution only for known providers.
-        for user in self.list_users():
-            for provider in ("telegram", "teams", "whatsapp", "discord"):
-                service_id = identity.resolve_service_id(provider)
-                provider_user = identity.resolve_service_user_id(user_id=user.user_id, service_id=service_id) if service_id is not None else None
-                if provider_user:
-                    try:
-                        self.bind_address(user_id=user.user_id, integration_id=provider, provider_key=provider, provider_user_id=provider_user)
-                        mappings += 1
-                    except ValueError:
-                        pass
-        return {"users_imported": imported, "addresses_imported": mappings, "admin_user_id": (self.admin_user().user_id if self.admin_user() else "")}
-
     def _setting(self, key: str) -> str:
         with self._connect() as conn:
             row = conn.execute("SELECT value FROM v2_user_settings WHERE key=?", (key,)).fetchone()

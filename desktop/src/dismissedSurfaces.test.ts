@@ -19,7 +19,7 @@ function memoryStorage(initial = "") {
 }
 
 function surface(surfaceId: string): A2uiSurface {
-  return { surfaceId, catalogId: "alphonse.desktop.catalog.v1", components: {}, dataModel: {} };
+  return { surfaceId, catalogId: "alphonse.desktop.catalog.v2", components: {}, dataModel: {} };
 }
 
 describe("dismissed scheduled-task surfaces", () => {

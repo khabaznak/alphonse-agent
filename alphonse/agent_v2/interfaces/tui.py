@@ -392,6 +392,7 @@ def save_telegram_integration_config(
     provider_user_id = str(telegram_user_id or "").strip()
     if provider_user_id:
         upsert_provider_user_mapping(
+            user_store=runtime.user_store,
             alphonse_user_id=runtime.user,
             provider_key="telegram",
             provider_user_id=provider_user_id,
@@ -1637,6 +1638,7 @@ def _build_textual_app_class() -> type[Any]:
             if not telegram_user_id:
                 try:
                     mapped_user_id = resolve_provider_user_mapping(
+                        user_store=self.runtime.user_store,
                         alphonse_user_id=self.runtime.user,
                         provider_key="telegram",
                     )

@@ -114,7 +114,7 @@ def default_agent_config_dir() -> Path:
 
 
 def packaged_agent_config_dir() -> Path:
-    return Path(__file__).resolve().parents[1] / "config"
+    return Path(__file__).resolve().parent / "config"
 
 
 def _validate_file_name(file_name: str) -> str:
