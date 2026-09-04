@@ -125,7 +125,6 @@ class ScheduledTaskWorker:
                     occurrence.occurrence_key,
                     response_outbox_id=outbox_message_id,
                 )
-                self.store.update_after_run(occurrence.task, now=now)
                 return {
                     "scheduled_task_id": occurrence.task.scheduled_task_id,
                     "project_id": occurrence.task.project_id,
@@ -155,7 +154,6 @@ class ScheduledTaskWorker:
                 worker_id=self.worker_id,
                 message_id=queued.message_id,
             )
-            self.store.update_after_run(occurrence.task, now=now)
             return {
                 "scheduled_task_id": occurrence.task.scheduled_task_id,
                 "project_id": occurrence.task.project_id,

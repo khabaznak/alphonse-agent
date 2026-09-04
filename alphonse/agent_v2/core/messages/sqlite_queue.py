@@ -233,6 +233,15 @@ class SQLiteMessageQueue:
                 counts[status] = int(row["count"] or 0)
         return counts
 
+    def status_for(self, message_id: str) -> str:
+        """Return the durable state of one message without exposing its content."""
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT status FROM v2_inbound_messages WHERE message_id=?",
+                (str(message_id or "").strip(),),
+            ).fetchone()
+        return str(row["status"] or "") if row is not None else ""
+
     def turns_ahead(self, message_id: str) -> int:
         """Count independently runnable PDCA tasks ahead of a queued message."""
         with self._connect() as conn:

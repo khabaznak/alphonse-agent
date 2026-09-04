@@ -63,7 +63,8 @@ def test_scheduled_worker_dispatches_due_task_and_records_stats() -> None:
 
     assert outcomes[0]["status"] == "queued"
     assert worker.stats.queued == 1
-    assert store.get_task(task.scheduled_task_id).status == "completed"
+    assert store.get_task(task.scheduled_task_id).status == "active"
+    assert store.list_executions(scheduled_task_id=task.scheduled_task_id)[0].status == "enqueued"
     assert runtime.queue.size() == 1
 
 
@@ -197,3 +198,35 @@ def test_daemon_marks_scheduled_occurrence_delivered_after_outbox_delivery() -> 
     executions = store.list_executions(scheduled_task_id=task.scheduled_task_id)
     assert executions[0].status == "delivered"
     assert executions[0].response_outbox_id == outbound.outbox_message_id
+    assert store.get_task(task.scheduled_task_id).status == "completed"
+
+
+def test_scheduled_processing_failure_marks_task_failed_and_notifies_owner() -> None:
+    store = ScheduledTaskStore(":memory:")
+    runtime = build_runtime_host(schedule_store=store)
+    daemon = V2Daemon(runtime)
+    now = datetime(2026, 7, 10, 12, 30, tzinfo=timezone.utc)
+    task = store.create_task(
+        owner_user_id="u-alex",
+        project_id="home",
+        name="Turn on study air",
+        prompt="Turn on the air",
+        schedule_kind="once",
+        run_at=(now - timedelta(seconds=1)).isoformat(),
+        timezone_name="UTC",
+        origin_channel={"integration_id": "telegram-home", "provider_key": "telegram", "channel_target": "123", "alphonse_user_id": "u-alex"},
+        now=now - timedelta(minutes=1),
+    )
+    occurrence = store.claim_due_occurrences(worker_id="worker-1", now=now)[0]
+    store.mark_occurrence_enqueued(occurrence.occurrence_key, worker_id="worker-1", message_id="scheduled:test")
+    store.mark_occurrence_processing_failed(occurrence.occurrence_key, error="openai_codex_auth_required")
+    daemon._notify_scheduled_task_failure(
+        {"scheduled_task_id": task.scheduled_task_id, "channel": task.origin_channel},
+        error="openai_codex_auth_required",
+    )
+
+    assert store.get_task(task.scheduled_task_id).status == "failed"
+    assert store.list_executions(scheduled_task_id=task.scheduled_task_id)[0].status == "failed"
+    notification = runtime.outbox.list()[0]
+    assert notification.kind == "scheduled_task_failed"
+    assert "signed in again" in notification.message

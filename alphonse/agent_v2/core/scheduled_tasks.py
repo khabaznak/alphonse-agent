@@ -351,7 +351,7 @@ class ScheduledTaskStore:
 
     def mark_failed(self, scheduled_task_id: str, *, error: str) -> ScheduledTaskRecord:
         _ = error
-        return self._set_status(scheduled_task_id, "failed", clear_next=False)
+        return self._set_status(scheduled_task_id, "failed", clear_next=True)
 
     def update_after_run(
         self,
@@ -681,10 +681,34 @@ class ScheduledTaskStore:
         )
 
     def mark_occurrence_delivered(self, occurrence_key: str, *, response_outbox_id: str = "") -> bool:
-        return self._update_occurrence(
+        updated = self._update_occurrence(
             occurrence_key,
             status="delivered",
             response_outbox_id=response_outbox_id,
+            lease_owner="",
+            lease_expires_at="",
+        )
+        if updated:
+            self._finalize_one_time_occurrence(occurrence_key, failed=False)
+        return updated
+
+    def mark_occurrence_processing_failed(self, occurrence_key: str, *, error: str) -> bool:
+        updated = self._update_occurrence(
+            occurrence_key,
+            status="failed",
+            last_error=error,
+            error=error,
+            lease_owner="",
+            lease_expires_at="",
+        )
+        if updated:
+            self._finalize_one_time_occurrence(occurrence_key, failed=True, error=error)
+        return updated
+
+    def mark_occurrence_processing(self, occurrence_key: str) -> bool:
+        return self._update_occurrence(
+            occurrence_key,
+            status="processing",
             lease_owner="",
             lease_expires_at="",
         )
@@ -706,7 +730,7 @@ class ScheduledTaskStore:
         )
 
     def mark_occurrence_failed(self, occurrence_key: str, *, error: str) -> bool:
-        return self._update_occurrence(
+        updated = self._update_occurrence(
             occurrence_key,
             status="delivery_failed",
             last_error=error,
@@ -714,6 +738,25 @@ class ScheduledTaskStore:
             lease_owner="",
             lease_expires_at="",
         )
+        if updated:
+            self._finalize_one_time_occurrence(occurrence_key, failed=True, error=error)
+        return updated
+
+    def _finalize_one_time_occurrence(self, occurrence_key: str, *, failed: bool, error: str = "") -> None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT scheduled_task_id FROM v2_scheduled_task_executions WHERE occurrence_key=?",
+                (str(occurrence_key or "").strip(),),
+            ).fetchone()
+        if row is None:
+            return
+        task = self.get_task(str(row["scheduled_task_id"] or ""))
+        if task is None or str(task.schedule.get("kind") or "") != "once":
+            return
+        if failed:
+            self.mark_failed(task.scheduled_task_id, error=error)
+        else:
+            self.complete_task(task.scheduled_task_id)
 
     def _update_occurrence(
         self,

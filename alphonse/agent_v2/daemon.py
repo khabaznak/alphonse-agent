@@ -1682,6 +1682,10 @@ class V2Daemon:
                     failed=step.status == LoopStepStatus.FAILED,
                     waiting=step.status in {LoopStepStatus.PARKED, LoopStepStatus.WAITING},
                 )
+        queued_metadata = getattr(getattr(queued, "message", None), "metadata", {}) or {}
+        occurrence_key = str(queued_metadata.get("occurrence_key") or "").strip() if isinstance(queued_metadata, dict) and str(queued_metadata.get("source") or "") == "scheduled_task" else ""
+        if occurrence_key and step.queued_message_id:
+            self.runtime.schedule_store.mark_occurrence_processing(occurrence_key)
         snapshot = self.runtime.visible_state.snapshot()
         if step.status in {LoopStepStatus.PROCESSED, LoopStepStatus.PARKED, LoopStepStatus.WAITING}:
             outbox_path = str(getattr(self.runtime.outbox, "db_path", ":memory:"))
@@ -1709,15 +1713,24 @@ class V2Daemon:
             self._mark_snapshot_checkpoint_terminal(snapshot, status="cancelled")
             self._close_terminal_task_progress(snapshot)
         elif step.status == LoopStepStatus.FAILED and step.queued_message_id:
+            error = str(getattr(step, "error", "") or "capd_processing_failed")
+            metadata = getattr(getattr(queued, "message", None), "metadata", {}) or {}
+            scheduled_occurrence = str(metadata.get("occurrence_key") or "").strip() if isinstance(metadata, dict) and str(metadata.get("source") or "") == "scheduled_task" else ""
+            non_retryable = _scheduled_failure_is_non_retryable(error)
             retry = getattr(self.runtime.queue, "retry", None)
             if callable(retry):
                 retry(
                     step.queued_message_id,
-                    error=str(getattr(step, "error", "") or "capd_processing_failed"),
+                    error=error,
                     next_attempt_at=datetime.now(timezone.utc) + timedelta(seconds=5),
                     lease_owner=self.daemon_id,
-                    max_attempts=self.inbound_max_attempts,
+                    max_attempts=1 if non_retryable else self.inbound_max_attempts,
                 )
+            status_for = getattr(self.runtime.queue, "status_for", None)
+            terminal = non_retryable or (callable(status_for) and status_for(step.queued_message_id) == "failed")
+            if scheduled_occurrence and terminal:
+                self.runtime.schedule_store.mark_occurrence_processing_failed(scheduled_occurrence, error=error)
+                self._notify_scheduled_task_failure(metadata, error=error)
             self.runtime.core.clear_failure()
         if step.status != LoopStepStatus.BUSY:
             self.kill_switch.clear(str(step.queued_message_id or ""))
@@ -1804,6 +1817,37 @@ class V2Daemon:
             source_message_id=f"outbound:{outbound.outbox_message_id}",
         )
         return outbound.outbox_message_id
+
+    def _notify_scheduled_task_failure(self, metadata: dict[str, Any], *, error: str) -> None:
+        """Notify the owner when scheduled work cannot run, without involving the model."""
+        task_id = str(metadata.get("scheduled_task_id") or "").strip()
+        task = self.runtime.schedule_store.get_task(task_id)
+        if task is None:
+            return
+        origin = channel_address_from_metadata({"channel": metadata.get("channel")})
+        if origin is None:
+            resolved = self.runtime.identity_resolver.resolve_outbound_address(alphonse_user_id=task.owner_user_id)
+            origin = resolved.address if resolved.resolved else None
+        if origin is None:
+            logger.error("scheduled task failure could not be delivered task_id=%s error=%s", task_id, error)
+            return
+        message = _scheduled_failure_message(task.name, error)
+        outbound = self.runtime.outbox.enqueue(
+            address=origin,
+            message=message,
+            kind="scheduled_task_failed",
+            audience_user_id=task.owner_user_id,
+            project_id=task.project_id,
+            metadata={"source": "scheduled_task_failure", "scheduled_task_id": task_id, "failure_code": _scheduled_failure_code(error)},
+        )
+        self.runtime.conversation_store.record(
+            owner_user_id=task.owner_user_id,
+            project_id=task.project_id,
+            role="assistant",
+            content=message,
+            source=origin.integration_id,
+            source_message_id=f"outbound:{outbound.outbox_message_id}",
+        )
 
     def _run_retention_if_due(self, *, force: bool = False) -> None:
         now = datetime.now(timezone.utc)
@@ -2009,6 +2053,32 @@ def _local_datetime_to_utc(value: datetime, *, timezone_name: str) -> str:
 def _scheduled_task_id_from_surface(surface_id: str) -> str:
     value = str(surface_id or "").strip()
     return value.removeprefix("scheduled-task:") if value.startswith("scheduled-task:") else ""
+
+
+def _scheduled_failure_code(error: str) -> str:
+    value = str(error or "").strip()
+    return value.split(":", 1)[0] or "scheduled_task_processing_failed"
+
+
+def _scheduled_failure_is_non_retryable(error: str) -> bool:
+    return _scheduled_failure_code(error) in {
+        "openai_codex_auth_required",
+        "openai_codex_cli_missing",
+        "openai_codex_cli_upgrade_required",
+    }
+
+
+def _scheduled_failure_message(task_name: str, error: str) -> str:
+    code = _scheduled_failure_code(error)
+    if code == "openai_codex_auth_required":
+        detail = "Codex needs to be signed in again before I can run it."
+    elif code == "openai_codex_cli_missing":
+        detail = "The Codex command-line tool is unavailable on this machine."
+    elif code == "openai_codex_cli_upgrade_required":
+        detail = "Codex needs to be updated before I can run it."
+    else:
+        detail = "I could not complete it after retrying."
+    return f"Scheduled task failed: {task_name}. {detail}"
 
 
 def _json_object(value: Any) -> dict[str, Any]:
