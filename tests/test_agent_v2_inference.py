@@ -7,19 +7,28 @@ from alphonse.agent_v2.core.inference import ModelProfile
 from alphonse.agent_v2.core.inference import StubInferenceProvider
 
 
-def test_inference_router_chooses_project_specific_model_profile() -> None:
+def test_inference_router_uses_one_profile_across_projects_and_purposes() -> None:
     default = ModelProfile(provider="openai", model="gpt", profile_id="default")
-    project = ModelProfile(provider="ollama", model="llama", profile_id="stoic-local")
     provider = StubInferenceProvider(markdown_by_purpose={InferencePurpose.CRITERIA_REVIEW: "done"})
-    router = InferenceRouter(provider=provider, default_profile=default, project_profiles={"stoic": project})
+    router = InferenceRouter(provider=provider, default_profile=default)
 
     result = router.generate_markdown(
         InferenceRequest(prompt="Review", purpose=InferencePurpose.CRITERIA_REVIEW, project_id="stoic")
     )
 
     assert result.content == "done"
-    assert result.model_profile == project
-    assert provider.requests[0].model_profile == project
+    assert result.model_profile == default
+    assert provider.requests[0].model_profile == default
+
+
+def test_inference_router_rejects_request_level_model_override() -> None:
+    selected = ModelProfile(provider="openai", model="selected", profile_id="saved")
+    override = ModelProfile(provider="openai", model="other", profile_id="request")
+    provider = StubInferenceProvider(markdown_by_purpose={InferencePurpose.ACCEPTANCE_CRITERIA: "done"})
+    router = InferenceRouter(provider=provider, default_profile=selected)
+    result = router.generate_markdown(InferenceRequest(prompt="Act", purpose=InferencePurpose.ACCEPTANCE_CRITERIA, model_profile=override))
+    assert result.model_profile == selected
+    assert provider.requests[0].model_profile == selected
 
 
 def test_inference_router_falls_back_to_default_profile() -> None:

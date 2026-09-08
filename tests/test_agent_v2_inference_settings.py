@@ -5,6 +5,8 @@ import json
 import pytest
 
 from alphonse.agent_v2.core.inference import InferenceRouter
+from alphonse.agent_v2.core.inference import InferencePurpose
+from alphonse.agent_v2.core.inference import InferenceRequest
 from alphonse.agent_v2.core.inference import StubInferenceProvider
 from alphonse.agent_v2.inference_settings import CODEX_DEFAULT_MODEL
 from alphonse.agent_v2.inference_settings import InferenceSettingsRecord
@@ -16,11 +18,11 @@ from alphonse.agent_v2.runtime import build_runtime_host
 from alphonse.agent_v2.runtime import refresh_runtime_inference
 
 
-def test_inference_settings_uses_environment_only_until_a_selection_is_saved(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_inference_settings_never_uses_environment_model(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("OPENAI_CODEX_MODEL", "env-model")
     store = SQLiteInferenceSettingsStore(":memory:")
 
-    assert store.get().model_id == "env-model"
+    assert store.get().model_id == ""
 
     saved = store.save(InferenceSettingsRecord(model_id="saved-model"))
 
@@ -28,7 +30,7 @@ def test_inference_settings_uses_environment_only_until_a_selection_is_saved(mon
     assert store.get().model_id == "saved-model"
 
 
-def test_codex_catalog_filters_hidden_models_and_keeps_default(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_codex_catalog_filters_hidden_models(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
     cache_path = tmp_path / "models_cache.json"
     cache_path.write_text(
         json.dumps(
@@ -48,7 +50,7 @@ def test_codex_catalog_filters_hidden_models_and_keeps_default(tmp_path, monkeyp
 
     status = provider_status("openai_codex")
 
-    assert [item["model_id"] for item in status["models"]] == [CODEX_DEFAULT_MODEL, "gpt-5.5"]
+    assert [item["model_id"] for item in status["models"]] == ["gpt-5.5"]
     assert status["catalog_fetched_at"] == "2026-07-11T00:00:00Z"
 
 
@@ -81,3 +83,12 @@ def test_saved_selection_replaces_router_for_future_tasks_only() -> None:
     assert active_context_router.default_profile.model == "old"
     assert runtime.core.inference is not None
     assert runtime.core.inference.default_profile.model == "new"
+
+
+def test_unconfigured_or_legacy_codex_default_model_builds_non_runnable_router(monkeypatch) -> None:
+    monkeypatch.setattr("alphonse.agent_v2.core.inference.openai_codex.shutil.which", lambda _: "/bin/codex")
+    for model_id in ("", CODEX_DEFAULT_MODEL):
+        router = build_inference_router_from_settings(InferenceSettingsRecord(model_id=model_id))
+        assert router.default_profile.model == ""
+        with pytest.raises(ValueError, match="openai_codex_model_not_configured"):
+            router.generate_markdown(InferenceRequest(prompt="Act", purpose=InferencePurpose.ACCEPTANCE_CRITERIA))

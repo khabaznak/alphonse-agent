@@ -16,7 +16,7 @@ import { createDesktopNotifier, DESKTOP_NOTIFICATION_PREFERENCES_KEY, notificati
 import { readDismissedScheduledSurfaces, rememberDismissedScheduledSurface, withoutDismissedSurfaces, withoutSurface } from "./dismissedSurfaces";
 import { avatarState, avatarStateLabel, capdActivityLabel, projectKey } from "./layoutState";
 import { formatMessageTime } from "./messageTime";
-import { reuseProjectAttention, reuseQuestions, type ProjectAttention } from "./pollState";
+import { reuseProjectAttention, reuseQuestions, withoutTaskProgressSurfaces, type ProjectAttention } from "./pollState";
 import { QueueWorkloadChart } from "./QueueWorkloadChart";
 import { appendQueueSample, type QueueSample } from "./queueHistory";
 import type { ActivityEvent, AgentDocument, ChatMessage, CodeModeSettings, InferenceSettings, MediaToolsSettings, MemorySettings, Project, Question, WebToolsSettings } from "./types";
@@ -25,6 +25,8 @@ type Modal = "projects" | "project-settings" | "project-context" | "scheduled-ta
 type SettingsTab = "general" | "appearance" | "tools" | "artifacts" | "integrations" | "automations" | "model" | "agent-config";
 type ManagedProject = Project & { owner?: { display_name?: string; user_id?: string } | null };
 type PollResponse = {
+  daemon_id?: string;
+  daemon_changed?: boolean;
   events: ActivityEvent[];
   next_sequence: number;
   ui_events?: Array<{ sequence?: number; event: { type: string; name?: string; value?: unknown } }>;
@@ -46,6 +48,7 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
   const clientId = useRef(crypto.randomUUID()).current;
   const sequence = useRef(0);
   const uiSequence = useRef(0);
+  const daemonId = useRef("");
   const delivered = useRef(new Set<string>());
   const progressTaskIdsRef = useRef(new Set<string>());
   const autoScrolledProgressTaskIdsRef = useRef(new Set<string>());
@@ -136,18 +139,36 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
         project_id: requestedProjectId,
         after_sequence: sequence.current,
         after_ui_sequence: uiSequence.current,
+        daemon_id: daemonId.current,
         client_capabilities: { supportedCatalogIds: [DESKTOP_CATALOG_ID] },
         limit: 50,
     });
+    const previousDaemonId = daemonId.current;
+    const daemonChanged = Boolean(response.daemon_changed || (previousDaemonId && response.daemon_id && previousDaemonId !== response.daemon_id));
+    if (response.daemon_id) daemonId.current = response.daemon_id;
     sequence.current = response.next_sequence;
     uiSequence.current = response.next_ui_sequence ?? uiSequence.current;
-    return { requestedProjectId, response };
+    return { requestedProjectId, response, daemonChanged };
   }, [clientId, project?.project_id, user]);
 
   const poll = useCallback(async () => {
     try {
-      const { requestedProjectId, response } = await pollTransport();
+      const { requestedProjectId, response, daemonChanged } = await pollTransport();
       if (!diagnosticBehavior.commitsPollResponses) return;
+      if (daemonChanged) {
+        progressCompletionTimersRef.current.forEach((timer) => window.clearTimeout(timer));
+        progressCompletionTimersRef.current.clear();
+        progressTaskIdsRef.current.clear();
+        autoScrolledProgressTaskIdsRef.current.clear();
+        progressStartedAtRef.current.clear();
+        progressMeaningfulAtRef.current.clear();
+        setProgressTaskIds([]);
+        setPendingProgressMessages({});
+        setHeldProgressSurfaces({});
+        const retainedSurfaces = withoutTaskProgressSurfaces(surfacesRef.current);
+        surfacesRef.current = retainedSurfaces;
+        setSurfaces(retainedSurfaces);
+      }
       setConnected(true);
       setError("");
       const responseIsForActiveProject = projectKey(requestedProjectId) === activeProjectKeyRef.current;
@@ -1297,9 +1318,9 @@ function AutomationsSettingsSection({ user }: { user: string }) {
 
 function ModelSettingsSection() {
   const [providers, setProviders] = useState<Provider[]>([]); const [settings, setSettings] = useState<InferenceSettings | null>(null); const [provider, setProvider] = useState(""); const [model, setModel] = useState(""); const [notice, setNotice] = useState("");
-  useEffect(() => { void Promise.all([daemonRequest<{ providers: Provider[] }>("inference_providers"), daemonRequest<{ settings: InferenceSettings }>("inference_settings")]).then(([catalog, current]) => { setProviders(catalog.providers); setSettings(current.settings); setProvider(current.settings.provider_key); setModel(current.settings.model_id); }); }, []);
+  useEffect(() => { void Promise.all([daemonRequest<{ providers: Provider[] }>("inference_providers"), daemonRequest<{ settings: InferenceSettings }>("inference_settings")]).then(([catalog, current]) => { const selectedProvider = catalog.providers.find((item) => item.provider_key === current.settings.provider_key) || catalog.providers[0]; setProviders(catalog.providers); setSettings(current.settings); setProvider(selectedProvider?.provider_key || ""); setModel(current.settings.model_id || selectedProvider?.models[0]?.model_id || ""); }); }, []);
   const selected = providers.find((item) => item.provider_key === provider);
-  return <section className="settings-panel"><h3>Inference model</h3><select value={provider} onChange={(event) => { setProvider(event.target.value); setModel(""); }}>{providers.map((item) => <option value={item.provider_key} key={item.provider_key}>{item.display_name}</option>)}</select><select value={model} onChange={(event) => setModel(event.target.value)}>{selected?.models.map((item) => <option value={item.model_id} key={item.model_id}>{item.display_name}</option>)}</select><button onClick={() => void daemonRequest<{ settings: InferenceSettings }>("set_inference_settings", { provider_key: provider, model_id: model }).then((result) => { setSettings(result.settings); setNotice("Validated and saved."); }).catch((cause: unknown) => setNotice(cause instanceof Error ? cause.message : "Validation failed"))}>Validate & save</button><p>{notice || settings?.validation_error}</p></section>;
+  return <section className="settings-panel"><h3>Agent model</h3><p>This model runs every phase of Alphonse's CAPD cycle. New tasks use the saved selection after it is validated.</p><select value={provider} onChange={(event) => { const nextProvider = providers.find((item) => item.provider_key === event.target.value); setProvider(event.target.value); setModel(nextProvider?.models[0]?.model_id || ""); }}>{providers.map((item) => <option value={item.provider_key} key={item.provider_key}>{item.display_name}</option>)}</select><select value={model} onChange={(event) => setModel(event.target.value)} disabled={!selected?.models.length}>{selected?.models.map((item) => <option value={item.model_id} key={item.model_id}>{item.display_name}</option>)}</select><button disabled={!provider || !model} onClick={() => void daemonRequest<{ settings: InferenceSettings }>("set_inference_settings", { provider_key: provider, model_id: model }).then((result) => { setSettings(result.settings); setNotice("Validated and saved for new tasks."); }).catch((cause: unknown) => setNotice(cause instanceof Error ? cause.message : "Validation failed"))}>Validate & save</button><p>{notice || settings?.validation_error || (!settings?.model_id ? "Choose and save a model before starting a task." : "")}</p></section>;
 }
 
 function AgentConfigSettingsSection() {

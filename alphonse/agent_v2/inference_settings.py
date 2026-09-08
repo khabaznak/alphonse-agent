@@ -69,7 +69,7 @@ class InferenceProviderDescriptor:
             raise ValueError(f"inference_provider_not_supported: {self.provider_key}")
         model = _normalize_model_id(model_id)
         return InferenceRouter(
-            provider=OpenAICodexProvider(),
+            provider=OpenAICodexProvider(OpenAICodexProviderConfig(require_explicit_model=True)),
             default_profile=ModelProfile(
                 provider=OPENAI_CODEX_PROVIDER,
                 model=model,
@@ -85,8 +85,10 @@ class InferenceProviderDescriptor:
         if self.provider_key != OPENAI_CODEX_PROVIDER:
             raise ValueError(f"inference_provider_not_supported: {self.provider_key}")
         model = _normalize_model_id(model_id)
+        if not model:
+            raise ValueError("inference_model_not_configured")
         provider = OpenAICodexProvider(
-            OpenAICodexProviderConfig(model=model or None, timeout_seconds=25.0, ephemeral=True)
+            OpenAICodexProviderConfig(timeout_seconds=25.0, ephemeral=True, require_explicit_model=True)
         )
         profile = ModelProfile(provider=OPENAI_CODEX_PROVIDER, model=model, profile_id="validation")
         provider.generate_markdown(
@@ -118,7 +120,7 @@ class SQLiteInferenceSettingsStore:
         with self._connect() as conn:
             row = conn.execute("SELECT * FROM v2_inference_settings WHERE settings_id = 1").fetchone()
         if row is None:
-            return InferenceSettingsRecord(model_id=os.getenv("OPENAI_CODEX_MODEL", "").strip())
+            return InferenceSettingsRecord()
         return InferenceSettingsRecord(
             provider_key=str(row["provider_key"]),
             model_id=str(row["model_id"]),
@@ -243,8 +245,8 @@ def _codex_model_options() -> list[ModelOption]:
     metadata = _read_codex_cache_metadata(_codex_cache_path())
     entries = metadata.get("models")
     if not isinstance(entries, list):
-        return [ModelOption(CODEX_DEFAULT_MODEL, "Codex default", "Use the Codex CLI default model.")]
-    options = [ModelOption(CODEX_DEFAULT_MODEL, "Codex default", "Use the Codex CLI default model.")]
+        return []
+    options: list[ModelOption] = []
     for entry in entries:
         if not isinstance(entry, dict) or str(entry.get("visibility") or "list") != "list":
             continue
@@ -274,7 +276,7 @@ def _codex_cache_path() -> Path:
 
 
 def _codex_cli_version() -> str:
-    cli_bin = os.getenv("OPENAI_CODEX_CLI_BIN", "codex")
+    cli_bin = "codex"
     try:
         completed = subprocess.run([cli_bin, "--version"], capture_output=True, text=True, timeout=5, check=False)
     except (OSError, subprocess.TimeoutExpired):

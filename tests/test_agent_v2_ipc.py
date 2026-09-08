@@ -206,6 +206,8 @@ def test_desktop_poll_is_cursor_based_and_acknowledges_only_its_delivery() -> No
         {"method": "desktop_poll", "params": {"client_id": "desktop-a", "user": "alex", "after_sequence": 0}}
     )
 
+    assert poll["daemon_id"] == daemon.daemon_id
+    assert poll["daemon_changed"] is False
     assert poll["events"][0]["sequence"] == 1
     assert poll["deliveries"][0]["integration_id"] == "desktop"
     delivery_id = poll["deliveries"][0]["outbox_message_id"]
@@ -220,6 +222,76 @@ def test_desktop_poll_is_cursor_based_and_acknowledges_only_its_delivery() -> No
     )
     assert repeat["events"] == []
     assert repeat["deliveries"] == []
+
+
+def test_desktop_poll_replays_journals_when_daemon_instance_changes() -> None:
+    runtime = build_runtime_host(inference=_router(), schedule_store=ScheduledTaskStore(":memory:"))
+    daemon = V2Daemon(runtime, daemon_id="daemon-current")
+    runtime.activity_events.append(CoreActivityEvent(
+        phase=ImprovementPhase.CHECK,
+        label="deliberating",
+        message="Reviewing the task.",
+        user="alex",
+        integration_id="desktop",
+        channel_target="alex",
+    ))
+    runtime.ui_events.append(CoreUiEvent("state_snapshot", {"status": "working"}))
+
+    poll = daemon.ipc._dispatch({
+        "method": "desktop_poll",
+        "params": {
+            "client_id": "desktop-a",
+            "user": "alex",
+            "after_sequence": 42,
+            "after_ui_sequence": 42,
+            "daemon_id": "daemon-previous",
+        },
+    })
+
+    assert poll["daemon_id"] == "daemon-current"
+    assert poll["daemon_changed"] is True
+    assert [event["sequence"] for event in poll["events"]] == [1]
+    assert poll["next_ui_sequence"] == 1
+
+    repeat = daemon.ipc._dispatch({
+        "method": "desktop_poll",
+        "params": {
+            "client_id": "desktop-a",
+            "user": "alex",
+            "after_sequence": poll["next_sequence"],
+            "after_ui_sequence": poll["next_ui_sequence"],
+            "daemon_id": poll["daemon_id"],
+        },
+    })
+    assert repeat["daemon_changed"] is False
+    assert repeat["events"] == []
+    assert repeat["ui_events"] == []
+
+
+def test_event_journals_recover_from_oversized_legacy_cursors() -> None:
+    runtime = build_runtime_host(inference=_router(), schedule_store=ScheduledTaskStore(":memory:"))
+    daemon = V2Daemon(runtime)
+    runtime.activity_events.append(CoreActivityEvent(
+        phase=ImprovementPhase.PLAN,
+        label="thinking",
+        message="Preparing response.",
+        user="alex",
+        integration_id="desktop",
+        channel_target="alex",
+    ))
+    runtime.ui_events.append(CoreUiEvent("state_snapshot", {"status": "working"}))
+
+    events, next_sequence = daemon.activity_events_since(
+        after_sequence=999,
+        integration_id="desktop",
+        channel_target="alex",
+    )
+    ui_events, next_ui_sequence = daemon.ui_events_since(after_sequence=999, user="alex")
+
+    assert [event["sequence"] for event in events] == [1]
+    assert next_sequence == 1
+    assert [event["sequence"] for event in ui_events] == [1]
+    assert next_ui_sequence == 1
 
 
 def test_desktop_conversation_history_is_project_scoped() -> None:

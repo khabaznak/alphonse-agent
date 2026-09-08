@@ -9,6 +9,7 @@ from alphonse.agent_v2.core.inference import StubInferenceProvider
 from alphonse.agent_v2.core.scheduled_tasks import ScheduledTaskStore
 from alphonse.agent_v2.daemon import V2Daemon
 from alphonse.agent_v2.core.io import ChannelAddress
+from alphonse.agent_v2.inference_settings import InferenceSettingsRecord
 from alphonse.agent_v2.runtime import build_runtime_host
 from alphonse.agent_v2.services.scheduled_worker import ScheduledTaskWorker
 
@@ -230,3 +231,25 @@ def test_scheduled_processing_failure_marks_task_failed_and_notifies_owner() -> 
     notification = runtime.outbox.list()[0]
     assert notification.kind == "scheduled_task_failed"
     assert "signed in again" in notification.message
+
+
+def test_terminal_inbound_failure_notifies_the_originating_channel() -> None:
+    runtime = build_runtime_host()
+    runtime.inference_settings_store.save(InferenceSettingsRecord(model_id="gpt-5.5"))
+    queued = runtime.channel.queue_message(
+        prompt="Update the medical record from this audio note",
+        user="u-alex",
+        project_id="doctor-at-home",
+        integration_id="telegram-home",
+        provider_key="telegram",
+        provider_user_id="123",
+        channel_target="123",
+    )
+    daemon = V2Daemon(runtime)
+
+    daemon._notify_inbound_failure(queued, error="openai_codex_exec_failed: exit_code=1")
+
+    notification = runtime.outbox.list()[0]
+    assert notification.kind == "task_failed"
+    assert notification.integration_id == "telegram-home"
+    assert "gpt-5.5" in notification.message

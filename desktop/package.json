@@ -6,6 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
+    "build:sidecar": "zsh ./scripts/build-daemon-sidecar.sh",
+    "tauri:build": "./scripts/build-release.sh",
     "test": "vitest run",
     "tauri": "tauri"
   },

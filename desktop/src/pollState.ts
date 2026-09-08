@@ -1,4 +1,5 @@
 import type { Question } from "./types";
+import type { A2uiSurface } from "./a2ui";
 
 export type ProjectAttention = Record<string, { unread_messages: number; pending_questions: number; total: number }>;
 export type QueueStatus = { ready: number; processing: number };
@@ -37,4 +38,8 @@ export function reuseProjectAttention(current: ProjectAttention, next: ProjectAt
 
 export function reuseQueueStatus(current: QueueStatus, next: QueueStatus): QueueStatus {
   return current.ready === next.ready && current.processing === next.processing ? current : next;
+}
+
+export function withoutTaskProgressSurfaces(surfaces: Record<string, A2uiSurface>): Record<string, A2uiSurface> {
+  return Object.fromEntries(Object.entries(surfaces).filter(([surfaceId]) => !surfaceId.startsWith("task-progress:")));
 }

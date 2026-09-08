@@ -811,6 +811,8 @@ class V2Daemon:
         with self._event_lock:
             self._collect_activity_events()
             cursor = max(0, int(after_sequence or 0))
+            if cursor > self._activity_event_sequence:
+                cursor = 0
             matched = [
                 event
                 for event in self._activity_event_journal
@@ -829,6 +831,7 @@ class V2Daemon:
         project_id: str = "",
         after_sequence: int = 0,
         after_ui_sequence: int = 0,
+        daemon_id: str = "",
         client_capabilities: dict[str, Any] | None = None,
         limit: int = 100,
     ) -> dict[str, Any]:
@@ -836,13 +839,17 @@ class V2Daemon:
         normalized_user = self._admin_user_id(user)
         normalized_project = str(project_id or "").strip()
         normalized_client = str(client_id or "desktop").strip() or "desktop"
+        client_daemon_id = str(daemon_id or "").strip()
+        daemon_changed = bool(client_daemon_id and client_daemon_id != self.daemon_id)
+        activity_cursor = 0 if daemon_changed else after_sequence
+        ui_cursor = 0 if daemon_changed else after_ui_sequence
         capabilities = dict(client_capabilities or {})
         catalogs = capabilities.get("supportedCatalogIds")
         self._desktop_capabilities[normalized_client] = {
             str(catalog).strip() for catalog in catalogs if str(catalog).strip()
         } if isinstance(catalogs, list) else set()
         events, next_sequence = self.activity_events_since(
-            after_sequence=after_sequence,
+            after_sequence=activity_cursor,
             integration_id="desktop",
             channel_target=normalized_user,
             limit=limit,
@@ -872,7 +879,7 @@ class V2Daemon:
                 ),
             })
         ui_events, next_ui_sequence = self.ui_events_since(
-            after_sequence=after_ui_sequence,
+            after_sequence=ui_cursor,
             user=normalized_user,
             limit=limit,
         )
@@ -894,6 +901,8 @@ class V2Daemon:
         else:
             ui_events = [item for item in ui_events if _event_name(item) != "scheduled_task_created"]
         return {
+            "daemon_id": self.daemon_id,
+            "daemon_changed": daemon_changed,
             "events": events,
             "next_sequence": next_sequence,
             "deliveries": deliveries,
@@ -1623,6 +1632,8 @@ class V2Daemon:
         with self._ui_event_lock:
             self._collect_ui_events()
             cursor = max(0, int(after_sequence or 0))
+            if cursor > self._ui_event_sequence:
+                cursor = 0
             matched = [
                 event
                 for event in self._ui_event_journal
@@ -1741,6 +1752,8 @@ class V2Daemon:
             if scheduled_occurrence and terminal:
                 self.runtime.schedule_store.mark_occurrence_processing_failed(scheduled_occurrence, error=error)
                 self._notify_scheduled_task_failure(metadata, error=error)
+            elif terminal and queued is not None:
+                self._notify_inbound_failure(queued, error=error)
             self.runtime.core.clear_failure()
         if step.status != LoopStepStatus.BUSY:
             self.kill_switch.clear(str(step.queued_message_id or ""))
@@ -1853,6 +1866,38 @@ class V2Daemon:
         self.runtime.conversation_store.record(
             owner_user_id=task.owner_user_id,
             project_id=task.project_id,
+            role="assistant",
+            content=message,
+            source=origin.integration_id,
+            source_message_id=f"outbound:{outbound.outbox_message_id}",
+        )
+
+    def _notify_inbound_failure(self, queued: Any, *, error: str) -> None:
+        """Tell the originating user when ordinary work has terminally failed."""
+        inbound = getattr(queued, "message", None)
+        metadata = getattr(inbound, "metadata", {}) or {}
+        user_id = str(getattr(inbound, "user", "") or "").strip()
+        project_id = str(getattr(inbound, "project_id", "") or "").strip()
+        origin = channel_address_from_metadata({"channel": metadata.get("channel")}) if isinstance(metadata, dict) else None
+        if origin is None and user_id:
+            resolved = self.runtime.identity_resolver.resolve_outbound_address(alphonse_user_id=user_id)
+            origin = resolved.address if resolved.resolved else None
+        if origin is None:
+            logger.error("inbound failure could not be delivered message_id=%s error=%s", getattr(queued, "message_id", ""), error)
+            return
+        message = _inbound_failure_message(error, self.runtime.inference_settings_store.get().model_id)
+        outbound = self.runtime.outbox.enqueue(
+            address=origin,
+            message=message,
+            kind="task_failed",
+            audience_user_id=user_id,
+            project_id=project_id,
+            correlation_id=str(getattr(inbound, "correlation_id", "") or ""),
+            metadata={"source": "inbound_failure", "failure_code": _scheduled_failure_code(error)},
+        )
+        self.runtime.conversation_store.record(
+            owner_user_id=user_id,
+            project_id=project_id,
             role="assistant",
             content=message,
             source=origin.integration_id,
@@ -2075,6 +2120,7 @@ def _scheduled_failure_is_non_retryable(error: str) -> bool:
         "openai_codex_auth_required",
         "openai_codex_cli_missing",
         "openai_codex_cli_upgrade_required",
+        "openai_codex_model_not_configured",
     }
 
 
@@ -2089,6 +2135,21 @@ def _scheduled_failure_message(task_name: str, error: str) -> str:
     else:
         detail = "I could not complete it after retrying."
     return f"Scheduled task failed: {task_name}. {detail}"
+
+
+def _inbound_failure_message(error: str, model_id: str) -> str:
+    code = _scheduled_failure_code(error)
+    model = str(model_id or "").strip()
+    if code == "openai_codex_auth_required":
+        return "I couldn't complete this task because Codex needs to be signed in again."
+    if code == "openai_codex_cli_missing":
+        return "I couldn't complete this task because the Codex command-line tool is unavailable."
+    if code == "openai_codex_cli_upgrade_required":
+        return "I couldn't complete this task because Codex needs to be updated."
+    if code == "openai_codex_model_not_configured":
+        return "I couldn't start this task because no agent model is configured. Choose and validate one in Alphonse settings."
+    selected = f" ({model})" if model else ""
+    return f"I couldn't complete this task after retrying the saved agent model{selected}. Please try again or validate another model in Alphonse settings."
 
 
 def _json_object(value: Any) -> dict[str, Any]:

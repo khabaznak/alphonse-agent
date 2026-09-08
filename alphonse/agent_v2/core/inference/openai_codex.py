@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
 import shutil
 import subprocess
 import tempfile
@@ -20,16 +19,16 @@ class OpenAICodexProviderConfig:
     """Configuration for the Codex CLI subscription provider."""
 
     cli_bin: str = "codex"
-    model: str | None = None
     timeout_seconds: float = 120.0
     ephemeral: bool = False
+    require_explicit_model: bool = False
 
 
 class OpenAICodexProvider:
     """Inference provider backed by the official Codex CLI subscription flow."""
 
     def __init__(self, config: OpenAICodexProviderConfig | None = None) -> None:
-        self.config = config or build_openai_codex_provider_config_from_env()
+        self.config = config or OpenAICodexProviderConfig()
 
     def generate_markdown(self, request: InferenceRequest) -> InferenceResult:
         output = self._run_codex(_markdown_envelope(request), request)
@@ -55,6 +54,9 @@ class OpenAICodexProvider:
         )
 
     def _run_codex(self, prompt: str, request: InferenceRequest) -> str:
+        model = _model_for_request(request)
+        if self.config.require_explicit_model and not model:
+            raise ValueError("openai_codex_model_not_configured")
         cli_bin = self.config.cli_bin
         if not shutil.which(cli_bin):
             raise ValueError("openai_codex_cli_missing")
@@ -62,7 +64,6 @@ class OpenAICodexProvider:
         command = [cli_bin, "exec", "--skip-git-repo-check"]
         if self.config.ephemeral:
             command.append("--ephemeral")
-        model = _model_for_request(request, self.config.model)
         if model:
             command.extend(["--model", model])
 
@@ -84,23 +85,26 @@ class OpenAICodexProvider:
         stderr = str(completed.stderr or "").strip()
         if completed.returncode != 0:
             text = f"{stdout}\n{stderr}".lower()
-            if any(token in text for token in ("login", "auth", "authenticate", "unauthorized")):
-                raise ValueError("openai_codex_auth_required")
             if "requires a newer version of codex" in text:
                 raise ValueError("openai_codex_cli_upgrade_required")
+            # CLI output can include prompts and optional MCP startup warnings.
+            # A mention of "auth" or "login" is not proof that model auth failed.
+            auth_failures = (
+                "please login first", "please log in", "not logged in",
+                "401 unauthorized", "authentication failed", "refresh_token_reused",
+                "refresh token has already been used", "invalid_api_key",
+            )
+            if any(
+                marker in line
+                for line in text.splitlines()
+                if "mcp" not in line
+                for marker in auth_failures
+            ):
+                raise ValueError("openai_codex_auth_required")
             raise ValueError(f"openai_codex_exec_failed: exit_code={completed.returncode}")
         if not stdout:
             raise ValueError("openai_codex_empty_response")
         return stdout
-
-
-def build_openai_codex_provider_config_from_env() -> OpenAICodexProviderConfig:
-    """Build Codex provider configuration from environment variables."""
-    return OpenAICodexProviderConfig(
-        cli_bin=os.getenv("OPENAI_CODEX_CLI_BIN", "codex"),
-        model=os.getenv("OPENAI_CODEX_MODEL") or None,
-        timeout_seconds=_parse_float(os.getenv("OPENAI_CODEX_TIMEOUT_SECONDS"), default=120.0),
-    )
 
 
 def _markdown_envelope(request: InferenceRequest) -> str:
@@ -168,23 +172,11 @@ def _tool_descriptor_to_dict(tool: ToolDescriptor) -> dict[str, Any]:
     }
 
 
-def _model_for_request(request: InferenceRequest, fallback: str | None) -> str | None:
+def _model_for_request(request: InferenceRequest) -> str | None:
     if request.model_profile is not None:
-        # A resolved profile, including an explicit empty model for the Codex
-        # default, is authoritative over an environment fallback.
+        # The router's saved profile is authoritative for every CAPD request.
         return request.model_profile.model.strip() or None
-    if fallback and fallback.strip():
-        return fallback.strip()
     return None
-
-
-def _parse_float(raw: str | None, default: float) -> float:
-    if raw is None:
-        return default
-    try:
-        return float(raw)
-    except ValueError:
-        return default
 
 
 def _try_parse_json_object(text: str) -> dict[str, Any] | None:

@@ -2,10 +2,18 @@
 set -euo pipefail
 
 # Builds the standalone daemon executable expected by Tauri's externalBin
-# setting. Run this once per macOS target triple before `npm run tauri build`.
-target="${1:?usage: build-daemon-sidecar.sh <rust-target-triple>}"
+# setting. The current Rust host target is used unless one is supplied.
+target="${1:-$(rustc -vV | awk '/^host:/ { print $2 }')}"
+if [[ -z "$target" ]]; then
+  print -u2 "could not determine Rust target triple"
+  exit 1
+fi
 root="$(cd "$(dirname "$0")/../.." && pwd)"
 output="$root/desktop/src-tauri/binaries/alphonse-daemon-$target"
+python_bin="$root/.venv/bin/python"
+if [[ ! -x "$python_bin" ]]; then
+  python_bin="python"
+fi
 
 cd "$root"
-python -m PyInstaller --onefile --name "alphonse-daemon-$target" --distpath "$(dirname "$output")" --workpath /tmp/alphonse-desktop-pyinstaller --specpath /tmp alphonse/agent_v2/daemon.py
+"$python_bin" -m PyInstaller --onefile --name "alphonse-daemon-$target" --distpath "$(dirname "$output")" --workpath /tmp/alphonse-desktop-pyinstaller --specpath /tmp alphonse/agent_v2/daemon.py

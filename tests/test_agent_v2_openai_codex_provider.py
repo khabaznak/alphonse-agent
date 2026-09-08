@@ -27,7 +27,7 @@ def test_codex_provider_markdown_maps_stdout_to_content(monkeypatch: pytest.Monk
     monkeypatch.setattr("alphonse.agent_v2.core.inference.openai_codex.shutil.which", lambda _bin: "/bin/codex")
     monkeypatch.setattr("alphonse.agent_v2.core.inference.openai_codex.subprocess.run", fake_run)
 
-    provider = OpenAICodexProvider(OpenAICodexProviderConfig(model="fallback-model"))
+    provider = OpenAICodexProvider(OpenAICodexProviderConfig())
     result = provider.generate_markdown(
         InferenceRequest(
             prompt="Generate acceptance criteria",
@@ -50,7 +50,7 @@ def test_codex_provider_markdown_maps_stdout_to_content(monkeypatch: pytest.Monk
     assert envelope["prompt"] == "Generate acceptance criteria"
 
 
-def test_codex_provider_respects_explicit_default_over_environment_model(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_codex_provider_ignores_environment_model(monkeypatch: pytest.MonkeyPatch) -> None:
     captured: dict[str, object] = {}
 
     def fake_run(command, **kwargs):
@@ -70,6 +70,14 @@ def test_codex_provider_respects_explicit_default_over_environment_model(monkeyp
     )
 
     assert "--model" not in captured["command"]
+
+
+def test_codex_provider_can_require_saved_explicit_model(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OPENAI_CODEX_MODEL", "environment-model")
+    monkeypatch.setattr("alphonse.agent_v2.core.inference.openai_codex.shutil.which", lambda _bin: "/bin/codex")
+    provider = OpenAICodexProvider(OpenAICodexProviderConfig(require_explicit_model=True))
+    with pytest.raises(ValueError, match="openai_codex_model_not_configured"):
+        provider.generate_markdown(InferenceRequest(prompt="Prompt", purpose=InferencePurpose.ACCEPTANCE_CRITERIA))
 
 
 def test_codex_provider_json_parses_fenced_json(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -148,6 +156,18 @@ def test_codex_provider_auth_failure_raises_controlled_error(monkeypatch: pytest
         OpenAICodexProvider().generate_markdown(
             InferenceRequest(prompt="Prompt", purpose=InferencePurpose.ACCEPTANCE_CRITERIA)
         )
+
+
+@pytest.mark.parametrize("stderr", [
+    "Review the user's authorization requirements.\nERROR: connection closed",
+    "MCP startup failed: authentication failed\nERROR: connection closed",
+    "For login help see the documentation.\nERROR: connection closed",
+])
+def test_codex_provider_does_not_mislabel_auth_mentions(monkeypatch, stderr):
+    monkeypatch.setattr("alphonse.agent_v2.core.inference.openai_codex.shutil.which", lambda _: "/bin/codex")
+    monkeypatch.setattr("alphonse.agent_v2.core.inference.openai_codex.subprocess.run", lambda *args, **kwargs: SimpleNamespace(returncode=2, stdout="", stderr=stderr))
+    with pytest.raises(ValueError, match="openai_codex_exec_failed: exit_code=2"):
+        OpenAICodexProvider().generate_markdown(InferenceRequest(prompt="Prompt", purpose=InferencePurpose.ACCEPTANCE_CRITERIA))
 
 
 def test_codex_provider_reports_when_cli_upgrade_is_required(monkeypatch: pytest.MonkeyPatch) -> None:

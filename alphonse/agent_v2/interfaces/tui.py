@@ -53,7 +53,6 @@ from alphonse.agent_v2.integrations import SQLiteIntegrationStore
 from alphonse.agent_v2.integrations import build_default_integration_registry
 from alphonse.agent_v2.integrations.presence import PresenceProjector
 from alphonse.agent_v2.integrations.presence import TuiPresenceAdapter
-from alphonse.agent_v2.inference_settings import CODEX_DEFAULT_MODEL
 from alphonse.agent_v2.inference_settings import SQLiteInferenceSettingsStore
 from alphonse.agent_v2.inference_settings import inference_provider_descriptors
 from alphonse.agent_v2.inference_settings import provider_status
@@ -791,11 +790,11 @@ def inference_status_parts(
 ) -> tuple[str, str]:
     if isinstance(settings, dict):
         provider = str(settings.get("provider_key") or "").strip() or "-"
-        model = str(settings.get("model_id") or "").strip() or "default"
+        model = str(settings.get("model_id") or "").strip() or "not configured"
         return provider, model
     if runtime is not None and runtime.core.inference is not None:
         profile = runtime.core.inference.default_profile
-        return str(profile.provider or "").strip() or "-", str(profile.model or "").strip() or "default"
+        return str(profile.provider or "").strip() or "-", str(profile.model or "").strip() or "not configured"
     return "-", "-"
 
 
@@ -1450,14 +1449,20 @@ def _build_textual_app_class() -> type[Any]:
                 for item in models
                 if isinstance(item, dict) and str(item.get("model_id") or "").strip()
             ]
-            current = str(self.settings.get("model_id") or "") or CODEX_DEFAULT_MODEL
+            current = str(self.settings.get("model_id") or "")
             if not any(value == current for _, value in options):
-                options.insert(0, ("Codex default", CODEX_DEFAULT_MODEL))
-                current = CODEX_DEFAULT_MODEL
+                if current:
+                    options.insert(0, (current, current))
+                elif options:
+                    current = options[0][1]
             with Vertical(id="model-dialog"):
-                yield Static("Inference Model", classes="dialog-title")
+                yield Static("Agent Model", classes="dialog-title")
                 yield Select(options=options, value=current, id="model-select", allow_blank=False)
-                yield Static(self._details_for(current), id="model-details")
+                yield Static(
+                    "This model runs every phase of the CAPD cycle for new tasks.\n"
+                    + self._details_for(current),
+                    id="model-details",
+                )
                 yield Static("", id="model-error")
                 with Horizontal(classes="dialog-actions"):
                     yield Button("Validate & Save", id="save-model", variant="primary")
@@ -1465,7 +1470,10 @@ def _build_textual_app_class() -> type[Any]:
 
         def on_select_changed(self, event: Select.Changed) -> None:
             if event.select.id == "model-select":
-                self.query_one("#model-details", Static).update(self._details_for(str(event.value or "")))
+                self.query_one("#model-details", Static).update(
+                    "This model runs every phase of the CAPD cycle for new tasks.\n"
+                    + self._details_for(str(event.value or ""))
+                )
 
         def _details_for(self, model_id: str) -> str:
             for item in self.provider.get("models", []):

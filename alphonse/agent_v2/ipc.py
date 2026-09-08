@@ -75,6 +75,7 @@ class V2DaemonClient:
         project_id: str = "",
         after_sequence: int = 0,
         after_ui_sequence: int = 0,
+        daemon_id: str = "",
         client_capabilities: dict[str, Any] | None = None,
         limit: int = 100,
     ) -> dict[str, Any]:
@@ -85,6 +86,7 @@ class V2DaemonClient:
             project_id=project_id,
             after_sequence=after_sequence,
             after_ui_sequence=after_ui_sequence,
+            daemon_id=daemon_id,
             client_capabilities=dict(client_capabilities or {}),
             limit=limit,
         )
@@ -370,6 +372,7 @@ class V2DaemonServer:
                 project_id=str(params.get("project_id") or ""),
                 after_sequence=int(params.get("after_sequence") or 0),
                 after_ui_sequence=int(params.get("after_ui_sequence") or 0),
+                daemon_id=str(params.get("daemon_id") or ""),
                 client_capabilities=params.get("client_capabilities") if isinstance(params.get("client_capabilities"), dict) else {},
                 limit=int(params.get("limit") or 100),
             )
