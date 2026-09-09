@@ -88,7 +88,7 @@ class InferenceProviderDescriptor:
         if not model:
             raise ValueError("inference_model_not_configured")
         provider = OpenAICodexProvider(
-            OpenAICodexProviderConfig(timeout_seconds=25.0, ephemeral=True, require_explicit_model=True)
+            OpenAICodexProviderConfig(timeout_seconds=60.0, ephemeral=True, require_explicit_model=True)
         )
         profile = ModelProfile(provider=OPENAI_CODEX_PROVIDER, model=model, profile_id="validation")
         provider.generate_markdown(
@@ -205,11 +205,12 @@ def validate_and_save_inference_settings(
         # Failed choices never become active, but retaining the diagnostic helps
         # the next configuration screen explain why validation did not succeed.
         current = store.get()
+        active_model_failed = _normalize_model_id(model_id) == current.model_id
         store.save(
             InferenceSettingsRecord(
                 provider_key=current.provider_key,
                 model_id=current.model_id,
-                validated_at=current.validated_at,
+                validated_at="" if active_model_failed else current.validated_at,
                 cli_version=current.cli_version,
                 validation_error=str(exc),
             )

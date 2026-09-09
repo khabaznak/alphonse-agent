@@ -8,6 +8,7 @@ from alphonse.agent_v2.core.inference import ModelProfile
 from alphonse.agent_v2.core.inference import StubInferenceProvider
 from alphonse.agent_v2.core.scheduled_tasks import ScheduledTaskStore
 from alphonse.agent_v2.daemon import V2Daemon
+from alphonse.agent_v2.daemon import _scheduled_failure_is_non_retryable
 from alphonse.agent_v2.core.io import ChannelAddress
 from alphonse.agent_v2.inference_settings import InferenceSettingsRecord
 from alphonse.agent_v2.runtime import build_runtime_host
@@ -253,3 +254,32 @@ def test_terminal_inbound_failure_notifies_the_originating_channel() -> None:
     assert notification.kind == "task_failed"
     assert notification.integration_id == "telegram-home"
     assert "gpt-5.5" in notification.message
+
+
+def test_unavailable_model_invalidates_saved_selection_and_gives_actionable_notice() -> None:
+    runtime = build_runtime_host()
+    runtime.inference_settings_store.save(
+        InferenceSettingsRecord(model_id="gpt-5.5", validated_at="yesterday", cli_version="codex-cli")
+    )
+    queued = runtime.channel.queue_message(
+        prompt="Hola",
+        user="u-alex",
+        project_id="home",
+        integration_id="desktop",
+        provider_key="desktop",
+        channel_target="u-alex",
+    )
+    daemon = V2Daemon(runtime)
+    error = "openai_codex_model_unavailable: gpt-5.5"
+
+    daemon._mark_selected_model_unavailable(error)
+    daemon._notify_inbound_failure(queued, error=error)
+
+    settings = runtime.inference_settings_store.get()
+    assert settings.model_id == "gpt-5.5"
+    assert settings.validated_at == ""
+    assert settings.validation_error == error
+    notification = runtime.outbox.list()[0]
+    assert notification.kind == "task_failed"
+    assert "saved agent model (gpt-5.5) is unavailable" in notification.message
+    assert _scheduled_failure_is_non_retryable(error) is True

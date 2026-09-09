@@ -183,6 +183,27 @@ def test_codex_provider_reports_when_cli_upgrade_is_required(monkeypatch: pytest
         )
 
 
+def test_codex_provider_reports_unavailable_model_without_generic_exit(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fake_run(command, **kwargs):
+        return SimpleNamespace(
+            returncode=1,
+            stdout="",
+            stderr="ERROR: The model `gpt-5.5` does not exist or you do not have access to it.",
+        )
+
+    monkeypatch.setattr("alphonse.agent_v2.core.inference.openai_codex.shutil.which", lambda _bin: "/bin/codex")
+    monkeypatch.setattr("alphonse.agent_v2.core.inference.openai_codex.subprocess.run", fake_run)
+
+    with pytest.raises(ValueError, match=r"openai_codex_model_unavailable: gpt-5\.5"):
+        OpenAICodexProvider().generate_markdown(
+            InferenceRequest(
+                prompt="Prompt",
+                purpose=InferencePurpose.ACCEPTANCE_CRITERIA,
+                model_profile=ModelProfile(provider="openai_codex", model="gpt-5.5", profile_id="saved"),
+            )
+        )
+
+
 def test_codex_provider_timeout_raises_controlled_error(monkeypatch: pytest.MonkeyPatch) -> None:
     def fake_run(command, **kwargs):
         raise subprocess.TimeoutExpired(command, timeout=1)

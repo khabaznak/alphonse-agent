@@ -69,6 +69,23 @@ def test_validation_failure_does_not_replace_active_selection(monkeypatch: pytes
     assert store.get().validation_error == "openai_codex_cli_upgrade_required"
 
 
+def test_failed_revalidation_marks_the_active_model_invalid(monkeypatch: pytest.MonkeyPatch) -> None:
+    store = SQLiteInferenceSettingsStore(":memory:")
+    store.save(InferenceSettingsRecord(model_id="gpt-5.5", validated_at="yesterday", cli_version="codex-cli"))
+    monkeypatch.setattr(
+        "alphonse.agent_v2.inference_settings.InferenceProviderDescriptor.validate",
+        lambda self, model_id: (_ for _ in ()).throw(ValueError("openai_codex_model_unavailable: gpt-5.5")),
+    )
+
+    with pytest.raises(ValueError, match="openai_codex_model_unavailable"):
+        validate_and_save_inference_settings(store, provider_key="openai_codex", model_id="gpt-5.5")
+
+    current = store.get()
+    assert current.model_id == "gpt-5.5"
+    assert current.validated_at == ""
+    assert current.validation_error == "openai_codex_model_unavailable: gpt-5.5"
+
+
 def test_saved_selection_replaces_router_for_future_tasks_only() -> None:
     runtime = build_runtime_host(
         inference=InferenceRouter(provider=StubInferenceProvider(), default_profile=build_inference_router_from_settings(InferenceSettingsRecord(model_id="old")).default_profile),
