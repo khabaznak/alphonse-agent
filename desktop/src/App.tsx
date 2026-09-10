@@ -39,7 +39,15 @@ type PollResponse = {
 type HistoryResponse = { messages: ChatMessage[] };
 type RecentFilesResponse = { files: Array<{ name: string; kind: "file" | "directory"; modified_at: string }> };
 type DesktopProjectFile = { filename: string; mime_type: string; size_bytes: number; project_path: string; relative_path: string };
-type Provider = { provider_key: string; display_name: string; models: Array<{ model_id: string; display_name: string }> };
+type Provider = {
+  provider_key: string;
+  display_name: string;
+  models: Array<{ model_id: string; display_name: string }>;
+  catalog_cli_version?: string;
+  cli_version?: string;
+  cli_path?: string;
+  catalog_cli_matches_runtime?: boolean | null;
+};
 const REMARK_PLUGINS = [remarkGfm];
 const fileNameFromPath = (path: string) => path.split(/[\\/]/).pop() || "attachment";
 
@@ -1320,7 +1328,17 @@ function ModelSettingsSection() {
   const [providers, setProviders] = useState<Provider[]>([]); const [settings, setSettings] = useState<InferenceSettings | null>(null); const [provider, setProvider] = useState(""); const [model, setModel] = useState(""); const [notice, setNotice] = useState("");
   useEffect(() => { void Promise.all([daemonRequest<{ providers: Provider[] }>("inference_providers"), daemonRequest<{ settings: InferenceSettings }>("inference_settings")]).then(([catalog, current]) => { const selectedProvider = catalog.providers.find((item) => item.provider_key === current.settings.provider_key) || catalog.providers[0]; setProviders(catalog.providers); setSettings(current.settings); setProvider(selectedProvider?.provider_key || ""); setModel(current.settings.model_id || selectedProvider?.models[0]?.model_id || ""); }); }, []);
   const selected = providers.find((item) => item.provider_key === provider);
-  return <section className="settings-panel"><h3>Agent model</h3><p>This model runs every phase of Alphonse's CAPD cycle. New tasks use the saved selection after it is validated.</p><select value={provider} onChange={(event) => { const nextProvider = providers.find((item) => item.provider_key === event.target.value); setProvider(event.target.value); setModel(nextProvider?.models[0]?.model_id || ""); }}>{providers.map((item) => <option value={item.provider_key} key={item.provider_key}>{item.display_name}</option>)}</select><select value={model} onChange={(event) => setModel(event.target.value)} disabled={!selected?.models.length}>{selected?.models.map((item) => <option value={item.model_id} key={item.model_id}>{item.display_name}</option>)}</select><button disabled={!provider || !model} onClick={() => void daemonRequest<{ settings: InferenceSettings }>("set_inference_settings", { provider_key: provider, model_id: model }).then((result) => { setSettings(result.settings); setNotice("Validated and saved for new tasks."); }).catch((cause: unknown) => setNotice(cause instanceof Error ? cause.message : "Validation failed"))}>Validate & save</button><p>{notice || settings?.validation_error || (!settings?.model_id ? "Choose and save a model before starting a task." : "")}</p></section>;
+  const savedStatus = settings?.validation_error?.startsWith("openai_codex_model_access_rejected") || settings?.validation_error?.startsWith("openai_codex_model_unavailable")
+    ? "Codex temporarily rejected this model. Alphonse will keep the last successful validation and retry new tasks."
+    : settings?.validation_error || (settings?.validated_at ? `Validated ${new Date(settings.validated_at).toLocaleString()}.` : (!settings?.model_id ? "Choose and save a model before starting a task." : "Validation required."));
+  return <section className="settings-panel"><h3>Agent model</h3><p>Models in this list are advertised by the Codex catalog. Validate &amp; save makes a live request to verify current access before Alphonse uses the selection for new tasks.</p><select value={provider} onChange={(event) => { const nextProvider = providers.find((item) => item.provider_key === event.target.value); setProvider(event.target.value); setModel(nextProvider?.models[0]?.model_id || ""); }}>{providers.map((item) => <option value={item.provider_key} key={item.provider_key}>{item.display_name}</option>)}</select><select value={model} onChange={(event) => setModel(event.target.value)} disabled={!selected?.models.length}>{selected?.models.map((item) => <option value={item.model_id} key={item.model_id}>{item.display_name}</option>)}</select><button disabled={!provider || !model} onClick={() => void daemonRequest<{ settings: InferenceSettings }>("set_inference_settings", { provider_key: provider, model_id: model }).then((result) => { setSettings(result.settings); setNotice("Validated and saved for new tasks."); }).catch((cause: unknown) => setNotice(inferenceValidationNotice(cause)))}>Validate &amp; save</button><p>{notice || savedStatus}</p>{selected?.catalog_cli_matches_runtime === false && <p>Catalog source {selected.catalog_cli_version || "unknown"}; runtime {selected.cli_version || "unknown"} at <code>{selected.cli_path || "codex"}</code>. Update or configure the runtime CLI so both use the same Codex version.</p>}</section>;
+}
+
+function inferenceValidationNotice(cause: unknown): string {
+  const message = cause instanceof Error ? cause.message : "Validation failed";
+  return message.startsWith("openai_codex_model_access_rejected") || message.startsWith("openai_codex_model_unavailable")
+    ? "Codex temporarily rejected this advertised model. Your saved model and its last successful validation were not changed."
+    : message;
 }
 
 function AgentConfigSettingsSection() {

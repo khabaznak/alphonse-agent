@@ -44,7 +44,14 @@ export type Project = {
 };
 
 export type AgentDocument = { file_name: string; display_name: string; content?: string };
-export type InferenceSettings = { provider_key: string; model_id: string; validation_error?: string };
+export type InferenceSettings = {
+  provider_key: string;
+  model_id: string;
+  validated_at?: string;
+  cli_version?: string;
+  validation_error?: string;
+  updated_at?: string;
+};
 export type WebToolsSettings = { enabled: boolean; searxng_base_url: string; search_timeout_seconds: number; fetch_timeout_seconds: number; fetch_max_chars: number; configured: boolean; available: boolean };
 export type CodeModeSettings = {
   enabled: boolean; docker_bin: string; image: string; timeout_seconds: number; max_tool_calls: number; max_parallel_calls: number;

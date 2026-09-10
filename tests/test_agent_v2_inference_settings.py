@@ -30,6 +30,14 @@ def test_inference_settings_never_uses_environment_model(monkeypatch: pytest.Mon
     assert store.get().model_id == "saved-model"
 
 
+def test_configured_codex_binary_is_pinned_for_runtime(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ALPHONSE_V2_CODEX_CLI_BIN", "/Applications/Codex/codex")
+
+    router = build_inference_router_from_settings(InferenceSettingsRecord(model_id="gpt-5.5"))
+
+    assert router.provider.config.cli_bin == "/Applications/Codex/codex"
+
+
 def test_codex_catalog_filters_hidden_models(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
     cache_path = tmp_path / "models_cache.json"
     cache_path.write_text(
@@ -52,6 +60,7 @@ def test_codex_catalog_filters_hidden_models(tmp_path, monkeypatch: pytest.Monke
 
     assert [item["model_id"] for item in status["models"]] == ["gpt-5.5"]
     assert status["catalog_fetched_at"] == "2026-07-11T00:00:00Z"
+    assert status["catalog_cli_matches_runtime"] is True
 
 
 def test_validation_failure_does_not_replace_active_selection(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -69,21 +78,21 @@ def test_validation_failure_does_not_replace_active_selection(monkeypatch: pytes
     assert store.get().validation_error == "openai_codex_cli_upgrade_required"
 
 
-def test_failed_revalidation_marks_the_active_model_invalid(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_transient_access_rejection_preserves_active_model_validation(monkeypatch: pytest.MonkeyPatch) -> None:
     store = SQLiteInferenceSettingsStore(":memory:")
     store.save(InferenceSettingsRecord(model_id="gpt-5.5", validated_at="yesterday", cli_version="codex-cli"))
     monkeypatch.setattr(
         "alphonse.agent_v2.inference_settings.InferenceProviderDescriptor.validate",
-        lambda self, model_id: (_ for _ in ()).throw(ValueError("openai_codex_model_unavailable: gpt-5.5")),
+        lambda self, model_id: (_ for _ in ()).throw(ValueError("openai_codex_model_access_rejected: gpt-5.5")),
     )
 
-    with pytest.raises(ValueError, match="openai_codex_model_unavailable"):
+    with pytest.raises(ValueError, match="openai_codex_model_access_rejected"):
         validate_and_save_inference_settings(store, provider_key="openai_codex", model_id="gpt-5.5")
 
     current = store.get()
     assert current.model_id == "gpt-5.5"
-    assert current.validated_at == ""
-    assert current.validation_error == "openai_codex_model_unavailable: gpt-5.5"
+    assert current.validated_at == "yesterday"
+    assert current.validation_error == "openai_codex_model_access_rejected: gpt-5.5"
 
 
 def test_saved_selection_replaces_router_for_future_tasks_only() -> None:

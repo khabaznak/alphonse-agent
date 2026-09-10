@@ -256,7 +256,7 @@ def test_terminal_inbound_failure_notifies_the_originating_channel() -> None:
     assert "gpt-5.5" in notification.message
 
 
-def test_unavailable_model_invalidates_saved_selection_and_gives_actionable_notice() -> None:
+def test_model_access_rejection_is_retryable_and_preserves_validation() -> None:
     runtime = build_runtime_host()
     runtime.inference_settings_store.save(
         InferenceSettingsRecord(model_id="gpt-5.5", validated_at="yesterday", cli_version="codex-cli")
@@ -270,16 +270,24 @@ def test_unavailable_model_invalidates_saved_selection_and_gives_actionable_noti
         channel_target="u-alex",
     )
     daemon = V2Daemon(runtime)
-    error = "openai_codex_model_unavailable: gpt-5.5"
+    error = "openai_codex_model_access_rejected: gpt-5.5"
 
-    daemon._mark_selected_model_unavailable(error)
+    daemon._record_selected_model_access_warning(error)
     daemon._notify_inbound_failure(queued, error=error)
 
     settings = runtime.inference_settings_store.get()
     assert settings.model_id == "gpt-5.5"
-    assert settings.validated_at == ""
+    assert settings.validated_at == "yesterday"
     assert settings.validation_error == error
     notification = runtime.outbox.list()[0]
     assert notification.kind == "task_failed"
-    assert "saved agent model (gpt-5.5) is unavailable" in notification.message
-    assert _scheduled_failure_is_non_retryable(error) is True
+    assert "temporarily rejected the saved agent model (gpt-5.5)" in notification.message
+    assert _scheduled_failure_is_non_retryable(error) is False
+
+    daemon._clear_selected_model_access_warning()
+
+    assert runtime.inference_settings_store.get().validation_error == ""
+
+
+def test_legacy_model_unavailable_diagnostic_is_also_retryable() -> None:
+    assert _scheduled_failure_is_non_retryable("openai_codex_model_unavailable: gpt-5.5") is False

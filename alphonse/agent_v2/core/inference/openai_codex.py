@@ -88,7 +88,9 @@ class OpenAICodexProvider:
             if "requires a newer version of codex" in text:
                 raise ValueError("openai_codex_cli_upgrade_required")
             if "does not exist or you do not have access to it" in text and "model" in text:
-                raise ValueError(f"openai_codex_model_unavailable: {model or 'selected model'}")
+                # The subscription backend uses one ambiguous response for an
+                # unknown slug, account access, and transient rollout routing.
+                raise ValueError(f"openai_codex_model_access_rejected: {model or 'selected model'}")
             # CLI output can include prompts and optional MCP startup warnings.
             # A mention of "auth" or "login" is not proof that model auth failed.
             auth_failures = (

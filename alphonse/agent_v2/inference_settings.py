@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import os
+import re
+import shutil
 import sqlite3
 import subprocess
 from dataclasses import dataclass
@@ -69,7 +71,9 @@ class InferenceProviderDescriptor:
             raise ValueError(f"inference_provider_not_supported: {self.provider_key}")
         model = _normalize_model_id(model_id)
         return InferenceRouter(
-            provider=OpenAICodexProvider(OpenAICodexProviderConfig(require_explicit_model=True)),
+            provider=OpenAICodexProvider(
+                OpenAICodexProviderConfig(cli_bin=_codex_cli_bin(), require_explicit_model=True)
+            ),
             default_profile=ModelProfile(
                 provider=OPENAI_CODEX_PROVIDER,
                 model=model,
@@ -88,7 +92,12 @@ class InferenceProviderDescriptor:
         if not model:
             raise ValueError("inference_model_not_configured")
         provider = OpenAICodexProvider(
-            OpenAICodexProviderConfig(timeout_seconds=60.0, ephemeral=True, require_explicit_model=True)
+            OpenAICodexProviderConfig(
+                cli_bin=_codex_cli_bin(),
+                timeout_seconds=60.0,
+                ephemeral=True,
+                require_explicit_model=True,
+            )
         )
         profile = ModelProfile(provider=OPENAI_CODEX_PROVIDER, model=model, profile_id="validation")
         provider.generate_markdown(
@@ -206,13 +215,22 @@ def validate_and_save_inference_settings(
         # the next configuration screen explain why validation did not succeed.
         current = store.get()
         active_model_failed = _normalize_model_id(model_id) == current.model_id
+        error = str(exc)
+        transient_access_rejection = error.split(":", 1)[0] in {
+            "openai_codex_model_access_rejected",
+            "openai_codex_model_unavailable",
+        }
         store.save(
             InferenceSettingsRecord(
                 provider_key=current.provider_key,
                 model_id=current.model_id,
-                validated_at="" if active_model_failed else current.validated_at,
+                validated_at=current.validated_at,
                 cli_version=current.cli_version,
-                validation_error=str(exc),
+                validation_error=(
+                    error
+                    if active_model_failed or not transient_access_rejection
+                    else current.validation_error
+                ),
             )
         )
         raise
@@ -230,6 +248,10 @@ def provider_status(provider_key: str) -> dict[str, Any]:
     descriptor = get_inference_provider(provider_key)
     cache_path = _codex_cache_path()
     metadata = _read_codex_cache_metadata(cache_path)
+    catalog_cli_version = str(metadata.get("client_version") or "")
+    cli_version = _codex_cli_version()
+    catalog_version_number = _version_number(catalog_cli_version)
+    runtime_version_number = _version_number(cli_version)
     return {
         "provider_key": descriptor.provider_key,
         "display_name": descriptor.display_name,
@@ -237,8 +259,14 @@ def provider_status(provider_key: str) -> dict[str, Any]:
         "models": [option.to_dict() for option in descriptor.list_models()],
         "catalog_path": str(cache_path),
         "catalog_fetched_at": str(metadata.get("fetched_at") or ""),
-        "catalog_cli_version": str(metadata.get("client_version") or ""),
-        "cli_version": _codex_cli_version(),
+        "catalog_cli_version": catalog_cli_version,
+        "cli_version": cli_version,
+        "cli_path": _codex_cli_bin(),
+        "catalog_cli_matches_runtime": (
+            catalog_version_number == runtime_version_number
+            if catalog_version_number and runtime_version_number
+            else None
+        ),
     }
 
 
@@ -277,12 +305,22 @@ def _codex_cache_path() -> Path:
 
 
 def _codex_cli_version() -> str:
-    cli_bin = "codex"
+    cli_bin = _codex_cli_bin()
     try:
         completed = subprocess.run([cli_bin, "--version"], capture_output=True, text=True, timeout=5, check=False)
     except (OSError, subprocess.TimeoutExpired):
         return ""
     return str(completed.stdout or "").strip() if completed.returncode == 0 else ""
+
+
+def _codex_cli_bin() -> str:
+    configured = str(os.getenv("ALPHONSE_V2_CODEX_CLI_BIN") or "").strip()
+    return configured or str(shutil.which("codex") or "codex")
+
+
+def _version_number(value: str) -> str:
+    match = re.search(r"\d+\.\d+\.\d+", str(value or ""))
+    return match.group(0) if match else ""
 
 
 def _normalize_model_id(value: str) -> str:

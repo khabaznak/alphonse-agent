@@ -1709,6 +1709,8 @@ class V2Daemon:
             self.runtime.schedule_store.mark_occurrence_processing(occurrence_key)
         snapshot = self.runtime.visible_state.snapshot()
         if step.status in {LoopStepStatus.PROCESSED, LoopStepStatus.PARKED, LoopStepStatus.WAITING}:
+            if step.status == LoopStepStatus.PROCESSED:
+                self._clear_selected_model_access_warning()
             outbox_path = str(getattr(self.runtime.outbox, "db_path", ":memory:"))
             conversation_path = str(getattr(self.runtime.conversation_store, "db_path", ":memory:"))
             schedule_path = str(getattr(self.runtime.schedule_store, "db_path", ":memory:"))
@@ -1738,8 +1740,8 @@ class V2Daemon:
             metadata = getattr(getattr(queued, "message", None), "metadata", {}) or {}
             scheduled_occurrence = str(metadata.get("occurrence_key") or "").strip() if isinstance(metadata, dict) and str(metadata.get("source") or "") == "scheduled_task" else ""
             non_retryable = _scheduled_failure_is_non_retryable(error)
-            if _scheduled_failure_code(error) == "openai_codex_model_unavailable":
-                self._mark_selected_model_unavailable(error)
+            if _model_access_rejection(error):
+                self._record_selected_model_access_warning(error)
             retry = getattr(self.runtime.queue, "retry", None)
             if callable(retry):
                 retry(
@@ -1906,12 +1908,17 @@ class V2Daemon:
             source_message_id=f"outbound:{outbound.outbox_message_id}",
         )
 
-    def _mark_selected_model_unavailable(self, error: str) -> None:
-        """Require a fresh Desktop/TUI validation after the backend rejects a saved model."""
+    def _record_selected_model_access_warning(self, error: str) -> None:
+        """Record a transient backend rejection without invalidating a known-good model."""
         current = self.runtime.inference_settings_store.get()
         self.runtime.inference_settings_store.save(
-            replace(current, validated_at="", validation_error=str(error or "openai_codex_model_unavailable"))
+            replace(current, validation_error=str(error or "openai_codex_model_access_rejected"))
         )
+
+    def _clear_selected_model_access_warning(self) -> None:
+        current = self.runtime.inference_settings_store.get()
+        if _model_access_rejection(current.validation_error):
+            self.runtime.inference_settings_store.save(replace(current, validation_error=""))
 
     def _run_retention_if_due(self, *, force: bool = False) -> None:
         now = datetime.now(timezone.utc)
@@ -2130,6 +2137,13 @@ def _scheduled_failure_is_non_retryable(error: str) -> bool:
         "openai_codex_cli_missing",
         "openai_codex_cli_upgrade_required",
         "openai_codex_model_not_configured",
+    }
+
+
+def _model_access_rejection(error: str) -> bool:
+    return _scheduled_failure_code(error) in {
+        "openai_codex_model_access_rejected",
+        # Preserve recovery behavior for diagnostics saved by older builds.
         "openai_codex_model_unavailable",
     }
 
@@ -2142,8 +2156,8 @@ def _scheduled_failure_message(task_name: str, error: str) -> str:
         detail = "The Codex command-line tool is unavailable on this machine."
     elif code == "openai_codex_cli_upgrade_required":
         detail = "Codex needs to be updated before I can run it."
-    elif code == "openai_codex_model_unavailable":
-        detail = "The saved agent model is no longer available. Choose and validate another model in Alphonse settings."
+    elif _model_access_rejection(error):
+        detail = "The Codex backend temporarily rejected the saved agent model after repeated attempts. Its catalog entry remains valid; try again later or validate another model."
     else:
         detail = "I could not complete it after retrying."
     return f"Scheduled task failed: {task_name}. {detail}"
@@ -2160,9 +2174,9 @@ def _inbound_failure_message(error: str, model_id: str) -> str:
         return "I couldn't complete this task because Codex needs to be updated."
     if code == "openai_codex_model_not_configured":
         return "I couldn't start this task because no agent model is configured. Choose and validate one in Alphonse settings."
-    if code == "openai_codex_model_unavailable":
+    if _model_access_rejection(error):
         selected = f" ({model})" if model else ""
-        return f"I couldn't start this task because the saved agent model{selected} is unavailable. Choose and validate another model in Alphonse settings."
+        return f"I couldn't complete this task because the Codex backend temporarily rejected the saved agent model{selected} after repeated attempts. Please try again later or validate another model in Alphonse settings."
     selected = f" ({model})" if model else ""
     return f"I couldn't complete this task after retrying the saved agent model{selected}. Please try again or validate another model in Alphonse settings."
 

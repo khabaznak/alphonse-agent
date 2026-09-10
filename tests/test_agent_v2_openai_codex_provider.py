@@ -183,7 +183,7 @@ def test_codex_provider_reports_when_cli_upgrade_is_required(monkeypatch: pytest
         )
 
 
-def test_codex_provider_reports_unavailable_model_without_generic_exit(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_codex_provider_reports_ambiguous_model_access_rejection(monkeypatch: pytest.MonkeyPatch) -> None:
     def fake_run(command, **kwargs):
         return SimpleNamespace(
             returncode=1,
@@ -194,7 +194,7 @@ def test_codex_provider_reports_unavailable_model_without_generic_exit(monkeypat
     monkeypatch.setattr("alphonse.agent_v2.core.inference.openai_codex.shutil.which", lambda _bin: "/bin/codex")
     monkeypatch.setattr("alphonse.agent_v2.core.inference.openai_codex.subprocess.run", fake_run)
 
-    with pytest.raises(ValueError, match=r"openai_codex_model_unavailable: gpt-5\.5"):
+    with pytest.raises(ValueError, match=r"openai_codex_model_access_rejected: gpt-5\.5"):
         OpenAICodexProvider().generate_markdown(
             InferenceRequest(
                 prompt="Prompt",
