@@ -82,6 +82,7 @@ class CoreMessage:
     prompt: str
     user: str
     project_id: str = ""
+    memory_session_id: str = ""
     tag: str = ""
     correlation_id: str = ""
     metadata: dict[str, Any] = field(default_factory=dict)

@@ -3,6 +3,7 @@
 - Message ID: {{ task.message_id or "" }}
 - User: {{ task.user or "" }}
 - Project ID: {{ task.project_id }}
+- Memory Session ID: {{ task.memory_session_id }}
 - Tag: {{ task.tag }}
 - Correlation ID: {{ task.correlation_id }}
 - Status: {{ task.status }}
@@ -30,7 +31,7 @@
 {{ task.recent_conversation_md or "- (none)" }}
 
 # Conversation History
-{{ task.conversation_history_md or "- (none)" }}
+{{ conversation_history_md | default(task.conversation_history_md, true) or "- (none)" }}
 
 # Facts
 {{ task.facts_md or "- (none)" }}

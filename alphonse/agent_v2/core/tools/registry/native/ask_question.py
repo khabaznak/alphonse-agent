@@ -110,7 +110,7 @@ def execute_ask_question(
     if context.memory is not None and interrupt.respondent_user_id != str(context.task.user or ""):
         child_id = str(interrupt.metadata.get("child_task_id") or "").strip()
         if child_id:
-            recipient_task = TaskState(task_id=child_id, user=interrupt.respondent_user_id, project_id=context.task.project_id, goal=question, status="waiting_user")
+            recipient_task = TaskState(task_id=child_id, user=interrupt.respondent_user_id, project_id=context.task.project_id, memory_session_id=context.task.memory_session_id, goal=question, status="waiting_user")
             context.memory.ensure_project_scope(user_id=recipient_task.user or "", project_id=recipient_task.project_id)
             if recipient_task.project_id and context.project_store is not None:
                 add_member = getattr(context.project_store, "add_member", None)

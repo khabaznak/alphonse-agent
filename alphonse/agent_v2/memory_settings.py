@@ -13,12 +13,14 @@ from alphonse.agent_v2.database import connect_database, default_database_path
 
 DEFAULT_MAX_LEDGER_BYTES = 500 * 1024
 DEFAULT_COMPACTION_SUMMARY_MAX_WORDS = 500
+DEFAULT_MEMORY_CONTEXT_TOKEN_BUDGET = 4096
 
 
 @dataclass(frozen=True)
 class MemorySettings:
     max_ledger_bytes: int = DEFAULT_MAX_LEDGER_BYTES
     compaction_summary_max_words: int = DEFAULT_COMPACTION_SUMMARY_MAX_WORDS
+    memory_context_token_budget: int = DEFAULT_MEMORY_CONTEXT_TOKEN_BUDGET
     updated_at: str = ""
 
     def to_dict(self) -> dict[str, object]:
@@ -42,13 +44,19 @@ class SQLiteMemorySettingsStore:
             row = conn.execute("SELECT * FROM v2_memory_settings WHERE settings_id=1").fetchone()
         if row is None:
             return MemorySettings()
-        return MemorySettings(int(row["max_ledger_bytes"]), int(row["compaction_summary_max_words"]), str(row["updated_at"]))
+        return MemorySettings(
+            max_ledger_bytes=int(row["max_ledger_bytes"]),
+            compaction_summary_max_words=int(row["compaction_summary_max_words"]),
+            memory_context_token_budget=int(row["memory_context_token_budget"]),
+            updated_at=str(row["updated_at"]),
+        )
 
     def save(self, settings: MemorySettings) -> MemorySettings:
         size = _integer(settings.max_ledger_bytes, "memory_max_ledger_bytes_invalid", 1024, 100 * 1024 * 1024)
         words = _integer(settings.compaction_summary_max_words, "memory_compaction_summary_max_words_invalid", 1, 100_000)
+        tokens = _integer(settings.memory_context_token_budget, "memory_context_token_budget_invalid", 256, 131_072)
         with self._connect() as conn:
-            conn.execute("INSERT OR REPLACE INTO v2_memory_settings (settings_id,max_ledger_bytes,compaction_summary_max_words,updated_at) VALUES (1,?,?,?)", (size, words, _now()))
+            conn.execute("INSERT OR REPLACE INTO v2_memory_settings (settings_id,max_ledger_bytes,compaction_summary_max_words,memory_context_token_budget,updated_at) VALUES (1,?,?,?,?)", (size, words, tokens, _now()))
         return self.get()
 
     def _connect(self):
@@ -63,8 +71,12 @@ class SQLiteMemorySettingsStore:
               settings_id INTEGER PRIMARY KEY CHECK(settings_id=1),
               max_ledger_bytes INTEGER NOT NULL,
               compaction_summary_max_words INTEGER NOT NULL,
+              memory_context_token_budget INTEGER NOT NULL DEFAULT 4096,
               updated_at TEXT NOT NULL
             ) STRICT""")
+            columns = {str(row["name"]) for row in conn.execute("PRAGMA table_info(v2_memory_settings)").fetchall()}
+            if "memory_context_token_budget" not in columns:
+                conn.execute("ALTER TABLE v2_memory_settings ADD COLUMN memory_context_token_budget INTEGER NOT NULL DEFAULT 4096")
 
 
 class _Connection:

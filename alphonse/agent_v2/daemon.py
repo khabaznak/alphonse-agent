@@ -64,6 +64,8 @@ from alphonse.agent_v2.code_mode_settings import CodeModeSettings
 from alphonse.agent_v2.code_mode_settings import SQLiteCodeModeSettingsStore
 from alphonse.agent_v2.memory_settings import MemorySettings
 from alphonse.agent_v2.memory_settings import SQLiteMemorySettingsStore
+from alphonse.agent_v2.memory_sessions import SQLiteMemorySessionStore
+from alphonse.agent_v2.memory_sessions import MemorySessionBindingKey
 from alphonse.agent_v2.web_tools_settings import SQLiteWebToolsSettingsStore
 from alphonse.agent_v2.media_tools_settings import SQLiteMediaToolsSettingsStore
 from alphonse.agent_v2.core.tools.registry.native.media import verify_ocr, verify_stt, verify_stt_recording, verify_tts
@@ -122,6 +124,7 @@ class V2Daemon:
             self.runtime.queue.lease_owner = self.daemon_id
         self._stop = threading.Event()
         self._processor_thread: threading.Thread | None = None
+        self._memory_migration_thread: threading.Thread | None = None
         self._lock_file: Any | None = None
         self._lifecycle_lock = threading.RLock()
         self._stopped = False
@@ -156,6 +159,7 @@ class V2Daemon:
             worker_id=self.daemon_id,
             on_message_queued=lambda: None,
             on_direct_delivery=self._deliver_scheduled_reminder,
+            memory_session_resolver=lambda project_id, identity, owner: self.runtime.memory_session_store.ensure_system(project_id=project_id, identity=identity, created_by_user_id=owner).session_id if project_id else "",
         )
         self.ipc = V2DaemonServer(self)
 
@@ -170,6 +174,8 @@ class V2Daemon:
             self._stop.clear()
             self._ensure_home_projects()
             self._migrate_blank_project_records()
+            self._memory_migration_thread = threading.Thread(target=self._migrate_project_memories, name="alphonse-v2-memory-migration", daemon=True)
+            self._memory_migration_thread.start()
             reclaim_expired = getattr(self.runtime.queue, "reclaim_expired", None)
             if callable(reclaim_expired):
                 reclaim_expired()
@@ -201,7 +207,33 @@ class V2Daemon:
         stop_runtime_integrations(self.runtime)
         if self._processor_thread is not None and self._processor_thread.is_alive():
             self._processor_thread.join(timeout=5)
+        if self._memory_migration_thread is not None and self._memory_migration_thread.is_alive():
+            self._memory_migration_thread.join(timeout=5)
         self._release_single_instance_lock()
+
+    def _migrate_project_memories(self) -> None:
+        admin = self.runtime.user_store.admin_user()
+        requester = admin.user_id if admin is not None else ""
+        projects = self.runtime.project_store.list_visible_projects(requester, requester_is_admin=True)
+        for project in projects:
+            if self._stop.is_set(): return
+            status = self.runtime.memory_session_store.migration_status(project.project_id)
+            if status.get("status") == "complete": continue
+            self.runtime.memory_session_store.set_migration_status(project.project_id, "running")
+            try:
+                self.runtime.memory_session_store.ensure_general(project_id=project.project_id, created_by_user_id=project.owner_user_id)
+                if not self.runtime.conversation_store.legacy_import_completed(owner_user_id=project.owner_user_id, project_id=project.project_id):
+                    legacy = self.runtime.core.memory.latest_content(user_id=project.owner_user_id, project_id=project.project_id)
+                    self.runtime.conversation_store.import_legacy_events(
+                        owner_user_id=project.owner_user_id,
+                        project_id=project.project_id,
+                        events=legacy_ledger_events(legacy, owner_user_id=project.owner_user_id, project_id=project.project_id, limit=500),
+                    )
+                self.runtime.core.memory.migrate_project_legacy(user_id=project.owner_user_id, project_id=project.project_id)
+                self.runtime.memory_session_store.set_migration_status(project.project_id, "complete")
+            except Exception as exc:
+                logger.exception("project memory migration failed project_id=%s", project.project_id)
+                self.runtime.memory_session_store.set_migration_status(project.project_id, "failed", str(exc))
 
     def restart_integrations(self) -> None:
         self._align_configured_provider_addresses()
@@ -631,6 +663,7 @@ class V2Daemon:
         saved = self.runtime.memory_settings_store.save(MemorySettings(
             max_ledger_bytes=values.get("max_ledger_bytes", current.max_ledger_bytes),
             compaction_summary_max_words=values.get("compaction_summary_max_words", current.compaction_summary_max_words),
+            memory_context_token_budget=values.get("memory_context_token_budget", current.memory_context_token_budget),
         ))
         return saved.to_dict()
 
@@ -1140,6 +1173,7 @@ class V2Daemon:
             visibility=visibility,  # type: ignore[arg-type]
             owner_user_id=owner,
         )
+        self.runtime.memory_session_store.ensure_general(project_id=project.project_id, created_by_user_id=owner)
         return project.to_dict()
 
     def import_project(self, *, user: str, name: str, description: str, root_path: str, visibility: str) -> dict[str, Any]:
@@ -1149,7 +1183,9 @@ class V2Daemon:
             raise ValueError("project_import_directory_required")
         if self.runtime.project_store.find_project_by_root(str(root)) is not None:
             raise ValueError("project_root_already_registered")
-        return self.runtime.project_store.create_project(name=name, description=description, root_path=str(root), visibility=visibility, owner_user_id=owner).to_dict()  # type: ignore[arg-type]
+        project = self.runtime.project_store.create_project(name=name, description=description, root_path=str(root), visibility=visibility, owner_user_id=owner)  # type: ignore[arg-type]
+        self.runtime.memory_session_store.ensure_general(project_id=project.project_id, created_by_user_id=owner)
+        return project.to_dict()
 
     def update_project(self, *, user: str, project_id: str, name: str, description: str, visibility: str) -> dict[str, Any]:
         actor = self._admin_user_id(user)
@@ -1229,6 +1265,50 @@ class V2Daemon:
         session = self.runtime.project_session_store.get(key)
         return session.to_dict() if session is not None else None
 
+    def list_memory_sessions(self, *, user: str, project_id: str, include_closed: bool = False) -> list[dict[str, object]]:
+        actor = self._admin_user_id(user)
+        project = self.runtime.project_store.get_project(project_id, requester_user_id=actor, requester_is_admin=self.runtime.user_store.is_admin(actor))
+        if project is None: raise PermissionError("project_not_accessible")
+        return [item.to_dict() for item in self.runtime.memory_session_store.list(project.project_id, include_closed=include_closed)]
+
+    def create_memory_session(self, *, user: str, project_id: str, name: str, integration_id: str = "tui", channel_target: str = "", thread_id: str = "") -> dict[str, object]:
+        actor = self._admin_user_id(user)
+        project = self.runtime.project_store.get_project(project_id, requester_user_id=actor, requester_is_admin=self.runtime.user_store.is_admin(actor))
+        if project is None: raise PermissionError("project_not_accessible")
+        session = self.runtime.memory_session_store.create(project_id=project.project_id, name=name, created_by_user_id=actor)
+        key = MemorySessionBindingKey(actor, integration_id, channel_target or actor, thread_id, project.project_id)
+        self.runtime.memory_session_store.bind(key, session)
+        return session.to_dict()
+
+    def select_memory_session(self, *, user: str, project_id: str, session_id: str, integration_id: str = "tui", channel_target: str = "", thread_id: str = "") -> dict[str, object]:
+        actor = self._admin_user_id(user)
+        project = self.runtime.project_store.get_project(project_id, requester_user_id=actor, requester_is_admin=self.runtime.user_store.is_admin(actor))
+        if project is None: raise PermissionError("project_not_accessible")
+        session = self.runtime.memory_session_store.resolve_open(project.project_id, session_id)
+        self.runtime.memory_session_store.bind(MemorySessionBindingKey(actor, integration_id, channel_target or actor, thread_id, project.project_id), session)
+        return session.to_dict()
+
+    def close_memory_session(self, *, user: str, project_id: str, session_id: str, integration_id: str = "tui", channel_target: str = "", thread_id: str = "") -> dict[str, object]:
+        actor = self._admin_user_id(user)
+        project = self.runtime.project_store.get_project(project_id, requester_user_id=actor, requester_is_admin=self.runtime.user_store.is_admin(actor))
+        if project is None: raise PermissionError("project_not_accessible")
+        session = self.runtime.memory_session_store.get(session_id)
+        if session is None or session.project_id != project.project_id: raise LookupError("memory_session_not_found")
+        pending = getattr(self.runtime.queue, "has_pending_memory_session", None)
+        if (callable(pending) and pending(session.session_id)) or str(self.active_work().get("memory_session_id") or "") == session.session_id:
+            raise RuntimeError("memory_session_has_active_or_queued_work")
+        self.runtime.core.memory.close_session(user_id=actor, project_id=project.project_id, session_id=session.session_id)
+        closed = self.runtime.memory_session_store.close(session.session_id)
+        general = self.runtime.memory_session_store.ensure_general(project_id=project.project_id, created_by_user_id=actor)
+        self.runtime.memory_session_store.bind(MemorySessionBindingKey(actor, integration_id, channel_target or actor, thread_id, project.project_id), general)
+        return {"closed": closed.to_dict(), "active": general.to_dict()}
+
+    def memory_migration_status(self, *, user: str, project_id: str) -> dict[str, str]:
+        actor = self._admin_user_id(user)
+        if self.runtime.project_store.get_project(project_id, requester_user_id=actor, requester_is_admin=self.runtime.user_store.is_admin(actor)) is None:
+            raise PermissionError("project_not_accessible")
+        return self.runtime.memory_session_store.migration_status(project_id)
+
     def ingest_message(self, **values: Any) -> dict[str, Any]:
         routed = self.runtime.inbound_router.ingest(**values)
         return {
@@ -1256,6 +1336,7 @@ class V2Daemon:
             payload = _event_payload(execution)
             queued = self.runtime.channel.queue_message(
                 prompt=str(execution["prompt"]), user=str(execution["owner_user_id"]), project_id=str(execution["project_id"]),
+                memory_session_id=self.runtime.memory_session_store.ensure_system(project_id=str(execution["project_id"]), identity=str(execution["automation_id"]), created_by_user_id=str(execution["owner_user_id"])).session_id,
                 metadata={"source": "event_automation", "automation_id": str(execution["automation_id"]), "automation_execution_id": str(execution["execution_id"]), "event": payload, "channel": _json_object(execution.get("origin_channel_json"))},
                 message_id=f"event:{execution['execution_id']}",
             )
@@ -1338,6 +1419,7 @@ class V2Daemon:
                 prompt=text or _question_answer_text(payload),
                 user=normalized_user,
                 project_id=result.resumed_task.project_id,
+                memory_session_id=result.resumed_task.memory_session_id,
                 correlation_id=result.resumed_task.correlation_id,
                 metadata={
                     "task_state": result.resumed_task.to_dict(),
@@ -1784,9 +1866,11 @@ class V2Daemon:
             connection=connection,
         )
         if projected is not None:
+            task_state = snapshot.metadata.get("task_state") if isinstance(getattr(snapshot, "metadata", None), dict) else {}
             self.runtime.conversation_store.record(
                 owner_user_id=projected.audience_user_id,
                 project_id=projected.project_id,
+                memory_session_id=str(task_state.get("memory_session_id") or "") if isinstance(task_state, dict) else "",
                 role="assistant",
                 content=projected.message,
                 source=projected.integration_id,
@@ -1814,6 +1898,7 @@ class V2Daemon:
     def _deliver_scheduled_reminder(self, occurrence: Any) -> str:
         """Deliver notification-only schedules without starting an LLM/PDCA run."""
         task = occurrence.task
+        memory_session = self.runtime.memory_session_store.ensure_system(project_id=task.project_id, identity=task.scheduled_task_id, created_by_user_id=task.owner_user_id) if task.project_id else None
         origin = channel_address_from_metadata({"channel": dict(task.origin_channel)})
         if origin is None:
             resolved = self.runtime.identity_resolver.resolve_outbound_address(
@@ -1838,6 +1923,7 @@ class V2Daemon:
         self.runtime.conversation_store.record(
             owner_user_id=task.owner_user_id,
             project_id=task.project_id,
+            memory_session_id=memory_session.session_id if memory_session is not None else "",
             role="assistant",
             content=outbound.message,
             source=origin.integration_id,
@@ -1965,6 +2051,7 @@ class V2Daemon:
                 "message_id": str(getattr(queued, "message_id", "") or ""),
                 "user": str(getattr(message, "user", "") or ""),
                 "project_id": str(getattr(message, "project_id", "") or ""),
+                "memory_session_id": str(getattr(message, "memory_session_id", "") or ""),
                 "correlation_id": str(getattr(message, "correlation_id", "") or ""),
                 "prompt": str(getattr(message, "prompt", "") or ""),
                 "routing_disposition": str((getattr(message, "metadata", {}) or {}).get("routing_disposition") or "pdca_task"),
@@ -2287,6 +2374,7 @@ def main() -> None:
                 inference_settings_store=SQLiteInferenceSettingsStore.default(),
                 agent_config_store=AgentConfigStore.default(),
                 project_session_store=SQLiteProjectSessionStore.default(),
+                memory_session_store=SQLiteMemorySessionStore.default(),
                 communication_thread_store=SQLiteCommunicationThreadStore.default(),
             ),
             daemon_id=daemon_id,

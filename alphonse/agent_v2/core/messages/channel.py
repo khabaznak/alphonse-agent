@@ -24,6 +24,7 @@ class CommunicationChannel:
         prompt: str,
         user: str,
         project_id: str = "",
+        memory_session_id: str = "",
         tag: str = "",
         correlation_id: str = "",
         timestamp: datetime | None = None,
@@ -45,7 +46,15 @@ class CommunicationChannel:
         if not user_value:
             raise ValueError("user_required")
         project_value = str(project_id or "").strip()
-        if not project_value:
+        legacy_provenance = bool(
+            raw_prompt.startswith("/")
+            or integration_id != "tui"
+            or provider_message_id
+            or channel_target
+            or metadata
+            or self.conversation_store is not None
+        )
+        if not project_value and not legacy_provenance:
             raise ValueError("project_id_required")
 
         merged_metadata = {
@@ -73,6 +82,7 @@ class CommunicationChannel:
             prompt=prompt_value,
             user=user_value,
             project_id=project_value,
+            memory_session_id=str(memory_session_id or "").strip(),
             tag=str(tag or ""),
             correlation_id=str(correlation_id or ""),
             metadata=merged_metadata,
@@ -83,7 +93,7 @@ class CommunicationChannel:
             queued = self.messages.enqueue(message)
         if self.conversation_store is not None:
             channel = merged_metadata.get("channel") if isinstance(merged_metadata.get("channel"), dict) else {}
-            self.conversation_store.record(owner_user_id=user_value, project_id=message.project_id, role="user", content=message.prompt, source=str(channel.get("integration_id") or provider_key), source_message_id=f"inbound:{queued.message_id}", created_at=message.timestamp.isoformat())
+            self.conversation_store.record(owner_user_id=user_value, project_id=message.project_id, memory_session_id=message.memory_session_id, role="user", content=message.prompt, source=str(channel.get("integration_id") or provider_key), source_message_id=f"inbound:{queued.message_id}", created_at=message.timestamp.isoformat())
         return queued
 
 

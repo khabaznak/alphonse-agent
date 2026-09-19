@@ -77,6 +77,10 @@ class InMemoryMessageQueue:
                 and str(item.message.metadata.get("routing_disposition") or "pdca_task") == "pdca_task"
             )
 
+    def has_pending_memory_session(self, session_id: str) -> bool:
+        with self._lock:
+            return any(item.message.memory_session_id == str(session_id) for item in self._messages)
+
     def _next_matching(self, selector: MessageSelector | None) -> QueuedMessage | None:
         matches = (message for message in self._messages if _matches(message, selector))
         return min(matches, key=_selection_key, default=None)

@@ -114,7 +114,7 @@ def _render_criteria_review_prompt(
         project_context_md=project_context_md,
         philosophy_md=philosophy_md,
         global_context_md=global_context_md,
-        task_state_md=task.to_markdown_prompt(),
+        task_state_md=task.to_markdown_prompt(include_memory=False),
     ).strip()
 
 

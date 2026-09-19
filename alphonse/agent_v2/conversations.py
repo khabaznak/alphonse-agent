@@ -20,6 +20,7 @@ class ConversationEvent:
     event_id: str
     owner_user_id: str
     project_id: str
+    memory_session_id: str
     role: str
     content: str
     source: str
@@ -47,6 +48,7 @@ class SQLiteConversationStore:
         *,
         owner_user_id: str,
         project_id: str,
+        memory_session_id: str = "",
         role: str,
         content: str,
         source: str,
@@ -60,6 +62,7 @@ class SQLiteConversationStore:
             return None
         event_id = str(uuid4())
         project = str(project_id or "").strip()
+        session = str(memory_session_id or "").strip()
         source_value = str(source or "unknown").strip() or "unknown"
         source_id = str(source_message_id or "").strip()
         timestamp = _canonical_timestamp(created_at or _now())
@@ -69,6 +72,7 @@ class SQLiteConversationStore:
                 event_id=event_id,
                 owner=owner,
                 project=project,
+                session=session,
                 role=normalized_role,
                 message=message,
                 source=source_value,
@@ -81,6 +85,7 @@ class SQLiteConversationStore:
                 event_id=event_id,
                 owner=owner,
                 project=project,
+                session=session,
                 role=normalized_role,
                 message=message,
                 source=source_value,
@@ -95,6 +100,7 @@ class SQLiteConversationStore:
         event_id: str,
         owner: str,
         project: str,
+        session: str,
         role: str,
         message: str,
         source: str,
@@ -109,15 +115,18 @@ class SQLiteConversationStore:
             if exists is not None:
                 return None
         cursor = conn.execute(
-            "INSERT INTO v2_conversation_events(event_id,owner_user_id,project_id,role,content,source,source_message_id,created_at) VALUES (?,?,?,?,?,?,?,?)",
-            (event_id, owner, project, role, message, source, source_id, timestamp),
+            "INSERT INTO v2_conversation_events(event_id,owner_user_id,project_id,memory_session_id,role,content,source,source_message_id,created_at) VALUES (?,?,?,?,?,?,?,?,?)",
+            (event_id, owner, project, session, role, message, source, source_id, timestamp),
         )
         sequence = int(cursor.lastrowid)
-        return ConversationEvent(sequence, event_id, owner, project, role, message, source, source_id, timestamp)
+        return ConversationEvent(sequence, event_id, owner, project, session, role, message, source, source_id, timestamp)
 
-    def list(self, *, owner_user_id: str, project_id: str = "", limit: int = 100) -> list[ConversationEvent]:
+    def list(self, *, owner_user_id: str, project_id: str = "", memory_session_id: str | None = None, limit: int = 100) -> list[ConversationEvent]:
         with self._connect() as conn:
-            rows = conn.execute("SELECT * FROM v2_conversation_events WHERE owner_user_id=? AND project_id=? ORDER BY sequence DESC LIMIT ?", (str(owner_user_id or "").strip(), str(project_id or "").strip(), max(1, min(int(limit or 100), 500)))).fetchall()
+            if memory_session_id is None:
+                rows = conn.execute("SELECT * FROM v2_conversation_events WHERE owner_user_id=? AND project_id=? ORDER BY sequence DESC LIMIT ?", (str(owner_user_id or "").strip(), str(project_id or "").strip(), max(1, min(int(limit or 100), 500)))).fetchall()
+            else:
+                rows = conn.execute("SELECT * FROM v2_conversation_events WHERE owner_user_id=? AND project_id=? AND memory_session_id=? ORDER BY sequence DESC LIMIT ?", (str(owner_user_id or "").strip(), str(project_id or "").strip(), str(memory_session_id or "").strip(), max(1, min(int(limit or 100), 500)))).fetchall()
         return [_event(row) for row in reversed(rows)]
 
     def sequence_for_source_message_id(self, source_message_id: str) -> int:
@@ -249,10 +258,13 @@ class SQLiteConversationStore:
                     self._create_events_table(conn)
                     for row in rows:
                         conn.execute(
-                            "INSERT INTO v2_conversation_events(event_id,owner_user_id,project_id,role,content,source,source_message_id,created_at) VALUES (?,?,?,?,?,?,?,?)",
-                            (row["event_id"], row["owner_user_id"], row["project_id"], row["role"], row["content"], row["source"], row["source_message_id"], row["created_at"]),
+                            "INSERT INTO v2_conversation_events(event_id,owner_user_id,project_id,memory_session_id,role,content,source,source_message_id,created_at) VALUES (?,?,?,?,?,?,?,?,?)",
+                            (row["event_id"], row["owner_user_id"], row["project_id"], "", row["role"], row["content"], row["source"], row["source_message_id"], row["created_at"]),
                         )
                     conn.execute("DROP TABLE v2_conversation_events_legacy")
+                    columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(v2_conversation_events)").fetchall()}
+                if "memory_session_id" not in columns:
+                    conn.execute("ALTER TABLE v2_conversation_events ADD COLUMN memory_session_id TEXT NOT NULL DEFAULT ''")
             else:
                 self._create_events_table(conn)
             conn.execute("CREATE INDEX IF NOT EXISTS idx_v2_conversation_events_scope ON v2_conversation_events(owner_user_id, project_id, sequence)")
@@ -299,6 +311,7 @@ class SQLiteConversationStore:
               event_id TEXT NOT NULL UNIQUE,
               owner_user_id TEXT NOT NULL,
               project_id TEXT NOT NULL DEFAULT '',
+              memory_session_id TEXT NOT NULL DEFAULT '',
               role TEXT NOT NULL CHECK(role IN ('user','assistant')),
               content TEXT NOT NULL,
               source TEXT NOT NULL,

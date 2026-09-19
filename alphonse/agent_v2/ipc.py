@@ -128,6 +128,18 @@ class V2DaemonClient:
     def active_project_session(self, **values: Any) -> dict[str, Any]:
         return self.request("active_project_session", **values)
 
+    def memory_sessions(self, **values: Any) -> dict[str, Any]:
+        return self.request("memory_sessions", **values)
+
+    def create_memory_session(self, **values: Any) -> dict[str, Any]:
+        return self.request("create_memory_session", **values)
+
+    def select_memory_session(self, **values: Any) -> dict[str, Any]:
+        return self.request("select_memory_session", **values)
+
+    def close_memory_session(self, **values: Any) -> dict[str, Any]:
+        return self.request("close_memory_session", **values)
+
     def pending_questions(self, *, user: str) -> dict[str, Any]:
         return self.request("pending_questions", user=user)
 
@@ -599,6 +611,22 @@ class V2DaemonServer:
                     thread_id=str(params.get("thread_id") or ""),
                 )
             }
+        if method == "memory_sessions":
+            return {"sessions": self.daemon.list_memory_sessions(user=str(params.get("user") or "local"), project_id=str(params.get("project_id") or ""), include_closed=bool(params.get("include_closed")))}
+        if method in {"create_memory_session", "select_memory_session", "close_memory_session"}:
+            common = {
+                "user": str(params.get("user") or "local"), "project_id": str(params.get("project_id") or ""),
+                "integration_id": str(params.get("integration_id") or "tui"),
+                "channel_target": str(params.get("channel_target") or params.get("user") or "local"),
+                "thread_id": str(params.get("thread_id") or ""),
+            }
+            if method == "create_memory_session":
+                return {"session": self.daemon.create_memory_session(name=str(params.get("name") or ""), **common)}
+            if method == "select_memory_session":
+                return {"session": self.daemon.select_memory_session(session_id=str(params.get("session_id") or ""), **common)}
+            return {"session": self.daemon.close_memory_session(session_id=str(params.get("session_id") or ""), **common)}
+        if method == "memory_migration_status":
+            return {"migration": self.daemon.memory_migration_status(user=str(params.get("user") or "local"), project_id=str(params.get("project_id") or ""))}
         if method == "pending_questions":
             user = str(params.get("user") or "local")
             return {"questions": [question.to_dict() for question in self.daemon.runtime.question_store.list_pending_for_respondent(user)]}

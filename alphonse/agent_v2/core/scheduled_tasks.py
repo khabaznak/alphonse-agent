@@ -170,8 +170,6 @@ class ScheduledTaskStore:
         if not prompt_value:
             raise ValueError("scheduled_task_prompt_required")
         project_value = str(project_id or "").strip()
-        if not project_value:
-            raise ValueError("scheduled_task_project_required")
         mode = str(delivery_mode or "pdca").strip().lower()
         if mode not in {"pdca", "direct"}:
             raise ValueError("scheduled_task_delivery_mode_invalid")
@@ -997,9 +995,10 @@ class ScheduledTaskStore:
 class ScheduledTaskRunner:
     """Queues due v2 scheduled tasks back into the normal message queue."""
 
-    def __init__(self, *, store: ScheduledTaskStore, messages: Any) -> None:
+    def __init__(self, *, store: ScheduledTaskStore, messages: Any, memory_session_resolver: Any | None = None) -> None:
         self.store = store
         self.channel = CommunicationChannel(messages)
+        self.memory_session_resolver = memory_session_resolver
 
     def run_due_once(self, *, now: datetime | None = None) -> list[dict[str, Any]]:
         current = now or _now_utc()
@@ -1016,6 +1015,7 @@ class ScheduledTaskRunner:
                 prompt=task.prompt,
                 user=task.owner_user_id,
                 project_id=task.project_id,
+                memory_session_id=(str(self.memory_session_resolver(task.project_id, task.scheduled_task_id, task.owner_user_id) or "") if callable(self.memory_session_resolver) else ""),
                 metadata={
                     "source": "scheduled_task",
                     "scheduled_task_id": task.scheduled_task_id,

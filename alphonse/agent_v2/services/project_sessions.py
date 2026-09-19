@@ -19,10 +19,13 @@ from alphonse.agent_v2.core.messages.queue import QueuedMessage
 from alphonse.agent_v2.core.projects import ProjectRecord
 from alphonse.agent_v2.core.projects import ProjectStore
 from alphonse.agent_v2.database import connect_database, default_database_path
+from alphonse.agent_v2.memory_sessions import MemorySessionBindingKey
+from alphonse.agent_v2.memory_sessions import MemorySessionRecord
+from alphonse.agent_v2.memory_sessions import SQLiteMemorySessionStore
 
 
 @dataclass(frozen=True)
-class ProjectSessionKey:
+class ChannelProjectSelectionKey:
     alphonse_user_id: str
     integration_id: str
     channel_target: str
@@ -30,8 +33,8 @@ class ProjectSessionKey:
 
 
 @dataclass(frozen=True)
-class ProjectSession:
-    key: ProjectSessionKey
+class ChannelProjectSelection:
+    key: ChannelProjectSelectionKey
     active_project_id: str
     project_name: str
     updated_at: str
@@ -48,7 +51,7 @@ class ProjectSession:
         }
 
 
-class SQLiteProjectSessionStore:
+class SQLiteChannelProjectSelectionStore:
     def __init__(self, db_path: str | Path = ":memory:") -> None:
         self.db_path = str(db_path)
         self._memory_connection: sqlite3.Connection | None = None
@@ -58,10 +61,10 @@ class SQLiteProjectSessionStore:
         self._ensure_schema()
 
     @classmethod
-    def default(cls) -> "SQLiteProjectSessionStore":
+    def default(cls) -> "SQLiteChannelProjectSelectionStore":
         return cls(default_database_path())
 
-    def get(self, key: ProjectSessionKey) -> ProjectSession | None:
+    def get(self, key: ChannelProjectSelectionKey) -> ChannelProjectSelection | None:
         with self._connect() as conn:
             row = conn.execute(
                 """
@@ -72,7 +75,7 @@ class SQLiteProjectSessionStore:
             ).fetchone()
         return _session_from_row(row)
 
-    def set(self, key: ProjectSessionKey, project: ProjectRecord) -> ProjectSession:
+    def set(self, key: ChannelProjectSelectionKey, project: ProjectRecord) -> ChannelProjectSelection:
         normalized = _normalize_key(key)
         now = _now_iso()
         with self._connect() as conn:
@@ -85,9 +88,9 @@ class SQLiteProjectSessionStore:
                 """,
                 (*_key_values(normalized), project.project_id, project.name, now),
             )
-        return ProjectSession(normalized, project.project_id, project.name, now)
+        return ChannelProjectSelection(normalized, project.project_id, project.name, now)
 
-    def clear(self, key: ProjectSessionKey) -> bool:
+    def clear(self, key: ChannelProjectSelectionKey) -> bool:
         with self._connect() as conn:
             cursor = conn.execute(
                 """
@@ -157,7 +160,9 @@ class ProjectInboundRouter:
         channel: CommunicationChannel,
         outbox: SQLiteOutboundStore,
         projects: ProjectStore,
-        sessions: SQLiteProjectSessionStore,
+        sessions: SQLiteChannelProjectSelectionStore,
+        memory_sessions: SQLiteMemorySessionStore | None = None,
+        memory: Any | None = None,
         is_admin: Any | None = None,
         managed_root: Any | None = None,
         communication_router: Any | None = None,
@@ -169,6 +174,8 @@ class ProjectInboundRouter:
         self.outbox = outbox
         self.projects = projects
         self.sessions = sessions
+        self.memory_sessions = memory_sessions or SQLiteMemorySessionStore(":memory:")
+        self.memory = memory
         self.is_admin = is_admin or (lambda _user: False)
         self.managed_root = managed_root
         self.communication_router = communication_router
@@ -204,7 +211,7 @@ class ProjectInboundRouter:
             reply_to_provider_message_id=str(reply_to_provider_message_id).strip(),
             thread_id=str(thread_id).strip(),
         )
-        key = ProjectSessionKey(address.alphonse_user_id, address.integration_id, address.channel_target, address.thread_id)
+        key = ChannelProjectSelectionKey(address.alphonse_user_id, address.integration_id, address.channel_target, address.thread_id)
         kill_switch_reply = self._handle_kill_switch(prompt, key, address)
         if kill_switch_reply is not None:
             self._reply(address, kill_switch_reply, correlation_id=correlation_id)
@@ -231,6 +238,9 @@ class ProjectInboundRouter:
         if project is None:
             raise ValueError("project_not_accessible")
         merged_metadata = dict(metadata or {})
+        memory_session = self._active_memory_session(key, project, merged_metadata)
+        self.memory_sessions.touch(memory_session.session_id)
+        merged_metadata["memory_session_id"] = memory_session.session_id
         disposition = self._disposition_for(
             user=address.alphonse_user_id,
             project_id=project.project_id,
@@ -243,6 +253,7 @@ class ProjectInboundRouter:
             prompt=prompt,
             user=address.alphonse_user_id,
             project_id=project.project_id,
+            memory_session_id=memory_session.session_id,
             tag=tag,
             correlation_id=correlation_id,
             metadata=merged_metadata,
@@ -260,7 +271,7 @@ class ProjectInboundRouter:
             self._queue_waiting_notice(address, project.project_id, queued.message_id, turns_ahead)
         return InboundRouteResult(queued=queued, project_id=project.project_id, disposition=disposition, turns_ahead=turns_ahead)
 
-    def active_project(self, key: ProjectSessionKey) -> ProjectRecord | None:
+    def active_project(self, key: ChannelProjectSelectionKey) -> ProjectRecord | None:
         session = self.sessions.get(key)
         if session is None:
             home = self._home_project(key.alphonse_user_id)
@@ -273,12 +284,12 @@ class ProjectInboundRouter:
             return home
         return project
 
-    def select_project(self, key: ProjectSessionKey, project_id_or_name: str) -> ProjectRecord:
+    def select_project(self, key: ChannelProjectSelectionKey, project_id_or_name: str) -> ProjectRecord:
         project = self._resolve_visible_project(key.alphonse_user_id, project_id_or_name)
         self.sessions.set(key, project)
         return project
 
-    def _handle_command(self, prompt: str, key: ProjectSessionKey, address: ChannelAddress) -> str | None:
+    def _handle_command(self, prompt: str, key: ChannelProjectSelectionKey, address: ChannelAddress) -> str | None:
         raw = str(prompt or "")
         if not raw.startswith("/"):
             return None
@@ -286,6 +297,10 @@ class ProjectInboundRouter:
         command, _, arguments = text.partition(" ")
         command = command.lower()
         arguments = arguments.strip()
+        if command == "/sessions":
+            return self._list_memory_sessions(key)
+        if command == "/session":
+            return self._handle_memory_session_command(key, arguments)
         if command == "/projects":
             return self._list_projects(key)
         if command != "/project":
@@ -325,7 +340,71 @@ class ProjectInboundRouter:
             return str(exc)
         return f"Active project: {project.name}."
 
-    def _list_projects(self, key: ProjectSessionKey) -> str:
+    def _memory_binding_key(self, key: ChannelProjectSelectionKey, project_id: str) -> MemorySessionBindingKey:
+        return MemorySessionBindingKey(key.alphonse_user_id, key.integration_id, key.channel_target, key.thread_id, project_id)
+
+    def _active_memory_session(self, key: ChannelProjectSelectionKey, project: ProjectRecord, metadata: dict[str, Any] | None = None) -> MemorySessionRecord:
+        source = str((metadata or {}).get("source") or "")
+        if source in {"scheduled_task", "event_automation"}:
+            identity = str((metadata or {}).get("schedule_id") or (metadata or {}).get("automation_id") or source)
+            return self.memory_sessions.ensure_system(project_id=project.project_id, identity=identity, created_by_user_id=key.alphonse_user_id)
+        binding = self._memory_binding_key(key, project.project_id)
+        active = self.memory_sessions.get_binding(binding)
+        if active is None:
+            active = self.memory_sessions.ensure_general(project_id=project.project_id, created_by_user_id=key.alphonse_user_id)
+            self.memory_sessions.bind(binding, active)
+        return active
+
+    def _list_memory_sessions(self, key: ChannelProjectSelectionKey) -> str:
+        project = self.active_project(key)
+        if project is None: return "No active project."
+        active = self._active_memory_session(key, project)
+        lines = [f"Sessions for {project.name}:"]
+        for item in self.memory_sessions.list(project.project_id):
+            lines.append(f"{'*' if item.session_id == active.session_id else '-'} {item.name} ({item.session_id})")
+        return "\n".join(lines)
+
+    def _handle_memory_session_command(self, key: ChannelProjectSelectionKey, arguments: str) -> str:
+        project = self.active_project(key)
+        if project is None: return "No active project."
+        binding = self._memory_binding_key(key, project.project_id)
+        active = self._active_memory_session(key, project)
+        if not arguments:
+            return f"Active session: {active.name} ({active.session_id})."
+        if arguments.casefold() == "close":
+            if self.memory is None:
+                return "Session closing is unavailable."
+            if self._memory_session_has_work(active.session_id):
+                return "This session still has active or queued work. Close it after that work finishes."
+            try:
+                self.memory.close_session(user_id=key.alphonse_user_id, project_id=project.project_id, session_id=active.session_id)
+                self.memory_sessions.close(active.session_id)
+            except Exception as exc:
+                return f"Could not close session; it remains open: {exc}"
+            general = self.memory_sessions.ensure_general(project_id=project.project_id, created_by_user_id=key.alphonse_user_id)
+            self.memory_sessions.bind(binding, general)
+            return f"Closed session {active.name} and promoted durable project memory. Active session: {general.name}."
+        if arguments.casefold() == "new" or arguments.casefold().startswith("new "):
+            name = arguments[3:].strip()
+            if not name: return "Usage: /session new <name>"
+            created = self.memory_sessions.create(project_id=project.project_id, name=name, created_by_user_id=key.alphonse_user_id)
+            self.memory_sessions.bind(binding, created)
+            return f"Created and activated session: {created.name}."
+        try:
+            selected = self.memory_sessions.resolve_open(project.project_id, arguments)
+        except LookupError as exc:
+            return str(exc)
+        self.memory_sessions.bind(binding, selected)
+        return f"Active session: {selected.name}."
+
+    def _memory_session_has_work(self, session_id: str) -> bool:
+        pending = getattr(self.channel.messages, "has_pending_memory_session", None)
+        if callable(pending) and pending(session_id):
+            return True
+        active = self.active_task_lookup()
+        return isinstance(active, dict) and str(active.get("memory_session_id") or "") == str(session_id)
+
+    def _list_projects(self, key: ChannelProjectSelectionKey) -> str:
         projects = self.projects.list_visible_projects(key.alphonse_user_id)
         active = self.active_project(key)
         if not projects:
@@ -336,7 +415,7 @@ class ProjectInboundRouter:
             lines.append(f"{prefix}{project.name} ({project.project_id})")
         return "\n".join(lines)
 
-    def _project_status(self, key: ProjectSessionKey) -> str:
+    def _project_status(self, key: ChannelProjectSelectionKey) -> str:
         active = self.active_project(key)
         prefix = f"Active project: {active.name}." if active is not None else "No active project."
         return f"{prefix}\n{self._list_projects(key)}"
@@ -425,7 +504,7 @@ class ProjectInboundRouter:
                 source_message_id=f"outbound:{outbound.outbox_message_id}",
             )
 
-    def _handle_kill_switch(self, prompt: str, key: ProjectSessionKey, address: ChannelAddress) -> str | None:
+    def _handle_kill_switch(self, prompt: str, key: ChannelProjectSelectionKey, address: ChannelAddress) -> str | None:
         text = str(prompt or "").strip()
         if not text.startswith("/"):
             return None
@@ -451,25 +530,25 @@ def managed_projects_root() -> Path:
     return Path(configured) if configured else Path.home() / ".alphonse" / "projects"
 
 
-def _normalize_key(key: ProjectSessionKey) -> ProjectSessionKey:
+def _normalize_key(key: ChannelProjectSelectionKey) -> ChannelProjectSelectionKey:
     user = str(key.alphonse_user_id or "").strip()
     integration = str(key.integration_id or "").strip()
     target = str(key.channel_target or "").strip()
     if not user or not integration or not target:
         raise ValueError("project_session_key_required")
-    return ProjectSessionKey(user, integration, target, str(key.thread_id or "").strip())
+    return ChannelProjectSelectionKey(user, integration, target, str(key.thread_id or "").strip())
 
 
-def _key_values(key: ProjectSessionKey) -> tuple[str, str, str, str]:
+def _key_values(key: ChannelProjectSelectionKey) -> tuple[str, str, str, str]:
     normalized = _normalize_key(key)
     return normalized.alphonse_user_id, normalized.integration_id, normalized.channel_target, normalized.thread_id
 
 
-def _session_from_row(row: sqlite3.Row | None) -> ProjectSession | None:
+def _session_from_row(row: sqlite3.Row | None) -> ChannelProjectSelection | None:
     if row is None:
         return None
-    return ProjectSession(
-        ProjectSessionKey(str(row["alphonse_user_id"]), str(row["integration_id"]), str(row["channel_target"]), str(row["thread_id"])),
+    return ChannelProjectSelection(
+        ChannelProjectSelectionKey(str(row["alphonse_user_id"]), str(row["integration_id"]), str(row["channel_target"]), str(row["thread_id"])),
         str(row["active_project_id"]),
         str(row["project_name"]),
         str(row["updated_at"]),
@@ -497,3 +576,9 @@ class _ConnectionProxy:
         else:
             self.conn.rollback()
         return False
+
+
+# Compatibility aliases for integrations importing the pre-memory-session names.
+ProjectSessionKey = ChannelProjectSelectionKey
+ProjectSession = ChannelProjectSelection
+SQLiteProjectSessionStore = SQLiteChannelProjectSelectionStore

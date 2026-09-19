@@ -52,7 +52,9 @@ from alphonse.agent_v2.artifacts import SQLiteArtifactStore
 from alphonse.agent_v2.artifacts import build_artifact_tool_definitions
 from alphonse.agent_v2.memory_settings import SQLiteMemorySettingsStore
 from alphonse.agent_v2.core.memory import LedgerMemory
+from alphonse.agent_v2.core.tools.registry.native.memory import build_search_memory_tool_definition
 from alphonse.agent_v2.conversations import SQLiteConversationStore
+from alphonse.agent_v2.memory_sessions import SQLiteMemorySessionStore
 
 
 @dataclass
@@ -101,6 +103,7 @@ class V2RuntimeHost:
     inference_settings_store: SQLiteInferenceSettingsStore
     agent_config_store: AgentConfigStore
     project_session_store: SQLiteProjectSessionStore
+    memory_session_store: SQLiteMemorySessionStore
     inbound_router: ProjectInboundRouter
     user_store: V2UserStore
     web_tools_settings_store: SQLiteWebToolsSettingsStore
@@ -134,6 +137,7 @@ def build_runtime_host(
     inference_settings_store: SQLiteInferenceSettingsStore | None = None,
     agent_config_store: AgentConfigStore | None = None,
     project_session_store: SQLiteProjectSessionStore | None = None,
+    memory_session_store: SQLiteMemorySessionStore | None = None,
     messages: Any | None = None,
     web_tools_settings_store: SQLiteWebToolsSettingsStore | None = None,
     code_mode_settings_store: SQLiteCodeModeSettingsStore | None = None,
@@ -166,6 +170,7 @@ def build_runtime_host(
     # Generic test and helper runtimes only need the package defaults.
     agent_config_store = agent_config_store or AgentConfigStore(packaged_agent_config_dir())
     project_session_store = project_session_store or SQLiteProjectSessionStore()
+    memory_session_store = memory_session_store or SQLiteMemorySessionStore()
     inference = inference or build_inference_router_from_settings(inference_settings_store.get())
     question_store = question_store or SQLiteQuestionStore()
     project_store = project_store or ProjectStore()
@@ -190,7 +195,13 @@ def build_runtime_host(
         project_root_provider=lambda project_id: (
             project.root_path if (project := project_store.get_project(project_id, requester_is_admin=True)) is not None else None
         ),
+        closed_session_ids_provider=lambda project_id: {
+            item.session_id for item in memory_session_store.list(project_id, include_closed=True, include_system=True) if item.status == "closed"
+        },
     )
+    register_tool = getattr(tools, "register", None)
+    if callable(register_tool) and getattr(tools, "get_definition", lambda _name: None)("native.search_memory") is None:
+        register_tool(build_search_memory_tool_definition())
     integration_registry = integration_registry or build_default_integration_registry()
     presence_projector = PresenceProjector()
     presence_projector.register("tui", TuiPresenceAdapter())
@@ -202,6 +213,8 @@ def build_runtime_host(
         outbox=outbox,
         projects=project_store,
         sessions=project_session_store,
+        memory_sessions=memory_session_store,
+        memory=memory,
         is_admin=user_store.is_admin,
         managed_root=user_store.managed_project_root,
         communication_router=communication_router,
@@ -253,6 +266,7 @@ def build_runtime_host(
         inference_settings_store=inference_settings_store,
         agent_config_store=agent_config_store,
         project_session_store=project_session_store,
+        memory_session_store=memory_session_store,
         inbound_router=inbound_router,
         user_store=user_store,
         web_tools_settings_store=web_tools_settings_store,

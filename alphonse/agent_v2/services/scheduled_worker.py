@@ -38,6 +38,7 @@ class ScheduledTaskWorker:
         worker_id: str | None = None,
         on_failure: Callable[[ScheduledOccurrence, str], None] | None = None,
         on_direct_delivery: Callable[[ScheduledOccurrence], str] | None = None,
+        memory_session_resolver: Callable[[str, str, str], str] | None = None,
     ) -> None:
         self.store = store
         self.messages = messages
@@ -49,6 +50,7 @@ class ScheduledTaskWorker:
         self.worker_id = str(worker_id or f"scheduler-{uuid.uuid4().hex[:12]}")
         self.on_failure = on_failure
         self.on_direct_delivery = on_direct_delivery
+        self.memory_session_resolver = memory_session_resolver
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._stats = ScheduledWorkerStats()
@@ -146,6 +148,7 @@ class ScheduledTaskWorker:
                 prompt=occurrence.task.prompt,
                 user=occurrence.task.owner_user_id,
                 project_id=occurrence.task.project_id,
+                memory_session_id=(self.memory_session_resolver(occurrence.task.project_id, occurrence.task.scheduled_task_id, occurrence.task.owner_user_id) if self.memory_session_resolver is not None else ""),
                 metadata=metadata,
                 message_id=message_id,
             )

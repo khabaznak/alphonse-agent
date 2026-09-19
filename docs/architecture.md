@@ -80,22 +80,30 @@ For graph-layer observability design, retention policy, and operational diagnost
 ## V2 Persistence
 
 Alphonse v2 uses one local, WAL-enabled SQLite database for relational state. Separate
-tables retain their own schemas and lifecycles: identity and settings, projects and
-channel sessions, inbound and outbound queues, conversation events and cursors,
+tables retain their own schemas and lifecycles: identity and settings, projects,
+channel-to-project selections, project memory sessions and bindings, inbound and outbound queues, conversation events and cursors,
 questions and task checkpoints, scheduled tasks and executions, automations,
 communication threads, integrations, asset metadata, and artifacts.
 
 SQLite conversation events are the canonical user-visible timeline. Markdown ledgers
-are intentionally a different projection: compactable model context stored on disk
-under a user/project scope. Binary attachments, project files, user/project context,
+are intentionally a different projection: complete append-only audit history stored
+per project memory session. Model prompts receive a bounded projection composed from
+the latest project summary, active-session summary, and recent visible session events;
+they never load the complete ledger. The administrator-controlled default budget is
+approximately 4,096 tokens. Binary attachments, project files, user/project context,
 and agent configuration also remain on disk; relational tables store their metadata
 and paths.
 
 The daemon evaluates a fixed 30-day retention policy daily for terminal operational
 rows. Pending and retryable work, conversation events, and Markdown memory are never
 removed by this policy. Checkpoints store actionable task state but do not embed the
-Markdown ledger; resumed tasks reload the current scoped ledger when processing
-starts.
+Markdown ledger; resumed tasks retain the memory-session ID stamped when the original
+message was queued. Closed and legacy ledgers are available through bounded
+`native.search_memory` retrieval rather than automatic prompt injection.
+
+Users manage project-shared sessions with `/sessions`, `/session`, `/session new
+<name>`, `/session <name-or-id>`, and `/session close`. Active session selection is
+stored independently for each user/integration/channel/thread/project combination.
 
 Users and projects can enqueue concurrently. SQLite WAL, a busy timeout, consistent
 transactions, and per-scope ledger locks protect those writes. CAPD task execution is

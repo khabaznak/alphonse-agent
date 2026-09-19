@@ -1012,7 +1012,7 @@ def _build_textual_app_class() -> type[Any]:
             self.dismiss(True)
 
     class UserSettingsScreen(ModalScreen[bool]):
-        def __init__(self, settings: dict[str, Any], save: Callable[[str, int, int, bool], dict[str, Any]]) -> None:
+        def __init__(self, settings: dict[str, Any], save: Callable[[str, int, int, int, bool], dict[str, Any]]) -> None:
             super().__init__()
             self.settings = settings
             self.save = save
@@ -1021,6 +1021,12 @@ def _build_textual_app_class() -> type[Any]:
             with Vertical(id="project-dialog"):
                 yield Static("Settings", classes="dialog-title")
                 yield Input(value=str(self.settings.get("users_root") or ""), id="users-root")
+                yield Static("Memory context budget limits project/session memory injected into model prompts; it does not include instructions, tools, or the current request.")
+                yield Input(value=str(self.settings.get("memory_context_token_budget") or 4096), id="memory-context-token-budget")
+                migration = self.settings.get("memory_migration") if isinstance(self.settings.get("memory_migration"), dict) else {}
+                if migration:
+                    yield Static(f"Active project memory migration: {migration.get('status', 'pending')}" + (f" — {migration.get('error')}" if migration.get("error") else ""))
+                yield Static("Advanced memory archive settings")
                 yield Input(value=str(self.settings.get("max_ledger_bytes") or 512000), id="memory-max-ledger-bytes")
                 yield Input(value=str(self.settings.get("compaction_summary_max_words") or 500), id="memory-summary-max-words")
                 yield Checkbox(
@@ -1039,6 +1045,7 @@ def _build_textual_app_class() -> type[Any]:
             try:
                 self.save(
                     self.query_one("#users-root", Input).value,
+                    int(self.query_one("#memory-context-token-budget", Input).value),
                     int(self.query_one("#memory-max-ledger-bytes", Input).value),
                     int(self.query_one("#memory-summary-max-words", Input).value),
                     self.query_one("#mirror-automation-messages", Checkbox).value,
@@ -2214,19 +2221,22 @@ def _build_textual_app_class() -> type[Any]:
             def _settings() -> dict[str, Any]:
                 base = self.daemon_client.request("settings") if self.external_daemon else self.runtime.user_store.status()
                 memory = self.daemon_client.request("memory_settings", actor_user_id=self.runtime.user).get("settings", {}) if self.external_daemon else self.runtime.memory_settings_store.get().to_dict()
-                return {**base, **(memory if isinstance(memory, dict) else {})}
-            def _save(root: str, max_bytes: int, max_words: int, mirror_automation_messages: bool) -> dict[str, Any]:
+                migration: dict[str, Any] = {}
+                if self.runtime.active_project_id:
+                    migration = (self.daemon_client.request("memory_migration_status", user=self.runtime.user, project_id=self.runtime.active_project_id).get("migration", {}) if self.external_daemon else self.runtime.memory_session_store.migration_status(self.runtime.active_project_id))
+                return {**base, **(memory if isinstance(memory, dict) else {}), "memory_migration": migration}
+            def _save(root: str, context_tokens: int, max_bytes: int, max_words: int, mirror_automation_messages: bool) -> dict[str, Any]:
                 if self.external_daemon:
                     self.daemon_client.request(
                         "save_settings",
                         users_root=root,
                         mirror_automation_messages_to_preferred_channel=mirror_automation_messages,
                     )
-                    return self.daemon_client.request("save_memory_settings", actor_user_id=self.runtime.user, values={"max_ledger_bytes": max_bytes, "compaction_summary_max_words": max_words})
+                    return self.daemon_client.request("save_memory_settings", actor_user_id=self.runtime.user, values={"memory_context_token_budget": context_tokens, "max_ledger_bytes": max_bytes, "compaction_summary_max_words": max_words})
                 self.runtime.user_store.set_users_root(root)
                 self.runtime.user_store.set_mirror_automation_messages_to_preferred_channel(mirror_automation_messages)
                 from alphonse.agent_v2.memory_settings import MemorySettings
-                return self.runtime.memory_settings_store.save(MemorySettings(max_bytes, max_words)).to_dict()
+                return self.runtime.memory_settings_store.save(MemorySettings(max_ledger_bytes=max_bytes, compaction_summary_max_words=max_words, memory_context_token_budget=context_tokens)).to_dict()
             try:
                 self.push_screen(UserSettingsScreen(_settings(), _save), callback=lambda _: self._refresh_status())
             except Exception as exc:

@@ -52,6 +52,7 @@ def act_node(task: TaskState, context: CoreLoopContext | None = None) -> TaskSta
             philosophy_md=_agent_prompt_md(context, "Philosophy.md"),
             global_context_md=_agent_prompt_md(context, "GlobalContext.md"),
         )
+        task.metadata["memory_context_consumed"] = True
         generated_criteria = _call_acceptance_criteria_inference(prompt, task, context)
         task.metadata["acceptance_criteria_prompt"] = prompt
         task.metadata["acceptance_criteria_llm_stubbed"] = context is None or context.inference is None
@@ -182,7 +183,7 @@ def _render_acceptance_criteria_prompt(
         project_context_md=project_context_md,
         philosophy_md=philosophy_md,
         global_context_md=global_context_md,
-        task_state_md=task.to_markdown_prompt(),
+        task_state_md=task.to_markdown_prompt(include_memory=not bool(task.metadata.get("memory_context_consumed"))),
     ).strip()
 
 

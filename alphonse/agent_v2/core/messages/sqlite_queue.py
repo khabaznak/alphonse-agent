@@ -39,8 +39,8 @@ class SQLiteMessageQueue:
                 """
                 INSERT INTO v2_inbound_messages (
                   message_id, sequence, timestamp, prompt, user_id, project_id, tag,
-                  correlation_id, metadata_json, queued_at, status
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')
+                  correlation_id, memory_session_id, metadata_json, queued_at, status
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')
                 ON CONFLICT(message_id) DO NOTHING
                 """,
                 (
@@ -52,6 +52,7 @@ class SQLiteMessageQueue:
                     queued.message.project_id,
                     queued.message.tag,
                     queued.message.correlation_id,
+                    queued.message.memory_session_id,
                     json.dumps(queued.message.metadata, sort_keys=True),
                     queued.queued_at.isoformat(),
                 ),
@@ -262,6 +263,14 @@ class SQLiteMessageQueue:
             ).fetchone()
         return int(row["count"] or 0) if row is not None else 0
 
+    def has_pending_memory_session(self, session_id: str) -> bool:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT 1 FROM v2_inbound_messages WHERE memory_session_id=? AND status IN ('pending','processing','retry_wait') LIMIT 1",
+                (str(session_id or "").strip(),),
+            ).fetchone()
+        return row is not None
+
     def _connect(self) -> sqlite3.Connection:
         if self._memory_connection is not None:
             return _ConnectionProxy(self._memory_connection)
@@ -282,6 +291,7 @@ class SQLiteMessageQueue:
                   project_id TEXT NOT NULL DEFAULT '',
                   tag TEXT NOT NULL DEFAULT '',
                   correlation_id TEXT NOT NULL DEFAULT '',
+                  memory_session_id TEXT NOT NULL DEFAULT '',
                   metadata_json TEXT NOT NULL DEFAULT '{}',
                   queued_at TEXT NOT NULL,
                   status TEXT NOT NULL DEFAULT 'pending',
@@ -304,6 +314,7 @@ class SQLiteMessageQueue:
                     "lease_expires_at": "TEXT NOT NULL DEFAULT ''",
                     "next_attempt_at": "TEXT NOT NULL DEFAULT ''",
                     "last_error": "TEXT NOT NULL DEFAULT ''",
+                    "memory_session_id": "TEXT NOT NULL DEFAULT ''",
                 },
             )
 
@@ -357,6 +368,7 @@ def _row_to_message(row: sqlite3.Row) -> QueuedMessage:
             prompt=str(row["prompt"]),
             user=str(row["user_id"]),
             project_id=str(row["project_id"] or ""),
+            memory_session_id=str(row["memory_session_id"] or ""),
             tag=str(row["tag"] or ""),
             correlation_id=str(row["correlation_id"] or ""),
             metadata=dict(metadata) if isinstance(metadata, dict) else {},

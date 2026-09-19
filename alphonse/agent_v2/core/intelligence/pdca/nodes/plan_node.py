@@ -102,7 +102,7 @@ def _render_tool_call_plan_prompt(
         current_time_utc=current_time_utc,
         user_timezone=user_timezone,
         program_available=program_available,
-        task_state_md=task.to_markdown_prompt(),
+        task_state_md=task.to_markdown_prompt(include_memory=False),
     ).strip()
 
 

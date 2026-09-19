@@ -32,6 +32,7 @@ class TaskState:
     message_id: str | None = None
     user: str | None = None
     project_id: str = ""
+    memory_session_id: str = ""
     tag: str = ""
     correlation_id: str = ""
     goal: str = ""
@@ -60,6 +61,7 @@ class TaskState:
             message_id=str(message_id or "").strip() or None,
             user=str(message.user or "").strip() or None,
             project_id=str(message.project_id or "").strip(),
+            memory_session_id=str(message.memory_session_id or message.metadata.get("memory_session_id") or "").strip(),
             tag=str(message.tag or "").strip(),
             correlation_id=str(message.correlation_id or "").strip(),
             goal=prompt,
@@ -92,6 +94,7 @@ class TaskState:
             message_id=_optional_string(value.get("message_id")),
             user=_optional_string(value.get("user")),
             project_id=str(value.get("project_id") or "").strip(),
+            memory_session_id=str(value.get("memory_session_id") or "").strip(),
             tag=str(value.get("tag") or "").strip(),
             correlation_id=str(value.get("correlation_id") or "").strip(),
             goal=str(value.get("goal") or "").strip(),
@@ -124,6 +127,7 @@ class TaskState:
             "message_id": self.message_id,
             "user": self.user,
             "project_id": self.project_id,
+            "memory_session_id": self.memory_session_id,
             "tag": self.tag,
             "correlation_id": self.correlation_id,
             "goal": self.goal,
@@ -151,7 +155,7 @@ class TaskState:
         checkpoint["conversation_history_md"] = EMPTY_MARKDOWN
         return checkpoint
 
-    def to_markdown_prompt(self) -> str:
+    def to_markdown_prompt(self, *, include_memory: bool = True) -> str:
         """Render this task state into the markdown prompt container."""
         env = Environment(
             loader=FileSystemLoader(_TEMPLATE_DIR),
@@ -160,7 +164,7 @@ class TaskState:
             lstrip_blocks=True,
         )
         template = env.get_template("task_state_prompt.md.j2")
-        return template.render(task=self).strip()
+        return template.render(task=self, conversation_history_md=self.conversation_history_md if include_memory else EMPTY_MARKDOWN).strip()
 
     def merge_attachments(self, metadata: dict[str, Any]) -> None:
         """Preserve attachment references when same-owner steering or answers arrive."""
