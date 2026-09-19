@@ -43,6 +43,20 @@ export type Project = {
   is_system_home?: boolean;
 };
 
+export type MemorySession = {
+  session_id: string;
+  project_id: string;
+  name: string;
+  created_by_user_id: string;
+  status: "open" | "closed";
+  ledger_relative_path: string;
+  created_at: string;
+  updated_at: string;
+  closed_at: string;
+  is_general: boolean;
+  is_system: boolean;
+};
+
 export type AgentDocument = { file_name: string; display_name: string; content?: string };
 export type InferenceSettings = {
   provider_key: string;
@@ -59,7 +73,7 @@ export type CodeModeSettings = {
   network_disabled: boolean; read_only_filesystem: boolean; run_as_non_root: boolean; drop_all_capabilities: boolean; no_new_privileges: boolean;
   verification_ready: boolean; verification_error: string; verified_at: string; available: boolean; weakened_protections: string[];
 };
-export type MemorySettings = { max_ledger_bytes: number; compaction_summary_max_words: number };
+export type MemorySettings = { max_ledger_bytes: number; compaction_summary_max_words: number; memory_context_token_budget: number };
 export type VerificationState = { ready: boolean; verified_at: string; error: string; preview: string };
 export type MediaToolsSettings = {
   platform: string; say_available: boolean;

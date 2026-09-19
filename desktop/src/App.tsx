@@ -19,7 +19,7 @@ import { formatMessageTime } from "./messageTime";
 import { reuseProjectAttention, reuseQuestions, withoutTaskProgressSurfaces, type ProjectAttention } from "./pollState";
 import { QueueWorkloadChart } from "./QueueWorkloadChart";
 import { appendQueueSample, type QueueSample } from "./queueHistory";
-import type { ActivityEvent, AgentDocument, ChatMessage, CodeModeSettings, InferenceSettings, MediaToolsSettings, MemorySettings, Project, Question, WebToolsSettings } from "./types";
+import type { ActivityEvent, AgentDocument, ChatMessage, CodeModeSettings, InferenceSettings, MediaToolsSettings, MemorySession, MemorySettings, Project, Question, WebToolsSettings } from "./types";
 
 type Modal = "projects" | "project-settings" | "project-context" | "scheduled-tasks" | "settings" | "users" | "onboarding" | null;
 type SettingsTab = "general" | "appearance" | "tools" | "artifacts" | "integrations" | "automations" | "model" | "agent-config";
@@ -38,6 +38,7 @@ type PollResponse = {
 };
 type HistoryResponse = { messages: ChatMessage[] };
 type RecentFilesResponse = { files: Array<{ name: string; kind: "file" | "directory"; modified_at: string }> };
+type MemorySessionsResponse = { sessions: MemorySession[]; active_session: MemorySession };
 type DesktopProjectFile = { filename: string; mime_type: string; size_bytes: number; project_path: string; relative_path: string };
 type Provider = {
   provider_key: string;
@@ -99,6 +100,13 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
   const [recentFilesOpen, setRecentFilesOpen] = useState(false);
   const [recentFiles, setRecentFiles] = useState<RecentFilesResponse["files"]>([]);
   const [recentFilesError, setRecentFilesError] = useState("");
+  const [memorySessions, setMemorySessions] = useState<MemorySession[]>([]);
+  const [activeMemorySessionId, setActiveMemorySessionId] = useState("");
+  const [memorySessionsLoading, setMemorySessionsLoading] = useState(false);
+  const [memorySessionsError, setMemorySessionsError] = useState("");
+  const [newSessionOpen, setNewSessionOpen] = useState(false);
+  const [newSessionName, setNewSessionName] = useState("");
+  const [sessionMutationPending, setSessionMutationPending] = useState(false);
   const [queueHistory, setQueueHistory] = useState<QueueSample[]>([]);
   const [projectAttention, setProjectAttention] = useState<ProjectAttention>({});
   const [timezone, setTimezone] = useState("UTC");
@@ -441,6 +449,88 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
     return () => { active = false; };
   }, [project, recentFilesOpen, user]);
 
+  useEffect(() => {
+    if (!project || !user) {
+      setMemorySessions([]);
+      setActiveMemorySessionId("");
+      return;
+    }
+    let active = true;
+    setMemorySessionsLoading(true);
+    setMemorySessionsError("");
+    void daemonRequest<MemorySessionsResponse>("memory_sessions", {
+      user,
+      project_id: project.project_id,
+      integration_id: "desktop",
+      channel_target: user,
+      thread_id: "",
+    }).then((result) => {
+      if (!active) return;
+      setMemorySessions(result.sessions);
+      setActiveMemorySessionId(result.active_session.session_id);
+    }).catch((cause: unknown) => {
+      if (!active) return;
+      setMemorySessions([]);
+      setActiveMemorySessionId("");
+      setMemorySessionsError(cause instanceof Error ? cause.message : "Sessions could not be loaded");
+    }).finally(() => { if (active) setMemorySessionsLoading(false); });
+    return () => { active = false; };
+  }, [project, user]);
+
+  const createMemorySession = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!project || sessionMutationPending) return;
+    const name = newSessionName.trim();
+    if (!name) {
+      setMemorySessionsError("Enter a session name.");
+      return;
+    }
+    const requestedProjectId = project.project_id;
+    setSessionMutationPending(true);
+    setMemorySessionsError("");
+    try {
+      const result = await daemonRequest<{ session: MemorySession }>("create_memory_session", {
+        user,
+        project_id: requestedProjectId,
+        integration_id: "desktop",
+        channel_target: user,
+        thread_id: "",
+        name,
+      });
+      if (activeProjectKeyRef.current !== projectKey(requestedProjectId)) return;
+      setMemorySessions((current) => [...current.filter((item) => item.session_id !== result.session.session_id), result.session]);
+      setActiveMemorySessionId(result.session.session_id);
+      setNewSessionName("");
+      setNewSessionOpen(false);
+    } catch (cause) {
+      setMemorySessionsError(cause instanceof Error ? cause.message : "Session could not be created");
+    } finally {
+      setSessionMutationPending(false);
+    }
+  };
+
+  const selectMemorySession = async (session: MemorySession) => {
+    if (!project || session.session_id === activeMemorySessionId || sessionMutationPending) return;
+    const requestedProjectId = project.project_id;
+    setSessionMutationPending(true);
+    setMemorySessionsError("");
+    try {
+      const result = await daemonRequest<{ session: MemorySession }>("select_memory_session", {
+        user,
+        project_id: requestedProjectId,
+        integration_id: "desktop",
+        channel_target: user,
+        thread_id: "",
+        session_id: session.session_id,
+      });
+      if (activeProjectKeyRef.current === projectKey(requestedProjectId)) setActiveMemorySessionId(result.session.session_id);
+    } catch (cause) {
+      setMemorySessionsError(cause instanceof Error ? cause.message : "Session could not be selected");
+    } finally {
+      setSessionMutationPending(false);
+    }
+  };
+
   const queueAttachmentPaths = useCallback((paths: string[]) => {
     if (!project) {
       setError("Select a project before attaching files.");
@@ -498,6 +588,11 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
     setRecentFilesOpen(false);
     setRecentFiles([]);
     setRecentFilesError("");
+    setMemorySessions([]);
+    setActiveMemorySessionId("");
+    setMemorySessionsError("");
+    setNewSessionOpen(false);
+    setNewSessionName("");
     setModal(null);
     setSurfaces({});
     surfacesRef.current = {};
@@ -691,6 +786,16 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
             <button className="project-selector" title="Projects" onClick={() => setModal("projects")}><span className="nav-icon" aria-hidden="true"><FolderKanban /></span><span className="nav-label">Project</span><small>{project?.name || "Home"}</small>{attentionTotal(projectAttention) > 0 && <span className="attention-badge" aria-label={`${attentionTotal(projectAttention)} project items need attention`}>{attentionTotal(projectAttention)}</span>}</button>
             {project && <button className="project-disclosure" type="button" title={recentFilesOpen ? "Hide recent files" : "Show recent files"} aria-label={recentFilesOpen ? "Hide recent files" : "Show recent files"} aria-expanded={recentFilesOpen} onClick={() => setRecentFilesOpen((open) => !open)}>{recentFilesOpen ? <ChevronDown aria-hidden="true" /> : <ChevronRight aria-hidden="true" />}</button>}
           </div>
+          {project && <div className="project-sessions-panel">
+            <div className="project-sessions-heading"><span>Sessions</span><button type="button" aria-expanded={newSessionOpen} onClick={() => { setNewSessionOpen((open) => !open); setMemorySessionsError(""); }}>{newSessionOpen ? "Cancel" : <><Plus aria-hidden="true" /> New</>}</button></div>
+            {newSessionOpen && <form className="new-session-form" onSubmit={(event) => void createMemorySession(event)}><input autoFocus maxLength={80} value={newSessionName} onChange={(event) => setNewSessionName(event.target.value)} placeholder="Session name" aria-label="New session name" /><button type="submit" disabled={sessionMutationPending || !newSessionName.trim()}>Add</button></form>}
+            {memorySessionsError && <p className="project-sessions-error" role="alert">{memorySessionsError}</p>}
+            {!memorySessionsError && memorySessionsLoading && <p className="project-sessions-empty">Loading sessions…</p>}
+            {!memorySessionsError && !memorySessionsLoading && (memorySessions.length ? <ul>{memorySessions.map((session) => {
+              const isActive = session.session_id === activeMemorySessionId;
+              return <li key={session.session_id}><button type="button" className={isActive ? "active" : ""} aria-pressed={isActive} disabled={sessionMutationPending} title={isActive ? `${session.name} (active)` : `Switch to ${session.name}`} onClick={() => void selectMemorySession(session)}><span className="session-status" aria-hidden="true" /><span>{session.name}</span>{isActive && <small>Active</small>}</button></li>;
+            })}</ul> : <p className="project-sessions-empty">No open sessions.</p>)}
+          </div>}
           {project && recentFilesOpen && <div className="recent-files-panel">
             <div className="recent-files-heading"><span>Recent files</span><button type="button" onClick={() => void revealProjectInFinder()}>Show in Finder</button></div>
             {recentFilesError && <p className="recent-files-error" role="alert">{recentFilesError}</p>}

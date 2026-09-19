@@ -179,6 +179,24 @@ button { border: 0; cursor: pointer; }
 }
 .project-selector > .attention-badge { position: absolute; top: 5px; right: 5px; margin: 0; }
 .project-disclosure { width: 32px; height: 32px; color: inherit; background: transparent; border-radius: 7px; font-size: 20px; }
+.project-sessions-panel { margin: 2px 4px 6px; padding: 8px; border-radius: 6px; background: var(--sidebar-panel); }
+.project-sessions-heading { display: flex; justify-content: space-between; gap: 8px; align-items: center; color: var(--sidebar-muted); font-size: 10px; text-transform: uppercase; letter-spacing: .08em; }
+.project-sessions-heading button { display: inline-flex; gap: 3px; align-items: center; padding: 3px 0; color: var(--highlight); background: transparent; font-size: 10px; text-transform: none; letter-spacing: 0; }
+.project-sessions-heading button svg { width: 12px; height: 12px; }
+.project-sessions-panel ul { display: grid; gap: 3px; margin: 7px 0 0; padding: 0; list-style: none; }
+.project-sessions-panel li button { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 6px; width: 100%; align-items: center; padding: 6px; border-radius: 5px; color: var(--sidebar-text); background: transparent; text-align: left; }
+.project-sessions-panel li button:hover { background: var(--accent-hover); }
+.project-sessions-panel li button.active { background: var(--accent-hover); color: var(--highlight); }
+.project-sessions-panel li button > span:nth-child(2) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.project-sessions-panel li button small { font-size: 8px; text-transform: uppercase; letter-spacing: .06em; }
+.session-status { width: 6px; height: 6px; border: 1px solid var(--sidebar-muted); border-radius: 50%; }
+.project-sessions-panel li button.active .session-status { border-color: var(--highlight); background: var(--highlight); box-shadow: 0 0 0 2px color-mix(in srgb, var(--highlight) 20%, transparent); }
+.new-session-form { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 5px; margin-top: 7px; }
+.new-session-form input { min-width: 0; padding: 6px 7px; border: 1px solid var(--sidebar-muted); border-radius: 5px; color: var(--sidebar-text); background: var(--sidebar); font-size: 11px; }
+.new-session-form button { padding: 6px 7px; border-radius: 5px; background: var(--highlight); color: var(--sidebar); font-size: 10px; }
+.new-session-form button:disabled { opacity: .5; }
+.project-sessions-empty, .project-sessions-error { margin: 7px 0 0; color: var(--sidebar-muted); font-size: 11px; line-height: 1.35; }
+.project-sessions-error { color: #f0b7a6; }
 .recent-files-panel { margin: 2px 4px 8px; padding: 8px; border-radius: 6px; background: var(--sidebar-panel); }
 .recent-files-heading { display: flex; justify-content: space-between; gap: 8px; align-items: center; color: var(--sidebar-muted); font-size: 10px; text-transform: uppercase; letter-spacing: .08em; }
 .recent-files-heading button { padding: 3px 0; color: var(--highlight); background: transparent; font-size: 10px; text-transform: none; letter-spacing: 0; }
@@ -201,6 +219,7 @@ button { border: 0; cursor: pointer; }
 .sidebar-collapsed .project-selector .nav-label,
 .sidebar-collapsed .project-selector small,
 .sidebar-collapsed .project-disclosure,
+.sidebar-collapsed .project-sessions-panel,
 .sidebar-collapsed .recent-files-panel { display: none; }
 .sidebar-collapsed .collapse-toggle { margin-top: 8px; }
 .sidebar-collapsed .sidebar > button { min-height: 52px; padding: 10px; grid-template-columns: 1fr; justify-items: center; }

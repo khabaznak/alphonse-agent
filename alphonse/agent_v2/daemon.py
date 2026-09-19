@@ -1271,6 +1271,17 @@ class V2Daemon:
         if project is None: raise PermissionError("project_not_accessible")
         return [item.to_dict() for item in self.runtime.memory_session_store.list(project.project_id, include_closed=include_closed)]
 
+    def active_memory_session(self, *, user: str, project_id: str, integration_id: str = "desktop", channel_target: str = "", thread_id: str = "") -> dict[str, object]:
+        actor = self._admin_user_id(user)
+        project = self.runtime.project_store.get_project(project_id, requester_user_id=actor, requester_is_admin=self.runtime.user_store.is_admin(actor))
+        if project is None: raise PermissionError("project_not_accessible")
+        key = MemorySessionBindingKey(actor, integration_id, channel_target or actor, thread_id, project.project_id)
+        session = self.runtime.memory_session_store.get_binding(key)
+        if session is None:
+            session = self.runtime.memory_session_store.ensure_general(project_id=project.project_id, created_by_user_id=actor)
+            self.runtime.memory_session_store.bind(key, session)
+        return session.to_dict()
+
     def create_memory_session(self, *, user: str, project_id: str, name: str, integration_id: str = "tui", channel_target: str = "", thread_id: str = "") -> dict[str, object]:
         actor = self._admin_user_id(user)
         project = self.runtime.project_store.get_project(project_id, requester_user_id=actor, requester_is_admin=self.runtime.user_store.is_admin(actor))

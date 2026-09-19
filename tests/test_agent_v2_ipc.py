@@ -22,6 +22,7 @@ from alphonse.agent_v2.agent_config import GLOBAL_CONTEXT_FILE
 from alphonse.agent_v2.agent_config import PHILOSOPHY_FILE
 from alphonse.agent_v2.interfaces.a2ui import A2UiAdapter
 from alphonse.agent_v2.interfaces.a2ui import ALPHONSE_DESKTOP_CATALOG_ID
+from alphonse.agent_v2.memory_sessions import SQLiteMemorySessionStore
 from alphonse.agent_v2.services.project_sessions import SQLiteProjectSessionStore
 from alphonse.agent_v2.runtime import build_runtime_host
 from alphonse.agent_v2.users import V2UserStore
@@ -181,6 +182,32 @@ def test_daemon_ipc_project_session_enriches_queued_message(tmp_path) -> None:
 
     assert queued["project_id"] == project.project_id
     assert runtime.queue.peek().message.project_id == project.project_id
+
+
+def test_daemon_ipc_memory_sessions_reports_desktop_active_session(tmp_path) -> None:
+    runtime = build_runtime_host(
+        schedule_store=ScheduledTaskStore(":memory:"),
+        memory_session_store=SQLiteMemorySessionStore(":memory:"),
+    )
+    daemon = V2Daemon(runtime)
+    project = runtime.project_store.create_project(name="Research", root_path=str(tmp_path / "research"), owner_user_id="alex")
+
+    initial = daemon.ipc._dispatch({
+        "method": "memory_sessions",
+        "params": {"user": "alex", "project_id": project.project_id, "integration_id": "desktop", "channel_target": "alex"},
+    })
+    created = daemon.ipc._dispatch({
+        "method": "create_memory_session",
+        "params": {"user": "alex", "project_id": project.project_id, "integration_id": "desktop", "channel_target": "alex", "name": "Design"},
+    })["session"]
+    selected = daemon.ipc._dispatch({
+        "method": "memory_sessions",
+        "params": {"user": "alex", "project_id": project.project_id, "integration_id": "desktop", "channel_target": "alex"},
+    })
+
+    assert initial["active_session"]["name"] == "General"
+    assert selected["active_session"]["session_id"] == created["session_id"]
+    assert {item["name"] for item in selected["sessions"]} == {"General", "Design"}
 
 
 def test_desktop_poll_is_cursor_based_and_acknowledges_only_its_delivery() -> None:

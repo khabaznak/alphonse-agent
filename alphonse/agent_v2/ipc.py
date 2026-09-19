@@ -612,7 +612,16 @@ class V2DaemonServer:
                 )
             }
         if method == "memory_sessions":
-            return {"sessions": self.daemon.list_memory_sessions(user=str(params.get("user") or "local"), project_id=str(params.get("project_id") or ""), include_closed=bool(params.get("include_closed")))}
+            common = {
+                "user": str(params.get("user") or "local"), "project_id": str(params.get("project_id") or ""),
+                "integration_id": str(params.get("integration_id") or "desktop"),
+                "channel_target": str(params.get("channel_target") or params.get("user") or "local"),
+                "thread_id": str(params.get("thread_id") or ""),
+            }
+            return {
+                "sessions": self.daemon.list_memory_sessions(user=common["user"], project_id=common["project_id"], include_closed=bool(params.get("include_closed"))),
+                "active_session": self.daemon.active_memory_session(**common),
+            }
         if method in {"create_memory_session", "select_memory_session", "close_memory_session"}:
             common = {
                 "user": str(params.get("user") or "local"), "project_id": str(params.get("project_id") or ""),
