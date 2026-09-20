@@ -74,6 +74,8 @@ class TaskState:
             tag=str(message.tag or "").strip(),
             correlation_id=str(message.correlation_id or "").strip(),
             goal=prompt,
+            intelligence_engine=str(message.metadata.get("intelligence_engine") or "tactical_v2").strip(),
+            intelligence_schema_version=max(1, _coerce_int(message.metadata.get("intelligence_schema_version") or 2)),
             metadata=dict(message.metadata),
         )
         state.append_conversation_message(message.user, prompt)

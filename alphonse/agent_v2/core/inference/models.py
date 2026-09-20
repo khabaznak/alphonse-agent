@@ -19,6 +19,7 @@ class InferencePurpose(str, Enum):
     PHASE_REVIEW = "phase_review"
     STRATEGIC_ACT = "strategic_act"
     FINAL_RESPONSE = "final_response"
+    PHASE_PLANNING = "phase_planning"
     MEMORY_COMPACTION = "memory_compaction"
 
 

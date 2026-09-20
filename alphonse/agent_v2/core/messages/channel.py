@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any
+from typing import Any, Callable
 
 from alphonse.agent_v2.core.core import CoreMessage, MessageQueue
 from alphonse.agent_v2.core.io.channels import channel_metadata
@@ -17,6 +17,7 @@ class CommunicationChannel:
 
     messages: MessageQueue
     conversation_store: Any | None = None
+    intelligence_engine_provider: Callable[[str], str] | None = None
 
     def queue_message(
         self,
@@ -76,6 +77,13 @@ class CommunicationChannel:
             ),
         )
         merged_metadata.setdefault("alphonse_user_id", user_value)
+        engine = (
+            str(self.intelligence_engine_provider(project_value) or "tactical_v2")
+            if self.intelligence_engine_provider is not None
+            else "tactical_v2"
+        )
+        merged_metadata.setdefault("intelligence_engine", engine)
+        merged_metadata.setdefault("intelligence_schema_version", 3 if engine == "hierarchical_v3" else 2)
 
         message = CoreMessage(
             timestamp=timestamp or datetime.now().astimezone(),

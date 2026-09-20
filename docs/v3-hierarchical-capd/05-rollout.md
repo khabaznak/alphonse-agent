@@ -1,6 +1,6 @@
 # Stage 5: Compatibility, observability, evaluation, and rollout
 
-Status: not started  
+Status: in progress
 Depends on: Stages 1 through 4
 
 ## Objective
@@ -103,17 +103,19 @@ results and a concise human review report.
 
 ## Implementation checklist
 
-- [ ] Add engine selection to settings with safe defaults.
-- [ ] Stamp engine and schema version at message ingestion.
-- [ ] Preserve engine selection across queue and checkpoint persistence.
-- [ ] Add V2/V3 compatibility loaders and explicit failure behavior.
-- [ ] Add structured phase/subgoal/action logs and metrics.
-- [ ] Extend daemon status and IPC progress payloads.
-- [ ] Add functional nested progress to the desktop client.
-- [ ] Build the replay/evaluation harness and initial corpus.
-- [ ] Add fault injection for tool failure, restart, timeout, cancellation, and steering.
-- [ ] Measure prompt/tool-schema token estimates per inference.
-- [ ] Add administrator-visible V3 enablement and rollback controls.
+- [x] Add engine selection to persistent settings with safe V2 defaults and per-project
+      V3 opt-in.
+- [x] Stamp engine and schema version at message ingestion.
+- [x] Preserve engine selection across queue and checkpoint persistence.
+- [x] Add V2/V3 compatibility loaders and explicit engine routing.
+- [x] Add structured phase/subgoal/action events and budget state.
+- [x] Extend daemon status and IPC with engine settings; V3 snapshots include nested
+      phase progress.
+- [ ] Add functional nested progress rendering to the desktop client.
+- [x] Add the initial machine-readable replay/evaluation corpus.
+- [x] Add automated failure, restart, cancellation, steering, scope, and budget tests.
+- [ ] Measure provider-reported prompt/tool-schema tokens and latency per inference.
+- [x] Add administrator-authorized IPC controls for V3 enablement and rollback.
 - [ ] Document operational recovery for stuck or incompatible tasks.
 - [ ] Complete each rollout gate with a dated evidence report.
 
@@ -150,5 +152,9 @@ results and a concise human review report.
 
 ## Implementation log
 
-- No implementation entries yet.
-
+- 2026-09-20 — Added persistent safe-default engine settings, ingestion-time engine
+  stamping, V2/V3 processor routing, strategic phase planning, end-to-end hierarchical
+  processing, daemon/IPC settings and status, nested phase snapshot data, and the
+  initial evaluation corpus. Full suite: 455 passed. Desktop nested rendering,
+  provider token/latency measurement, operational recovery documentation, and rollout
+  gate evidence remain open; V3 is not approved for default rollout or merge.

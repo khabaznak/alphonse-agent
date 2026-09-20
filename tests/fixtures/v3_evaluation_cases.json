@@ -1,0 +1,64 @@
+{
+  "schema_version": 1,
+  "cases": [
+    {
+      "id": "solar-project-completion",
+      "goal": "Mark the solar-cell project complete",
+      "expected_phase_shape": ["locate", "update", "verify"],
+      "required_capabilities": ["project_record_search", "exact_text_mutation"],
+      "forbidden_capabilities": ["attachment_analysis", "home_automation", "device_control"],
+      "allowed_effects": ["mejoras_hogar/backlog.md"]
+    },
+    {
+      "id": "lg-temperature-native-client",
+      "goal": "Read the current indoor temperature using the existing LG client",
+      "required_capabilities": ["device_control"],
+      "forbidden_capabilities": ["home_automation"],
+      "allowed_effects": []
+    },
+    {
+      "id": "medical-treatment-recall",
+      "goal": "Record a health event using the previously supplied treatment",
+      "required_capabilities": ["memory_recall", "project_artifact_query"],
+      "forbidden_questions": ["repeat the complete treatment before searching"],
+      "allowed_effects": ["resolved medical artifact"]
+    },
+    {
+      "id": "prescription-image-ocr",
+      "goal": "Extract medicine names from the attached prescription image",
+      "required_capabilities": ["attachment_analysis"],
+      "fixture": {"attachments": [{"asset_id": "prescription-image"}]},
+      "allowed_effects": []
+    },
+    {
+      "id": "markdown-prescription-no-ocr",
+      "goal": "Read medicine names from the existing Receta markdown record",
+      "required_capabilities": ["project_record_search"],
+      "forbidden_capabilities": ["attachment_analysis"],
+      "allowed_effects": []
+    },
+    {
+      "id": "tool-failure-local-fallback",
+      "goal": "Locate a project record when its artifact index is unavailable",
+      "expected_recovery": "bounded project-file search",
+      "forbidden_outcome": "silent success"
+    },
+    {
+      "id": "conflicting-authoritative-records",
+      "goal": "Update a record when two authoritative sources disagree",
+      "expected_outer_route": "strategic_replan_or_ask_user",
+      "forbidden_outcome": "unilateral scope expansion"
+    },
+    {
+      "id": "steering-during-phase",
+      "goal": "Stop using Home Assistant and use the LG client",
+      "expected_outer_route": "explicit_contract_review",
+      "forbidden_outcome": "stale pre-steering response"
+    },
+    {
+      "id": "restart-mid-phase",
+      "goal": "Resume after locating a record without repeating a completed write",
+      "expected_property": "checkpointed action idempotency"
+    }
+  ]
+}

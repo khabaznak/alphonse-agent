@@ -64,6 +64,8 @@ from alphonse.agent_v2.code_mode_settings import CodeModeSettings
 from alphonse.agent_v2.code_mode_settings import SQLiteCodeModeSettingsStore
 from alphonse.agent_v2.memory_settings import MemorySettings
 from alphonse.agent_v2.memory_settings import SQLiteMemorySettingsStore
+from alphonse.agent_v2.intelligence_engine_settings import IntelligenceEngineSettings
+from alphonse.agent_v2.intelligence_engine_settings import SQLiteIntelligenceEngineSettingsStore
 from alphonse.agent_v2.memory_sessions import SQLiteMemorySessionStore
 from alphonse.agent_v2.memory_sessions import MemorySessionBindingKey
 from alphonse.agent_v2.web_tools_settings import SQLiteWebToolsSettingsStore
@@ -664,6 +666,19 @@ class V2Daemon:
             max_ledger_bytes=values.get("max_ledger_bytes", current.max_ledger_bytes),
             compaction_summary_max_words=values.get("compaction_summary_max_words", current.compaction_summary_max_words),
             memory_context_token_budget=values.get("memory_context_token_budget", current.memory_context_token_budget),
+        ))
+        return saved.to_dict()
+
+    def intelligence_engine_settings(self, *, actor_user_id: str) -> dict[str, object]:
+        self._require_admin(actor_user_id)
+        return self.runtime.intelligence_engine_settings_store.get().to_dict()
+
+    def save_intelligence_engine_settings(self, *, actor_user_id: str, values: dict[str, Any]) -> dict[str, object]:
+        self._require_admin(actor_user_id)
+        current = self.runtime.intelligence_engine_settings_store.get()
+        saved = self.runtime.intelligence_engine_settings_store.save(IntelligenceEngineSettings(
+            default_engine=str(values.get("default_engine") or current.default_engine),
+            v3_project_ids=tuple(str(item) for item in values.get("v3_project_ids", current.v3_project_ids)),
         ))
         return saved.to_dict()
 
@@ -2386,6 +2401,7 @@ def main() -> None:
                 artifact_store=SQLiteArtifactStore.default(),
                 conversation_store=SQLiteConversationStore.default(),
                 memory_settings_store=SQLiteMemorySettingsStore.default(),
+                intelligence_engine_settings_store=SQLiteIntelligenceEngineSettingsStore.default(),
                 outbox=SQLiteOutboundStore.default(),
                 integration_store=SQLiteIntegrationStore.default(),
                 inference_settings_store=SQLiteInferenceSettingsStore.default(),

@@ -16,6 +16,8 @@ from alphonse.agent_v2.core.core import ToolDescriptor
 from alphonse.agent_v2.core.core import ToolRegistry
 from alphonse.agent_v2.core.inference import InferenceRouter
 from alphonse.agent_v2.core.intelligence import PDCAIntelligenceProcessor
+from alphonse.agent_v2.core.intelligence.v3 import EngineRoutingProcessor, HierarchicalCAPDProcessor
+from alphonse.agent_v2.intelligence_engine_settings import SQLiteIntelligenceEngineSettingsStore
 from alphonse.agent_v2.core.io import IntegrationIdentity
 from alphonse.agent_v2.core.io import SQLiteOutboundStore
 from alphonse.agent_v2.core.io import V2IdentityResolver
@@ -101,6 +103,7 @@ class V2RuntimeHost:
     integration_registry: IntegrationRegistry
     presence_projector: PresenceProjector
     inference_settings_store: SQLiteInferenceSettingsStore
+    intelligence_engine_settings_store: SQLiteIntelligenceEngineSettingsStore
     agent_config_store: AgentConfigStore
     project_session_store: SQLiteProjectSessionStore
     memory_session_store: SQLiteMemorySessionStore
@@ -135,6 +138,7 @@ def build_runtime_host(
     integration_store: SQLiteIntegrationStore | None = None,
     integration_registry: IntegrationRegistry | None = None,
     inference_settings_store: SQLiteInferenceSettingsStore | None = None,
+    intelligence_engine_settings_store: SQLiteIntelligenceEngineSettingsStore | None = None,
     agent_config_store: AgentConfigStore | None = None,
     project_session_store: SQLiteProjectSessionStore | None = None,
     memory_session_store: SQLiteMemorySessionStore | None = None,
@@ -152,9 +156,14 @@ def build_runtime_host(
     provided_tools = tools is not None
     queue = messages or InMemoryMessageQueue()
     conversation_store = conversation_store or SQLiteConversationStore()
-    channel = CommunicationChannel(queue, conversation_store=conversation_store)
+    intelligence_engine_settings_store = intelligence_engine_settings_store or SQLiteIntelligenceEngineSettingsStore()
+    channel = CommunicationChannel(
+        queue,
+        conversation_store=conversation_store,
+        intelligence_engine_provider=lambda project_id: intelligence_engine_settings_store.get().engine_for(project_id),
+    )
     visible_state = InMemoryInternalState()
-    processor = processor or PDCAIntelligenceProcessor()
+    processor = processor or EngineRoutingProcessor(v2=PDCAIntelligenceProcessor(), v3=HierarchicalCAPDProcessor())
     web_tools_settings_store = web_tools_settings_store or SQLiteWebToolsSettingsStore()
     code_mode_settings_store = code_mode_settings_store or SQLiteCodeModeSettingsStore()
     media_tools_settings_store = media_tools_settings_store or SQLiteMediaToolsSettingsStore()
@@ -264,6 +273,7 @@ def build_runtime_host(
         integration_registry=integration_registry,
         presence_projector=presence_projector,
         inference_settings_store=inference_settings_store,
+        intelligence_engine_settings_store=intelligence_engine_settings_store,
         agent_config_store=agent_config_store,
         project_session_store=project_session_store,
         memory_session_store=memory_session_store,

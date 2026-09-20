@@ -371,6 +371,7 @@ class V2DaemonServer:
                 "status_error": status_error,
                 "scheduler": self.daemon.scheduler.stats.__dict__,
                 "persistence": persistence,
+                "intelligence_engine": runtime.intelligence_engine_settings_store.get().to_dict(),
             }
         if method == "stop":
             threading.Thread(target=self.daemon.stop, name="alphonse-v2-stop", daemon=True).start()
@@ -470,6 +471,10 @@ class V2DaemonServer:
             return {"settings": self.daemon.memory_settings(actor_user_id=str(params.get("actor_user_id") or ""))}
         if method == "save_memory_settings":
             return {"settings": self.daemon.save_memory_settings(actor_user_id=str(params.get("actor_user_id") or ""), values=dict(params.get("values") or {}))}
+        if method == "intelligence_engine_settings":
+            return {"settings": self.daemon.intelligence_engine_settings(actor_user_id=str(params.get("actor_user_id") or ""))}
+        if method == "save_intelligence_engine_settings":
+            return {"settings": self.daemon.save_intelligence_engine_settings(actor_user_id=str(params.get("actor_user_id") or ""), values=dict(params.get("values") or {}))}
         if method == "artifacts":
             return {"artifacts": self.daemon.list_artifacts(actor_user_id=str(params.get("actor_user_id") or ""))}
         if method == "update_artifact":
