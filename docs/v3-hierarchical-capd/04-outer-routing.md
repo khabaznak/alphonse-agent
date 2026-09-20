@@ -1,6 +1,6 @@
 # Stage 4: Outer completion routing and response
 
-Status: not started  
+Status: complete
 Depends on: Stages 1 through 3
 
 ## Objective
@@ -77,32 +77,32 @@ paths, not repeatedly interpreted as an ordinary model-owned criterion.
 
 ## Implementation checklist
 
-- [ ] Define the phase-review output schema.
-- [ ] Update Check to consume `PhaseOutcome` and full bounded cumulative evidence.
-- [ ] Add deterministic handling for system-verifiable criteria and invariants.
-- [ ] Separate phase completion from mission completion.
-- [ ] Define Act's strategic-decision schema and invocation conditions.
-- [ ] Add direct terminal routing after verified task completion.
-- [ ] Add a dedicated response-generation boundary with no tools.
-- [ ] Ensure a response summarizes only verified outcomes and visible blockers.
-- [ ] Prevent another planning phase after terminal verification.
-- [ ] Preserve waiting/parking behavior for necessary user decisions.
-- [ ] Ensure steering amends outcomes only through the existing explicit contract path.
-- [ ] Update activity/UI events to distinguish tactical progress, phase review, and
+- [x] Define the phase-review output schema.
+- [x] Update outer review to consume `PhaseOutcome` and cumulative phase evidence.
+- [x] Add deterministic handling for system-verifiable criteria and invariants.
+- [x] Separate phase completion from mission completion.
+- [x] Define Act's strategic-decision schema and invocation conditions.
+- [x] Add direct terminal routing after verified task completion.
+- [x] Add a dedicated response-generation boundary with no tools.
+- [x] Ensure a response summarizes only verified outcomes and visible blockers.
+- [x] Prevent another planning phase after terminal verification.
+- [x] Preserve waiting/parking behavior for necessary user decisions.
+- [x] Ensure steering amends outcomes only through the existing explicit contract path.
+- [x] Update activity/UI events to distinguish tactical progress, phase review, and
       mission completion.
 
 ## Tests
 
-- [ ] A verified simple mutation routes directly to response and ends.
-- [ ] A completed phase with unmet task criteria creates another strategic phase.
-- [ ] A tactical fallback success does not force strategic replanning.
-- [ ] A scope violation prevents completion.
-- [ ] Earlier contradictory evidence remains visible during later phase review.
-- [ ] A failed phase produces a visible blocker rather than silence.
-- [ ] A required user decision parks the task and resumes safely.
-- [ ] Steering during execution triggers explicit contract amendment review.
-- [ ] Final response cannot precede the final mutation/verification action.
-- [ ] No extra Plan inference occurs after verified task completion.
+- [x] A verified simple mutation routes directly to response and ends.
+- [x] A completed phase with unmet task criteria creates another strategic phase.
+- [x] A tactical fallback success does not force strategic replanning.
+- [x] A scope violation prevents completion.
+- [x] Earlier contradictory evidence remains visible during later phase review.
+- [x] A failed phase produces a visible blocker rather than silence.
+- [x] A required user decision parks the task and resumes safely.
+- [x] Steering during execution triggers explicit contract amendment review.
+- [x] Final response cannot precede the final mutation/verification action.
+- [x] No extra Plan inference occurs after verified task completion.
 
 ## Non-goals
 
@@ -118,15 +118,19 @@ paths, not repeatedly interpreted as an ordinary model-owned criterion.
 - Every failure path produces a visible outcome, question, or retriable state.
 - Representative simple tasks use one outer execution phase.
 
-## Open decisions
+## Decisions made
 
-- Whether final response generation is an explicit graph node or a terminal Act
-  operation with a separate no-tools inference purpose.
-- Which criteria can be verified deterministically without a Check inference.
-- How much phase evidence enters the response generator versus a compact verified-fact
-  projection.
+- Final response generation is a terminal outer-controller operation with a dedicated
+  no-tools inference purpose.
+- Mutation authorization, affected paths, phase status, and structured verification
+  flags are deterministic invariants. Semantic task criteria remain phase-review
+  inference responsibilities.
+- Response generation receives at most the six latest successful evidence entries plus
+  the verified objective and review reason.
 
 ## Implementation log
 
-- No implementation entries yet.
-
+- 2026-09-20 — Added phase-review and strategic-decision contracts, deterministic
+  mutation-scope checks, cumulative evidence-based acceptance review, direct terminal
+  routing, waiting/failure routes, and no-tools verified response generation. Full
+  suite: 451 passed.

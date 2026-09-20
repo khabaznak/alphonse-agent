@@ -18,6 +18,11 @@ from alphonse.agent_v2.core.intelligence.v3.revealing import Capability
 from alphonse.agent_v2.core.intelligence.v3.revealing import ToolRevealDecision
 from alphonse.agent_v2.core.intelligence.v3.revealing import ToolRevealPolicy
 from alphonse.agent_v2.core.intelligence.v3.revealing import ToolRevealResult
+from alphonse.agent_v2.core.intelligence.v3.outer import PhaseReview
+from alphonse.agent_v2.core.intelligence.v3.outer import PhaseReviewStatus
+from alphonse.agent_v2.core.intelligence.v3.outer import StrategicAction
+from alphonse.agent_v2.core.intelligence.v3.outer import StrategicDecision
+from alphonse.agent_v2.core.intelligence.v3.outer import V3OuterController
 
 __all__ = [
     "CompletionCondition",
@@ -38,4 +43,9 @@ __all__ = [
     "ToolRevealDecision",
     "ToolRevealPolicy",
     "ToolRevealResult",
+    "PhaseReview",
+    "PhaseReviewStatus",
+    "StrategicAction",
+    "StrategicDecision",
+    "V3OuterController",
 ]
