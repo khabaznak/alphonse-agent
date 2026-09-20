@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any
+from typing import Any, Callable
 
 from alphonse.agent_v2.core.core import ToolDescriptor
 
@@ -49,6 +49,7 @@ class InferenceRequest:
     tools: tuple[ToolDescriptor, ...] = ()
     model_profile: ModelProfile | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    cancel_checker: Callable[[], bool] | None = field(default=None, repr=False, compare=False)
 
 
 @dataclass(frozen=True)

@@ -80,7 +80,7 @@ class CommunicationChannel:
         engine = (
             str(self.intelligence_engine_provider(project_value) or "tactical_v2")
             if self.intelligence_engine_provider is not None
-            else "tactical_v2"
+            else "hierarchical_v3"
         )
         merged_metadata.setdefault("intelligence_engine", engine)
         merged_metadata.setdefault("intelligence_schema_version", 3 if engine == "hierarchical_v3" else 2)

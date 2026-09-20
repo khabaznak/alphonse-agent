@@ -254,3 +254,22 @@ def test_codex_provider_nonzero_exit_raises_controlled_error(monkeypatch: pytest
         OpenAICodexProvider().generate_markdown(
             InferenceRequest(prompt="Prompt", purpose=InferencePurpose.ACCEPTANCE_CRITERIA)
         )
+
+
+def test_codex_provider_passes_live_cancellation_to_interruptible_runner(monkeypatch: pytest.MonkeyPatch) -> None:
+    checker = lambda: True
+    captured = {}
+
+    def fake_interruptible(command, **kwargs):
+        captured["checker"] = kwargs["cancel_checker"]
+        raise ValueError("inference_cancelled")
+
+    monkeypatch.setattr("alphonse.agent_v2.core.inference.openai_codex.shutil.which", lambda _bin: "/bin/codex")
+    monkeypatch.setattr("alphonse.agent_v2.core.inference.openai_codex._run_interruptible", fake_interruptible)
+
+    with pytest.raises(ValueError, match="inference_cancelled"):
+        OpenAICodexProvider().generate_markdown(InferenceRequest(
+            prompt="Prompt", purpose=InferencePurpose.ACCEPTANCE_CRITERIA, cancel_checker=checker,
+        ))
+
+    assert captured["checker"] is checker

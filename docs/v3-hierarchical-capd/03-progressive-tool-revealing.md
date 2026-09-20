@@ -33,6 +33,10 @@ device_control
 Policy selects the small set of concrete descriptors needed for the current subgoal.
 Full argument schemas are included only for those tools.
 
+Jev then chooses one candidate from that safe set. Only the chosen tool schema enters
+the System Two tactical-argument prompt. An ambiguous or unavailable Jev response
+falls back to the bounded reveal set; it never expands that set.
+
 ## Deterministic prerequisites
 
 Tool reveal must enforce prerequisites before model choice:
@@ -45,6 +49,9 @@ Tool reveal must enforce prerequisites before model choice:
 - Integration tools require that the integration is installed, available, authorized,
   and relevant to the subgoal.
 - Read-only tools may be exposed more broadly than tools with external side effects.
+- Unbounded shell execution is never revealed in V3.
+- Project file discovery excludes `.alphonse`, source-control metadata, dependencies,
+  and generated build directories.
 
 The model should not have to reject obviously irrelevant tools; policy should omit
 them.
@@ -98,6 +105,9 @@ that phase unless new evidence and the phase contract make them relevant.
 - [x] Emit structured reveal decisions through the existing UI/debug event stream.
 - [x] Fail visibly and return to outer review when policy reveals no usable tool.
 - [x] Bound concrete tool count and schema characters.
+- [x] Add bounded authorized `native.project_search` and
+      `native.read_project_file` primitives.
+- [x] Select the next safe tool with System One before generating arguments.
 
 ## Tests
 
@@ -111,6 +121,8 @@ that phase unless new evidence and the phase contract make them relevant.
 - [x] A hidden tool call is rejected at execution even if the model invents it.
 - [x] Tool reveal changes after typed subgoal output is bound.
 - [x] Prompt schemas remain within a configured budget.
+- [x] Internal `.alphonse` memory cannot be searched, read, or mutated through the
+      V3 project-file path.
 - [ ] Necessary-tool recall is measured on the V3 evaluation set (Stage 5 rollout
       gate).
 
@@ -143,3 +155,5 @@ that phase unless new evidence and the phase contract make them relevant.
 - 2026-09-20 — Added the capability catalog, deterministic reveal policy, attachment,
   project, mutation, side-effect, and integration prerequisites, schema/tool budgets,
   structured reveal events, and executor enforcement. Full suite: 445 passed.
+- 2026-09-20 — Added System One ranking within the revealed set, safe project-file
+  primitives, and deterministic exclusion of unbounded shell and agent internals.

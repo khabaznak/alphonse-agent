@@ -147,6 +147,8 @@ def _prerequisite_failure(
     descriptor: "ToolDescriptor",
     capabilities: tuple[str, ...],
 ) -> str:
+    if descriptor.tool_id == "native.bash":
+        return "unbounded_shell_disabled_in_v3"
     capability_set = set(capabilities)
     if Capability.ATTACHMENT_ANALYSIS.value in capability_set and not _has_analyzable_attachment(task, state):
         return "attachment_required"
@@ -179,6 +181,8 @@ def _has_analyzable_attachment(task: "TaskState", state: TacticalState) -> bool:
 
 _TOOL_CAPABILITIES: dict[str, tuple[str, ...]] = {
     "native.bash": (Capability.PROJECT_FILE_INSPECTION.value,),
+    "native.project_search": (Capability.PROJECT_RECORD_SEARCH.value, Capability.PROJECT_FILE_INSPECTION.value),
+    "native.read_project_file": (Capability.PROJECT_FILE_INSPECTION.value,),
     "native.search_memory": (Capability.MEMORY_RECALL.value,),
     "native.analyze_image": (Capability.ATTACHMENT_ANALYSIS.value,),
     "native.exact_text_edit": (Capability.EXACT_TEXT_MUTATION.value,),

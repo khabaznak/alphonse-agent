@@ -122,6 +122,8 @@ def _resolve_project_path(raw_path: Any, context: ToolExecutionContext | None) -
         display = str(candidate.relative_to(root))
     except ValueError as exc:
         raise PermissionError("exact_text_edit_path_outside_project") from exc
+    if Path(display).parts and Path(display).parts[0] == ".alphonse":
+        raise PermissionError("exact_text_edit_path_protected")
     if not candidate.exists() or not candidate.is_file():
         raise ValueError(f"exact_text_edit_file_not_found: {display}")
     return candidate, display

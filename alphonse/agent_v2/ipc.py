@@ -56,6 +56,9 @@ class V2DaemonClient:
     def stop(self) -> dict[str, Any]:
         return self.request("stop")
 
+    def trigger_killswitch(self, *, actor_user_id: str) -> dict[str, Any]:
+        return self.request("trigger_killswitch", actor_user_id=actor_user_id)
+
     def queue_message(self, **message: Any) -> dict[str, Any]:
         return self.request("queue_message", **message)
 
@@ -383,6 +386,11 @@ class V2DaemonServer:
         if method == "stop":
             threading.Thread(target=self.daemon.stop, name="alphonse-v2-stop", daemon=True).start()
             return {"status": "stopping"}
+        if method == "trigger_killswitch":
+            return self.daemon.trigger_killswitch(
+                actor_user_id=str(params.get("actor_user_id") or ""),
+                source={"integration_id": "desktop", "provider_key": "tui"},
+            )
         if method == "events":
             return {"events": self.daemon.pop_activity_events()}
         if method == "desktop_poll":

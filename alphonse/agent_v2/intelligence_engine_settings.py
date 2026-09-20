@@ -1,4 +1,4 @@
-"""Persistent opt-in and rollback settings for the hierarchical V3 engine."""
+"""Persistent default and rollback settings for the hierarchical V3 engine."""
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ VALID_ENGINES = {TACTICAL_V2, HIERARCHICAL_V3}
 
 @dataclass(frozen=True)
 class IntelligenceEngineSettings:
-    default_engine: str = TACTICAL_V2
+    default_engine: str = HIERARCHICAL_V3
     v3_project_ids: tuple[str, ...] = ()
     updated_at: str = ""
 
@@ -74,7 +74,7 @@ class SQLiteIntelligenceEngineSettingsStore:
         with self._connect() as conn:
             conn.execute("""CREATE TABLE IF NOT EXISTS v2_intelligence_engine_settings(
                 settings_id INTEGER PRIMARY KEY CHECK(settings_id=1),
-                default_engine TEXT NOT NULL DEFAULT 'tactical_v2',
+                default_engine TEXT NOT NULL DEFAULT 'hierarchical_v3',
                 v3_project_ids_json TEXT NOT NULL DEFAULT '[]',
                 updated_at TEXT NOT NULL
             ) STRICT""")

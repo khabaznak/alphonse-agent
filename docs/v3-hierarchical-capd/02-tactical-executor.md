@@ -36,7 +36,8 @@ while phase is nonterminal:
     check cancellation, steering, deadline, and call budget
     resolve the current subgoal
     determine whether a static next action is already executable
-    otherwise request one tactical action from bounded inference
+    otherwise ask System One to choose one revealed tool
+    ask bounded System Two inference only for that tool's arguments
     validate action against tools, capabilities, dependencies, and scope
     execute exactly once
     append action and result evidence
@@ -75,6 +76,8 @@ Return to outer Check/Act when:
 
 - [x] Add a `PhaseExecutor` independent of the V2 one-call Do implementation.
 - [x] Add a tactical-action inference purpose and strict structured output validation.
+- [x] Use Jev System One to select one tool from the deterministically safe reveal set,
+      with System Two fallback when Jev is unavailable or ambiguous.
 - [x] Validate every selected action before invocation.
 - [x] Reuse `ToolInvocationService` as the only tool execution boundary.
 - [x] Decrement budgets for attempted calls, including failures.
@@ -87,8 +90,8 @@ Return to outer Check/Act when:
 - [x] Make all unexpected failures visible in `PhaseOutcome`.
 - [x] Ensure successful writes require structured verification or a separate read-back
       completion condition.
-- [x] Keep V3 invocation explicit so V2 remains the default; administrator engine
-      selection is completed in Stage 5.
+- [x] Keep V2 available as an explicit rollback engine while V3 becomes the default
+      for newly ingested tasks.
 - [x] Emit nested activity events for phase, subgoal, and tactical action.
 
 ## Tests
@@ -111,7 +114,6 @@ Return to outer Check/Act when:
 
 - Full progressive tool revealing; Stage 2 may use a fixed test shortlist.
 - Mission-completion routing.
-- Making V3 the default engine.
 - Broad parallel execution.
 
 ## Exit criteria
@@ -136,3 +138,7 @@ Return to outer Check/Act when:
   per-action checkpoint/evidence recording, typed bindings, local fallback, scope/tool
   rejection, steering/cancellation boundaries, and nested progress events. Full suite:
   437 passed.
+- 2026-09-20 — Added System One tactical tool choice, per-transition durable
+  checkpoints, bounded project search/read tools, and hard protection for `.alphonse`
+  internal state. System Two now generates arguments for one selected tool rather
+  than reconsidering the complete reveal set.

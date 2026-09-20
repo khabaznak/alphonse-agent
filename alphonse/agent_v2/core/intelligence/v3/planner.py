@@ -22,7 +22,10 @@ def plan_phase(task: "TaskState", context: "CoreLoopContext") -> PhasePlan:
     prompt = (
         "Plan one bounded strategic execution phase. Return one JSON object matching the PhasePlan contract. "
         "Use meaningful subgoals, not one outer CAPD cycle per tool. Do not include a final user response subgoal. "
-        "Authorize only capabilities and project-relative mutation paths needed in this phase.\n\n"
+        "Authorize only capabilities and project-relative mutation paths needed in this phase. "
+        "Never target .alphonse, memory ledgers, prompts, plans, acceptance criteria, or other agent-internal state. "
+        "A mutation path must already be established by the user or prior verified evidence; otherwise plan a read-only discovery phase first. "
+        "Use native.project_search and native.read_project_file for bounded file discovery; native.bash is unavailable in V3.\n\n"
         f"Goal: {task.goal}\n"
         f"Immutable acceptance contract: {json.dumps(task.ensure_acceptance_contract(), ensure_ascii=False)}\n"
         f"Prior V3 phase history: {json.dumps(task.metadata.get('v3_phase_history') or [], ensure_ascii=False)}\n"
@@ -38,6 +41,7 @@ def plan_phase(task: "TaskState", context: "CoreLoopContext") -> PhasePlan:
             user=task.user,
             task_id=task.task_id,
             tools=(),
+            cancel_checker=context.is_cancelled if context.cancellation_checker is not None else None,
         )
     )
     if not isinstance(result.json_value, dict):

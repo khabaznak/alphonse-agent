@@ -72,7 +72,7 @@ success, or exceed its phase limits.
 3. [Progressive tool revealing](03-progressive-tool-revealing.md)
 4. [Outer completion routing and response](04-outer-routing.md)
 5. [Compatibility, observability, evaluation, and rollout](05-rollout.md)
-6. [Experimental System One Check and Act](06-system-one-check-act.md)
+6. [System One Do, Check, and Act](06-system-one-check-act.md)
 
 Stages are ordered. A later stage may be prototyped early, but it must not be declared
 complete before its dependencies and exit gates pass.
@@ -104,9 +104,9 @@ Compare V3 with V2 on:
 - Percentage of tool schemas exposed per tactical decision.
 - Recovery behavior and user-question quality.
 
-V3 is not ready as the default unless correctness and safety are no worse than V2 and
-the representative simple-task set shows a material reduction in global model calls
-and latency.
+The owner-operated installation now uses V3 for newly ingested tasks. V2 remains an
+explicit rollback engine while the representative evaluation set and operational
+evidence continue to mature.
 
 ## Compatibility strategy
 
@@ -140,5 +140,5 @@ V2 already provides several V3 foundations:
 - Tool descriptors with capabilities and `read_only` metadata.
 - Task checkpointing, steering ingestion, cancellation, and UI activity events.
 
-The next implementation task is Stage 1: define and test the V3 phase/state contracts
-without changing default V2 behavior.
+All architectural stages are implemented. Current work focuses on live reliability,
+evaluation regressions, and operational recovery under the V3 default.

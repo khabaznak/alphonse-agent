@@ -31,6 +31,8 @@ from alphonse.agent_v2.core.tools.registry.native.scheduled_task import build_sc
 from alphonse.agent_v2.core.tools.registry.native.scheduled_task import execute_scheduled_task
 from alphonse.agent_v2.core.tools.registry.native.web import build_web_fetch_tool_definition
 from alphonse.agent_v2.core.tools.registry.native.web import build_web_search_tool_definition
+from alphonse.agent_v2.core.tools.registry.native.project_files import build_project_read_tool_definition
+from alphonse.agent_v2.core.tools.registry.native.project_files import build_project_search_tool_definition
 from alphonse.agent_v2.web_tools_settings import WebToolsSettings
 from alphonse.agent_v2.media_tools_settings import MediaToolsSettings
 
@@ -41,6 +43,8 @@ def build_native_tool_registry(web_tools_settings: WebToolsSettings | None = Non
     registry.register(build_respond_tool_definition())
     registry.register(build_bash_tool_definition())
     registry.register(build_exact_text_edit_tool_definition())
+    registry.register(build_project_search_tool_definition())
+    registry.register(build_project_read_tool_definition())
     registry.register(build_deliver_message_tool_definition())
     registry.register(build_send_attachment_tool_definition(asset_store))
     registry.register(build_ask_question_tool_definition())

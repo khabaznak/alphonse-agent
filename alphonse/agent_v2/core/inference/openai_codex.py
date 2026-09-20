@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import json
+import os
+import signal
 import shutil
 import subprocess
 import tempfile
+import time
 from dataclasses import dataclass
 from typing import Any
 
@@ -69,15 +72,19 @@ class OpenAICodexProvider:
 
         try:
             with tempfile.TemporaryDirectory(prefix="alphonse-codex-") as workdir:
-                completed = subprocess.run(
-                    command,
-                    input=prompt,
-                    capture_output=True,
-                    text=True,
-                    timeout=self.config.timeout_seconds,
-                    cwd=workdir,
-                    check=False,
-                )
+                if request.cancel_checker is None:
+                    completed = subprocess.run(
+                        command, input=prompt, capture_output=True, text=True,
+                        timeout=self.config.timeout_seconds, cwd=workdir, check=False,
+                    )
+                else:
+                    completed = _run_interruptible(
+                        command,
+                        prompt=prompt,
+                        timeout_seconds=self.config.timeout_seconds,
+                        cwd=workdir,
+                        cancel_checker=request.cancel_checker,
+                    )
         except subprocess.TimeoutExpired as exc:
             raise ValueError("openai_codex_timeout") from exc
 
@@ -181,6 +188,55 @@ def _model_for_request(request: InferenceRequest) -> str | None:
         # The router's saved profile is authoritative for every CAPD request.
         return request.model_profile.model.strip() or None
     return None
+
+
+def _run_interruptible(
+    command: list[str], *, prompt: str, timeout_seconds: float, cwd: str,
+    cancel_checker: Any = None,
+) -> subprocess.CompletedProcess[str]:
+    process = subprocess.Popen(
+        command,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        cwd=cwd,
+        start_new_session=True,
+    )
+    started = time.monotonic()
+    pending_input: str | None = prompt
+    while True:
+        if callable(cancel_checker) and cancel_checker():
+            _terminate_process_group(process)
+            process.communicate()
+            raise ValueError("inference_cancelled")
+        remaining = float(timeout_seconds) - (time.monotonic() - started)
+        if remaining <= 0:
+            _terminate_process_group(process)
+            stdout, stderr = process.communicate()
+            raise subprocess.TimeoutExpired(command, timeout_seconds, output=stdout, stderr=stderr)
+        try:
+            stdout, stderr = process.communicate(input=pending_input, timeout=min(0.1, remaining))
+        except subprocess.TimeoutExpired:
+            pending_input = None
+            continue
+        return subprocess.CompletedProcess(command, int(process.returncode or 0), stdout, stderr)
+
+
+def _terminate_process_group(process: subprocess.Popen[str]) -> None:
+    if process.poll() is not None:
+        return
+    try:
+        os.killpg(process.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return
+    try:
+        process.wait(timeout=0.25)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
 
 
 def _try_parse_json_object(text: str) -> dict[str, Any] | None:

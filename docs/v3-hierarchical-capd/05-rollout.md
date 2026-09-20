@@ -5,8 +5,8 @@ Depends on: Stages 1 through 4
 
 ## Objective
 
-Make hierarchical CAPD safely operable, measurable, restartable, and reversible before
-it becomes the default engine.
+Make hierarchical CAPD safely operable, measurable, restartable, and reversible as
+the single-user installation moves to V3 by default.
 
 ## Engine compatibility
 
@@ -99,6 +99,9 @@ Status: passed on 2026-09-20 for developer opt-in only. See
 
 ### Gate D: default with rollback
 
+Status: developer default enabled on 2026-09-20 by owner decision. V2 remains an
+explicit rollback path, not the normal route for new tasks.
+
 - Correctness and silent-failure rates are no worse than V2.
 - Simple-task model calls, token usage, and latency improve materially.
 - Operational dashboards and logs can diagnose failed phases.
@@ -106,8 +109,8 @@ Status: passed on 2026-09-20 for developer opt-in only. See
 
 ## Implementation checklist
 
-- [x] Add engine selection to persistent settings with safe V2 defaults and per-project
-      V3 opt-in.
+- [x] Add engine selection to persistent settings with V3 as the new-task default and
+      an explicit V2 rollback setting.
 - [x] Stamp engine and schema version at message ingestion.
 - [x] Preserve engine selection across queue and checkpoint persistence.
 - [x] Add V2/V3 compatibility loaders and explicit engine routing.
@@ -138,6 +141,8 @@ Status: passed on 2026-09-20 for developer opt-in only. See
 - [ ] A hundreds-of-kilobytes legacy memory ledger does not exceed the configured
       bounded memory projection.
 - [ ] Steering interrupts tactical execution without sending a stale response.
+- [x] A queue retry restores the same V3 acceptance contract and tactical checkpoint
+      instead of creating a new task identity.
 
 ## Exit criteria
 
@@ -176,6 +181,10 @@ Status: passed on 2026-09-20 for developer opt-in only. See
   replay cases; V3 used 48 versus 54 inference calls, 15 versus 23 tool calls, and
   30,724 versus 101,127 estimated tokens. Gate A is approved for developer opt-in;
   Gate B shadow planning remains next.
+- 2026-09-20 — Owner chose V3 as the default for this single-user installation.
+  New messages are stamped `hierarchical_v3`; V2 is retained only for rollback.
+  Added stable message-keyed checkpoints, deterministic non-retry of controlled V3
+  failures, interruptible inference cancellation, and a working Desktop kill switch.
 
 ## Running an offline comparison
 

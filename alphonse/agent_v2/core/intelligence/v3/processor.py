@@ -31,6 +31,7 @@ class HierarchicalCAPDProcessor:
         if not task.acceptance_contract:
             check_node(task, context=context)
             act_node(task, context=context)
+            self._persist(task, context)
         if not task.acceptance_contract:
             task.status = "failed"
             task.outcome = {"status": "failure", "reason": "V3 could not establish acceptance criteria."}
@@ -48,9 +49,11 @@ class HierarchicalCAPDProcessor:
                     state = self._new_state(task, context)
             else:
                 state = self._new_state(task, context)
+                self._persist(task, context)
             outcome = self.executor.run(task, state, context)
             self._append_history(task, state, outcome.to_dict())
             review, decision = self.outer.review_and_route(task, state, outcome, context)
+            self._persist(task, context)
             if task.metadata.get("v3_route") in {"plan_next_phase", "strategic_replan"}:
                 task.hierarchical_state = {}
                 if state.steering_pending:
@@ -80,6 +83,11 @@ class HierarchicalCAPDProcessor:
             history.append({"phase": state.phase.to_dict(), "outcome": outcome, "evidence": state.evidence.to_dict()})
 
     @staticmethod
+    def _persist(task: "TaskState", context: "CoreLoopContext") -> None:
+        if context.question_store is not None:
+            context.question_store.save_task_checkpoint(task, status=task.status)
+
+    @staticmethod
     def _result(task: "TaskState", context: "CoreLoopContext") -> ProcessingResult:
         status = (
             ProcessingStatus.PARKED if task.status == "waiting_user" else
@@ -101,6 +109,10 @@ class HierarchicalCAPDProcessor:
                 },
             ),
             status=status,
+            error=(
+                f"v3_task_failed:{str((task.outcome or {}).get('reason') or 'deterministic_failure')}"
+                if status == ProcessingStatus.FAILED else None
+            ),
         )
 
 

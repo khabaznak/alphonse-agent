@@ -64,6 +64,20 @@ def test_daemon_ipc_dispatches_ping_status_and_queue_message() -> None:
     assert daemon.ipc._dispatch({"method": "status"})["queue_size"] == 0
 
 
+def test_daemon_ipc_killswitch_reaches_active_runtime(tmp_path) -> None:
+    users = V2UserStore(":memory:")
+    admin = users.onboard(display_name="Admin", users_root=tmp_path / "users")
+    runtime = build_runtime_host(user=admin.user_id, user_store=users)
+    daemon = V2Daemon(runtime)
+    queued = runtime.channel.queue_message(prompt="work", user=admin.user_id)
+    daemon._activate_kill_switch_task(queued, type("Task", (), {"task_id": "task", "user": admin.user_id, "project_id": ""})())
+
+    result = daemon.ipc._dispatch({"method": "trigger_killswitch", "params": {"actor_user_id": admin.user_id}})
+
+    assert result["status"] == "cancel_requested"
+    assert daemon.kill_switch.is_cancelled(queued.message_id) is True
+
+
 def test_daemon_ipc_exposes_inference_configuration() -> None:
     runtime = build_runtime_host(schedule_store=ScheduledTaskStore(":memory:"))
     daemon = V2Daemon(runtime)

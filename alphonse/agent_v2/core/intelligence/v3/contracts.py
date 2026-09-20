@@ -116,6 +116,8 @@ class MutationScope:
             pure = PurePosixPath(path)
             if not path or pure.is_absolute() or ".." in pure.parts:
                 raise ValueError(f"mutation_scope_path_invalid:{path or '(missing)'}")
+            if pure.parts and pure.parts[0] == ".alphonse":
+                raise ValueError(f"mutation_scope_path_protected:{path}")
             normalized.append(str(pure))
         if len(set(normalized)) != len(normalized):
             raise ValueError("mutation_scope_duplicate_path")

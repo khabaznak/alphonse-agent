@@ -473,8 +473,18 @@ class AlphonseCore:
         working = self._transition(MESSAGE_DEQUEUED)
         from alphonse.agent_v2.core.intelligence.task_state import TaskState
 
-        task = TaskState.from_queued_message(queued)
-        if not task.task_id:
+        queued_engine = str(queued.message.metadata.get("intelligence_engine") or "").strip()
+        task = None
+        if queued_engine == "hierarchical_v3" and self.question_store is not None:
+            task = self.question_store.load_task_checkpoint(queued.message_id)
+        if task is None:
+            task = TaskState.from_queued_message(queued)
+        if queued_engine == "hierarchical_v3":
+            # A queue delivery may be retried, but it is still the same V3 task.
+            # Using the durable message id prevents a retry from silently creating
+            # a new acceptance contract and a different execution history.
+            task.task_id = queued.message_id
+        elif not task.task_id:
             task.task_id = str(uuid4())
         if self.active_task_callback is not None:
             self.active_task_callback(queued, task)
@@ -527,13 +537,17 @@ class AlphonseCore:
             if result.status not in {ProcessingStatus.FAILED, ProcessingStatus.CANCELLED}:
                 context.acknowledge_consumed_messages()
         except Exception as exc:
+            cancelled = bool(self.cancellation_checker and self.cancellation_checker(queued.message_id))
+            if cancelled:
+                task.status = "cancelled"
+                task.outcome = {"status": "cancelled", "reason": "Execution was cancelled by the kill switch."}
             result = ProcessingResult(
                 snapshot=StateSnapshot(
                     current_work=task.goal,
-                    metadata={"exception_type": type(exc).__name__},
+                    metadata={"exception_type": type(exc).__name__, "task_state": task.to_dict()},
                 ),
-                status=ProcessingStatus.FAILED,
-                error=str(exc),
+                status=ProcessingStatus.CANCELLED if cancelled else ProcessingStatus.FAILED,
+                error="inference_cancelled" if cancelled else str(exc),
             )
 
         self.state.update(result.snapshot)

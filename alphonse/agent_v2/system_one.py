@@ -175,6 +175,28 @@ class SystemOneReviewResult:
         }
 
 
+@dataclass(frozen=True)
+class SystemOneToolSelection:
+    tool_id: str = ""
+    confidence: float = 0.0
+    confident: bool = False
+    no_safe_action: bool = False
+    model: str = ""
+    usage: dict[str, Any] = field(default_factory=dict)
+    duration_ms: int = 0
+
+    def to_metadata(self) -> dict[str, Any]:
+        return {
+            "tool_id": self.tool_id,
+            "confidence": self.confidence,
+            "confident": self.confident,
+            "no_safe_action": self.no_safe_action,
+            "model": self.model,
+            "usage": dict(self.usage),
+            "duration_ms": self.duration_ms,
+        }
+
+
 class JevCriterionDecisionProvider:
     def __init__(self, settings: SystemOneSettings, *, transport: Transport | None = None) -> None:
         self.settings = _normalize_settings(settings)
@@ -260,6 +282,71 @@ class JevCriterionDecisionProvider:
             usage=dict(response.get("usage") or {}), duration_ms=duration_ms,
         )
 
+    def select_tactical_tool(
+        self,
+        *,
+        goal: str,
+        phase: dict[str, Any],
+        subgoal: dict[str, Any],
+        evidence: dict[str, Any],
+        bindings: dict[str, Any],
+        tools: tuple[Any, ...],
+    ) -> SystemOneToolSelection:
+        if not tools:
+            return SystemOneToolSelection(no_safe_action=True, confident=True)
+        if len(tools) == 1:
+            return SystemOneToolSelection(tool_id=str(tools[0].tool_id), confidence=1.0, confident=True, model="deterministic")
+        option_tools: dict[str, str] = {}
+        criteria: dict[str, str] = {}
+        for index, tool in enumerate(tools):
+            option = f"tool_{index}"
+            option_tools[option] = str(tool.tool_id)
+            criteria[option] = (
+                f"Choose {tool.tool_id} only when its capability and output directly advance the current subgoal. "
+                f"Tool description: {str(tool.description or tool.name)[:1000]}"
+            )
+        criteria["no_safe_action"] = "No listed tool can safely advance the subgoal with the available evidence and bindings."
+        state = {
+            "goal": str(goal)[:2000],
+            "phase": {"phase_id": phase.get("phase_id"), "objective": str(phase.get("objective") or "")[:2000]},
+            "subgoal": {
+                "subgoal_id": subgoal.get("subgoal_id"),
+                "objective": str(subgoal.get("objective") or "")[:2000],
+                "required_output_type": subgoal.get("required_output_type"),
+            },
+            "recent_evidence": _bounded_evidence((evidence or {}).get("entries"))[-6:],
+            "bindings": _bounded_json(bindings, 6000),
+        }
+        started = monotonic()
+        response = self.client.evaluate(
+            state=state,
+            questions={
+                "next_tool": {
+                    "type": "choice",
+                    "instructions": "Which single tool should execute next to advance the current tactical subgoal safely?",
+                    "criteria": criteria,
+                }
+            },
+        )
+        duration_ms = max(0, round((monotonic() - started) * 1000))
+        answer = response["answers"].get("next_tool")
+        if not isinstance(answer, dict) or answer.get("type") != "choice":
+            raise ValueError("system_one_tool_answer_invalid")
+        choice = str(answer.get("choice") or "")
+        probabilities = answer.get("probabilities") if isinstance(answer.get("probabilities"), dict) else {}
+        probability = float(probabilities.get(choice) or 0.0)
+        if choice not in option_tools and choice != "no_safe_action":
+            raise ValueError("system_one_tool_choice_invalid")
+        return SystemOneToolSelection(
+            tool_id=option_tools.get(choice, ""),
+            confidence=probability,
+            confident=probability >= self.settings.route_confidence_threshold,
+            no_safe_action=choice == "no_safe_action",
+            model=str(response.get("model") or self.settings.model),
+            usage=dict(response.get("usage") or {}),
+            duration_ms=duration_ms,
+        )
+
 
 def validate_and_save_system_one_settings(
     store: SQLiteSystemOneSettingsStore,
@@ -332,6 +419,13 @@ def _bounded_evidence(raw_entries: Any) -> list[dict[str, str]]:
         rendered = json.dumps(raw.get("result"), ensure_ascii=False, sort_keys=True, default=str)
         entries.append({"evidence_ref": evidence_ref, "summary": rendered[:2000]})
     return entries
+
+
+def _bounded_json(value: Any, limit: int) -> Any:
+    rendered = json.dumps(value, ensure_ascii=False, sort_keys=True, default=str)
+    if len(rendered) <= limit:
+        return value
+    return {"truncated_json": rendered[:limit]}
 
 
 def _http_transport(url: str, api_key: str, payload: dict[str, Any], timeout: float) -> dict[str, Any]:

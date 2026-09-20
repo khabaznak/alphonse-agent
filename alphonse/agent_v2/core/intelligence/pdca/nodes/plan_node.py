@@ -172,6 +172,7 @@ def _call_tool_planning_inference(
                 user=task.user,
                 task_id=task.task_id,
                 tools=tools,
+                cancel_checker=context.is_cancelled if context.cancellation_checker is not None else None,
             )
         )
         if result.model_profile is not None:

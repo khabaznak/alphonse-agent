@@ -21,6 +21,7 @@ from alphonse.agent_v2.core.intelligence.v3 import TacticalState
 from alphonse.agent_v2.core.intelligence.v3 import new_tactical_state
 from alphonse.agent_v2.core.messages import CommunicationChannel, InMemoryMessageQueue
 from alphonse.agent_v2.core.tools.registry import InMemoryToolRegistry, ToolDefinition
+from alphonse.agent_v2.system_one import SystemOneToolSelection
 
 
 def _tool(tool_id: str, callback, *, read_only: bool) -> ToolDefinition:
@@ -122,6 +123,48 @@ def test_phase_executor_runs_search_edit_verify_in_one_phase() -> None:
     assert state.bindings["record_reference"]["value"]["path"] == "mejoras_hogar/backlog.md"
     assert len(state.evidence.entries) == 3
     assert task.hierarchical_state["status"] == "phase_complete"
+
+
+def test_phase_executor_uses_system_one_to_reduce_tactical_tool_choice() -> None:
+    calls: list[str] = []
+    task = TaskState(task_id="task", user="alex", project_id="home")
+    state = new_tactical_state(_phase())
+    selected_tool_sets = []
+
+    class SystemOne:
+        def select_tactical_tool(self, **values):
+            tools = values["tools"]
+            tool_id = next(item.tool_id for item in tools if item.tool_id == "native.search")
+            return SystemOneToolSelection(tool_id=tool_id, confidence=0.95, confident=True)
+
+    def selector(current_state, subgoal, tools):
+        selected_tool_sets.append([item.tool_id for item in tools])
+        return {"tool_id": tools[0].tool_id, "arguments": {"query": "solar"}}
+
+    executor = PhaseExecutor(action_selector=selector)
+    context = CoreLoopContext(messages=InMemoryMessageQueue(), tools=_registry(calls), system_one=SystemOne())
+
+    # Injected action selectors intentionally bypass model/System One selection;
+    # verify the provider path separately through the real selector below.
+    executor._action_selector = None
+    class Inference:
+        def generate_json(self, request):
+            selected_tool_sets.append([item.tool_id for item in request.tools])
+            return type("Result", (), {"json_value": {"tool_id": request.tools[0].tool_id, "arguments": {"query": "solar"}}})()
+    context.inference = Inference()
+    state.phase = PhasePlan(
+        "search", "Search", (PhaseSubgoal("locate", "Locate", "record", allowed_capabilities=("native.search", "native.read")),),
+        authorized_capabilities=("native.search", "native.read"), limits=PhaseLimits(1, 20),
+    )
+    state.active_subgoal_id = "locate"
+    state.remaining_tool_calls = 1
+    state.revealed_tool_ids = ["native.search", "native.read"]
+
+    outcome = executor.run(task, state, context)
+
+    assert outcome.status == PhaseStatus.PHASE_COMPLETE
+    assert selected_tool_sets == [["native.search"]]
+    assert task.metadata["system_one_tool_selections"][0]["tool_id"] == "native.search"
 
 
 def test_phase_executor_rejects_unrevealed_tool_before_execution() -> None:

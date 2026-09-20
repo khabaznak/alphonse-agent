@@ -37,7 +37,7 @@ class PhaseExecutor:
     def run(self, task: "TaskState", state: TacticalState, context: "CoreLoopContext") -> PhaseOutcome:
         if state.status == PhaseStatus.PLANNED:
             state.transition(PhaseStatus.RUNNING)
-            self._checkpoint(task, state)
+            self._checkpoint(task, state, context)
             context.emit_activity(
                 phase=ImprovementPhase.DO,
                 label="phase started",
@@ -47,14 +47,14 @@ class PhaseExecutor:
         while state.status == PhaseStatus.RUNNING:
             interruption = self._interruption(task, state, context)
             if interruption is not None:
-                self._checkpoint(task, state)
+                self._checkpoint(task, state, context)
                 return interruption
             subgoal = self._active_subgoal(state)
             tools = self._revealed_tools(task, state, subgoal, context)
             selected = self._select_action(task, state, subgoal, tools, context)
             if selected is None:
                 state.transition(PhaseStatus.BLOCKED)
-                self._checkpoint(task, state)
+                self._checkpoint(task, state, context)
                 return self._outcome(state, "No valid tactical action was available.", blockers=("tactical_action_unavailable",))
             try:
                 action = self._validate_action(state, subgoal, selected, tools)
@@ -69,11 +69,11 @@ class PhaseExecutor:
                     }
                 )
                 state.transition(PhaseStatus.BLOCKED)
-                self._checkpoint(task, state)
+                self._checkpoint(task, state, context)
                 return self._outcome(state, str(exc), blockers=(str(exc),))
             state.consume_tool_call()
             state.actions.append(action)
-            self._checkpoint(task, state)
+            self._checkpoint(task, state, context)
             context.emit_activity(
                 phase=ImprovementPhase.DO,
                 label="tactical action",
@@ -110,21 +110,21 @@ class PhaseExecutor:
                     "error": completed.error,
                 }
             )
-            self._checkpoint(task, state)
+            self._checkpoint(task, state, context)
             if completed.status == "waiting":
                 state.transition(PhaseStatus.WAITING_USER)
-                self._checkpoint(task, state)
+                self._checkpoint(task, state, context)
                 return self._outcome(state, "A tactical action requires user input.")
             if completed.status != "success":
                 failure = self._handle_failure(state, subgoal, completed)
-                self._checkpoint(task, state)
+                self._checkpoint(task, state, context)
                 if failure is not None:
                     return failure
                 continue
             if not _condition_met(subgoal, completed.result):
                 if self._subgoal_calls(state, subgoal.subgoal_id) >= subgoal.limits.max_tool_calls:
                     state.transition(PhaseStatus.BUDGET_EXHAUSTED)
-                    self._checkpoint(task, state)
+                    self._checkpoint(task, state, context)
                     return self._outcome(state, "The subgoal call budget was exhausted before its completion condition was met.")
                 continue
             state.bind_subgoal_output(subgoal.subgoal_id, subgoal.required_output_type, completed.result)
@@ -139,13 +139,13 @@ class PhaseExecutor:
             next_subgoal = _next_subgoal(state)
             if next_subgoal is None:
                 state.transition(PhaseStatus.PHASE_COMPLETE)
-                self._checkpoint(task, state)
+                self._checkpoint(task, state, context)
                 return self._outcome(state, "All phase subgoals completed with recorded evidence.")
             state.active_subgoal_id = next_subgoal.subgoal_id
             state.revealed_capabilities = []
             state.revealed_tool_ids = []
             state.transition(PhaseStatus.RUNNING)
-            self._checkpoint(task, state)
+            self._checkpoint(task, state, context)
         return self._outcome(state, "The phase ended outside the running state.")
 
     def _select_action(
@@ -160,7 +160,44 @@ class PhaseExecutor:
             return self._action_selector(state, subgoal, tools)
         if context.inference is None:
             return None
-        prompt = _tactical_prompt(state, subgoal, tools)
+        selected_tools = tools
+        if context.system_one is not None and hasattr(context.system_one, "select_tactical_tool"):
+            try:
+                system_one_selection = context.system_one.select_tactical_tool(
+                    goal=task.goal,
+                    phase=state.phase.to_dict(),
+                    subgoal={
+                        "subgoal_id": subgoal.subgoal_id,
+                        "objective": subgoal.objective,
+                        "required_output_type": subgoal.required_output_type,
+                    },
+                    evidence=state.evidence.to_dict(),
+                    bindings=dict(state.bindings),
+                    tools=tools,
+                )
+            except Exception as exc:
+                selection_metadata = {"status": "fallback", "error_type": type(exc).__name__}
+            else:
+                selection_metadata = {"status": "used", **system_one_selection.to_metadata()}
+                if system_one_selection.confident and system_one_selection.no_safe_action:
+                    _record_system_one_tool_selection(task, state, subgoal, selection_metadata)
+                    context.emit_telemetry({
+                        "event": "system_one_tool_selection", "task_id": task.task_id,
+                        "phase_id": state.phase.phase_id, "subgoal_id": subgoal.subgoal_id,
+                        **selection_metadata,
+                    })
+                    return None
+                if system_one_selection.confident and system_one_selection.tool_id:
+                    selected_tools = tuple(item for item in tools if item.tool_id == system_one_selection.tool_id)
+                elif not system_one_selection.confident:
+                    selection_metadata["status"] = "ambiguous_fallback"
+            _record_system_one_tool_selection(task, state, subgoal, selection_metadata)
+            context.emit_telemetry({
+                "event": "system_one_tool_selection", "task_id": task.task_id,
+                "phase_id": state.phase.phase_id, "subgoal_id": subgoal.subgoal_id,
+                **selection_metadata,
+            })
+        prompt = _tactical_prompt(state, subgoal, selected_tools)
         result = context.inference.generate_json(
             InferenceRequest(
                 prompt=prompt,
@@ -168,8 +205,9 @@ class PhaseExecutor:
                 project_id=task.project_id,
                 user=task.user,
                 task_id=task.task_id,
-                tools=tools,
+                tools=selected_tools,
                 metadata={"phase_id": state.phase.phase_id, "subgoal_id": subgoal.subgoal_id},
+                cancel_checker=context.is_cancelled if context.cancellation_checker is not None else None,
             )
         )
         return dict(result.json_value) if isinstance(result.json_value, dict) else None
@@ -268,10 +306,12 @@ class PhaseExecutor:
         return sum(1 for item in state.actions if item.subgoal_id == subgoal_id)
 
     @staticmethod
-    def _checkpoint(task: "TaskState", state: TacticalState) -> None:
+    def _checkpoint(task: "TaskState", state: TacticalState, context: "CoreLoopContext") -> None:
         task.intelligence_engine = "hierarchical_v3"
         task.intelligence_schema_version = 3
         task.hierarchical_state = state.to_dict()
+        if context.question_store is not None:
+            context.question_store.save_task_checkpoint(task, status=task.status)
 
     @staticmethod
     def _outcome(state: TacticalState, reason: str, blockers: tuple[str, ...] = ()) -> PhaseOutcome:
@@ -335,3 +375,15 @@ def _error_message(value: Any) -> str:
     if isinstance(value, dict):
         return str(value.get("message") or value.get("code") or "").strip()
     return str(value or "").strip()
+
+
+def _record_system_one_tool_selection(
+    task: "TaskState", state: TacticalState, subgoal: PhaseSubgoal, metadata: dict[str, Any]
+) -> None:
+    history = task.metadata.setdefault("system_one_tool_selections", [])
+    if not isinstance(history, list):
+        history = []
+        task.metadata["system_one_tool_selections"] = history
+    history.append({"phase_id": state.phase.phase_id, "subgoal_id": subgoal.subgoal_id, **metadata})
+    if len(history) > 50:
+        del history[:-50]

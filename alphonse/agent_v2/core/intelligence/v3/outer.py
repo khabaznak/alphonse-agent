@@ -209,6 +209,7 @@ def generate_verified_response(
             task_id=task.task_id,
             tools=(),
             metadata={"phase_id": state.phase.phase_id},
+            cancel_checker=context.is_cancelled if context.cancellation_checker is not None else None,
         )
     )
     return str(result.content or "").strip() or fallback
@@ -293,6 +294,7 @@ def _review_acceptance_statuses(
             task_id=task.task_id,
             tools=(),
             metadata={"phase_id": state.phase.phase_id},
+            cancel_checker=context.is_cancelled if context.cancellation_checker is not None else None,
         )
     )
     if not isinstance(result.json_value, dict):

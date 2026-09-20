@@ -1,14 +1,27 @@
-# Experimental System One Check and Act
+# System One Do, Check, and Act
 
 Status: implemented, disabled by default
-Depends on: Stage 4 outer review and routing
+Depends on: Stages 2 through 4
 
 ## Purpose
 
-Alphonse V3 can use TypeSafe.ai Jev as a fast System One decision engine for the
-semantic part of outer Check. The same request returns an advisory route for Act.
+Alphonse V3 can use TypeSafe.ai Jev as a fast System One decision engine for tactical
+tool choice inside Do and for the semantic part of outer Check. The Check request
+also returns an advisory route for Act.
 This is an optional provider path; it does not replace deterministic authorization,
 effect, cancellation, or completion invariants.
+
+## Do boundary
+
+Deterministic reveal policy first removes irrelevant, unavailable, or unauthorized
+tools. Jev receives the bounded goal, phase, current subgoal, recent successful
+evidence, typed bindings, and clear descriptions of only those safe candidates. A
+Choice question selects one next tool or `no_safe_action`.
+
+When the result clears the configured confidence threshold, System Two receives only
+that tool and produces its arguments. Ambiguous responses and provider failures fall
+back to the complete bounded reveal set. Jev cannot reveal a hidden tool, authorize a
+side effect, select Bash, broaden mutation scope, or directly execute anything.
 
 ## Check boundary
 
@@ -56,7 +69,8 @@ the key or request contents.
 - Provider failure is tested to fall back.
 - Act is tested to withhold completion but never manufacture success.
 - IPC access is administrator-only and API-key masking is tested.
-- V3 remains opt-in; this feature does not advance the rollout beyond Gate A.
+- New tasks use V3 by default in the owner-operated installation; V2 remains a manual
+  rollback option.
 
 ## Implementation log
 
@@ -64,3 +78,6 @@ the key or request contents.
   review, advisory Choice routing, System Two fallback, masked admin IPC, desktop
   settings and validation, and structured telemetry. Full Python suite: 472 passed;
   desktop suite: 47 passed.
+- 2026-09-20 — Extended Jev into Do as a one-tool Choice layer after deterministic
+  reveal and before System Two argument generation. Added bounded decision telemetry
+  and conservative fallback.

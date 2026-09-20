@@ -13,11 +13,11 @@ from alphonse.agent_v2.intelligence_engine_settings import IntelligenceEngineSet
 from alphonse.agent_v2.intelligence_engine_settings import SQLiteIntelligenceEngineSettingsStore
 
 
-def test_engine_settings_default_to_v2_and_allow_project_opt_in(tmp_path: Path) -> None:
+def test_engine_settings_default_to_v3_and_allow_v2_rollback(tmp_path: Path) -> None:
     store = SQLiteIntelligenceEngineSettingsStore(tmp_path / "settings.sqlite3")
-    assert store.get().default_engine == TACTICAL_V2
+    assert store.get().default_engine == HIERARCHICAL_V3
 
-    saved = store.save(IntelligenceEngineSettings(v3_project_ids=("home",)))
+    saved = store.save(IntelligenceEngineSettings(default_engine=TACTICAL_V2, v3_project_ids=("home",)))
 
     assert saved.engine_for("home") == HIERARCHICAL_V3
     assert saved.engine_for("health") == TACTICAL_V2
@@ -34,6 +34,15 @@ def test_channel_stamps_engine_at_ingestion_so_later_setting_changes_do_not_move
 
     assert task.intelligence_engine == HIERARCHICAL_V3
     assert task.intelligence_schema_version == 3
+
+
+def test_channel_defaults_new_messages_to_v3_without_a_settings_provider() -> None:
+    queued = CommunicationChannel(InMemoryMessageQueue()).queue_message(
+        prompt="Do work", user="alex", project_id="home"
+    )
+
+    assert queued.message.metadata["intelligence_engine"] == HIERARCHICAL_V3
+    assert queued.message.metadata["intelligence_schema_version"] == 3
 
 
 class _Processor:

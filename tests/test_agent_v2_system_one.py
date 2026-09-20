@@ -98,3 +98,24 @@ def test_system_one_client_rejects_missing_key_before_transport() -> None:
     )
     with pytest.raises(ValueError, match="system_one_api_key_required"):
         client.validate()
+
+
+def test_jev_selects_one_tactical_tool_from_authorized_candidates() -> None:
+    provider = JevCriterionDecisionProvider(
+        SystemOneSettings(enabled=True, api_key="secret", validated_at="now"),
+        transport=_transport(route="tool_1", route_probability=0.93),
+    )
+    tools = (
+        type("Tool", (), {"tool_id": "native.project_search", "name": "search", "description": "Find project records"})(),
+        type("Tool", (), {"tool_id": "artifact.medical", "name": "medical", "description": "Query medical records"})(),
+    )
+
+    result = provider.select_tactical_tool(
+        goal="Find the treatment", phase={"phase_id": "p", "objective": "Locate record"},
+        subgoal={"subgoal_id": "s", "objective": "Find authoritative record", "required_output_type": "record"},
+        evidence={"entries": []}, bindings={}, tools=tools,
+    )
+
+    assert result.tool_id == "artifact.medical"
+    assert result.confident is True
+    assert result.no_safe_action is False

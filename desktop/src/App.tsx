@@ -667,9 +667,28 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
         setError("Commands cannot be sent with file attachments.");
         return;
       }
-      setPrompt("");
-      await runCommand(value.split(/\s+/, 1)[0]);
-      return;
+      const command = value.split(/\s+/, 1)[0].toLowerCase();
+      if (command === "/killswitch") {
+        setPrompt("");
+        try {
+          const result = await daemonRequest<{ status: string }>("trigger_killswitch", { actor_user_id: user });
+          appendMessage({
+            id: `killswitch:${crypto.randomUUID()}`,
+            role: "assistant",
+            content: result.status === "cancel_requested" ? "Kill switch engaged. The active task is being cancelled." : "Kill switch checked: no active task is running.",
+            created_at: new Date().toISOString(),
+            project_id: project?.project_id || "",
+          });
+        } catch (cause) {
+          setError(cause instanceof Error ? cause.message : "Kill switch failed");
+        }
+        return;
+      }
+      if (matchingCommands(command).includes(command)) {
+        setPrompt("");
+        await runCommand(command);
+        return;
+      }
     }
     if (attachmentPaths.length && !project) {
       setError("Select a project before sending files.");
@@ -1473,16 +1492,16 @@ function SystemOneSettingsSection({ user }: { user: string }) {
     : "Not validated. Alphonse will continue using the existing System Two review until validation succeeds.");
   return <section className="settings-panel">
     <h3>System One</h3>
-    <p>Use TypeSafe.ai Jev for fast acceptance-evidence decisions in V3 Check and a constrained recommendation in Act. Deterministic safety gates remain authoritative, and ambiguous or unavailable decisions fall back to the agent model.</p>
+    <p>Use TypeSafe.ai Jev for fast tactical tool selection in V3 Do, acceptance-evidence decisions in Check, and a constrained recommendation in Act. Deterministic safety gates remain authoritative, and ambiguous or unavailable decisions fall back to the agent model.</p>
     {settings && <>
-      <div className="form-field checkbox-field"><label htmlFor="system-one-enabled"><input id="system-one-enabled" type="checkbox" checked={settings.enabled} onChange={(event) => setSettings({ ...settings, enabled: event.target.checked })} /> Enable System One for V3 Check and Act</label></div>
+      <div className="form-field checkbox-field"><label htmlFor="system-one-enabled"><input id="system-one-enabled" type="checkbox" checked={settings.enabled} onChange={(event) => setSettings({ ...settings, enabled: event.target.checked })} /> Enable System One for V3 Do, Check, and Act</label></div>
       <div className="form-field"><label htmlFor="system-one-url">API URL</label><input id="system-one-url" value={settings.api_url} onChange={(event) => setSettings({ ...settings, api_url: event.target.value })} /></div>
       <div className="form-field"><label htmlFor="system-one-model">Model</label><input id="system-one-model" value={settings.model} onChange={(event) => setSettings({ ...settings, model: event.target.value })} /></div>
       <div className="form-field"><label htmlFor="system-one-key">API key</label><input id="system-one-key" type="password" value={apiKey} onChange={(event) => setApiKey(event.target.value)} placeholder={settings.has_api_key ? "Leave blank to keep the saved key" : "Enter TypeSafe.ai API key"} autoComplete="new-password" /></div>
       <details><summary>Decision thresholds</summary>
         <div className="form-field"><label htmlFor="system-one-yes">Evidence yes threshold</label><input id="system-one-yes" type="number" min="0" max="1" step="0.01" value={settings.yes_threshold} onChange={(event) => setSettings({ ...settings, yes_threshold: Number(event.target.value) })} /></div>
         <div className="form-field"><label htmlFor="system-one-no">Evidence no threshold</label><input id="system-one-no" type="number" min="0" max="1" step="0.01" value={settings.no_threshold} onChange={(event) => setSettings({ ...settings, no_threshold: Number(event.target.value) })} /></div>
-        <div className="form-field"><label htmlFor="system-one-route">Act route confidence threshold</label><input id="system-one-route" type="number" min="0" max="1" step="0.01" value={settings.route_confidence_threshold} onChange={(event) => setSettings({ ...settings, route_confidence_threshold: Number(event.target.value) })} /></div>
+        <div className="form-field"><label htmlFor="system-one-route">Tool and Act confidence threshold</label><input id="system-one-route" type="number" min="0" max="1" step="0.01" value={settings.route_confidence_threshold} onChange={(event) => setSettings({ ...settings, route_confidence_threshold: Number(event.target.value) })} /></div>
       </details>
       <p><small>When enabled, bounded phase objectives, acceptance criteria, and verified evidence summaries are sent to the configured TypeSafe.ai endpoint. The API key stays in local settings and is never returned to the desktop.</small></p>
       <button disabled={saving || (settings.enabled && !settings.has_api_key && !apiKey)} onClick={() => void save()}>{settings.enabled ? "Validate & save" : "Save disabled settings"}</button>

@@ -2265,10 +2265,13 @@ def _scheduled_failure_code(error: str) -> str:
 
 def _scheduled_failure_is_non_retryable(error: str) -> bool:
     return _scheduled_failure_code(error) in {
+        "capd_processing_failed",
+        "inference_cancelled",
         "openai_codex_auth_required",
         "openai_codex_cli_missing",
         "openai_codex_cli_upgrade_required",
         "openai_codex_model_not_configured",
+        "v3_task_failed",
     }
 
 

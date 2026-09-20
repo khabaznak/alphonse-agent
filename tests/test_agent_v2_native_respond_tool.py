@@ -26,7 +26,10 @@ def test_native_registry_registers_respond_tool() -> None:
 def test_native_registry_exposes_native_tools() -> None:
     names = {descriptor.name for descriptor in build_native_tool_registry().list()}
 
-    assert names == {"respond", "bash", "exact_text_edit", "ask_question", "deliver_message", "send_attachment", "scheduled_task"}
+    assert names == {
+        "respond", "bash", "exact_text_edit", "ask_question", "deliver_message",
+        "send_attachment", "scheduled_task", "project_search", "read_project_file",
+    }
 
 
 def test_respond_descriptor_and_schema_are_visible_to_plan_prompt() -> None:

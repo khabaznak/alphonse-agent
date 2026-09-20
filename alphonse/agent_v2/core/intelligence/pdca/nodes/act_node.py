@@ -292,6 +292,7 @@ def _call_acceptance_criteria_inference(
                 project_id=task.project_id,
                 user=task.user,
                 task_id=task.task_id,
+                cancel_checker=context.is_cancelled if context.cancellation_checker is not None else None,
             )
         )
         if result.model_profile is not None:
@@ -314,6 +315,7 @@ def _call_acceptance_criteria_amendment_inference(
             project_id=task.project_id,
             user=task.user,
             task_id=task.task_id,
+            cancel_checker=context.is_cancelled if context.cancellation_checker is not None else None,
         )
     )
     if result.model_profile is not None:

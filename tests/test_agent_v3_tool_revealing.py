@@ -184,3 +184,16 @@ def test_capability_catalog_is_compact_and_subgoal_scoped() -> None:
         Capability.MEMORY_RECALL.value,
     ]
     assert all(item["description"] for item in catalog)
+
+
+def test_v3_never_reveals_unbounded_bash() -> None:
+    subgoal = PhaseSubgoal(
+        "inspect", "Inspect project", "record",
+        allowed_capabilities=(Capability.PROJECT_FILE_INSPECTION.value,),
+    )
+    bash = _descriptor("native.bash", Capability.PROJECT_FILE_INSPECTION)
+
+    result = ToolRevealPolicy().reveal(TaskState(project_id="home"), _state(subgoal), subgoal, (bash,))
+
+    assert result.tools == ()
+    assert result.decisions[0].reason == "unbounded_shell_disabled_in_v3"
