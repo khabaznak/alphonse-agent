@@ -679,26 +679,14 @@ def _latest_tool_result_response(task_state: dict[str, Any]) -> str:
         result = execution.get("result")
         if not isinstance(result, dict):
             continue
-        if str(result.get("message") or "").strip():
+        if tool_id == "native.respond" and str(result.get("message") or "").strip():
             return str(result.get("message") or "").strip()
-        if tool_id == "native.bash":
-            stdout = str(result.get("stdout") or "").strip()
-            stderr = str(result.get("stderr") or "").strip()
-            if stdout:
-                return stdout
-            if stderr:
-                return stderr
         if tool_id == "native.scheduled_task":
             name = str(result.get("name") or "Scheduled task").strip()
             next_run_at = str(result.get("next_run_at") or "").strip()
             if next_run_at:
                 return f'Scheduled "{name}" for {next_run_at}.'
             return f'Scheduled "{name}".'
-        if tool_id.startswith("artifact."):
-            tool_name = str(call.get("tool_name") or "").strip()
-            if not tool_name:
-                tool_name = tool_id.removeprefix("artifact.").replace("-", " ").replace("_", " ")
-            return f"Completed {tool_name}."
     return ""
 
 

@@ -43,7 +43,6 @@ from alphonse.agent_v2.core.scheduled_tasks import ScheduledTaskStore
 from alphonse.agent_v2.core.scheduled_tasks import schedule_summary
 from alphonse.agent_v2.core.state import get_state
 from alphonse.agent_v2.core.state import reset_state
-from alphonse.agent_v2.core.tools.registry.native import BASH_TOOL_ID
 from alphonse.agent_v2.core.tools.registry.native import RESPOND_TOOL_ID
 from alphonse.agent_v2.core.tools.registry.native import SCHEDULED_TASK_TOOL_ID
 from alphonse.agent_v2.core.tools.registry.native import build_native_tool_registry
@@ -697,13 +696,6 @@ def _latest_tool_result_response(task_state: dict[str, Any]) -> str:
             continue
         if tool_id == RESPOND_TOOL_ID:
             return str(result.get("message") or "").strip()
-        if tool_id == BASH_TOOL_ID:
-            stdout = str(result.get("stdout") or "").strip()
-            stderr = str(result.get("stderr") or "").strip()
-            if stdout:
-                return stdout
-            if stderr:
-                return stderr
         if tool_id == SCHEDULED_TASK_TOOL_ID:
             name = str(result.get("name") or "Scheduled task").strip()
             next_run_at = str(result.get("next_run_at") or "").strip()

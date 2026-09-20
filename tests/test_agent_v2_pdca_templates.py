@@ -135,18 +135,20 @@ def test_criteria_review_prompt_template_renders_expected_sections() -> None:
     env = Environment(loader=FileSystemLoader(TEMPLATE_DIR))
 
     rendered = env.get_template("criteria_review_prompt.j2").render(
-        acceptance_criteria_md="1.- [ ] File exists",
+        acceptance_contract_json='{"criteria":[{"id":"ac-1","statement":"File exists","status":"pending"}]}',
+        valid_evidence_refs=["tool-call:plan-call-1"],
         latest_executed_call_json='{"id": "plan-call-1", "execution": {"status": "success"}}',
         task_state_md="Task state markdown",
     )
 
     assert "# System Prompt" in rendered
-    assert "Return revised acceptance criteria only" in rendered
-    assert "Preserve every unmet criterion with `[ ]`" in rendered
-    assert "Mark only clearly fulfilled criteria with `[x]`" in rendered
+    assert "cannot change, remove, add, merge, or reinterpret criteria" in rendered
+    assert "Return the status-update JSON object only" in rendered
+    assert "A satisfied criterion requires at least one real evidence reference" in rendered
     assert "Do not decide mission success or mission failure" in rendered
-    assert "# Current Acceptance Criteria" in rendered
-    assert "1.- [ ] File exists" in rendered
+    assert "# Immutable Acceptance Contract" in rendered
+    assert '"id":"ac-1"' in rendered
+    assert "tool-call:plan-call-1" in rendered
     assert "# Latest Executed Tool Call" in rendered
     assert "plan-call-1" in rendered
     assert "# Task State" in rendered

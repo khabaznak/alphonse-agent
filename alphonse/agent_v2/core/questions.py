@@ -293,7 +293,15 @@ class SQLiteQuestionStore:
             )
             return cursor.rowcount == 1
 
-    def save_task_checkpoint(self, task: TaskState, *, status: str | None = None) -> int:
+    def save_task_checkpoint(
+        self,
+        task: TaskState,
+        *,
+        status: str | None = None,
+        connection: sqlite3.Connection | None = None,
+    ) -> int:
+        if connection is not None:
+            return self._save_task_checkpoint(connection, task, status=status)
         with self._connect() as conn:
             return self._save_task_checkpoint(conn, task, status=status)
 

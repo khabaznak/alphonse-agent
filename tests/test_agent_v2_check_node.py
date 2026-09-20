@@ -78,7 +78,7 @@ def test_check_node_leaves_scheduled_occurrences_for_independent_processing() ->
     assert queue.size() == 1
 
 
-def test_check_node_steer_reviews_acceptance_criteria_before_returning(monkeypatch) -> None:
+def test_check_node_steer_preserves_acceptance_contract_for_explicit_amendment() -> None:
     queue = InMemoryMessageQueue()
     CommunicationChannel(queue).queue_message(prompt="The file exists now", user="alex", project_id="alpha", metadata={"routing_disposition": "steering"})
     task = TaskState(
@@ -87,17 +87,15 @@ def test_check_node_steer_reviews_acceptance_criteria_before_returning(monkeypat
         project_id="alpha",
         acceptance_criteria_md="1.- [ ] File exists",
     )
-    monkeypatch.setattr(check_node_module, "_call_criteria_review_llm", lambda prompt: "1.- [x] File exists")
-
     events = []
     check_node(task, context=CoreLoopContext(messages=queue, activity_sink=events.append))
 
     assert task.check_verdict == "steer"
-    assert task.acceptance_criteria_md == "1.- [x] File exists"
-    assert task.metadata["criteria_review_updated"] is True
-    assert "criteria_review_prompt" in task.metadata
+    assert task.acceptance_criteria_md == "1.- [ ] File exists"
+    assert "criteria_review_prompt" not in task.metadata
+    assert task.metadata["pending_steering_message_ids"]
     assert events[-1].label == "criteria refreshed"
-    assert events[-1].progress["acceptance_criteria"] == "1.- [x] File exists"
+    assert events[-1].progress["acceptance_criteria"] == "1.- [ ] File exists"
 
 
 def test_check_node_consumes_same_correlation_id_from_other_user() -> None:
@@ -151,7 +149,7 @@ def test_check_node_criteria_review_can_mark_criteria_complete(monkeypatch) -> N
     assert task.acceptance_criteria_md == revised
     assert task.metadata["criteria_review_updated"] is True
     assert task.check_verdict == "wip"
-    assert "Check updated acceptance criteria" in task.updates_md
+    assert "Check updated criterion statuses without changing the acceptance contract" in task.updates_md
 
 
 def test_check_node_does_not_set_terminal_verdict_when_all_criteria_complete(monkeypatch) -> None:
@@ -166,7 +164,19 @@ def test_check_node_does_not_set_terminal_verdict_when_all_criteria_complete(mon
 
 
 def test_check_node_uses_inference_without_tools_for_criteria_review() -> None:
-    provider = StubInferenceProvider(markdown_by_purpose={InferencePurpose.CRITERIA_REVIEW: "1.- [x] File exists"})
+    provider = StubInferenceProvider(
+        json_by_purpose={
+            InferencePurpose.CRITERIA_REVIEW: {
+                "updates": [
+                    {
+                        "criterion_id": "ac-1",
+                        "status": "satisfied",
+                        "evidence_refs": ["tool-call:plan-call-1"],
+                    }
+                ]
+            }
+        }
+    )
     router = InferenceRouter(
         provider=provider,
         default_profile=ModelProfile(provider="openai", model="gpt", profile_id="default"),

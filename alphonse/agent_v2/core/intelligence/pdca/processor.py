@@ -20,6 +20,8 @@ class PDCAIntelligenceProcessor:
         status = (
             ProcessingStatus.CANCELLED
             if str(result.status or "").strip().lower() == "cancelled"
+            else ProcessingStatus.FAILED
+            if str(result.status or "").strip().lower() == "failed"
             else ProcessingStatus.PARKED
             if str(result.status or "").strip().lower() == "waiting_user"
             else ProcessingStatus.COMPLETED

@@ -144,16 +144,30 @@ def test_run_pdca_once_executes_planned_tool_and_returns_to_check(monkeypatch) -
 
 
 def test_run_pdca_once_marks_mission_success_after_check_completes_criteria(monkeypatch) -> None:
-    monkeypatch.setattr(
-        _plan_node_module(),
-        "_call_tool_planning_llm",
-        lambda prompt: {
-            "id": "plan-call-1",
+    call_index = {"value": 0}
+
+    def next_call(prompt: str) -> dict[str, Any]:
+        call_index["value"] += 1
+        if "pending_user_response" in prompt:
+            return {
+                "id": f"respond-{call_index['value']}",
+                "tool_id": "native.respond",
+                "tool_name": "respond",
+                "arguments": {"message": "The requested work is complete."},
+                "internal_state": "Preparing the requester-facing answer.",
+            }
+        return {
+            "id": f"plan-call-{call_index['value']}",
             "tool_id": "tool-1",
             "tool_name": "write_file",
             "arguments": {"path": "a.txt"},
             "internal_state": "Writing the requested file.",
-        },
+        }
+
+    monkeypatch.setattr(
+        _plan_node_module(),
+        "_call_tool_planning_llm",
+        next_call,
     )
     monkeypatch.setattr(
         _check_node_module(),
@@ -169,7 +183,7 @@ def test_run_pdca_once_marks_mission_success_after_check_completes_criteria(monk
 
     assert result.check_verdict == "mission_success"
     assert result.status == "completed"
-    assert result.outcome == {"status": "success", "reason": "All acceptance criteria are complete."}
+    assert result.outcome == {"status": "success", "reason": "All acceptance criteria are complete and a user response is prepared."}
     assert result.metadata["act_route"] == "end"
 
 
@@ -206,8 +220,14 @@ class _ToolRegistry:
                 kind=ToolKind.NATIVE,
                 description="Writes a file",
             ),
+            ToolDescriptor(
+                tool_id="native.respond",
+                name="respond",
+                kind=ToolKind.NATIVE,
+                description="Prepares a user-facing response",
+            ),
         )
 
     def execute(self, tool_id: str, arguments: dict[str, Any]) -> dict[str, Any]:
         self.calls.append((tool_id, dict(arguments)))
-        return {"ok": True}
+        return {"message": str(arguments.get("message") or "Done.")} if tool_id == "native.respond" else {"ok": True}

@@ -128,6 +128,15 @@ def do_node(task: TaskState, context: CoreLoopContext | None = None) -> TaskStat
     if tool_id == "native.respond" and isinstance(result, dict):
         context.record_memory_event(task, "Conversation", f"- Alphonse: {str(result.get('message') or '')}")
     task.record_plan_call_success(call_id, result)
+    if tool_id == "native.respond" and isinstance(result, dict) and str(result.get("message") or "").strip():
+        task.metadata["prepared_user_response"] = {
+            "tool_call_id": call_id,
+            "message": str(result.get("message") or "").strip(),
+        }
+        task.metadata.pop("pending_user_response", None)
+    elif tool_id not in {ASK_QUESTION_TOOL_ID, SCHEDULED_TASK_TOOL_ID}:
+        # A response must describe the latest completed work, not precede it.
+        task.metadata.pop("prepared_user_response", None)
     if tool_id == SCHEDULED_TASK_TOOL_ID:
         # Persisting a future occurrence completes the setup task. The worker
         # owns the clock; CAPD must not keep working until the trigger time.
@@ -195,6 +204,12 @@ def _execute_program(task: TaskState, context: CoreLoopContext | None, planned_c
         task.append_update("Do recorded a failed program execution.")
         return task
     task.record_plan_call_success(call_id, result)
+    prepared = _successful_program_response(child_calls)
+    if prepared is not None:
+        task.metadata["prepared_user_response"] = prepared
+        task.metadata.pop("pending_user_response", None)
+    elif child_calls:
+        task.metadata.pop("prepared_user_response", None)
     task.metadata["do_executed_since_last_act"] = True
     context.emit_ui_event("program_execution_finished", {"tool_call_id": call_id, "status": "success", "result": result})
     context.emit_activity(phase=ImprovementPhase.DO, label="tool completed", message=f"{tool_name} completed.")
@@ -217,3 +232,21 @@ def _is_silent_successful_bash(tool_id: str, result: Any) -> bool:
     except (TypeError, ValueError):
         return False
     return not str(result.get("stdout") or "").strip() and not str(result.get("stderr") or "").strip()
+
+
+def _successful_program_response(child_calls: list[Any]) -> dict[str, str] | None:
+    for call in reversed(child_calls):
+        if not isinstance(call, dict) or str(call.get("tool_id") or "") != "native.respond":
+            continue
+        if str(call.get("status") or "") != "success":
+            continue
+        result = call.get("result")
+        if not isinstance(result, dict):
+            continue
+        message = str(result.get("message") or "").strip()
+        if message:
+            return {
+                "tool_call_id": str(call.get("tool_call_id") or call.get("call_id") or call.get("id") or "program-response"),
+                "message": message,
+            }
+    return None

@@ -14,6 +14,10 @@ from jinja2 import FileSystemLoader
 from jinja2 import select_autoescape
 
 from alphonse.agent_v2.core.core import CoreMessage
+from alphonse.agent_v2.core.intelligence.acceptance_contract import contract_from_markdown
+from alphonse.agent_v2.core.intelligence.acceptance_contract import normalize_contract
+from alphonse.agent_v2.core.intelligence.acceptance_contract import render_contract
+from alphonse.agent_v2.core.intelligence.acceptance_contract import required_criteria_complete
 
 if TYPE_CHECKING:
     from alphonse.agent_v2.core.messages.queue import QueuedMessage
@@ -41,6 +45,7 @@ class TaskState:
     conversation_history_md: str = EMPTY_MARKDOWN
     plan_json: str = EMPTY_MARKDOWN
     acceptance_criteria_md: str = EMPTY_MARKDOWN
+    acceptance_contract: dict[str, Any] = field(default_factory=dict)
     memory_facts_md: str = EMPTY_MARKDOWN
     updates_md: str = EMPTY_MARKDOWN
     status: str = "running"
@@ -105,6 +110,11 @@ class TaskState:
                 value.get("plan_json") if value.get("plan_json") is not None else value.get("plan_md")
             ),
             acceptance_criteria_md=_markdown_or_default(value.get("acceptance_criteria_md")),
+            acceptance_contract=normalize_contract(
+                value.get("acceptance_contract"),
+                fallback_markdown=_markdown_or_default(value.get("acceptance_criteria_md")),
+                source_message_id=str(value.get("message_id") or ""),
+            ),
             memory_facts_md=_markdown_or_default(value.get("memory_facts_md")),
             updates_md=_markdown_or_default(value.get("updates_md")),
             status=str(value.get("status") or "").strip() or "running",
@@ -136,6 +146,7 @@ class TaskState:
             "conversation_history_md": self.conversation_history_md,
             "plan_json": self.plan_json,
             "acceptance_criteria_md": self.acceptance_criteria_md,
+            "acceptance_contract": dict(self.acceptance_contract or {}),
             "memory_facts_md": self.memory_facts_md,
             "updates_md": self.updates_md,
             "status": self.status,
@@ -153,9 +164,14 @@ class TaskState:
         """Serialize resumable state without duplicating the project memory ledger."""
         checkpoint = self.to_dict()
         checkpoint["conversation_history_md"] = EMPTY_MARKDOWN
+        checkpoint["metadata"] = {
+            key: value
+            for key, value in dict(self.metadata or {}).items()
+            if not str(key).endswith("_prompt")
+        }
         return checkpoint
 
-    def to_markdown_prompt(self, *, include_memory: bool = True) -> str:
+    def to_markdown_prompt(self, *, include_memory: bool = True, include_plan: bool = True) -> str:
         """Render this task state into the markdown prompt container."""
         env = Environment(
             loader=FileSystemLoader(_TEMPLATE_DIR),
@@ -164,7 +180,47 @@ class TaskState:
             lstrip_blocks=True,
         )
         template = env.get_template("task_state_prompt.md.j2")
-        return template.render(task=self, conversation_history_md=self.conversation_history_md if include_memory else EMPTY_MARKDOWN).strip()
+        return template.render(
+            task=self,
+            conversation_history_md=self.conversation_history_md if include_memory else EMPTY_MARKDOWN,
+            operational_plan_json=self.operational_plan_json() if include_plan else EMPTY_MARKDOWN,
+        ).strip()
+
+    def ensure_acceptance_contract(self) -> dict[str, Any]:
+        """Create the structured contract once for legacy Markdown-only tasks."""
+        self.acceptance_contract = normalize_contract(
+            self.acceptance_contract,
+            fallback_markdown=self.acceptance_criteria_md,
+            source_message_id=str(self.message_id or ""),
+        )
+        self.acceptance_criteria_md = render_contract(self.acceptance_contract)
+        return self.acceptance_contract
+
+    def set_acceptance_contract_from_markdown(self, markdown: str) -> None:
+        self.acceptance_contract = contract_from_markdown(markdown, source_message_id=str(self.message_id or ""))
+        self.acceptance_criteria_md = render_contract(self.acceptance_contract)
+
+    def sync_acceptance_criteria_view(self) -> None:
+        self.acceptance_criteria_md = render_contract(self.ensure_acceptance_contract())
+
+    def operational_plan_json(self, *, max_calls: int = 4, max_chars: int = 12_000) -> str:
+        """Return bounded execution evidence for prompts without mutating the audit plan."""
+        calls = _json_list_or_empty(self.plan_json)[-max(1, int(max_calls)):]
+        compact: list[dict[str, Any]] = []
+        for call in calls:
+            if not isinstance(call, dict):
+                continue
+            item = {key: call.get(key) for key in ("id", "tool_id", "tool_name", "internal_state", "execution_mode") if call.get(key) is not None}
+            execution = call.get("execution")
+            if isinstance(execution, dict):
+                item["execution"] = {
+                    "status": execution.get("status"),
+                    "exception": execution.get("exception"),
+                    "result": _bounded_json_value(execution.get("result"), max_chars=4_000),
+                }
+            compact.append(item)
+        rendered = json.dumps(compact, ensure_ascii=False, indent=2, sort_keys=True)
+        return rendered if len(rendered) <= max_chars else rendered[: max_chars - 18].rstrip() + '\n"... truncated"'
 
     def merge_attachments(self, metadata: dict[str, Any]) -> None:
         """Preserve attachment references when same-owner steering or answers arrive."""
@@ -202,8 +258,12 @@ class TaskState:
         return None
 
     def acceptance_criteria_all_complete(self) -> bool:
-        checkbox_states = _acceptance_criteria_checkbox_states(self.acceptance_criteria_md)
-        return bool(checkbox_states) and all(checkbox_states)
+        contract = self.ensure_acceptance_contract()
+        return required_criteria_complete(contract)
+
+    def has_prepared_user_response(self) -> bool:
+        response = self.metadata.get("prepared_user_response")
+        return isinstance(response, dict) and bool(str(response.get("message") or "").strip())
 
     def count_plan_call_exceptions(self) -> int:
         count = 0
@@ -266,6 +326,10 @@ class TaskState:
 
     def append_acceptance_criterion(self, criterion: str) -> None:
         self.acceptance_criteria_md = _append_markdown_line(self.acceptance_criteria_md, criterion)
+        self.acceptance_contract = contract_from_markdown(
+            self.acceptance_criteria_md,
+            source_message_id=str(self.message_id or ""),
+        )
 
     def append_memory_fact(self, fact: str) -> None:
         self.memory_facts_md = _append_markdown_line(self.memory_facts_md, fact)
@@ -286,6 +350,7 @@ class TaskState:
 
     def clear_acceptance_criteria(self) -> None:
         self.acceptance_criteria_md = EMPTY_MARKDOWN
+        self.acceptance_contract = {}
 
     def set_correlation_id(self, correlation_id: str) -> None:
         self.correlation_id = str(correlation_id or "").strip()
@@ -352,6 +417,14 @@ def _json_safe(value: Any) -> Any:
         return json.loads(json.dumps(value))
     except (TypeError, ValueError):
         return str(value)
+
+
+def _bounded_json_value(value: Any, *, max_chars: int) -> Any:
+    safe = _json_safe(value)
+    rendered = json.dumps(safe, ensure_ascii=False, sort_keys=True)
+    if len(rendered) <= max_chars:
+        return safe
+    return rendered[: max(1, max_chars - 18)].rstrip() + "... [truncated]"
 
 
 def _exception_payload(exception: Any) -> str:

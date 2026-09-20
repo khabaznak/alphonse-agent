@@ -84,16 +84,30 @@ def test_pdca_processor_snapshot_includes_planned_tool_call_when_present(monkeyp
 
 
 def test_pdca_processor_snapshot_includes_final_act_outcome(monkeypatch) -> None:
-    monkeypatch.setattr(
-        plan_node_module,
-        "_call_tool_planning_llm",
-        lambda prompt: {
-            "id": "plan-call-1",
+    call_index = {"value": 0}
+
+    def next_call(prompt: str) -> dict[str, object]:
+        call_index["value"] += 1
+        if "pending_user_response" in prompt:
+            return {
+                "id": f"respond-{call_index['value']}",
+                "tool_id": "native.respond",
+                "tool_name": "respond",
+                "arguments": {"message": "The file is ready."},
+                "internal_state": "Preparing the requester-facing response.",
+            }
+        return {
+            "id": f"plan-call-{call_index['value']}",
             "tool_id": "tool-1",
             "tool_name": "write_file",
             "arguments": {"path": "a.txt"},
             "internal_state": "Writing the requested file.",
-        },
+        }
+
+    monkeypatch.setattr(
+        plan_node_module,
+        "_call_tool_planning_llm",
+        next_call,
     )
     monkeypatch.setattr(check_node_module, "_call_criteria_review_llm", lambda prompt: "1.- [x] File exists")
     task = TaskState(
@@ -111,7 +125,7 @@ def test_pdca_processor_snapshot_includes_final_act_outcome(monkeypatch) -> None
     assert result.snapshot.metadata["status"] == "completed"
     assert result.snapshot.metadata["outcome"] == {
         "status": "success",
-        "reason": "All acceptance criteria are complete.",
+        "reason": "All acceptance criteria are complete and a user response is prepared.",
     }
     assert result.snapshot.metadata["act_route"] == "end"
 
@@ -144,11 +158,17 @@ class _ToolRegistry:
                 kind=ToolKind.NATIVE,
                 description="Writes a file",
             ),
+            ToolDescriptor(
+                tool_id="native.respond",
+                name="respond",
+                kind=ToolKind.NATIVE,
+                description="Prepares a user-facing response",
+            ),
         )
 
-    def execute(self, tool_id: str, arguments: dict[str, object]) -> dict[str, bool]:
+    def execute(self, tool_id: str, arguments: dict[str, object]) -> dict[str, object]:
         self.calls.append((tool_id, dict(arguments)))
-        return {"ok": True}
+        return {"message": str(arguments.get("message") or "Done.")} if tool_id == "native.respond" else {"ok": True}
 
 
 class _NullPrompts:

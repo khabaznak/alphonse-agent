@@ -37,7 +37,7 @@
 {{ task.facts_md or "- (none)" }}
 
 # Plan JSON
-{{ task.plan_json or "- (none)" }}
+{{ operational_plan_json | default(task.plan_json, true) or "- (none)" }}
 
 # Required User Confirmation
 {% set pending_confirmation = task.metadata.get("pending_silent_bash_confirmation") if task.metadata else none %}
@@ -46,6 +46,15 @@
 - Completed Bash action: {{ pending_confirmation.get("internal_state", "") or pending_confirmation.get("command", "") }}
 {% else %}
 - (none)
+{% endif %}
+
+# Required User Response
+{% if task.metadata.get("pending_user_response") %}
+- The requested work is otherwise complete, but the task cannot finish until `native.respond` prepares a concise answer for the requester.
+{% elif task.metadata.get("prepared_user_response") %}
+- A user-facing response has been prepared.
+{% else %}
+- No user-facing response has been prepared yet.
 {% endif %}
 
 # Acceptance Criteria

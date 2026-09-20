@@ -44,7 +44,21 @@ def test_check_node_uses_codex_provider_for_criteria_review(monkeypatch) -> None
 
     def fake_run(command, **kwargs):
         captured["input"] = kwargs["input"]
-        return SimpleNamespace(returncode=0, stdout="1.- [x] File exists", stderr="")
+        return SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps(
+                {
+                    "updates": [
+                        {
+                            "criterion_id": "ac-1",
+                            "status": "satisfied",
+                            "evidence_refs": ["tool-call:plan-call-1"],
+                        }
+                    ]
+                }
+            ),
+            stderr="",
+        )
 
     monkeypatch.setattr("alphonse.agent_v2.core.inference.openai_codex.shutil.which", lambda _bin: "/bin/codex")
     monkeypatch.setattr("alphonse.agent_v2.core.inference.openai_codex.subprocess.run", fake_run)

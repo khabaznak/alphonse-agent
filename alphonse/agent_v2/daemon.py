@@ -2032,7 +2032,13 @@ class V2Daemon:
         task_state = metadata.get("task_state") if isinstance(metadata, dict) else None
         task_id = str(task_state.get("task_id") or "").strip() if isinstance(task_state, dict) else ""
         if task_id:
-            self.runtime.question_store.mark_task_checkpoint_terminal(task_id, status=status)
+            from alphonse.agent_v2.core.intelligence.task_state import TaskState
+
+            # Persist the final serialized state, not only the checkpoint status
+            # column. This prevents a terminal row from containing stale running
+            # criteria and outcome data after a resumed task.
+            final_task = TaskState.from_dict(task_state)
+            self.runtime.question_store.save_task_checkpoint(final_task, status=status)
 
     def _close_terminal_task_progress(self, snapshot: Any) -> None:
         """Close Desktop progress cards even when CAPD produces no outbound reply."""

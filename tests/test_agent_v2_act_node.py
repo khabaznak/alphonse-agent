@@ -40,10 +40,9 @@ def test_act_node_steer_verdict_prompt_includes_existing_acceptance_criteria() -
 
     act_node(task)
 
-    prompt = task.metadata["acceptance_criteria_prompt"]
-    assert "steer" in prompt
-    assert "Gaby answered." in prompt
-    assert "1.- [ ] Alex has confirmation from Gaby if she wanted coffee" in prompt
+    prompt = task.metadata["acceptance_criteria_amendment_prompt"]
+    assert "immutable acceptance contract" in prompt
+    assert "Alex has confirmation from Gaby if she wanted coffee" in prompt
 
 
 def test_act_node_does_not_mutate_acceptance_criteria() -> None:
@@ -123,17 +122,30 @@ def test_act_node_routes_wip_with_acceptance_criteria_to_plan_before_cycle_limit
     assert "routed work-in-progress task back to Plan" in task.updates_md
 
 
-def test_act_node_wip_with_completed_acceptance_criteria_routes_success_to_end() -> None:
+def test_act_node_wip_with_completed_acceptance_criteria_requires_user_response() -> None:
     task = TaskState(goal="Continue task", check_verdict="wip", acceptance_criteria_md="1.- [x] Done")
+
+    act_node(task)
+
+    assert task.check_verdict == "wip"
+    assert task.status == "running"
+    assert task.metadata["act_route"] == "plan"
+    assert task.metadata["pending_user_response"] is True
+
+
+def test_act_node_completes_only_after_user_response_is_prepared() -> None:
+    task = TaskState(
+        goal="Continue task",
+        check_verdict="wip",
+        acceptance_criteria_md="1.- [x] Done",
+        metadata={"prepared_user_response": {"tool_call_id": "respond-1", "message": "Done."}},
+    )
 
     act_node(task)
 
     assert task.check_verdict == "mission_success"
     assert task.status == "completed"
-    assert task.outcome == {"status": "success", "reason": "All acceptance criteria are complete."}
     assert task.metadata["act_route"] == "end"
-    assert task.metadata["act_terminal_decision"] == "mission_success"
-    assert "mission success" in task.updates_md
 
 
 def test_act_node_does_not_complete_until_silent_bash_confirmation_is_sent() -> None:
@@ -203,13 +215,17 @@ def test_act_node_wip_repeated_tool_exceptions_route_failed_to_end() -> None:
     assert "3 exceptions" in task.outcome["reason"]
 
 
-def test_act_node_wip_terminal_success_overrides_temporary_cycle_limit() -> None:
+def test_act_node_wip_terminal_success_with_response_overrides_temporary_cycle_limit() -> None:
     task = TaskState(
         goal="Continue task",
         check_verdict="wip",
         acceptance_criteria_md="1.- [x] Done",
         pdca_cycle_count=10,
-        metadata={"do_executed_since_last_act": True, "tool_call_planning_llm_stubbed": True},
+        metadata={
+            "do_executed_since_last_act": True,
+            "tool_call_planning_llm_stubbed": True,
+            "prepared_user_response": {"tool_call_id": "respond-1", "message": "Done."},
+        },
     )
 
     act_node(task)
