@@ -14,6 +14,10 @@ from alphonse.agent_v2.core.intelligence.v3.contracts import TacticalAction
 from alphonse.agent_v2.core.intelligence.v3.contracts import TacticalState
 from alphonse.agent_v2.core.intelligence.v3.contracts import new_tactical_state
 from alphonse.agent_v2.core.intelligence.v3.executor import PhaseExecutor
+from alphonse.agent_v2.core.intelligence.v3.revealing import Capability
+from alphonse.agent_v2.core.intelligence.v3.revealing import ToolRevealDecision
+from alphonse.agent_v2.core.intelligence.v3.revealing import ToolRevealPolicy
+from alphonse.agent_v2.core.intelligence.v3.revealing import ToolRevealResult
 
 __all__ = [
     "CompletionCondition",
@@ -30,4 +34,8 @@ __all__ = [
     "TacticalState",
     "new_tactical_state",
     "PhaseExecutor",
+    "Capability",
+    "ToolRevealDecision",
+    "ToolRevealPolicy",
+    "ToolRevealResult",
 ]

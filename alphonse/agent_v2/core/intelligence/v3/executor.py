@@ -16,6 +16,7 @@ from alphonse.agent_v2.core.intelligence.v3.contracts import PhaseSubgoal
 from alphonse.agent_v2.core.intelligence.v3.contracts import SideEffectClass
 from alphonse.agent_v2.core.intelligence.v3.contracts import TacticalAction
 from alphonse.agent_v2.core.intelligence.v3.contracts import TacticalState
+from alphonse.agent_v2.core.intelligence.v3.revealing import ToolRevealPolicy
 from alphonse.agent_v2.core.messages.queue import MessageSelector
 from alphonse.agent_v2.core.tools.invocation import ToolInvocationService
 
@@ -29,8 +30,9 @@ ActionSelector = Callable[[TacticalState, PhaseSubgoal, tuple["ToolDescriptor", 
 class PhaseExecutor:
     """Run tactical actions until a phase reaches a bounded outcome."""
 
-    def __init__(self, *, action_selector: ActionSelector | None = None) -> None:
+    def __init__(self, *, action_selector: ActionSelector | None = None, reveal_policy: ToolRevealPolicy | None = None) -> None:
         self._action_selector = action_selector
+        self._reveal_policy = reveal_policy
 
     def run(self, task: "TaskState", state: TacticalState, context: "CoreLoopContext") -> PhaseOutcome:
         if state.status == PhaseStatus.PLANNED:
@@ -48,7 +50,7 @@ class PhaseExecutor:
                 self._checkpoint(task, state)
                 return interruption
             subgoal = self._active_subgoal(state)
-            tools = self._revealed_tools(state, context)
+            tools = self._revealed_tools(task, state, subgoal, context)
             selected = self._select_action(task, state, subgoal, tools, context)
             if selected is None:
                 state.transition(PhaseStatus.BLOCKED)
@@ -172,11 +174,27 @@ class PhaseExecutor:
         )
         return dict(result.json_value) if isinstance(result.json_value, dict) else None
 
-    @staticmethod
-    def _revealed_tools(state: TacticalState, context: "CoreLoopContext") -> tuple["ToolDescriptor", ...]:
+    def _revealed_tools(
+        self, task: "TaskState", state: TacticalState, subgoal: PhaseSubgoal, context: "CoreLoopContext"
+    ) -> tuple["ToolDescriptor", ...]:
         if context.tools is None:
             return ()
         available = tuple(context.tools.list())
+        if self._reveal_policy is not None and not state.revealed_tool_ids:
+            reveal = self._reveal_policy.reveal(task, state, subgoal, available)
+            state.revealed_capabilities = [item["capability"] for item in reveal.catalog]
+            state.revealed_tool_ids = [item.tool_id for item in reveal.tools]
+            context.emit_ui_event(
+                "tactical_tools_revealed",
+                {
+                    "phase_id": state.phase.phase_id,
+                    "subgoal_id": subgoal.subgoal_id,
+                    "capabilities": list(state.revealed_capabilities),
+                    "tool_ids": list(state.revealed_tool_ids),
+                    "decisions": [item.__dict__ for item in reveal.decisions],
+                },
+            )
+            return reveal.tools
         allowed_ids = set(state.revealed_tool_ids)
         if not allowed_ids:
             # Stage 2 compatibility: use a fixed shortlist chosen by the caller/phase.

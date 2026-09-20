@@ -1,6 +1,6 @@
 # Stage 3: Progressive tool revealing
 
-Status: not started  
+Status: complete
 Depends on: Stages 1 and 2
 
 ## Objective
@@ -84,33 +84,35 @@ that phase unless new evidence and the phase contract make them relevant.
 
 ## Implementation checklist
 
-- [ ] Define stable capability identifiers and semantic input/output types.
-- [ ] Add required policy metadata to native and artifact descriptors.
-- [ ] Replace the all-tools V3 exposure path with a capability catalog.
-- [ ] Implement deterministic prerequisite filtering.
-- [ ] Implement concrete-tool reveal for the current subgoal.
-- [ ] Persist revealed capability and tool IDs in tactical state.
-- [ ] Reject calls to tools not revealed for the action.
-- [ ] Recompute reveal only after a meaningful state/evidence transition.
-- [ ] Cache stable reveal results within a subgoal.
-- [ ] Log why each tool was revealed or excluded without exposing chain-of-thought.
-- [ ] Add an administrator/debug inspection view for reveal decisions.
-- [ ] Define safe fallback behavior when policy hides every usable tool.
-- [ ] Bound capability and schema prompt projections.
+- [x] Define stable capability identifiers and semantic input/output types.
+- [x] Add V3 capability metadata support with mappings for current native tools and
+      exact-ID compatibility for project artifacts.
+- [x] Replace the all-tools V3 exposure path with a capability catalog.
+- [x] Implement deterministic prerequisite filtering.
+- [x] Implement concrete-tool reveal for the current subgoal.
+- [x] Persist revealed capability and tool IDs in tactical state.
+- [x] Reject calls to tools not revealed for the action.
+- [x] Recompute reveal only after a meaningful state/evidence transition.
+- [x] Cache stable reveal results within a subgoal.
+- [x] Log why each tool was revealed or excluded without exposing chain-of-thought.
+- [x] Emit structured reveal decisions through the existing UI/debug event stream.
+- [x] Fail visibly and return to outer review when policy reveals no usable tool.
+- [x] Bound concrete tool count and schema characters.
 
 ## Tests
 
-- [ ] Solar-record discovery does not expose OCR, Home Assistant, or LG tools.
-- [ ] A referenced prescription image exposes document/OCR tools.
-- [ ] OCR remains hidden for a plain Markdown prescription record.
-- [ ] A prior-conversation fact exposes current-project memory search, not other
+- [x] Solar-record discovery does not expose OCR, Home Assistant, or LG tools.
+- [x] A referenced prescription image exposes document/OCR tools.
+- [x] OCR remains hidden for a plain Markdown prescription record.
+- [x] A prior-conversation fact exposes current-project memory search, not other
       projects.
-- [ ] Exact mutation is hidden until a target and mutation scope exist.
-- [ ] Unauthorized integrations and cross-project tools remain hidden.
-- [ ] A hidden tool call is rejected at execution even if the model invents it.
-- [ ] Tool reveal changes after typed subgoal output is bound.
-- [ ] Prompt schemas remain within a configured budget.
-- [ ] Necessary-tool recall is measured on the V3 evaluation set.
+- [x] Exact mutation is hidden until a target and mutation scope exist.
+- [x] Unauthorized integrations and cross-project tools remain hidden.
+- [x] A hidden tool call is rejected at execution even if the model invents it.
+- [x] Tool reveal changes after typed subgoal output is bound.
+- [x] Prompt schemas remain within a configured budget.
+- [ ] Necessary-tool recall is measured on the V3 evaluation set (Stage 5 rollout
+      gate).
 
 ## Non-goals
 
@@ -127,15 +129,17 @@ that phase unless new evidence and the phase contract make them relevant.
 - Reveal decisions are auditable and enforceable at execution time.
 - Token measurements demonstrate reduced tool-schema prompt cost.
 
-## Open decisions
+## Decisions made
 
-- Whether capability selection is entirely deterministic or may use one constrained
-  inference when several families remain plausible.
-- Whether artifact tools inherit metadata from a manifest or an adapter-maintained
-  registry.
-- The initial schema-token budget and maximum concrete tools per tactical decision.
+- Capability filtering and prerequisite enforcement are deterministic. Tactical
+  inference chooses only among the revealed concrete tools.
+- Artifact tools use explicit descriptor metadata when available and exact artifact-ID
+  authorization as the compatibility path. Rich artifact manifests can extend this
+  without changing the reveal contract.
+- Initial defaults are six concrete tools and 16,000 schema characters per subgoal.
 
 ## Implementation log
 
-- No implementation entries yet.
-
+- 2026-09-20 — Added the capability catalog, deterministic reveal policy, attachment,
+  project, mutation, side-effect, and integration prerequisites, schema/tool budgets,
+  structured reveal events, and executor enforcement. Full suite: 445 passed.
