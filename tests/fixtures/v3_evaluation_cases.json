@@ -7,7 +7,8 @@
       "expected_phase_shape": ["locate", "update", "verify"],
       "required_capabilities": ["project_record_search", "exact_text_mutation"],
       "forbidden_capabilities": ["attachment_analysis", "home_automation", "device_control"],
-      "allowed_effects": ["mejoras_hogar/backlog.md"]
+      "allowed_effects": ["mejoras_hogar/backlog.md"],
+      "fixture": {"files": {"mejoras_hogar/backlog.md": "Solar: open\n"}}
     },
     {
       "id": "lg-temperature-native-client",
@@ -35,7 +36,8 @@
       "goal": "Read medicine names from the existing Receta markdown record",
       "required_capabilities": ["project_record_search"],
       "forbidden_capabilities": ["attachment_analysis"],
-      "allowed_effects": []
+      "allowed_effects": [],
+      "fixture": {"files": {"Receta.md": "Medicine: amoxicillin\n"}}
     },
     {
       "id": "tool-failure-local-fallback",
@@ -58,7 +60,10 @@
     {
       "id": "restart-mid-phase",
       "goal": "Resume after locating a record without repeating a completed write",
-      "expected_property": "checkpointed action idempotency"
+      "expected_property": "checkpointed action idempotency",
+      "required_capabilities": ["exact_text_mutation", "project_record_search"],
+      "allowed_effects": ["records/item.md"],
+      "fixture": {"files": {"records/item.md": "Status: open\n"}}
     }
   ]
 }

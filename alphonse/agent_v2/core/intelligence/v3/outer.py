@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Any
 from alphonse.agent_v2.core.core import ImprovementPhase
 from alphonse.agent_v2.core.inference import InferencePurpose, InferenceRequest
 from alphonse.agent_v2.core.intelligence.acceptance_contract import apply_status_patch
-from alphonse.agent_v2.core.intelligence.v3.contracts import PhaseOutcome, PhaseStatus, TacticalState
+from alphonse.agent_v2.core.intelligence.v3.contracts import PhaseOutcome, PhaseStatus, SideEffectClass, TacticalState
 
 if TYPE_CHECKING:
     from alphonse.agent_v2.core.core import CoreLoopContext
@@ -242,6 +242,7 @@ def _successful_evidence_refs(state: TacticalState) -> tuple[str, ...]:
 
 def _invariant_violations(state: TacticalState) -> list[str]:
     allowed_paths = set(state.phase.mutation_scope.allowed_paths)
+    subgoals = {item.subgoal_id: item for item in state.phase.subgoals}
     violations: list[str] = []
     for entry in state.evidence.entries:
         result = entry.get("result")
@@ -249,9 +250,17 @@ def _invariant_violations(state: TacticalState) -> list[str]:
             continue
         affected = result.get("affected_paths")
         if isinstance(affected, list):
-            unauthorized = [str(path) for path in affected if str(path) not in allowed_paths]
-            if unauthorized:
-                violations.append(f"unauthorized_affected_paths:{','.join(unauthorized)}")
+            subgoal = subgoals.get(str(entry.get("subgoal_id") or ""))
+            effects = set(subgoal.allowed_side_effects) if subgoal is not None else set()
+            if SideEffectClass.PROJECT_MUTATION in effects:
+                unauthorized = [str(path) for path in affected if str(path) not in allowed_paths]
+                if unauthorized:
+                    violations.append(f"unauthorized_affected_paths:{','.join(unauthorized)}")
+            elif effects & {SideEffectClass.EXTERNAL_REVERSIBLE, SideEffectClass.EXTERNAL_IRREVERSIBLE}:
+                if not state.phase.mutation_scope.allow_external_effects:
+                    violations.append(f"external_effect_not_authorized:{entry.get('evidence_ref') or '(unknown)'}")
+            else:
+                violations.append(f"affected_paths_without_side_effect_authorization:{entry.get('evidence_ref') or '(unknown)'}")
         verification = result.get("verification")
         if isinstance(verification, dict) and verification.get("status") not in {None, "verified"}:
             violations.append(f"verification_not_verified:{entry.get('evidence_ref') or '(unknown)'}")

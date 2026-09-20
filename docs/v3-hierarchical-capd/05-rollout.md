@@ -78,6 +78,9 @@ results and a concise human review report.
 
 ### Gate A: developer opt-in
 
+Status: passed on 2026-09-20 for developer opt-in only. See
+[`evidence/2026-09-20-gate-a/`](evidence/2026-09-20-gate-a/README.md).
+
 - Unit and integration suites pass.
 - Checkpoint/resume and cancellation pass fault injection.
 - No unauthorized mutation in the evaluation corpus.
@@ -165,7 +168,14 @@ results and a concise human review report.
   and a fixture-isolated V2/V3 replay harness. The harness enforces corpus capability,
   question, outcome, and effect constraints and emits `v3-comparison.json` plus
   `v3-comparison.md`. It deliberately requires explicit engine adapters so evaluation
-  cannot accidentally run against live projects. Gate A has not yet been claimed.
+  cannot accidentally run against live projects. At that point, Gate A had not yet
+  been claimed.
+- 2026-09-20 — Added deterministic adapters that run the real V2 and V3 processors
+  against isolated fixtures. Fixed the external-effect/project-path invariant exposed
+  by the medical-artifact replay. Full suite: 463 passed. Both engines passed all nine
+  replay cases; V3 used 48 versus 54 inference calls, 15 versus 23 tool calls, and
+  30,724 versus 101,127 estimated tokens. Gate A is approved for developer opt-in;
+  Gate B shadow planning remains next.
 
 ## Running an offline comparison
 
@@ -182,10 +192,10 @@ effects, questions, outcomes, and metadata. Run a comparison with:
 python -m alphonse.agent_v2.evaluation.replay \
   --corpus tests/fixtures/v3_evaluation_cases.json \
   --output-dir build/v3-evaluation \
-  --v2-runner evaluation_adapters:v2_runner \
-  --v3-runner evaluation_adapters:v3_runner
+  --v2-runner alphonse.agent_v2.evaluation.deterministic_adapters:v2_runner \
+  --v3-runner alphonse.agent_v2.evaluation.deterministic_adapters:v3_runner
 ```
 
 The checked-in harness never enables V3 in persistent settings and never points an
-adapter at a real project. Creating the concrete deterministic V2/V3 adapters and
-capturing the first dated Gate A report are the next evaluation tasks.
+adapter at a real project. The next evaluation task is Gate B shadow planning with all
+side effects disabled.

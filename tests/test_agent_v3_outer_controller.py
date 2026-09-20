@@ -12,6 +12,7 @@ from alphonse.agent_v2.core.intelligence.v3 import PhaseReviewStatus
 from alphonse.agent_v2.core.intelligence.v3 import PhaseStatus
 from alphonse.agent_v2.core.intelligence.v3 import PhaseSubgoal
 from alphonse.agent_v2.core.intelligence.v3 import StrategicAction
+from alphonse.agent_v2.core.intelligence.v3 import SideEffectClass
 from alphonse.agent_v2.core.intelligence.v3 import V3OuterController
 from alphonse.agent_v2.core.intelligence.v3 import new_tactical_state
 from alphonse.agent_v2.core.messages import InMemoryMessageQueue
@@ -23,6 +24,7 @@ def _phase():
         (PhaseSubgoal(
             "update", "Update", "verified_mutation",
             allowed_capabilities=("exact_text_mutation",),
+            allowed_side_effects=(SideEffectClass.PROJECT_MUTATION,),
             completion=CompletionCondition("field_equals", field="verification.status", expected="verified"),
         ),),
         criterion_ids=("ac-1",),
@@ -38,6 +40,7 @@ def _completed_state(*, affected_path="backlog.md"):
     state.completed_subgoal_ids = ["update"]
     state.evidence.append({
         "evidence_ref": "tactical-action:edit",
+        "subgoal_id": "update",
         "status": "success",
         "result": {
             "affected_paths": [affected_path],
@@ -118,6 +121,36 @@ def test_scope_violation_prevents_completion_without_model_review() -> None:
     assert decision.action == StrategicAction.REPLAN
     assert task.metadata["v3_route"] == "strategic_replan"
     assert provider.requests == []
+
+
+def test_authorized_external_effect_is_not_treated_as_project_path_mutation() -> None:
+    phase = PhasePlan(
+        "medical", "Record medical event",
+        (PhaseSubgoal(
+            "record", "Record", "artifact_result",
+            allowed_capabilities=("project_artifact_query",),
+            allowed_side_effects=(SideEffectClass.EXTERNAL_REVERSIBLE,),
+        ),),
+        criterion_ids=("ac-1",),
+        authorized_capabilities=("project_artifact_query",),
+        mutation_scope=MutationScope((), allow_external_effects=True),
+    )
+    state = new_tactical_state(phase)
+    state.status = PhaseStatus.PHASE_COMPLETE
+    state.completed_subgoal_ids = ["record"]
+    state.evidence.append({
+        "evidence_ref": "tactical-action:edit", "subgoal_id": "record", "status": "success",
+        "result": {"affected_paths": ["resolved medical artifact"], "recorded": True},
+    })
+    task = _task()
+    context, _ = _context()
+
+    review, decision = V3OuterController().review_and_route(
+        task, state, PhaseOutcome("medical", PhaseStatus.PHASE_COMPLETE), context,
+    )
+
+    assert review.status == PhaseReviewStatus.PHASE_VERIFIED_TASK_COMPLETE
+    assert decision.action == StrategicAction.COMPLETE
 
 
 def test_blocked_phase_routes_to_strategic_replan_and_keeps_failure_visible() -> None:
