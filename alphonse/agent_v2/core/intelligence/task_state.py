@@ -57,6 +57,9 @@ class TaskState:
     evidence_journal: list[dict[str, Any]] = field(default_factory=list)
     check_new_message_count: int = 0
     pdca_cycle_count: int = 0
+    intelligence_engine: str = "tactical_v2"
+    intelligence_schema_version: int = 2
+    hierarchical_state: dict[str, Any] = field(default_factory=dict)
     metadata: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
@@ -129,6 +132,9 @@ class TaskState:
             evidence_journal=[dict(item) for item in value.get("evidence_journal") or [] if isinstance(item, dict)],
             check_new_message_count=max(0, _coerce_int(value.get("check_new_message_count"))),
             pdca_cycle_count=max(0, _coerce_int(value.get("pdca_cycle_count"))),
+            intelligence_engine=str(value.get("intelligence_engine") or "tactical_v2").strip(),
+            intelligence_schema_version=max(1, _coerce_int(value.get("intelligence_schema_version") or 2)),
+            hierarchical_state=dict(value.get("hierarchical_state")) if isinstance(value.get("hierarchical_state"), dict) else {},
             metadata=dict(value.get("metadata")) if isinstance(value.get("metadata"), dict) else {},
         )
 
@@ -160,6 +166,9 @@ class TaskState:
             "evidence_journal": [dict(item) for item in self.evidence_journal],
             "check_new_message_count": self.check_new_message_count,
             "pdca_cycle_count": self.pdca_cycle_count,
+            "intelligence_engine": self.intelligence_engine,
+            "intelligence_schema_version": self.intelligence_schema_version,
+            "hierarchical_state": dict(self.hierarchical_state),
             "metadata": dict(self.metadata or {}),
         }
 

@@ -1,6 +1,6 @@
 # Stage 1: Phase contracts and persisted state
 
-Status: not started  
+Status: complete
 Depends on: current V2 acceptance contracts and task checkpointing
 
 ## Objective
@@ -89,33 +89,34 @@ Terminal states must be explicit. Invalid transitions must fail closed.
 
 ## Implementation checklist
 
-- [ ] Choose package location for the V3 intelligence engine without duplicating V2
+- [x] Choose package location for the V3 intelligence engine without duplicating V2
       infrastructure.
-- [ ] Define versioned phase and tactical-state schemas.
-- [ ] Define stable enums for statuses, failure policies, and side-effect classes.
-- [ ] Add validation for duplicate IDs, missing dependencies, dependency cycles,
+- [x] Define versioned phase and tactical-state schemas.
+- [x] Define stable enums for statuses, failure policies, and side-effect classes.
+- [x] Add validation for duplicate IDs, missing dependencies, dependency cycles,
       negative budgets, and invalid mutation scopes.
-- [ ] Add JSON-safe serialization and restoration.
-- [ ] Add a bounded prompt projection separate from the full audit representation.
-- [ ] Add V3 fields to task checkpoints behind an explicit engine/schema version.
-- [ ] Define how immutable acceptance-criterion IDs are referenced by a phase.
-- [ ] Define how subgoal outputs are typed and bound for dependent actions.
-- [ ] Define how cumulative V2 evidence is imported into a new V3 phase.
-- [ ] Add a compatibility adapter for a legacy one-call plan where appropriate.
-- [ ] Add structured logging fields for phase ID, subgoal ID, action ID, and budgets.
-- [ ] Keep the V2 planner and executor unchanged by default.
+- [x] Add JSON-safe serialization and restoration.
+- [x] Add a bounded prompt projection separate from the full audit representation.
+- [x] Add V3 fields to task checkpoints behind an explicit engine/schema version.
+- [x] Define how immutable acceptance-criterion IDs are referenced by a phase.
+- [x] Define how subgoal outputs are typed and bound for dependent actions.
+- [x] Define how cumulative V2 evidence is imported into a new V3 phase.
+- [x] Add a compatibility adapter for a legacy one-call plan where appropriate.
+- [x] Add structured logging fields for phase ID, subgoal ID, action ID, and budgets.
+- [x] Keep the V2 planner and executor unchanged by default.
 
 ## Tests
 
-- [ ] Round-trip every V3 state model through JSON/checkpoint persistence.
-- [ ] Reject invalid subgoal dependency graphs.
-- [ ] Reject mutation scopes outside the authorized project.
-- [ ] Verify state-transition rules and terminal-state immutability.
-- [ ] Verify budget decrement and deadline restoration after restart.
-- [ ] Verify full evidence remains append-only while prompt projection is bounded.
-- [ ] Verify steering metadata survives checkpoint restoration.
-- [ ] Verify a legacy one-call plan maps only to a one-subgoal compatibility phase.
-- [ ] Verify old V2 checkpoints still load unchanged.
+- [x] Round-trip every V3 state model through JSON/checkpoint persistence.
+- [x] Reject invalid subgoal dependency graphs.
+- [x] Reject unsafe absolute or parent-traversing mutation paths; runtime project-root
+      authorization remains an executor responsibility.
+- [x] Verify state-transition rules and terminal-state immutability.
+- [x] Verify budget decrement and deadline restoration after restart.
+- [x] Verify full evidence remains append-only while prompt projection is bounded.
+- [x] Verify steering metadata survives checkpoint restoration.
+- [x] Verify a legacy one-call plan maps only to a one-subgoal compatibility phase.
+- [x] Verify old V2 checkpoints still load unchanged.
 
 ## Non-goals
 
@@ -133,15 +134,17 @@ Terminal states must be explicit. Invalid transitions must fail closed.
 - A code review can answer exactly what is strategic state, tactical state, evidence,
   and authorization state.
 
-## Open decisions
+## Decisions made
 
-- Dataclasses versus a dedicated validation library.
-- Whether deadlines persist as absolute timestamps or remaining duration plus restart
-  policy.
-- Whether subgoal output types use a fixed enum, JSON Schema, or both.
-- Whether an active V2 task may opt into V3 or must finish on its original engine.
+- Use dependency-free dataclasses with explicit validation and serialization.
+- Persist deadlines as timezone-aware absolute timestamps.
+- Use stable semantic output-type identifiers with explicit typed binding; introduce
+  JSON Schema later only where a tool family needs field-level validation.
+- Stamp the engine on task state; active V2 tasks remain V2 unless a future explicit,
+  tested migration is requested.
 
 ## Implementation log
 
-- No implementation entries yet.
-
+- 2026-09-20 — Added `intelligence/v3` contracts, V3 fields in `TaskState`, legacy
+  one-call adaptation, absolute phase deadlines, typed bindings, bounded projections,
+  and contract/checkpoint tests. Full suite: 428 passed.
