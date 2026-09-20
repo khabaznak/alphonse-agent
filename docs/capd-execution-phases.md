@@ -1,5 +1,9 @@
 # CAPD execution phases
 
+> This document describes the current V2 execution model. The proposed hierarchical
+> V3 design and staged implementation plans begin at
+> [`docs/v3-hierarchical-capd/README.md`](v3-hierarchical-capd/README.md).
+
 ## Implemented prompt contract
 
 Plan selects one bounded execution phase: either one direct tool call or a Python
