@@ -215,6 +215,7 @@ class CoreLoopContext:
     program_runner: Any | None = None
     cancellation_checker: Callable[[], bool] | None = None
     telemetry_sink: Callable[[dict[str, Any]], None] | None = None
+    system_one: Any | None = None
     consumed_message_ids: list[str] = field(default_factory=list)
 
     def consume_message(self, selector: MessageSelector | None = None) -> QueuedMessage | None:
@@ -419,6 +420,7 @@ class AlphonseCore:
     activity_sink: Callable[[CoreActivityEvent], None] | None = None
     ui_event_sink: Callable[[CoreUiEvent], None] | None = None
     telemetry_sink: Callable[[dict[str, Any]], None] | None = None
+    system_one: Any | None = None
     question_store: Any | None = None
     project_store: Any | None = None
     schedule_store: Any | None = None
@@ -502,6 +504,7 @@ class AlphonseCore:
                 activity_sink=_task_activity_sink,
                 ui_event_sink=self.ui_event_sink,
                 telemetry_sink=self.telemetry_sink,
+                system_one=self.system_one,
                 question_store=self.question_store,
                 project_store=self.project_store,
                 schedule_store=self.schedule_store,

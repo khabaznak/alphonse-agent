@@ -16,6 +16,7 @@ from alphonse.agent_v2.core.intelligence.v3 import SideEffectClass
 from alphonse.agent_v2.core.intelligence.v3 import V3OuterController
 from alphonse.agent_v2.core.intelligence.v3 import new_tactical_state
 from alphonse.agent_v2.core.messages import InMemoryMessageQueue
+from alphonse.agent_v2.system_one import SystemOneReviewResult
 
 
 def _phase():
@@ -199,3 +200,49 @@ def test_final_response_fallback_is_generated_without_inference() -> None:
     assert decision.action == StrategicAction.COMPLETE
     assert review.status == PhaseReviewStatus.PHASE_VERIFIED_TASK_COMPLETE
     assert "quedó verificado" in task.metadata["prepared_user_response"]["message"]
+
+
+class _SystemOne:
+    def __init__(self, result=None, error=None):
+        self.result = result
+        self.error = error
+
+    def evaluate(self, **_values):
+        if self.error:
+            raise self.error
+        return self.result
+
+
+def test_system_one_check_and_act_can_conservatively_withhold_completion() -> None:
+    task = _task()
+    state = _completed_state()
+    context, provider = _context()
+    context.system_one = _SystemOne(SystemOneReviewResult(
+        updates=({"criterion_id": "ac-1", "status": "satisfied", "evidence_refs": ["tactical-action:edit"]},),
+        ambiguous_criterion_ids=(), recommended_route="replan", route_confidence=0.92, route_confident=True,
+    ))
+
+    review, decision = V3OuterController().review_and_route(
+        task, state, PhaseOutcome("solar", PhaseStatus.PHASE_COMPLETE), context,
+    )
+
+    assert review.status == PhaseReviewStatus.PHASE_VERIFIED_TASK_COMPLETE
+    assert decision.action == StrategicAction.REPLAN
+    assert task.metadata["v3_route"] == "strategic_replan"
+    assert task.metadata["system_one_review"]["status"] == "used"
+    assert provider.requests == []
+
+
+def test_system_one_failure_falls_back_to_existing_phase_review() -> None:
+    task = _task()
+    context, provider = _context()
+    context.system_one = _SystemOne(error=RuntimeError("unavailable"))
+
+    review, decision = V3OuterController().review_and_route(
+        task, _completed_state(), PhaseOutcome("solar", PhaseStatus.PHASE_COMPLETE), context,
+    )
+
+    assert review.status == PhaseReviewStatus.PHASE_VERIFIED_TASK_COMPLETE
+    assert decision.action == StrategicAction.COMPLETE
+    assert task.metadata["system_one_review"]["status"] == "fallback"
+    assert [item.purpose for item in provider.requests] == [InferencePurpose.PHASE_REVIEW, InferencePurpose.FINAL_RESPONSE]

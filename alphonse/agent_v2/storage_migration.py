@@ -74,6 +74,7 @@ def initialize_unified_schema(target: str | Path) -> None:
     from alphonse.agent_v2.services.project_sessions import SQLiteProjectSessionStore
     from alphonse.agent_v2.users import V2UserStore
     from alphonse.agent_v2.web_tools_settings import SQLiteWebToolsSettingsStore
+    from alphonse.agent_v2.system_one import SQLiteSystemOneSettingsStore
 
     path = str(Path(target).expanduser())
     SQLiteMessageQueue(path)
@@ -88,6 +89,7 @@ def initialize_unified_schema(target: str | Path) -> None:
     SQLiteMediaToolsSettingsStore(path)
     SQLiteMemorySettingsStore(path)
     SQLiteIntelligenceEngineSettingsStore(path)
+    SQLiteSystemOneSettingsStore(path)
     SQLiteProjectSessionStore(path)
     V2UserStore(path)
     SQLiteAssetStore(path)

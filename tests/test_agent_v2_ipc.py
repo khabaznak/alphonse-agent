@@ -28,6 +28,7 @@ from alphonse.agent_v2.runtime import build_runtime_host
 from alphonse.agent_v2.users import V2UserStore
 from alphonse.agent_v2.web_tools_settings import SQLiteWebToolsSettingsStore
 from alphonse.agent_v2.code_mode_settings import SQLiteCodeModeSettingsStore
+from alphonse.agent_v2.system_one import SQLiteSystemOneSettingsStore
 
 
 def _router() -> InferenceRouter:
@@ -141,6 +142,47 @@ def test_model_settings_request_uses_validation_timeout(monkeypatch) -> None:
     client.set_inference_settings(provider_key="openai_codex", model_id="gpt-5.5")
 
     assert captured == {"timeout": 35.0, "method": "set_inference_settings"}
+
+
+def test_daemon_ipc_system_one_settings_are_admin_only_and_mask_secrets(tmp_path) -> None:
+    users = V2UserStore(":memory:")
+    admin = users.onboard(display_name="Admin", users_root=tmp_path / "users")
+    runtime = build_runtime_host(
+        user_store=users,
+        system_one_settings_store=SQLiteSystemOneSettingsStore(":memory:"),
+        schedule_store=ScheduledTaskStore(":memory:"),
+    )
+    daemon = V2Daemon(runtime)
+
+    with pytest.raises(PermissionError, match="admin_required"):
+        daemon.ipc._dispatch({"method": "system_one_settings", "params": {"actor_user_id": "not-admin"}})
+    saved = daemon.ipc._dispatch({
+        "method": "save_system_one_settings",
+        "params": {
+            "actor_user_id": admin.user_id,
+            "values": {"enabled": False, "api_key": "secret"},
+        },
+    })["settings"]
+
+    assert saved["enabled"] is False
+    assert saved["has_api_key"] is True
+    assert "api_key" not in saved
+    assert runtime.core.system_one is None
+
+
+def test_system_one_settings_request_uses_validation_timeout(monkeypatch) -> None:
+    client = __import__("alphonse.agent_v2.ipc", fromlist=["V2DaemonClient"]).V2DaemonClient("/tmp/test.sock", timeout_sec=2)
+    captured = {}
+
+    def fake_request(self, method, **params):
+        captured["timeout"] = self.timeout_sec
+        captured["method"] = method
+        return {"settings": {}}
+
+    monkeypatch.setattr("alphonse.agent_v2.ipc.V2DaemonClient.request", fake_request)
+    client.save_system_one_settings(actor_user_id="admin", values={"enabled": True})
+
+    assert captured == {"timeout": 35.0, "method": "save_system_one_settings"}
 
 
 def test_daemon_ipc_reads_and_saves_agent_configuration(tmp_path) -> None:

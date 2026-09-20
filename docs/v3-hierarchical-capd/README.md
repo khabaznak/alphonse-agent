@@ -72,6 +72,7 @@ success, or exceed its phase limits.
 3. [Progressive tool revealing](03-progressive-tool-revealing.md)
 4. [Outer completion routing and response](04-outer-routing.md)
 5. [Compatibility, observability, evaluation, and rollout](05-rollout.md)
+6. [Experimental System One Check and Act](06-system-one-check-act.md)
 
 Stages are ordered. A later stage may be prototyped early, but it must not be declared
 complete before its dependencies and exit gates pass.
@@ -141,4 +142,3 @@ V2 already provides several V3 foundations:
 
 The next implementation task is Stage 1: define and test the V3 phase/state contracts
 without changing default V2 behavior.
-

@@ -127,6 +127,10 @@ paths, not repeatedly interpreted as an ordinary model-owned criterion.
   inference responsibilities.
 - Response generation receives at most the six latest successful evidence entries plus
   the verified objective and review reason.
+- An optional System One provider may perform semantic criterion/evidence decisions
+  and recommend an Act route. Deterministic invariants remain authoritative, and Act
+  accepts only conservative completion vetoes or replanning recommendations. See
+  [Experimental System One Check and Act](06-system-one-check-act.md).
 
 ## Implementation log
 

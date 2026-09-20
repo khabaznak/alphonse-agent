@@ -19,10 +19,10 @@ import { formatMessageTime } from "./messageTime";
 import { reuseProjectAttention, reuseQuestions, withoutTaskProgressSurfaces, type ProjectAttention } from "./pollState";
 import { QueueWorkloadChart } from "./QueueWorkloadChart";
 import { appendQueueSample, type QueueSample } from "./queueHistory";
-import type { ActivityEvent, AgentDocument, ChatMessage, CodeModeSettings, InferenceSettings, MediaToolsSettings, MemorySession, MemorySettings, Project, Question, WebToolsSettings } from "./types";
+import type { ActivityEvent, AgentDocument, ChatMessage, CodeModeSettings, InferenceSettings, MediaToolsSettings, MemorySession, MemorySettings, Project, Question, SystemOneSettings, WebToolsSettings } from "./types";
 
 type Modal = "projects" | "project-settings" | "project-context" | "scheduled-tasks" | "settings" | "users" | "onboarding" | null;
-type SettingsTab = "general" | "appearance" | "tools" | "artifacts" | "integrations" | "automations" | "model" | "agent-config";
+type SettingsTab = "general" | "appearance" | "tools" | "artifacts" | "integrations" | "automations" | "model" | "system-one" | "agent-config";
 type ManagedProject = Project & { owner?: { display_name?: string; user_id?: string } | null };
 type PollResponse = {
   daemon_id?: string;
@@ -895,7 +895,7 @@ function SettingsModal({ user, initialTab, enterToSend, desktopStyle, desktopNot
   };
   const verify = async (kind: "search" | "fetch") => { try { const current = await daemonRequest<{ user: { user_id: string } | null }>("current_user"); if (!current.user) return; const result = await daemonRequest<{ result: { exception?: { message?: string } } }>("verify_web_tools", { actor_user_id: current.user.user_id, kind }); setWebNotice(result.result.exception?.message || `${kind === "search" ? "SearXNG search" : "Public fetch"} verified.`); } catch (cause) { setWebNotice(cause instanceof Error ? cause.message : "Verification failed"); } };
   const saveMemory = async () => { if (!memory) return; try { const current = await daemonRequest<{ user: { user_id: string } | null }>("current_user"); if (!current.user) return; const result = await daemonRequest<{ settings: MemorySettings }>("save_memory_settings", { actor_user_id: current.user.user_id, values: memory }); setMemory(result.settings); setMemoryNotice("Saved. New tasks use these limits."); } catch (cause) { setMemoryNotice(cause instanceof Error ? cause.message : "Memory settings could not be saved"); } };
-  const tabs = <div className="settings-tabs" role="tablist" aria-label="Settings sections">{(["general", "appearance", "tools", "artifacts", "integrations", "automations", "model", "agent-config"] as SettingsTab[]).map((item) => <button key={item} type="button" role="tab" aria-selected={tab === item} className={tab === item ? "active" : ""} onClick={() => setTab(item)}>{item === "agent-config" ? "Agent configuration" : item[0].toUpperCase() + item.slice(1)}</button>)}</div>;
+  const tabs = <div className="settings-tabs" role="tablist" aria-label="Settings sections">{(["general", "appearance", "tools", "artifacts", "integrations", "automations", "model", "system-one", "agent-config"] as SettingsTab[]).map((item) => <button key={item} type="button" role="tab" aria-selected={tab === item} className={tab === item ? "active" : ""} onClick={() => setTab(item)}>{item === "agent-config" ? "Agent configuration" : item === "system-one" ? "System One" : item[0].toUpperCase() + item.slice(1)}</button>)}</div>;
   return <ModalFrame title="Settings" tabs={tabs} className="settings-modal" onClose={onClose}>
     {tab === "general" && <div className="general-settings">
       <section className="setting-group">
@@ -949,6 +949,7 @@ function SettingsModal({ user, initialTab, enterToSend, desktopStyle, desktopNot
     {tab === "integrations" && <IntegrationsSettingsSection user={user} />}
     {tab === "automations" && <AutomationsSettingsSection user={user} />}
     {tab === "model" && <ModelSettingsSection />}
+    {tab === "system-one" && <SystemOneSettingsSection user={user} />}
     {tab === "agent-config" && <AgentConfigSettingsSection />}
   </ModalFrame>;
 }
@@ -1437,6 +1438,58 @@ function ModelSettingsSection() {
     ? "Codex temporarily rejected this model. Alphonse will keep the last successful validation and retry new tasks."
     : settings?.validation_error || (settings?.validated_at ? `Validated ${new Date(settings.validated_at).toLocaleString()}.` : (!settings?.model_id ? "Choose and save a model before starting a task." : "Validation required."));
   return <section className="settings-panel"><h3>Agent model</h3><p>Models in this list are advertised by the Codex catalog. Validate &amp; save makes a live request to verify current access before Alphonse uses the selection for new tasks.</p><select value={provider} onChange={(event) => { const nextProvider = providers.find((item) => item.provider_key === event.target.value); setProvider(event.target.value); setModel(nextProvider?.models[0]?.model_id || ""); }}>{providers.map((item) => <option value={item.provider_key} key={item.provider_key}>{item.display_name}</option>)}</select><select value={model} onChange={(event) => setModel(event.target.value)} disabled={!selected?.models.length}>{selected?.models.map((item) => <option value={item.model_id} key={item.model_id}>{item.display_name}</option>)}</select><button disabled={!provider || !model} onClick={() => void daemonRequest<{ settings: InferenceSettings }>("set_inference_settings", { provider_key: provider, model_id: model }).then((result) => { setSettings(result.settings); setNotice("Validated and saved for new tasks."); }).catch((cause: unknown) => setNotice(inferenceValidationNotice(cause)))}>Validate &amp; save</button><p>{notice || savedStatus}</p>{selected?.catalog_cli_matches_runtime === false && <p>Catalog source {selected.catalog_cli_version || "unknown"}; runtime {selected.cli_version || "unknown"} at <code>{selected.cli_path || "codex"}</code>. Update or configure the runtime CLI so both use the same Codex version.</p>}</section>;
+}
+
+function SystemOneSettingsSection({ user }: { user: string }) {
+  const [settings, setSettings] = useState<SystemOneSettings | null>(null);
+  const [apiKey, setApiKey] = useState("");
+  const [notice, setNotice] = useState("");
+  const [saving, setSaving] = useState(false);
+  useEffect(() => {
+    void daemonRequest<{ settings: SystemOneSettings }>("system_one_settings", { actor_user_id: user })
+      .then((result) => setSettings(result.settings))
+      .catch((cause: unknown) => setNotice(cause instanceof Error ? cause.message : "System One settings unavailable"));
+  }, [user]);
+  const save = async () => {
+    if (!settings) return;
+    setSaving(true);
+    setNotice(settings.enabled ? "Validating Jev connection…" : "Saving…");
+    try {
+      const result = await daemonRequest<{ settings: SystemOneSettings }>("save_system_one_settings", {
+        actor_user_id: user,
+        values: { ...settings, api_key: apiKey },
+      });
+      setSettings(result.settings);
+      setApiKey("");
+      setNotice(result.settings.enabled ? "Validated and enabled for newly started V3 tasks." : "Saved. System One is disabled.");
+    } catch (cause) {
+      setNotice(cause instanceof Error ? cause.message : "System One validation failed");
+    } finally {
+      setSaving(false);
+    }
+  };
+  const status = settings?.validation_error || (settings?.validated_at
+    ? `Last validated ${new Date(settings.validated_at).toLocaleString()}.`
+    : "Not validated. Alphonse will continue using the existing System Two review until validation succeeds.");
+  return <section className="settings-panel">
+    <h3>System One</h3>
+    <p>Use TypeSafe.ai Jev for fast acceptance-evidence decisions in V3 Check and a constrained recommendation in Act. Deterministic safety gates remain authoritative, and ambiguous or unavailable decisions fall back to the agent model.</p>
+    {settings && <>
+      <div className="form-field checkbox-field"><label htmlFor="system-one-enabled"><input id="system-one-enabled" type="checkbox" checked={settings.enabled} onChange={(event) => setSettings({ ...settings, enabled: event.target.checked })} /> Enable System One for V3 Check and Act</label></div>
+      <div className="form-field"><label htmlFor="system-one-url">API URL</label><input id="system-one-url" value={settings.api_url} onChange={(event) => setSettings({ ...settings, api_url: event.target.value })} /></div>
+      <div className="form-field"><label htmlFor="system-one-model">Model</label><input id="system-one-model" value={settings.model} onChange={(event) => setSettings({ ...settings, model: event.target.value })} /></div>
+      <div className="form-field"><label htmlFor="system-one-key">API key</label><input id="system-one-key" type="password" value={apiKey} onChange={(event) => setApiKey(event.target.value)} placeholder={settings.has_api_key ? "Leave blank to keep the saved key" : "Enter TypeSafe.ai API key"} autoComplete="new-password" /></div>
+      <details><summary>Decision thresholds</summary>
+        <div className="form-field"><label htmlFor="system-one-yes">Evidence yes threshold</label><input id="system-one-yes" type="number" min="0" max="1" step="0.01" value={settings.yes_threshold} onChange={(event) => setSettings({ ...settings, yes_threshold: Number(event.target.value) })} /></div>
+        <div className="form-field"><label htmlFor="system-one-no">Evidence no threshold</label><input id="system-one-no" type="number" min="0" max="1" step="0.01" value={settings.no_threshold} onChange={(event) => setSettings({ ...settings, no_threshold: Number(event.target.value) })} /></div>
+        <div className="form-field"><label htmlFor="system-one-route">Act route confidence threshold</label><input id="system-one-route" type="number" min="0" max="1" step="0.01" value={settings.route_confidence_threshold} onChange={(event) => setSettings({ ...settings, route_confidence_threshold: Number(event.target.value) })} /></div>
+      </details>
+      <p><small>When enabled, bounded phase objectives, acceptance criteria, and verified evidence summaries are sent to the configured TypeSafe.ai endpoint. The API key stays in local settings and is never returned to the desktop.</small></p>
+      <button disabled={saving || (settings.enabled && !settings.has_api_key && !apiKey)} onClick={() => void save()}>{settings.enabled ? "Validate & save" : "Save disabled settings"}</button>
+      <p role="status">{notice || status}</p>
+    </>}
+    {!settings && notice && <p role="status">{notice}</p>}
+  </section>;
 }
 
 function inferenceValidationNotice(cause: unknown): string {

@@ -74,6 +74,7 @@ from alphonse.agent_v2.core.tools.registry.native.media import verify_ocr, verif
 from alphonse.agent_v2.runtime import refresh_runtime_web_tools
 from alphonse.agent_v2.runtime import refresh_runtime_media_tools
 from alphonse.agent_v2.runtime import refresh_runtime_artifacts
+from alphonse.agent_v2.runtime import refresh_runtime_system_one
 from alphonse.agent_v2.core.tools.registry.native.web import execute_web_fetch, execute_web_search
 from alphonse.agent_v2.assets import SQLiteAssetStore
 from alphonse.agent_v2.artifacts import SQLiteArtifactStore
@@ -81,6 +82,8 @@ from alphonse.agent_v2.conversations import SQLiteConversationStore, legacy_ledg
 from alphonse.agent_v2.automations import EventAutomationStore
 from alphonse.agent_v2.storage_migration import migrate_legacy_databases
 from alphonse.agent_v2.retention import prune_operational_data
+from alphonse.agent_v2.system_one import SQLiteSystemOneSettingsStore
+from alphonse.agent_v2.system_one import validate_and_save_system_one_settings
 
 
 logger = logging.getLogger(__name__)
@@ -667,6 +670,16 @@ class V2Daemon:
             compaction_summary_max_words=values.get("compaction_summary_max_words", current.compaction_summary_max_words),
             memory_context_token_budget=values.get("memory_context_token_budget", current.memory_context_token_budget),
         ))
+        return saved.to_dict()
+
+    def system_one_settings(self, *, actor_user_id: str) -> dict[str, object]:
+        self._require_admin(actor_user_id)
+        return self.runtime.system_one_settings_store.get().to_dict()
+
+    def save_system_one_settings(self, *, actor_user_id: str, values: dict[str, Any]) -> dict[str, object]:
+        self._require_admin(actor_user_id)
+        saved = validate_and_save_system_one_settings(self.runtime.system_one_settings_store, values=values)
+        refresh_runtime_system_one(self.runtime, saved)
         return saved.to_dict()
 
     def intelligence_engine_settings(self, *, actor_user_id: str) -> dict[str, object]:
@@ -2401,6 +2414,7 @@ def main() -> None:
                 artifact_store=SQLiteArtifactStore.default(),
                 conversation_store=SQLiteConversationStore.default(),
                 memory_settings_store=SQLiteMemorySettingsStore.default(),
+                system_one_settings_store=SQLiteSystemOneSettingsStore.default(),
                 intelligence_engine_settings_store=SQLiteIntelligenceEngineSettingsStore.default(),
                 outbox=SQLiteOutboundStore.default(),
                 integration_store=SQLiteIntegrationStore.default(),

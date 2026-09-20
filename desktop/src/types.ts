@@ -74,6 +74,11 @@ export type CodeModeSettings = {
   verification_ready: boolean; verification_error: string; verified_at: string; available: boolean; weakened_protections: string[];
 };
 export type MemorySettings = { max_ledger_bytes: number; compaction_summary_max_words: number; memory_context_token_budget: number };
+export type SystemOneSettings = {
+  enabled: boolean; api_url: string; model: string; has_api_key: boolean;
+  yes_threshold: number; no_threshold: number; route_confidence_threshold: number;
+  validated_at: string; validation_error: string; updated_at: string;
+};
 export type VerificationState = { ready: boolean; verified_at: string; error: string; preview: string };
 export type MediaToolsSettings = {
   platform: string; say_available: boolean;

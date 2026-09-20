@@ -198,6 +198,13 @@ class V2DaemonClient:
         client = V2DaemonClient(self.socket_path, timeout_sec=max(self.timeout_sec, 35.0))
         return client.request("set_inference_settings", provider_key=provider_key, model_id=model_id)
 
+    def system_one_settings(self, *, actor_user_id: str) -> dict[str, Any]:
+        return self.request("system_one_settings", actor_user_id=actor_user_id)
+
+    def save_system_one_settings(self, *, actor_user_id: str, values: dict[str, Any]) -> dict[str, Any]:
+        client = V2DaemonClient(self.socket_path, timeout_sec=max(self.timeout_sec, 35.0))
+        return client.request("save_system_one_settings", actor_user_id=actor_user_id, values=values)
+
     def web_tools_settings(self, *, actor_user_id: str) -> dict[str, Any]:
         return self.request("web_tools_settings", actor_user_id=actor_user_id)
 
@@ -471,6 +478,10 @@ class V2DaemonServer:
             return {"settings": self.daemon.memory_settings(actor_user_id=str(params.get("actor_user_id") or ""))}
         if method == "save_memory_settings":
             return {"settings": self.daemon.save_memory_settings(actor_user_id=str(params.get("actor_user_id") or ""), values=dict(params.get("values") or {}))}
+        if method == "system_one_settings":
+            return {"settings": self.daemon.system_one_settings(actor_user_id=str(params.get("actor_user_id") or ""))}
+        if method == "save_system_one_settings":
+            return {"settings": self.daemon.save_system_one_settings(actor_user_id=str(params.get("actor_user_id") or ""), values=dict(params.get("values") or {}))}
         if method == "intelligence_engine_settings":
             return {"settings": self.daemon.intelligence_engine_settings(actor_user_id=str(params.get("actor_user_id") or ""))}
         if method == "save_intelligence_engine_settings":

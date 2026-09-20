@@ -66,7 +66,13 @@ class V3OuterController:
             message=review.reason,
             progress={"phase_id": review.phase_id, "phase_review_status": review.status.value},
         )
-        decision = decide_next_action(review)
+        system_one_review = task.metadata.get("system_one_review")
+        system_one_review = system_one_review if isinstance(system_one_review, dict) else {}
+        decision = decide_next_action(
+            review,
+            recommended_route=str(system_one_review.get("recommended_route") or ""),
+            recommendation_confident=bool(system_one_review.get("route_confident")),
+        )
         context.emit_activity(
             phase=ImprovementPhase.ACT,
             label="strategy selected",
@@ -148,10 +154,23 @@ def review_phase(
     )
 
 
-def decide_next_action(review: PhaseReview) -> StrategicDecision:
+def decide_next_action(
+    review: PhaseReview,
+    *,
+    recommended_route: str = "",
+    recommendation_confident: bool = False,
+) -> StrategicDecision:
+    """Apply an advisory System One route without relaxing deterministic gates."""
     if review.status == PhaseReviewStatus.PHASE_VERIFIED_TASK_COMPLETE:
+        if recommendation_confident and recommended_route in {"continue", "replan", "ask_user", "fail"}:
+            return StrategicDecision(
+                StrategicAction.REPLAN,
+                f"System One advised {recommended_route}; completion was conservatively withheld for strategic review.",
+            )
         return StrategicDecision(StrategicAction.COMPLETE, review.reason)
     if review.status == PhaseReviewStatus.PHASE_VERIFIED_TASK_INCOMPLETE:
+        if recommendation_confident and recommended_route == "replan":
+            return StrategicDecision(StrategicAction.REPLAN, "System One recommended replanning the incomplete task.")
         return StrategicDecision(StrategicAction.CONTINUE, review.reason)
     if review.status == PhaseReviewStatus.WAITING_USER:
         return StrategicDecision(StrategicAction.ASK_USER, review.reason)
@@ -201,6 +220,60 @@ def _review_acceptance_statuses(
     evidence_refs: tuple[str, ...],
     context: "CoreLoopContext",
 ) -> None:
+    if context.system_one is not None:
+        try:
+            system_one_result = context.system_one.evaluate(
+                contract=task.ensure_acceptance_contract(),
+                phase=state.phase.to_dict(),
+                evidence=state.evidence.to_dict(),
+            )
+        except Exception as exc:
+            task.metadata["system_one_review"] = {
+                "status": "fallback",
+                "error": f"{type(exc).__name__}:{str(exc)[:300]}",
+            }
+            context.emit_telemetry({
+                "event": "system_one_review",
+                "task_id": task.task_id,
+                "phase_id": state.phase.phase_id,
+                "status": "fallback",
+                "error_type": type(exc).__name__,
+            })
+        else:
+            metadata = system_one_result.to_metadata()
+            if not system_one_result.ambiguous_criterion_ids:
+                contract, rejected = apply_status_patch(
+                    task.ensure_acceptance_contract(),
+                    {"updates": list(system_one_result.updates)},
+                    valid_evidence_refs=set(evidence_refs),
+                )
+                task.acceptance_contract = contract
+                task.sync_acceptance_criteria_view()
+                task.metadata["v3_phase_review_rejections"] = rejected
+                task.metadata["system_one_review"] = {"status": "used", **metadata}
+                context.emit_telemetry({
+                    "event": "system_one_review",
+                    "task_id": task.task_id,
+                    "phase_id": state.phase.phase_id,
+                    "status": "used",
+                    "recommended_route": system_one_result.recommended_route,
+                    "route_confident": system_one_result.route_confident,
+                    "duration_ms": system_one_result.duration_ms,
+                    "model": system_one_result.model,
+                    "usage": dict(system_one_result.usage),
+                })
+                return
+            task.metadata["system_one_review"] = {"status": "ambiguous_fallback", **metadata}
+            context.emit_telemetry({
+                "event": "system_one_review",
+                "task_id": task.task_id,
+                "phase_id": state.phase.phase_id,
+                "status": "ambiguous_fallback",
+                "ambiguous_criterion_count": len(system_one_result.ambiguous_criterion_ids),
+                "duration_ms": system_one_result.duration_ms,
+                "model": system_one_result.model,
+                "usage": dict(system_one_result.usage),
+            })
     if context.inference is None:
         return
     prompt = (

@@ -59,6 +59,9 @@ from alphonse.agent_v2.core.memory import LedgerMemory
 from alphonse.agent_v2.core.tools.registry.native.memory import build_search_memory_tool_definition
 from alphonse.agent_v2.conversations import SQLiteConversationStore
 from alphonse.agent_v2.memory_sessions import SQLiteMemorySessionStore
+from alphonse.agent_v2.system_one import SQLiteSystemOneSettingsStore
+from alphonse.agent_v2.system_one import SystemOneSettings
+from alphonse.agent_v2.system_one import build_system_one_provider
 
 
 logger = logging.getLogger(__name__)
@@ -120,6 +123,7 @@ class V2RuntimeHost:
     asset_store: SQLiteAssetStore
     artifact_store: SQLiteArtifactStore
     memory_settings_store: SQLiteMemorySettingsStore
+    system_one_settings_store: SQLiteSystemOneSettingsStore
     communication_router: CommunicationRouter
     conversation_store: SQLiteConversationStore
     integration_runtimes: list[Any] = field(default_factory=list)
@@ -158,6 +162,7 @@ def build_runtime_host(
     asset_store: SQLiteAssetStore | None = None,
     artifact_store: SQLiteArtifactStore | None = None,
     memory_settings_store: SQLiteMemorySettingsStore | None = None,
+    system_one_settings_store: SQLiteSystemOneSettingsStore | None = None,
     communication_thread_store: SQLiteCommunicationThreadStore | None = None,
     conversation_store: SQLiteConversationStore | None = None,
 ) -> V2RuntimeHost:
@@ -182,6 +187,7 @@ def build_runtime_host(
     # Generic embedded/test hosts are intentionally ephemeral. The daemon
     # injects the durable store explicitly.
     memory_settings_store = memory_settings_store or SQLiteMemorySettingsStore()
+    system_one_settings_store = system_one_settings_store or SQLiteSystemOneSettingsStore()
     tools = tools or build_native_tool_registry(web_tools_settings_store.get(), asset_store, media_tools_settings_store.get(), artifact_store)
     inference_settings_store = inference_settings_store or SQLiteInferenceSettingsStore()
     # Persistent daemon/TUI constructors pass `AgentConfigStore.default()`.
@@ -269,6 +275,7 @@ def build_runtime_host(
         program_runner=ProgramRunner(settings_provider=code_mode_settings_store.get),
         activity_sink=_activity_sink,
         telemetry_sink=telemetry_sink,
+        system_one=build_system_one_provider(system_one_settings_store.get()),
     )
     runtime = V2RuntimeHost(
         user=str(user or (user_store.admin_user().user_id if user_store.admin_user() else "local")).strip() or "local",
@@ -298,6 +305,7 @@ def build_runtime_host(
         asset_store=asset_store,
         artifact_store=artifact_store,
         memory_settings_store=memory_settings_store,
+        system_one_settings_store=system_one_settings_store,
         communication_router=communication_router,
         conversation_store=conversation_store,
         ui_events=ui_events,
@@ -341,6 +349,13 @@ def refresh_runtime_inference(runtime: V2RuntimeHost, settings: InferenceSetting
     router = build_inference_router_from_settings(selected)
     _append_router_telemetry_sink(router, runtime.record_telemetry)
     runtime.core.inference = router
+    return selected
+
+
+def refresh_runtime_system_one(runtime: V2RuntimeHost, settings: SystemOneSettings | None = None) -> SystemOneSettings:
+    """Apply validated System One settings to tasks started after this call."""
+    selected = settings or runtime.system_one_settings_store.get()
+    runtime.core.system_one = build_system_one_provider(selected)
     return selected
 
 
