@@ -112,9 +112,11 @@ results and a concise human review report.
 - [x] Extend daemon status and IPC with engine settings; V3 snapshots include nested
       phase progress.
 - [ ] Add functional nested progress rendering to the desktop client.
-- [x] Add the initial machine-readable replay/evaluation corpus.
+- [x] Add the initial machine-readable replay/evaluation corpus and an isolated V2/V3
+      runner that writes JSON and Markdown comparisons.
 - [x] Add automated failure, restart, cancellation, steering, scope, and budget tests.
-- [ ] Measure provider-reported prompt/tool-schema tokens and latency per inference.
+- [x] Measure deterministic prompt/output/tool-schema token estimates, inference/tool
+      latency, call failures, and provider-reported usage when an adapter supplies it.
 - [x] Add administrator-authorized IPC controls for V3 enablement and rollback.
 - [ ] Document operational recovery for stuck or incompatible tasks.
 - [ ] Complete each rollout gate with a dated evidence report.
@@ -158,3 +160,32 @@ results and a concise human review report.
   initial evaluation corpus. Full suite: 455 passed. Desktop nested rendering,
   provider token/latency measurement, operational recovery documentation, and rollout
   gate evidence remain open; V3 is not approved for default rollout or merge.
+- 2026-09-20 — Added provider-independent inference and tool telemetry, bounded runtime
+  collection with structured logs, provider-usage passthrough, affected-path metadata,
+  and a fixture-isolated V2/V3 replay harness. The harness enforces corpus capability,
+  question, outcome, and effect constraints and emits `v3-comparison.json` plus
+  `v3-comparison.md`. It deliberately requires explicit engine adapters so evaluation
+  cannot accidentally run against live projects. Gate A has not yet been claimed.
+
+## Running an offline comparison
+
+Replay adapters are ordinary Python callables with this signature:
+
+```python
+runner(case, fixture_root, telemetry_sink) -> EngineTrace
+```
+
+They must execute only inside `fixture_root` and report observable capabilities,
+effects, questions, outcomes, and metadata. Run a comparison with:
+
+```bash
+python -m alphonse.agent_v2.evaluation.replay \
+  --corpus tests/fixtures/v3_evaluation_cases.json \
+  --output-dir build/v3-evaluation \
+  --v2-runner evaluation_adapters:v2_runner \
+  --v3-runner evaluation_adapters:v3_runner
+```
+
+The checked-in harness never enables V3 in persistent settings and never points an
+adapter at a real project. Creating the concrete deterministic V2/V3 adapters and
+capturing the first dated Gate A report are the next evaluation tasks.

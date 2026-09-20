@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import inspect
+from time import monotonic
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
@@ -10,6 +11,7 @@ from jsonschema import Draft202012Validator
 from jsonschema.exceptions import ValidationError
 
 from alphonse.agent_v2.core.core import CoreLoopContext
+from alphonse.agent_v2.core.telemetry import ToolTelemetryEvent, json_chars, safe_telemetry_value
 
 if TYPE_CHECKING:
     from alphonse.agent_v2.core.intelligence.task_state import TaskState
@@ -23,19 +25,42 @@ class ToolInvocationService:
         self.task = task
 
     def execute_or_raise(self, tool_id: str, arguments: dict[str, Any]) -> Any:
-        if self.context.tools is None:
-            raise RuntimeError("tool_registry_unavailable")
-        descriptor = _descriptor_for(self.context.tools, tool_id)
-        # Older test/adapter registries can execute by opaque id without
-        # implementing descriptor lookup. The concrete V2 registry still
-        # enforces enabled tools during execution.
-        if descriptor is not None:
-            self._validate(descriptor.argument_schema, arguments)
-        execute = self.context.tools.execute
-        signature = inspect.signature(execute)
-        if "execution_context" in signature.parameters:
-            return execute(tool_id, dict(arguments), execution_context=self.context.tool_execution_context(self.task))
-        return execute(tool_id, dict(arguments))
+        started = monotonic()
+        try:
+            if self.context.tools is None:
+                raise RuntimeError("tool_registry_unavailable")
+            descriptor = _descriptor_for(self.context.tools, tool_id)
+            # Older test/adapter registries can execute by opaque id without
+            # implementing descriptor lookup. The concrete V2 registry still
+            # enforces enabled tools during execution.
+            if descriptor is not None:
+                self._validate(descriptor.argument_schema, arguments)
+            execute = self.context.tools.execute
+            signature = inspect.signature(execute)
+            if "execution_context" in signature.parameters:
+                result = execute(tool_id, dict(arguments), execution_context=self.context.tool_execution_context(self.task))
+            else:
+                result = execute(tool_id, dict(arguments))
+        except Exception as exc:
+            self._emit_tool_telemetry(tool_id, arguments, None, started, "failed", f"{type(exc).__name__}: {exc}")
+            raise
+        self._emit_tool_telemetry(tool_id, arguments, result, started, "success", "")
+        return result
+
+    def _emit_tool_telemetry(
+        self, tool_id: str, arguments: dict[str, Any], result: Any, started: float, status: str, error: str
+    ) -> None:
+        self.context.emit_telemetry(ToolTelemetryEvent(
+            tool_id=tool_id,
+            task_id=str(self.task.task_id or ""),
+            project_id=self.task.project_id,
+            argument_chars=json_chars(arguments),
+            result_chars=json_chars(result) if result is not None else 0,
+            duration_ms=max(0, round((monotonic() - started) * 1000)),
+            status=status,
+            error=str(safe_telemetry_value(error)),
+            metadata=_tool_result_metadata(result),
+        ).to_dict())
 
     def invoke(self, tool_id: str, arguments: dict[str, Any], *, call_id: str | None = None, parallel: bool = False) -> dict[str, Any]:
         call_id = str(call_id or f"program-call-{uuid4()}")
@@ -104,3 +129,15 @@ def _bash_result_error(tool_id: str, result: Any) -> str:
         return ""
     detail = str(result.get("stderr") or result.get("stdout") or "").strip()
     return f"Bash exited with code {exit_code}." + (f" {detail}" if detail else "")
+
+
+def _tool_result_metadata(result: Any) -> dict[str, Any]:
+    if not isinstance(result, dict):
+        return {}
+    paths = result.get("affected_paths")
+    if not isinstance(paths, (list, tuple)):
+        paths = [result["path"]] if isinstance(result.get("path"), str) else []
+    return {
+        "affected_paths": [str(path) for path in paths[:25]],
+        "waiting_for_answer": result.get("waiting_for_answer") is True,
+    }

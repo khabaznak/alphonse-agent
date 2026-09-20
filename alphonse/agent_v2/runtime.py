@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import json
+import logging
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Callable
 
 from alphonse.agent_v2.core.core import AlphonseCore
 from alphonse.agent_v2.core.core import CoreActivityEvent
@@ -57,6 +59,9 @@ from alphonse.agent_v2.core.memory import LedgerMemory
 from alphonse.agent_v2.core.tools.registry.native.memory import build_search_memory_tool_definition
 from alphonse.agent_v2.conversations import SQLiteConversationStore
 from alphonse.agent_v2.memory_sessions import SQLiteMemorySessionStore
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -121,6 +126,10 @@ class V2RuntimeHost:
     active_project_id: str = ""
     ui_events: list[CoreUiEvent] = field(default_factory=list)
     activity_events: list[CoreActivityEvent] = field(default_factory=list)
+    telemetry_events: list[dict[str, Any]] = field(default_factory=list)
+
+    def record_telemetry(self, event: dict[str, Any]) -> None:
+        _record_runtime_telemetry(self.telemetry_events, event)
 
 
 def build_runtime_host(
@@ -234,6 +243,9 @@ def build_runtime_host(
     )
     ui_events: list[CoreUiEvent] = []
     activity_events: list[CoreActivityEvent] = []
+    telemetry_events: list[dict[str, Any]] = []
+    telemetry_sink = lambda event: _record_runtime_telemetry(telemetry_events, event)
+    _append_router_telemetry_sink(inference, telemetry_sink)
 
     def _activity_sink(event: CoreActivityEvent) -> None:
         presence_projector.on_activity(event)
@@ -256,6 +268,7 @@ def build_runtime_host(
         user_timezone_provider=lambda _user_id: user_store.timezone(),
         program_runner=ProgramRunner(settings_provider=code_mode_settings_store.get),
         activity_sink=_activity_sink,
+        telemetry_sink=telemetry_sink,
     )
     runtime = V2RuntimeHost(
         user=str(user or (user_store.admin_user().user_id if user_store.admin_user() else "local")).strip() or "local",
@@ -289,6 +302,7 @@ def build_runtime_host(
         conversation_store=conversation_store,
         ui_events=ui_events,
         activity_events=activity_events,
+        telemetry_events=telemetry_events,
     )
     if not provided_tools:
         refresh_runtime_artifacts(runtime)
@@ -324,8 +338,34 @@ def refresh_runtime_inference(runtime: V2RuntimeHost, settings: InferenceSetting
     router here cannot alter a task already being processed.
     """
     selected = settings or runtime.inference_settings_store.get()
-    runtime.core.inference = build_inference_router_from_settings(selected)
+    router = build_inference_router_from_settings(selected)
+    _append_router_telemetry_sink(router, runtime.record_telemetry)
+    runtime.core.inference = router
     return selected
+
+
+def _append_router_telemetry_sink(router: InferenceRouter, sink: Callable[[dict[str, Any]], None]) -> None:
+    """Fan runtime collection into a router without discarding an injected sink."""
+    existing = router.telemetry_sink
+    if existing is None:
+        router.telemetry_sink = sink
+        return
+    if existing is sink:
+        return
+
+    def _fanout(event: dict[str, Any]) -> None:
+        existing(event)
+        sink(event)
+
+    router.telemetry_sink = _fanout
+
+
+def _record_runtime_telemetry(events: list[dict[str, Any]], event: dict[str, Any]) -> None:
+    item = dict(event)
+    events.append(item)
+    if len(events) > 2_000:
+        del events[:-2_000]
+    logger.info("execution_telemetry %s", json.dumps(item, ensure_ascii=False, sort_keys=True, default=str))
 
 
 def build_identity_resolver(store: SQLiteIntegrationStore, *, user_store: V2UserStore | None = None) -> V2IdentityResolver:

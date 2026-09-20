@@ -60,3 +60,4 @@ class InferenceResult:
     tool_call: dict[str, Any] | None = None
     model_profile: ModelProfile | None = None
     raw_response: Any = None
+    usage: dict[str, Any] = field(default_factory=dict)

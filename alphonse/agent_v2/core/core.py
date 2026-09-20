@@ -214,6 +214,7 @@ class CoreLoopContext:
     memory: Any | None = None
     program_runner: Any | None = None
     cancellation_checker: Callable[[], bool] | None = None
+    telemetry_sink: Callable[[dict[str, Any]], None] | None = None
     consumed_message_ids: list[str] = field(default_factory=list)
 
     def consume_message(self, selector: MessageSelector | None = None) -> QueuedMessage | None:
@@ -238,6 +239,10 @@ class CoreLoopContext:
         if self.ui_event_sink is None:
             return
         self.ui_event_sink(CoreUiEvent(event_type=event_type, payload=dict(payload or {})))
+
+    def emit_telemetry(self, event: dict[str, Any]) -> None:
+        if self.telemetry_sink is not None:
+            self.telemetry_sink(dict(event))
 
     def tool_execution_context(self, task: TaskState) -> ToolExecutionContext:
         return ToolExecutionContext(
@@ -413,6 +418,7 @@ class AlphonseCore:
     inference: InferenceRouter | None = None
     activity_sink: Callable[[CoreActivityEvent], None] | None = None
     ui_event_sink: Callable[[CoreUiEvent], None] | None = None
+    telemetry_sink: Callable[[dict[str, Any]], None] | None = None
     question_store: Any | None = None
     project_store: Any | None = None
     schedule_store: Any | None = None
@@ -495,6 +501,7 @@ class AlphonseCore:
                 prompts=self.prompts,
                 activity_sink=_task_activity_sink,
                 ui_event_sink=self.ui_event_sink,
+                telemetry_sink=self.telemetry_sink,
                 question_store=self.question_store,
                 project_store=self.project_store,
                 schedule_store=self.schedule_store,
