@@ -15,6 +15,7 @@ class InferencePurpose(str, Enum):
     ACCEPTANCE_CRITERIA = "acceptance_criteria"
     CRITERIA_REVIEW = "criteria_review"
     TOOL_PLANNING = "tool_planning"
+    TACTICAL_ACTION = "tactical_action"
     MEMORY_COMPACTION = "memory_compaction"
 
 

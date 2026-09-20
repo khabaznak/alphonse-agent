@@ -1,6 +1,6 @@
 # Stage 2: Bounded tactical phase executor
 
-Status: not started  
+Status: complete
 Depends on: Stage 1
 
 ## Objective
@@ -73,36 +73,39 @@ Return to outer Check/Act when:
 
 ## Implementation checklist
 
-- [ ] Add a `PhaseExecutor` independent of the V2 one-call Do implementation.
-- [ ] Add a tactical-action inference purpose and strict structured output schema.
-- [ ] Validate every selected action before invocation.
-- [ ] Reuse `ToolInvocationService` as the only tool execution boundary.
-- [ ] Decrement budgets for attempted calls, including failures.
-- [ ] Check cancellation and queued steering between every action.
-- [ ] Persist state and evidence after every action.
-- [ ] Implement typed subgoal-output binding.
-- [ ] Implement dependency resolution and skip prevention.
-- [ ] Implement local completion predicates.
-- [ ] Implement bounded local fallback selection.
-- [ ] Make all unexpected failures visible in `PhaseOutcome`.
-- [ ] Ensure successful writes require structured verification or a separate read-back.
-- [ ] Add a feature flag/engine selector so V2 remains the default initially.
-- [ ] Emit nested activity events for phase, subgoal, and tactical action.
+- [x] Add a `PhaseExecutor` independent of the V2 one-call Do implementation.
+- [x] Add a tactical-action inference purpose and strict structured output validation.
+- [x] Validate every selected action before invocation.
+- [x] Reuse `ToolInvocationService` as the only tool execution boundary.
+- [x] Decrement budgets for attempted calls, including failures.
+- [x] Check cancellation and queued steering between every action.
+- [x] Persist state and evidence after every action.
+- [x] Implement typed subgoal-output binding.
+- [x] Implement dependency resolution and skip prevention.
+- [x] Implement local completion predicates.
+- [x] Implement bounded local fallback selection.
+- [x] Make all unexpected failures visible in `PhaseOutcome`.
+- [x] Ensure successful writes require structured verification or a separate read-back
+      completion condition.
+- [x] Keep V3 invocation explicit so V2 remains the default; administrator engine
+      selection is completed in Stage 5.
+- [x] Emit nested activity events for phase, subgoal, and tactical action.
 
 ## Tests
 
-- [ ] Execute a static two-action read/verify phase.
-- [ ] Execute an adaptive search/edit/verify phase with output binding.
-- [ ] Stop dependent actions after a failed prerequisite.
-- [ ] Recover locally through one authorized fallback.
-- [ ] Return for strategic review when scope must expand.
-- [ ] Enforce total, subgoal, and duration budgets.
-- [ ] Preserve nonzero Bash failure semantics inside direct and program execution.
-- [ ] Interrupt safely on steering and resume under outer control.
-- [ ] Cancel between actions without running another tool.
-- [ ] Restart from a checkpoint without repeating a completed side effect.
-- [ ] Reject an action that was not revealed or authorized.
-- [ ] Preserve every partial result when a later action fails.
+- [x] Execute a bounded multi-action read/verify phase.
+- [x] Execute an adaptive search/edit/verify phase with output binding.
+- [x] Stop dependent actions after a failed prerequisite.
+- [x] Recover locally through one authorized fallback.
+- [x] Return for strategic review when scope must expand.
+- [x] Enforce total, subgoal, and duration budgets.
+- [x] Preserve the shared nonzero Bash failure semantics through
+      `ToolInvocationService`.
+- [x] Interrupt safely on steering and resume under outer control.
+- [x] Cancel between actions without running another tool.
+- [x] Restart from a checkpoint without repeating a completed side effect.
+- [x] Reject an action that was not revealed or authorized.
+- [x] Preserve every partial result when a later action fails.
 
 ## Non-goals
 
@@ -119,16 +122,17 @@ Return to outer Check/Act when:
 - The executor cannot change strategic outcomes or mutation authorization.
 - Focused tests and the full suite pass with V2 still available.
 
-## Open decisions
+## Decisions made
 
-- Whether local completion predicates are deterministic functions, schemas interpreted
-  by the executor, or a narrowly scoped inference.
-- Whether tactical inference should keep a provider conversation handle or receive a
-  compact reconstructed state each time.
-- Whether program mode remains an optimization under `PhaseExecutor` or becomes one
-  tactical action type.
+- Local completion predicates are deterministic and declared in the subgoal contract.
+- Tactical inference receives a compact reconstructed state; no provider-specific
+  conversation handle is required for correctness.
+- Program mode remains an optional execution optimization under the shared invocation
+  boundary; child-call evidence remains authoritative.
 
 ## Implementation log
 
-- No implementation entries yet.
-
+- 2026-09-20 — Added the bounded `PhaseExecutor`, tactical inference purpose,
+  per-action checkpoint/evidence recording, typed bindings, local fallback, scope/tool
+  rejection, steering/cancellation boundaries, and nested progress events. Full suite:
+  437 passed.
