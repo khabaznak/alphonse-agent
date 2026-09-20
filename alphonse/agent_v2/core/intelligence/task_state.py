@@ -54,6 +54,7 @@ class TaskState:
     check_reason: str = ""
     check_confidence: float = 0.0
     check_evidence_refs: list[str] | None = None
+    evidence_journal: list[dict[str, Any]] = field(default_factory=list)
     check_new_message_count: int = 0
     pdca_cycle_count: int = 0
     metadata: dict[str, Any] = field(default_factory=dict)
@@ -125,6 +126,7 @@ class TaskState:
             check_evidence_refs=[str(item).strip() for item in refs if str(item).strip()]
             if isinstance(refs, list)
             else [],
+            evidence_journal=[dict(item) for item in value.get("evidence_journal") or [] if isinstance(item, dict)],
             check_new_message_count=max(0, _coerce_int(value.get("check_new_message_count"))),
             pdca_cycle_count=max(0, _coerce_int(value.get("pdca_cycle_count"))),
             metadata=dict(value.get("metadata")) if isinstance(value.get("metadata"), dict) else {},
@@ -155,6 +157,7 @@ class TaskState:
             "check_reason": self.check_reason,
             "check_confidence": self.check_confidence,
             "check_evidence_refs": list(self.check_evidence_refs or []),
+            "evidence_journal": [dict(item) for item in self.evidence_journal],
             "check_new_message_count": self.check_new_message_count,
             "pdca_cycle_count": self.pdca_cycle_count,
             "metadata": dict(self.metadata or {}),
@@ -271,7 +274,7 @@ class TaskState:
             if not isinstance(call, dict):
                 continue
             execution = call.get("execution")
-            if isinstance(execution, dict) and str(execution.get("status") or "").strip().lower() == "exception":
+            if isinstance(execution, dict) and str(execution.get("status") or "").strip().lower() in {"exception", "failed"}:
                 count += 1
         return count
 
@@ -282,6 +285,16 @@ class TaskState:
                 "status": "success",
                 "result": _json_safe(result),
                 "exception": "",
+            },
+        )
+
+    def record_plan_call_failure(self, call_id: str, result: Any, exception: Any) -> None:
+        self._record_plan_call_execution(
+            call_id,
+            {
+                "status": "failed",
+                "result": _json_safe(result),
+                "exception": _exception_payload(exception),
             },
         )
 
@@ -322,7 +335,25 @@ class TaskState:
                 updated["execution"] = execution_payload
                 calls[index] = updated
                 self.plan_json = json.dumps(calls, indent=2, sort_keys=True)
+                self._append_evidence_journal(updated, execution_payload)
                 return
+
+    def _append_evidence_journal(self, call: dict[str, Any], execution: dict[str, Any]) -> None:
+        call_id = str(call.get("id") or "").strip()
+        if not call_id:
+            return
+        entry = {
+            "evidence_ref": f"tool-call:{call_id}",
+            "call_id": call_id,
+            "tool_id": str(call.get("tool_id") or "program").strip(),
+            "tool_name": str(call.get("tool_name") or call.get("tool_id") or "program").strip(),
+            "execution_mode": str(call.get("execution_mode") or "direct").strip(),
+            "status": str(execution.get("status") or "").strip(),
+            "result": _bounded_json_value(execution.get("result"), max_chars=6_000),
+            "exception": str(execution.get("exception") or "").strip(),
+            "recorded_at": str(execution.get("finished_at") or ""),
+        }
+        self.evidence_journal.append(entry)
 
     def append_acceptance_criterion(self, criterion: str) -> None:
         self.acceptance_criteria_md = _append_markdown_line(self.acceptance_criteria_md, criterion)

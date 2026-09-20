@@ -55,6 +55,21 @@ def test_do_node_records_tool_exception() -> None:
     assert execution["exception"] == "RuntimeError: tool failed"
 
 
+def test_do_node_records_nonzero_bash_as_failed_with_result_evidence() -> None:
+    task = TaskState()
+    task.append_plan_call(_planned_call("bash-call", tool_id="native.bash", path="false"))
+    tools = _ToolRegistry(result={"exit_code": 7, "stdout": "", "stderr": "not a repository", "timed_out": False})
+
+    do_node(task, context=CoreLoopContext(messages=InMemoryMessageQueue(), tools=tools))
+
+    execution = json.loads(task.plan_json)[0]["execution"]
+    assert execution["status"] == "failed"
+    assert execution["result"]["exit_code"] == 7
+    assert "not a repository" in execution["exception"]
+    assert task.evidence_journal[0]["status"] == "failed"
+    assert task.evidence_journal[0]["evidence_ref"] == "tool-call:bash-call"
+
+
 def test_do_node_records_missing_registry_as_exception() -> None:
     task = TaskState()
     task.append_plan_call(_planned_call("plan-call-1"))

@@ -129,6 +129,25 @@ def test_check_node_wip_with_latest_execution_renders_criteria_review_prompt() -
     assert "Check prepared acceptance criteria review" in task.updates_md
 
 
+def test_check_node_prompt_preserves_cumulative_execution_evidence() -> None:
+    task = _task_with_successful_tool_execution()
+    task.append_plan_call(
+        {"id": "plan-call-2", "tool_id": "native.exact_text_edit", "tool_name": "exact_text_edit", "arguments": {}, "internal_state": "Correcting."}
+    )
+    task.record_plan_call_success(
+        "plan-call-2",
+        {"affected_paths": ["backlog.md"], "verification": {"status": "verified", "read_back_excerpt": "Solar | Complete"}},
+    )
+
+    check_node(task, context=CoreLoopContext(messages=InMemoryMessageQueue()))
+
+    prompt = task.metadata["criteria_review_prompt"]
+    assert "Cumulative Evidence Journal" in prompt
+    assert "tool-call:plan-call-1" in prompt
+    assert "tool-call:plan-call-2" in prompt
+    assert "Solar | Complete" in prompt
+
+
 def test_check_node_stubbed_criteria_review_leaves_criteria_unchanged() -> None:
     task = _task_with_successful_tool_execution()
     original = task.acceptance_criteria_md

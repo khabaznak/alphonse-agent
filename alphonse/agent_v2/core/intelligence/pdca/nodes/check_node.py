@@ -120,6 +120,7 @@ def _render_criteria_review_prompt(
         acceptance_criteria_md=task.acceptance_criteria_md,
         acceptance_contract_json=json.dumps(task.ensure_acceptance_contract(), indent=2, ensure_ascii=False, sort_keys=True),
         valid_evidence_refs=sorted(_valid_evidence_refs(task)),
+        cumulative_evidence_json=_bounded_json(_evidence_journal(task), max_chars=24_000),
         latest_executed_call_json=_bounded_json(latest_call, max_chars=12_000),
         user_context_md=user_context_md,
         project_context_md=project_context_md,
@@ -234,6 +235,16 @@ def _markdown_is_empty(value: str) -> bool:
 
 
 def _valid_evidence_refs(task: TaskState) -> set[str]:
+    journal = _evidence_journal(task)
+    if journal:
+        latest_status_by_ref: dict[str, str] = {}
+        for item in journal:
+            evidence_ref = str(item.get("evidence_ref") or "").strip()
+            if evidence_ref:
+                latest_status_by_ref[evidence_ref] = str(item.get("status") or "").strip()
+        return {
+            evidence_ref for evidence_ref, status in latest_status_by_ref.items() if status == "success"
+        }
     refs: set[str] = set()
     try:
         calls = json.loads(task.plan_json) if task.plan_json and task.plan_json != "- (none)" else []
@@ -246,6 +257,33 @@ def _valid_evidence_refs(task: TaskState) -> set[str]:
         if call_id:
             refs.add(f"tool-call:{call_id}")
     return refs
+
+
+def _evidence_journal(task: TaskState) -> list[dict[str, Any]]:
+    if task.evidence_journal:
+        return [dict(item) for item in task.evidence_journal if isinstance(item, dict)]
+    # Backward compatibility for checkpoints created before the evidence journal.
+    journal: list[dict[str, Any]] = []
+    try:
+        calls = json.loads(task.plan_json) if task.plan_json and task.plan_json != "- (none)" else []
+    except json.JSONDecodeError:
+        calls = []
+    for call in calls if isinstance(calls, list) else []:
+        execution = call.get("execution") if isinstance(call, dict) else None
+        if not isinstance(execution, dict):
+            continue
+        call_id = str(call.get("id") or "").strip()
+        journal.append(
+            {
+                "evidence_ref": f"tool-call:{call_id}",
+                "call_id": call_id,
+                "tool_id": str(call.get("tool_id") or "program"),
+                "status": str(execution.get("status") or ""),
+                "result": execution.get("result"),
+                "exception": execution.get("exception"),
+            }
+        )
+    return journal
 
 
 def _normalize_status_patch(value: Any, task: TaskState) -> dict[str, Any]:

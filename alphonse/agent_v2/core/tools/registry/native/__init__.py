@@ -10,6 +10,10 @@ from alphonse.agent_v2.core.tools.registry.native.bash import BASH_TOOL_ID
 from alphonse.agent_v2.core.tools.registry.native.bash import BASH_TOOL_NAME
 from alphonse.agent_v2.core.tools.registry.native.bash import build_bash_tool_definition
 from alphonse.agent_v2.core.tools.registry.native.bash import execute_bash
+from alphonse.agent_v2.core.tools.registry.native.exact_text_edit import EXACT_TEXT_EDIT_TOOL_ID
+from alphonse.agent_v2.core.tools.registry.native.exact_text_edit import EXACT_TEXT_EDIT_TOOL_NAME
+from alphonse.agent_v2.core.tools.registry.native.exact_text_edit import build_exact_text_edit_tool_definition
+from alphonse.agent_v2.core.tools.registry.native.exact_text_edit import execute_exact_text_edit
 from alphonse.agent_v2.core.tools.registry.native.deliver_message import DELIVER_MESSAGE_TOOL_ID
 from alphonse.agent_v2.core.tools.registry.native.deliver_message import DELIVER_MESSAGE_TOOL_NAME
 from alphonse.agent_v2.core.tools.registry.native.deliver_message import build_deliver_message_tool_definition
@@ -36,6 +40,7 @@ def build_native_tool_registry(web_tools_settings: WebToolsSettings | None = Non
     registry = InMemoryToolRegistry()
     registry.register(build_respond_tool_definition())
     registry.register(build_bash_tool_definition())
+    registry.register(build_exact_text_edit_tool_definition())
     registry.register(build_deliver_message_tool_definition())
     registry.register(build_send_attachment_tool_definition(asset_store))
     registry.register(build_ask_question_tool_definition())
@@ -58,6 +63,8 @@ __all__ = [
     "BASH_TOOL_NAME",
     "DELIVER_MESSAGE_TOOL_ID",
     "DELIVER_MESSAGE_TOOL_NAME",
+    "EXACT_TEXT_EDIT_TOOL_ID",
+    "EXACT_TEXT_EDIT_TOOL_NAME",
     "RESPOND_TOOL_ID",
     "RESPOND_TOOL_NAME",
     "SCHEDULED_TASK_TOOL_ID",
@@ -65,12 +72,14 @@ __all__ = [
     "build_ask_question_tool_definition",
     "build_bash_tool_definition",
     "build_deliver_message_tool_definition",
+    "build_exact_text_edit_tool_definition",
     "build_native_tool_registry",
     "build_respond_tool_definition",
     "build_scheduled_task_tool_definition",
     "execute_ask_question",
     "execute_bash",
     "execute_deliver_message",
+    "execute_exact_text_edit",
     "execute_respond",
     "execute_scheduled_task",
 ]

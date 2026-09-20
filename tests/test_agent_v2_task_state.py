@@ -164,6 +164,20 @@ def test_to_dict_from_dict_round_trip() -> None:
     assert restored.to_dict() == state.to_dict()
 
 
+def test_execution_evidence_journal_is_append_only_and_checkpointed() -> None:
+    state = TaskState()
+    state.append_plan_call(
+        {"id": "call-1", "tool_id": "native.read", "tool_name": "read", "arguments": {}, "internal_state": "Reading."}
+    )
+    state.record_plan_call_success("call-1", {"value": "first"})
+    state.record_plan_call_failure("call-1", {"value": "second"}, "later failure")
+
+    restored = TaskState.from_dict(state.to_checkpoint_dict())
+
+    assert [item["status"] for item in restored.evidence_journal] == ["success", "failed"]
+    assert all(item["evidence_ref"] == "tool-call:call-1" for item in restored.evidence_journal)
+
+
 def test_from_dict_reads_legacy_plan_md_fallback() -> None:
     state = TaskState.from_dict({"goal": "Goal", "plan_md": "- legacy plan"})
 
@@ -412,7 +426,7 @@ def test_acceptance_criteria_all_complete_requires_real_completed_checkbox_crite
     assert not TaskState(acceptance_criteria_md="plain text only").acceptance_criteria_all_complete()
 
 
-def test_count_plan_call_exceptions_counts_exception_executions() -> None:
+def test_count_plan_call_exceptions_counts_failed_and_exception_executions() -> None:
     state = TaskState()
     for index in range(3):
         state.append_plan_call(
@@ -427,5 +441,6 @@ def test_count_plan_call_exceptions_counts_exception_executions() -> None:
     state.record_plan_call_exception("plan-call-0", RuntimeError("first"))
     state.record_plan_call_success("plan-call-1", {"ok": True})
     state.record_plan_call_exception("plan-call-2", RuntimeError("second"))
+    state.record_plan_call_failure("plan-call-1", {"exit_code": 1}, "command failed")
 
-    assert state.count_plan_call_exceptions() == 2
+    assert state.count_plan_call_exceptions() == 3

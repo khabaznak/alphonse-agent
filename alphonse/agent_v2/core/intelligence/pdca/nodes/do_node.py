@@ -114,6 +114,26 @@ def do_node(task: TaskState, context: CoreLoopContext | None = None) -> TaskStat
         task.append_update(f"Do parked task waiting for question answer: {call_id}.")
         return task
 
+    failure = _tool_result_failure(tool_id, result)
+    if failure is not None:
+        context.record_memory_event(task, "Tool Result", {"status": "failed", "result": result, "error": failure})
+        context.emit_ui_event(
+            "tool_call_result",
+            {
+                "tool_call_id": call_id,
+                "tool_name": tool_name,
+                "tool_id": tool_id,
+                "status": "failed",
+                "result": result,
+                "exception": failure,
+            },
+        )
+        task.record_plan_call_failure(call_id, result, failure)
+        context.emit_activity(phase=ImprovementPhase.DO, label="tool failed", message=f"{tool_name} returned an error.")
+        task.metadata["do_executed_since_last_act"] = True
+        task.append_update(f"Do recorded failed result from planned tool call: {call_id}.")
+        return task
+
     context.emit_ui_event(
         "tool_call_result",
         {
@@ -219,6 +239,21 @@ def _execute_program(task: TaskState, context: CoreLoopContext | None, planned_c
 
 def _result_waits_for_answer(result: Any) -> bool:
     return isinstance(result, dict) and result.get("waiting_for_answer") is True
+
+
+def _tool_result_failure(tool_id: str, result: Any) -> str | None:
+    if tool_id != "native.bash" or not isinstance(result, dict):
+        return None
+    if result.get("timed_out") is True:
+        return str(result.get("stderr") or "Bash command timed out.").strip()
+    try:
+        exit_code = int(result.get("exit_code", 0))
+    except (TypeError, ValueError):
+        return "Bash returned an invalid exit code."
+    if exit_code != 0:
+        detail = str(result.get("stderr") or result.get("stdout") or "").strip()
+        return f"Bash exited with code {exit_code}." + (f" {detail}" if detail else "")
+    return None
 
 
 def _is_silent_successful_bash(tool_id: str, result: Any) -> bool:

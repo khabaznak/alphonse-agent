@@ -53,13 +53,12 @@ class ToolInvocationService:
             outcome = _failure(call_id, tool_id, type(exc).__name__, str(exc))
         else:
             waiting = isinstance(result, dict) and result.get("waiting_for_answer") is True
-            outcome = {
-                "call_id": call_id,
-                "tool_id": tool_id,
-                "status": "waiting" if waiting else "success",
-                "result": result,
-                "error": None,
+            bash_error = _bash_result_error(tool_id, result)
+            outcome = _failure(call_id, tool_id, "command_failed", bash_error) if bash_error else {
+                "call_id": call_id, "tool_id": tool_id, "status": "waiting" if waiting else "success", "result": result, "error": None,
             }
+            if bash_error:
+                outcome["result"] = result
         self.context.emit_ui_event("tool_call_result", {"tool_call_id": call_id, "tool_id": tool_id, "tool_name": descriptor.name, **outcome, "programmatic": True})
         self.context.record_memory_event(self.task, "Tool Result", {**outcome, "programmatic": True})
         return outcome
@@ -90,3 +89,18 @@ def _descriptor_for(registry: Any, tool_id: str) -> Any | None:
             if str(getattr(descriptor, "tool_id", "")) == tool_id or str(getattr(descriptor, "name", "")) == tool_id:
                 return descriptor
     return None
+
+
+def _bash_result_error(tool_id: str, result: Any) -> str:
+    if tool_id != "native.bash" or not isinstance(result, dict):
+        return ""
+    if result.get("timed_out") is True:
+        return str(result.get("stderr") or "Bash command timed out.").strip()
+    try:
+        exit_code = int(result.get("exit_code", 0))
+    except (TypeError, ValueError):
+        return "Bash returned an invalid exit code."
+    if exit_code == 0:
+        return ""
+    detail = str(result.get("stderr") or result.get("stdout") or "").strip()
+    return f"Bash exited with code {exit_code}." + (f" {detail}" if detail else "")
