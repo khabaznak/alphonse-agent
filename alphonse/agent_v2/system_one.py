@@ -8,6 +8,7 @@ import re
 import sqlite3
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from functools import lru_cache
 from pathlib import Path
 from time import monotonic
 from typing import Any, Callable
@@ -19,6 +20,7 @@ from alphonse.agent_v2.database import connect_database, default_database_path
 
 DEFAULT_SYSTEM_ONE_URL = "https://api.typesafe.ai/v1/systemone"
 DEFAULT_SYSTEM_ONE_MODEL = "jev-latest"
+_JEV_TOOL_REGISTRY_PATH = Path(__file__).resolve().parent / "config" / "jev_tool_registry.json"
 
 
 @dataclass(frozen=True)
@@ -403,18 +405,17 @@ class JevCriterionDecisionProvider:
             return self._tool_registry
         questions: dict[str, Any] = {}
         tool_ids_by_question: dict[str, str] = {}
+        native_questions = _load_jev_native_tool_registry()
         for tool in tools:
             tool_id = str(tool.tool_id)
             question_id = _tool_question_id(tool_id)
-            profile = _jev_tool_profile(tool)
-            questions[question_id] = {
-                "type": "noul",
-                "instructions": f"Can {tool_id} materially help accomplish at least one stage or subgoal of the plan in the state? Judge semantic usefulness; authorization is enforced separately.",
-                "criteria": {
-                    "true": f"At least one plan step directly needs this tool. {profile}",
-                    "false": f"No plan step directly needs this tool. Do not select it merely because it is broadly capable. {profile}",
-                },
-            }
+            if _tool_kind(tool) == "artifact":
+                question = _artifact_jev_question(tool)
+            else:
+                question = native_questions.get(tool_id)
+                if question is None:
+                    raise ValueError(f"system_one_native_tool_template_missing:{tool_id}")
+            questions[question_id] = json.loads(json.dumps(question, ensure_ascii=False))
             tool_ids_by_question[question_id] = tool_id
         self._tool_registry = _StaticJevToolRegistry(signature, questions, tool_ids_by_question)
         return self._tool_registry
@@ -506,33 +507,65 @@ def _tool_question_id(tool_id: str) -> str:
     return f"tool_relevance__{slug}__{digest}"
 
 
-def _jev_tool_profile(tool: Any) -> str:
-    description = str(getattr(tool, "description", "") or getattr(tool, "name", "") or "No description supplied").strip()
-    metadata = getattr(tool, "metadata", {})
-    metadata = metadata if isinstance(metadata, dict) else {}
-    capabilities = [
-        str(item).strip()
-        for item in (
-            list(metadata.get("v3_capabilities") or [])
-            + list(getattr(tool, "capabilities", ()) or ())
-            + list(getattr(tool, "tags", ()) or ())
-        )
-        if str(item).strip()
-    ]
-    schema = getattr(tool, "argument_schema", {})
-    properties = schema.get("properties") if isinstance(schema, dict) else {}
-    inputs = sorted(str(item) for item in properties) if isinstance(properties, dict) else []
-    read_only = bool(getattr(tool, "read_only", False))
-    effect = (
-        "Effect: read-only observation; it must not change project or external state."
-        if read_only else
-        f"Effect: {str(metadata.get('side_effect_class') or 'may change project or external state; separate authorization is required')}."
-    )
+@lru_cache(maxsize=1)
+def _load_jev_native_tool_registry() -> dict[str, dict[str, Any]]:
+    try:
+        payload = json.loads(_JEV_TOOL_REGISTRY_PATH.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise ValueError("system_one_native_tool_template_invalid") from exc
+    if not isinstance(payload, dict) or payload.get("schema_version") != 1:
+        raise ValueError("system_one_native_tool_template_invalid")
+    raw_questions = payload.get("questions")
+    if not isinstance(raw_questions, dict) or not raw_questions:
+        raise ValueError("system_one_native_tool_template_invalid")
+    questions: dict[str, dict[str, Any]] = {}
+    for tool_id, question in raw_questions.items():
+        normalized_id = str(tool_id or "").strip()
+        if not normalized_id.startswith("native.") or not _valid_jev_tool_question(question):
+            raise ValueError(f"system_one_native_tool_template_invalid:{normalized_id or '(missing)'}")
+        questions[normalized_id] = dict(question)
+    return questions
+
+
+def _valid_jev_tool_question(value: Any) -> bool:
+    if not isinstance(value, dict) or value.get("type") != "noul":
+        return False
+    if not str(value.get("instructions") or "").strip():
+        return False
+    criteria = value.get("criteria")
     return (
-        f"Capability: {description[:1000]} "
-        f"Semantic tags: {', '.join(dict.fromkeys(capabilities)) or 'unspecified'}. "
-        f"Expected inputs: {', '.join(inputs) or 'none declared'}. {effect}"
+        isinstance(criteria, dict)
+        and bool(str(criteria.get("true") or "").strip())
+        and bool(str(criteria.get("false") or "").strip())
     )
+
+
+def _tool_kind(tool: Any) -> str:
+    kind = getattr(tool, "kind", "")
+    return str(getattr(kind, "value", kind) or "").strip().lower()
+
+
+def _artifact_jev_question(tool: Any) -> dict[str, Any]:
+    name = _jev_tool_name(tool)
+    description = _jev_tool_description(tool)
+    return {
+        "type": "noul",
+        "instructions": f"Does this phase need {name}?",
+        "criteria": {
+            "true": f"The phase needs {name}: {description}",
+            "false": f"The phase does not need {name}.",
+        },
+    }
+
+
+def _jev_tool_name(tool: Any) -> str:
+    name = str(getattr(tool, "name", "") or getattr(tool, "tool_id", "") or "this tool").strip()
+    return name.replace("_", " ")[:200]
+
+
+def _jev_tool_description(tool: Any) -> str:
+    description = str(getattr(tool, "description", "") or "No description supplied.").strip()[:1200]
+    return description if description.endswith((".", "!", "?")) else description + "."
 
 
 def _http_transport(url: str, api_key: str, payload: dict[str, Any], timeout: float) -> dict[str, Any]:

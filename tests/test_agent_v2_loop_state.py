@@ -108,6 +108,58 @@ def test_v3_retry_restores_checkpoint_and_keeps_acceptance_contract(tmp_path) ->
     assert processor.received.acceptance_criteria_md == checkpoint.acceptance_criteria_md
 
 
+def test_v3_correlated_answer_preserves_original_task_identity() -> None:
+    reset_state()
+    queue = InMemoryMessageQueue()
+    original = TaskState(
+        task_id="original-v3-task",
+        message_id="original-v3-message",
+        user="alex",
+        project_id="home",
+        goal="Qué temperatura tenemos en el estudio?",
+        intelligence_engine="hierarchical_v3",
+        intelligence_schema_version=3,
+    )
+    queue.enqueue(
+        CoreMessage(
+            timestamp=datetime.now().astimezone(),
+            prompt="usa el artifact de LG",
+            user="alex",
+            project_id="home",
+            metadata={
+                "intelligence_engine": "hierarchical_v3",
+                "intelligence_schema_version": 3,
+                "routing_disposition": "correlated_response",
+                "task_state": original.to_dict(),
+            },
+        ),
+        message_id="answer-message",
+    )
+
+    class CaptureProcessor:
+        received = None
+
+        def process(self, task, context):
+            self.received = task
+            return ProcessingResult(snapshot=StateSnapshot(current_work=task.goal))
+
+    processor = CaptureProcessor()
+    core = AlphonseCore(
+        intelligence=processor,
+        messages=queue,
+        tools=_NullTools(),
+        prompts=_NullPrompts(),
+        state=_RecordingState(),
+        memory=_NullMemory(),
+    )
+
+    core.step()
+
+    assert processor.received is not None
+    assert processor.received.task_id == "original-v3-task"
+    assert 'usa el artifact de LG' in processor.received.recent_conversation_md
+
+
 def test_working_state_does_not_let_outer_loop_consume_message() -> None:
     core, queue, processor = _core(_Processor(ProcessingStatus.COMPLETED))
     State.set(core.fsm.current_state_for_key(WORKING))

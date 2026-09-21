@@ -44,9 +44,16 @@ class HierarchicalCAPDProcessor:
             try:
                 if task.hierarchical_state:
                     state = TacticalState.from_dict(task.hierarchical_state)
-                    if state.status.value in {"planned", "running", "waiting_user"}:
-                        if state.status.value == "waiting_user":
-                            state.status = PhaseStatus.RUNNING
+                    if state.status == PhaseStatus.WAITING_USER:
+                        # The question store has already appended the user's answer
+                        # to the durable conversation before re-queueing this task.
+                        # Re-running the parked subgoal would merely ask the same
+                        # question again. Replan from the answer while retaining the
+                        # earlier phase evidence in v3_phase_history.
+                        task.hierarchical_state = {}
+                        state = self._new_state(task, context)
+                    elif state.status.value in {"planned", "running"}:
+                        pass
                     else:
                         state = self._new_state(task, context)
                 else:

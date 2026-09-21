@@ -139,7 +139,9 @@ def test_phase_executor_uses_system_one_registry_selection_before_system_two_com
             }
             return SystemOneToolRegistrySelection(
                 selected_tool_ids=("native.search",),
-                probabilities={"native.search": 0.95, "native.read": 0.1, "native.exact_text_edit": 0.1},
+                ambiguous_tool_ids=("native.read",),
+                rejected_tool_ids=("native.exact_text_edit",),
+                probabilities={"native.search": 0.95, "native.read": 0.63, "native.exact_text_edit": 0.1},
             )
 
     def selector(current_state, subgoal, tools):
@@ -168,9 +170,11 @@ def test_phase_executor_uses_system_one_registry_selection_before_system_two_com
     outcome = executor.run(task, state, context)
 
     assert outcome.status == PhaseStatus.PHASE_COMPLETE
-    assert selected_tool_sets == [["native.search"]]
+    assert selected_tool_sets == [["native.search", "native.read"]]
     selection = task.metadata["system_one_tool_registry_selections"][0]
     assert selection["selected_tool_ids"] == ["native.search"]
+    assert selection["ambiguous_tool_ids"] == ["native.read"]
+    assert state.system_one_relevant_tool_ids == ["native.search", "native.read"]
 
 
 def test_phase_executor_uses_system_one_to_check_semantic_subgoal_completion() -> None:

@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import pytest
 
+from alphonse.agent_v2.core.core import ToolDescriptor, ToolKind
 from alphonse.agent_v2.system_one import JevCriterionDecisionProvider
 from alphonse.agent_v2.system_one import SQLiteSystemOneSettingsStore
 from alphonse.agent_v2.system_one import SystemOneSettings
 from alphonse.agent_v2.system_one import TypeSafeSystemOneClient
+from alphonse.agent_v2.system_one import _load_jev_native_tool_registry
 from alphonse.agent_v2.system_one import build_system_one_provider
 from alphonse.agent_v2.system_one import validate_and_save_system_one_settings
 
@@ -108,7 +110,7 @@ def test_jev_classifies_complete_static_tool_registry_with_parallel_noul_questio
         payloads.append(payload)
         answers = {}
         for key, question in payload["questions"].items():
-            probability = 0.94 if "project_search" in question["instructions"] else 0.03
+            probability = 0.94 if "locate text or records" in question["instructions"] else 0.03
             answers[key] = {"type": "noul", "noul": probability}
         return {"answers": answers, "model": "jev-latest"}
 
@@ -117,8 +119,8 @@ def test_jev_classifies_complete_static_tool_registry_with_parallel_noul_questio
         transport=transport,
     )
     tools = (
-        type("Tool", (), {"tool_id": "native.project_search", "name": "search", "description": "Find project records", "read_only": True})(),
-        type("Tool", (), {"tool_id": "artifact.medical", "name": "medical", "description": "Query medical records", "read_only": True})(),
+        ToolDescriptor("native.project_search", "project_search", ToolKind.NATIVE),
+        ToolDescriptor("native.respond", "respond", ToolKind.NATIVE),
     )
 
     result = provider.select_plan_tools(
@@ -128,13 +130,44 @@ def test_jev_classifies_complete_static_tool_registry_with_parallel_noul_questio
     provider.select_plan_tools(goal="Another goal", phase={"phase_id": "p2", "objective": "Another plan"}, tools=tools)
 
     assert result.selected_tool_ids == ("native.project_search",)
-    assert result.rejected_tool_ids == ("artifact.medical",)
+    assert result.rejected_tool_ids == ("native.respond",)
     assert len(payloads[0]["questions"]) == len(tools)
     assert payloads[0]["questions"] == payloads[1]["questions"]
     assert all(question["type"] == "noul" for question in payloads[0]["questions"].values())
     instructions = [question["instructions"] for question in payloads[0]["questions"].values()]
-    assert any("native.project_search" in instruction for instruction in instructions)
-    assert any("artifact.medical" in instruction for instruction in instructions)
+    assert "Does this phase need to locate text or records inside the authorized project?" in instructions
+    assert "Does this phase need to send a direct response to the requester?" in instructions
+    questions = list(payloads[0]["questions"].values())
+    assert questions[0]["criteria"] == {
+        "true": "The phase needs to discover which project file contains a relevant term, record, or reference before reading or changing it.",
+        "false": "The relevant file is already known, the information is outside the project, or no project-file discovery is needed.",
+    }
+    assert questions[1]["criteria"] == {
+        "true": "The phase includes a user-visible answer, greeting, status update, clarification, or presentation of completed work.",
+        "false": "The phase must perform or verify other work before responding, or it has no requester-facing response subgoal.",
+    }
+    serialized = str(payloads[0]["questions"])
+    assert "Semantic tags:" not in serialized
+    assert "Expected inputs:" not in serialized
+    assert "Effect:" not in serialized
+
+
+def test_jev_native_registry_template_covers_every_out_of_box_tool() -> None:
+    assert set(_load_jev_native_tool_registry()) == {
+        "native.respond",
+        "native.bash",
+        "native.exact_text_edit",
+        "native.project_search",
+        "native.read_project_file",
+        "native.deliver_message",
+        "native.send_attachment",
+        "native.ask_question",
+        "native.scheduled_task",
+        "native.artifact_registration",
+        "native.analyze_image",
+        "native.web_search",
+        "native.web_fetch",
+    }
 
 
 def test_jev_tactical_review_distinguishes_operational_success_from_semantic_completion() -> None:

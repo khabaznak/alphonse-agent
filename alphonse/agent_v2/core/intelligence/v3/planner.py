@@ -9,6 +9,7 @@ from alphonse.agent_v2.core.inference import InferencePurpose, InferenceRequest
 from alphonse.agent_v2.core.intelligence.v3.contracts import FailurePolicy, PhasePlan, SideEffectClass
 from alphonse.agent_v2.core.intelligence.v3.contracts import SUPPORTED_COMPLETION_KINDS, V3_SCHEMA_VERSION
 from alphonse.agent_v2.core.intelligence.v3.revealing import tool_capabilities
+from alphonse.agent_v2.core.intelligence.v3.revealing import ToolRevealPolicy
 
 if TYPE_CHECKING:
     from alphonse.agent_v2.core.core import CoreLoopContext
@@ -24,6 +25,11 @@ def plan_phase(task: "TaskState", context: "CoreLoopContext") -> PhasePlan:
         raise RuntimeError("v3_phase_planning_inference_unavailable")
     tools = tuple(context.tools.list()) if context.tools is not None else ()
     catalog = sorted({capability for tool in tools for capability in tool_capabilities(tool)})
+    capability_descriptions = ToolRevealPolicy().capability_descriptions
+    capability_catalog = [
+        {"capability": capability, "description": capability_descriptions.get(capability, capability)}
+        for capability in catalog
+    ]
     contract_schema = _phase_plan_json_schema(catalog)
     prompt = (
         "Plan one bounded strategic execution phase. Return one JSON object matching the PhasePlan contract. "
@@ -39,9 +45,11 @@ def plan_phase(task: "TaskState", context: "CoreLoopContext") -> PhasePlan:
         "A mutation path must already be established by the user or prior verified evidence; otherwise plan a read-only discovery phase first. "
         "Use native.project_search and native.read_project_file for bounded file discovery; native.bash is unavailable in V3.\n\n"
         f"Goal: {task.goal}\n"
+        f"Recent conversation (newest steering and answers are authoritative):\n{_bounded_text(task.recent_conversation_md, 6000)}\n"
+        f"Known task facts:\n{_bounded_text(task.facts_md, 4000)}\n"
         f"Immutable acceptance contract: {json.dumps(task.ensure_acceptance_contract(), ensure_ascii=False)}\n"
         f"Prior V3 phase history: {json.dumps(task.metadata.get('v3_phase_history') or [], ensure_ascii=False)}\n"
-        f"Available capability identifiers: {json.dumps(catalog)}\n"
+        f"Available capability catalog: {json.dumps(capability_catalog, ensure_ascii=False)}\n"
         "Return an object conforming exactly to this JSON Schema. Do not omit required nested fields "
         "or invent enum values. Use the user_response side effect for a subgoal whose effect is replying "
         f"to the requester.\nPhasePlan JSON Schema: {json.dumps(contract_schema, ensure_ascii=False, sort_keys=True)}"
@@ -63,6 +71,13 @@ def plan_phase(task: "TaskState", context: "CoreLoopContext") -> PhasePlan:
         return PhasePlan.from_dict(result.json_value)
     except (TypeError, ValueError) as exc:
         raise V3PhasePlanValidationError(f"v3_phase_plan_invalid:{exc}") from exc
+
+
+def _bounded_text(value: object, max_chars: int) -> str:
+    rendered = str(value or "").strip() or "- (none)"
+    if len(rendered) <= max_chars:
+        return rendered
+    return rendered[-max(1, max_chars - 18):].lstrip() + "\n... truncated"
 
 
 def _phase_plan_json_schema(capabilities: list[str]) -> dict[str, object]:

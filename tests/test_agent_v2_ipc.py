@@ -535,6 +535,137 @@ def test_task_progress_omits_empty_acceptance_criteria_sentinel() -> None:
     assert progress["acceptance_criteria"] == ""
 
 
+def test_v3_task_progress_projects_hierarchical_actions_without_private_reasoning() -> None:
+    task = TaskState(
+        task_id="v3-progress",
+        user="alex",
+        project_id="home",
+        acceptance_criteria_md="1. [ ] Report the current device status",
+        intelligence_engine="hierarchical_v3",
+        intelligence_schema_version=3,
+    )
+    task.hierarchical_state = {
+        "phase": {
+            "phase_id": "inspect-device",
+            "objective": "Inspect the device",
+            "subgoals": [{
+                "subgoal_id": "read-status",
+                "objective": "Read the current device status",
+            }],
+        },
+        "actions": [
+            {
+                "action_id": "action-1",
+                "subgoal_id": "read-status",
+                "tool_id": "native.device_status",
+                "arguments": {"device_id": "studio", "api_token": "secret-input"},
+                "status": "success",
+                "result": {"temperature_c": 23, "access_token": "secret-output"},
+                "error": "",
+            },
+            {
+                "action_id": "action-2",
+                "subgoal_id": "read-status",
+                "tool_id": "native.respond",
+                "arguments": {"message": "The studio is 23 C."},
+                "status": "failed",
+                "result": None,
+                "error": "Response delivery failed.",
+            },
+        ],
+    }
+
+    progress = _task_progress_snapshot(task)
+
+    assert progress["tool_name"] == "native.respond"
+    assert progress["tool_status"] == "failed"
+    assert progress["tool_result"] == {"error": "Response delivery failed."}
+    assert progress["intention"] == "Read the current device status"
+    assert progress["steps"] == [
+        {
+            "intention": "Read the current device status",
+            "tool_name": "native.device_status",
+            "arguments": {"device_id": "studio", "api_token": "[redacted]"},
+            "status": "success",
+            "result": {"temperature_c": 23, "access_token": "[redacted]"},
+        },
+        {
+            "intention": "Read the current device status",
+            "tool_name": "native.respond",
+            "arguments": {"message": "The studio is 23 C."},
+            "status": "failed",
+            "result": {"error": "Response delivery failed."},
+        },
+    ]
+
+
+def test_desktop_task_progress_a2ui_renders_v3_capd_work_log(tmp_path) -> None:
+    users = V2UserStore(":memory:")
+    admin = users.onboard(display_name="Admin", users_root=tmp_path / "users")
+    runtime = build_runtime_host(user_store=users, schedule_store=ScheduledTaskStore(":memory:"), inference=_router())
+    daemon = V2Daemon(runtime)
+    task = TaskState(
+        task_id="v3-desktop-progress",
+        user=admin.user_id,
+        project_id="home",
+        acceptance_criteria_md="1. [ ] Report the current device status",
+        intelligence_engine="hierarchical_v3",
+        intelligence_schema_version=3,
+    )
+    task.hierarchical_state = {
+        "phase": {
+            "phase_id": "inspect-device",
+            "objective": "Inspect the device",
+            "subgoals": [{
+                "subgoal_id": "read-status",
+                "objective": "Read the current device status",
+            }],
+        },
+        "actions": [{
+            "action_id": "action-1",
+            "subgoal_id": "read-status",
+            "tool_id": "native.device_status",
+            "arguments": {"device_id": "studio", "api_key": "secret-input"},
+            "status": "success",
+            "result": {"temperature_c": 23, "access_token": "secret-output"},
+            "error": "",
+        }],
+    }
+    runtime.activity_events.append(CoreActivityEvent(
+        phase=ImprovementPhase.DO,
+        label="subgoal completed",
+        message="Read the current device status",
+        task_id=task.task_id,
+        user=admin.user_id,
+        integration_id="desktop",
+        channel_target=admin.user_id,
+        progress=_task_progress_snapshot(task),
+    ))
+
+    response = daemon.ipc._dispatch({
+        "method": "desktop_poll",
+        "params": {
+            "client_id": "v3-rich",
+            "user": admin.user_id,
+            "project_id": "home",
+            "client_capabilities": {"supportedCatalogIds": [ALPHONSE_DESKTOP_CATALOG_ID]},
+        },
+    })
+    envelopes = [
+        item["event"]["value"] for item in response["ui_events"]
+        if item["event"].get("name") == "a2ui.envelope"
+    ]
+    rendered = str(envelopes)
+
+    assert "task-progress:v3-desktop-progress" in rendered
+    assert "native.device_status · success" in rendered
+    assert "Intention: Read the current device status" in rendered
+    assert "device_id" in rendered
+    assert "temperature_c" in rendered
+    assert "secret-input" not in rendered
+    assert "secret-output" not in rendered
+
+
 def test_desktop_a2ui_question_surface_is_negotiated_and_actions_resume_only_the_question() -> None:
     store = SQLiteQuestionStore(":memory:")
     runtime = build_runtime_host(inference=_router(), schedule_store=ScheduledTaskStore(":memory:"), question_store=store)

@@ -33,8 +33,11 @@ device_control
 At startup use, Alphonse constructs a static Jev-oriented registry: one stable Noul
 question per registered tool describing its capability, expected inputs, and effects.
 Every planned phase sends the same complete question set in parallel with a different
-plan state. Tool count is not artificially capped at this semantic-classification
-boundary and complete JSON schemas are not sent to Jev.
+plan state. Out-of-the-box native tools use a versioned, reviewed registry template
+whose fixed Noul questions state precisely when each tool is and is not needed.
+Registered artifacts are appended dynamically using their stored name and description.
+Tool count is not artificially capped at this semantic-classification boundary and
+schemas, tags, argument lists, and generated effect profiles are not sent to Jev.
 
 Jev's positive results form a phase-wide semantic palette. Deterministic policy then
 applies authorization and current-subgoal prerequisites. Only the remaining concrete
@@ -127,7 +130,9 @@ that phase unless new evidence and the phase contract make them relevant.
 - [x] Unauthorized integrations and cross-project tools remain hidden.
 - [x] A hidden tool call is rejected at execution even if the model invents it.
 - [x] Tool reveal changes after typed subgoal output is bound.
-- [x] Jev receives compact semantic tool profiles rather than complete schemas.
+- [x] Jev receives calibrated static questions for out-of-the-box tools and simple
+      description-grounded questions for dynamically registered artifacts rather than
+      generated semantic profiles or complete schemas.
 - [x] Internal `.alphonse` memory cannot be searched, read, or mutated through the
       V3 project-file path.
 - [ ] Necessary-tool recall is measured on the V3 evaluation set (Stage 5 rollout
@@ -168,3 +173,7 @@ that phase unless new evidence and the phase contract make them relevant.
 - 2026-09-20 — Replaced per-call Choice selection and the six-tool cap with a static,
   full-registry parallel Noul classification. Jev now supplies a phase-wide palette;
   deterministic gates narrow it per subgoal and System Two composes invocations.
+- 2026-09-21 — Moved out-of-the-box tool relevance questions into a versioned,
+  reviewed Jev registry template. Dynamically registered artifacts retain the simple
+  name-and-description question generator. Removed duplicated generated profiles,
+  tags, argument-name lists, and effect prose from Jev's relevance payload.

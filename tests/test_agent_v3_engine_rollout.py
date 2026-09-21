@@ -336,6 +336,132 @@ def test_hierarchical_processor_fails_invalid_phase_once_with_controlled_error()
     assert len([item for item in provider.requests if item.purpose == InferencePurpose.PHASE_PLANNING]) == 1
 
 
+def test_v3_phase_planner_receives_latest_user_tool_hint() -> None:
+    provider = StubInferenceProvider(
+        json_by_purpose={
+            InferencePurpose.PHASE_PLANNING: {
+                "schema_version": 3,
+                "phase_id": "read-device-temperature",
+                "objective": "Use the requested device-status tool to read the studio temperature",
+                "criterion_ids": ["ac-1"],
+                "authorized_capabilities": ["device_control"],
+                "mutation_scope": {"allowed_paths": [], "allow_external_effects": False},
+                "limits": {"max_tool_calls": 2, "max_duration_seconds": 20},
+                "originating_decision": "The user named the tool in the latest answer.",
+                "subgoals": [{
+                    "subgoal_id": "read-temperature",
+                    "objective": "Query the named device-status tool for the current studio temperature",
+                    "required_output_type": "temperature",
+                    "depends_on": [],
+                    "allowed_capabilities": ["device_control"],
+                    "allowed_side_effects": ["read_only"],
+                    "limits": {"max_tool_calls": 2, "max_duration_seconds": 20},
+                    "completion": {"kind": "output_present", "output_type": "temperature"},
+                    "failure_policy": "stop",
+                }],
+            }
+        },
+    )
+    inference = InferenceRouter(provider=provider, default_profile=ModelProfile("test", "test", "default"))
+    registry = InMemoryToolRegistry()
+    registry.register(ToolDefinition(
+        descriptor=ToolDescriptor(
+            "native.device_status", "device_status", ToolKind.NATIVE,
+            description="Query authorized device status.",
+            metadata={"v3_capabilities": ["device_control"]}, read_only=True,
+        ),
+        callable=lambda _arguments: {"temperature_c": 23},
+    ))
+    task = TaskState(
+        goal="Qué temperatura tenemos en el estudio?",
+        user="alex",
+        project_id="home",
+        recent_conversation_md=(
+            '- alex: "Qué temperatura tenemos en el estudio?"\n'
+            '- alex: "usa la herramienta device status"'
+        ),
+    )
+    task.set_acceptance_contract_from_markdown("1.- [ ] La temperatura del estudio se obtiene")
+
+    state = HierarchicalCAPDProcessor._new_state(
+        task,
+        CoreLoopContext(messages=InMemoryMessageQueue(), tools=registry, inference=inference),
+    )
+
+    request = next(item for item in provider.requests if item.purpose == InferencePurpose.PHASE_PLANNING)
+    assert 'usa la herramienta device status' in request.prompt
+    assert '"capability": "device_control"' in request.prompt
+    assert "Read or control an authorized device" in request.prompt
+    assert state.phase.phase_id == "read-device-temperature"
+
+
+def test_v3_answered_question_replans_with_named_tool_instead_of_repeating_parked_subgoal() -> None:
+    waiting_phase = PhasePlan(
+        "ask-source",
+        "Ask for a temperature source",
+        (PhaseSubgoal(
+            "ask",
+            "Ask Alex for a source",
+            "source",
+            allowed_capabilities=("user_interaction",),
+            completion=CompletionCondition("output_present", output_type="source"),
+        ),),
+        authorized_capabilities=("user_interaction",),
+        limits=PhaseLimits(1, 10),
+    )
+    waiting_state = new_tactical_state(waiting_phase)
+    waiting_state.status = PhaseStatus.WAITING_USER
+    resumed_phase = PhasePlan(
+        "use-device-status",
+        "Use the device-status tool named in the answer",
+        (PhaseSubgoal(
+            "read",
+            "Read the device status",
+            "temperature",
+            allowed_capabilities=("device_control",),
+            completion=CompletionCondition("output_present", output_type="temperature"),
+        ),),
+        authorized_capabilities=("device_control",),
+        limits=PhaseLimits(1, 10),
+    )
+    resumed_state = new_tactical_state(resumed_phase)
+    task = TaskState(
+        task_id="temperature-task",
+        goal="Qué temperatura tenemos en el estudio?",
+        user="alex",
+        project_id="home",
+        recent_conversation_md='- alex: "usa la herramienta device status"',
+        hierarchical_state=waiting_state.to_dict(),
+        intelligence_engine=HIERARCHICAL_V3,
+        intelligence_schema_version=3,
+    )
+    task.set_acceptance_contract_from_markdown("1.- [ ] La temperatura del estudio se obtiene")
+    seen_phase_ids: list[str] = []
+    processor = HierarchicalCAPDProcessor(max_phases=1)
+    processor._new_state = lambda _task, _context: resumed_state  # type: ignore[method-assign]
+
+    class Executor:
+        @staticmethod
+        def run(_task, state, _context):
+            seen_phase_ids.append(state.phase.phase_id)
+            state.status = PhaseStatus.PHASE_COMPLETE
+            return PhaseOutcome(state.phase.phase_id, PhaseStatus.PHASE_COMPLETE)
+
+    class Outer:
+        @staticmethod
+        def review_and_route(current_task, _state, _outcome, _context):
+            current_task.status = "completed"
+            current_task.metadata["v3_route"] = "respond_and_end"
+            return object(), object()
+
+    processor.executor = Executor()  # type: ignore[assignment]
+    processor.outer = Outer()  # type: ignore[assignment]
+
+    processor.process(task, CoreLoopContext(messages=InMemoryMessageQueue()))
+
+    assert seen_phase_ids == ["use-device-status"]
+
+
 def test_phase_budget_failure_is_persisted_as_terminal_checkpoint(tmp_path: Path) -> None:
     phase = PhasePlan(
         "only-phase",

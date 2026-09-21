@@ -297,6 +297,45 @@ def _task_progress_snapshot(task: Any, extra: dict[str, Any] | None = None) -> d
             "status": str(call_execution.get("status") or "planned").strip(),
             "result": _safe_progress_value(call_execution.get("result")),
         })
+    hierarchical_state = getattr(task, "hierarchical_state", {})
+    hierarchical_state = hierarchical_state if isinstance(hierarchical_state, dict) else {}
+    phase = hierarchical_state.get("phase") if isinstance(hierarchical_state.get("phase"), dict) else {}
+    subgoal_intentions = {
+        str(item.get("subgoal_id") or "").strip(): str(item.get("objective") or "").strip()
+        for item in phase.get("subgoals") or []
+        if isinstance(item, dict) and str(item.get("subgoal_id") or "").strip()
+    }
+    v3_actions = [item for item in hierarchical_state.get("actions") or [] if isinstance(item, dict)]
+    if v3_actions:
+        steps = []
+        for action in v3_actions[-10:]:
+            subgoal_id = str(action.get("subgoal_id") or "").strip()
+            result = action.get("result")
+            error = str(action.get("error") or "").strip()
+            if result in (None, "", {}, []) and error:
+                result = {"error": error}
+            steps.append({
+                "intention": _truncate_progress(subgoal_intentions.get(subgoal_id, ""), 500),
+                "tool_name": str(action.get("tool_id") or "").strip(),
+                "arguments": _safe_progress_value(action.get("arguments")),
+                "status": str(action.get("status") or "planned").strip(),
+                "result": _safe_progress_value(result),
+            })
+        current = v3_actions[-1]
+        current_subgoal_id = str(current.get("subgoal_id") or "").strip()
+        current_result = current.get("result")
+        current_error = str(current.get("error") or "").strip()
+        if current_result in (None, "", {}, []) and current_error:
+            current_result = {"error": current_error}
+        selected = {
+            "tool_id": str(current.get("tool_id") or "").strip(),
+            "arguments": current.get("arguments"),
+            "internal_state": subgoal_intentions.get(current_subgoal_id, ""),
+        }
+        execution = {
+            "status": str(current.get("status") or "planned").strip(),
+            "result": current_result,
+        }
     acceptance_criteria = str(getattr(task, "acceptance_criteria_md", "") or "").strip()
     if acceptance_criteria == "- (none)":
         acceptance_criteria = ""
@@ -479,7 +518,14 @@ class AlphonseCore:
             task = self.question_store.load_task_checkpoint(queued.message_id)
         if task is None:
             task = TaskState.from_queued_message(queued)
-        if queued_engine == "hierarchical_v3":
+        routing_disposition = str(queued.message.metadata.get("routing_disposition") or "")
+        raw_task_state = queued.message.metadata.get("task_state")
+        is_correlated_resume = (
+            routing_disposition == "correlated_response"
+            and isinstance(raw_task_state, dict)
+            and bool(str(task.task_id or "").strip())
+        )
+        if queued_engine == "hierarchical_v3" and not is_correlated_resume:
             # A queue delivery may be retried, but it is still the same V3 task.
             # Using the durable message id prevents a retry from silently creating
             # a new acceptance contract and a different execution history.

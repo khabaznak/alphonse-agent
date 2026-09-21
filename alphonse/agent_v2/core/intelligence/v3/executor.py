@@ -204,7 +204,10 @@ class PhaseExecutor:
                     state.system_one_tool_registry_status = "fallback"
                 else:
                     selection_metadata = {"status": "used", **selection.to_metadata()}
-                    state.system_one_relevant_tool_ids = list(selection.selected_tool_ids)
+                    state.system_one_relevant_tool_ids = list(dict.fromkeys((
+                        *selection.selected_tool_ids,
+                        *selection.ambiguous_tool_ids,
+                    )))
                     state.system_one_tool_registry_status = "used"
                 _record_system_one_registry_selection(task, state, selection_metadata)
                 context.emit_telemetry({
@@ -212,6 +215,12 @@ class PhaseExecutor:
                     "phase_id": state.phase.phase_id, **selection_metadata,
                 })
             if state.system_one_tool_registry_status == "used":
+                # A Noul result between the configured yes/no thresholds is not a
+                # semantic rejection. Keep those tools in the phase palette and
+                # let the deterministic capability gates plus System Two make the
+                # final choice. Dropping ambiguous tools here creates a false-
+                # negative cliff: a likely device client can disappear while a
+                # more confidently scored but less useful file search remains.
                 relevant = set(state.system_one_relevant_tool_ids)
                 candidates = tuple(item for item in available if item.tool_id in relevant)
         if self._reveal_policy is not None and not state.revealed_tool_ids:
