@@ -9,10 +9,13 @@ from alphonse.agent_v2.core.intelligence.v3 import EngineRoutingProcessor, Hiera
 from alphonse.agent_v2.core.messages import CommunicationChannel, InMemoryMessageQueue
 from alphonse.agent_v2.core.questions import SQLiteQuestionStore
 from alphonse.agent_v2.core.tools.registry import InMemoryToolRegistry, ToolDefinition
+from alphonse.agent_v2.core.tools.registry.native.respond import build_respond_tool_definition
 from alphonse.agent_v2.intelligence_engine_settings import HIERARCHICAL_V3, TACTICAL_V2
 from alphonse.agent_v2.intelligence_engine_settings import IntelligenceEngineSettings
 from alphonse.agent_v2.intelligence_engine_settings import SQLiteIntelligenceEngineSettingsStore
-from alphonse.agent_v2.system_one import SystemOneDirectResponseDecision
+from alphonse.agent_v2.system_one import SystemOneReviewResult
+from alphonse.agent_v2.system_one import SystemOneTacticalReview
+from alphonse.agent_v2.system_one import SystemOneToolRegistrySelection
 
 
 def test_engine_settings_default_to_v3_and_allow_v2_rollback(tmp_path: Path) -> None:
@@ -138,16 +141,79 @@ def test_hierarchical_processor_completes_one_phase_without_v2_tool_cycles() -> 
     assert InferencePurpose.TOOL_PLANNING not in [item.purpose for item in provider.requests]
 
 
-def test_hierarchical_processor_routes_greeting_directly_without_acceptance_or_plan(tmp_path: Path) -> None:
+def test_hierarchical_processor_plans_one_stage_and_jev_selects_respond_for_greeting(tmp_path: Path) -> None:
     provider = StubInferenceProvider(
-        markdown_by_purpose={InferencePurpose.FINAL_RESPONSE: "¡Hola, Alex! Qué gusto saludarte."},
+        markdown_by_purpose={
+            InferencePurpose.ACCEPTANCE_CRITERIA: "1.- [ ] Alex receives a warm greeting",
+        },
+        json_by_purpose={
+            InferencePurpose.PHASE_PLANNING: {
+                "schema_version": 3,
+                "phase_id": "reply-to-requester",
+                "objective": "Reply directly to Alex with a warm greeting",
+                "criterion_ids": ["ac-1"],
+                "authorized_capabilities": ["user_response"],
+                "mutation_scope": {"allowed_paths": [], "allow_external_effects": True},
+                "limits": {"max_tool_calls": 1, "max_duration_seconds": 10},
+                "originating_decision": "initial",
+                "subgoals": [{
+                    "subgoal_id": "reply",
+                    "objective": "Reply directly to Alex with a warm greeting",
+                    "required_output_type": "user_response",
+                    "depends_on": [],
+                    "allowed_capabilities": ["user_response"],
+                    "allowed_side_effects": ["external_reversible"],
+                    "limits": {"max_tool_calls": 1, "max_duration_seconds": 10},
+                    "completion": {"kind": "output_present", "output_type": "user_response"},
+                    "failure_policy": "stop",
+                }],
+            },
+            InferencePurpose.TACTICAL_ACTION: {
+                "tool_id": "native.respond",
+                "arguments": {"message": "¡Hola, Alex! Qué gusto saludarte.", "tone": "warm"},
+            },
+        },
     )
     inference = InferenceRouter(provider=provider, default_profile=ModelProfile("test", "test", "default"))
 
     class SystemOne:
-        def classify_direct_response(self, **values):
+        def select_plan_tools(self, **values):
             assert values["goal"] == "Hola Alphonse!"
-            return SystemOneDirectResponseDecision(True, 0.99, True, model="jev-latest")
+            assert {tool.tool_id for tool in values["tools"]} == {"native.respond", "artifact.medical"}
+            return SystemOneToolRegistrySelection(
+                selected_tool_ids=("native.respond",),
+                rejected_tool_ids=("artifact.medical",),
+                probabilities={"native.respond": 0.99, "artifact.medical": 0.01},
+                model="jev-latest",
+            )
+
+        def evaluate_tactical_progress(self, **_values):
+            return SystemOneTacticalReview(True, 0.99, True, model="jev-latest")
+
+        def evaluate(self, **values):
+            evidence_ref = values["evidence"]["entries"][-1]["evidence_ref"]
+            return SystemOneReviewResult(
+                updates=({
+                    "criterion_id": "ac-1", "status": "satisfied",
+                    "evidence_refs": [evidence_ref], "reason": "The response was produced.",
+                },),
+                ambiguous_criterion_ids=(),
+                recommended_route="complete",
+                route_confidence=0.99,
+                route_confident=True,
+                model="jev-latest",
+            )
+
+    registry = InMemoryToolRegistry()
+    registry.register(build_respond_tool_definition())
+    registry.register(ToolDefinition(
+        descriptor=ToolDescriptor(
+            "artifact.medical", "medical", ToolKind.ARTIFACT,
+            description="Read or update the authorized family medical database.",
+            metadata={"v3_capabilities": ["project_artifact_query"]},
+        ),
+        callable=lambda _arguments: (_ for _ in ()).throw(AssertionError("irrelevant artifact must not run")),
+    ))
 
     task = TaskState(
         task_id="greeting-task", goal="Hola Alphonse!", user="alex", project_id="home",
@@ -159,6 +225,7 @@ def test_hierarchical_processor_routes_greeting_directly_without_acceptance_or_p
         task,
         CoreLoopContext(
             messages=InMemoryMessageQueue(),
+            tools=registry,
             inference=inference,
             system_one=SystemOne(),
             question_store=question_store,
@@ -169,24 +236,15 @@ def test_hierarchical_processor_routes_greeting_directly_without_acceptance_or_p
     assert result.status.value == "completed"
     assert task.metadata["v3_route"] == "respond_and_end"
     assert task.metadata["prepared_user_response"]["message"] == "¡Hola, Alex! Qué gusto saludarte."
-    assert task.acceptance_contract == {}
-    assert [item.purpose for item in provider.requests] == [InferencePurpose.FINAL_RESPONSE]
+    assert task.metadata["prepared_user_response"]["source"] == "native.respond"
+    assert task.acceptance_criteria_all_complete()
+    purposes = [item.purpose for item in provider.requests]
+    assert InferencePurpose.ACCEPTANCE_CRITERIA in purposes
+    assert InferencePurpose.PHASE_PLANNING in purposes
+    assert InferencePurpose.TACTICAL_ACTION in purposes
+    assert InferencePurpose.FINAL_RESPONSE not in purposes
     assert question_store.load_task_checkpoint("greeting-task") is not None
-    assert [event.label for event in activity] == ["understanding request", "responding"]
-
-
-def test_direct_response_route_is_not_hardcoded_to_greeting_text() -> None:
-    class SystemOne:
-        def classify_direct_response(self, **values):
-            assert values["goal"] == "Hola Alphonse!"
-            return SystemOneDirectResponseDecision(False, 0.01, True, model="jev-latest")
-
-    task = TaskState(goal="Hola Alphonse!", user="alex", project_id="home")
-
-    assert HierarchicalCAPDProcessor()._should_respond_directly(
-        task,
-        CoreLoopContext(messages=InMemoryMessageQueue(), system_one=SystemOne()),
-    ) is False
+    assert "tactical action" in [event.label for event in activity]
 
 
 def test_hierarchical_processor_fails_invalid_phase_once_with_controlled_error() -> None:

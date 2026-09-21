@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from alphonse.agent_v2.core.core import CoreLoopContext
 from alphonse.agent_v2.core.inference import InferencePurpose, InferenceRouter, ModelProfile, StubInferenceProvider
 from alphonse.agent_v2.core.intelligence.task_state import TaskState
@@ -186,20 +188,17 @@ def test_waiting_phase_parks_task() -> None:
     assert task.status == "waiting_user"
 
 
-def test_final_response_fallback_is_generated_without_inference() -> None:
+def test_final_response_requires_inference_when_no_respond_tool_prepared_a_message() -> None:
     task = _task()
     task.acceptance_contract["criteria"][0]["status"] = "satisfied"
     task.sync_acceptance_criteria_view()
     state = _completed_state()
 
-    review, decision = V3OuterController().review_and_route(
-        task, state, PhaseOutcome("solar", PhaseStatus.PHASE_COMPLETE),
-        CoreLoopContext(messages=InMemoryMessageQueue()),
-    )
-
-    assert decision.action == StrategicAction.COMPLETE
-    assert review.status == PhaseReviewStatus.PHASE_VERIFIED_TASK_COMPLETE
-    assert "quedó verificado" in task.metadata["prepared_user_response"]["message"]
+    with pytest.raises(RuntimeError, match="v3_final_response_inference_unavailable"):
+        V3OuterController().review_and_route(
+            task, state, PhaseOutcome("solar", PhaseStatus.PHASE_COMPLETE),
+            CoreLoopContext(messages=InMemoryMessageQueue()),
+        )
 
 
 class _SystemOne:

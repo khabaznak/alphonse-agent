@@ -27,19 +27,15 @@ updating it, and reading it back should be one phase, not three or more CAPD cyc
 Message and bounded memory
           |
           v
-System One direct-response gate
-  Social/tool-free request -> warm response and end
-          |
-          v
 Outer CAPD
   Check task/steering
   Act defines or amends immutable outcomes
-  Plan selects a bounded phase
+  Plan selects a bounded phase, including a one-stage reply when appropriate
           |
           v
 Tactical Phase Executor inside Do
   Resolve current subgoal
-  Reveal relevant tools
+  Ask Jev about every native and artifact tool, then reveal relevant authorized tools
   Choose and execute the next action
   Inspect local result and recover within policy
   Return structured phase evidence

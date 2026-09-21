@@ -132,6 +132,9 @@ def test_jev_classifies_complete_static_tool_registry_with_parallel_noul_questio
     assert len(payloads[0]["questions"]) == len(tools)
     assert payloads[0]["questions"] == payloads[1]["questions"]
     assert all(question["type"] == "noul" for question in payloads[0]["questions"].values())
+    instructions = [question["instructions"] for question in payloads[0]["questions"].values()]
+    assert any("native.project_search" in instruction for instruction in instructions)
+    assert any("artifact.medical" in instruction for instruction in instructions)
 
 
 def test_jev_tactical_review_distinguishes_operational_success_from_semantic_completion() -> None:
@@ -148,16 +151,4 @@ def test_jev_tactical_review_distinguishes_operational_success_from_semantic_com
     )
 
     assert result.complete is True
-    assert result.confident is True
-
-
-def test_jev_classifies_greeting_as_direct_response_without_tools() -> None:
-    provider = JevCriterionDecisionProvider(
-        SystemOneSettings(enabled=True, api_key="secret", validated_at="now"),
-        transport=_transport(support=0.96),
-    )
-
-    result = provider.classify_direct_response(goal="Hola Alphonse!")
-
-    assert result.direct_response is True
     assert result.confident is True

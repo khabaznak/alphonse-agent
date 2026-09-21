@@ -25,7 +25,9 @@ def plan_phase(task: "TaskState", context: "CoreLoopContext") -> PhasePlan:
     catalog = sorted({capability for tool in tools for capability in tool_capabilities(tool)})
     prompt = (
         "Plan one bounded strategic execution phase. Return one JSON object matching the PhasePlan contract. "
-        "Use meaningful subgoals, not one outer CAPD cycle per tool. Do not include a final user response subgoal. "
+        "Use meaningful subgoals, not one outer CAPD cycle per tool. "
+        "When replying to the requester is itself part or all of the goal, include a user_response subgoal; "
+        "a purely conversational request can be a single-stage response phase. "
         "Authorize only capabilities and project-relative mutation paths needed in this phase. "
         "Never target .alphonse, memory ledgers, prompts, plans, acceptance criteria, or other agent-internal state. "
         "A mutation path must already be established by the user or prior verified evidence; otherwise plan a read-only discovery phase first. "

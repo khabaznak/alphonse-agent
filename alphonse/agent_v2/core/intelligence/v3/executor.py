@@ -19,6 +19,7 @@ from alphonse.agent_v2.core.intelligence.v3.contracts import TacticalState
 from alphonse.agent_v2.core.intelligence.v3.revealing import ToolRevealPolicy
 from alphonse.agent_v2.core.messages.queue import MessageSelector
 from alphonse.agent_v2.core.tools.invocation import ToolInvocationService
+from alphonse.agent_v2.core.tools.registry.native.respond import RESPOND_TOOL_ID
 
 if TYPE_CHECKING:
     from alphonse.agent_v2.core.core import CoreLoopContext, ToolDescriptor
@@ -127,6 +128,14 @@ class PhaseExecutor:
                     self._checkpoint(task, state, context)
                     return self._outcome(state, "The subgoal call budget was exhausted before its completion condition was met.")
                 continue
+            if completed.tool_id == RESPOND_TOOL_ID and isinstance(completed.result, dict):
+                message = str(completed.result.get("message") or "").strip()
+                if message:
+                    task.metadata["prepared_user_response"] = {
+                        "source": RESPOND_TOOL_ID,
+                        "tool_call_id": completed.action_id,
+                        "message": message,
+                    }
             state.bind_subgoal_output(subgoal.subgoal_id, subgoal.required_output_type, completed.result)
             state.completed_subgoal_ids.append(subgoal.subgoal_id)
             state.transition(PhaseStatus.SUBGOAL_COMPLETE)

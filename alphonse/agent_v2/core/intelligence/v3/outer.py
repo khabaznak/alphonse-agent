@@ -82,12 +82,13 @@ class V3OuterController:
         task.metadata["v3_phase_review"] = _review_dict(review)
         task.metadata["v3_strategic_decision"] = {"action": decision.action.value, "reason": decision.reason}
         if decision.action == StrategicAction.COMPLETE:
-            message = generate_verified_response(task, state, review, context)
-            task.metadata["prepared_user_response"] = {
-                "source": "v3_final_response",
-                "phase_id": state.phase.phase_id,
-                "message": message,
-            }
+            if not task.has_prepared_user_response():
+                message = generate_verified_response(task, state, review, context)
+                task.metadata["prepared_user_response"] = {
+                    "source": "v3_final_response",
+                    "phase_id": state.phase.phase_id,
+                    "message": message,
+                }
             task.status = "completed"
             task.outcome = {
                 "status": "success",
@@ -185,9 +186,8 @@ def generate_verified_response(
     review: PhaseReview,
     context: "CoreLoopContext",
 ) -> str:
-    fallback = f"Listo. {state.phase.objective.rstrip('.')} quedó verificado."
     if context.inference is None:
-        return fallback
+        raise RuntimeError("v3_final_response_inference_unavailable")
     evidence = [
         item for item in state.evidence.entries
         if str(item.get("evidence_ref") or "") in set(review.evidence_refs)
@@ -212,7 +212,10 @@ def generate_verified_response(
             cancel_checker=context.is_cancelled if context.cancellation_checker is not None else None,
         )
     )
-    return str(result.content or "").strip() or fallback
+    message = str(result.content or "").strip()
+    if not message:
+        raise ValueError("v3_final_response_empty")
+    return message
 
 
 def _review_acceptance_statuses(

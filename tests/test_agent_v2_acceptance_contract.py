@@ -99,11 +99,11 @@ def test_bash_stdout_is_evidence_not_an_outbound_response() -> None:
     assert _latest_tool_result_response(task.to_dict()) == ""
 
 
-def test_v3_prepared_response_is_projected_without_a_legacy_respond_tool_call() -> None:
+def test_v3_prepared_respond_tool_result_is_projected() -> None:
     task = TaskState(
         metadata={
             "prepared_user_response": {
-                "source": "v3_direct_response",
+                "source": "native.respond",
                 "message": "¡Hola, Alex! Qué gusto saludarte.",
             }
         }

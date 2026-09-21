@@ -11,12 +11,10 @@ from strategic failure, and terminate immediately after verified task completion
 This stage removes the current pattern of returning to global Plan after every tool
 call or after already-proven success.
 
-Requests that can be fully satisfied conversationally take a response-only route
-before acceptance-criteria generation. System One decides this from explicit generic
-boundaries: no retrieval, verification, mutation, communication, scheduling,
-analysis, external action, or tool use may be required. There are no phrase-, intent-,
-or greeting-specific hardcoded routes. This route performs no planning and exposes no
-tools.
+Every request enters CAPD. Plan may create a single-stage `user_response` phase when
+replying is the complete strategic plan. Jev receives the full registered native and
+artifact tool catalog, identifies the relevant tools, and System Two composes the
+concrete call. There is no pre-CAPD conversational classifier or special intent route.
 
 ## Check responsibilities
 
@@ -91,9 +89,9 @@ paths, not repeatedly interpreted as an ordinary model-owned criterion.
 - [x] Define Act's strategic-decision schema and invocation conditions.
 - [x] Add direct terminal routing after verified task completion.
 - [x] Add a dedicated response-generation boundary with no tools.
-- [x] Add a response-only route for greetings and other tool-free social exchanges.
-- [x] Project V3 prepared responses into the ordinary outbox without requiring a
-      legacy `native.respond` tool call.
+- [x] Allow Plan to represent a conversational response as a one-stage phase using
+      the registered `native.respond` capability.
+- [x] Project successful V3 `native.respond` results into the ordinary outbox.
 - [x] Ensure a response summarizes only verified outcomes and visible blockers.
 - [x] Prevent another planning phase after terminal verification.
 - [x] Preserve waiting/parking behavior for necessary user decisions.
@@ -113,9 +111,8 @@ paths, not repeatedly interpreted as an ordinary model-owned criterion.
 - [x] Steering during execution triggers explicit contract amendment review.
 - [x] Final response cannot precede the final mutation/verification action.
 - [x] No extra Plan inference occurs after verified task completion.
-- [x] A greeting performs no acceptance-criteria, phase-planning, or tool inference.
-- [x] A direct conversational response persists with the checkpoint store's terminal
-      `done` status and emits lightweight classification/response activity.
+- [x] A conversational request enters CAPD, receives a one-stage plan, and lets Jev
+      select `native.respond` from the complete native-and-artifact registry.
 - [x] Invalid phase contracts fail once with a visible controlled V3 error rather than
       consuming the queue retry budget.
 
@@ -135,8 +132,8 @@ paths, not repeatedly interpreted as an ordinary model-owned criterion.
 
 ## Decisions made
 
-- Final response generation is a terminal outer-controller operation with a dedicated
-  no-tools inference purpose.
+- A response already produced by `native.respond` is preserved through terminal outer
+  review and is not regenerated.
 - Mutation authorization, affected paths, phase status, and structured verification
   flags are deterministic invariants. Semantic task criteria remain phase-review
   inference responsibilities.
@@ -159,3 +156,7 @@ paths, not repeatedly interpreted as an ordinary model-owned criterion.
 - 2026-09-20 — Fixed the direct-response terminal checkpoint mapping (`completed` task
   state to `done` persistence status) and added visible classification/response
   activity after a live greeting completed in memory but failed before delivery.
+- 2026-09-20 — Removed the pre-CAPD direct-response gate. Conversational requests now
+  follow CAPD: Plan defines a response phase, Jev evaluates every native and artifact
+  tool, System Two composes the call, and Do executes `native.respond`. Removed canned
+  user-facing response fallbacks.
