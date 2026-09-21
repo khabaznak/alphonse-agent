@@ -7,6 +7,7 @@ from alphonse.agent_v2.core.inference import InferencePurpose, InferenceRouter, 
 from alphonse.agent_v2.core.intelligence.task_state import TaskState
 from alphonse.agent_v2.core.intelligence.v3 import EngineRoutingProcessor, HierarchicalCAPDProcessor
 from alphonse.agent_v2.core.messages import CommunicationChannel, InMemoryMessageQueue
+from alphonse.agent_v2.core.questions import SQLiteQuestionStore
 from alphonse.agent_v2.core.tools.registry import InMemoryToolRegistry, ToolDefinition
 from alphonse.agent_v2.intelligence_engine_settings import HIERARCHICAL_V3, TACTICAL_V2
 from alphonse.agent_v2.intelligence_engine_settings import IntelligenceEngineSettings
@@ -137,7 +138,7 @@ def test_hierarchical_processor_completes_one_phase_without_v2_tool_cycles() -> 
     assert InferencePurpose.TOOL_PLANNING not in [item.purpose for item in provider.requests]
 
 
-def test_hierarchical_processor_routes_greeting_directly_without_acceptance_or_plan() -> None:
+def test_hierarchical_processor_routes_greeting_directly_without_acceptance_or_plan(tmp_path: Path) -> None:
     provider = StubInferenceProvider(
         markdown_by_purpose={InferencePurpose.FINAL_RESPONSE: "¡Hola, Alex! Qué gusto saludarte."},
     )
@@ -149,12 +150,20 @@ def test_hierarchical_processor_routes_greeting_directly_without_acceptance_or_p
             return SystemOneDirectResponseDecision(True, 0.99, True, model="jev-latest")
 
     task = TaskState(
-        goal="Hola Alphonse!", user="alex", project_id="home",
+        task_id="greeting-task", goal="Hola Alphonse!", user="alex", project_id="home",
         intelligence_engine=HIERARCHICAL_V3, intelligence_schema_version=3,
     )
+    activity = []
+    question_store = SQLiteQuestionStore(tmp_path / "questions.sqlite3")
     result = HierarchicalCAPDProcessor().process(
         task,
-        CoreLoopContext(messages=InMemoryMessageQueue(), inference=inference, system_one=SystemOne()),
+        CoreLoopContext(
+            messages=InMemoryMessageQueue(),
+            inference=inference,
+            system_one=SystemOne(),
+            question_store=question_store,
+            activity_sink=activity.append,
+        ),
     )
 
     assert result.status.value == "completed"
@@ -162,6 +171,8 @@ def test_hierarchical_processor_routes_greeting_directly_without_acceptance_or_p
     assert task.metadata["prepared_user_response"]["message"] == "¡Hola, Alex! Qué gusto saludarte."
     assert task.acceptance_contract == {}
     assert [item.purpose for item in provider.requests] == [InferencePurpose.FINAL_RESPONSE]
+    assert question_store.load_task_checkpoint("greeting-task") is not None
+    assert [event.label for event in activity] == ["understanding request", "responding"]
 
 
 def test_direct_response_route_is_not_hardcoded_to_greeting_text() -> None:

@@ -114,6 +114,8 @@ paths, not repeatedly interpreted as an ordinary model-owned criterion.
 - [x] Final response cannot precede the final mutation/verification action.
 - [x] No extra Plan inference occurs after verified task completion.
 - [x] A greeting performs no acceptance-criteria, phase-planning, or tool inference.
+- [x] A direct conversational response persists with the checkpoint store's terminal
+      `done` status and emits lightweight classification/response activity.
 - [x] Invalid phase contracts fail once with a visible controlled V3 error rather than
       consuming the queue retry budget.
 
@@ -154,3 +156,6 @@ paths, not repeatedly interpreted as an ordinary model-owned criterion.
 - 2026-09-20 — Added the response-only conversational route, prepared-response outbox
   projection, and controlled single-attempt handling for invalid System Two phase
   contracts after the live `Hola Alphonse!` regression exposed retry churn.
+- 2026-09-20 — Fixed the direct-response terminal checkpoint mapping (`completed` task
+  state to `done` persistence status) and added visible classification/response
+  activity after a live greeting completed in memory but failed before delivery.

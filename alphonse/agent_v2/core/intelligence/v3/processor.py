@@ -30,7 +30,19 @@ class HierarchicalCAPDProcessor:
         context.emit_ui_event("run_started", {"task": task.to_dict(), "engine": "hierarchical_v3"})
         task.intelligence_engine = "hierarchical_v3"
         task.intelligence_schema_version = 3
+        context.emit_activity(
+            phase=ImprovementPhase.CHECK,
+            label="understanding request",
+            message="Determining the appropriate response path.",
+            progress={"engine": "hierarchical_v3", "route": "classifying"},
+        )
         if self._should_respond_directly(task, context):
+            context.emit_activity(
+                phase=ImprovementPhase.ACT,
+                label="responding",
+                message="Preparing a direct conversational response.",
+                progress={"engine": "hierarchical_v3", "route": "direct_response"},
+            )
             self._complete_direct_response(task, context)
             self._persist(task, context)
             return self._result(task, context)
@@ -144,7 +156,8 @@ class HierarchicalCAPDProcessor:
     @staticmethod
     def _persist(task: "TaskState", context: "CoreLoopContext") -> None:
         if context.question_store is not None:
-            context.question_store.save_task_checkpoint(task, status=task.status)
+            checkpoint_status = "done" if task.status == "completed" else task.status
+            context.question_store.save_task_checkpoint(task, status=checkpoint_status)
 
     @staticmethod
     def _result(task: "TaskState", context: "CoreLoopContext") -> ProcessingResult:
