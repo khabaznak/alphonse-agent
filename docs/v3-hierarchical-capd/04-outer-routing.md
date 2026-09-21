@@ -11,6 +11,12 @@ from strategic failure, and terminate immediately after verified task completion
 This stage removes the current pattern of returning to global Plan after every tool
 call or after already-proven success.
 
+Purely conversational requests such as greetings take a response-only route before
+acceptance-criteria generation. System One classifies whether a direct reply can fully
+satisfy the request; an intentionally narrow deterministic greeting fallback remains
+available when System One is unavailable or miscalibrated. This route performs no
+planning and exposes no tools.
+
 ## Check responsibilities
 
 Outer Check evaluates:
@@ -84,6 +90,9 @@ paths, not repeatedly interpreted as an ordinary model-owned criterion.
 - [x] Define Act's strategic-decision schema and invocation conditions.
 - [x] Add direct terminal routing after verified task completion.
 - [x] Add a dedicated response-generation boundary with no tools.
+- [x] Add a response-only route for greetings and other tool-free social exchanges.
+- [x] Project V3 prepared responses into the ordinary outbox without requiring a
+      legacy `native.respond` tool call.
 - [x] Ensure a response summarizes only verified outcomes and visible blockers.
 - [x] Prevent another planning phase after terminal verification.
 - [x] Preserve waiting/parking behavior for necessary user decisions.
@@ -103,6 +112,9 @@ paths, not repeatedly interpreted as an ordinary model-owned criterion.
 - [x] Steering during execution triggers explicit contract amendment review.
 - [x] Final response cannot precede the final mutation/verification action.
 - [x] No extra Plan inference occurs after verified task completion.
+- [x] A greeting performs no acceptance-criteria, phase-planning, or tool inference.
+- [x] Invalid phase contracts fail once with a visible controlled V3 error rather than
+      consuming the queue retry budget.
 
 ## Non-goals
 
@@ -138,3 +150,6 @@ paths, not repeatedly interpreted as an ordinary model-owned criterion.
   mutation-scope checks, cumulative evidence-based acceptance review, direct terminal
   routing, waiting/failure routes, and no-tools verified response generation. Full
   suite: 451 passed.
+- 2026-09-20 — Added the response-only conversational route, prepared-response outbox
+  projection, and controlled single-attempt handling for invalid System Two phase
+  contracts after the live `Hola Alphonse!` regression exposed retry churn.

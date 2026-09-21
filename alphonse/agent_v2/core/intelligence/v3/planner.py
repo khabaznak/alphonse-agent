@@ -14,6 +14,10 @@ if TYPE_CHECKING:
     from alphonse.agent_v2.core.intelligence.task_state import TaskState
 
 
+class V3PhasePlanValidationError(ValueError):
+    """System Two returned a phase that violates the durable V3 contract."""
+
+
 def plan_phase(task: "TaskState", context: "CoreLoopContext") -> PhasePlan:
     if context.inference is None:
         raise RuntimeError("v3_phase_planning_inference_unavailable")
@@ -31,7 +35,9 @@ def plan_phase(task: "TaskState", context: "CoreLoopContext") -> PhasePlan:
         f"Prior V3 phase history: {json.dumps(task.metadata.get('v3_phase_history') or [], ensure_ascii=False)}\n"
         f"Available capability identifiers: {json.dumps(catalog)}\n"
         "Required top-level fields: phase_id, objective, subgoals, criterion_ids, limits, "
-        "authorized_capabilities, mutation_scope, originating_decision, schema_version."
+        "authorized_capabilities, mutation_scope, originating_decision, schema_version. "
+        "Every subgoal requires: subgoal_id, objective, required_output_type, depends_on, "
+        "allowed_capabilities, allowed_side_effects, limits, completion, and failure_policy."
     )
     result = context.inference.generate_json(
         InferenceRequest(
@@ -46,4 +52,7 @@ def plan_phase(task: "TaskState", context: "CoreLoopContext") -> PhasePlan:
     )
     if not isinstance(result.json_value, dict):
         raise ValueError("v3_phase_plan_missing")
-    return PhasePlan.from_dict(result.json_value)
+    try:
+        return PhasePlan.from_dict(result.json_value)
+    except (TypeError, ValueError) as exc:
+        raise V3PhasePlanValidationError(f"v3_phase_plan_invalid:{exc}") from exc

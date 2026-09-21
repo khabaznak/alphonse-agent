@@ -99,6 +99,19 @@ def test_bash_stdout_is_evidence_not_an_outbound_response() -> None:
     assert _latest_tool_result_response(task.to_dict()) == ""
 
 
+def test_v3_prepared_response_is_projected_without_a_legacy_respond_tool_call() -> None:
+    task = TaskState(
+        metadata={
+            "prepared_user_response": {
+                "source": "v3_direct_response",
+                "message": "¡Hola, Alex! Qué gusto saludarte.",
+            }
+        }
+    )
+
+    assert _latest_tool_result_response(task.to_dict()) == "¡Hola, Alex! Qué gusto saludarte."
+
+
 def test_contract_markdown_is_a_derived_status_view() -> None:
     contract = contract_from_markdown("1.- [ ] First outcome\n2.- [x] Second outcome")
 

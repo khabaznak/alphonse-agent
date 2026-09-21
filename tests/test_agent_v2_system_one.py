@@ -149,3 +149,15 @@ def test_jev_tactical_review_distinguishes_operational_success_from_semantic_com
 
     assert result.complete is True
     assert result.confident is True
+
+
+def test_jev_classifies_greeting_as_direct_response_without_tools() -> None:
+    provider = JevCriterionDecisionProvider(
+        SystemOneSettings(enabled=True, api_key="secret", validated_at="now"),
+        transport=_transport(support=0.96),
+    )
+
+    result = provider.classify_direct_response(goal="Hola Alphonse!")
+
+    assert result.direct_response is True
+    assert result.confident is True

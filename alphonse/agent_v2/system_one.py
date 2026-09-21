@@ -220,6 +220,26 @@ class SystemOneTacticalReview:
 
 
 @dataclass(frozen=True)
+class SystemOneDirectResponseDecision:
+    direct_response: bool
+    confidence: float
+    confident: bool
+    model: str = ""
+    usage: dict[str, Any] = field(default_factory=dict)
+    duration_ms: int = 0
+
+    def to_metadata(self) -> dict[str, Any]:
+        return {
+            "direct_response": self.direct_response,
+            "confidence": self.confidence,
+            "confident": self.confident,
+            "model": self.model,
+            "usage": dict(self.usage),
+            "duration_ms": self.duration_ms,
+        }
+
+
+@dataclass(frozen=True)
 class _StaticJevToolRegistry:
     signature: tuple[str, ...]
     questions: dict[str, Any]
@@ -234,6 +254,34 @@ class JevCriterionDecisionProvider:
             model=self.settings.model, transport=transport,
         )
         self._tool_registry: _StaticJevToolRegistry | None = None
+
+    def classify_direct_response(self, *, goal: str) -> SystemOneDirectResponseDecision:
+        state = {"user_request": str(goal)[:4000]}
+        questions = {
+            "direct_response_satisfies_request": {
+                "type": "noul",
+                "instructions": "Can this request be fully satisfied by replying conversationally, without planning or using any tool?",
+                "criteria": {
+                    "true": "The request is only a greeting, thanks, farewell, casual social exchange, or simple conversational acknowledgement and needs no retrieval, verification, mutation, communication, scheduling, analysis, or external action.",
+                    "false": "Satisfying the request requires facts not already present, project or memory retrieval, analysis, a file or database operation, an external action, communication, scheduling, or any tool use.",
+                },
+            }
+        }
+        started = monotonic()
+        response = self.client.evaluate(state=state, questions=questions)
+        duration_ms = max(0, round((monotonic() - started) * 1000))
+        answer = response["answers"].get("direct_response_satisfies_request")
+        if not isinstance(answer, dict) or answer.get("type") != "noul" or not isinstance(answer.get("noul"), (int, float)):
+            raise ValueError("system_one_direct_response_answer_invalid")
+        probability = max(0.0, min(1.0, float(answer["noul"])))
+        return SystemOneDirectResponseDecision(
+            direct_response=probability >= self.settings.yes_threshold,
+            confidence=probability,
+            confident=(probability >= self.settings.yes_threshold or probability <= self.settings.no_threshold),
+            model=str(response.get("model") or self.settings.model),
+            usage=dict(response.get("usage") or {}),
+            duration_ms=duration_ms,
+        )
 
     def evaluate(self, *, contract: dict[str, Any], phase: dict[str, Any], evidence: dict[str, Any]) -> SystemOneReviewResult:
         criteria = [

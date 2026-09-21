@@ -668,6 +668,10 @@ def _enqueue_preferred_automation_copy(
 
 
 def _latest_tool_result_response(task_state: dict[str, Any]) -> str:
+    metadata = task_state.get("metadata") if isinstance(task_state.get("metadata"), dict) else {}
+    prepared = metadata.get("prepared_user_response") if isinstance(metadata, dict) else None
+    if isinstance(prepared, dict) and str(prepared.get("message") or "").strip():
+        return str(prepared.get("message") or "").strip()
     calls = _json_list(task_state.get("plan_json"))
     for call in reversed(calls):
         if not isinstance(call, dict):

@@ -11,6 +11,7 @@ from alphonse.agent_v2.core.tools.registry import InMemoryToolRegistry, ToolDefi
 from alphonse.agent_v2.intelligence_engine_settings import HIERARCHICAL_V3, TACTICAL_V2
 from alphonse.agent_v2.intelligence_engine_settings import IntelligenceEngineSettings
 from alphonse.agent_v2.intelligence_engine_settings import SQLiteIntelligenceEngineSettingsStore
+from alphonse.agent_v2.system_one import SystemOneDirectResponseDecision
 
 
 def test_engine_settings_default_to_v3_and_allow_v2_rollback(tmp_path: Path) -> None:
@@ -134,3 +135,67 @@ def test_hierarchical_processor_completes_one_phase_without_v2_tool_cycles() -> 
     assert task.metadata["v3_route"] == "respond_and_end"
     assert task.metadata["prepared_user_response"]["message"] == "Encontré el registro del proyecto."
     assert InferencePurpose.TOOL_PLANNING not in [item.purpose for item in provider.requests]
+
+
+def test_hierarchical_processor_routes_greeting_directly_without_acceptance_or_plan() -> None:
+    provider = StubInferenceProvider(
+        markdown_by_purpose={InferencePurpose.FINAL_RESPONSE: "¡Hola, Alex! Qué gusto saludarte."},
+    )
+    inference = InferenceRouter(provider=provider, default_profile=ModelProfile("test", "test", "default"))
+
+    class SystemOne:
+        def classify_direct_response(self, **values):
+            assert values["goal"] == "Hola Alphonse!"
+            return SystemOneDirectResponseDecision(True, 0.99, True, model="jev-latest")
+
+    task = TaskState(
+        goal="Hola Alphonse!", user="alex", project_id="home",
+        intelligence_engine=HIERARCHICAL_V3, intelligence_schema_version=3,
+    )
+    result = HierarchicalCAPDProcessor().process(
+        task,
+        CoreLoopContext(messages=InMemoryMessageQueue(), inference=inference, system_one=SystemOne()),
+    )
+
+    assert result.status.value == "completed"
+    assert task.metadata["v3_route"] == "respond_and_end"
+    assert task.metadata["prepared_user_response"]["message"] == "¡Hola, Alex! Qué gusto saludarte."
+    assert task.acceptance_contract == {}
+    assert [item.purpose for item in provider.requests] == [InferencePurpose.FINAL_RESPONSE]
+
+
+def test_hierarchical_processor_fails_invalid_phase_once_with_controlled_error() -> None:
+    provider = StubInferenceProvider(
+        markdown_by_purpose={InferencePurpose.ACCEPTANCE_CRITERIA: "1.- [ ] The record is updated"},
+        json_by_purpose={
+            InferencePurpose.PHASE_PLANNING: {
+                "schema_version": 3,
+                "phase_id": "invalid",
+                "objective": "Update record",
+                "criterion_ids": ["ac-1"],
+                "authorized_capabilities": ["project_record_search"],
+                "mutation_scope": {"allowed_paths": []},
+                "limits": {"max_tool_calls": 1, "max_duration_seconds": 20},
+                "originating_decision": "initial",
+                "subgoals": [{
+                    "subgoal_id": "missing-completion",
+                    "objective": "Locate record",
+                    "required_output_type": "record",
+                    "allowed_capabilities": ["project_record_search"],
+                }],
+            }
+        },
+    )
+    inference = InferenceRouter(provider=provider, default_profile=ModelProfile("test", "test", "default"))
+    task = TaskState(
+        goal="Update the record", user="alex", project_id="home",
+        intelligence_engine=HIERARCHICAL_V3, intelligence_schema_version=3,
+    )
+
+    result = HierarchicalCAPDProcessor().process(
+        task, CoreLoopContext(messages=InMemoryMessageQueue(), inference=inference)
+    )
+
+    assert result.status.value == "failed"
+    assert result.error is not None and result.error.startswith("v3_task_failed:v3_phase_plan_invalid:")
+    assert len([item for item in provider.requests if item.purpose == InferencePurpose.PHASE_PLANNING]) == 1

@@ -27,6 +27,10 @@ updating it, and reading it back should be one phase, not three or more CAPD cyc
 Message and bounded memory
           |
           v
+System One direct-response gate
+  Social/tool-free request -> warm response and end
+          |
+          v
 Outer CAPD
   Check task/steering
   Act defines or amends immutable outcomes

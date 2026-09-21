@@ -291,3 +291,9 @@ def test_model_access_rejection_is_retryable_and_preserves_validation() -> None:
 
 def test_legacy_model_unavailable_diagnostic_is_also_retryable() -> None:
     assert _scheduled_failure_is_non_retryable("openai_codex_model_unavailable: gpt-5.5") is False
+
+
+def test_controlled_v3_plan_validation_failure_is_not_retried() -> None:
+    assert _scheduled_failure_is_non_retryable(
+        "v3_task_failed:v3_phase_plan_invalid:completion_condition_invalid"
+    ) is True
