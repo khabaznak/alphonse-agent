@@ -5,7 +5,11 @@ from pathlib import Path
 from alphonse.agent_v2.core.core import CoreLoopContext, ProcessingResult, StateSnapshot, ToolDescriptor, ToolKind
 from alphonse.agent_v2.core.inference import InferencePurpose, InferenceRouter, ModelProfile, StubInferenceProvider
 from alphonse.agent_v2.core.intelligence.task_state import TaskState
+from alphonse.agent_v2.core.intelligence.v3 import CompletionCondition
 from alphonse.agent_v2.core.intelligence.v3 import EngineRoutingProcessor, HierarchicalCAPDProcessor
+from alphonse.agent_v2.core.intelligence.v3 import PhaseLimits, PhaseOutcome, PhasePlan, PhaseStatus, PhaseSubgoal
+from alphonse.agent_v2.core.intelligence.v3 import new_tactical_state
+from alphonse.agent_v2.core.intelligence.v3.processor import _deduplicated_history_evidence
 from alphonse.agent_v2.core.messages import CommunicationChannel, InMemoryMessageQueue
 from alphonse.agent_v2.core.questions import SQLiteQuestionStore
 from alphonse.agent_v2.core.tools.registry import InMemoryToolRegistry, ToolDefinition
@@ -48,6 +52,48 @@ def test_channel_defaults_new_messages_to_v3_without_a_settings_provider() -> No
 
     assert queued.message.metadata["intelligence_engine"] == HIERARCHICAL_V3
     assert queued.message.metadata["intelligence_schema_version"] == 3
+
+
+def test_v3_cumulative_phase_evidence_is_deduplicated_by_reference() -> None:
+    repeated = {"evidence_ref": "action:one", "status": "success", "result": {"value": 1}}
+    later = {"evidence_ref": "action:two", "status": "success", "result": {"value": 2}}
+    history = [
+        {"evidence": {"entries": [repeated]}},
+        {"evidence": {"entries": [repeated, later]}},
+        {"evidence": {"entries": [repeated, later]}},
+    ]
+
+    assert _deduplicated_history_evidence(history) == [repeated, later]
+
+
+def test_v3_phase_history_stores_only_current_phase_evidence() -> None:
+    phase = PhasePlan(
+        "current-phase",
+        "Complete current work",
+        (PhaseSubgoal(
+            "work",
+            "Complete work",
+            "result",
+            completion=CompletionCondition("output_present", output_type="result"),
+        ),),
+        limits=PhaseLimits(1, 10),
+    )
+    state = new_tactical_state(
+        phase,
+        cumulative_evidence=[{"evidence_ref": "prior", "phase_id": "prior-phase", "status": "success"}],
+    )
+    state.evidence.append({"evidence_ref": "current", "phase_id": "current-phase", "status": "success"})
+    task = TaskState(goal="Do work", user="alex", project_id="home")
+
+    HierarchicalCAPDProcessor._append_history(
+        task,
+        state,
+        PhaseOutcome("current-phase", PhaseStatus.PHASE_COMPLETE).to_dict(),
+    )
+
+    assert task.metadata["v3_phase_history"][0]["evidence"]["entries"] == [
+        {"evidence_ref": "current", "phase_id": "current-phase", "status": "success"}
+    ]
 
 
 class _Processor:
@@ -246,6 +292,9 @@ def test_hierarchical_processor_plans_one_stage_and_jev_selects_respond_for_gree
     planning_request = next(item for item in provider.requests if item.purpose == InferencePurpose.PHASE_PLANNING)
     assert '"required": ["kind"]' in planning_request.prompt
     assert '"enum": ["read_only", "user_response", "project_mutation"' in planning_request.prompt
+    assert "do not declare it unavailable" in planning_request.prompt
+    acceptance_request = next(item for item in provider.requests if item.purpose == InferencePurpose.ACCEPTANCE_CRITERIA)
+    assert "All criteria are conjunctive" in acceptance_request.prompt
     assert question_store.load_task_checkpoint("greeting-task") is not None
     assert "tactical action" in [event.label for event in activity]
 
@@ -285,3 +334,59 @@ def test_hierarchical_processor_fails_invalid_phase_once_with_controlled_error()
     assert result.status.value == "failed"
     assert result.error is not None and result.error.startswith("v3_task_failed:v3_phase_plan_invalid:")
     assert len([item for item in provider.requests if item.purpose == InferencePurpose.PHASE_PLANNING]) == 1
+
+
+def test_phase_budget_failure_is_persisted_as_terminal_checkpoint(tmp_path: Path) -> None:
+    phase = PhasePlan(
+        "only-phase",
+        "Attempt one phase",
+        (PhaseSubgoal(
+            "work",
+            "Attempt work",
+            "result",
+            completion=CompletionCondition("output_present", output_type="result"),
+        ),),
+        limits=PhaseLimits(1, 10),
+    )
+    state = new_tactical_state(phase)
+    state.status = PhaseStatus.PHASE_COMPLETE
+    task = TaskState(
+        task_id="budget-task",
+        goal="Complete work",
+        user="alex",
+        project_id="home",
+        intelligence_engine=HIERARCHICAL_V3,
+        intelligence_schema_version=3,
+    )
+    task.set_acceptance_contract_from_markdown("1.- [ ] Work is complete")
+    question_store = SQLiteQuestionStore(tmp_path / "questions.sqlite3")
+    processor = HierarchicalCAPDProcessor(max_phases=1)
+    processor._new_state = lambda _task, _context: state  # type: ignore[method-assign]
+
+    class Executor:
+        @staticmethod
+        def run(_task, _state, _context):
+            return PhaseOutcome("only-phase", PhaseStatus.PHASE_COMPLETE)
+
+    class Outer:
+        @staticmethod
+        def review_and_route(current_task, _state, _outcome, _context):
+            current_task.metadata["v3_route"] = "plan_next_phase"
+            return object(), object()
+
+    processor.executor = Executor()  # type: ignore[assignment]
+    processor.outer = Outer()  # type: ignore[assignment]
+
+    result = processor.process(
+        task,
+        CoreLoopContext(messages=InMemoryMessageQueue(), question_store=question_store),
+    )
+
+    restored = question_store.load_task_checkpoint("budget-task")
+    assert result.status.value == "failed"
+    assert restored is not None
+    assert restored.status == "failed"
+    assert restored.outcome == {
+        "status": "failure",
+        "reason": "V3 phase budget exhausted without a terminal outcome.",
+    }

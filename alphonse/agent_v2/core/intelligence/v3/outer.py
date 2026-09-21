@@ -59,6 +59,7 @@ class V3OuterController:
         outcome: PhaseOutcome,
         context: "CoreLoopContext",
     ) -> tuple[PhaseReview, StrategicDecision]:
+        acceptance_before = _acceptance_progress_signature(task)
         review = review_phase(task, state, outcome, context)
         context.emit_activity(
             phase=ImprovementPhase.CHECK,
@@ -72,6 +73,12 @@ class V3OuterController:
             review,
             recommended_route=str(system_one_review.get("recommended_route") or ""),
             recommendation_confident=bool(system_one_review.get("route_confident")),
+        )
+        decision = _apply_no_progress_guard(
+            task,
+            review,
+            decision,
+            acceptance_changed=acceptance_before != _acceptance_progress_signature(task),
         )
         context.emit_activity(
             phase=ImprovementPhase.ACT,
@@ -178,6 +185,38 @@ def decide_next_action(
     if review.status in {PhaseReviewStatus.PHASE_BLOCKED, PhaseReviewStatus.VERIFICATION_FAILED}:
         return StrategicDecision(StrategicAction.REPLAN, review.reason)
     return StrategicDecision(StrategicAction.FAIL, review.reason)
+
+
+def _apply_no_progress_guard(
+    task: "TaskState",
+    review: PhaseReview,
+    decision: StrategicDecision,
+    *,
+    acceptance_changed: bool,
+) -> StrategicDecision:
+    if review.status != PhaseReviewStatus.PHASE_VERIFIED_TASK_INCOMPLETE:
+        task.metadata["v3_consecutive_no_progress_phases"] = 0
+        return decision
+    count = 0 if acceptance_changed else int(task.metadata.get("v3_consecutive_no_progress_phases") or 0) + 1
+    task.metadata["v3_consecutive_no_progress_phases"] = count
+    if count < 3:
+        return decision
+    return StrategicDecision(
+        StrategicAction.FAIL,
+        "Three consecutive completed phases made no acceptance-criteria progress; stopping to prevent repeated work.",
+    )
+
+
+def _acceptance_progress_signature(task: "TaskState") -> tuple[tuple[str, str, tuple[str, ...]], ...]:
+    return tuple(
+        (
+            str(item.get("id") or ""),
+            str(item.get("status") or "pending"),
+            tuple(str(ref) for ref in item.get("evidence_refs") or []),
+        )
+        for item in task.ensure_acceptance_contract().get("criteria") or []
+        if isinstance(item, dict) and item.get("superseded") is not True
+    )
 
 
 def generate_verified_response(

@@ -302,3 +302,12 @@ def test_controlled_v3_plan_validation_failure_is_not_retried() -> None:
     assert "V3 execution plan was rejected" in message
     assert "completion_condition_invalid" in message
     assert "gpt-5.5" not in message
+
+
+def test_non_plan_v3_failure_message_does_not_claim_plan_rejection() -> None:
+    message = _inbound_failure_message(
+        "v3_task_failed:V3 phase budget exhausted without a terminal outcome.", "gpt-5.5"
+    )
+
+    assert "stopped without completing" in message
+    assert "execution plan was rejected" not in message

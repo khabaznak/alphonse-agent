@@ -115,6 +115,11 @@ paths, not repeatedly interpreted as an ordinary model-owned criterion.
       select `native.respond` from the complete native-and-artifact registry.
 - [x] Invalid phase contracts fail once with a visible controlled V3 error rather than
       consuming the queue retry budget.
+- [x] Three completed phases without acceptance-criteria progress fail visibly instead
+      of consuming the full outer-phase budget.
+- [x] Phase history stores phase-local evidence and reconstructs a deduplicated
+      cumulative view without exponential growth.
+- [x] Exhausting the outer-phase budget persists a terminal failed checkpoint.
 
 ## Non-goals
 
@@ -169,3 +174,11 @@ paths, not repeatedly interpreted as an ordinary model-owned criterion.
   generic PhasePlan JSON Schema after a second live greeting omitted
   `completion.kind`. The schema enumerates every required nested field, completion
   kind, failure policy, capability, and side-effect value without task-specific routes.
+- 2026-09-21 — Diagnosed the live studio-temperature failure. Plan inferred that the
+  temperature was unavailable before Jev could evaluate the complete tool registry,
+  then eight response-only phases repeated while one conjunctive acceptance criterion
+  remained pending. Tightened Plan and acceptance-contract instructions, added a
+  three-phase no-progress terminal guard, made phase history store only local evidence
+  with deduplicated reconstruction (preventing 1/2/4/8 evidence amplification),
+  persisted phase-budget failures as terminal checkpoints, and corrected their
+  user-facing error classification.

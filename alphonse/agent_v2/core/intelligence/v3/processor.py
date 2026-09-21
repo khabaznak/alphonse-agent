@@ -72,22 +72,28 @@ class HierarchicalCAPDProcessor:
         if phases >= self.max_phases and task.status == "running":
             task.status = "failed"
             task.outcome = {"status": "failure", "reason": "V3 phase budget exhausted without a terminal outcome."}
+            self._persist(task, context)
         return self._result(task, context)
 
     @staticmethod
     def _new_state(task: "TaskState", context: "CoreLoopContext") -> TacticalState:
         phase = plan_phase(task, context)
-        prior = [
-            entry for item in task.metadata.get("v3_phase_history") or []
-            for entry in (item.get("evidence") or {}).get("entries", []) if isinstance(entry, dict)
-        ]
+        prior = _deduplicated_history_evidence(task.metadata.get("v3_phase_history"))
         return new_tactical_state(phase, cumulative_evidence=prior)
 
     @staticmethod
     def _append_history(task: "TaskState", state: TacticalState, outcome: dict) -> None:
         history = task.metadata.setdefault("v3_phase_history", [])
         if isinstance(history, list):
-            history.append({"phase": state.phase.to_dict(), "outcome": outcome, "evidence": state.evidence.to_dict()})
+            local_evidence = [
+                dict(entry) for entry in state.evidence.entries
+                if str(entry.get("phase_id") or "") == state.phase.phase_id
+            ]
+            history.append({
+                "phase": state.phase.to_dict(),
+                "outcome": outcome,
+                "evidence": {"entries": local_evidence},
+            })
 
     @staticmethod
     def _persist(task: "TaskState", context: "CoreLoopContext") -> None:
@@ -133,3 +139,22 @@ class EngineRoutingProcessor:
 
     def process(self, task: "TaskState", context: "CoreLoopContext") -> ProcessingResult:
         return (self.v3 if task.intelligence_engine == "hierarchical_v3" else self.v2).process(task, context)
+
+
+def _deduplicated_history_evidence(raw_history: object) -> list[dict]:
+    evidence_by_ref: dict[str, dict] = {}
+    unreferenced: list[dict] = []
+    for item in raw_history if isinstance(raw_history, list) else []:
+        if not isinstance(item, dict):
+            continue
+        evidence = item.get("evidence")
+        entries = evidence.get("entries") if isinstance(evidence, dict) else []
+        for entry in entries if isinstance(entries, list) else []:
+            if not isinstance(entry, dict):
+                continue
+            evidence_ref = str(entry.get("evidence_ref") or "").strip()
+            if evidence_ref:
+                evidence_by_ref[evidence_ref] = dict(entry)
+            else:
+                unreferenced.append(dict(entry))
+    return [*evidence_by_ref.values(), *unreferenced]

@@ -110,6 +110,31 @@ def test_completed_phase_with_unmet_criteria_routes_to_next_phase() -> None:
     assert "prepared_user_response" not in task.metadata
 
 
+def test_three_completed_phases_without_acceptance_progress_fail_fast() -> None:
+    task = _task()
+    context, _ = _context(satisfy=False)
+    controller = V3OuterController()
+
+    decisions = [
+        controller.review_and_route(
+            task,
+            _completed_state(),
+            PhaseOutcome("solar", PhaseStatus.PHASE_COMPLETE),
+            context,
+        )[1]
+        for _ in range(3)
+    ]
+
+    assert [decision.action for decision in decisions] == [
+        StrategicAction.CONTINUE,
+        StrategicAction.CONTINUE,
+        StrategicAction.FAIL,
+    ]
+    assert task.status == "failed"
+    assert task.metadata["v3_consecutive_no_progress_phases"] == 3
+    assert "no acceptance-criteria progress" in task.outcome["reason"]
+
+
 def test_scope_violation_prevents_completion_without_model_review() -> None:
     task = _task()
     context, provider = _context()

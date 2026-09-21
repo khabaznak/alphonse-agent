@@ -2303,7 +2303,9 @@ def _inbound_failure_message(error: str, model_id: str) -> str:
     model = str(model_id or "").strip()
     if code == "v3_task_failed":
         reason = str(error or "").partition(":")[2].strip() or "V3 reported a terminal task failure."
-        return f"I couldn't complete this task because the V3 execution plan was rejected: {reason}"
+        if reason.startswith("v3_phase_plan_invalid:"):
+            return f"I couldn't complete this task because the V3 execution plan was rejected: {reason}"
+        return f"I couldn't complete this task because V3 stopped without completing it: {reason}"
     if code == "openai_codex_auth_required":
         return "I couldn't complete this task because Codex needs to be signed in again."
     if code == "openai_codex_cli_missing":
