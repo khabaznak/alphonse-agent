@@ -21,6 +21,7 @@ def test_native_registry_registers_respond_tool() -> None:
     assert descriptor.name == RESPOND_TOOL_NAME
     assert descriptor.argument_schema["required"] == ["message"]
     assert descriptor.capabilities == ("conversation", "user_response")
+    assert descriptor.metadata["side_effect_class"] == "user_response"
 
 
 def test_native_registry_exposes_native_tools() -> None:

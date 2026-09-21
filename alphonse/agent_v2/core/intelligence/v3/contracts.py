@@ -34,6 +34,7 @@ class FailurePolicy(str, Enum):
 
 class SideEffectClass(str, Enum):
     READ_ONLY = "read_only"
+    USER_RESPONSE = "user_response"
     PROJECT_MUTATION = "project_mutation"
     EXTERNAL_REVERSIBLE = "external_reversible"
     EXTERNAL_IRREVERSIBLE = "external_irreversible"

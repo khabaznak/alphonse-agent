@@ -162,7 +162,7 @@ def test_hierarchical_processor_plans_one_stage_and_jev_selects_respond_for_gree
                     "required_output_type": "user_response",
                     "depends_on": [],
                     "allowed_capabilities": ["user_response"],
-                    "allowed_side_effects": ["external_reversible"],
+                    "allowed_side_effects": ["user_response"],
                     "limits": {"max_tool_calls": 1, "max_duration_seconds": 10},
                     "completion": {"kind": "output_present", "output_type": "user_response"},
                     "failure_policy": "stop",
@@ -243,6 +243,8 @@ def test_hierarchical_processor_plans_one_stage_and_jev_selects_respond_for_gree
     assert InferencePurpose.PHASE_PLANNING in purposes
     assert InferencePurpose.TACTICAL_ACTION in purposes
     assert InferencePurpose.FINAL_RESPONSE not in purposes
+    planning_request = next(item for item in provider.requests if item.purpose == InferencePurpose.PHASE_PLANNING)
+    assert "read_only, user_response, project_mutation" in planning_request.prompt
     assert question_store.load_task_checkpoint("greeting-task") is not None
     assert "tactical action" in [event.label for event in activity]
 

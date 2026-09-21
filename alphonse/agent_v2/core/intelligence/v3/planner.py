@@ -39,7 +39,10 @@ def plan_phase(task: "TaskState", context: "CoreLoopContext") -> PhasePlan:
         "Required top-level fields: phase_id, objective, subgoals, criterion_ids, limits, "
         "authorized_capabilities, mutation_scope, originating_decision, schema_version. "
         "Every subgoal requires: subgoal_id, objective, required_output_type, depends_on, "
-        "allowed_capabilities, allowed_side_effects, limits, completion, and failure_policy."
+        "allowed_capabilities, allowed_side_effects, limits, completion, and failure_policy. "
+        "allowed_side_effects values must be chosen exactly from: read_only, user_response, "
+        "project_mutation, external_reversible, external_irreversible. Use user_response for "
+        "a subgoal whose effect is replying to the requester."
     )
     result = context.inference.generate_json(
         InferenceRequest(

@@ -8,6 +8,7 @@ from alphonse.agent_v2.core.inference import ModelProfile
 from alphonse.agent_v2.core.inference import StubInferenceProvider
 from alphonse.agent_v2.core.scheduled_tasks import ScheduledTaskStore
 from alphonse.agent_v2.daemon import V2Daemon
+from alphonse.agent_v2.daemon import _inbound_failure_message
 from alphonse.agent_v2.daemon import _scheduled_failure_is_non_retryable
 from alphonse.agent_v2.core.io import ChannelAddress
 from alphonse.agent_v2.inference_settings import InferenceSettingsRecord
@@ -294,6 +295,10 @@ def test_legacy_model_unavailable_diagnostic_is_also_retryable() -> None:
 
 
 def test_controlled_v3_plan_validation_failure_is_not_retried() -> None:
-    assert _scheduled_failure_is_non_retryable(
-        "v3_task_failed:v3_phase_plan_invalid:completion_condition_invalid"
-    ) is True
+    error = "v3_task_failed:v3_phase_plan_invalid:completion_condition_invalid"
+
+    assert _scheduled_failure_is_non_retryable(error) is True
+    message = _inbound_failure_message(error, "gpt-5.5")
+    assert "V3 execution plan was rejected" in message
+    assert "completion_condition_invalid" in message
+    assert "gpt-5.5" not in message

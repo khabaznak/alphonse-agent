@@ -160,3 +160,8 @@ paths, not repeatedly interpreted as an ordinary model-owned criterion.
   follow CAPD: Plan defines a response phase, Jev evaluates every native and artifact
   tool, System Two composes the call, and Do executes `native.respond`. Removed canned
   user-facing response fallbacks.
+- 2026-09-20 — Added `user_response` as an explicit phase side-effect class and exposed
+  the exact side-effect vocabulary to Plan after a live greeting used the invented
+  value `send_message_to_user`. Acceptance contracts now describe observable outcomes
+  rather than forbidding the internal response tool, and terminal V3 errors report
+  their real validation reason instead of blaming the configured model.
