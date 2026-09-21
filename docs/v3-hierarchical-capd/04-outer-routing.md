@@ -11,11 +11,12 @@ from strategic failure, and terminate immediately after verified task completion
 This stage removes the current pattern of returning to global Plan after every tool
 call or after already-proven success.
 
-Purely conversational requests such as greetings take a response-only route before
-acceptance-criteria generation. System One classifies whether a direct reply can fully
-satisfy the request; an intentionally narrow deterministic greeting fallback remains
-available when System One is unavailable or miscalibrated. This route performs no
-planning and exposes no tools.
+Requests that can be fully satisfied conversationally take a response-only route
+before acceptance-criteria generation. System One decides this from explicit generic
+boundaries: no retrieval, verification, mutation, communication, scheduling,
+analysis, external action, or tool use may be required. There are no phrase-, intent-,
+or greeting-specific hardcoded routes. This route performs no planning and exposes no
+tools.
 
 ## Check responsibilities
 

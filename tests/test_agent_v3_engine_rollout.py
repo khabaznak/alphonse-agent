@@ -164,6 +164,20 @@ def test_hierarchical_processor_routes_greeting_directly_without_acceptance_or_p
     assert [item.purpose for item in provider.requests] == [InferencePurpose.FINAL_RESPONSE]
 
 
+def test_direct_response_route_is_not_hardcoded_to_greeting_text() -> None:
+    class SystemOne:
+        def classify_direct_response(self, **values):
+            assert values["goal"] == "Hola Alphonse!"
+            return SystemOneDirectResponseDecision(False, 0.01, True, model="jev-latest")
+
+    task = TaskState(goal="Hola Alphonse!", user="alex", project_id="home")
+
+    assert HierarchicalCAPDProcessor()._should_respond_directly(
+        task,
+        CoreLoopContext(messages=InMemoryMessageQueue(), system_one=SystemOne()),
+    ) is False
+
+
 def test_hierarchical_processor_fails_invalid_phase_once_with_controlled_error() -> None:
     provider = StubInferenceProvider(
         markdown_by_purpose={InferencePurpose.ACCEPTANCE_CRITERIA: "1.- [ ] The record is updated"},

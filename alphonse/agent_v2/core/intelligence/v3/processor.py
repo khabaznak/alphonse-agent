@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import re
 from typing import TYPE_CHECKING
 
 from alphonse.agent_v2.core.core import ImprovementPhase, ProcessingResult, ProcessingStatus, StateSnapshot
@@ -106,12 +105,10 @@ class HierarchicalCAPDProcessor:
                 metadata = {"status": "used" if decision.confident else "ambiguous_fallback", **decision.to_metadata()}
                 task.metadata["system_one_direct_response"] = metadata
                 context.emit_telemetry({"event": "system_one_direct_response", "task_id": task.task_id, **metadata})
-                if decision.confident and decision.direct_response:
-                    return True
-                return _obvious_social_message(task.goal)
+                return bool(decision.confident and decision.direct_response)
             task.metadata["system_one_direct_response"] = metadata
             context.emit_telemetry({"event": "system_one_direct_response", "task_id": task.task_id, **metadata})
-        return _obvious_social_message(task.goal)
+        return False
 
     @staticmethod
     def _complete_direct_response(task: "TaskState", context: "CoreLoopContext") -> None:
@@ -187,14 +184,3 @@ class EngineRoutingProcessor:
 
     def process(self, task: "TaskState", context: "CoreLoopContext") -> ProcessingResult:
         return (self.v3 if task.intelligence_engine == "hierarchical_v3" else self.v2).process(task, context)
-
-
-_SOCIAL_MESSAGE = re.compile(
-    r"^\s*(?:[¡!¿?.,]\s*)*(?:hola|hello|hi|hey|buen(?:os\s+d[ií]as|as\s+tardes|as\s+noches)|"
-    r"gracias|thank\s+you|thanks|adi[oó]s|bye)(?:\s+(?:alphonse|alfonse))?[!¡?.\s]*$",
-    re.IGNORECASE,
-)
-
-
-def _obvious_social_message(value: str) -> bool:
-    return bool(_SOCIAL_MESSAGE.fullmatch(str(value or "")))
