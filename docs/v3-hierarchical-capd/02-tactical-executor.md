@@ -36,12 +36,12 @@ while phase is nonterminal:
     check cancellation, steering, deadline, and call budget
     resolve the current subgoal
     determine whether a static next action is already executable
-    otherwise ask System One to choose one revealed tool
-    ask bounded System Two inference only for that tool's arguments
+    use the phase-wide System One tool palette
+    ask bounded System Two inference to compose the next concrete invocation
     validate action against tools, capabilities, dependencies, and scope
     execute exactly once
     append action and result evidence
-    evaluate the local completion predicate
+    evaluate hard completion invariants, then ask System One about semantic completion
     complete subgoal, recover locally, wait, or stop for outer review
 return PhaseOutcome and PhaseEvidence
 ```
@@ -76,8 +76,9 @@ Return to outer Check/Act when:
 
 - [x] Add a `PhaseExecutor` independent of the V2 one-call Do implementation.
 - [x] Add a tactical-action inference purpose and strict structured output validation.
-- [x] Use Jev System One to select one tool from the deterministically safe reveal set,
-      with System Two fallback when Jev is unavailable or ambiguous.
+- [x] Use one parallel Jev Noul question per registry tool to select a phase-wide
+      semantic palette; leave concrete invocation composition to System Two.
+- [x] Use Jev for semantic inner-Do completion checks after operational success.
 - [x] Validate every selected action before invocation.
 - [x] Reuse `ToolInvocationService` as the only tool execution boundary.
 - [x] Decrement budgets for attempted calls, including failures.

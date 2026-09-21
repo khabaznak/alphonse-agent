@@ -100,22 +100,52 @@ def test_system_one_client_rejects_missing_key_before_transport() -> None:
         client.validate()
 
 
-def test_jev_selects_one_tactical_tool_from_authorized_candidates() -> None:
+def test_jev_classifies_complete_static_tool_registry_with_parallel_noul_questions() -> None:
+    payloads = []
+
+    def transport(url, api_key, payload, timeout):
+        _ = url, api_key, timeout
+        payloads.append(payload)
+        answers = {}
+        for key, question in payload["questions"].items():
+            probability = 0.94 if "project_search" in question["instructions"] else 0.03
+            answers[key] = {"type": "noul", "noul": probability}
+        return {"answers": answers, "model": "jev-latest"}
+
     provider = JevCriterionDecisionProvider(
         SystemOneSettings(enabled=True, api_key="secret", validated_at="now"),
-        transport=_transport(route="tool_1", route_probability=0.93),
+        transport=transport,
     )
     tools = (
-        type("Tool", (), {"tool_id": "native.project_search", "name": "search", "description": "Find project records"})(),
-        type("Tool", (), {"tool_id": "artifact.medical", "name": "medical", "description": "Query medical records"})(),
+        type("Tool", (), {"tool_id": "native.project_search", "name": "search", "description": "Find project records", "read_only": True})(),
+        type("Tool", (), {"tool_id": "artifact.medical", "name": "medical", "description": "Query medical records", "read_only": True})(),
     )
 
-    result = provider.select_tactical_tool(
+    result = provider.select_plan_tools(
         goal="Find the treatment", phase={"phase_id": "p", "objective": "Locate record"},
-        subgoal={"subgoal_id": "s", "objective": "Find authoritative record", "required_output_type": "record"},
-        evidence={"entries": []}, bindings={}, tools=tools,
+        tools=tools,
+    )
+    provider.select_plan_tools(goal="Another goal", phase={"phase_id": "p2", "objective": "Another plan"}, tools=tools)
+
+    assert result.selected_tool_ids == ("native.project_search",)
+    assert result.rejected_tool_ids == ("artifact.medical",)
+    assert len(payloads[0]["questions"]) == len(tools)
+    assert payloads[0]["questions"] == payloads[1]["questions"]
+    assert all(question["type"] == "noul" for question in payloads[0]["questions"].values())
+
+
+def test_jev_tactical_review_distinguishes_operational_success_from_semantic_completion() -> None:
+    provider = JevCriterionDecisionProvider(
+        SystemOneSettings(enabled=True, api_key="secret", validated_at="now"),
+        transport=_transport(support=0.91),
     )
 
-    assert result.tool_id == "artifact.medical"
+    result = provider.evaluate_tactical_progress(
+        goal="Find the solar record",
+        phase={"phase_id": "p", "objective": "Locate record"},
+        subgoal={"subgoal_id": "s", "objective": "Find authoritative record"},
+        action={"tool_id": "native.project_search", "status": "success", "result": {"path": "backlog.md"}},
+    )
+
+    assert result.complete is True
     assert result.confident is True
-    assert result.no_safe_action is False

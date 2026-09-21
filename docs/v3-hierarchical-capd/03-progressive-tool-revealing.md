@@ -30,12 +30,17 @@ device_control
 
 ### Concrete tool reveal
 
-Policy selects the small set of concrete descriptors needed for the current subgoal.
-Full argument schemas are included only for those tools.
+At startup use, Alphonse constructs a static Jev-oriented registry: one stable Noul
+question per registered tool describing its capability, expected inputs, and effects.
+Every planned phase sends the same complete question set in parallel with a different
+plan state. Tool count is not artificially capped at this semantic-classification
+boundary and complete JSON schemas are not sent to Jev.
 
-Jev then chooses one candidate from that safe set. Only the chosen tool schema enters
-the System Two tactical-argument prompt. An ambiguous or unavailable Jev response
-falls back to the bounded reveal set; it never expands that set.
+Jev's positive results form a phase-wide semantic palette. Deterministic policy then
+applies authorization and current-subgoal prerequisites. Only the remaining concrete
+descriptors and schemas enter System Two, which composes the actual invocation and
+arguments. Provider failure falls back to deterministic revealing; Jev can never
+authorize an otherwise forbidden tool.
 
 ## Deterministic prerequisites
 
@@ -104,10 +109,12 @@ that phase unless new evidence and the phase contract make them relevant.
 - [x] Log why each tool was revealed or excluded without exposing chain-of-thought.
 - [x] Emit structured reveal decisions through the existing UI/debug event stream.
 - [x] Fail visibly and return to outer review when policy reveals no usable tool.
-- [x] Bound concrete tool count and schema characters.
+- [x] Keep the full Jev registry static and reuse the same parallel Noul questions for
+      every phase.
 - [x] Add bounded authorized `native.project_search` and
       `native.read_project_file` primitives.
-- [x] Select the next safe tool with System One before generating arguments.
+- [x] Select a phase-wide relevant tool palette with System One while preserving
+      System Two ownership of invocation composition.
 
 ## Tests
 
@@ -120,7 +127,7 @@ that phase unless new evidence and the phase contract make them relevant.
 - [x] Unauthorized integrations and cross-project tools remain hidden.
 - [x] A hidden tool call is rejected at execution even if the model invents it.
 - [x] Tool reveal changes after typed subgoal output is bound.
-- [x] Prompt schemas remain within a configured budget.
+- [x] Jev receives compact semantic tool profiles rather than complete schemas.
 - [x] Internal `.alphonse` memory cannot be searched, read, or mutated through the
       V3 project-file path.
 - [ ] Necessary-tool recall is measured on the V3 evaluation set (Stage 5 rollout
@@ -135,7 +142,8 @@ that phase unless new evidence and the phase contract make them relevant.
 
 ## Exit criteria
 
-- Tactical prompts receive a small relevant tool set rather than the entire registry.
+- Tactical prompts receive the Jev-selected, deterministically authorized tool set
+  rather than the entire registry.
 - Irrelevant high-risk tools are deterministically excluded.
 - Necessary tools remain discoverable on the representative evaluation set.
 - Reveal decisions are auditable and enforceable at execution time.
@@ -143,17 +151,20 @@ that phase unless new evidence and the phase contract make them relevant.
 
 ## Decisions made
 
-- Capability filtering and prerequisite enforcement are deterministic. Tactical
-  inference chooses only among the revealed concrete tools.
+- Jev performs semantic relevance classification over the full static registry.
+  Capability authorization and prerequisite enforcement remain deterministic, and
+  System Two chooses and parameterizes concrete calls from the resulting palette.
 - Artifact tools use explicit descriptor metadata when available and exact artifact-ID
   authorization as the compatibility path. Rich artifact manifests can extend this
   without changing the reveal contract.
-- Initial defaults are six concrete tools and 16,000 schema characters per subgoal.
+- The registry is frozen on first use for a runtime. A registry change requires a
+  restart so its static Jev question contract cannot silently drift mid-task.
 
 ## Implementation log
 
 - 2026-09-20 — Added the capability catalog, deterministic reveal policy, attachment,
   project, mutation, side-effect, and integration prerequisites, schema/tool budgets,
   structured reveal events, and executor enforcement. Full suite: 445 passed.
-- 2026-09-20 — Added System One ranking within the revealed set, safe project-file
-  primitives, and deterministic exclusion of unbounded shell and agent internals.
+- 2026-09-20 — Replaced per-call Choice selection and the six-tool cap with a static,
+  full-registry parallel Noul classification. Jev now supplies a phase-wide palette;
+  deterministic gates narrow it per subgoal and System Two composes invocations.

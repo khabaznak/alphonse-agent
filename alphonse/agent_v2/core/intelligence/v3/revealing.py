@@ -47,8 +47,8 @@ class ToolRevealResult:
 
 @dataclass
 class ToolRevealPolicy:
-    max_tools: int = 6
-    max_schema_chars: int = 16_000
+    max_tools: int | None = None
+    max_schema_chars: int | None = None
     capability_descriptions: dict[str, str] = field(default_factory=lambda: {
         Capability.PROJECT_RECORD_SEARCH.value: "Find records and indexes inside the authorized project.",
         Capability.PROJECT_FILE_INSPECTION.value: "Inspect authorized project files and local process state.",
@@ -100,10 +100,10 @@ class ToolRevealPolicy:
         selected_ids: set[str] = set()
         for _, descriptor, capabilities in candidates:
             size = len(json.dumps(descriptor.argument_schema, ensure_ascii=False))
-            if len(selected) >= max(1, self.max_tools):
+            if self.max_tools is not None and len(selected) >= max(1, self.max_tools):
                 decisions.append(ToolRevealDecision(descriptor.tool_id, False, capabilities, "tool_count_budget"))
                 continue
-            if selected and schema_chars + size > max(1, self.max_schema_chars):
+            if self.max_schema_chars is not None and selected and schema_chars + size > max(1, self.max_schema_chars):
                 decisions.append(ToolRevealDecision(descriptor.tool_id, False, capabilities, "schema_budget"))
                 continue
             selected.append(descriptor)

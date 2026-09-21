@@ -21,7 +21,8 @@ from alphonse.agent_v2.core.intelligence.v3 import TacticalState
 from alphonse.agent_v2.core.intelligence.v3 import new_tactical_state
 from alphonse.agent_v2.core.messages import CommunicationChannel, InMemoryMessageQueue
 from alphonse.agent_v2.core.tools.registry import InMemoryToolRegistry, ToolDefinition
-from alphonse.agent_v2.system_one import SystemOneToolSelection
+from alphonse.agent_v2.system_one import SystemOneToolRegistrySelection
+from alphonse.agent_v2.system_one import SystemOneTacticalReview
 
 
 def _tool(tool_id: str, callback, *, read_only: bool) -> ToolDefinition:
@@ -125,17 +126,21 @@ def test_phase_executor_runs_search_edit_verify_in_one_phase() -> None:
     assert task.hierarchical_state["status"] == "phase_complete"
 
 
-def test_phase_executor_uses_system_one_to_reduce_tactical_tool_choice() -> None:
+def test_phase_executor_uses_system_one_registry_selection_before_system_two_composes_call() -> None:
     calls: list[str] = []
     task = TaskState(task_id="task", user="alex", project_id="home")
     state = new_tactical_state(_phase())
     selected_tool_sets = []
 
     class SystemOne:
-        def select_tactical_tool(self, **values):
-            tools = values["tools"]
-            tool_id = next(item.tool_id for item in tools if item.tool_id == "native.search")
-            return SystemOneToolSelection(tool_id=tool_id, confidence=0.95, confident=True)
+        def select_plan_tools(self, **values):
+            assert {item.tool_id for item in values["tools"]} == {
+                "native.search", "native.exact_text_edit", "native.read",
+            }
+            return SystemOneToolRegistrySelection(
+                selected_tool_ids=("native.search",),
+                probabilities={"native.search": 0.95, "native.read": 0.1, "native.exact_text_edit": 0.1},
+            )
 
     def selector(current_state, subgoal, tools):
         selected_tool_sets.append([item.tool_id for item in tools])
@@ -158,13 +163,47 @@ def test_phase_executor_uses_system_one_to_reduce_tactical_tool_choice() -> None
     )
     state.active_subgoal_id = "locate"
     state.remaining_tool_calls = 1
-    state.revealed_tool_ids = ["native.search", "native.read"]
+    state.revealed_tool_ids = []
 
     outcome = executor.run(task, state, context)
 
     assert outcome.status == PhaseStatus.PHASE_COMPLETE
     assert selected_tool_sets == [["native.search"]]
-    assert task.metadata["system_one_tool_selections"][0]["tool_id"] == "native.search"
+    selection = task.metadata["system_one_tool_registry_selections"][0]
+    assert selection["selected_tool_ids"] == ["native.search"]
+
+
+def test_phase_executor_uses_system_one_to_check_semantic_subgoal_completion() -> None:
+    calls: list[str] = []
+    phase = PhasePlan(
+        "search", "Find authoritative record",
+        (PhaseSubgoal(
+            "locate", "Locate exact solar record", "record",
+            allowed_capabilities=("native.search",),
+            limits=PhaseLimits(1, 20),
+        ),),
+        authorized_capabilities=("native.search",),
+        limits=PhaseLimits(1, 20),
+    )
+    state = new_tactical_state(phase)
+    state.revealed_tool_ids = ["native.search"]
+
+    class SystemOne:
+        def evaluate_tactical_progress(self, **values):
+            assert values["action"]["status"] == "success"
+            return SystemOneTacticalReview(complete=False, confidence=0.05, confident=True)
+
+    executor = PhaseExecutor(
+        action_selector=_selector([{"tool_id": "native.search", "arguments": {"query": "solar"}}])
+    )
+    outcome = executor.run(
+        TaskState(task_id="task", user="alex", project_id="home"),
+        state,
+        CoreLoopContext(messages=InMemoryMessageQueue(), tools=_registry(calls), system_one=SystemOne()),
+    )
+
+    assert outcome.status == PhaseStatus.BUDGET_EXHAUSTED
+    assert state.completed_subgoal_ids == []
 
 
 def test_phase_executor_rejects_unrevealed_tool_before_execution() -> None:

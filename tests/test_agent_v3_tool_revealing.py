@@ -171,6 +171,21 @@ def test_reveal_enforces_tool_count_and_schema_budgets() -> None:
     assert any(item.reason in {"tool_count_budget", "schema_budget"} for item in result.decisions if not item.revealed)
 
 
+def test_default_reveal_has_no_arbitrary_six_tool_limit_after_system_one_classification() -> None:
+    subgoal = PhaseSubgoal(
+        "search", "Search", "result",
+        allowed_capabilities=(Capability.PROJECT_RECORD_SEARCH.value,),
+    )
+    tools = tuple(
+        _descriptor(f"native.search_{index}", Capability.PROJECT_RECORD_SEARCH)
+        for index in range(12)
+    )
+
+    result = ToolRevealPolicy().reveal(TaskState(project_id="home"), _state(subgoal), subgoal, tools)
+
+    assert len(result.tools) == 12
+
+
 def test_capability_catalog_is_compact_and_subgoal_scoped() -> None:
     subgoal = PhaseSubgoal(
         "locate", "Locate", "record",

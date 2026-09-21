@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import hashlib
+import re
 import sqlite3
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -176,25 +178,52 @@ class SystemOneReviewResult:
 
 
 @dataclass(frozen=True)
-class SystemOneToolSelection:
-    tool_id: str = ""
-    confidence: float = 0.0
-    confident: bool = False
-    no_safe_action: bool = False
+class SystemOneToolRegistrySelection:
+    selected_tool_ids: tuple[str, ...] = ()
+    rejected_tool_ids: tuple[str, ...] = ()
+    ambiguous_tool_ids: tuple[str, ...] = ()
+    probabilities: dict[str, float] = field(default_factory=dict)
     model: str = ""
     usage: dict[str, Any] = field(default_factory=dict)
     duration_ms: int = 0
 
     def to_metadata(self) -> dict[str, Any]:
         return {
-            "tool_id": self.tool_id,
-            "confidence": self.confidence,
-            "confident": self.confident,
-            "no_safe_action": self.no_safe_action,
+            "selected_tool_ids": list(self.selected_tool_ids),
+            "rejected_tool_ids": list(self.rejected_tool_ids),
+            "ambiguous_tool_ids": list(self.ambiguous_tool_ids),
+            "probabilities": dict(self.probabilities),
             "model": self.model,
             "usage": dict(self.usage),
             "duration_ms": self.duration_ms,
         }
+
+
+@dataclass(frozen=True)
+class SystemOneTacticalReview:
+    complete: bool
+    confidence: float
+    confident: bool
+    model: str = ""
+    usage: dict[str, Any] = field(default_factory=dict)
+    duration_ms: int = 0
+
+    def to_metadata(self) -> dict[str, Any]:
+        return {
+            "complete": self.complete,
+            "confidence": self.confidence,
+            "confident": self.confident,
+            "model": self.model,
+            "usage": dict(self.usage),
+            "duration_ms": self.duration_ms,
+        }
+
+
+@dataclass(frozen=True)
+class _StaticJevToolRegistry:
+    signature: tuple[str, ...]
+    questions: dict[str, Any]
+    tool_ids_by_question: dict[str, str]
 
 
 class JevCriterionDecisionProvider:
@@ -204,6 +233,7 @@ class JevCriterionDecisionProvider:
             api_url=self.settings.api_url, api_key=self.settings.api_key,
             model=self.settings.model, transport=transport,
         )
+        self._tool_registry: _StaticJevToolRegistry | None = None
 
     def evaluate(self, *, contract: dict[str, Any], phase: dict[str, Any], evidence: dict[str, Any]) -> SystemOneReviewResult:
         criteria = [
@@ -282,70 +312,112 @@ class JevCriterionDecisionProvider:
             usage=dict(response.get("usage") or {}), duration_ms=duration_ms,
         )
 
-    def select_tactical_tool(
+    def select_plan_tools(
+        self,
+        *,
+        goal: str,
+        phase: dict[str, Any],
+        tools: tuple[Any, ...],
+    ) -> SystemOneToolRegistrySelection:
+        if not tools:
+            return SystemOneToolRegistrySelection()
+        registry = self._static_tool_registry(tools)
+        state = {
+            "goal": str(goal)[:2000],
+            "plan": _bounded_json(phase, 16_000),
+        }
+        started = monotonic()
+        response = self.client.evaluate(state=state, questions=registry.questions)
+        duration_ms = max(0, round((monotonic() - started) * 1000))
+        selected: list[str] = []
+        rejected: list[str] = []
+        ambiguous: list[str] = []
+        probabilities: dict[str, float] = {}
+        for question_id, tool_id in registry.tool_ids_by_question.items():
+            answer = response["answers"].get(question_id)
+            if not isinstance(answer, dict) or answer.get("type") != "noul" or not isinstance(answer.get("noul"), (int, float)):
+                raise ValueError(f"system_one_tool_relevance_answer_invalid:{question_id}")
+            probability = max(0.0, min(1.0, float(answer["noul"])))
+            probabilities[tool_id] = probability
+            if probability >= self.settings.yes_threshold:
+                selected.append(tool_id)
+            elif probability <= self.settings.no_threshold:
+                rejected.append(tool_id)
+            else:
+                ambiguous.append(tool_id)
+        return SystemOneToolRegistrySelection(
+            selected_tool_ids=tuple(selected),
+            rejected_tool_ids=tuple(rejected),
+            ambiguous_tool_ids=tuple(ambiguous),
+            probabilities=probabilities,
+            model=str(response.get("model") or self.settings.model),
+            usage=dict(response.get("usage") or {}),
+            duration_ms=duration_ms,
+        )
+
+    def evaluate_tactical_progress(
         self,
         *,
         goal: str,
         phase: dict[str, Any],
         subgoal: dict[str, Any],
-        evidence: dict[str, Any],
-        bindings: dict[str, Any],
-        tools: tuple[Any, ...],
-    ) -> SystemOneToolSelection:
-        if not tools:
-            return SystemOneToolSelection(no_safe_action=True, confident=True)
-        if len(tools) == 1:
-            return SystemOneToolSelection(tool_id=str(tools[0].tool_id), confidence=1.0, confident=True, model="deterministic")
-        option_tools: dict[str, str] = {}
-        criteria: dict[str, str] = {}
-        for index, tool in enumerate(tools):
-            option = f"tool_{index}"
-            option_tools[option] = str(tool.tool_id)
-            criteria[option] = (
-                f"Choose {tool.tool_id} only when its capability and output directly advance the current subgoal. "
-                f"Tool description: {str(tool.description or tool.name)[:1000]}"
-            )
-        criteria["no_safe_action"] = "No listed tool can safely advance the subgoal with the available evidence and bindings."
+        action: dict[str, Any],
+    ) -> SystemOneTacticalReview:
         state = {
             "goal": str(goal)[:2000],
-            "phase": {"phase_id": phase.get("phase_id"), "objective": str(phase.get("objective") or "")[:2000]},
-            "subgoal": {
-                "subgoal_id": subgoal.get("subgoal_id"),
-                "objective": str(subgoal.get("objective") or "")[:2000],
-                "required_output_type": subgoal.get("required_output_type"),
-            },
-            "recent_evidence": _bounded_evidence((evidence or {}).get("entries"))[-6:],
-            "bindings": _bounded_json(bindings, 6000),
+            "plan": _bounded_json(phase, 12_000),
+            "current_subgoal": _bounded_json(subgoal, 4000),
+            "successful_tool_action": _bounded_json(action, 6000),
+        }
+        questions = {
+            "current_subgoal_complete": {
+                "type": "noul",
+                "instructions": "Does the successful tool result semantically satisfy the current subgoal's declared completion condition?",
+                "criteria": {
+                    "true": "The observed result directly provides the required output and satisfies the declared completion condition.",
+                    "false": "The call ran, but its result is irrelevant, incomplete, ambiguous, or does not establish the required output.",
+                },
+            }
         }
         started = monotonic()
-        response = self.client.evaluate(
-            state=state,
-            questions={
-                "next_tool": {
-                    "type": "choice",
-                    "instructions": "Which single tool should execute next to advance the current tactical subgoal safely?",
-                    "criteria": criteria,
-                }
-            },
-        )
+        response = self.client.evaluate(state=state, questions=questions)
         duration_ms = max(0, round((monotonic() - started) * 1000))
-        answer = response["answers"].get("next_tool")
-        if not isinstance(answer, dict) or answer.get("type") != "choice":
-            raise ValueError("system_one_tool_answer_invalid")
-        choice = str(answer.get("choice") or "")
-        probabilities = answer.get("probabilities") if isinstance(answer.get("probabilities"), dict) else {}
-        probability = float(probabilities.get(choice) or 0.0)
-        if choice not in option_tools and choice != "no_safe_action":
-            raise ValueError("system_one_tool_choice_invalid")
-        return SystemOneToolSelection(
-            tool_id=option_tools.get(choice, ""),
+        answer = response["answers"].get("current_subgoal_complete")
+        if not isinstance(answer, dict) or answer.get("type") != "noul" or not isinstance(answer.get("noul"), (int, float)):
+            raise ValueError("system_one_tactical_review_invalid")
+        probability = max(0.0, min(1.0, float(answer["noul"])))
+        return SystemOneTacticalReview(
+            complete=probability >= self.settings.yes_threshold,
             confidence=probability,
-            confident=probability >= self.settings.route_confidence_threshold,
-            no_safe_action=choice == "no_safe_action",
+            confident=(probability >= self.settings.yes_threshold or probability <= self.settings.no_threshold),
             model=str(response.get("model") or self.settings.model),
             usage=dict(response.get("usage") or {}),
             duration_ms=duration_ms,
         )
+
+    def _static_tool_registry(self, tools: tuple[Any, ...]) -> _StaticJevToolRegistry:
+        signature = tuple(str(tool.tool_id) for tool in tools)
+        if self._tool_registry is not None:
+            if self._tool_registry.signature != signature:
+                raise ValueError("system_one_static_tool_registry_changed_restart_required")
+            return self._tool_registry
+        questions: dict[str, Any] = {}
+        tool_ids_by_question: dict[str, str] = {}
+        for tool in tools:
+            tool_id = str(tool.tool_id)
+            question_id = _tool_question_id(tool_id)
+            profile = _jev_tool_profile(tool)
+            questions[question_id] = {
+                "type": "noul",
+                "instructions": f"Can {tool_id} materially help accomplish at least one stage or subgoal of the plan in the state? Judge semantic usefulness; authorization is enforced separately.",
+                "criteria": {
+                    "true": f"At least one plan step directly needs this tool. {profile}",
+                    "false": f"No plan step directly needs this tool. Do not select it merely because it is broadly capable. {profile}",
+                },
+            }
+            tool_ids_by_question[question_id] = tool_id
+        self._tool_registry = _StaticJevToolRegistry(signature, questions, tool_ids_by_question)
+        return self._tool_registry
 
 
 def validate_and_save_system_one_settings(
@@ -426,6 +498,41 @@ def _bounded_json(value: Any, limit: int) -> Any:
     if len(rendered) <= limit:
         return value
     return {"truncated_json": rendered[:limit]}
+
+
+def _tool_question_id(tool_id: str) -> str:
+    slug = re.sub(r"[^a-zA-Z0-9]+", "_", str(tool_id or "tool")).strip("_").lower()[:48] or "tool"
+    digest = hashlib.sha256(str(tool_id).encode("utf-8")).hexdigest()[:10]
+    return f"tool_relevance__{slug}__{digest}"
+
+
+def _jev_tool_profile(tool: Any) -> str:
+    description = str(getattr(tool, "description", "") or getattr(tool, "name", "") or "No description supplied").strip()
+    metadata = getattr(tool, "metadata", {})
+    metadata = metadata if isinstance(metadata, dict) else {}
+    capabilities = [
+        str(item).strip()
+        for item in (
+            list(metadata.get("v3_capabilities") or [])
+            + list(getattr(tool, "capabilities", ()) or ())
+            + list(getattr(tool, "tags", ()) or ())
+        )
+        if str(item).strip()
+    ]
+    schema = getattr(tool, "argument_schema", {})
+    properties = schema.get("properties") if isinstance(schema, dict) else {}
+    inputs = sorted(str(item) for item in properties) if isinstance(properties, dict) else []
+    read_only = bool(getattr(tool, "read_only", False))
+    effect = (
+        "Effect: read-only observation; it must not change project or external state."
+        if read_only else
+        f"Effect: {str(metadata.get('side_effect_class') or 'may change project or external state; separate authorization is required')}."
+    )
+    return (
+        f"Capability: {description[:1000]} "
+        f"Semantic tags: {', '.join(dict.fromkeys(capabilities)) or 'unspecified'}. "
+        f"Expected inputs: {', '.join(inputs) or 'none declared'}. {effect}"
+    )
 
 
 def _http_transport(url: str, api_key: str, payload: dict[str, Any], timeout: float) -> dict[str, Any]:

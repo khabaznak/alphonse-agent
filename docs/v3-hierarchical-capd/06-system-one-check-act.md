@@ -5,23 +5,31 @@ Depends on: Stages 2 through 4
 
 ## Purpose
 
-Alphonse V3 can use TypeSafe.ai Jev as a fast System One decision engine for tactical
-tool choice inside Do and for the semantic part of outer Check. The Check request
+Alphonse V3 can use TypeSafe.ai Jev as a fast System One decision engine for parallel
+tool relevance and semantic completion inside Do and for the semantic part of outer Check. The Check request
 also returns an advisory route for Act.
 This is an optional provider path; it does not replace deterministic authorization,
 effect, cancellation, or completion invariants.
 
 ## Do boundary
 
-Deterministic reveal policy first removes irrelevant, unavailable, or unauthorized
-tools. Jev receives the bounded goal, phase, current subgoal, recent successful
-evidence, typed bindings, and clear descriptions of only those safe candidates. A
-Choice question selects one next tool or `no_safe_action`.
+Alphonse produces a static Jev-oriented registry once per runtime. It contains one
+stable Noul question for every registered tool, with explicit capability, inputs,
+read/write effects, and positive/negative selection boundaries. Every phase submits
+the complete question set in parallel against the goal and full phase plan. The
+questions do not change between tasks, even though the plan state does.
 
-When the result clears the configured confidence threshold, System Two receives only
-that tool and produces its arguments. Ambiguous responses and provider failures fall
-back to the complete bounded reveal set. Jev cannot reveal a hidden tool, authorize a
-side effect, select Bash, broaden mutation scope, or directly execute anything.
+Positive answers form the phase-wide relevant-tool palette. Deterministic policy then
+removes unavailable, unauthorized, or current-subgoal-incompatible tools. System Two
+receives the resulting descriptors and schemas and remains solely responsible for
+choosing the concrete call and filling its arguments. Jev never writes arguments,
+executes a tool, broadens mutation scope, or grants authorization.
+
+After an operationally successful call, a separate Jev Noul decision determines
+whether the observed result semantically satisfies the current subgoal. Hard status,
+schema, scope, and verification failures remain deterministic and cannot be converted
+to success by Jev. Ambiguous or unavailable semantic reviews fall back to the declared
+deterministic completion predicate.
 
 ## Check boundary
 
@@ -78,6 +86,6 @@ the key or request contents.
   review, advisory Choice routing, System Two fallback, masked admin IPC, desktop
   settings and validation, and structured telemetry. Full Python suite: 472 passed;
   desktop suite: 47 passed.
-- 2026-09-20 — Extended Jev into Do as a one-tool Choice layer after deterministic
-  reveal and before System Two argument generation. Added bounded decision telemetry
-  and conservative fallback.
+- 2026-09-20 — Extended Jev into Do with a static full-registry parallel Noul contract,
+  phase-wide relevance selection, deterministic per-subgoal enforcement, System Two
+  invocation composition, and a semantic inner-Do completion review.

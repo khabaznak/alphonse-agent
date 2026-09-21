@@ -293,6 +293,8 @@ class TacticalState:
     bindings: dict[str, Any] = field(default_factory=dict)
     revealed_capabilities: list[str] = field(default_factory=list)
     revealed_tool_ids: list[str] = field(default_factory=list)
+    system_one_relevant_tool_ids: list[str] = field(default_factory=list)
+    system_one_tool_registry_status: str = ""
     actions: list[TacticalAction] = field(default_factory=list)
     evidence: PhaseEvidence = field(default_factory=PhaseEvidence)
     remaining_tool_calls: int | None = None
@@ -349,6 +351,8 @@ class TacticalState:
             "bindings": _json_safe(self.bindings),
             "revealed_capabilities": list(self.revealed_capabilities),
             "revealed_tool_ids": list(self.revealed_tool_ids),
+            "system_one_relevant_tool_ids": list(self.system_one_relevant_tool_ids),
+            "system_one_tool_registry_status": self.system_one_tool_registry_status,
             "actions": [item.to_dict() for item in self.actions],
             "evidence": self.evidence.to_dict(),
             "remaining_tool_calls": self.remaining_tool_calls,
@@ -375,6 +379,8 @@ class TacticalState:
             bindings=dict(value.get("bindings") or {}),
             revealed_capabilities=list(_strings(value.get("revealed_capabilities"))),
             revealed_tool_ids=list(_strings(value.get("revealed_tool_ids"))),
+            system_one_relevant_tool_ids=list(_strings(value.get("system_one_relevant_tool_ids"))),
+            system_one_tool_registry_status=str(value.get("system_one_tool_registry_status") or "").strip(),
             actions=[TacticalAction.from_dict(item) for item in value.get("actions") or []],
             evidence=PhaseEvidence.from_dict(value.get("evidence")),
             remaining_tool_calls=int(value.get("remaining_tool_calls")) if value.get("remaining_tool_calls") is not None else None,

@@ -121,7 +121,7 @@ class PhaseExecutor:
                 if failure is not None:
                     return failure
                 continue
-            if not _condition_met(subgoal, completed.result):
+            if not self._completion_met(task, state, subgoal, completed, context):
                 if self._subgoal_calls(state, subgoal.subgoal_id) >= subgoal.limits.max_tool_calls:
                     state.transition(PhaseStatus.BUDGET_EXHAUSTED)
                     self._checkpoint(task, state, context)
@@ -160,44 +160,7 @@ class PhaseExecutor:
             return self._action_selector(state, subgoal, tools)
         if context.inference is None:
             return None
-        selected_tools = tools
-        if context.system_one is not None and hasattr(context.system_one, "select_tactical_tool"):
-            try:
-                system_one_selection = context.system_one.select_tactical_tool(
-                    goal=task.goal,
-                    phase=state.phase.to_dict(),
-                    subgoal={
-                        "subgoal_id": subgoal.subgoal_id,
-                        "objective": subgoal.objective,
-                        "required_output_type": subgoal.required_output_type,
-                    },
-                    evidence=state.evidence.to_dict(),
-                    bindings=dict(state.bindings),
-                    tools=tools,
-                )
-            except Exception as exc:
-                selection_metadata = {"status": "fallback", "error_type": type(exc).__name__}
-            else:
-                selection_metadata = {"status": "used", **system_one_selection.to_metadata()}
-                if system_one_selection.confident and system_one_selection.no_safe_action:
-                    _record_system_one_tool_selection(task, state, subgoal, selection_metadata)
-                    context.emit_telemetry({
-                        "event": "system_one_tool_selection", "task_id": task.task_id,
-                        "phase_id": state.phase.phase_id, "subgoal_id": subgoal.subgoal_id,
-                        **selection_metadata,
-                    })
-                    return None
-                if system_one_selection.confident and system_one_selection.tool_id:
-                    selected_tools = tuple(item for item in tools if item.tool_id == system_one_selection.tool_id)
-                elif not system_one_selection.confident:
-                    selection_metadata["status"] = "ambiguous_fallback"
-            _record_system_one_tool_selection(task, state, subgoal, selection_metadata)
-            context.emit_telemetry({
-                "event": "system_one_tool_selection", "task_id": task.task_id,
-                "phase_id": state.phase.phase_id, "subgoal_id": subgoal.subgoal_id,
-                **selection_metadata,
-            })
-        prompt = _tactical_prompt(state, subgoal, selected_tools)
+        prompt = _tactical_prompt(state, subgoal, tools)
         result = context.inference.generate_json(
             InferenceRequest(
                 prompt=prompt,
@@ -205,7 +168,7 @@ class PhaseExecutor:
                 project_id=task.project_id,
                 user=task.user,
                 task_id=task.task_id,
-                tools=selected_tools,
+                tools=tools,
                 metadata={"phase_id": state.phase.phase_id, "subgoal_id": subgoal.subgoal_id},
                 cancel_checker=context.is_cancelled if context.cancellation_checker is not None else None,
             )
@@ -218,8 +181,32 @@ class PhaseExecutor:
         if context.tools is None:
             return ()
         available = tuple(context.tools.list())
+        candidates = available
+        if context.system_one is not None and hasattr(context.system_one, "select_plan_tools"):
+            if not state.system_one_tool_registry_status:
+                try:
+                    selection = context.system_one.select_plan_tools(
+                        goal=task.goal,
+                        phase=state.phase.to_dict(),
+                        tools=available,
+                    )
+                except Exception as exc:
+                    selection_metadata = {"status": "fallback", "error_type": type(exc).__name__}
+                    state.system_one_tool_registry_status = "fallback"
+                else:
+                    selection_metadata = {"status": "used", **selection.to_metadata()}
+                    state.system_one_relevant_tool_ids = list(selection.selected_tool_ids)
+                    state.system_one_tool_registry_status = "used"
+                _record_system_one_registry_selection(task, state, selection_metadata)
+                context.emit_telemetry({
+                    "event": "system_one_tool_registry_selection", "task_id": task.task_id,
+                    "phase_id": state.phase.phase_id, **selection_metadata,
+                })
+            if state.system_one_tool_registry_status == "used":
+                relevant = set(state.system_one_relevant_tool_ids)
+                candidates = tuple(item for item in available if item.tool_id in relevant)
         if self._reveal_policy is not None and not state.revealed_tool_ids:
-            reveal = self._reveal_policy.reveal(task, state, subgoal, available)
+            reveal = self._reveal_policy.reveal(task, state, subgoal, candidates)
             state.revealed_capabilities = [item["capability"] for item in reveal.catalog]
             state.revealed_tool_ids = [item.tool_id for item in reveal.tools]
             context.emit_ui_event(
@@ -237,9 +224,52 @@ class PhaseExecutor:
         if not allowed_ids:
             # Stage 2 compatibility: use a fixed shortlist chosen by the caller/phase.
             # Stage 3 replaces this with progressive reveal policy.
-            allowed_ids = {item.tool_id for item in available if item.tool_id in state.phase.authorized_capabilities}
+            allowed_ids = {item.tool_id for item in candidates if item.tool_id in state.phase.authorized_capabilities}
             state.revealed_tool_ids = sorted(allowed_ids)
-        return tuple(item for item in available if item.tool_id in allowed_ids)
+        return tuple(item for item in candidates if item.tool_id in allowed_ids)
+
+    def _completion_met(
+        self,
+        task: "TaskState",
+        state: TacticalState,
+        subgoal: PhaseSubgoal,
+        action: TacticalAction,
+        context: "CoreLoopContext",
+    ) -> bool:
+        deterministic = _condition_met(subgoal, action.result)
+        if not deterministic:
+            return False
+        if context.system_one is None or not hasattr(context.system_one, "evaluate_tactical_progress"):
+            return True
+        try:
+            review = context.system_one.evaluate_tactical_progress(
+                goal=task.goal,
+                phase=state.phase.to_dict(),
+                subgoal={
+                    "subgoal_id": subgoal.subgoal_id,
+                    "objective": subgoal.objective,
+                    "required_output_type": subgoal.required_output_type,
+                    "depends_on": list(subgoal.depends_on),
+                    "allowed_capabilities": list(subgoal.allowed_capabilities),
+                    "completion": subgoal.completion.__dict__,
+                    "allowed_side_effects": [item.value for item in subgoal.allowed_side_effects],
+                    "failure_policy": subgoal.failure_policy.value,
+                },
+                action=action.to_dict(),
+            )
+        except Exception as exc:
+            metadata = {"status": "fallback", "error_type": type(exc).__name__}
+            result = deterministic
+        else:
+            metadata = {"status": "used" if review.confident else "ambiguous_fallback", **review.to_metadata()}
+            result = review.complete if review.confident else deterministic
+        _record_system_one_tactical_review(task, state, subgoal, action, metadata)
+        context.emit_telemetry({
+            "event": "system_one_tactical_review", "task_id": task.task_id,
+            "phase_id": state.phase.phase_id, "subgoal_id": subgoal.subgoal_id,
+            "action_id": action.action_id, **metadata,
+        })
+        return result
 
     @staticmethod
     def _validate_action(
@@ -377,13 +407,31 @@ def _error_message(value: Any) -> str:
     return str(value or "").strip()
 
 
-def _record_system_one_tool_selection(
-    task: "TaskState", state: TacticalState, subgoal: PhaseSubgoal, metadata: dict[str, Any]
+def _record_system_one_registry_selection(
+    task: "TaskState", state: TacticalState, metadata: dict[str, Any]
 ) -> None:
-    history = task.metadata.setdefault("system_one_tool_selections", [])
+    history = task.metadata.setdefault("system_one_tool_registry_selections", [])
     if not isinstance(history, list):
         history = []
-        task.metadata["system_one_tool_selections"] = history
-    history.append({"phase_id": state.phase.phase_id, "subgoal_id": subgoal.subgoal_id, **metadata})
+        task.metadata["system_one_tool_registry_selections"] = history
+    history.append({"phase_id": state.phase.phase_id, **metadata})
+    if len(history) > 20:
+        del history[:-20]
+
+
+def _record_system_one_tactical_review(
+    task: "TaskState", state: TacticalState, subgoal: PhaseSubgoal,
+    action: TacticalAction, metadata: dict[str, Any],
+) -> None:
+    history = task.metadata.setdefault("system_one_tactical_reviews", [])
+    if not isinstance(history, list):
+        history = []
+        task.metadata["system_one_tactical_reviews"] = history
+    history.append({
+        "phase_id": state.phase.phase_id,
+        "subgoal_id": subgoal.subgoal_id,
+        "action_id": action.action_id,
+        **metadata,
+    })
     if len(history) > 50:
         del history[:-50]
