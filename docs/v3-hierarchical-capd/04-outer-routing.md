@@ -165,3 +165,7 @@ paths, not repeatedly interpreted as an ordinary model-owned criterion.
   value `send_message_to_user`. Acceptance contracts now describe observable outcomes
   rather than forbidding the internal response tool, and terminal V3 errors report
   their real validation reason instead of blaming the configured model.
+- 2026-09-20 — Replaced Plan's prose-only phase-shape description with the complete
+  generic PhasePlan JSON Schema after a second live greeting omitted
+  `completion.kind`. The schema enumerates every required nested field, completion
+  kind, failure policy, capability, and side-effect value without task-specific routes.

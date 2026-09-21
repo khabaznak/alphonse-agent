@@ -6,7 +6,8 @@ import json
 from typing import TYPE_CHECKING
 
 from alphonse.agent_v2.core.inference import InferencePurpose, InferenceRequest
-from alphonse.agent_v2.core.intelligence.v3.contracts import PhasePlan
+from alphonse.agent_v2.core.intelligence.v3.contracts import FailurePolicy, PhasePlan, SideEffectClass
+from alphonse.agent_v2.core.intelligence.v3.contracts import SUPPORTED_COMPLETION_KINDS, V3_SCHEMA_VERSION
 from alphonse.agent_v2.core.intelligence.v3.revealing import tool_capabilities
 
 if TYPE_CHECKING:
@@ -23,6 +24,7 @@ def plan_phase(task: "TaskState", context: "CoreLoopContext") -> PhasePlan:
         raise RuntimeError("v3_phase_planning_inference_unavailable")
     tools = tuple(context.tools.list()) if context.tools is not None else ()
     catalog = sorted({capability for tool in tools for capability in tool_capabilities(tool)})
+    contract_schema = _phase_plan_json_schema(catalog)
     prompt = (
         "Plan one bounded strategic execution phase. Return one JSON object matching the PhasePlan contract. "
         "Use meaningful subgoals, not one outer CAPD cycle per tool. "
@@ -36,13 +38,9 @@ def plan_phase(task: "TaskState", context: "CoreLoopContext") -> PhasePlan:
         f"Immutable acceptance contract: {json.dumps(task.ensure_acceptance_contract(), ensure_ascii=False)}\n"
         f"Prior V3 phase history: {json.dumps(task.metadata.get('v3_phase_history') or [], ensure_ascii=False)}\n"
         f"Available capability identifiers: {json.dumps(catalog)}\n"
-        "Required top-level fields: phase_id, objective, subgoals, criterion_ids, limits, "
-        "authorized_capabilities, mutation_scope, originating_decision, schema_version. "
-        "Every subgoal requires: subgoal_id, objective, required_output_type, depends_on, "
-        "allowed_capabilities, allowed_side_effects, limits, completion, and failure_policy. "
-        "allowed_side_effects values must be chosen exactly from: read_only, user_response, "
-        "project_mutation, external_reversible, external_irreversible. Use user_response for "
-        "a subgoal whose effect is replying to the requester."
+        "Return an object conforming exactly to this JSON Schema. Do not omit required nested fields "
+        "or invent enum values. Use the user_response side effect for a subgoal whose effect is replying "
+        f"to the requester.\nPhasePlan JSON Schema: {json.dumps(contract_schema, ensure_ascii=False, sort_keys=True)}"
     )
     result = context.inference.generate_json(
         InferenceRequest(
@@ -61,3 +59,75 @@ def plan_phase(task: "TaskState", context: "CoreLoopContext") -> PhasePlan:
         return PhasePlan.from_dict(result.json_value)
     except (TypeError, ValueError) as exc:
         raise V3PhasePlanValidationError(f"v3_phase_plan_invalid:{exc}") from exc
+
+
+def _phase_plan_json_schema(capabilities: list[str]) -> dict[str, object]:
+    limits = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["max_tool_calls", "max_duration_seconds"],
+        "properties": {
+            "max_tool_calls": {"type": "integer", "minimum": 1},
+            "max_duration_seconds": {"type": "number", "exclusiveMinimum": 0},
+        },
+    }
+    capability = {"type": "string", "enum": capabilities}
+    completion = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["kind"],
+        "properties": {
+            "kind": {"type": "string", "enum": list(SUPPORTED_COMPLETION_KINDS)},
+            "output_type": {"type": "string"},
+            "field": {"type": "string"},
+            "expected": {},
+        },
+    }
+    subgoal = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": [
+            "subgoal_id", "objective", "required_output_type", "depends_on",
+            "allowed_capabilities", "allowed_side_effects", "limits", "completion", "failure_policy",
+        ],
+        "properties": {
+            "subgoal_id": {"type": "string", "minLength": 1},
+            "objective": {"type": "string", "minLength": 1},
+            "required_output_type": {"type": "string", "minLength": 1},
+            "depends_on": {"type": "array", "items": {"type": "string"}},
+            "allowed_capabilities": {"type": "array", "items": capability},
+            "allowed_side_effects": {
+                "type": "array", "minItems": 1,
+                "items": {"type": "string", "enum": [item.value for item in SideEffectClass]},
+            },
+            "limits": limits,
+            "completion": completion,
+            "failure_policy": {"type": "string", "enum": [item.value for item in FailurePolicy]},
+        },
+    }
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "required": [
+            "schema_version", "phase_id", "objective", "subgoals", "criterion_ids", "limits",
+            "authorized_capabilities", "mutation_scope", "originating_decision",
+        ],
+        "properties": {
+            "schema_version": {"const": V3_SCHEMA_VERSION},
+            "phase_id": {"type": "string", "minLength": 1},
+            "objective": {"type": "string", "minLength": 1},
+            "subgoals": {"type": "array", "minItems": 1, "items": subgoal},
+            "criterion_ids": {"type": "array", "items": {"type": "string"}},
+            "limits": limits,
+            "authorized_capabilities": {"type": "array", "items": capability},
+            "mutation_scope": {
+                "type": "object", "additionalProperties": False,
+                "required": ["allowed_paths", "allow_external_effects"],
+                "properties": {
+                    "allowed_paths": {"type": "array", "items": {"type": "string"}},
+                    "allow_external_effects": {"type": "boolean"},
+                },
+            },
+            "originating_decision": {"type": "string"},
+        },
+    }

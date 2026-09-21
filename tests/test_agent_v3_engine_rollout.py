@@ -244,7 +244,8 @@ def test_hierarchical_processor_plans_one_stage_and_jev_selects_respond_for_gree
     assert InferencePurpose.TACTICAL_ACTION in purposes
     assert InferencePurpose.FINAL_RESPONSE not in purposes
     planning_request = next(item for item in provider.requests if item.purpose == InferencePurpose.PHASE_PLANNING)
-    assert "read_only, user_response, project_mutation" in planning_request.prompt
+    assert '"required": ["kind"]' in planning_request.prompt
+    assert '"enum": ["read_only", "user_response", "project_mutation"' in planning_request.prompt
     assert question_store.load_task_checkpoint("greeting-task") is not None
     assert "tactical action" in [event.label for event in activity]
 

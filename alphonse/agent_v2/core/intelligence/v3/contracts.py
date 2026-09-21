@@ -12,6 +12,7 @@ from typing import Any
 V3_SCHEMA_VERSION = 3
 MAX_PHASE_TOOL_CALLS = 64
 MAX_PHASE_DURATION_SECONDS = 3600.0
+SUPPORTED_COMPLETION_KINDS = ("output_present", "tool_call_terminal", "field_equals")
 
 
 class PhaseStatus(str, Enum):
@@ -92,6 +93,10 @@ class CompletionCondition:
     def __post_init__(self) -> None:
         if not str(self.kind or "").strip():
             raise ValueError("completion_condition_kind_required")
+        if self.kind not in SUPPORTED_COMPLETION_KINDS:
+            raise ValueError(f"completion_condition_kind_invalid:{self.kind}")
+        if self.kind == "field_equals" and not str(self.field or "").strip():
+            raise ValueError("completion_condition_field_required")
 
     @classmethod
     def from_dict(cls, value: Any) -> "CompletionCondition":
