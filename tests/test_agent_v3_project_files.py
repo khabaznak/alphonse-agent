@@ -42,6 +42,47 @@ def test_project_search_fails_closed_when_no_project_record_matches(tmp_path) ->
         execute_project_search({"query": "solar record"}, context=context)
 
 
+def test_project_search_supports_keywords_or_phrases_and_path_matches(tmp_path) -> None:
+    root, context = _context(tmp_path)
+    (root / "calisthenics_journal.md").write_text(
+        "# Training Notes\n\n- Push-ups: 5 sets\n- Rest: 45 seconds\n",
+        encoding="utf-8",
+    )
+
+    keywords = execute_project_search(
+        {"query": "entrenamiento OR workout OR push-ups"}, context=context,
+    )
+    phrase = execute_project_search(
+        {"query": 'missing "45 seconds"'}, context=context,
+    )
+    filename = execute_project_search(
+        {"query": "calisthenics_journal"}, context=context,
+    )
+
+    assert keywords["terms"] == ["entrenamiento", "workout", "push-ups"]
+    assert any(item["matched_term"] == "push-ups" for item in keywords["matches"])
+    assert any(item["matched_term"] == "45 seconds" for item in phrase["matches"])
+    assert filename["matches"][0] == {
+        "path": "calisthenics_journal.md",
+        "line_number": 0,
+        "line": "",
+        "matched_term": "calisthenics_journal",
+        "match_source": "path",
+    }
+
+
+def test_project_search_whitespace_terms_are_alternatives(tmp_path) -> None:
+    root, context = _context(tmp_path)
+    (root / "journal.md").write_text("Push-ups completed\n", encoding="utf-8")
+
+    result = execute_project_search(
+        {"query": "entrenamiento rutina push-ups 2026-09-21"}, context=context,
+    )
+
+    assert result["terms"] == ["entrenamiento", "rutina", "push-ups", "2026-09-21"]
+    assert result["matches"][0]["matched_term"] == "push-ups"
+
+
 def test_project_read_and_exact_edit_reject_internal_alphonse_paths(tmp_path) -> None:
     root, context = _context(tmp_path)
     internal = root / ".alphonse" / "memory"

@@ -2272,6 +2272,7 @@ def _scheduled_failure_is_non_retryable(error: str) -> bool:
         "openai_codex_cli_upgrade_required",
         "openai_codex_model_not_configured",
         "v3_task_failed",
+        "system_one_unavailable",
     }
 
 
@@ -2285,7 +2286,9 @@ def _model_access_rejection(error: str) -> bool:
 
 def _scheduled_failure_message(task_name: str, error: str) -> str:
     code = _scheduled_failure_code(error)
-    if code == "openai_codex_auth_required":
+    if code == "system_one_unavailable":
+        detail = "Jev is unavailable, so Alphonse is offline until the decision service is back."
+    elif code == "openai_codex_auth_required":
         detail = "Codex needs to be signed in again before I can run it."
     elif code == "openai_codex_cli_missing":
         detail = "The Codex command-line tool is unavailable on this machine."
@@ -2301,6 +2304,8 @@ def _scheduled_failure_message(task_name: str, error: str) -> str:
 def _inbound_failure_message(error: str, model_id: str) -> str:
     code = _scheduled_failure_code(error)
     model = str(model_id or "").strip()
+    if code == "system_one_unavailable":
+        return "I couldn't complete this task because Jev is unavailable. Alphonse is offline until the decision service is back; please try again later."
     if code == "v3_task_failed":
         reason = str(error or "").partition(":")[2].strip() or "V3 reported a terminal task failure."
         if reason.startswith("v3_phase_plan_invalid:"):

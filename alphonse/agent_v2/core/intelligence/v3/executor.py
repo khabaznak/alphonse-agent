@@ -20,6 +20,7 @@ from alphonse.agent_v2.core.intelligence.v3.revealing import ToolRevealPolicy
 from alphonse.agent_v2.core.messages.queue import MessageSelector
 from alphonse.agent_v2.core.tools.invocation import ToolInvocationService
 from alphonse.agent_v2.core.tools.registry.native.respond import RESPOND_TOOL_ID
+from alphonse.agent_v2.system_one import SystemOneUnavailableError
 
 if TYPE_CHECKING:
     from alphonse.agent_v2.core.core import CoreLoopContext, ToolDescriptor
@@ -98,6 +99,7 @@ class PhaseExecutor:
                 status=str(outcome.get("status") or "failed"),
                 result=outcome.get("result"),
                 error=_error_message(outcome.get("error")),
+                acceptance_questions=action.acceptance_questions,
             )
             state.actions[-1] = completed
             state.evidence.append(
@@ -106,12 +108,15 @@ class PhaseExecutor:
                     "phase_id": state.phase.phase_id,
                     "subgoal_id": subgoal.subgoal_id,
                     "tool_id": completed.tool_id,
+                    "arguments": completed.arguments,
                     "status": completed.status,
                     "result": completed.result,
                     "error": completed.error,
+                    "acceptance_questions": [dict(item) for item in completed.acceptance_questions],
                 }
             )
             self._checkpoint(task, state, context)
+            completion_met = self._completion_met(task, state, subgoal, completed, context)
             if completed.status == "waiting":
                 state.transition(PhaseStatus.WAITING_USER)
                 self._checkpoint(task, state, context)
@@ -122,7 +127,7 @@ class PhaseExecutor:
                 if failure is not None:
                     return failure
                 continue
-            if not self._completion_met(task, state, subgoal, completed, context):
+            if not completion_met:
                 if self._subgoal_calls(state, subgoal.subgoal_id) >= subgoal.limits.max_tool_calls:
                     state.transition(PhaseStatus.BUDGET_EXHAUSTED)
                     self._checkpoint(task, state, context)
@@ -169,7 +174,7 @@ class PhaseExecutor:
             return self._action_selector(state, subgoal, tools)
         if context.inference is None:
             return None
-        prompt = _tactical_prompt(state, subgoal, tools)
+        prompt = _tactical_prompt(state, subgoal, tools, goal=task.goal)
         result = context.inference.generate_json(
             InferenceRequest(
                 prompt=prompt,
@@ -191,38 +196,9 @@ class PhaseExecutor:
             return ()
         available = tuple(context.tools.list())
         candidates = available
-        if context.system_one is not None and hasattr(context.system_one, "select_plan_tools"):
-            if not state.system_one_tool_registry_status:
-                try:
-                    selection = context.system_one.select_plan_tools(
-                        goal=task.goal,
-                        phase=state.phase.to_dict(),
-                        tools=available,
-                    )
-                except Exception as exc:
-                    selection_metadata = {"status": "fallback", "error_type": type(exc).__name__}
-                    state.system_one_tool_registry_status = "fallback"
-                else:
-                    selection_metadata = {"status": "used", **selection.to_metadata()}
-                    state.system_one_relevant_tool_ids = list(dict.fromkeys((
-                        *selection.selected_tool_ids,
-                        *selection.ambiguous_tool_ids,
-                    )))
-                    state.system_one_tool_registry_status = "used"
-                _record_system_one_registry_selection(task, state, selection_metadata)
-                context.emit_telemetry({
-                    "event": "system_one_tool_registry_selection", "task_id": task.task_id,
-                    "phase_id": state.phase.phase_id, **selection_metadata,
-                })
-            if state.system_one_tool_registry_status == "used":
-                # A Noul result between the configured yes/no thresholds is not a
-                # semantic rejection. Keep those tools in the phase palette and
-                # let the deterministic capability gates plus System Two make the
-                # final choice. Dropping ambiguous tools here creates a false-
-                # negative cliff: a likely device client can disappear while a
-                # more confidently scored but less useful file search remains.
-                relevant = set(state.system_one_relevant_tool_ids)
-                candidates = tuple(item for item in available if item.tool_id in relevant)
+        if state.phase.tool_curation_status == "used":
+            relevant = set(state.phase.curated_tool_ids)
+            candidates = tuple(item for item in available if item.tool_id in relevant)
         if self._reveal_policy is not None and not state.revealed_tool_ids:
             reveal = self._reveal_policy.reveal(task, state, subgoal, candidates)
             state.revealed_capabilities = [item["capability"] for item in reveal.catalog]
@@ -255,10 +231,8 @@ class PhaseExecutor:
         context: "CoreLoopContext",
     ) -> bool:
         deterministic = _condition_met(subgoal, action.result)
-        if not deterministic:
-            return False
         if context.system_one is None or not hasattr(context.system_one, "evaluate_tactical_progress"):
-            return True
+            raise SystemOneUnavailableError("tactical_acceptance_unavailable")
         try:
             review = context.system_one.evaluate_tactical_progress(
                 goal=task.goal,
@@ -274,10 +248,11 @@ class PhaseExecutor:
                     "failure_policy": subgoal.failure_policy.value,
                 },
                 action=action.to_dict(),
+                questions=list(action.acceptance_questions),
+                execution_log=[dict(item) for item in state.evidence.entries],
             )
         except Exception as exc:
-            metadata = {"status": "fallback", "error_type": type(exc).__name__}
-            result = deterministic
+            raise SystemOneUnavailableError(f"tactical_acceptance:{type(exc).__name__}") from exc
         else:
             metadata = {"status": "used" if review.confident else "ambiguous_fallback", **review.to_metadata()}
             result = review.complete if review.confident else deterministic
@@ -309,11 +284,32 @@ class PhaseExecutor:
             path = str(arguments.get("path") or "").strip().replace("\\", "/")
             if path not in set(state.phase.mutation_scope.allowed_paths):
                 raise PermissionError(f"tactical_mutation_path_not_authorized:{path or '(missing)'}")
+        raw_questions = selected.get("acceptance_questions")
+        if not isinstance(raw_questions, list) or not raw_questions:
+            raise ValueError("tactical_acceptance_questions_required")
+        questions = []
+        seen_questions: set[str] = set()
+        for item in raw_questions:
+            if not isinstance(item, dict) or item.get("type") != "noul":
+                raise ValueError("tactical_acceptance_question_invalid")
+            question_id = str(item.get("question_id") or "").strip()
+            criteria = item.get("criteria")
+            if (
+                not question_id or question_id in seen_questions
+                or not str(item.get("instructions") or "").strip()
+                or not isinstance(criteria, dict)
+                or not str(criteria.get("true") or "").strip()
+                or not str(criteria.get("false") or "").strip()
+            ):
+                raise ValueError("tactical_acceptance_question_invalid")
+            seen_questions.add(question_id)
+            questions.append(dict(item))
         return TacticalAction(
             action_id=str(selected.get("action_id") or f"action-{uuid4()}"),
             subgoal_id=subgoal.subgoal_id,
             tool_id=tool_id,
             arguments=dict(arguments),
+            acceptance_questions=tuple(questions),
         )
 
     def _handle_failure(
@@ -404,16 +400,23 @@ def _steering_is_pending(task: "TaskState", context: "CoreLoopContext") -> bool:
     return str(metadata.get("routing_disposition") or "") in {"steering", "correlated_response"}
 
 
-def _tactical_prompt(state: TacticalState, subgoal: PhaseSubgoal, tools: tuple["ToolDescriptor", ...]) -> str:
+def _tactical_prompt(
+    state: TacticalState, subgoal: PhaseSubgoal, tools: tuple["ToolDescriptor", ...], *, goal: str = ""
+) -> str:
     tool_rows = [
         {"tool_id": item.tool_id, "name": item.name, "description": item.description, "schema": item.argument_schema}
         for item in tools
     ]
     return (
-        "Select exactly one concrete tactical action for the current bounded subgoal. "
+        "Select exactly one concrete tactical action for the current bounded subgoal and define acceptance questions for its result. "
         "Do not change the objective, acceptance criteria, mutation scope, or budgets. "
-        "Return JSON only: {\"tool_id\":\"...\",\"arguments\":{...}}.\n\n"
-        f"Phase state:\n{state.prompt_projection(max_evidence_entries=6, max_chars=9000)}\n\n"
+        "Return JSON with tool_id, arguments, and a non-empty acceptance_questions array. Each item must be a Noul question "
+        "shaped as {question_id, type:'noul', instructions, criteria:{true, false}}. Questions must evaluate the tool result "
+        "against the stage goal and relevant acceptance criteria.\n\n"
+        f"Goal: {goal}\n"
+        f"Strategic plan: {json.dumps(state.phase.to_dict(), ensure_ascii=False)}\n"
+        f"Stage goal: {json.dumps(subgoal.__dict__, default=str, ensure_ascii=False)}\n"
+        f"Complete tool execution log (every entry, no omissions or truncation):\n{state.prompt_projection(max_evidence_entries=None, max_chars=None)}\n\n"
         f"Current subgoal:\n{json.dumps(subgoal.__dict__, default=str, ensure_ascii=False)}\n\n"
         f"Revealed tools:\n{json.dumps(tool_rows, ensure_ascii=False)}"
     )

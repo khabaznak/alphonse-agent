@@ -11,6 +11,7 @@ from alphonse.agent_v2.core.core import ImprovementPhase
 from alphonse.agent_v2.core.inference import InferencePurpose, InferenceRequest
 from alphonse.agent_v2.core.intelligence.acceptance_contract import apply_status_patch
 from alphonse.agent_v2.core.intelligence.v3.contracts import PhaseOutcome, PhaseStatus, SideEffectClass, TacticalState
+from alphonse.agent_v2.system_one import SystemOneUnavailableError
 
 if TYPE_CHECKING:
     from alphonse.agent_v2.core.core import CoreLoopContext
@@ -263,66 +264,76 @@ def _review_acceptance_statuses(
     evidence_refs: tuple[str, ...],
     context: "CoreLoopContext",
 ) -> None:
-    if context.system_one is not None:
-        try:
-            system_one_result = context.system_one.evaluate(
-                contract=task.ensure_acceptance_contract(),
-                phase=state.phase.to_dict(),
-                evidence=state.evidence.to_dict(),
-            )
-        except Exception as exc:
-            task.metadata["system_one_review"] = {
-                "status": "fallback",
-                "error": f"{type(exc).__name__}:{str(exc)[:300]}",
-            }
-            context.emit_telemetry({
-                "event": "system_one_review",
-                "task_id": task.task_id,
-                "phase_id": state.phase.phase_id,
-                "status": "fallback",
-                "error_type": type(exc).__name__,
-            })
-        else:
-            metadata = system_one_result.to_metadata()
-            if not system_one_result.ambiguous_criterion_ids:
-                contract, rejected = apply_status_patch(
-                    task.ensure_acceptance_contract(),
-                    {"updates": list(system_one_result.updates)},
-                    valid_evidence_refs=set(evidence_refs),
-                )
-                task.acceptance_contract = contract
-                task.sync_acceptance_criteria_view()
-                task.metadata["v3_phase_review_rejections"] = rejected
-                task.metadata["system_one_review"] = {"status": "used", **metadata}
-                context.emit_telemetry({
-                    "event": "system_one_review",
-                    "task_id": task.task_id,
-                    "phase_id": state.phase.phase_id,
-                    "status": "used",
-                    "recommended_route": system_one_result.recommended_route,
-                    "route_confident": system_one_result.route_confident,
-                    "duration_ms": system_one_result.duration_ms,
-                    "model": system_one_result.model,
-                    "usage": dict(system_one_result.usage),
-                })
-                return
-            task.metadata["system_one_review"] = {"status": "ambiguous_fallback", **metadata}
-            context.emit_telemetry({
-                "event": "system_one_review",
-                "task_id": task.task_id,
-                "phase_id": state.phase.phase_id,
-                "status": "ambiguous_fallback",
-                "ambiguous_criterion_count": len(system_one_result.ambiguous_criterion_ids),
-                "duration_ms": system_one_result.duration_ms,
-                "model": system_one_result.model,
-                "usage": dict(system_one_result.usage),
-            })
+    if context.system_one is None or not hasattr(context.system_one, "evaluate"):
+        raise SystemOneUnavailableError("acceptance_review_unavailable")
+    try:
+        system_one_result = context.system_one.evaluate(
+            contract=task.ensure_acceptance_contract(),
+            phase=state.phase.to_dict(),
+            evidence=state.evidence.to_dict(),
+        )
+    except Exception as exc:
+        raise SystemOneUnavailableError(f"acceptance_review:{type(exc).__name__}") from exc
+    metadata = system_one_result.to_metadata()
+    ambiguous_ids = set(system_one_result.ambiguous_criterion_ids)
+    confident_updates = [
+        dict(update) for update in system_one_result.updates
+        if str(update.get("criterion_id") or "") not in ambiguous_ids
+    ]
+    rejected: list[str] = []
+    if confident_updates:
+        contract, rejected = apply_status_patch(
+            task.ensure_acceptance_contract(),
+            {"updates": confident_updates},
+            valid_evidence_refs=set(evidence_refs),
+        )
+        task.acceptance_contract = contract
+        task.sync_acceptance_criteria_view()
+    task.metadata["v3_phase_review_rejections"] = rejected
+    if not ambiguous_ids:
+        task.metadata["system_one_review"] = {"status": "used", **metadata}
+        context.emit_telemetry({
+            "event": "system_one_review",
+            "task_id": task.task_id,
+            "phase_id": state.phase.phase_id,
+            "status": "used",
+            "recommended_route": system_one_result.recommended_route,
+            "route_confident": system_one_result.route_confident,
+            "duration_ms": system_one_result.duration_ms,
+            "model": system_one_result.model,
+            "usage": dict(system_one_result.usage),
+        })
+        return
+    task.metadata["system_one_review"] = {
+        "status": "partial_fallback" if confident_updates else "ambiguous_fallback",
+        **metadata,
+    }
+    context.emit_telemetry({
+        "event": "system_one_review",
+        "task_id": task.task_id,
+        "phase_id": state.phase.phase_id,
+        "status": "partial_fallback" if confident_updates else "ambiguous_fallback",
+        "ambiguous_criterion_count": len(system_one_result.ambiguous_criterion_ids),
+        "duration_ms": system_one_result.duration_ms,
+        "model": system_one_result.model,
+        "usage": dict(system_one_result.usage),
+    })
     if context.inference is None:
+        return
+    unresolved_contract = dict(task.ensure_acceptance_contract())
+    unresolved_contract["criteria"] = [
+        dict(item) for item in unresolved_contract.get("criteria") or []
+        if isinstance(item, dict)
+        and item.get("superseded") is not True
+        and item.get("required", True)
+        and item.get("status") != "satisfied"
+    ]
+    if not unresolved_contract["criteria"]:
         return
     prompt = (
         "Evaluate the immutable acceptance contract against the complete phase evidence. "
         "Return status updates only; do not redefine criteria. Satisfied criteria require one of the supplied evidence refs.\n\n"
-        f"Contract: {json.dumps(task.ensure_acceptance_contract(), ensure_ascii=False)}\n"
+        f"Unresolved contract criteria: {json.dumps(unresolved_contract, ensure_ascii=False)}\n"
         f"Phase: {json.dumps(state.phase.to_dict(), ensure_ascii=False)}\n"
         f"Evidence: {json.dumps(state.evidence.to_dict(), ensure_ascii=False)}\n"
         f"Valid evidence refs: {json.dumps(evidence_refs)}"

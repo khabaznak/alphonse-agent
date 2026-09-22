@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shlex
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -18,7 +19,11 @@ def build_project_search_tool_definition() -> ToolDefinition:
     schema = {
         "type": "object", "additionalProperties": False,
         "properties": {
-            "query": {"type": "string", "minLength": 1},
+            "query": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Case-insensitive keywords separated by whitespace or OR; quote an exact phrase.",
+            },
             "max_results": {"type": "integer", "minimum": 1, "maximum": 25, "default": 10},
         },
         "required": ["query"],
@@ -28,7 +33,11 @@ def build_project_search_tool_definition() -> ToolDefinition:
             tool_id=PROJECT_SEARCH_TOOL_ID,
             name="project_search",
             kind=ToolKind.NATIVE,
-            description="Search bounded text files in the authorized project. Internal .alphonse memory and metadata are always excluded.",
+            description=(
+                "Search authorized project file paths and bounded text contents using case-insensitive keywords. "
+                "Whitespace and OR separate alternatives; quote a multi-word exact phrase. "
+                "Internal .alphonse memory and metadata are always excluded."
+            ),
             argument_schema=schema,
             capabilities=("project_search", "filesystem"),
             tags=("native", "filesystem", "read_only"),
@@ -74,36 +83,81 @@ def execute_project_search(arguments: dict[str, Any], *, context: ToolExecutionC
     query = str(arguments.get("query") or "").strip()
     if not query:
         raise ValueError("project_search_query_required")
+    terms = _search_terms(query)
     limit = max(1, min(25, int(arguments.get("max_results", 10))))
     root = _project_root(context)
-    needle = query.casefold()
     matches: list[dict[str, Any]] = []
     scanned = 0
     for path in sorted(root.rglob("*")):
         if len(matches) >= limit:
             break
-        if not path.is_file() or _is_protected(path.relative_to(root)) or path.suffix.lower() not in _TEXT_SUFFIXES:
+        relative = path.relative_to(root)
+        if not path.is_file() or _is_protected(relative) or path.suffix.lower() not in _TEXT_SUFFIXES:
             continue
         if path.stat().st_size > 2_000_000:
             continue
         scanned += 1
+        display = relative.as_posix()
+        path_term = _first_match(display, terms)
+        if path_term:
+            matches.append({
+                "path": display,
+                "line_number": 0,
+                "line": "",
+                "matched_term": path_term,
+                "match_source": "path",
+            })
+            if len(matches) >= limit:
+                break
         try:
             lines = path.read_text(encoding="utf-8").splitlines()
         except (OSError, UnicodeError):
             continue
         for line_number, line in enumerate(lines, 1):
-            if needle not in line.casefold():
+            matched_term = _first_match(line, terms)
+            if not matched_term:
                 continue
             matches.append({
-                "path": path.relative_to(root).as_posix(),
+                "path": display,
                 "line_number": line_number,
                 "line": line[:1000],
+                "matched_term": matched_term,
+                "match_source": "content",
             })
             if len(matches) >= limit:
                 break
     if not matches:
         raise LookupError("project_search_no_matches")
-    return {"query": query, "matches": matches, "match_count": len(matches), "files_scanned": scanned, "truncated": len(matches) >= limit}
+    return {
+        "query": query,
+        "terms": terms,
+        "matches": matches,
+        "match_count": len(matches),
+        "files_scanned": scanned,
+        "truncated": len(matches) >= limit,
+    }
+
+
+def _search_terms(query: str) -> list[str]:
+    try:
+        tokens = shlex.split(query)
+    except ValueError:
+        tokens = query.split()
+    terms: list[str] = []
+    seen: set[str] = set()
+    for token in tokens:
+        normalized = str(token or "").strip()
+        folded = normalized.casefold()
+        if not normalized or folded == "or" or folded in seen:
+            continue
+        seen.add(folded)
+        terms.append(normalized)
+    return terms or [query]
+
+
+def _first_match(value: str, terms: list[str]) -> str:
+    folded = str(value or "").casefold()
+    return next((term for term in terms if term.casefold() in folded), "")
 
 
 def execute_project_read(arguments: dict[str, Any], *, context: ToolExecutionContext | None = None) -> dict[str, Any]:

@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from alphonse.agent_v2.core.core import CoreLoopContext, ProcessingResult, StateSnapshot, ToolDescriptor, ToolKind
-from alphonse.agent_v2.core.inference import InferencePurpose, InferenceRouter, ModelProfile, StubInferenceProvider
+from alphonse.agent_v2.core.inference import InferencePurpose, InferenceResult, InferenceRouter, ModelProfile, StubInferenceProvider
 from alphonse.agent_v2.core.intelligence.task_state import TaskState
 from alphonse.agent_v2.core.intelligence.v3 import CompletionCondition
 from alphonse.agent_v2.core.intelligence.v3 import EngineRoutingProcessor, HierarchicalCAPDProcessor
@@ -11,8 +11,11 @@ from alphonse.agent_v2.core.intelligence.v3 import PhaseLimits, PhaseOutcome, Ph
 from alphonse.agent_v2.core.intelligence.v3 import new_tactical_state
 from alphonse.agent_v2.core.intelligence.v3.processor import _deduplicated_history_evidence
 from alphonse.agent_v2.core.messages import CommunicationChannel, InMemoryMessageQueue
+from alphonse.agent_v2.core.projects import ProjectStore
 from alphonse.agent_v2.core.questions import SQLiteQuestionStore
 from alphonse.agent_v2.core.tools.registry import InMemoryToolRegistry, ToolDefinition
+from alphonse.agent_v2.core.tools.registry.native.exact_text_edit import build_exact_text_edit_tool_definition
+from alphonse.agent_v2.core.tools.registry.native.project_files import build_project_read_tool_definition
 from alphonse.agent_v2.core.tools.registry.native.respond import build_respond_tool_definition
 from alphonse.agent_v2.intelligence_engine_settings import HIERARCHICAL_V3, TACTICAL_V2
 from alphonse.agent_v2.intelligence_engine_settings import IntelligenceEngineSettings
@@ -393,6 +396,217 @@ def test_v3_phase_planner_receives_latest_user_tool_hint() -> None:
     assert '"capability": "device_control"' in request.prompt
     assert "Read or control an authorized device" in request.prompt
     assert state.phase.phase_id == "read-device-temperature"
+
+
+def test_v3_phase_planner_receives_project_context_and_durable_memory(tmp_path: Path) -> None:
+    provider = StubInferenceProvider(
+        json_by_purpose={
+            InferencePurpose.PHASE_PLANNING: {
+                "schema_version": 3,
+                "phase_id": "read-known-journal",
+                "objective": "Read the known journal before updating it",
+                "criterion_ids": ["ac-1"],
+                "authorized_capabilities": ["project_file_inspection"],
+                "mutation_scope": {"allowed_paths": [], "allow_external_effects": False},
+                "limits": {"max_tool_calls": 1, "max_duration_seconds": 20},
+                "originating_decision": "The journal path is established in durable project memory.",
+                "subgoals": [{
+                    "subgoal_id": "read-journal",
+                    "objective": "Read calisthenics_journal.md",
+                    "required_output_type": "journal_contents",
+                    "depends_on": [],
+                    "allowed_capabilities": ["project_file_inspection"],
+                    "allowed_side_effects": ["read_only"],
+                    "limits": {"max_tool_calls": 1, "max_duration_seconds": 20},
+                    "completion": {"kind": "output_present", "output_type": "journal_contents"},
+                    "failure_policy": "stop",
+                }],
+            }
+        },
+    )
+    inference = InferenceRouter(provider=provider, default_profile=ModelProfile("test", "test", "default"))
+    projects = ProjectStore(":memory:")
+    root = tmp_path / "calisthenics"
+    project = projects.create_project(
+        name="Calisthenics", description="Workout coaching and tracking",
+        root_path=str(root), owner_user_id="alex",
+    )
+    projects.write_project_context(
+        project.project_id, "Keep a dated workout journal.", requester_user_id="alex",
+    )
+    task = TaskState(
+        goal="Update today's workout",
+        user="alex",
+        project_id=project.project_id,
+        conversation_history_md=(
+            "# Durable Project Memory\n"
+            f"Primary journal path: {root / 'calisthenics_journal.md'}\n"
+            "Never duplicate a same-date entry.\n"
+            + ("archived context " * 900)
+            + "\n# Recent Session Events\nLatest workout correction remains active."
+        ),
+        recent_conversation_md='- alex: "I completed 5 sets of push-ups"',
+    )
+    task.set_acceptance_contract_from_markdown("1.- [ ] Today's workout is recorded")
+
+    state = HierarchicalCAPDProcessor._new_state(
+        task,
+        CoreLoopContext(messages=InMemoryMessageQueue(), project_store=projects, inference=inference),
+    )
+
+    request = next(item for item in provider.requests if item.purpose == InferencePurpose.PHASE_PLANNING)
+    assert f"Project Directory: {root}" in request.prompt
+    assert "Keep a dated workout journal." in request.prompt
+    assert str(root / "calisthenics_journal.md") in request.prompt
+    assert "Latest workout correction remains active." in request.prompt
+    assert "context truncated" in request.prompt
+    assert 'I completed 5 sets of push-ups' in request.prompt
+    assert "never mutation targets" in request.prompt
+    assert "Do not ask the requester for a file location already present" in request.prompt
+    assert state.phase.mutation_scope.allowed_paths == ()
+
+
+def test_v3_known_journal_path_flows_from_memory_to_read_and_verified_edit(tmp_path: Path) -> None:
+    root = tmp_path / "project"
+    root.mkdir()
+    journal = root / "workout_journal.md"
+    journal.write_text("# Workout Journal\n\n- Push-ups: 3 sets\n", encoding="utf-8")
+    projects = ProjectStore(":memory:")
+    project = projects.create_project(name="Workout", root_path=str(root), owner_user_id="alex")
+
+    read_phase = {
+        "schema_version": 3,
+        "phase_id": "read-known-journal",
+        "objective": "Read the journal path established by project memory",
+        "criterion_ids": ["ac-1"],
+        "authorized_capabilities": ["project_file_inspection"],
+        "mutation_scope": {"allowed_paths": [], "allow_external_effects": False},
+        "limits": {"max_tool_calls": 1, "max_duration_seconds": 20},
+        "originating_decision": "Durable memory establishes workout_journal.md as a read candidate.",
+        "subgoals": [{
+            "subgoal_id": "read-journal",
+            "objective": "Read workout_journal.md before editing it",
+            "required_output_type": "journal_contents",
+            "depends_on": [],
+            "allowed_capabilities": ["project_file_inspection"],
+            "allowed_side_effects": ["read_only"],
+            "limits": {"max_tool_calls": 1, "max_duration_seconds": 20},
+            "completion": {"kind": "output_present", "output_type": "journal_contents"},
+            "failure_policy": "stop",
+        }],
+    }
+    edit_phase = {
+        "schema_version": 3,
+        "phase_id": "update-known-journal",
+        "objective": "Append the verified workout entry using an exact edit",
+        "criterion_ids": ["ac-1"],
+        "authorized_capabilities": ["exact_text_mutation"],
+        "mutation_scope": {"allowed_paths": ["workout_journal.md"], "allow_external_effects": False},
+        "limits": {"max_tool_calls": 1, "max_duration_seconds": 20},
+        "originating_decision": "The successful read established the exact file and anchor text.",
+        "subgoals": [{
+            "subgoal_id": "update-journal",
+            "objective": "Append today's workout and verify the write",
+            "required_output_type": "verified_mutation",
+            "depends_on": [],
+            "allowed_capabilities": ["exact_text_mutation"],
+            "allowed_side_effects": ["project_mutation"],
+            "limits": {"max_tool_calls": 1, "max_duration_seconds": 20},
+            "completion": {"kind": "field_equals", "field": "verification.status", "expected": "verified"},
+            "failure_policy": "stop",
+        }],
+    }
+
+    class SequencedProvider:
+        def __init__(self):
+            self.requests = []
+            self.phases = [read_phase, edit_phase]
+            self.actions = [
+                {"tool_id": "native.read_project_file", "arguments": {"path": "workout_journal.md"}},
+                {
+                    "tool_id": "native.exact_text_edit",
+                    "arguments": {
+                        "path": "workout_journal.md",
+                        "expected_text": "- Push-ups: 3 sets\n",
+                        "replacement_text": "- Push-ups: 3 sets\n\n## 2026-09-21\n- Push-ups: 5 sets x 10 reps\n",
+                    },
+                },
+            ]
+
+        def generate_json(self, request):
+            self.requests.append(request)
+            values = self.phases if request.purpose == InferencePurpose.PHASE_PLANNING else self.actions
+            return InferenceResult(json_value=values.pop(0), model_profile=request.model_profile)
+
+        def generate_markdown(self, request):
+            self.requests.append(request)
+            return InferenceResult(content="Workout journal updated.", model_profile=request.model_profile)
+
+        def plan_tool_call(self, request):
+            raise AssertionError(f"Unexpected tool-planning request: {request.purpose}")
+
+    class SystemOne:
+        def select_plan_tools(self, **values):
+            selected = (
+                "native.read_project_file" if values["phase"]["phase_id"] == "read-known-journal"
+                else "native.exact_text_edit"
+            )
+            return SystemOneToolRegistrySelection(selected_tool_ids=(selected,))
+
+        def evaluate_tactical_progress(self, **_values):
+            return SystemOneTacticalReview(True, 0.99, True)
+
+        def evaluate(self, **values):
+            evidence_ref = values["evidence"]["entries"][-1]["evidence_ref"]
+            edited = values["phase"]["phase_id"] == "update-known-journal"
+            return SystemOneReviewResult(
+                updates=({
+                    "criterion_id": "ac-1",
+                    "status": "satisfied" if edited else "pending",
+                    "evidence_refs": [evidence_ref] if edited else [],
+                    "reason": "Verified edit" if edited else "Read completed; mutation remains.",
+                },),
+                ambiguous_criterion_ids=(),
+                recommended_route="complete" if edited else "continue",
+                route_confidence=0.99,
+                route_confident=True,
+            )
+
+    provider = SequencedProvider()
+    inference = InferenceRouter(provider=provider, default_profile=ModelProfile("test", "test", "default"))
+    registry = InMemoryToolRegistry()
+    registry.register(build_project_read_tool_definition())
+    registry.register(build_exact_text_edit_tool_definition())
+    task = TaskState(
+        task_id="journal-update",
+        goal="Record today's workout",
+        user="alex",
+        project_id=project.project_id,
+        intelligence_engine=HIERARCHICAL_V3,
+        intelligence_schema_version=3,
+        conversation_history_md=(
+            "# Durable Project Memory\nPrimary journal path: " + str(journal)
+        ),
+    )
+    task.set_acceptance_contract_from_markdown("1.- [ ] Today's workout is recorded in the journal")
+
+    result = HierarchicalCAPDProcessor().process(
+        task,
+        CoreLoopContext(
+            messages=InMemoryMessageQueue(), tools=registry, inference=inference,
+            project_store=projects, system_one=SystemOne(),
+        ),
+    )
+
+    assert result.status.value == "completed"
+    assert "## 2026-09-21" in journal.read_text(encoding="utf-8")
+    tool_ids = [
+        entry["tool_id"]
+        for phase in task.metadata["v3_phase_history"]
+        for entry in phase["evidence"]["entries"]
+    ]
+    assert tool_ids == ["native.read_project_file", "native.exact_text_edit"]
+    assert "native.ask_question" not in tool_ids
 
 
 def test_v3_answered_question_replans_with_named_tool_instead_of_repeating_parked_subgoal() -> None:

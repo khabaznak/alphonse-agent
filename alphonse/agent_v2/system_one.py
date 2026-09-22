@@ -23,6 +23,14 @@ DEFAULT_SYSTEM_ONE_MODEL = "jev-latest"
 _JEV_TOOL_REGISTRY_PATH = Path(__file__).resolve().parent / "config" / "jev_tool_registry.json"
 
 
+class SystemOneUnavailableError(RuntimeError):
+    """Jev is required for V3 decisions but the service cannot answer."""
+
+    def __init__(self, detail: str = "") -> None:
+        suffix = f":{detail}" if detail else ""
+        super().__init__(f"system_one_unavailable{suffix}")
+
+
 @dataclass(frozen=True)
 class SystemOneSettings:
     enabled: bool = False
@@ -209,6 +217,7 @@ class SystemOneTacticalReview:
     model: str = ""
     usage: dict[str, Any] = field(default_factory=dict)
     duration_ms: int = 0
+    answers: dict[str, float] = field(default_factory=dict)
 
     def to_metadata(self) -> dict[str, Any]:
         return {
@@ -218,6 +227,7 @@ class SystemOneTacticalReview:
             "model": self.model,
             "usage": dict(self.usage),
             "duration_ms": self.duration_ms,
+            "answers": dict(self.answers),
         }
 
 
@@ -325,8 +335,8 @@ class JevCriterionDecisionProvider:
             return SystemOneToolRegistrySelection()
         registry = self._static_tool_registry(tools)
         state = {
-            "goal": str(goal)[:2000],
-            "plan": _bounded_json(phase, 16_000),
+            "goal": str(goal),
+            "strategic_plan": phase,
         }
         started = monotonic()
         response = self.client.evaluate(state=state, questions=registry.questions)
@@ -364,37 +374,63 @@ class JevCriterionDecisionProvider:
         phase: dict[str, Any],
         subgoal: dict[str, Any],
         action: dict[str, Any],
+        questions: list[dict[str, Any]] | None = None,
+        execution_log: list[dict[str, Any]] | None = None,
     ) -> SystemOneTacticalReview:
         state = {
-            "goal": str(goal)[:2000],
-            "plan": _bounded_json(phase, 12_000),
-            "current_subgoal": _bounded_json(subgoal, 4000),
-            "successful_tool_action": _bounded_json(action, 6000),
+            "goal": str(goal),
+            "strategic_plan": phase,
+            "stage_goal": subgoal,
+            "tool_execution_log": execution_log if execution_log is not None else [action],
         }
-        questions = {
-            "current_subgoal_complete": {
+        supplied = list(questions or [])
+        if not supplied:
+            supplied = [{
+                "question_id": "current_subgoal_complete",
                 "type": "noul",
                 "instructions": "Does the successful tool result semantically satisfy the current subgoal's declared completion condition?",
                 "criteria": {
                     "true": "The observed result directly provides the required output and satisfies the declared completion condition.",
                     "false": "The call ran, but its result is irrelevant, incomplete, ambiguous, or does not establish the required output.",
                 },
+            }]
+        question_payload: dict[str, Any] = {}
+        for index, question in enumerate(supplied):
+            question_id = str(question.get("question_id") or f"acceptance_{index + 1}").strip()
+            if not question_id or question_id in question_payload:
+                raise ValueError("system_one_tactical_question_id_invalid")
+            if question.get("type") != "noul" or not isinstance(question.get("criteria"), dict):
+                raise ValueError(f"system_one_tactical_question_invalid:{question_id}")
+            question_payload[question_id] = {
+                "type": "noul",
+                "instructions": str(question.get("instructions") or ""),
+                "criteria": dict(question["criteria"]),
             }
-        }
+        if not question_payload:
+            raise ValueError("system_one_tactical_questions_required")
         started = monotonic()
-        response = self.client.evaluate(state=state, questions=questions)
+        response = self.client.evaluate(state=state, questions=question_payload)
         duration_ms = max(0, round((monotonic() - started) * 1000))
-        answer = response["answers"].get("current_subgoal_complete")
-        if not isinstance(answer, dict) or answer.get("type") != "noul" or not isinstance(answer.get("noul"), (int, float)):
-            raise ValueError("system_one_tactical_review_invalid")
-        probability = max(0.0, min(1.0, float(answer["noul"])))
+        answers: dict[str, float] = {}
+        for question_id in question_payload:
+            answer = response["answers"].get(question_id)
+            if not isinstance(answer, dict) or answer.get("type") != "noul" or not isinstance(answer.get("noul"), (int, float)):
+                raise ValueError(f"system_one_tactical_review_invalid:{question_id}")
+            answers[question_id] = max(0.0, min(1.0, float(answer["noul"])))
+        complete = all(probability >= self.settings.yes_threshold for probability in answers.values())
+        confident = all(
+            probability >= self.settings.yes_threshold or probability <= self.settings.no_threshold
+            for probability in answers.values()
+        )
+        confidence = min(answers.values()) if complete else min(1.0 - value for value in answers.values())
         return SystemOneTacticalReview(
-            complete=probability >= self.settings.yes_threshold,
-            confidence=probability,
-            confident=(probability >= self.settings.yes_threshold or probability <= self.settings.no_threshold),
+            complete=complete,
+            confidence=max(0.0, confidence),
+            confident=confident,
             model=str(response.get("model") or self.settings.model),
             usage=dict(response.get("usage") or {}),
             duration_ms=duration_ms,
+            answers=answers,
         )
 
     def _static_tool_registry(self, tools: tuple[Any, ...]) -> _StaticJevToolRegistry:

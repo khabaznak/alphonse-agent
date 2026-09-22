@@ -191,6 +191,8 @@ class PhasePlan:
     originating_decision: str = ""
     created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     schema_version: int = V3_SCHEMA_VERSION
+    curated_tool_ids: tuple[str, ...] = ()
+    tool_curation_status: str = ""
 
     def __post_init__(self) -> None:
         if self.schema_version != V3_SCHEMA_VERSION:
@@ -234,6 +236,8 @@ class PhasePlan:
             originating_decision=str(value.get("originating_decision") or "").strip(),
             created_at=str(value.get("created_at") or "").strip() or datetime.now(timezone.utc).isoformat(),
             schema_version=int(value.get("schema_version", V3_SCHEMA_VERSION)),
+            curated_tool_ids=_strings(value.get("curated_tool_ids")),
+            tool_curation_status=str(value.get("tool_curation_status") or "").strip(),
         )
 
 
@@ -246,6 +250,7 @@ class TacticalAction:
     status: str = "planned"
     result: Any = None
     error: str = ""
+    acceptance_questions: tuple[dict[str, Any], ...] = ()
 
     def __post_init__(self) -> None:
         if not self.action_id.strip() or not self.subgoal_id.strip() or not self.tool_id.strip():
@@ -268,6 +273,9 @@ class TacticalAction:
             status=str(value.get("status") or "planned").strip(),
             result=_json_safe(value.get("result")),
             error=str(value.get("error") or "").strip(),
+            acceptance_questions=tuple(
+                dict(item) for item in value.get("acceptance_questions") or [] if isinstance(item, dict)
+            ),
         )
 
 
@@ -367,11 +375,14 @@ class TacticalState:
             "cancellation_pending": self.cancellation_pending,
         }
 
-    def prompt_projection(self, *, max_evidence_entries: int = 8, max_chars: int = 12_000) -> str:
+    def prompt_projection(
+        self, *, max_evidence_entries: int | None = 8, max_chars: int | None = 12_000
+    ) -> str:
         payload = self.to_dict()
-        payload["evidence"] = {"entries": self.evidence.entries[-max(1, max_evidence_entries) :]}
+        if max_evidence_entries is not None:
+            payload["evidence"] = {"entries": self.evidence.entries[-max(1, max_evidence_entries) :]}
         rendered = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True)
-        return rendered if len(rendered) <= max_chars else rendered[: max(1, max_chars - 18)].rstrip() + '\n"... truncated"'
+        return rendered if max_chars is None or len(rendered) <= max_chars else rendered[: max(1, max_chars - 18)].rstrip() + '\n"... truncated"'
 
     @classmethod
     def from_dict(cls, value: Any) -> "TacticalState":

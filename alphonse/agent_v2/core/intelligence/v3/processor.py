@@ -12,6 +12,7 @@ from alphonse.agent_v2.core.intelligence.v3.executor import PhaseExecutor
 from alphonse.agent_v2.core.intelligence.v3.outer import V3OuterController
 from alphonse.agent_v2.core.intelligence.v3.planner import plan_phase
 from alphonse.agent_v2.core.intelligence.v3.planner import V3PhasePlanValidationError
+from alphonse.agent_v2.system_one import SystemOneUnavailableError
 from alphonse.agent_v2.core.intelligence.v3.revealing import ToolRevealPolicy
 
 if TYPE_CHECKING:
@@ -59,14 +60,20 @@ class HierarchicalCAPDProcessor:
                 else:
                     state = self._new_state(task, context)
                     self._persist(task, context)
-            except V3PhasePlanValidationError as exc:
+            except (V3PhasePlanValidationError, SystemOneUnavailableError) as exc:
                 task.status = "failed"
                 task.outcome = {"status": "failure", "reason": str(exc)}
                 self._persist(task, context)
                 break
-            outcome = self.executor.run(task, state, context)
-            self._append_history(task, state, outcome.to_dict())
-            review, decision = self.outer.review_and_route(task, state, outcome, context)
+            try:
+                outcome = self.executor.run(task, state, context)
+                self._append_history(task, state, outcome.to_dict())
+                review, decision = self.outer.review_and_route(task, state, outcome, context)
+            except SystemOneUnavailableError as exc:
+                task.status = "failed"
+                task.outcome = {"status": "failure", "reason": str(exc)}
+                self._persist(task, context)
+                break
             self._persist(task, context)
             if task.metadata.get("v3_route") in {"plan_next_phase", "strategic_replan"}:
                 task.hierarchical_state = {}
@@ -131,7 +138,11 @@ class HierarchicalCAPDProcessor:
             ),
             status=status,
             error=(
-                f"v3_task_failed:{str((task.outcome or {}).get('reason') or 'deterministic_failure')}"
+                (
+                    str((task.outcome or {}).get("reason"))
+                    if str((task.outcome or {}).get("reason") or "").startswith("system_one_unavailable")
+                    else f"v3_task_failed:{str((task.outcome or {}).get('reason') or 'deterministic_failure')}"
+                )
                 if status == ProcessingStatus.FAILED else None
             ),
         )

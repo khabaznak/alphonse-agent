@@ -270,3 +270,60 @@ def test_system_one_failure_falls_back_to_existing_phase_review() -> None:
     assert decision.action == StrategicAction.COMPLETE
     assert task.metadata["system_one_review"]["status"] == "fallback"
     assert [item.purpose for item in provider.requests] == [InferencePurpose.PHASE_REVIEW, InferencePurpose.FINAL_RESPONSE]
+
+
+def test_system_one_confident_updates_survive_partial_ambiguity_and_response_is_reused() -> None:
+    task = TaskState(goal="Provide a safe routine", user="alex", project_id="home")
+    task.set_acceptance_contract_from_markdown(
+        "1.- [ ] The response contains a routine\n"
+        "2.- [ ] The response contains safety guidance"
+    )
+    task.metadata["prepared_user_response"] = {
+        "source": "native.respond",
+        "tool_call_id": "respond-once",
+        "message": "Routine with safety guidance.",
+    }
+    state = _completed_state()
+    state.evidence.entries[0].update({
+        "evidence_ref": "tactical-action:respond-once",
+        "tool_id": "native.respond",
+        "result": {"message": "Routine with safety guidance."},
+    })
+    provider = StubInferenceProvider(json_by_purpose={
+        InferencePurpose.PHASE_REVIEW: {
+            "updates": [{
+                "criterion_id": "ac-2",
+                "status": "satisfied",
+                "evidence_refs": ["tactical-action:respond-once"],
+                "reason": "Safety guidance is present.",
+            }],
+        },
+    })
+    context = CoreLoopContext(
+        messages=InMemoryMessageQueue(),
+        inference=InferenceRouter(provider=provider, default_profile=ModelProfile("test", "test", "default")),
+        system_one=_SystemOne(SystemOneReviewResult(
+            updates=({
+                "criterion_id": "ac-1",
+                "status": "satisfied",
+                "evidence_refs": ["tactical-action:respond-once"],
+                "reason": "Routine is present.",
+            },),
+            ambiguous_criterion_ids=("ac-2",),
+            recommended_route="continue",
+            route_confidence=0.55,
+            route_confident=False,
+        )),
+    )
+
+    review, decision = V3OuterController().review_and_route(
+        task, state, PhaseOutcome("solar", PhaseStatus.PHASE_COMPLETE), context,
+    )
+
+    assert review.status == PhaseReviewStatus.PHASE_VERIFIED_TASK_COMPLETE
+    assert decision.action == StrategicAction.COMPLETE
+    assert task.metadata["system_one_review"]["status"] == "partial_fallback"
+    assert task.metadata["prepared_user_response"]["tool_call_id"] == "respond-once"
+    assert [item.purpose for item in provider.requests] == [InferencePurpose.PHASE_REVIEW]
+    assert "The response contains a routine" not in provider.requests[0].prompt
+    assert "The response contains safety guidance" in provider.requests[0].prompt
