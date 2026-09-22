@@ -99,6 +99,21 @@ def _selector(actions: list[dict[str, Any]]):
     return select
 
 
+def _accept_successful_actions():
+    class SystemOne:
+        def evaluate_tactical_progress(self, **values):
+            complete = (
+                values["action"].get("status") == "success"
+                and values["action"].get("result") not in (None, {})
+            )
+            return SystemOneTacticalReview(
+                complete=complete,
+                confidence=0.99 if complete else 0.01,
+                confident=True,
+            )
+    return SystemOne()
+
+
 def test_phase_executor_runs_search_edit_verify_in_one_phase() -> None:
     calls: list[str] = []
     task = TaskState(task_id="task", user="alex", project_id="home")
@@ -115,7 +130,7 @@ def test_phase_executor_runs_search_edit_verify_in_one_phase() -> None:
     )
 
     outcome = executor.run(
-        task, state, CoreLoopContext(messages=InMemoryMessageQueue(), tools=_registry(calls))
+        task, state, CoreLoopContext(messages=InMemoryMessageQueue(), tools=_registry(calls), system_one=_accept_successful_actions())
     )
 
     assert outcome.status == PhaseStatus.PHASE_COMPLETE
@@ -126,7 +141,7 @@ def test_phase_executor_runs_search_edit_verify_in_one_phase() -> None:
     assert task.hierarchical_state["status"] == "phase_complete"
 
 
-def test_phase_executor_uses_system_one_registry_selection_before_system_two_composes_call() -> None:
+def test_phase_executor_supplies_revealed_tools_to_tactical_inference() -> None:
     calls: list[str] = []
     task = TaskState(task_id="task", user="alex", project_id="home")
     state = new_tactical_state(_phase())
@@ -144,6 +159,9 @@ def test_phase_executor_uses_system_one_registry_selection_before_system_two_com
                 probabilities={"native.search": 0.95, "native.read": 0.63, "native.exact_text_edit": 0.1},
             )
 
+        def evaluate_tactical_progress(self, **values):
+            return SystemOneTacticalReview(complete=True, confidence=0.99, confident=True)
+
     def selector(current_state, subgoal, tools):
         selected_tool_sets.append([item.tool_id for item in tools])
         return {"tool_id": tools[0].tool_id, "arguments": {"query": "solar"}}
@@ -157,7 +175,16 @@ def test_phase_executor_uses_system_one_registry_selection_before_system_two_com
     class Inference:
         def generate_json(self, request):
             selected_tool_sets.append([item.tool_id for item in request.tools])
-            return type("Result", (), {"json_value": {"tool_id": request.tools[0].tool_id, "arguments": {"query": "solar"}}})()
+            return type("Result", (), {"json_value": {
+                "tool_id": request.tools[0].tool_id,
+                "arguments": {"query": "solar"},
+                "acceptance_questions": [{
+                    "question_id": "found_record",
+                    "type": "noul",
+                    "instructions": "Was a record found?",
+                    "criteria": {"true": "A record is present.", "false": "No record is present."},
+                }],
+            }})()
     context.inference = Inference()
     state.phase = PhasePlan(
         "search", "Search", (PhaseSubgoal("locate", "Locate", "record", allowed_capabilities=("native.search", "native.read")),),
@@ -171,10 +198,6 @@ def test_phase_executor_uses_system_one_registry_selection_before_system_two_com
 
     assert outcome.status == PhaseStatus.PHASE_COMPLETE
     assert selected_tool_sets == [["native.search", "native.read"]]
-    selection = task.metadata["system_one_tool_registry_selections"][0]
-    assert selection["selected_tool_ids"] == ["native.search"]
-    assert selection["ambiguous_tool_ids"] == ["native.read"]
-    assert state.system_one_relevant_tool_ids == ["native.search", "native.read"]
 
 
 def test_phase_executor_uses_system_one_to_check_semantic_subgoal_completion() -> None:
@@ -272,11 +295,63 @@ def test_phase_executor_uses_bounded_local_fallback() -> None:
         {"tool_id": "native.fallback", "arguments": {}},
     ]))
 
-    outcome = executor.run(TaskState(user="alex"), state, CoreLoopContext(messages=InMemoryMessageQueue(), tools=registry))
+    outcome = executor.run(TaskState(user="alex"), state, CoreLoopContext(messages=InMemoryMessageQueue(), tools=registry, system_one=_accept_successful_actions()))
+
+    assert outcome.status == PhaseStatus.BLOCKED
+    assert calls == ["broken"]
+    assert [item.status for item in state.actions] == ["failed"]
+
+
+def test_phase_executor_retries_same_read_only_action_when_jev_approves(monkeypatch) -> None:
+    import alphonse.agent_v2.core.intelligence.v3.executor as executor_module
+
+    monkeypatch.setattr(executor_module, "TACTICAL_RETRY_BASE_SECONDS", 0)
+    calls: list[dict[str, Any]] = []
+    registry = InMemoryToolRegistry()
+
+    def flaky(arguments):
+        calls.append(dict(arguments))
+        if len(calls) == 1:
+            return {
+                "output": None,
+                "exception": {
+                    "code": "server_timeout",
+                    "message": "temporary timeout",
+                    "retryable": True,
+                },
+            }
+        return {"path": "backlog.md"}
+
+    registry.register(_tool("native.flaky_read", flaky, read_only=True))
+    phase = PhasePlan(
+        "retry", "Read record",
+        (PhaseSubgoal("read", "Read record", "record", allowed_capabilities=("native.flaky_read",)),),
+        authorized_capabilities=("native.flaky_read",), limits=PhaseLimits(3, 20),
+    )
+    state = new_tactical_state(phase)
+    state.revealed_tool_ids = ["native.flaky_read"]
+
+    class Jev:
+        def evaluate_tactical_progress(self, **values):
+            assert len(values["questions"]) == 1
+            return SystemOneTacticalReview(
+                complete=values["action"]["status"] == "success",
+                confidence=0.99,
+                confident=True,
+                retry_approved=True,
+            )
+
+    outcome = PhaseExecutor(action_selector=_selector([
+        {"tool_id": "native.flaky_read", "arguments": {"record_id": "r-1"}},
+    ])).run(
+        TaskState(user="alex"), state,
+        CoreLoopContext(messages=InMemoryMessageQueue(), tools=registry, system_one=Jev()),
+    )
 
     assert outcome.status == PhaseStatus.PHASE_COMPLETE
-    assert calls == ["broken", "fallback"]
+    assert calls == [{"record_id": "r-1"}, {"record_id": "r-1"}]
     assert [item.status for item in state.actions] == ["failed", "success"]
+    assert [item["retry_attempt"] for item in state.evidence.entries] == [0, 1]
 
 
 def test_phase_executor_stops_on_failure_and_preserves_evidence() -> None:
@@ -291,7 +366,7 @@ def test_phase_executor_stops_on_failure_and_preserves_evidence() -> None:
     state.revealed_tool_ids = ["native.fail"]
 
     outcome = PhaseExecutor(action_selector=_selector([{"tool_id": "native.fail", "arguments": {}}])).run(
-        TaskState(user="alex"), state, CoreLoopContext(messages=InMemoryMessageQueue(), tools=registry)
+        TaskState(user="alex"), state, CoreLoopContext(messages=InMemoryMessageQueue(), tools=registry, system_one=_accept_successful_actions())
     )
 
     assert outcome.status == PhaseStatus.BLOCKED
@@ -340,7 +415,7 @@ def test_phase_executor_resumes_checkpoint_without_repeating_completed_action() 
     outcome = PhaseExecutor(action_selector=_selector([
         {"tool_id": "native.exact_text_edit", "arguments": {"path": "mejoras_hogar/backlog.md"}},
         {"tool_id": "native.read", "arguments": {"path": "mejoras_hogar/backlog.md"}},
-    ])).run(task, restored, CoreLoopContext(messages=InMemoryMessageQueue(), tools=_registry(calls)))
+    ])).run(task, restored, CoreLoopContext(messages=InMemoryMessageQueue(), tools=_registry(calls), system_one=_accept_successful_actions()))
 
     assert outcome.status == PhaseStatus.PHASE_COMPLETE
     assert calls == ["edit", "read"]
@@ -364,7 +439,7 @@ def test_phase_executor_enforces_subgoal_budget_when_completion_is_unmet() -> No
     state.revealed_tool_ids = ["native.empty"]
 
     outcome = PhaseExecutor(action_selector=_selector([{"tool_id": "native.empty", "arguments": {}}])).run(
-        TaskState(user="alex"), state, CoreLoopContext(messages=InMemoryMessageQueue(), tools=registry)
+        TaskState(user="alex"), state, CoreLoopContext(messages=InMemoryMessageQueue(), tools=registry, system_one=_accept_successful_actions())
     )
 
     assert outcome.status == PhaseStatus.BUDGET_EXHAUSTED

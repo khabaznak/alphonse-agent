@@ -185,3 +185,51 @@ def test_jev_tactical_review_distinguishes_operational_success_from_semantic_com
 
     assert result.complete is True
     assert result.confident is True
+
+
+def test_jev_tactical_review_sends_acceptance_and_retry_fuse_questions_together() -> None:
+    payloads = []
+
+    def transport(url, api_key, payload, timeout):
+        _ = url, api_key, timeout
+        payloads.append(payload)
+        return {
+            "answers": {
+                key: {
+                    "type": "noul",
+                    "noul": 0.1 if key == "retry_fuse_repeat_is_safe" else 0.95,
+                }
+                for key in payload["questions"]
+            },
+            "model": "jev-latest",
+        }
+
+    provider = JevCriterionDecisionProvider(
+        SystemOneSettings(enabled=True, api_key="secret", validated_at="now"),
+        transport=transport,
+    )
+    result = provider.evaluate_tactical_progress(
+        goal="Read from server",
+        phase={"phase_id": "p", "objective": "Read record"},
+        subgoal={"subgoal_id": "s", "objective": "Read record"},
+        action={"tool_id": "native.server_read", "status": "failed", "error": "timeout"},
+        questions=[{
+            "question_id": "record_was_read",
+            "type": "noul",
+            "instructions": "Was the record read?",
+            "criteria": {"true": "The record is present.", "false": "The record is absent."},
+        }],
+        execution_log=[{"tool_id": "native.server_read", "status": "failed", "error": "timeout"}],
+    )
+
+    payload = payloads[0]
+    assert set(payload["questions"]) == {
+        "record_was_read",
+        "retry_fuse_transient_failure",
+        "retry_fuse_same_call_likely_to_work",
+        "retry_fuse_repeat_is_safe",
+    }
+    assert payload["state"]["tool_execution_log"][0]["error"] == "timeout"
+    assert all(question["type"] == "noul" for question in payload["questions"].values())
+    assert result.complete is True
+    assert result.retry_approved is False

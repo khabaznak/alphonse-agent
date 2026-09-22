@@ -79,11 +79,23 @@ class ToolInvocationService:
         else:
             waiting = isinstance(result, dict) and result.get("waiting_for_answer") is True
             bash_error = _bash_result_error(tool_id, result)
-            outcome = _failure(call_id, tool_id, "command_failed", bash_error) if bash_error else {
-                "call_id": call_id, "tool_id": tool_id, "status": "waiting" if waiting else "success", "result": result, "error": None,
-            }
-            if bash_error:
+            tool_exception = result.get("exception") if isinstance(result, dict) else None
+            if isinstance(tool_exception, dict) and tool_exception:
+                code = str(tool_exception.get("code") or "tool_reported_failure")
+                message = str(tool_exception.get("message") or code)
+                outcome = _failure(call_id, tool_id, code, message)
                 outcome["result"] = result
+            elif bash_error:
+                outcome = _failure(call_id, tool_id, "command_failed", bash_error)
+                outcome["result"] = result
+            else:
+                outcome = {
+                    "call_id": call_id,
+                    "tool_id": tool_id,
+                    "status": "waiting" if waiting else "success",
+                    "result": result,
+                    "error": None,
+                }
         self.context.emit_ui_event("tool_call_result", {"tool_call_id": call_id, "tool_id": tool_id, "tool_name": descriptor.name, **outcome, "programmatic": True})
         self.context.record_memory_event(self.task, "Tool Result", {**outcome, "programmatic": True})
         return outcome

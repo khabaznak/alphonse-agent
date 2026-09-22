@@ -21,6 +21,35 @@ from alphonse.agent_v2.database import connect_database, default_database_path
 DEFAULT_SYSTEM_ONE_URL = "https://api.typesafe.ai/v1/systemone"
 DEFAULT_SYSTEM_ONE_MODEL = "jev-latest"
 _JEV_TOOL_REGISTRY_PATH = Path(__file__).resolve().parent / "config" / "jev_tool_registry.json"
+_TACTICAL_RETRY_FUSE_QUESTIONS = (
+    {
+        "question_id": "retry_fuse_transient_failure",
+        "type": "noul",
+        "instructions": "Does the observed tool failure appear transient rather than caused by invalid credentials, missing permissions, invalid input, or another persistent configuration problem?",
+        "criteria": {
+            "true": "Evidence points to a temporary condition such as a timeout, connection interruption, or temporary service outage.",
+            "false": "Evidence points to credentials, permissions, invalid input, unavailable configuration, or another condition that will persist without a change.",
+        },
+    },
+    {
+        "question_id": "retry_fuse_same_call_likely_to_work",
+        "type": "noul",
+        "instructions": "After a short backoff, is the same tool call with exactly the same arguments reasonably likely to succeed without new information or configuration?",
+        "criteria": {
+            "true": "A temporary failure is plausible and another identical attempt could succeed without changing inputs.",
+            "false": "The call needs changed arguments, credentials, permissions, configuration, or user input to succeed.",
+        },
+    },
+    {
+        "question_id": "retry_fuse_repeat_is_safe",
+        "type": "noul",
+        "instructions": "Is repeating this exact tool call safe, without a meaningful risk of duplicating or compounding side effects?",
+        "criteria": {
+            "true": "The operation is read-only/idempotent, or the execution evidence explicitly establishes safe retry semantics.",
+            "false": "The operation may have partially succeeded, may duplicate side effects, or its retry safety is unknown.",
+        },
+    },
+)
 
 
 class SystemOneUnavailableError(RuntimeError):
@@ -218,6 +247,7 @@ class SystemOneTacticalReview:
     usage: dict[str, Any] = field(default_factory=dict)
     duration_ms: int = 0
     answers: dict[str, float] = field(default_factory=dict)
+    retry_approved: bool = False
 
     def to_metadata(self) -> dict[str, Any]:
         return {
@@ -228,6 +258,7 @@ class SystemOneTacticalReview:
             "usage": dict(self.usage),
             "duration_ms": self.duration_ms,
             "answers": dict(self.answers),
+            "retry_approved": self.retry_approved,
         }
 
 
@@ -394,6 +425,11 @@ class JevCriterionDecisionProvider:
                     "false": "The call ran, but its result is irrelevant, incomplete, ambiguous, or does not establish the required output.",
                 },
             }]
+        acceptance_question_ids = {
+            str(question.get("question_id") or f"acceptance_{index + 1}").strip()
+            for index, question in enumerate(supplied)
+        }
+        supplied.extend(_TACTICAL_RETRY_FUSE_QUESTIONS)
         question_payload: dict[str, Any] = {}
         for index, question in enumerate(supplied):
             question_id = str(question.get("question_id") or f"acceptance_{index + 1}").strip()
@@ -417,12 +453,18 @@ class JevCriterionDecisionProvider:
             if not isinstance(answer, dict) or answer.get("type") != "noul" or not isinstance(answer.get("noul"), (int, float)):
                 raise ValueError(f"system_one_tactical_review_invalid:{question_id}")
             answers[question_id] = max(0.0, min(1.0, float(answer["noul"])))
-        complete = all(probability >= self.settings.yes_threshold for probability in answers.values())
+        acceptance_answers = {key: answers[key] for key in acceptance_question_ids}
+        complete = all(probability >= self.settings.yes_threshold for probability in acceptance_answers.values())
         confident = all(
             probability >= self.settings.yes_threshold or probability <= self.settings.no_threshold
-            for probability in answers.values()
+            for probability in acceptance_answers.values()
         )
-        confidence = min(answers.values()) if complete else min(1.0 - value for value in answers.values())
+        confidence = min(acceptance_answers.values()) if complete else min(1.0 - value for value in acceptance_answers.values())
+        fuse_ids = {item["question_id"] for item in _TACTICAL_RETRY_FUSE_QUESTIONS}
+        retry_approved = all(
+            answers.get(question_id, 0.0) >= self.settings.yes_threshold
+            for question_id in fuse_ids
+        )
         return SystemOneTacticalReview(
             complete=complete,
             confidence=max(0.0, confidence),
@@ -431,6 +473,7 @@ class JevCriterionDecisionProvider:
             usage=dict(response.get("usage") or {}),
             duration_ms=duration_ms,
             answers=answers,
+            retry_approved=retry_approved,
         )
 
     def _static_tool_registry(self, tools: tuple[Any, ...]) -> _StaticJevToolRegistry:

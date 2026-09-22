@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import json
+import time
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Callable
 from uuid import uuid4
 
 from alphonse.agent_v2.core.core import ImprovementPhase
 from alphonse.agent_v2.core.inference import InferencePurpose, InferenceRequest
-from alphonse.agent_v2.core.intelligence.v3.contracts import FailurePolicy
 from alphonse.agent_v2.core.intelligence.v3.contracts import PhaseOutcome
 from alphonse.agent_v2.core.intelligence.v3.contracts import PhaseStatus
 from alphonse.agent_v2.core.intelligence.v3.contracts import PhaseSubgoal
@@ -27,6 +27,8 @@ if TYPE_CHECKING:
     from alphonse.agent_v2.core.intelligence.task_state import TaskState
 
 ActionSelector = Callable[[TacticalState, PhaseSubgoal, tuple["ToolDescriptor", ...]], dict[str, Any] | None]
+MAX_TACTICAL_RETRIES = 2
+TACTICAL_RETRY_BASE_SECONDS = 1.0
 
 
 class PhaseExecutor:
@@ -73,50 +75,87 @@ class PhaseExecutor:
                 state.transition(PhaseStatus.BLOCKED)
                 self._checkpoint(task, state, context)
                 return self._outcome(state, str(exc), blockers=(str(exc),))
-            state.consume_tool_call()
-            state.actions.append(action)
-            self._checkpoint(task, state, context)
-            context.emit_activity(
-                phase=ImprovementPhase.DO,
-                label="tactical action",
-                message=subgoal.objective,
-                progress={
-                    "phase_id": state.phase.phase_id,
-                    "subgoal_id": subgoal.subgoal_id,
-                    "action_id": action.action_id,
-                    "tool_id": action.tool_id,
-                    "remaining_tool_calls": state.remaining_tool_calls,
-                },
-            )
-            outcome = ToolInvocationService(context=context, task=task).invoke(
-                action.tool_id, action.arguments, call_id=action.action_id
-            )
-            completed = TacticalAction(
-                action_id=action.action_id,
-                subgoal_id=action.subgoal_id,
-                tool_id=action.tool_id,
-                arguments=action.arguments,
-                status=str(outcome.get("status") or "failed"),
-                result=outcome.get("result"),
-                error=_error_message(outcome.get("error")),
-                acceptance_questions=action.acceptance_questions,
-            )
-            state.actions[-1] = completed
-            state.evidence.append(
-                {
-                    "evidence_ref": f"tactical-action:{completed.action_id}",
-                    "phase_id": state.phase.phase_id,
-                    "subgoal_id": subgoal.subgoal_id,
-                    "tool_id": completed.tool_id,
-                    "arguments": completed.arguments,
-                    "status": completed.status,
-                    "result": completed.result,
-                    "error": completed.error,
-                    "acceptance_questions": [dict(item) for item in completed.acceptance_questions],
-                }
-            )
-            self._checkpoint(task, state, context)
-            completion_met = self._completion_met(task, state, subgoal, completed, context)
+            retry_count = 0
+            retry_interrupted = False
+            while True:
+                if retry_count:
+                    interruption = self._interruption(task, state, context)
+                    if interruption is not None:
+                        self._checkpoint(task, state, context)
+                        return interruption
+                state.consume_tool_call()
+                state.actions.append(action)
+                self._checkpoint(task, state, context)
+                context.emit_activity(
+                    phase=ImprovementPhase.DO,
+                    label="tactical action",
+                    message=subgoal.objective,
+                    progress={
+                        "phase_id": state.phase.phase_id,
+                        "subgoal_id": subgoal.subgoal_id,
+                        "action_id": action.action_id,
+                        "tool_id": action.tool_id,
+                        "retry_attempt": retry_count,
+                        "remaining_tool_calls": state.remaining_tool_calls,
+                    },
+                )
+                outcome = ToolInvocationService(context=context, task=task).invoke(
+                    action.tool_id, action.arguments, call_id=action.action_id
+                )
+                completed = TacticalAction(
+                    action_id=action.action_id,
+                    subgoal_id=action.subgoal_id,
+                    tool_id=action.tool_id,
+                    arguments=action.arguments,
+                    status=str(outcome.get("status") or "failed"),
+                    result=outcome.get("result"),
+                    error=_error_message(outcome.get("error")),
+                    acceptance_questions=action.acceptance_questions,
+                )
+                state.actions[-1] = completed
+                state.evidence.append(
+                    {
+                        "evidence_ref": f"tactical-action:{completed.action_id}",
+                        "phase_id": state.phase.phase_id,
+                        "subgoal_id": subgoal.subgoal_id,
+                        "tool_id": completed.tool_id,
+                        "arguments": completed.arguments,
+                        "status": completed.status,
+                        "result": completed.result,
+                        "error": completed.error,
+                        "retry_attempt": retry_count,
+                        "acceptance_questions": [dict(item) for item in completed.acceptance_questions],
+                    }
+                )
+                self._checkpoint(task, state, context)
+                completion_met, retry_approved = self._completion_review(task, state, subgoal, completed, context)
+                retry_available = (
+                    completed.status == "failed"
+                    and retry_approved
+                    and retry_count < MAX_TACTICAL_RETRIES
+                    and int(state.remaining_tool_calls or 0) > 0
+                    and self._subgoal_calls(state, subgoal.subgoal_id) < subgoal.limits.max_tool_calls
+                    and _retry_is_safe(completed, context)
+                )
+                if not retry_available:
+                    break
+                delay = TACTICAL_RETRY_BASE_SECONDS * (2 ** retry_count)
+                if not _wait_for_retry(delay, task, state, context):
+                    retry_interrupted = True
+                    break
+                retry_count += 1
+                action = TacticalAction(
+                    action_id=f"action-{uuid4()}",
+                    subgoal_id=action.subgoal_id,
+                    tool_id=action.tool_id,
+                    arguments=dict(action.arguments),
+                    acceptance_questions=action.acceptance_questions,
+                )
+            if retry_interrupted:
+                interruption = self._interruption(task, state, context)
+                if interruption is not None:
+                    self._checkpoint(task, state, context)
+                    return interruption
             if completed.status == "waiting":
                 state.transition(PhaseStatus.WAITING_USER)
                 self._checkpoint(task, state, context)
@@ -171,7 +210,19 @@ class PhaseExecutor:
         context: "CoreLoopContext",
     ) -> dict[str, Any] | None:
         if self._action_selector is not None:
-            return self._action_selector(state, subgoal, tools)
+            selected = self._action_selector(state, subgoal, tools)
+            if isinstance(selected, dict) and not selected.get("acceptance_questions"):
+                selected = dict(selected)
+                selected["acceptance_questions"] = [{
+                    "question_id": "stage_result_satisfies_completion",
+                    "type": "noul",
+                    "instructions": "Does the tool result satisfy the current stage completion condition?",
+                    "criteria": {
+                        "true": "The observed result establishes the stage completion condition.",
+                        "false": "The result is missing, failed, ambiguous, or does not establish the condition.",
+                    },
+                }]
+            return selected
         if context.inference is None:
             return None
         prompt = _tactical_prompt(state, subgoal, tools, goal=task.goal)
@@ -222,14 +273,14 @@ class PhaseExecutor:
             state.revealed_tool_ids = sorted(allowed_ids)
         return tuple(item for item in candidates if item.tool_id in allowed_ids)
 
-    def _completion_met(
+    def _completion_review(
         self,
         task: "TaskState",
         state: TacticalState,
         subgoal: PhaseSubgoal,
         action: TacticalAction,
         context: "CoreLoopContext",
-    ) -> bool:
+    ) -> tuple[bool, bool]:
         deterministic = _condition_met(subgoal, action.result)
         if context.system_one is None or not hasattr(context.system_one, "evaluate_tactical_progress"):
             raise SystemOneUnavailableError("tactical_acceptance_unavailable")
@@ -256,13 +307,15 @@ class PhaseExecutor:
         else:
             metadata = {"status": "used" if review.confident else "ambiguous_fallback", **review.to_metadata()}
             result = review.complete if review.confident else deterministic
+            retry_approved = bool(getattr(review, "retry_approved", False))
+            metadata["retry_approved"] = retry_approved
         _record_system_one_tactical_review(task, state, subgoal, action, metadata)
         context.emit_telemetry({
             "event": "system_one_tactical_review", "task_id": task.task_id,
             "phase_id": state.phase.phase_id, "subgoal_id": subgoal.subgoal_id,
             "action_id": action.action_id, **metadata,
         })
-        return result
+        return result, retry_approved
 
     @staticmethod
     def _validate_action(
@@ -315,11 +368,6 @@ class PhaseExecutor:
     def _handle_failure(
         self, state: TacticalState, subgoal: PhaseSubgoal, action: TacticalAction
     ) -> PhaseOutcome | None:
-        if subgoal.failure_policy == FailurePolicy.LOCAL_FALLBACK and self._subgoal_calls(state, subgoal.subgoal_id) < subgoal.limits.max_tool_calls and int(state.remaining_tool_calls or 0) > 0:
-            return None
-        if subgoal.failure_policy == FailurePolicy.WAIT_USER:
-            state.transition(PhaseStatus.WAITING_USER)
-            return self._outcome(state, action.error or "A user decision is required.")
         state.transition(PhaseStatus.BLOCKED)
         return self._outcome(state, action.error or "A tactical action failed.", blockers=(action.error or "tactical_action_failed",))
 
@@ -426,6 +474,32 @@ def _error_message(value: Any) -> str:
     if isinstance(value, dict):
         return str(value.get("message") or value.get("code") or "").strip()
     return str(value or "").strip()
+
+
+def _retry_is_safe(action: TacticalAction, context: "CoreLoopContext") -> bool:
+    registry = context.tools
+    if registry is None:
+        return False
+    descriptor = registry.get(action.tool_id) if callable(getattr(registry, "get", None)) else None
+    if descriptor is None:
+        descriptor = next(
+            (item for item in registry.list() if str(getattr(item, "tool_id", "")) == action.tool_id),
+            None,
+        ) if callable(getattr(registry, "list", None)) else None
+    if bool(getattr(descriptor, "read_only", False)):
+        return True
+    result = action.result if isinstance(action.result, dict) else {}
+    error = result.get("exception") if isinstance(result.get("exception"), dict) else {}
+    return result.get("retry_safe") is True or error.get("retry_safe") is True
+
+
+def _wait_for_retry(delay: float, task: "TaskState", state: TacticalState, context: "CoreLoopContext") -> bool:
+    deadline = time.monotonic() + max(0.0, delay)
+    while time.monotonic() < deadline:
+        if context.is_cancelled() or _steering_is_pending(task, context):
+            return False
+        time.sleep(min(0.1, max(0.0, deadline - time.monotonic())))
+    return True
 
 
 def _record_system_one_registry_selection(
