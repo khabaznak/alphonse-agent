@@ -60,7 +60,7 @@ def test_system_one_validation_preserves_saved_settings_when_new_key_fails(tmp_p
     assert store.get() == original
 
 
-def test_jev_maps_only_direct_evidence_refs_and_returns_act_recommendation() -> None:
+def test_jev_maps_only_direct_evidence_refs_during_check_review() -> None:
     provider = JevCriterionDecisionProvider(
         SystemOneSettings(enabled=True, api_key="secret", validated_at="now"),
         transport=_transport(route="replan"),
@@ -73,9 +73,23 @@ def test_jev_maps_only_direct_evidence_refs_and_returns_act_recommendation() -> 
 
     assert result.updates[0]["status"] == "satisfied"
     assert result.updates[0]["evidence_refs"] == ["action:1"]
-    assert result.recommended_route == "replan"
-    assert result.route_confident is True
+    assert result.recommended_route == ""
     assert result.ambiguous_criterion_ids == ()
+
+
+def test_jev_act_recommendation_combines_choice_with_parallel_resilience_fuses() -> None:
+    provider = JevCriterionDecisionProvider(
+        SystemOneSettings(enabled=True, api_key="secret", validated_at="now"),
+        transport=_transport(route="ask_user", support=0.91),
+    )
+
+    result = provider.recommend_act(state={"check_verdict": "failure", "goal": "Connect to server"})
+
+    assert result.action == "ask_user"
+    assert result.confident is True
+    assert set(result.answers) == {
+        "continuation_is_worthwhile", "user_input_can_unblock", "closure_explanation_is_warranted",
+    }
 
 
 def test_jev_marks_midrange_evidence_ambiguous_for_system_two_fallback() -> None:
@@ -150,6 +164,34 @@ def test_jev_classifies_complete_static_tool_registry_with_parallel_noul_questio
     assert "Semantic tags:" not in serialized
     assert "Expected inputs:" not in serialized
     assert "Effect:" not in serialized
+
+
+def test_jev_triages_each_plan_message_with_choice_and_relevance_fuse() -> None:
+    payloads = []
+
+    def transport(url, api_key, payload, timeout):
+        _ = url, api_key, timeout
+        payloads.append(payload)
+        answers = {}
+        for key, question in payload["questions"].items():
+            if question["type"] == "choice":
+                answers[key] = {"type": "choice", "choice": "relevant_context", "probabilities": {"relevant_context": 0.91}}
+            else:
+                answers[key] = {"type": "noul", "noul": 0.94}
+        return {"answers": answers, "model": "jev-latest"}
+
+    provider = JevCriterionDecisionProvider(
+        SystemOneSettings(enabled=True, api_key="secret", validated_at="now"), transport=transport,
+    )
+    selected = provider.triage_plan_messages(
+        task={"task_id": "t1", "goal": "Do X"},
+        candidates=[{"message_id": "m1", "sender": "alex", "text": "Consult B first"}],
+    )
+
+    assert selected == ("m1",)
+    assert list(payloads[0]["questions"]) == ["message_class_0", "relevant_0"]
+    assert payloads[0]["questions"]["message_class_0"]["type"] == "choice"
+    assert payloads[0]["questions"]["relevant_0"]["type"] == "noul"
 
 
 def test_jev_native_registry_template_covers_every_out_of_box_tool() -> None:

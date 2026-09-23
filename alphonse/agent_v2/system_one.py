@@ -263,6 +263,26 @@ class SystemOneTacticalReview:
 
 
 @dataclass(frozen=True)
+class SystemOneActRecommendation:
+    action: str
+    confidence: float
+    confident: bool
+    rationale: str
+    answers: dict[str, float] = field(default_factory=dict)
+    yes_threshold: float = 0.8
+    model: str = ""
+    usage: dict[str, Any] = field(default_factory=dict)
+    duration_ms: int = 0
+
+    def to_metadata(self) -> dict[str, Any]:
+        return {
+            "action": self.action, "confidence": self.confidence, "confident": self.confident,
+            "rationale": self.rationale, "model": self.model, "usage": dict(self.usage),
+            "duration_ms": self.duration_ms, "answers": dict(self.answers), "yes_threshold": self.yes_threshold,
+        }
+
+
+@dataclass(frozen=True)
 class _StaticJevToolRegistry:
     signature: tuple[str, ...]
     questions: dict[str, Any]
@@ -286,24 +306,14 @@ class JevCriterionDecisionProvider:
             and item.get("status") != "satisfied"
         ]
         entries = _bounded_evidence(evidence.get("entries") if isinstance(evidence, dict) else [])
+        if not criteria:
+            return SystemOneReviewResult(updates=(), ambiguous_criterion_ids=(), model=self.settings.model)
         state = {
             "acceptance_criteria": {str(item.get("id")): str(item.get("statement")) for item in criteria},
             "phase": {"phase_id": phase.get("phase_id"), "objective": phase.get("objective")},
             "verified_evidence": {item["evidence_ref"]: item["summary"] for item in entries},
         }
-        questions: dict[str, Any] = {
-            "recommended_route": {
-                "type": "choice",
-                "instructions": "Which route is justified by the current phase outcome and verified evidence?",
-                "criteria": {
-                    "complete": "Every required acceptance criterion has direct supporting evidence.",
-                    "continue": "Evidence is valid but one or more required outcomes still need work.",
-                    "replan": "The current strategy cannot safely or effectively complete the remaining work.",
-                    "ask_user": "Progress requires information or a decision only the user can provide.",
-                    "fail": "The task cannot be completed safely within the authorized scope.",
-                },
-            }
-        }
+        questions: dict[str, Any] = {}
         pair_keys: dict[str, tuple[str, str]] = {}
         for criterion_index, criterion in enumerate(criteria):
             criterion_id = str(criterion.get("id") or "")
@@ -342,17 +352,128 @@ class JevCriterionDecisionProvider:
                 ambiguous.append(criterion_id)
             else:
                 updates.append({"criterion_id": criterion_id, "status": "pending", "evidence_refs": [], "reason": "No verified evidence available"})
-        route = answers.get("recommended_route")
-        if not isinstance(route, dict) or route.get("type") != "choice":
-            raise ValueError("system_one_route_answer_invalid")
-        route_name = str(route.get("choice") or "")
-        route_probability = float((route.get("probabilities") or {}).get(route_name) or 0.0)
         return SystemOneReviewResult(
             updates=tuple(updates), ambiguous_criterion_ids=tuple(ambiguous),
-            recommended_route=route_name, route_confidence=route_probability,
-            route_confident=(route_probability >= self.settings.route_confidence_threshold),
             model=str(response.get("model") or self.settings.model),
             usage=dict(response.get("usage") or {}), duration_ms=duration_ms,
+        )
+
+    def triage_plan_messages(self, *, task: dict[str, Any], candidates: list[dict[str, Any]]) -> tuple[str, ...]:
+        """Return queued message IDs Jev judges relevant to the active task."""
+        if not candidates:
+            return ()
+        state = {
+            "active_task": {
+                "task_id": task.get("task_id"),
+                "goal": task.get("goal"),
+                "acceptance_contract": task.get("acceptance_contract"),
+                "strategic_plan": task.get("strategic_plan"),
+            },
+            "queued_messages": [
+                {"message_id": str(item["message_id"]), "sender": item.get("sender"), "text": item.get("text"),
+                 "correlated_question_id": item.get("question_id")}
+                for item in candidates
+            ],
+        }
+        questions: dict[str, Any] = {}
+        key_to_id: dict[str, str] = {}
+        for index, item in enumerate(candidates):
+            key = f"message_class_{index}"
+            key_to_id[key] = str(item["message_id"])
+            questions[key] = {
+                "type": "choice",
+                "instructions": "Classify this queued message only by its relevance to the active task.",
+                "criteria": {
+                    "steering": "It changes, clarifies, or adds a requirement to the active task.",
+                    "question_answer": "It answers an open question that blocks or informs the active task.",
+                    "relevant_context": "It provides information or a dependency needed to complete the active task.",
+                    "independent_task": "It requests separate work that belongs to a different task.",
+                    "unrelated": "It is unrelated to the active task or is not actionable context for it.",
+                },
+            }
+            questions[f"relevant_{index}"] = {
+                "type": "noul",
+                "instructions": f"Is queued message {item['message_id']} relevant to the active task?",
+                "criteria": {
+                    "true": "The message should be incorporated before planning or continuing this task.",
+                    "false": "The message is unrelated, independent work, or should remain queued for another task.",
+                },
+            }
+        response = self.client.evaluate(state=state, questions=questions)
+        selected: list[str] = []
+        answers = response["answers"]
+        for index, (key, message_id) in enumerate(key_to_id.items()):
+            choice = answers.get(key)
+            fuse = answers.get(f"relevant_{index}")
+            if not isinstance(choice, dict) or choice.get("type") != "choice":
+                raise ValueError(f"system_one_message_classification_invalid:{key}")
+            if not isinstance(fuse, dict) or fuse.get("type") != "noul" or not isinstance(fuse.get("noul"), (int, float)):
+                raise ValueError(f"system_one_message_relevance_invalid:{index}")
+            label = str(choice.get("choice") or "")
+            probability = float((choice.get("probabilities") or {}).get(label) or 0.0)
+            if label in {"steering", "question_answer", "relevant_context"} and probability >= self.settings.route_confidence_threshold and float(fuse["noul"]) >= self.settings.yes_threshold:
+                selected.append(message_id)
+        return tuple(selected)
+
+    def recommend_act(self, *, state: dict[str, Any]) -> SystemOneActRecommendation:
+        """Recommend the next mission-level action from Check's verdict and durable evidence."""
+        actions = {
+            "complete": "All required acceptance criteria are verified and the task can end successfully.",
+            "continue": "More authorized work under the current strategy is likely to make useful progress.",
+            "replan": "The current strategic approach should change before any further execution.",
+            "ask_user": "A specific answer or steering from the user could materially unblock or redirect the mission.",
+            "fail_explain": "The mission is no longer worth pursuing, but the user should receive a final evidence-based explanation.",
+            "fail": "The mission must stop immediately and no further user-facing closure cycle is appropriate.",
+        }
+        questions = {
+            "recommended_action": {
+                "type": "choice",
+                "instructions": "Recommend the next mission-level action, considering Check's verdict and all supplied evidence and constraints.",
+                "criteria": actions,
+            },
+            "continuation_is_worthwhile": {
+                "type": "noul",
+                "instructions": "Would another bounded execution cycle likely create meaningful mission progress under the current strategy?",
+                "criteria": {"true": "There is a plausible, authorized next step.", "false": "The same approach is exhausted, blocked, or unlikely to change the outcome."},
+            },
+            "user_input_can_unblock": {
+                "type": "noul",
+                "instructions": "Could a concrete user answer or steering materially change the mission's prospects?",
+                "criteria": {"true": "A user decision or missing information is a plausible path forward.", "false": "User input would not change the feasibility or safety of the mission."},
+            },
+            "closure_explanation_is_warranted": {
+                "type": "noul",
+                "instructions": "If the mission ends unsuccessfully, should Alphonse spend one bounded final cycle explaining why to the user?",
+                "criteria": {"true": "A concise explanation of the failure is useful and safe to deliver.", "false": "No additional user-facing closure cycle is appropriate."},
+            },
+        }
+        started = monotonic()
+        response = self.client.evaluate(state=state, questions=questions)
+        duration_ms = max(0, round((monotonic() - started) * 1000))
+        answer = response["answers"].get("recommended_action")
+        if not isinstance(answer, dict) or answer.get("type") != "choice":
+            raise ValueError("system_one_act_recommendation_invalid")
+        action = str(answer.get("choice") or "")
+        if action not in actions:
+            raise ValueError("system_one_act_action_invalid")
+        probabilities = answer.get("probabilities") if isinstance(answer.get("probabilities"), dict) else {}
+        confidence = max(0.0, min(1.0, float(probabilities.get(action) or 0.0)))
+        fuse_answers: dict[str, float] = {}
+        for question_id in ("continuation_is_worthwhile", "user_input_can_unblock", "closure_explanation_is_warranted"):
+            fuse = response["answers"].get(question_id)
+            if not isinstance(fuse, dict) or fuse.get("type") != "noul" or not isinstance(fuse.get("noul"), (int, float)):
+                raise ValueError(f"system_one_act_fuse_invalid:{question_id}")
+            fuse_answers[question_id] = max(0.0, min(1.0, float(fuse["noul"])))
+        return SystemOneActRecommendation(
+            action=action,
+            confidence=confidence,
+            confident=confidence >= self.settings.route_confidence_threshold,
+            rationale=actions[action],
+            answers=fuse_answers,
+            yes_threshold=self.settings.yes_threshold,
+            model=str(response.get("model") or self.settings.model),
+            usage=dict(response.get("usage") or {}),
+            duration_ms=duration_ms,
         )
 
     def select_plan_tools(

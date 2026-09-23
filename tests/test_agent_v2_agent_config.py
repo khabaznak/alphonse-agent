@@ -11,7 +11,6 @@ from alphonse.agent_v2.core.core import CoreLoopContext
 from alphonse.agent_v2.core.messages import InMemoryMessageQueue
 from alphonse.agent_v2.core.intelligence.pdca.nodes.plan_node import plan_node
 from alphonse.agent_v2.core.intelligence.pdca.nodes.act_node import _render_acceptance_criteria_prompt
-from alphonse.agent_v2.core.intelligence.pdca.nodes.check_node import _render_criteria_review_prompt
 from alphonse.agent_v2.core.intelligence.pdca.nodes.plan_node import _render_tool_call_plan_prompt
 
 
@@ -58,7 +57,6 @@ def test_capd_prompt_templates_accept_agent_configuration() -> None:
     for prompt in (
         _render_tool_call_plan_prompt(task, (), **common),
         _render_acceptance_criteria_prompt(task, **common),
-        _render_criteria_review_prompt(task, {}, **common),
     ):
         assert prompt.index("## Philosophy.md") < prompt.index("## GlobalContext.md")
         assert prompt.index("## GlobalContext.md") < prompt.index("## User Context")

@@ -16,6 +16,7 @@ from alphonse.agent_v2.core.core import ToolDescriptor
 from alphonse.agent_v2.core.inference import InferencePurpose
 from alphonse.agent_v2.core.inference import InferenceRequest
 from alphonse.agent_v2.core.intelligence.task_state import TaskState
+from alphonse.agent_v2.core.intelligence.acceptance_planning import plan_acceptance_contract
 from alphonse.agent_v2.core.tools.registry import ToolExposurePolicy
 
 if TYPE_CHECKING:
@@ -26,6 +27,13 @@ _TEMPLATE_DIR = Path(__file__).resolve().parents[2] / "templates"
 
 def plan_node(task: TaskState, context: CoreLoopContext | None = None) -> TaskState:
     """Prepare one bounded execution phase without executing it."""
+    if not plan_acceptance_contract(task, context):
+        task.metadata["tool_call_planning_llm_stubbed"] = True
+        task.status = "failed"
+        task.outcome = {"status": "failure", "reason": "Plan could not establish acceptance criteria."}
+        task.metadata["act_route"] = "end"
+        task.append_update("Plan could not establish the acceptance contract; no execution was planned.")
+        return task
     if context is not None:
         context.emit_activity(
             phase=ImprovementPhase.PLAN,
@@ -45,6 +53,7 @@ def plan_node(task: TaskState, context: CoreLoopContext | None = None) -> TaskSt
         current_time_utc=datetime.now(timezone.utc).isoformat(),
         user_timezone=_user_timezone(task, context),
         program_available=program_available,
+        act_directive=task.metadata.get("act_directive") if isinstance(task.metadata.get("act_directive"), dict) else {},
     )
     task.metadata["tool_call_plan_prompt"] = prompt
 
@@ -57,6 +66,14 @@ def plan_node(task: TaskState, context: CoreLoopContext | None = None) -> TaskSt
         task.metadata["tool_call_planning_llm_stubbed"] = True
         task.append_update("Plan produced no executable phase; inference may be stubbed or the plan invalid.")
         return task
+    act_directive = task.metadata.get("act_directive")
+    if isinstance(act_directive, dict) and act_directive.get("response_required"):
+        if str(planned_tool_call.get("tool_id") or "") != "native.respond" or planned_tool_call.get("execution_mode") == "program":
+            task.status = "failed"
+            task.outcome = {"status": "failure", "reason": "Plan did not honor Act's response-only directive."}
+            task.metadata["act_route"] = "end"
+            task.append_update("Plan output was rejected because Act required a response-only closure action.")
+            return task
 
     task.metadata["tool_call_planning_llm_stubbed"] = False
     task.metadata["planned_tool_call"] = planned_tool_call
@@ -84,6 +101,7 @@ def _render_tool_call_plan_prompt(
     current_time_utc: str = "",
     user_timezone: str = "UTC",
     program_available: bool = False,
+    act_directive: dict[str, Any] | None = None,
 ) -> str:
     env = Environment(
         loader=FileSystemLoader(_TEMPLATE_DIR),
@@ -102,6 +120,7 @@ def _render_tool_call_plan_prompt(
         current_time_utc=current_time_utc,
         user_timezone=user_timezone,
         program_available=program_available,
+        act_directive=act_directive or {},
         task_state_md=task.to_markdown_prompt(include_memory=False),
     ).strip()
 

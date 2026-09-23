@@ -16,6 +16,7 @@ from alphonse.agent_v2.core.intelligence.task_state import TaskState
 from alphonse.agent_v2.core.intelligence.v3 import HierarchicalCAPDProcessor
 from alphonse.agent_v2.core.intelligence.v3.contracts import PhaseStatus, TacticalAction, new_tactical_state
 from alphonse.agent_v2.core.intelligence.v3.contracts import PhasePlan
+from alphonse.agent_v2.system_one import SystemOneActRecommendation, SystemOneReviewResult
 from alphonse.agent_v2.core.messages import CommunicationChannel, InMemoryMessageQueue
 from alphonse.agent_v2.core.tools.registry import InMemoryToolRegistry, ToolDefinition
 from alphonse.agent_v2.evaluation.replay import EngineTrace, EvaluationCase
@@ -72,7 +73,23 @@ class _DeterministicProvider:
 
     def generate_json(self, request: InferenceRequest) -> InferenceResult:
         if request.purpose == InferencePurpose.PHASE_PLANNING:
-            value = _phase_plan(self.state.scenario).to_dict()
+            phase = _phase_plan(self.state.scenario).to_dict()
+            if '"response_required": true' in request.prompt.lower() or '"response_required":true' in request.prompt.lower():
+                phase.update({
+                    "phase_id": "final-response", "objective": "Respond to the requester",
+                    "authorized_capabilities": ["user_response"],
+                    "mutation_scope": {"allowed_paths": [], "allow_external_effects": True},
+                    "limits": {"max_tool_calls": 1, "max_duration_seconds": 10},
+                    "subgoals": [{
+                        "subgoal_id": "respond", "objective": "Provide the final response",
+                        "required_output_type": "user_response", "depends_on": [],
+                        "allowed_capabilities": ["user_response"], "allowed_side_effects": ["user_response"],
+                        "limits": {"max_tool_calls": 1, "max_duration_seconds": 10},
+                        "completion": {"kind": "output_present", "output_type": "user_response"},
+                        "failure_policy": "stop",
+                    }],
+                })
+            value = phase
         elif request.purpose == InferencePurpose.TACTICAL_ACTION:
             value = self._next_v3_action()
         elif request.purpose == InferencePurpose.PHASE_REVIEW:
@@ -97,7 +114,9 @@ class _DeterministicProvider:
 
     def plan_tool_call(self, request: InferenceRequest) -> InferenceResult:
         actions = list(self.state.scenario.actions)
-        if self.state.v2_index >= len(actions):
+        if '"response_required": true' in request.prompt.lower() or '"response_required":true' in request.prompt.lower():
+            action = _respond_action(self.state.scenario.final_response)
+        elif self.state.v2_index >= len(actions):
             action = _respond_action(self.state.scenario.final_response)
         else:
             action = actions[self.state.v2_index]
@@ -175,6 +194,7 @@ def _run(
         messages=queue,
         tools=registry,
         inference=router,
+        system_one=_ReplayJev(),
         telemetry_sink=telemetry_sink,
         ui_event_sink=lambda event: ui_events.append({"event_type": event.event_type, "payload": dict(event.payload)}),
     )
@@ -306,6 +326,7 @@ def _phase_plan(scenario: _Scenario) -> PhasePlan:
             "failure_policy": "local_fallback",
         }]
     return PhasePlan.from_dict({
+        "acceptance_criteria": [scenario.acceptance],
         "phase_id": "fixture-phase",
         "objective": scenario.acceptance,
         "subgoals": subgoals,
@@ -319,6 +340,53 @@ def _phase_plan(scenario: _Scenario) -> PhasePlan:
         "originating_decision": "offline_replay",
         "schema_version": 3,
     })
+
+
+class _ReplayJev:
+    """Deterministic Jev stand-in for offline V2/V3 evaluation runs."""
+
+    def evaluate(self, *, contract, phase, evidence):
+        _ = phase
+        entries = evidence.get("entries") if isinstance(evidence, dict) else []
+        successful = [
+            str(item.get("evidence_ref")) for item in entries
+            if isinstance(item, dict) and item.get("status") == "success" and item.get("evidence_ref")
+        ]
+        updates = tuple({
+            "criterion_id": str(item.get("id") or ""),
+            "status": "satisfied",
+            "evidence_refs": successful[-1:],
+            "reason": "Deterministic replay evidence",
+        } for item in contract.get("criteria") or [] if isinstance(item, dict) and successful)
+        return SystemOneReviewResult(updates, (), model="replay-jev")
+
+    def select_plan_tools(self, *, tools, **_values):
+        from alphonse.agent_v2.system_one import SystemOneToolRegistrySelection
+        tool_ids = tuple(str(getattr(tool, "tool_id", "")) for tool in tools)
+        return SystemOneToolRegistrySelection(selected_tool_ids=tool_ids)
+
+    def triage_plan_messages(self, *, candidates, **_values):
+        return tuple(str(item.get("message_id")) for item in candidates if isinstance(item, dict))
+
+    def recommend_act(self, *, state):
+        verdict = str(state.get("check_verdict") or "wip")
+        action = "complete" if verdict in {"success", "mission_success"} else "continue" if verdict == "wip" else "fail_explain"
+        return SystemOneActRecommendation(
+            action=action, confidence=0.99, confident=True, rationale=f"Replay Jev recommends {action}.",
+            answers={
+                "continuation_is_worthwhile": 0.99,
+                "user_input_can_unblock": 0.1,
+                "closure_explanation_is_warranted": 0.99,
+            }, model="replay-jev",
+        )
+
+    def evaluate_tactical_progress(self, *, questions=None, **_values):
+        from alphonse.agent_v2.system_one import SystemOneTacticalReview
+        return SystemOneTacticalReview(
+            complete=True, confidence=0.99, confident=True, model="replay-jev",
+            answers={str(item.get("question_id")): 0.99 for item in questions or []},
+            retry_approved=False,
+        )
 
 
 def _restore_checkpoint(task: TaskState, scenario: _Scenario, engine: str) -> None:

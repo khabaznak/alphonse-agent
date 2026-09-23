@@ -3,16 +3,7 @@
 from __future__ import annotations
 
 import json
-import re
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
-
-from jinja2 import Environment
-from jinja2 import FileSystemLoader
-from jinja2 import select_autoescape
-
-from alphonse.agent_v2.core.inference import InferencePurpose
-from alphonse.agent_v2.core.inference import InferenceRequest
 from alphonse.agent_v2.core.core import ImprovementPhase
 from alphonse.agent_v2.core.intelligence.task_state import TaskState
 from alphonse.agent_v2.core.intelligence.acceptance_contract import apply_status_patch
@@ -21,11 +12,9 @@ from alphonse.agent_v2.core.messages.queue import MessageSelector
 if TYPE_CHECKING:
     from alphonse.agent_v2.core.core import CoreLoopContext
 
-_TEMPLATE_DIR = Path(__file__).resolve().parents[2] / "templates"
 
-
-def check_node(task: TaskState, context: CoreLoopContext | None = None) -> TaskState:
-    """Classify the task and fold related steering messages into it."""
+def check_node(task: TaskState, context: CoreLoopContext | None = None, *, consume_steering: bool = True) -> TaskState:
+    """Classify the task, optionally folding related steering messages into it."""
     if context is not None:
         context.emit_activity(
             phase=ImprovementPhase.CHECK,
@@ -33,7 +22,7 @@ def check_node(task: TaskState, context: CoreLoopContext | None = None) -> TaskS
             message="Reviewing the task and queued steering messages.",
         )
     is_new_task = _markdown_is_empty(task.acceptance_criteria_md)
-    steering_count = _consume_steering_messages(task, context)
+    steering_count = _consume_steering_messages(task, context) if consume_steering else 0
 
     if is_new_task:
         verdict = "new"
@@ -44,6 +33,9 @@ def check_node(task: TaskState, context: CoreLoopContext | None = None) -> TaskS
     else:
         verdict = "wip"
         reason = _review_wip_acceptance_criteria(task, context)
+        if task.acceptance_criteria_all_complete():
+            verdict = "mission_success"
+            reason = "Every required acceptance criterion is supported by verified tool evidence."
 
     task.set_check_result(
         verdict=verdict,
@@ -70,119 +62,42 @@ def _review_wip_acceptance_criteria(
     latest_call = task.get_latest_executed_plan_call()
     if latest_call is None and require_latest_call:
         return "Acceptance criteria exist, but no steering messages or executed tool results were available yet."
+    if not _valid_evidence_refs(task):
+        task.metadata["criteria_review_updated"] = False
+        return "No successful tool evidence is available to satisfy acceptance criteria."
 
-    prompt = _render_criteria_review_prompt(
-        task,
-        latest_call or {},
-        user_context_md=_user_context_md(task, context),
-        project_context_md=_project_context_md(task, context),
-        philosophy_md=_agent_prompt_md(context, "Philosophy.md"),
-        global_context_md=_agent_prompt_md(context, "GlobalContext.md"),
-    )
-    status_patch = _call_criteria_review_inference(prompt, task, context)
-    task.metadata["criteria_review_prompt"] = prompt
-    task.metadata["criteria_review_llm_stubbed"] = context is None or context.inference is None
-    if status_patch is not None:
-        contract, rejected = apply_status_patch(
-            task.ensure_acceptance_contract(),
-            _normalize_status_patch(status_patch, task),
-            valid_evidence_refs=_valid_evidence_refs(task),
-        )
-        task.acceptance_contract = contract
-        task.sync_acceptance_criteria_view()
-        task.metadata["criteria_review_rejections"] = rejected
-        task.metadata["criteria_review_updated"] = True
-        task.append_update("Check updated criterion statuses without changing the acceptance contract.")
-        return "Acceptance criterion statuses were reviewed against the latest executed tool call."
-
-    task.metadata["criteria_review_updated"] = False
-    task.append_update("Check prepared acceptance criteria review; LLM execution is stubbed.")
-    return "Acceptance criteria need review against the latest executed tool call."
-
-
-def _render_criteria_review_prompt(
-    task: TaskState,
-    latest_call: dict[str, object],
-    *,
-    user_context_md: str = "",
-    project_context_md: str = "",
-    philosophy_md: str = "",
-    global_context_md: str = "",
-) -> str:
-    env = Environment(
-        loader=FileSystemLoader(_TEMPLATE_DIR),
-        autoescape=select_autoescape(default_for_string=False),
-        trim_blocks=True,
-        lstrip_blocks=True,
-    )
-    template = env.get_template("criteria_review_prompt.j2")
-    return template.render(
-        acceptance_criteria_md=task.acceptance_criteria_md,
-        acceptance_contract_json=json.dumps(task.ensure_acceptance_contract(), indent=2, ensure_ascii=False, sort_keys=True),
-        valid_evidence_refs=sorted(_valid_evidence_refs(task)),
-        cumulative_evidence_json=_bounded_json(_evidence_journal(task), max_chars=24_000),
-        latest_executed_call_json=_bounded_json(latest_call, max_chars=12_000),
-        user_context_md=user_context_md,
-        project_context_md=project_context_md,
-        philosophy_md=philosophy_md,
-        global_context_md=global_context_md,
-        task_state_md=task.to_markdown_prompt(include_memory=False, include_plan=False),
-    ).strip()
-
-
-def _project_context_md(task: TaskState, context: CoreLoopContext | None) -> str:
-    if context is None or context.project_store is None or not str(task.project_id or "").strip():
-        return ""
-    render = getattr(context.project_store, "render_project_context", None)
-    if not callable(render):
-        return ""
-    return str(render(task.project_id, requester_user_id=task.user) or "").strip()
-
-
-def _user_context_md(task: TaskState, context: CoreLoopContext | None) -> str:
-    if context is None or not callable(context.user_context_provider):
-        return ""
+    if context is None or context.system_one is None or not callable(getattr(context.system_one, "evaluate", None)):
+        from alphonse.agent_v2.system_one import SystemOneUnavailableError
+        raise SystemOneUnavailableError("check_criteria_review_unavailable")
     try:
-        return str(context.user_context_provider(task.user) or "").strip()
-    except (OSError, KeyError):
-        return ""
-
-
-def _agent_prompt_md(context: CoreLoopContext | None, name: str) -> str:
-    if context is None or context.prompts is None:
-        return ""
-    load = getattr(context.prompts, "load", None)
-    if not callable(load):
-        return ""
-    return str(load(name).content or "").strip()
-
-
-def _call_criteria_review_llm(prompt: str) -> str | None:
-    """Stub for the future WIP acceptance criteria review LLM call."""
-    _ = prompt
-    return None
-
-
-def _call_criteria_review_inference(
-    prompt: str,
-    task: TaskState,
-    context: CoreLoopContext | None = None,
-) -> Any:
-    if context is not None and context.inference is not None:
-        result = context.inference.generate_json(
-            InferenceRequest(
-                prompt=prompt,
-                purpose=InferencePurpose.CRITERIA_REVIEW,
-                project_id=task.project_id,
-                user=task.user,
-                task_id=task.task_id,
-                cancel_checker=context.is_cancelled if context.cancellation_checker is not None else None,
-            )
+        result = context.system_one.evaluate(
+            contract=task.ensure_acceptance_contract(),
+            phase={"latest_executed_call": latest_call, "plan": task.plan_json},
+            evidence={"entries": _evidence_journal(task)},
         )
-        if result.model_profile is not None:
-            task.metadata["criteria_review_model_profile"] = result.model_profile.profile_id
-        return result.json_value if isinstance(result.json_value, dict) else None
-    return _call_criteria_review_llm(prompt)
+    except Exception as exc:
+        from alphonse.agent_v2.system_one import SystemOneUnavailableError
+        raise SystemOneUnavailableError(f"check_criteria_review:{type(exc).__name__}") from exc
+    updates = [
+        dict(update) for update in result.updates
+        if str(update.get("criterion_id") or "") not in set(result.ambiguous_criterion_ids)
+    ]
+    contract, rejected = apply_status_patch(
+        task.ensure_acceptance_contract(), {"updates": updates}, valid_evidence_refs=_valid_evidence_refs(task),
+    )
+    task.acceptance_contract = contract
+    task.sync_acceptance_criteria_view()
+    task.metadata["criteria_review_rejections"] = rejected
+    task.metadata["criteria_review_updated"] = bool(updates)
+    task.metadata["system_one_check_review"] = result.to_metadata()
+    context.emit_telemetry({
+        "event": "system_one_check_review", "task_id": task.task_id,
+        "duration_ms": result.duration_ms, "model": result.model,
+        "ambiguous_criterion_count": len(result.ambiguous_criterion_ids),
+        "usage": dict(result.usage),
+    })
+    task.append_update("Check reviewed acceptance evidence with Jev; ambiguous criteria remain unresolved.")
+    return "Acceptance criterion statuses were reviewed against verified tool evidence."
 
 
 def _consume_steering_messages(task: TaskState, context: CoreLoopContext | None) -> int:
@@ -285,32 +200,3 @@ def _evidence_journal(task: TaskState) -> list[dict[str, Any]]:
             }
         )
     return journal
-
-
-def _normalize_status_patch(value: Any, task: TaskState) -> dict[str, Any]:
-    if isinstance(value, dict):
-        return value
-    # Backward-compatible test/provider adapter: accept checkbox Markdown only
-    # as statuses for exact, already-defined statements.
-    if not isinstance(value, str):
-        return {"updates": []}
-    updates: list[dict[str, Any]] = []
-    latest = task.get_latest_executed_plan_call() or {}
-    call_id = str(latest.get("id") or "").strip()
-    evidence = [f"tool-call:{call_id}"] if call_id else []
-    by_statement = {str(item.get("statement") or "").strip(): str(item.get("id") or "") for item in task.ensure_acceptance_contract().get("criteria") or [] if isinstance(item, dict)}
-    for line in value.splitlines():
-        match = re.search(r"\[(?P<state>x|\s)\]\s*(?P<statement>.+?)\s*$", line, flags=re.IGNORECASE)
-        if match is None:
-            continue
-        criterion_id = by_statement.get(match.group("statement").strip())
-        if criterion_id:
-            updates.append({"criterion_id": criterion_id, "status": "satisfied" if match.group("state").lower() == "x" else "pending", "evidence_refs": evidence if match.group("state").lower() == "x" else []})
-    return {"updates": updates}
-
-
-def _bounded_json(value: Any, *, max_chars: int) -> str:
-    rendered = json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True)
-    if len(rendered) <= max_chars:
-        return rendered
-    return rendered[: max(1, max_chars - 18)].rstrip() + '\n"... truncated"'

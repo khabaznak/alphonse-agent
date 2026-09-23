@@ -393,6 +393,9 @@ class MessageQueue(Protocol):
     def dequeue(self, selector: MessageSelector | None = None) -> QueuedMessage | None:
         """Remove and return the next matching message."""
 
+    def list_pending(self, selector: MessageSelector | None = None, *, limit: int = 1000) -> list[QueuedMessage]:
+        """List pending messages in arrival order without claiming them."""
+
     def size(self, selector: MessageSelector | None = None) -> int:
         """Return the number of queued messages matching a selector."""
 

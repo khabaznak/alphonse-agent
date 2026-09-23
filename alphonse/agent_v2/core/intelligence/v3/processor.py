@@ -5,8 +5,6 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from alphonse.agent_v2.core.core import ImprovementPhase, ProcessingResult, ProcessingStatus, StateSnapshot
-from alphonse.agent_v2.core.intelligence.pdca.nodes.act_node import act_node
-from alphonse.agent_v2.core.intelligence.pdca.nodes.check_node import check_node
 from alphonse.agent_v2.core.intelligence.v3.contracts import PhaseStatus, TacticalState, new_tactical_state
 from alphonse.agent_v2.core.intelligence.v3.executor import PhaseExecutor
 from alphonse.agent_v2.core.intelligence.v3.outer import V3OuterController
@@ -30,15 +28,6 @@ class HierarchicalCAPDProcessor:
         context.emit_ui_event("run_started", {"task": task.to_dict(), "engine": "hierarchical_v3"})
         task.intelligence_engine = "hierarchical_v3"
         task.intelligence_schema_version = 3
-        if not task.acceptance_contract:
-            check_node(task, context=context)
-            act_node(task, context=context)
-            self._persist(task, context)
-        if not task.acceptance_contract:
-            task.status = "failed"
-            task.outcome = {"status": "failure", "reason": "V3 could not establish acceptance criteria."}
-            return self._result(task, context)
-
         phases = 0
         while phases < self.max_phases and task.status not in {"completed", "failed", "waiting_user", "cancelled"}:
             phases += 1
@@ -77,9 +66,6 @@ class HierarchicalCAPDProcessor:
             self._persist(task, context)
             if task.metadata.get("v3_route") in {"plan_next_phase", "strategic_replan"}:
                 task.hierarchical_state = {}
-                if state.steering_pending:
-                    check_node(task, context=context)
-                    act_node(task, context=context)
                 continue
             _ = review, decision
             break

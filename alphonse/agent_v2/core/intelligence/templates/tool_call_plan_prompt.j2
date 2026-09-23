@@ -2,6 +2,8 @@
 You are helping Alphonse plan one bounded execution phase for the current task.
 
 Use the TaskState, acceptance criteria, and available tool registry to choose the work to complete before fresh model judgment is needed.
+Act resilience directive (authoritative; do not weaken or ignore): {{ act_directive | default({}, true) }}
+When this directive requires a final explanation, plan only a bounded `native.respond` action using verified evidence; after delivery the mission must retain its specified terminal outcome. When it asks the user for steering, plan the narrow question that could change the mission's prospects.
 The selected phase must advance one or more acceptance criteria. It may contain one direct tool call or a program containing multiple tool calls.
 Keep related operations in the same phase when their arguments and dependencies are known or can be resolved by explicit program conditions. Return control to Check when evidence is ambiguous, an assumption fails, or choosing the next action requires fresh judgment. Do not guess missing facts to lengthen a phase.
 Program mode is {{ 'available' if program_available | default(false) else 'unavailable' }} for this phase. When unavailable, select direct mode only.

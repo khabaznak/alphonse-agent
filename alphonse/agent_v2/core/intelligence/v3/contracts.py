@@ -193,6 +193,7 @@ class PhasePlan:
     schema_version: int = V3_SCHEMA_VERSION
     curated_tool_ids: tuple[str, ...] = ()
     tool_curation_status: str = ""
+    acceptance_criteria: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if self.schema_version != V3_SCHEMA_VERSION:
@@ -217,6 +218,8 @@ class PhasePlan:
             known.add(subgoal.subgoal_id)
         if sum(item.limits.max_tool_calls for item in self.subgoals) < 1:
             raise ValueError("phase_subgoal_budgets_invalid")
+        if any(not str(item).strip() for item in self.acceptance_criteria):
+            raise ValueError("phase_acceptance_criteria_invalid")
 
     def to_dict(self) -> dict[str, Any]:
         return _enum_values(asdict(self))
@@ -238,6 +241,7 @@ class PhasePlan:
             schema_version=int(value.get("schema_version", V3_SCHEMA_VERSION)),
             curated_tool_ids=_strings(value.get("curated_tool_ids")),
             tool_curation_status=str(value.get("tool_curation_status") or "").strip(),
+            acceptance_criteria=tuple(str(item).strip() for item in value.get("acceptance_criteria") or []),
         )
 
 

@@ -2,23 +2,16 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from jinja2 import Environment
-from jinja2 import FileSystemLoader
-from jinja2 import select_autoescape
-
 from alphonse.agent_v2.core.core import ImprovementPhase
-from alphonse.agent_v2.core.inference import InferencePurpose
-from alphonse.agent_v2.core.inference import InferenceRequest
 from alphonse.agent_v2.core.intelligence.task_state import TaskState
-from alphonse.agent_v2.core.intelligence.acceptance_contract import apply_amendment
+from alphonse.agent_v2.core.intelligence.acceptance_planning import _render_acceptance_criteria_prompt, _render_acceptance_criteria_amendment_prompt
+from alphonse.agent_v2.system_one import SystemOneUnavailableError
 
 if TYPE_CHECKING:
     from alphonse.agent_v2.core.core import CoreLoopContext
 
-_TEMPLATE_DIR = Path(__file__).resolve().parents[2] / "templates"
 _PLAN_ROUTE = "plan"
 _END_ROUTE = "end"
 _TEMPORARY_MAX_COMPLETED_CYCLES = 10
@@ -36,121 +29,92 @@ def act_node(task: TaskState, context: CoreLoopContext | None = None) -> TaskSta
     _observe_completed_do_cycle(task)
     verdict = str(task.check_verdict or "").strip().lower()
     if verdict == "wip":
-        return _act_on_wip(task)
-
-    if _temporary_cycle_limit_reached(task):
-        task.metadata["act_route"] = _END_ROUTE
-        task.metadata["act_stop_reason"] = "temporary_cycle_limit"
-        task.append_update("Act stopped the CAPD cycle at the temporary completed-cycle limit.")
-        return task
+        return _act_on_wip(task, context)
 
     if verdict == "new":
-        prompt = _render_acceptance_criteria_prompt(
-            task,
-            user_context_md=_user_context_md(task, context),
-            project_context_md=_project_context_md(task, context),
-            philosophy_md=_agent_prompt_md(context, "Philosophy.md"),
-            global_context_md=_agent_prompt_md(context, "GlobalContext.md"),
-        )
-        task.metadata["memory_context_consumed"] = True
-        generated_criteria = _call_acceptance_criteria_inference(prompt, task, context)
-        task.metadata["acceptance_criteria_prompt"] = prompt
-        task.metadata["acceptance_criteria_llm_stubbed"] = context is None or context.inference is None
-        if generated_criteria:
-            task.set_acceptance_contract_from_markdown(str(generated_criteria).strip())
-            if context is not None:
-                context.record_memory_event(task, "Acceptance Criteria", task.acceptance_criteria_md)
-            task.metadata["acceptance_criteria_updated"] = True
-            task.append_update("Act updated acceptance criteria from LLM result.")
-            if context is not None:
-                context.emit_activity(
-                    phase=ImprovementPhase.ACT,
-                    label="criteria selected",
-                    message="Selected acceptance criteria for the task.",
-                )
-        else:
-            task.metadata["acceptance_criteria_updated"] = False
-            task.append_update(
-                "Act prepared acceptance criteria generation/revision prompt; LLM execution is stubbed."
-            )
-        task.metadata["act_route"] = _PLAN_ROUTE if _markdown_has_acceptance_criteria(task.acceptance_criteria_md) else _END_ROUTE
+        task.metadata["act_route"] = _PLAN_ROUTE
+        task.append_update("Act routed the new mission to Plan to establish acceptance criteria.")
         return task
 
     if verdict == "steer":
-        task.ensure_acceptance_contract()
-        prompt = _render_acceptance_criteria_amendment_prompt(
-            task,
-            user_context_md=_user_context_md(task, context),
-            project_context_md=_project_context_md(task, context),
-        )
-        amendment = _call_acceptance_criteria_amendment_inference(prompt, task, context)
-        task.metadata["acceptance_criteria_amendment_prompt"] = prompt
-        task.metadata["acceptance_criteria_amendment_llm_stubbed"] = context is None or context.inference is None
-        if amendment is not None:
-            source_ids = task.metadata.get("pending_steering_message_ids")
-            source_id = str(source_ids[-1] if isinstance(source_ids, list) and source_ids else task.message_id or "")
-            contract, rejected = apply_amendment(task.acceptance_contract, amendment, source_message_id=source_id)
-            task.acceptance_contract = contract
-            task.sync_acceptance_criteria_view()
-            task.metadata["acceptance_criteria_amendment_rejections"] = rejected
-            task.metadata["acceptance_criteria_updated"] = bool((amendment.get("operations") if isinstance(amendment, dict) else [])) and not rejected
-            task.append_update("Act applied a validated steering amendment to the acceptance contract.")
-            if context is not None:
-                context.record_memory_event(task, "Acceptance Contract Amendment", {"amendment": amendment, "rejected": rejected})
-        else:
-            task.metadata["acceptance_criteria_updated"] = False
-            task.append_update("Act preserved the acceptance contract because no valid steering amendment was produced.")
-        task.metadata.pop("pending_steering_message_ids", None)
-        task.metadata["act_route"] = _PLAN_ROUTE if _markdown_has_acceptance_criteria(task.acceptance_criteria_md) else _END_ROUTE
+        task.metadata["act_route"] = _PLAN_ROUTE
+        task.append_update("Act routed steering to Plan for acceptance-contract and strategy revision.")
         return task
 
-    if verdict in {"mission_success", "mission_failed"}:
-        task.metadata["act_route"] = _END_ROUTE
-        task.append_update(f"Act routed terminal check verdict to end: {verdict}.")
-        return task
-
-    task.metadata["act_route"] = _PLAN_ROUTE if _markdown_has_acceptance_criteria(task.acceptance_criteria_md) else _END_ROUTE
-    task.append_update(f"Act has no implemented action for check verdict: {verdict or 'none'}.")
-    return task
+    return _recommend_act(task, context)
 
 
-def _act_on_wip(task: TaskState) -> TaskState:
+def _act_on_wip(task: TaskState, context: CoreLoopContext | None) -> TaskState:
     if task.metadata.get("pending_silent_bash_confirmation"):
         task.metadata["act_route"] = _PLAN_ROUTE
         task.append_update("Act requires a native.respond confirmation before completing the task.")
         return task
 
-    if task.acceptance_criteria_all_complete():
-        if task.has_prepared_user_response():
-            return _mark_mission_success(task, "All acceptance criteria are complete and a user response is prepared.")
-        if _temporary_cycle_limit_reached(task):
-            task.metadata["act_route"] = _END_ROUTE
-            task.metadata["act_stop_reason"] = "temporary_cycle_limit"
-            task.append_update("Act stopped before completion because no user-facing response was prepared within the cycle limit.")
-            return task
-        task.metadata["pending_user_response"] = True
-        task.metadata["act_route"] = _PLAN_ROUTE
-        task.append_update("Act requires a successful native.respond call before completing the interactive task.")
-        return task
+    return _recommend_act(task, context)
 
-    failure_reason = _mission_failure_reason(task)
-    if failure_reason:
-        return _mark_mission_failed(task, failure_reason)
 
-    if _temporary_cycle_limit_reached(task):
+def _recommend_act(task: TaskState, context: CoreLoopContext | None) -> TaskState:
+    if task.metadata.get("cancel_requested") is True or task.metadata.get("kill_switch_cancelled") is True:
+        task.status = "cancelled"
         task.metadata["act_route"] = _END_ROUTE
-        task.metadata["act_stop_reason"] = "temporary_cycle_limit"
-        task.append_update("Act stopped the CAPD cycle at the temporary completed-cycle limit.")
         return task
-
-    if _markdown_has_acceptance_criteria(task.acceptance_criteria_md):
+    directive = task.metadata.get("act_directive")
+    if isinstance(directive, dict) and directive.get("closure_only") and task.has_prepared_user_response():
+        return _mark_mission_failed(task, str(directive.get("reason") or "Mission failed; final explanation delivered."))
+    if context is None or context.system_one is None or not callable(getattr(context.system_one, "recommend_act", None)):
+        raise SystemOneUnavailableError("act_recommendation_unavailable")
+    state = {
+        "goal": task.goal,
+        "check_verdict": task.check_verdict,
+        "check_reason": task.check_reason,
+        "acceptance_contract": task.ensure_acceptance_contract(),
+        "task_state": task.to_dict(),
+        "complete_tool_execution_log": task.plan_json,
+        "user_constraints": task.metadata.get("user_constraints", {}),
+        "completed_cycles": task.pdca_cycle_count,
+        "cycle_limit": _TEMPORARY_MAX_COMPLETED_CYCLES,
+        "plan_call_exceptions": task.count_plan_call_exceptions(),
+        "plan_call_exception_limit": _PLAN_CALL_EXCEPTION_FAILURE_THRESHOLD,
+        "failure_reason": _mission_failure_reason(task),
+    }
+    try:
+        recommendation = context.system_one.recommend_act(state=state)
+    except Exception as exc:
+        raise SystemOneUnavailableError(f"act_recommendation:{type(exc).__name__}") from exc
+    task.metadata["act_recommendation"] = recommendation.to_metadata()
+    action = recommendation.action
+    yes_threshold = float(getattr(recommendation, "yes_threshold", 0.8))
+    if _temporary_cycle_limit_reached(task) and action in {"continue", "replan"}:
+        action = "fail_explain" if recommendation.answers.get("closure_explanation_is_warranted", 0.0) >= yes_threshold else "fail"
+    if action == "complete" and not task.acceptance_criteria_all_complete():
+        action = "continue" if recommendation.answers.get("continuation_is_worthwhile", 0.0) >= yes_threshold else "replan"
+    if action == "complete" and not task.has_prepared_user_response():
+        task.metadata["pending_user_response"] = True
+        task.metadata["act_directive"] = {"action": "complete", "response_required": True}
+        action = "continue"
+    if action == "ask_user" and recommendation.answers.get("user_input_can_unblock", 0.0) < yes_threshold:
+        action = "replan"
+    if action == "fail_explain" and recommendation.answers.get("closure_explanation_is_warranted", 0.0) < yes_threshold:
+        action = "fail"
+    if not recommendation.confident and action not in {"fail", "fail_explain"}:
+        action = "replan"
+    if action == "fail_explain":
+        task.metadata["act_directive"] = {
+            "action": "fail_explain", "closure_only": True, "response_required": True,
+            "terminal_outcome": "failed", "reason": recommendation.rationale,
+        }
+        task.metadata["pending_user_response"] = True
+        action = "continue"
+    if action in {"continue", "replan", "ask_user"}:
+        task.metadata.setdefault("act_directive", {"action": action, "rationale": recommendation.rationale})
         task.metadata["act_route"] = _PLAN_ROUTE
-        task.append_update("Act routed work-in-progress task back to Plan.")
+        task.append_update(f"Act routed to Plan on Jev recommendation: {action}.")
         return task
-
-    task.metadata["act_route"] = _END_ROUTE
-    task.append_update("Act cannot continue work-in-progress task without acceptance criteria.")
-    return task
+    if action == "complete":
+        return _mark_mission_success(task, recommendation.rationale)
+    if action == "fail":
+        return _mark_mission_failed(task, recommendation.rationale)
+    raise SystemOneUnavailableError("act_recommendation_action_invalid")
 
 
 def _mark_mission_success(task: TaskState, reason: str) -> TaskState:
@@ -196,131 +160,6 @@ def _mission_failure_reason(task: TaskState) -> str:
     if task.count_plan_call_exceptions() >= _PLAN_CALL_EXCEPTION_FAILURE_THRESHOLD:
         return f"Planned tool calls reached {_PLAN_CALL_EXCEPTION_FAILURE_THRESHOLD} exceptions."
     return ""
-
-
-def _render_acceptance_criteria_prompt(
-    task: TaskState,
-    *,
-    user_context_md: str = "",
-    project_context_md: str = "",
-    philosophy_md: str = "",
-    global_context_md: str = "",
-) -> str:
-    env = Environment(
-        loader=FileSystemLoader(_TEMPLATE_DIR),
-        autoescape=select_autoescape(default_for_string=False),
-        trim_blocks=True,
-        lstrip_blocks=True,
-    )
-    template = env.get_template("acceptance_criteria_prompt.j2")
-    return template.render(
-        check_verdict=task.check_verdict or "",
-        check_reason=task.check_reason,
-        existing_acceptance_criteria_md=task.acceptance_criteria_md,
-        user_context_md=user_context_md,
-        project_context_md=project_context_md,
-        philosophy_md=philosophy_md,
-        global_context_md=global_context_md,
-        task_state_md=task.to_markdown_prompt(include_memory=not bool(task.metadata.get("memory_context_consumed"))),
-    ).strip()
-
-
-def _render_acceptance_criteria_amendment_prompt(
-    task: TaskState,
-    *,
-    user_context_md: str = "",
-    project_context_md: str = "",
-) -> str:
-    env = Environment(
-        loader=FileSystemLoader(_TEMPLATE_DIR),
-        autoescape=select_autoescape(default_for_string=False),
-        trim_blocks=True,
-        lstrip_blocks=True,
-    )
-    template = env.get_template("acceptance_criteria_amendment_prompt.j2")
-    return template.render(
-        acceptance_contract=task.acceptance_contract,
-        recent_conversation_md=task.recent_conversation_md,
-        user_context_md=user_context_md,
-        project_context_md=project_context_md,
-    ).strip()
-
-
-def _project_context_md(task: TaskState, context: CoreLoopContext | None) -> str:
-    if context is None or context.project_store is None or not str(task.project_id or "").strip():
-        return ""
-    render = getattr(context.project_store, "render_project_context", None)
-    if not callable(render):
-        return ""
-    return str(render(task.project_id, requester_user_id=task.user) or "").strip()
-
-
-def _user_context_md(task: TaskState, context: CoreLoopContext | None) -> str:
-    if context is None or not callable(context.user_context_provider):
-        return ""
-    try:
-        return str(context.user_context_provider(task.user) or "").strip()
-    except (OSError, KeyError):
-        return ""
-
-
-def _agent_prompt_md(context: CoreLoopContext | None, name: str) -> str:
-    if context is None or context.prompts is None:
-        return ""
-    load = getattr(context.prompts, "load", None)
-    if not callable(load):
-        return ""
-    return str(load(name).content or "").strip()
-
-
-def _call_acceptance_criteria_llm(prompt: str) -> str | None:
-    """Stub for the future acceptance criteria LLM call."""
-    _ = prompt
-    return None
-
-
-def _call_acceptance_criteria_inference(
-    prompt: str,
-    task: TaskState,
-    context: CoreLoopContext | None = None,
-) -> str | None:
-    if context is not None and context.inference is not None:
-        result = context.inference.generate_markdown(
-            InferenceRequest(
-                prompt=prompt,
-                purpose=InferencePurpose.ACCEPTANCE_CRITERIA,
-                project_id=task.project_id,
-                user=task.user,
-                task_id=task.task_id,
-                cancel_checker=context.is_cancelled if context.cancellation_checker is not None else None,
-            )
-        )
-        if result.model_profile is not None:
-            task.metadata["acceptance_criteria_model_profile"] = result.model_profile.profile_id
-        return str(result.content or "").strip() or None
-    return _call_acceptance_criteria_llm(prompt)
-
-
-def _call_acceptance_criteria_amendment_inference(
-    prompt: str,
-    task: TaskState,
-    context: CoreLoopContext | None = None,
-) -> dict[str, Any] | None:
-    if context is None or context.inference is None:
-        return None
-    result = context.inference.generate_json(
-        InferenceRequest(
-            prompt=prompt,
-            purpose=InferencePurpose.ACCEPTANCE_CRITERIA,
-            project_id=task.project_id,
-            user=task.user,
-            task_id=task.task_id,
-            cancel_checker=context.is_cancelled if context.cancellation_checker is not None else None,
-        )
-    )
-    if result.model_profile is not None:
-        task.metadata["acceptance_criteria_model_profile"] = result.model_profile.profile_id
-    return dict(result.json_value) if isinstance(result.json_value, dict) else None
 
 
 def _observe_completed_do_cycle(task: TaskState) -> None:

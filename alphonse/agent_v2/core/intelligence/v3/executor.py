@@ -441,11 +441,24 @@ def _next_subgoal(state: TacticalState) -> PhaseSubgoal | None:
 
 
 def _steering_is_pending(task: "TaskState", context: "CoreLoopContext") -> bool:
-    pending = context.messages.peek(MessageSelector(user=task.user, project_id=task.project_id))
-    if pending is None:
+    list_pending = getattr(context.messages, "list_pending", None)
+    if not callable(list_pending):
         return False
-    metadata = pending.message.metadata if isinstance(pending.message.metadata, dict) else {}
-    return str(metadata.get("routing_disposition") or "") in {"steering", "correlated_response"}
+    ignored = set(task.metadata.get("v3_intake_ignored_message_ids") or [])
+    for pending in list_pending(limit=1000):
+        if pending.message_id in ignored:
+            continue
+        message = pending.message
+        metadata = message.metadata if isinstance(message.metadata, dict) else {}
+        disposition = str(metadata.get("routing_disposition") or "")
+        if disposition == "steering" and message.user == task.user and message.project_id == task.project_id:
+            return True
+        if disposition == "correlated_response" and task.correlation_id and message.correlation_id == task.correlation_id:
+            question_id = str(metadata.get("answered_question_id") or "")
+            question = context.question_store.get_question(question_id) if context.question_store is not None and question_id else None
+            if question is not None and question.status == "answered" and question.task_id == task.task_id and question.respondent_user_id == message.user:
+                return True
+    return False
 
 
 def _tactical_prompt(

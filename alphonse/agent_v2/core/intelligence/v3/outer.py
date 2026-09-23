@@ -8,7 +8,6 @@ from enum import Enum
 from typing import TYPE_CHECKING, Any
 
 from alphonse.agent_v2.core.core import ImprovementPhase
-from alphonse.agent_v2.core.inference import InferencePurpose, InferenceRequest
 from alphonse.agent_v2.core.intelligence.acceptance_contract import apply_status_patch
 from alphonse.agent_v2.core.intelligence.v3.contracts import PhaseOutcome, PhaseStatus, SideEffectClass, TacticalState
 from alphonse.agent_v2.system_one import SystemOneUnavailableError
@@ -68,19 +67,41 @@ class V3OuterController:
             message=review.reason,
             progress={"phase_id": review.phase_id, "phase_review_status": review.status.value},
         )
-        system_one_review = task.metadata.get("system_one_review")
-        system_one_review = system_one_review if isinstance(system_one_review, dict) else {}
-        decision = decide_next_action(
-            review,
-            recommended_route=str(system_one_review.get("recommended_route") or ""),
-            recommendation_confident=bool(system_one_review.get("route_confident")),
-        )
+        act_directive = task.metadata.get("act_directive")
+        act_directive = act_directive if isinstance(act_directive, dict) else {}
+        if act_directive.get("closure_only") and task.has_prepared_user_response():
+            desired = str(act_directive.get("terminal_outcome") or "failed")
+            decision = StrategicDecision(
+                StrategicAction.FAIL if desired == "failed" else StrategicAction.COMPLETE,
+                "Act's bounded final explanation was delivered; closing with the previously selected outcome.",
+            )
+            task.status = "failed" if desired == "failed" else "completed"
+            task.outcome = {"status": desired, "reason": str(act_directive.get("reason") or decision.reason)}
+            task.metadata["v3_route"] = "end"
+            task.metadata["v3_strategic_decision"] = {"action": decision.action.value, "reason": decision.reason}
+            return review, decision
+        decision, recommendation = _recommend_act(task, state, outcome, review, context)
+        task.metadata["system_one_act_recommendation"] = recommendation.to_metadata()
         decision = _apply_no_progress_guard(
             task,
             review,
             decision,
             acceptance_changed=acceptance_before != _acceptance_progress_signature(task),
         )
+        if (
+            decision.action == StrategicAction.FAIL
+            and review.status == PhaseReviewStatus.PHASE_VERIFIED_TASK_INCOMPLETE
+            and recommendation.action != "fail_explain"
+            and recommendation.answers.get("closure_explanation_is_warranted", 0.0) >= float(getattr(recommendation, "yes_threshold", 0.8))
+        ):
+            task.metadata["act_directive"] = {
+                "action": "fail_explain", "closure_only": True, "response_required": True,
+                "terminal_outcome": "failed", "reason": decision.reason,
+            }
+            task.metadata["v3_route"] = "strategic_replan"
+            task.metadata["v3_phase_review"] = _review_dict(review)
+            task.metadata["v3_strategic_decision"] = {"action": "fail", "reason": decision.reason}
+            return review, decision
         context.emit_activity(
             phase=ImprovementPhase.ACT,
             label="strategy selected",
@@ -91,12 +112,9 @@ class V3OuterController:
         task.metadata["v3_strategic_decision"] = {"action": decision.action.value, "reason": decision.reason}
         if decision.action == StrategicAction.COMPLETE:
             if not task.has_prepared_user_response():
-                message = generate_verified_response(task, state, review, context)
-                task.metadata["prepared_user_response"] = {
-                    "source": "v3_final_response",
-                    "phase_id": state.phase.phase_id,
-                    "message": message,
-                }
+                task.metadata["act_directive"] = {"action": "complete", "response_required": True}
+                task.metadata["v3_route"] = "plan_next_phase"
+                return review, StrategicDecision(StrategicAction.CONTINUE, "Plan must prepare the final user-facing response before task completion.")
             task.status = "completed"
             task.outcome = {
                 "status": "success",
@@ -105,12 +123,26 @@ class V3OuterController:
             }
             task.metadata["v3_route"] = "respond_and_end"
         elif decision.action == StrategicAction.CONTINUE:
-            task.metadata["v3_route"] = "plan_next_phase"
+            if str(task.metadata.get("system_one_act_recommendation", {}).get("action") or "") == "fail_explain":
+                task.metadata["act_directive"] = {
+                    "action": "fail_explain", "closure_only": True, "response_required": True,
+                    "terminal_outcome": "failed", "reason": recommendation.rationale,
+                }
+                task.metadata["v3_route"] = "strategic_replan"
+            else:
+                task.metadata["v3_route"] = "plan_next_phase"
         elif decision.action == StrategicAction.REPLAN:
+            task.metadata["act_directive"] = {"action": "replan", "rationale": decision.reason}
             task.metadata["v3_route"] = "strategic_replan"
         elif decision.action == StrategicAction.ASK_USER:
-            task.status = "waiting_user"
-            task.metadata["v3_route"] = "ask_user"
+            task.metadata["act_directive"] = {"action": "ask_user", "rationale": decision.reason}
+            task.metadata["v3_route"] = "strategic_replan"
+        elif recommendation.action == "fail_explain":
+            task.metadata["act_directive"] = {
+                "action": "fail_explain", "closure_only": True, "response_required": True,
+                "terminal_outcome": "failed", "reason": recommendation.rationale,
+            }
+            task.metadata["v3_route"] = "strategic_replan"
         else:
             task.status = "failed"
             task.outcome = {"status": "failure", "reason": decision.reason, "phase_id": state.phase.phase_id}
@@ -188,6 +220,66 @@ def decide_next_action(
     return StrategicDecision(StrategicAction.FAIL, review.reason)
 
 
+def _recommend_act(task, state, outcome, review: PhaseReview, context):
+    if context.system_one is None or not callable(getattr(context.system_one, "recommend_act", None)):
+        raise SystemOneUnavailableError("act_recommendation_unavailable")
+    # Cancellation and authorization violations are deterministic hard stops,
+    # not candidates for probabilistic override.
+    if review.status == PhaseReviewStatus.CANCELLED:
+        from alphonse.agent_v2.system_one import SystemOneActRecommendation
+        return StrategicDecision(StrategicAction.FAIL, review.reason), SystemOneActRecommendation(
+            "fail", 1.0, True, review.reason,
+        )
+    check_verdict = (
+        "success" if review.status == PhaseReviewStatus.PHASE_VERIFIED_TASK_COMPLETE else
+        "wip" if review.status == PhaseReviewStatus.PHASE_VERIFIED_TASK_INCOMPLETE else "failure"
+    )
+    input_state = {
+        "goal": task.goal,
+        "task_id": task.task_id,
+        "check_verdict": check_verdict,
+        "check_reason": review.reason,
+        "acceptance_contract": task.ensure_acceptance_contract(),
+        "strategic_plan": state.phase.to_dict(),
+        "phase_outcome": outcome.to_dict(),
+        "complete_tool_execution_log": state.to_dict(),
+        "task_context": {
+            "recent_conversation": task.recent_conversation_md,
+            "facts": task.facts_md,
+            "user_constraints": task.metadata.get("user_constraints", {}),
+            "failure_reason": task.metadata.get("failure_reason", ""),
+            "plan_call_exception_count": task.count_plan_call_exceptions(),
+            "consecutive_no_progress_phases": task.metadata.get("v3_consecutive_no_progress_phases", 0),
+        },
+    }
+    try:
+        recommendation = context.system_one.recommend_act(state=input_state)
+    except Exception as exc:
+        raise SystemOneUnavailableError(f"act_recommendation:{type(exc).__name__}") from exc
+    action = str(recommendation.action)
+    answers = recommendation.answers
+    yes_threshold = float(getattr(recommendation, "yes_threshold", 0.8))
+    if action == "complete" and review.status != PhaseReviewStatus.PHASE_VERIFIED_TASK_COMPLETE:
+        action = "continue" if answers.get("continuation_is_worthwhile", 0.0) >= yes_threshold else "replan"
+    elif action == "continue" and answers.get("continuation_is_worthwhile", 0.0) < yes_threshold:
+        action = "fail_explain" if answers.get("closure_explanation_is_warranted", 0.0) >= yes_threshold else "fail"
+    elif action == "ask_user" and answers.get("user_input_can_unblock", 0.0) < yes_threshold:
+        action = "replan" if answers.get("continuation_is_worthwhile", 0.0) >= yes_threshold else "fail_explain"
+    elif action == "fail_explain" and answers.get("closure_explanation_is_warranted", 0.0) < yes_threshold:
+        action = "fail"
+    elif not recommendation.confident and action not in {"fail", "fail_explain"}:
+        action = "replan"
+    rationale = recommendation.rationale
+    mapping = {
+        "complete": StrategicAction.COMPLETE, "continue": StrategicAction.CONTINUE,
+        "replan": StrategicAction.REPLAN, "ask_user": StrategicAction.ASK_USER,
+        "fail_explain": StrategicAction.FAIL, "fail": StrategicAction.FAIL,
+    }
+    if action not in mapping:
+        raise SystemOneUnavailableError("act_recommendation_action_invalid")
+    return StrategicDecision(mapping[action], rationale), recommendation
+
+
 def _apply_no_progress_guard(
     task: "TaskState",
     review: PhaseReview,
@@ -218,44 +310,6 @@ def _acceptance_progress_signature(task: "TaskState") -> tuple[tuple[str, str, t
         for item in task.ensure_acceptance_contract().get("criteria") or []
         if isinstance(item, dict) and item.get("superseded") is not True
     )
-
-
-def generate_verified_response(
-    task: "TaskState",
-    state: TacticalState,
-    review: PhaseReview,
-    context: "CoreLoopContext",
-) -> str:
-    if context.inference is None:
-        raise RuntimeError("v3_final_response_inference_unavailable")
-    evidence = [
-        item for item in state.evidence.entries
-        if str(item.get("evidence_ref") or "") in set(review.evidence_refs)
-    ][-6:]
-    prompt = (
-        "Write one concise, warm user-facing completion response using only the verified facts below. "
-        "Do not claim unobserved effects, tests, or unrelated changes. Do not call tools.\n\n"
-        f"User goal: {task.goal}\n"
-        f"Verified phase objective: {state.phase.objective}\n"
-        f"Review reason: {review.reason}\n"
-        f"Verified evidence: {json.dumps(evidence, ensure_ascii=False, default=str)}"
-    )
-    result = context.inference.generate_markdown(
-        InferenceRequest(
-            prompt=prompt,
-            purpose=InferencePurpose.FINAL_RESPONSE,
-            project_id=task.project_id,
-            user=task.user,
-            task_id=task.task_id,
-            tools=(),
-            metadata={"phase_id": state.phase.phase_id},
-            cancel_checker=context.is_cancelled if context.cancellation_checker is not None else None,
-        )
-    )
-    message = str(result.content or "").strip()
-    if not message:
-        raise ValueError("v3_final_response_empty")
-    return message
 
 
 def _review_acceptance_statuses(
@@ -297,8 +351,6 @@ def _review_acceptance_statuses(
             "task_id": task.task_id,
             "phase_id": state.phase.phase_id,
             "status": "used",
-            "recommended_route": system_one_result.recommended_route,
-            "route_confident": system_one_result.route_confident,
             "duration_ms": system_one_result.duration_ms,
             "model": system_one_result.model,
             "usage": dict(system_one_result.usage),
@@ -318,46 +370,8 @@ def _review_acceptance_statuses(
         "model": system_one_result.model,
         "usage": dict(system_one_result.usage),
     })
-    if context.inference is None:
-        return
-    unresolved_contract = dict(task.ensure_acceptance_contract())
-    unresolved_contract["criteria"] = [
-        dict(item) for item in unresolved_contract.get("criteria") or []
-        if isinstance(item, dict)
-        and item.get("superseded") is not True
-        and item.get("required", True)
-        and item.get("status") != "satisfied"
-    ]
-    if not unresolved_contract["criteria"]:
-        return
-    prompt = (
-        "Evaluate the immutable acceptance contract against the complete phase evidence. "
-        "Return status updates only; do not redefine criteria. Satisfied criteria require one of the supplied evidence refs.\n\n"
-        f"Unresolved contract criteria: {json.dumps(unresolved_contract, ensure_ascii=False)}\n"
-        f"Phase: {json.dumps(state.phase.to_dict(), ensure_ascii=False)}\n"
-        f"Evidence: {json.dumps(state.evidence.to_dict(), ensure_ascii=False)}\n"
-        f"Valid evidence refs: {json.dumps(evidence_refs)}"
-    )
-    result = context.inference.generate_json(
-        InferenceRequest(
-            prompt=prompt,
-            purpose=InferencePurpose.PHASE_REVIEW,
-            project_id=task.project_id,
-            user=task.user,
-            task_id=task.task_id,
-            tools=(),
-            metadata={"phase_id": state.phase.phase_id},
-            cancel_checker=context.is_cancelled if context.cancellation_checker is not None else None,
-        )
-    )
-    if not isinstance(result.json_value, dict):
-        return
-    contract, rejected = apply_status_patch(
-        task.ensure_acceptance_contract(), result.json_value, valid_evidence_refs=set(evidence_refs)
-    )
-    task.acceptance_contract = contract
-    task.sync_acceptance_criteria_view()
-    task.metadata["v3_phase_review_rejections"] = rejected
+    # Ambiguous evidence remains unresolved. Check does not call the inference
+    # model to break ties; Act receives that uncertainty in its Jev state.
 
 
 def _successful_evidence_refs(state: TacticalState) -> tuple[str, ...]:

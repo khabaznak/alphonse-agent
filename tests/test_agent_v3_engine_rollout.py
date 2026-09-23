@@ -21,8 +21,36 @@ from alphonse.agent_v2.intelligence_engine_settings import HIERARCHICAL_V3, TACT
 from alphonse.agent_v2.intelligence_engine_settings import IntelligenceEngineSettings
 from alphonse.agent_v2.intelligence_engine_settings import SQLiteIntelligenceEngineSettingsStore
 from alphonse.agent_v2.system_one import SystemOneReviewResult
+from alphonse.agent_v2.system_one import SystemOneActRecommendation
 from alphonse.agent_v2.system_one import SystemOneTacticalReview
 from alphonse.agent_v2.system_one import SystemOneToolRegistrySelection
+
+
+class _TestJev:
+    def select_plan_tools(self, *, goal, phase, tools):
+        _ = goal, phase
+        return SystemOneToolRegistrySelection(selected_tool_ids=tuple(item.tool_id for item in tools))
+
+    def evaluate(self, *, contract, phase, evidence):
+        _ = phase
+        entries = evidence.get("entries") or []
+        refs = [str(item.get("evidence_ref")) for item in entries if item.get("status") == "success"]
+        updates = tuple({"criterion_id": str(item.get("id")), "status": "satisfied", "evidence_refs": refs[-1:]}
+                        for item in contract.get("criteria") or [] if item.get("status") != "satisfied" and refs)
+        return SystemOneReviewResult(updates, (), model="test-jev")
+
+    def evaluate_tactical_progress(self, *, questions=None, **_values):
+        return SystemOneTacticalReview(True, 0.99, True, model="test-jev", answers={
+            str(item.get("question_id")): 0.99 for item in questions or []
+        })
+
+    def recommend_act(self, *, state):
+        action = "complete" if state.get("check_verdict") == "success" else "continue"
+        return SystemOneActRecommendation(action, 0.99, True, f"Jev recommends {action}.", answers={
+            "continuation_is_worthwhile": 0.99,
+            "user_input_can_unblock": 0.1,
+            "closure_explanation_is_warranted": 0.99,
+        })
 
 
 def test_engine_settings_default_to_v3_and_allow_v2_rollback(tmp_path: Path) -> None:
@@ -129,6 +157,7 @@ def test_hierarchical_processor_completes_one_phase_without_v2_tool_cycles() -> 
         json_by_purpose={
             InferencePurpose.PHASE_PLANNING: {
                 "schema_version": 3,
+                "acceptance_criteria": ["The project record was found"],
                 "phase_id": "locate-project",
                 "objective": "Locate the project record",
                 "criterion_ids": ["ac-1"],
@@ -180,7 +209,7 @@ def test_hierarchical_processor_completes_one_phase_without_v2_tool_cycles() -> 
     task = TaskState(goal="Find solar", user="alex", project_id="home", intelligence_engine=HIERARCHICAL_V3, intelligence_schema_version=3)
 
     result = HierarchicalCAPDProcessor().process(
-        task, CoreLoopContext(messages=InMemoryMessageQueue(), tools=registry, inference=inference)
+        task, CoreLoopContext(messages=InMemoryMessageQueue(), tools=registry, inference=inference, system_one=_TestJev())
     )
 
     assert result.status.value == "completed"
@@ -198,6 +227,7 @@ def test_hierarchical_processor_plans_one_stage_and_jev_selects_respond_for_gree
         json_by_purpose={
             InferencePurpose.PHASE_PLANNING: {
                 "schema_version": 3,
+                "acceptance_criteria": ["Alex receives a warm greeting"],
                 "phase_id": "reply-to-requester",
                 "objective": "Reply directly to Alex with a warm greeting",
                 "criterion_ids": ["ac-1"],
@@ -251,6 +281,20 @@ def test_hierarchical_processor_plans_one_stage_and_jev_selects_respond_for_gree
                 route_confidence=0.99,
                 route_confident=True,
                 model="jev-latest",
+            )
+
+        def recommend_act(self, *, state):
+            action = "complete" if state.get("check_verdict") == "success" else "continue"
+            return SystemOneActRecommendation(action, 0.99, True, "Verified greeting.", answers={
+                "continuation_is_worthwhile": 0.99, "user_input_can_unblock": 0.1,
+                "closure_explanation_is_warranted": 0.99,
+            })
+
+        def recommend_act(self, *, state):
+            from alphonse.agent_v2.system_one import SystemOneActRecommendation
+            return SystemOneActRecommendation(
+                "complete", 0.99, True, "Acceptance is verified.",
+                answers={"continuation_is_worthwhile": 0.1, "user_input_can_unblock": 0.1, "closure_explanation_is_warranted": 0.9},
             )
 
     registry = InMemoryToolRegistry()
@@ -308,6 +352,7 @@ def test_hierarchical_processor_fails_invalid_phase_once_with_controlled_error()
         json_by_purpose={
             InferencePurpose.PHASE_PLANNING: {
                 "schema_version": 3,
+                "acceptance_criteria": ["The record is updated"],
                 "phase_id": "invalid",
                 "objective": "Update record",
                 "criterion_ids": ["ac-1"],
@@ -331,7 +376,7 @@ def test_hierarchical_processor_fails_invalid_phase_once_with_controlled_error()
     )
 
     result = HierarchicalCAPDProcessor().process(
-        task, CoreLoopContext(messages=InMemoryMessageQueue(), inference=inference)
+        task, CoreLoopContext(messages=InMemoryMessageQueue(), inference=inference, system_one=_TestJev())
     )
 
     assert result.status.value == "failed"
@@ -344,6 +389,7 @@ def test_v3_phase_planner_receives_latest_user_tool_hint() -> None:
         json_by_purpose={
             InferencePurpose.PHASE_PLANNING: {
                 "schema_version": 3,
+                "acceptance_criteria": ["The device temperature is reported"],
                 "phase_id": "read-device-temperature",
                 "objective": "Use the requested device-status tool to read the studio temperature",
                 "criterion_ids": ["ac-1"],
@@ -388,7 +434,7 @@ def test_v3_phase_planner_receives_latest_user_tool_hint() -> None:
 
     state = HierarchicalCAPDProcessor._new_state(
         task,
-        CoreLoopContext(messages=InMemoryMessageQueue(), tools=registry, inference=inference),
+        CoreLoopContext(messages=InMemoryMessageQueue(), tools=registry, inference=inference, system_one=_TestJev()),
     )
 
     request = next(item for item in provider.requests if item.purpose == InferencePurpose.PHASE_PLANNING)
@@ -403,6 +449,7 @@ def test_v3_phase_planner_receives_project_context_and_durable_memory(tmp_path: 
         json_by_purpose={
             InferencePurpose.PHASE_PLANNING: {
                 "schema_version": 3,
+                "acceptance_criteria": ["The journal is updated"],
                 "phase_id": "read-known-journal",
                 "objective": "Read the known journal before updating it",
                 "criterion_ids": ["ac-1"],
@@ -451,7 +498,7 @@ def test_v3_phase_planner_receives_project_context_and_durable_memory(tmp_path: 
 
     state = HierarchicalCAPDProcessor._new_state(
         task,
-        CoreLoopContext(messages=InMemoryMessageQueue(), project_store=projects, inference=inference),
+        CoreLoopContext(messages=InMemoryMessageQueue(), project_store=projects, inference=inference, system_one=_TestJev()),
     )
 
     request = next(item for item in provider.requests if item.purpose == InferencePurpose.PHASE_PLANNING)
@@ -476,6 +523,7 @@ def test_v3_known_journal_path_flows_from_memory_to_read_and_verified_edit(tmp_p
 
     read_phase = {
         "schema_version": 3,
+        "acceptance_criteria": ["The workout entry is recorded"],
         "phase_id": "read-known-journal",
         "objective": "Read the journal path established by project memory",
         "criterion_ids": ["ac-1"],
@@ -497,6 +545,7 @@ def test_v3_known_journal_path_flows_from_memory_to_read_and_verified_edit(tmp_p
     }
     edit_phase = {
         "schema_version": 3,
+        "acceptance_criteria": [],
         "phase_id": "update-known-journal",
         "objective": "Append the verified workout entry using an exact edit",
         "criterion_ids": ["ac-1"],
@@ -571,6 +620,13 @@ def test_v3_known_journal_path_flows_from_memory_to_read_and_verified_edit(tmp_p
                 route_confidence=0.99,
                 route_confident=True,
             )
+
+        def recommend_act(self, *, state):
+            action = "complete" if state.get("check_verdict") == "success" else "continue"
+            return SystemOneActRecommendation(action, 0.99, True, f"Jev recommends {action}.", answers={
+                "continuation_is_worthwhile": 0.99, "user_input_can_unblock": 0.1,
+                "closure_explanation_is_warranted": 0.99,
+            })
 
     provider = SequencedProvider()
     inference = InferenceRouter(provider=provider, default_profile=ModelProfile("test", "test", "default"))

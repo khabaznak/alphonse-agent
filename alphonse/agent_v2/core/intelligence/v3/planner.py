@@ -7,6 +7,8 @@ from dataclasses import replace
 from typing import TYPE_CHECKING
 
 from alphonse.agent_v2.core.inference import InferencePurpose, InferenceRequest
+from alphonse.agent_v2.core.messages.queue import MessageSelector
+from alphonse.agent_v2.core.intelligence.acceptance_contract import normalize_contract
 from alphonse.agent_v2.core.intelligence.v3.contracts import FailurePolicy, PhasePlan, SideEffectClass
 from alphonse.agent_v2.core.intelligence.v3.contracts import SUPPORTED_COMPLETION_KINDS, V3_SCHEMA_VERSION
 from alphonse.agent_v2.core.intelligence.v3.revealing import tool_capabilities
@@ -23,6 +25,7 @@ class V3PhasePlanValidationError(ValueError):
 
 
 def plan_phase(task: "TaskState", context: "CoreLoopContext") -> PhasePlan:
+    _ingest_relevant_messages(task, context)
     if context.inference is None:
         raise RuntimeError("v3_phase_planning_inference_unavailable")
     tools = tuple(context.tools.list()) if context.tools is not None else ()
@@ -35,9 +38,12 @@ def plan_phase(task: "TaskState", context: "CoreLoopContext") -> PhasePlan:
     project_context = _project_context(task, context)
     durable_memory = _bounded_context_text(task.conversation_history_md, 9000)
     prepared_response = task.metadata.get("prepared_user_response")
+    act_directive = task.metadata.get("act_directive")
+    act_directive = act_directive if isinstance(act_directive, dict) else {}
     contract_schema = _phase_plan_json_schema(catalog)
     prompt = (
-        "Plan one bounded strategic execution phase. Return one JSON object matching the PhasePlan contract. "
+        "Plan one bounded strategic execution phase and define the mission acceptance criteria in the same response. "
+        "Return one JSON object matching the PhasePlan contract. "
         "Use meaningful subgoals, not one outer CAPD cycle per tool. "
         "When replying to the requester is itself part or all of the goal, include a user_response subgoal; "
         "a purely conversational request can be a single-stage response phase. "
@@ -59,7 +65,13 @@ def plan_phase(task: "TaskState", context: "CoreLoopContext") -> PhasePlan:
         f"Recent conversation (newest steering and answers are authoritative):\n{_bounded_text(task.recent_conversation_md, 6000)}\n"
         f"Known task facts:\n{_bounded_text(task.facts_md, 4000)}\n"
         f"Prepared user response already exists: {'yes' if isinstance(prepared_response, dict) else 'no'}\n"
-        f"Immutable acceptance contract: {json.dumps(task.ensure_acceptance_contract(), ensure_ascii=False)}\n"
+        f"Act directive (authoritative resilience instruction): {json.dumps(act_directive, ensure_ascii=False)}\n"
+        "If Act requires a final response/closure, plan exactly one bounded user_response subgoal that uses the user-response capability, "
+        "and do no further mission work in that phase. If Act requests user input, plan an ask-question subgoal. "
+        f"Existing acceptance contract (preserve its definitions unless new user steering requires a justified revision): {json.dumps(task.ensure_acceptance_contract(), ensure_ascii=False)}\n"
+        "If no acceptance contract exists yet, create a concise complete set of measurable acceptance_criteria; "
+        "use stable IDs ac-1, ac-2, ... and make criterion_ids refer to the criteria needed in this phase. "
+        "If a contract already exists, return acceptance_criteria as an empty array and preserve it. "
         f"Prior V3 phase history: {json.dumps(task.metadata.get('v3_phase_history') or [], ensure_ascii=False)}\n"
         f"Available capability catalog: {json.dumps(capability_catalog, ensure_ascii=False)}\n"
         "Return an object conforming exactly to this JSON Schema. Do not omit required nested fields "
@@ -83,7 +95,88 @@ def plan_phase(task: "TaskState", context: "CoreLoopContext") -> PhasePlan:
         phase = PhasePlan.from_dict(result.json_value)
     except (TypeError, ValueError) as exc:
         raise V3PhasePlanValidationError(f"v3_phase_plan_invalid:{exc}") from exc
+    if act_directive.get("response_required"):
+        response_subgoals = [
+            subgoal for subgoal in phase.subgoals
+            if SideEffectClass.USER_RESPONSE in subgoal.allowed_side_effects
+        ]
+        if len(response_subgoals) != 1 or len(phase.subgoals) != 1:
+            raise V3PhasePlanValidationError("v3_act_response_directive_not_isolated")
+    if not task.acceptance_contract:
+        if not phase.acceptance_criteria:
+            raise V3PhasePlanValidationError("v3_phase_plan_acceptance_criteria_missing")
+        markdown = "\n".join(f"- [ ] {item}" for item in phase.acceptance_criteria)
+        task.acceptance_contract = normalize_contract({}, fallback_markdown=markdown, source_message_id=str(task.message_id or ""))
+        if not task.acceptance_contract:
+            raise V3PhasePlanValidationError("v3_phase_plan_acceptance_criteria_invalid")
+        task.sync_acceptance_criteria_view()
+        task.append_update("Plan established the mission acceptance contract alongside the strategic phase.")
     return _curate_phase_tools(task, phase, tools, context)
+
+
+def _ingest_relevant_messages(task: "TaskState", context: "CoreLoopContext") -> None:
+    """Jev classifies eligible queued context before strategic planning."""
+    list_pending = getattr(context.messages, "list_pending", None)
+    if not callable(list_pending):
+        raise SystemOneUnavailableError("message_intake_unavailable")
+    ignored = task.metadata.setdefault("v3_intake_ignored_message_ids", [])
+    if not isinstance(ignored, list):
+        ignored = []
+        task.metadata["v3_intake_ignored_message_ids"] = ignored
+    candidates = []
+    for queued in list_pending(limit=1000):
+        message = queued.message
+        metadata = message.metadata if isinstance(message.metadata, dict) else {}
+        if queued.message_id in ignored or metadata.get("source") in {"scheduled_task", "event_automation"}:
+            continue
+        disposition = str(metadata.get("routing_disposition") or "")
+        eligible = (
+            disposition == "steering" and message.user == task.user and message.project_id == task.project_id
+        )
+        question_id = str(metadata.get("answered_question_id") or "")
+        if disposition == "correlated_response" and task.correlation_id and message.correlation_id == task.correlation_id and question_id:
+            question = context.question_store.get_question(question_id) if context.question_store is not None else None
+            eligible = bool(
+                question is not None and question.status == "answered"
+                and question.task_id == task.task_id
+                and question.respondent_user_id == message.user
+            )
+        if eligible:
+            candidates.append({
+                "message_id": queued.message_id,
+                "sender": message.user,
+                "text": message.prompt,
+                "question_id": question_id or None,
+            })
+    if not candidates:
+        return
+    triage = getattr(context.system_one, "triage_plan_messages", None) if context.system_one is not None else None
+    if not callable(triage):
+        raise SystemOneUnavailableError("message_intake_jev_unavailable")
+    plan = task.hierarchical_state.get("phase") if isinstance(task.hierarchical_state, dict) else None
+    task_view = {
+        "task_id": task.task_id,
+        "goal": task.goal,
+        "acceptance_contract": task.ensure_acceptance_contract(),
+        "strategic_plan": plan,
+    }
+    try:
+        selected_ids = set(triage(task=task_view, candidates=candidates))
+    except Exception as exc:
+        raise SystemOneUnavailableError(f"message_intake_jev:{type(exc).__name__}") from exc
+    eligible_ids = {item["message_id"] for item in candidates}
+    ignored.extend(sorted(eligible_ids - selected_ids))
+    for message_id in (item["message_id"] for item in candidates if item["message_id"] in selected_ids):
+        queued = context.consume_message(MessageSelector(message_id=message_id))
+        if queued is None:
+            continue
+        task.append_conversation_message(queued.message.user, queued.message.prompt)
+        if queued.message.user == task.user:
+            task.merge_attachments(queued.message.metadata)
+    context.emit_telemetry({
+        "event": "v3_plan_message_intake", "task_id": task.task_id,
+        "candidate_count": len(candidates), "selected_count": len(selected_ids & eligible_ids),
+    })
 
 
 def _curate_phase_tools(task, phase: PhasePlan, tools, context) -> PhasePlan:
@@ -196,7 +289,7 @@ def _phase_plan_json_schema(capabilities: list[str]) -> dict[str, object]:
         "additionalProperties": False,
         "required": [
             "schema_version", "phase_id", "objective", "subgoals", "criterion_ids", "limits",
-            "authorized_capabilities", "mutation_scope", "originating_decision",
+            "authorized_capabilities", "mutation_scope", "originating_decision", "acceptance_criteria",
         ],
         "properties": {
             "schema_version": {"const": V3_SCHEMA_VERSION},
@@ -204,6 +297,7 @@ def _phase_plan_json_schema(capabilities: list[str]) -> dict[str, object]:
             "objective": {"type": "string", "minLength": 1},
             "subgoals": {"type": "array", "minItems": 1, "items": subgoal},
             "criterion_ids": {"type": "array", "items": {"type": "string"}},
+            "acceptance_criteria": {"type": "array", "items": {"type": "string", "minLength": 1}},
             "limits": limits,
             "authorized_capabilities": {"type": "array", "items": capability},
             "mutation_scope": {
