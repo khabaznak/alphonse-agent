@@ -2,7 +2,7 @@
 
 Status: proposed  
 Owner: Alphonse project  
-Last updated: 2026-09-20
+Last updated: 2026-09-23
 
 ## Purpose
 
@@ -25,6 +25,11 @@ updating it, and reading it back should be one phase, not three or more CAPD cyc
 
 ```text
 Message and bounded memory
+          |
+          v
+One-time admission for a new human task
+  Direct text is sufficient -> reply and end
+  Task or ambiguity -> acknowledge immediately and continue
           |
           v
 Outer CAPD

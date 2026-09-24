@@ -307,6 +307,26 @@ def test_desktop_poll_is_cursor_based_and_acknowledges_only_its_delivery() -> No
     assert repeat["deliveries"] == []
 
 
+def test_desktop_acknowledgement_delivery_does_not_close_running_task_progress() -> None:
+    runtime = build_runtime_host(inference=_router(), schedule_store=ScheduledTaskStore(":memory:"))
+    daemon = V2Daemon(runtime)
+    outbound = runtime.outbox.enqueue(
+        address=ChannelAddress("desktop", "tui", "alex", alphonse_user_id="alex"),
+        message="Got it — I’m taking a closer look now.",
+        kind="task_acknowledgement",
+        audience_user_id="alex",
+        task_id="task-1",
+    )
+    poll = daemon.poll_desktop(client_id="desktop-a", user="alex")
+    assert poll["deliveries"][0]["outbox_message_id"] == outbound.outbox_message_id
+
+    assert daemon.acknowledge_desktop_delivery(
+        client_id="desktop-a", outbox_message_id=outbound.outbox_message_id,
+    ) is True
+
+    assert "task-1" not in daemon._desktop_progress_closures.get(("desktop-a", "alex"), set())
+
+
 def test_desktop_poll_replays_journals_when_daemon_instance_changes() -> None:
     runtime = build_runtime_host(inference=_router(), schedule_store=ScheduledTaskStore(":memory:"))
     daemon = V2Daemon(runtime, daemon_id="daemon-current")

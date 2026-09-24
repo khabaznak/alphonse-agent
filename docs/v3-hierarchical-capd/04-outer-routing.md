@@ -11,10 +11,16 @@ from strategic failure, and terminate immediately after verified task completion
 This stage removes the current pattern of returning to global Plan after every tool
 call or after already-proven success.
 
-Every request enters CAPD. Plan may create a single-stage `user_response` phase when
-replying is the complete strategic plan. Jev receives the full registered native and
-artifact tool catalog, identifies the relevant tools, and System Two composes the
-concrete call. There is no pre-CAPD conversational classifier or special intent route.
+A new human task first passes through a one-time admission judgment. Jev decides
+whether one immediate conversational text reply fully satisfies the message. A
+confident text-only decision produces that reply and ends without Plan. A task,
+ambiguous decision, or unavailable admission judgment emits an idempotent receipt and
+continues into Plan. Steering, correlated answers, resumed tasks, and automations skip
+admission and keep their existing routes.
+
+Once admitted, Plan may still create a `user_response` phase when replying is part of
+the task strategy. Jev receives the full registered native and artifact tool catalog,
+identifies the relevant tools, and System Two composes the concrete call.
 
 ## Check responsibilities
 
@@ -89,6 +95,8 @@ paths, not repeatedly interpreted as an ordinary model-owned criterion.
 - [x] Define Act's strategic-decision schema and invocation conditions.
 - [x] Add direct terminal routing after verified task completion.
 - [x] Add a dedicated response-generation boundary with no tools.
+- [x] Add one-time Jev admission for new human tasks, with fail-open routing to Plan.
+- [x] Deliver an immediate, idempotent acknowledgement while task planning continues.
 - [x] Allow Plan to represent a conversational response as a one-stage phase using
       the registered `native.respond` capability.
 - [x] Project successful V3 `native.respond` results into the ordinary outbox.
@@ -111,8 +119,11 @@ paths, not repeatedly interpreted as an ordinary model-owned criterion.
 - [x] Steering during execution triggers explicit contract amendment review.
 - [x] Final response cannot precede the final mutation/verification action.
 - [x] No extra Plan inference occurs after verified task completion.
-- [x] A conversational request enters CAPD, receives a one-stage plan, and lets Jev
-      select `native.respond` from the complete native-and-artifact registry.
+- [x] A text-only conversational message responds without entering Plan.
+- [x] A task or ambiguous admission is acknowledged once and continues into Plan.
+- [x] Steering, correlated answers, resumes, and automations bypass admission.
+- [x] A conversational response that remains in CAPD can receive a one-stage plan and
+      let Jev select `native.respond` from the complete native-and-artifact registry.
 - [x] Invalid phase contracts fail once with a visible controlled V3 error rather than
       consuming the queue retry budget.
 - [x] Three completed phases without acceptance-criteria progress fail visibly instead
@@ -165,6 +176,10 @@ paths, not repeatedly interpreted as an ordinary model-owned criterion.
   follow CAPD: Plan defines a response phase, Jev evaluates every native and artifact
   tool, System Two composes the call, and Do executes `native.respond`. Removed canned
   user-facing response fallbacks.
+- 2026-09-23 — Added one-time task admission for new human messages. Jev distinguishes
+  direct text responses from task-bearing or ambiguous requests; direct responses end
+  without Plan, while tasks receive an exactly-once acknowledgement through the
+  durable outbox before normal planning continues.
 - 2026-09-20 — Added `user_response` as an explicit phase side-effect class and exposed
   the exact side-effect vocabulary to Plan after a live greeting used the invented
   value `send_message_to_user`. Acceptance contracts now describe observable outcomes

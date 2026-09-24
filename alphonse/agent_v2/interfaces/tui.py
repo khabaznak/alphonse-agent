@@ -308,6 +308,7 @@ def refresh_tui_identity_resolver(runtime: TuiRuntime) -> None:
     runtime.core.delivery_sink = build_outbox_delivery_sink(
         outbox=runtime.outbox,
         identity_resolver=runtime.identity_resolver,
+        conversation_store=runtime.conversation_store,
     )
 
 

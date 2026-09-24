@@ -194,6 +194,31 @@ def test_jev_triages_each_plan_message_with_choice_and_relevance_fuse() -> None:
     assert payloads[0]["questions"]["relevant_0"]["type"] == "noul"
 
 
+def test_jev_admission_classifies_work_beyond_one_direct_text_reply() -> None:
+    payloads = []
+
+    def transport(url, api_key, payload, timeout):
+        _ = url, api_key, timeout
+        payloads.append(payload)
+        return {
+            "answers": {"requires_task": {"type": "noul", "noul": 0.93}},
+            "model": "jev-latest",
+        }
+
+    provider = JevCriterionDecisionProvider(
+        SystemOneSettings(enabled=True, api_key="secret", validated_at="now"), transport=transport,
+    )
+
+    decision = provider.classify_task_admission(message="Inspect the project and repair the failing test")
+
+    assert decision.requires_task is True
+    assert decision.confident is True
+    assert payloads[0]["questions"]["requires_task"]["type"] == "noul"
+    criteria = payloads[0]["questions"]["requires_task"]["criteria"]
+    assert "planning" in criteria["true"]
+    assert "One immediate conversational text reply" in criteria["false"]
+
+
 def test_jev_native_registry_template_covers_every_out_of_box_tool() -> None:
     assert set(_load_jev_native_tool_registry()) == {
         "native.respond",

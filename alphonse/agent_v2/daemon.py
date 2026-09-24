@@ -981,7 +981,7 @@ class V2Daemon:
         if delivery is None or delivery.integration_id != "desktop" or delivery.lease_owner != expected_owner:
             return False
         acknowledged = self.runtime.outbox.mark_delivered(outbox_message_id)
-        if acknowledged and delivery.task_id:
+        if acknowledged and delivery.task_id and delivery.kind != "task_acknowledgement":
             key = (str(client_id or "desktop").strip() or "desktop", str(delivery.audience_user_id or "").strip())
             self._desktop_progress_closures.setdefault(key, set()).add(str(delivery.task_id))
         return acknowledged

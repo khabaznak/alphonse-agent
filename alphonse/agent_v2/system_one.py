@@ -283,6 +283,28 @@ class SystemOneActRecommendation:
 
 
 @dataclass(frozen=True)
+class SystemOneAdmissionDecision:
+    """One-time judgment for routing a new human message into V3."""
+
+    requires_task: bool
+    confidence: float
+    confident: bool
+    model: str = ""
+    usage: dict[str, Any] = field(default_factory=dict)
+    duration_ms: int = 0
+
+    def to_metadata(self) -> dict[str, Any]:
+        return {
+            "requires_task": self.requires_task,
+            "confidence": self.confidence,
+            "confident": self.confident,
+            "model": self.model,
+            "usage": dict(self.usage),
+            "duration_ms": self.duration_ms,
+        }
+
+
+@dataclass(frozen=True)
 class _StaticJevToolRegistry:
     signature: tuple[str, ...]
     questions: dict[str, Any]
@@ -297,6 +319,43 @@ class JevCriterionDecisionProvider:
             model=self.settings.model, transport=transport,
         )
         self._tool_registry: _StaticJevToolRegistry | None = None
+
+    def classify_task_admission(self, *, message: str) -> SystemOneAdmissionDecision:
+        """Decide whether a new human message needs work beyond one direct reply."""
+        state = {"user_message": str(message or "")[:4000]}
+        questions = {
+            "requires_task": {
+                "type": "noul",
+                "instructions": (
+                    "Does satisfying this user message require work beyond one immediate conversational text reply?"
+                ),
+                "criteria": {
+                    "true": (
+                        "Satisfying it requires planning, extended analysis, retrieval, tools, verification, "
+                        "a mutation, scheduling, communication, an external action, or continued work."
+                    ),
+                    "false": (
+                        "One immediate conversational text reply fully satisfies it without planning, retrieval, "
+                        "tools, verification, mutation, scheduling, communication, or continued work."
+                    ),
+                },
+            }
+        }
+        started = monotonic()
+        response = self.client.evaluate(state=state, questions=questions)
+        duration_ms = max(0, round((monotonic() - started) * 1000))
+        answer = response["answers"].get("requires_task")
+        if not isinstance(answer, dict) or answer.get("type") != "noul" or not isinstance(answer.get("noul"), (int, float)):
+            raise ValueError("system_one_admission_answer_invalid")
+        probability = max(0.0, min(1.0, float(answer["noul"])))
+        return SystemOneAdmissionDecision(
+            requires_task=probability >= self.settings.yes_threshold,
+            confidence=probability,
+            confident=probability >= self.settings.yes_threshold or probability <= self.settings.no_threshold,
+            model=str(response.get("model") or self.settings.model),
+            usage=dict(response.get("usage") or {}),
+            duration_ms=duration_ms,
+        )
 
     def evaluate(self, *, contract: dict[str, Any], phase: dict[str, Any], evidence: dict[str, Any]) -> SystemOneReviewResult:
         criteria = [

@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable
-from uuid import uuid4
+from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from alphonse.agent_v2.core.core import StateSnapshot
 from alphonse.agent_v2.core.io.channels import ChannelAddress
@@ -122,6 +122,7 @@ class SQLiteOutboundStore:
         project_id: str = "",
         reply_to_provider_message_id: str = "",
         metadata: dict[str, Any] | None = None,
+        idempotency_key: str = "",
         connection: sqlite3.Connection | None = None,
     ) -> OutboundMessage:
         text = str(message or "").strip()
@@ -130,8 +131,9 @@ class SQLiteOutboundStore:
         now = _now_iso()
         payload = dict(metadata or {})
         resolved_project_id = str(project_id or payload.get("project_id") or "").strip()
+        dedupe_key = str(idempotency_key or "").strip()
         record = OutboundMessage(
-            outbox_message_id=str(uuid4()),
+            outbox_message_id=str(uuid5(NAMESPACE_URL, f"alphonse-outbox:{dedupe_key}")) if dedupe_key else str(uuid4()),
             integration_id=str(address.integration_id or "").strip(),
             provider_key=str(address.provider_key or "").strip().lower(),
             channel_target=str(address.channel_target or "").strip(),
@@ -156,16 +158,30 @@ class SQLiteOutboundStore:
             raise ValueError("outbound_channel_target_required")
         if connection is not None:
             self._insert(connection, record)
+            if dedupe_key:
+                existing = connection.execute(
+                    "SELECT * FROM v2_outbox WHERE outbox_message_id = ?",
+                    (record.outbox_message_id,),
+                ).fetchone()
+                if existing is not None:
+                    return _message_from_row(existing)
         else:
             with self._connect() as conn:
                 self._insert(conn, record)
+                if dedupe_key:
+                    existing = conn.execute(
+                        "SELECT * FROM v2_outbox WHERE outbox_message_id = ?",
+                        (record.outbox_message_id,),
+                    ).fetchone()
+                    if existing is not None:
+                        return _message_from_row(existing)
         return record
 
     @staticmethod
     def _insert(conn: sqlite3.Connection, record: OutboundMessage) -> None:
         conn.execute(
             """
-            INSERT INTO v2_outbox (
+            INSERT OR IGNORE INTO v2_outbox (
               outbox_message_id, integration_id, provider_key, channel_target, message,
               kind, audience_user_id, correlation_id, status, provider_message_id,
               reply_to_provider_message_id, task_id, question_id, project_id, metadata_json,
@@ -471,12 +487,51 @@ def build_outbox_delivery_sink(
     outbox: SQLiteOutboundStore,
     identity_resolver: V2IdentityResolver | None = None,
     communication_router: Any | None = None,
+    conversation_store: Any | None = None,
 ) -> Callable[[dict[str, Any]], dict[str, Any]]:
-    """Build a delivery sink for tools that already emit delivery events."""
+    """Build a delivery sink for task lifecycle and tool delivery events."""
     resolver = identity_resolver or V2IdentityResolver()
 
     def _sink(event: dict[str, Any]) -> dict[str, Any]:
         event_type = str(event.get("event_type") or "").strip()
+        if event_type == "task.acknowledge":
+            task = event.get("task") if isinstance(event.get("task"), dict) else {}
+            task_metadata = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
+            origin = channel_address_from_metadata(task_metadata)
+            if origin is None:
+                return {"status": "origin_unavailable"}
+            message = str(event.get("message") or "").strip()
+            if not message:
+                return {"status": "message_unavailable"}
+            outbound = outbox.enqueue(
+                address=origin,
+                message=message,
+                kind="task_acknowledgement",
+                audience_user_id=str(task.get("user") or origin.alphonse_user_id or "").strip(),
+                correlation_id=str(task.get("correlation_id") or "").strip(),
+                task_id=str(task.get("task_id") or "").strip(),
+                project_id=str(task.get("project_id") or "").strip(),
+                metadata={"source": "v3_admission", "project_id": str(task.get("project_id") or "").strip()},
+                idempotency_key=str(event.get("idempotency_key") or "").strip(),
+            )
+            if conversation_store is not None:
+                conversation_store.record(
+                    owner_user_id=str(task.get("user") or origin.alphonse_user_id or "").strip(),
+                    project_id=str(task.get("project_id") or "").strip(),
+                    memory_session_id=str(task.get("memory_session_id") or "").strip(),
+                    role="assistant",
+                    content=outbound.message,
+                    source=outbound.integration_id,
+                    source_message_id=f"outbound:{outbound.outbox_message_id}",
+                    created_at=outbound.created_at,
+                )
+            return {
+                "status": "queued",
+                "outbox_message_id": outbound.outbox_message_id,
+                "integration_id": outbound.integration_id,
+                "provider_key": outbound.provider_key,
+                "channel_target": outbound.channel_target,
+            }
         if event_type == "communication.deliver":
             if communication_router is None:
                 return {"status": "delivery_unavailable"}

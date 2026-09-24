@@ -231,7 +231,12 @@ def build_runtime_host(
     presence_projector.register("tui", TuiPresenceAdapter())
     identity_resolver = identity_resolver or build_identity_resolver(integration_store, user_store=user_store)
     communication_router = CommunicationRouter(users=user_store, resolver=identity_resolver, outbox=outbox, threads=communication_thread_store)
-    delivery_sink = build_outbox_delivery_sink(outbox=outbox, identity_resolver=identity_resolver, communication_router=communication_router)
+    delivery_sink = build_outbox_delivery_sink(
+        outbox=outbox,
+        identity_resolver=identity_resolver,
+        communication_router=communication_router,
+        conversation_store=conversation_store,
+    )
     inbound_router = ProjectInboundRouter(
         channel=channel,
         outbox=outbox,
@@ -403,6 +408,7 @@ def refresh_runtime_identity_resolver(runtime: V2RuntimeHost) -> None:
         outbox=runtime.outbox,
         identity_resolver=runtime.identity_resolver,
         communication_router=runtime.communication_router,
+        conversation_store=runtime.conversation_store,
     )
 
 
