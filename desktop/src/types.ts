@@ -9,6 +9,7 @@ export type ActivityEvent = {
   user: string;
   integration_id: string;
   channel_target: string;
+  occurred_at?: string;
 };
 
 export type Delivery = {

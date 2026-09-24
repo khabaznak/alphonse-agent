@@ -19,6 +19,8 @@ import { formatMessageTime } from "./messageTime";
 import { reuseProjectAttention, reuseQuestions, withoutTaskProgressSurfaces, type ProjectAttention } from "./pollState";
 import { QueueWorkloadChart } from "./QueueWorkloadChart";
 import { appendQueueSample, type QueueSample } from "./queueHistory";
+import { PdcaActivityChart } from "./PdcaActivityChart";
+import { appendPdcaActivity, type PdcaSample } from "./pdcaHistory";
 import type { ActivityEvent, AgentDocument, ChatMessage, CodeModeSettings, InferenceSettings, MediaToolsSettings, MemorySession, MemorySettings, Project, Question, SystemOneSettings, WebToolsSettings } from "./types";
 
 type Modal = "projects" | "project-settings" | "project-context" | "scheduled-tasks" | "settings" | "users" | "onboarding" | null;
@@ -108,6 +110,7 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
   const [newSessionName, setNewSessionName] = useState("");
   const [sessionMutationPending, setSessionMutationPending] = useState(false);
   const [queueHistory, setQueueHistory] = useState<QueueSample[]>([]);
+  const [pdcaHistory, setPdcaHistory] = useState<PdcaSample[]>([]);
   const [projectAttention, setProjectAttention] = useState<ProjectAttention>({});
   const [timezone, setTimezone] = useState("UTC");
   const [progressTaskIds, setProgressTaskIds] = useState<string[]>([]);
@@ -207,10 +210,17 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
         });
       }
       setProjectAttention((current) => reuseProjectAttention(current, response.project_attention || {}));
+      const polledAt = Date.now();
       setQueueHistory((current) => appendQueueSample(current, {
         ready: response.status.queue?.ready || 0,
         processing: response.status.queue?.processing || 0,
-      }, Date.now()));
+      }, polledAt));
+      setPdcaHistory((current) => appendPdcaActivity(
+        daemonChanged ? [] : current,
+        response.events,
+        response.status.activity.state || "idle",
+        polledAt,
+      ));
       const newProgressTaskIds = responseIsForActiveProject ? taskProgressIds(response.ui_events || []) : [];
       if (newProgressTaskIds.length) {
         newProgressTaskIds.forEach((taskId) => {
@@ -825,6 +835,7 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
         <button title="Users" onClick={() => setModal("users")}><span className="nav-icon" aria-hidden="true"><UsersRound /></span><span className="nav-label">Users</span></button>
         <button title="Settings" onClick={() => { setSettingsTab("general"); setModal("settings"); }}><span className="nav-icon" aria-hidden="true"><Settings /></span><span className="nav-label">Settings</span></button>
         <QueueWorkloadChart samples={queueHistory} />
+        <PdcaActivityChart samples={pdcaHistory} now={queueHistory.at(-1)?.at || Date.now()} />
       </aside>
 
       <section className="conversation">

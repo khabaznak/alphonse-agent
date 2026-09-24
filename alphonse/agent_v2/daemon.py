@@ -1699,6 +1699,7 @@ class V2Daemon:
                     "integration_id": event.integration_id,
                     "channel_target": event.channel_target,
                     "progress": dict(event.progress),
+                    "occurred_at": event.occurred_at,
                 }
             )
         if len(self._activity_event_journal) > 2000:

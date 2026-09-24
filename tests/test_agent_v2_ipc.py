@@ -292,6 +292,7 @@ def test_desktop_poll_is_cursor_based_and_acknowledges_only_its_delivery() -> No
     assert poll["daemon_id"] == daemon.daemon_id
     assert poll["daemon_changed"] is False
     assert poll["events"][0]["sequence"] == 1
+    assert poll["events"][0]["occurred_at"]
     assert poll["deliveries"][0]["integration_id"] == "desktop"
     delivery_id = poll["deliveries"][0]["outbox_message_id"]
     assert daemon.ipc._dispatch(
