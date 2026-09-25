@@ -136,6 +136,21 @@ def test_exact_mutation_requires_scope_and_subgoal_authorization() -> None:
     assert [item.tool_id for item in visible.tools] == ["native.exact_text_edit"]
 
 
+def test_trusted_artifact_does_not_require_native_side_effect_classification() -> None:
+    subgoal = PhaseSubgoal(
+        "temperature", "Read temperature", "temperature",
+        allowed_capabilities=(Capability.DEVICE_CONTROL.value,),
+        allowed_side_effects=(),
+    )
+    tool = _descriptor("artifact.lg", Capability.DEVICE_CONTROL, read_only=False)
+
+    result = ToolRevealPolicy().reveal(
+        TaskState(project_id="home"), _state(subgoal), subgoal, (tool,),
+    )
+
+    assert [item.tool_id for item in result.tools] == ["artifact.lg"]
+
+
 def test_integration_tool_requires_installed_integration_id() -> None:
     subgoal = PhaseSubgoal(
         "temperature", "Read temperature", "temperature",
@@ -201,14 +216,14 @@ def test_capability_catalog_is_compact_and_subgoal_scoped() -> None:
     assert all(item["description"] for item in catalog)
 
 
-def test_v3_never_reveals_unbounded_bash() -> None:
+def test_v3_reveals_bash_for_local_shell_work() -> None:
     subgoal = PhaseSubgoal(
         "inspect", "Inspect project", "record",
-        allowed_capabilities=(Capability.PROJECT_FILE_INSPECTION.value,),
+        allowed_capabilities=(Capability.LOCAL_SHELL.value,),
     )
-    bash = _descriptor("native.bash", Capability.PROJECT_FILE_INSPECTION)
+    bash = _descriptor("native.bash", Capability.LOCAL_SHELL, read_only=False)
 
     result = ToolRevealPolicy().reveal(TaskState(project_id="home"), _state(subgoal), subgoal, (bash,))
 
-    assert result.tools == ()
-    assert result.decisions[0].reason == "unbounded_shell_disabled_in_v3"
+    assert [item.tool_id for item in result.tools] == ["native.bash"]
+    assert result.decisions[0].reason == "relevant_and_authorized"

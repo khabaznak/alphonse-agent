@@ -9,13 +9,28 @@ Expose only the capabilities and concrete tool schemas relevant to the current
 subgoal and evidence. Reduce prompt cost and tool confusion without making necessary
 capabilities undiscoverable.
 
-## Two-level discovery model
+## Request-level curation and phase-level reveal
+
+Before strategic System Two planning, Jev receives the runtime tool registry after
+the runtime exposure policy has selected tools available to this task, plus the
+Plan instructions, current request, and session conversation history. Jev returns
+only relevant tool IDs; ambiguous candidates remain available. Jev does not devise
+the method or authorize tools. Strategic Plan then receives the complete
+LLM-oriented descriptors for those candidates, so it can form a feasible plan
+without paying to show System Two the entire registry.
+
+After the phase is planned, Jev still curates the request-level candidate set for
+that phase. Deterministic authorization and subgoal prerequisites are applied
+before concrete tools are revealed to tactical System Two. This preserves focused
+per-phase tactical contexts while preventing the strategic plan from being blind
+to a relevant registered artifact.
 
 ### Capability catalog
 
 The tactical executor first sees compact capability summaries, for example:
 
 ```text
+local_shell
 project_record_search
 project_artifact_query
 memory_recall
@@ -30,20 +45,13 @@ device_control
 
 ### Concrete tool reveal
 
-At startup use, Alphonse constructs a static Jev-oriented registry: one stable Noul
-question per registered tool describing its capability, expected inputs, and effects.
-Every planned phase sends the same complete question set in parallel with a different
-plan state. Out-of-the-box native tools use a versioned, reviewed registry template
-whose fixed Noul questions state precisely when each tool is and is not needed.
-Registered artifacts are appended dynamically using their stored name and description.
-Tool count is not artificially capped at this semantic-classification boundary and
-schemas, tags, argument lists, and generated effect profiles are not sent to Jev.
-
-Jev's positive results form a phase-wide semantic palette. Deterministic policy then
-applies authorization and current-subgoal prerequisites. Only the remaining concrete
-descriptors and schemas enter System Two, which composes the actual invocation and
-arguments. Provider failure falls back to deterministic revealing; Jev can never
-authorize an otherwise forbidden tool.
+Jev's native-tool questions come from the reviewed registry template; artifact
+questions are grounded in each artifact's registered name and description. Jev sees
+this compact decision-oriented registry, not LLM schemas or argument lists. Its
+request-level positive and ambiguous results form the candidate set supplied to Plan.
+The per-phase Jev result then narrows that set, and deterministic policy applies
+authorization and current-subgoal prerequisites before schemas reach tactical
+System Two. Jev can never grant execution permission.
 
 ## Deterministic prerequisites
 
@@ -57,7 +65,11 @@ Tool reveal must enforce prerequisites before model choice:
 - Integration tools require that the integration is installed, available, authorized,
   and relevant to the subgoal.
 - Read-only tools may be exposed more broadly than tools with external side effects.
-- Unbounded shell execution is never revealed in V3.
+- Bash is revealed when the phase authorizes `local_shell`; it is a trusted general
+  execution capability for direct CLI, filesystem, process, build, test, diagnostic,
+  and artifact work. Plans involving a CLI-backed artifact should authorize
+  `local_shell` alongside `project_artifact_query`, allowing Jev to favor both when
+  direct CLI invocation, inspection, repair, or verification may be needed.
 - Project file discovery excludes `.alphonse`, source-control metadata, dependencies,
   and generated build directories.
 
@@ -102,7 +114,10 @@ that phase unless new evidence and the phase contract make them relevant.
 - [x] Define stable capability identifiers and semantic input/output types.
 - [x] Add V3 capability metadata support with mappings for current native tools and
       exact-ID compatibility for project artifacts.
-- [x] Replace the all-tools V3 exposure path with a capability catalog.
+- [x] Curate request-relevant tools with Jev before strategic planning.
+- [x] Pass Plan instructions, current request, and session history to request-level curation.
+- [x] Give strategic Plan complete descriptors only for Jev-curated candidates.
+- [x] Keep per-phase Jev curation and deterministic authorization before tactical reveal.
 - [x] Implement deterministic prerequisite filtering.
 - [x] Implement concrete-tool reveal for the current subgoal.
 - [x] Persist revealed capability and tool IDs in tactical state.
@@ -112,8 +127,8 @@ that phase unless new evidence and the phase contract make them relevant.
 - [x] Log why each tool was revealed or excluded without exposing chain-of-thought.
 - [x] Emit structured reveal decisions through the existing UI/debug event stream.
 - [x] Fail visibly and return to outer review when policy reveals no usable tool.
-- [x] Keep the full Jev registry static and reuse the same parallel Noul questions for
-      every phase.
+- [x] Reuse reviewed native-tool Noul questions and artifact-description-grounded
+      questions across request- and phase-level curation.
 - [x] Add bounded authorized `native.project_search` and
       `native.read_project_file` primitives.
 - [x] Select a phase-wide relevant tool palette with System One while preserving
@@ -156,9 +171,9 @@ that phase unless new evidence and the phase contract make them relevant.
 
 ## Decisions made
 
-- Jev performs semantic relevance classification over the full static registry.
-  Capability authorization and prerequisite enforcement remain deterministic, and
-  System Two chooses and parameterizes concrete calls from the resulting palette.
+- Jev performs cheap relevance filtering before strategic planning, then phase-level
+  relevance filtering. Runtime exposure and deterministic phase authorization stay
+  outside Jev; System Two remains responsible for strategy and concrete call selection.
 - Artifact tools use explicit descriptor metadata when available and exact artifact-ID
   authorization as the compatibility path. Rich artifact manifests can extend this
   without changing the reveal contract.

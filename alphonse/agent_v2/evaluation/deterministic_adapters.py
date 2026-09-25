@@ -79,19 +79,24 @@ class _DeterministicProvider:
                     "phase_id": "final-response", "objective": "Respond to the requester",
                     "authorized_capabilities": ["user_response"],
                     "mutation_scope": {"allowed_paths": [], "allow_external_effects": True},
-                    "limits": {"max_tool_calls": 1, "max_duration_seconds": 10},
                     "subgoals": [{
                         "subgoal_id": "respond", "objective": "Provide the final response",
                         "required_output_type": "user_response", "depends_on": [],
                         "allowed_capabilities": ["user_response"], "allowed_side_effects": ["user_response"],
-                        "limits": {"max_tool_calls": 1, "max_duration_seconds": 10},
                         "completion": {"kind": "output_present", "output_type": "user_response"},
                         "failure_policy": "stop",
                     }],
                 })
             value = phase
         elif request.purpose == InferencePurpose.TACTICAL_ACTION:
-            value = self._next_v3_action()
+            if '"phase_id": "final-response"' in request.prompt:
+                value = {
+                    "tool_id": "native.respond",
+                    "arguments": {"message": self.state.scenario.final_response},
+                    "acceptance_questions": [_tactical_acceptance_question("response-delivered")],
+                }
+            else:
+                value = self._next_v3_action()
         elif request.purpose == InferencePurpose.PHASE_REVIEW:
             value = _satisfied_patch(request.prompt)
         elif request.purpose == InferencePurpose.CRITERIA_REVIEW:
@@ -141,6 +146,7 @@ class _DeterministicProvider:
             "action_id": f"v3-{self.state.v3_index}-{action.role}",
             "tool_id": action.tool_id,
             "arguments": dict(action.arguments),
+            "acceptance_questions": [_tactical_acceptance_question(f"{action.role}-complete")],
         }
 
     @staticmethod
@@ -305,7 +311,6 @@ def _phase_plan(scenario: _Scenario) -> PhasePlan:
             "depends_on": list(prior[-1:]),
             "allowed_capabilities": [action.capability],
             "allowed_side_effects": allowed_effects,
-            "limits": {"max_tool_calls": 2 if action.failure_policy == "local_fallback" else 1, "max_duration_seconds": 30},
             "completion": completion,
             "failure_policy": action.failure_policy,
         })
@@ -316,12 +321,11 @@ def _phase_plan(scenario: _Scenario) -> PhasePlan:
         first, second = scenario.actions[:2]
         subgoals = [{
             "subgoal_id": "locate",
-            "objective": "Locate using bounded fallback",
+            "objective": "Locate using an authorized fallback",
             "required_output_type": "result_1",
             "depends_on": [],
             "allowed_capabilities": [first.capability, second.capability],
             "allowed_side_effects": ["read_only"],
-            "limits": {"max_tool_calls": 2, "max_duration_seconds": 30},
             "completion": {"kind": "output_present", "output_type": "result_1"},
             "failure_policy": "local_fallback",
         }]
@@ -331,7 +335,6 @@ def _phase_plan(scenario: _Scenario) -> PhasePlan:
         "objective": scenario.acceptance,
         "subgoals": subgoals,
         "criterion_ids": ["ac-1"],
-        "limits": {"max_tool_calls": max(2, len(scenario.actions) + 1), "max_duration_seconds": 60},
         "authorized_capabilities": list(dict.fromkeys(action.capability for action in scenario.actions)),
         "mutation_scope": {
             "allowed_paths": list(scenario.mutation_paths),
@@ -396,7 +399,6 @@ def _restore_checkpoint(task: TaskState, scenario: _Scenario, engine: str) -> No
         tactical.status = PhaseStatus.RUNNING
         tactical.active_subgoal_id = scenario.actions[1].role
         tactical.completed_subgoal_ids = [first.role]
-        tactical.remaining_tool_calls = max(1, int(tactical.remaining_tool_calls or 1) - 1)
         tactical.actions.append(TacticalAction("checkpoint-locate", first.role, first.tool_id, dict(first.arguments), "success", first.result))
         tactical.evidence.append({
             "evidence_ref": "tactical-action:checkpoint-locate", "phase_id": "fixture-phase",
@@ -520,6 +522,18 @@ def _respond_action(message: str) -> _Action:
         "native.respond", "user_response", {"message": message}, role="respond",
         behavior="respond", result={"message": message},
     )
+
+
+def _tactical_acceptance_question(question_id: str) -> dict[str, Any]:
+    return {
+        "question_id": question_id,
+        "type": "noul",
+        "instructions": "Did this action satisfy the current tactical stage?",
+        "criteria": {
+            "true": "The action result satisfies the stage.",
+            "false": "The action failed or did not satisfy the stage.",
+        },
+    }
 
 
 def _scenario(case_id: str) -> _Scenario:

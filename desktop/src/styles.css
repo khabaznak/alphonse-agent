@@ -376,6 +376,12 @@ button { border: 0; cursor: pointer; }
 .task-progress-checklist li p { margin: 0; }
 .task-progress-detail { padding: 8px 10px; border-radius: 5px; background: #f0eddb; color: #415b49; }
 .task-progress-trace { gap: 7px !important; }
+.task-progress-step,
+.task-progress-context { overflow: hidden; border: 1px solid #e8dcac; border-radius: 6px; background: rgba(255, 255, 255, .52); }
+.task-progress-step summary,
+.task-progress-context summary { padding: 8px 10px; color: #415b49; cursor: pointer; font-size: 12px; font-weight: 600; }
+.task-progress-step .task-progress-detail,
+.task-progress-context .task-progress-detail { margin: 0 7px 7px; }
 .task-question-bubble { flex: 0 0 auto; width: min(620px, 77%); max-width: 77%; padding: 0; overflow: hidden; }
 .task-question-bubble .question-card { margin: 0; border-radius: 7px; }
 @keyframes task-progress-pulse { 50% { opacity: .35; transform: scale(.85); } }

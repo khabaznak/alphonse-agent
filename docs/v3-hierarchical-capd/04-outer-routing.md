@@ -14,7 +14,8 @@ call or after already-proven success.
 A new human task first passes through a one-time admission judgment. Jev decides
 whether one immediate conversational text reply fully satisfies the message. A
 confident text-only decision produces that reply and ends without Plan. A task,
-ambiguous decision, or unavailable admission judgment emits an idempotent receipt and
+ambiguous decision, or unavailable admission judgment generates a short acknowledgement
+with a no-tools completion, delivers it only to the message's originating channel, and
 continues into Plan. Steering, correlated answers, resumed tasks, and automations skip
 admission and keep their existing routes.
 
@@ -96,7 +97,8 @@ paths, not repeatedly interpreted as an ordinary model-owned criterion.
 - [x] Add direct terminal routing after verified task completion.
 - [x] Add a dedicated response-generation boundary with no tools.
 - [x] Add one-time Jev admission for new human tasks, with fail-open routing to Plan.
-- [x] Deliver an immediate, idempotent acknowledgement while task planning continues.
+- [x] Deliver an immediate, idempotent acknowledgement only to the originating channel
+      while task planning continues.
 - [x] Allow Plan to represent a conversational response as a one-stage phase using
       the registered `native.respond` capability.
 - [x] Project successful V3 `native.respond` results into the ordinary outbox.
@@ -126,11 +128,12 @@ paths, not repeatedly interpreted as an ordinary model-owned criterion.
       let Jev select `native.respond` from the complete native-and-artifact registry.
 - [x] Invalid phase contracts fail once with a visible controlled V3 error rather than
       consuming the queue retry budget.
-- [x] Three completed phases without acceptance-criteria progress fail visibly instead
-      of consuming the full outer-phase budget.
+- [x] Repeated incomplete phases continue through Jev's strategic decision without a
+      hardcoded no-progress threshold.
 - [x] Phase history stores phase-local evidence and reconstructs a deduplicated
       cumulative view without exponential growth.
-- [x] Exhausting the outer-phase budget persists a terminal failed checkpoint.
+- [x] The processor continues until a real terminal state: completion, explicit
+      failure, waiting for the user, cancellation, or steering.
 
 ## Non-goals
 
@@ -178,8 +181,8 @@ paths, not repeatedly interpreted as an ordinary model-owned criterion.
   user-facing response fallbacks.
 - 2026-09-23 — Added one-time task admission for new human messages. Jev distinguishes
   direct text responses from task-bearing or ambiguous requests; direct responses end
-  without Plan, while tasks receive an exactly-once acknowledgement through the
-  durable outbox before normal planning continues.
+  without Plan, while tasks receive an LLM-authored, exactly-once acknowledgement on
+  the originating channel before normal planning continues.
 - 2026-09-20 — Added `user_response` as an explicit phase side-effect class and exposed
   the exact side-effect vocabulary to Plan after a live greeting used the invented
   value `send_message_to_user`. Acceptance contracts now describe observable outcomes
@@ -192,8 +195,7 @@ paths, not repeatedly interpreted as an ordinary model-owned criterion.
 - 2026-09-21 — Diagnosed the live studio-temperature failure. Plan inferred that the
   temperature was unavailable before Jev could evaluate the complete tool registry,
   then eight response-only phases repeated while one conjunctive acceptance criterion
-  remained pending. Tightened Plan and acceptance-contract instructions, added a
-  three-phase no-progress terminal guard, made phase history store only local evidence
-  with deduplicated reconstruction (preventing 1/2/4/8 evidence amplification),
-  persisted phase-budget failures as terminal checkpoints, and corrected their
-  user-facing error classification.
+  remained pending. Tightened Plan and acceptance-contract instructions and made phase
+  history store only local evidence with deduplicated reconstruction (preventing
+  1/2/4/8 evidence amplification). A temporary no-progress guard and phase-budget
+  termination were subsequently removed in favor of administrator-owned settings.

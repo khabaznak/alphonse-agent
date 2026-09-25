@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
 
 import pytest
 
@@ -9,7 +8,6 @@ from alphonse.agent_v2.core.intelligence.task_state import TaskState
 from alphonse.agent_v2.core.intelligence.v3 import CompletionCondition
 from alphonse.agent_v2.core.intelligence.v3 import MutationScope
 from alphonse.agent_v2.core.intelligence.v3 import PhaseEvidence
-from alphonse.agent_v2.core.intelligence.v3 import PhaseLimits
 from alphonse.agent_v2.core.intelligence.v3 import PhaseOutcome
 from alphonse.agent_v2.core.intelligence.v3 import PhasePlan
 from alphonse.agent_v2.core.intelligence.v3 import PhaseStatus
@@ -28,7 +26,6 @@ def _solar_phase() -> PhasePlan:
         criterion_ids=("ac-1", "ac-2"),
         authorized_capabilities=("project_search", "exact_text_mutation", "project_read"),
         mutation_scope=MutationScope(allowed_paths=("mejoras_hogar/backlog.md",)),
-        limits=PhaseLimits(max_tool_calls=5, max_duration_seconds=30),
         subgoals=(
             PhaseSubgoal(
                 subgoal_id="locate",
@@ -109,8 +106,6 @@ def test_tactical_state_round_trip_preserves_full_evidence_and_binds_state() -> 
         revealed_tool_ids=["native.exact_text_edit"],
         actions=[TacticalAction("search", "locate", "native.search", {"query": "solar"}, status="success")],
         evidence=evidence,
-        remaining_tool_calls=4,
-        deadline_at="2026-09-20T12:00:00+00:00",
     )
 
     restored = TacticalState.from_dict(json.loads(json.dumps(state.to_dict())))
@@ -120,14 +115,12 @@ def test_tactical_state_round_trip_preserves_full_evidence_and_binds_state() -> 
     assert restored.evidence.entries[0]["evidence_ref"] == "action:search"
 
 
-def test_tactical_state_enforces_transitions_and_tool_budget() -> None:
+def test_tactical_state_enforces_transitions() -> None:
     state = TacticalState(_solar_phase(), active_subgoal_id="locate")
     state.transition(PhaseStatus.RUNNING)
-    state.consume_tool_call()
     state.transition(PhaseStatus.SUBGOAL_COMPLETE)
     state.transition(PhaseStatus.RUNNING)
 
-    assert state.remaining_tool_calls == 4
     with pytest.raises(ValueError, match="transition_invalid"):
         state.transition(PhaseStatus.PHASE_COMPLETE)
 
@@ -141,20 +134,34 @@ def test_tactical_state_binds_only_declared_output_type() -> None:
         state.bind_subgoal_output("locate", "ocr_text", "wrong")
 
 
-def test_new_tactical_state_sets_absolute_deadline_and_imports_prior_evidence() -> None:
+def test_new_tactical_state_imports_prior_evidence_without_budget_fields() -> None:
     state = new_tactical_state(
         _solar_phase(),
         cumulative_evidence=[{"evidence_ref": "tool-call:prior"}],
-        now=datetime(2026, 9, 20, 12, 0, tzinfo=timezone.utc),
     )
 
-    assert state.deadline_at == "2026-09-20T12:00:30+00:00"
+    assert "deadline_at" not in state.to_dict()
+    assert "remaining_tool_calls" not in state.to_dict()
     assert state.evidence.entries == [{"source": "prior_task_evidence", "evidence_ref": "tool-call:prior"}]
 
 
-def test_tactical_state_rejects_naive_or_invalid_deadline() -> None:
-    with pytest.raises(ValueError, match="tactical_deadline_invalid"):
-        TacticalState(_solar_phase(), active_subgoal_id="locate", deadline_at="2026-09-20T12:00:00")
+def test_tactical_state_ignores_legacy_budget_fields() -> None:
+    payload = new_tactical_state(_solar_phase()).to_dict()
+    payload.update({"remaining_tool_calls": 0, "deadline_at": "2020-01-01T00:00:00"})
+
+    restored = TacticalState.from_dict(payload)
+
+    assert "remaining_tool_calls" not in restored.to_dict()
+    assert "deadline_at" not in restored.to_dict()
+
+
+def test_legacy_budget_exhausted_status_restores_as_blocked() -> None:
+    payload = new_tactical_state(_solar_phase()).to_dict()
+    payload["status"] = "budget_exhausted"
+
+    restored = TacticalState.from_dict(payload)
+
+    assert restored.status == PhaseStatus.BLOCKED
 
 
 def test_waiting_state_can_resume_but_completed_phase_is_immutable() -> None:

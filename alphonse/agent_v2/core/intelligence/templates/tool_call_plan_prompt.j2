@@ -28,7 +28,7 @@ For `native.scheduled_task`, provide explicit `schedule_kind` and either ISO `ru
 Current UTC time: {{ current_time_utc }}. User timezone: {{ user_timezone }}. For relative requests such as “in 3 minutes,” calculate a future ISO `run_at` from this current time and timezone.
 For shell-like prompts such as `ls -la`, use `native.bash` with `arguments.command` set to the exact shell command text.
 For `native.bash`, omit `arguments.cwd` unless the user explicitly requested a working directory.
-For normal short `native.bash` commands, omit `arguments.timeout_seconds` so the 10-second default applies. Set an explicit longer timeout only for builds, tests, or other commands expected to need it.
+For `native.bash`, omit `arguments.timeout_seconds` unless the command itself requires a definite deadline. Never invent a short timeout merely to bound the tool call.
 Do not use synchronous `native.bash` for persistent foreground services. If a background process is genuinely required, detach it and redirect stdin, stdout, and stderr so it cannot hold the tool call open.
 When Task State contains `pending_silent_bash_confirmation`, your next tool call must be `native.respond`. Use the original request and completed Bash action to give the requester a concise, contextual confirmation; do not use a generic canned confirmation.
 Prepare the phase for Do to execute. Do not execute tools while planning. Do not write prose. For direct mode return only valid JSON with this shape:

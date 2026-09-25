@@ -11,10 +11,10 @@
     },
     "native.bash": {
       "type": "noul",
-      "instructions": "Does this phase need a bounded local shell command?",
+      "instructions": "Does this phase need local Bash, including direct work with a relevant CLI-backed artifact?",
       "criteria": {
-        "true": "The phase requires local process, build, test, filesystem, or diagnostic work that no safer structured tool directly provides.",
-        "false": "The phase is conversational, external-service work, or can use a safer purpose-built tool instead of shell execution."
+        "true": "The phase requires local process, build, test, filesystem, diagnostic, or artifact work; or a relevant artifact is CLI-backed and may need direct CLI invocation, inspection, repair, or verification. Favor Bash alongside that artifact when either path may be needed.",
+        "false": "The phase is purely conversational or external-service work, or a working non-CLI structured tool fully completes it without any artifact CLI, inspection, repair, or verification work."
       }
     },
     "native.exact_text_edit": {
@@ -79,6 +79,14 @@
       "criteria": {
         "true": "The user requested reusable artifact registration and the executable, description, and input schema already exist in the owned project.",
         "false": "The phase only needs to use an existing tool, still needs to create the executable, or no reusable artifact was requested."
+      }
+    },
+    "native.artifact_metadata_update": {
+      "type": "noul",
+      "instructions": "Does this phase need to improve or correct the name or routing description of an existing artifact?",
+      "criteria": {
+        "true": "The requester asks to edit an existing artifact's catalog name or description, and the artifact ID is known or can be found in the artifact catalog.",
+        "false": "The phase needs to register a new artifact, modify artifact program files, or merely use an existing artifact."
       }
     },
     "native.analyze_image": {

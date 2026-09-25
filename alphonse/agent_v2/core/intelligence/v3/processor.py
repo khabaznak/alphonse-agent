@@ -20,8 +20,7 @@ if TYPE_CHECKING:
 
 
 class HierarchicalCAPDProcessor:
-    def __init__(self, *, max_phases: int = 8) -> None:
-        self.max_phases = max(1, max_phases)
+    def __init__(self) -> None:
         self.executor = PhaseExecutor(reveal_policy=ToolRevealPolicy())
         self.outer = V3OuterController()
 
@@ -32,9 +31,7 @@ class HierarchicalCAPDProcessor:
         if self._admit_initial_human_task(task, context):
             self._persist(task, context)
             return self._result(task, context)
-        phases = 0
-        while phases < self.max_phases and task.status not in {"completed", "failed", "waiting_user", "cancelled"}:
-            phases += 1
+        while task.status not in {"completed", "failed", "waiting_user", "cancelled"}:
             try:
                 if task.hierarchical_state:
                     state = TacticalState.from_dict(task.hierarchical_state)
@@ -73,10 +70,6 @@ class HierarchicalCAPDProcessor:
                 continue
             _ = review, decision
             break
-        if phases >= self.max_phases and task.status == "running":
-            task.status = "failed"
-            task.outcome = {"status": "failure", "reason": "V3 phase budget exhausted without a terminal outcome."}
-            self._persist(task, context)
         return self._result(task, context)
 
     @classmethod
@@ -136,12 +129,14 @@ class HierarchicalCAPDProcessor:
             **decision_metadata,
             "acknowledgement": acknowledgement,
         }
-        context.emit_activity(
-            phase=ImprovementPhase.PLAN,
-            label="request acknowledged",
-            message=str(acknowledgement.get("message") or "Request received."),
-            progress={"engine": "hierarchical_v3", "route": "task", "admission": "completed"},
-        )
+        acknowledgement_message = str(acknowledgement.get("message") or "").strip()
+        if acknowledgement_message:
+            context.emit_activity(
+                phase=ImprovementPhase.PLAN,
+                label="request acknowledged",
+                message=acknowledgement_message,
+                progress={"engine": "hierarchical_v3", "route": "task", "admission": "completed"},
+            )
         context.emit_telemetry({
             "event": "v3_task_admission", "task_id": task.task_id,
             **task.metadata["v3_admission"],
@@ -186,7 +181,31 @@ class HierarchicalCAPDProcessor:
 
     @staticmethod
     def _deliver_early_acknowledgement(task: "TaskState", context: "CoreLoopContext") -> dict[str, object]:
-        message = _acknowledgement_text(task)
+        if context.inference is None:
+            return {"status": "generation_unavailable"}
+        try:
+            result = context.inference.generate_markdown(InferenceRequest(
+                prompt=(
+                    "Write one short, natural acknowledgement to the user before work begins. "
+                    "Use the user's language and reflect the specific request so the acknowledgement feels attentive. "
+                    "Do not answer the request, report results, claim completion, mention planning or internal systems, "
+                    "or promise a particular outcome. Return only the user-facing acknowledgement.\n\n"
+                    f"User message: {task.goal}"
+                ),
+                purpose=InferencePurpose.FINAL_RESPONSE,
+                project_id=task.project_id,
+                user=task.user,
+                task_id=task.task_id,
+                tools=(),
+                cancel_checker=context.is_cancelled if context.cancellation_checker is not None else None,
+            ))
+        except Exception as exc:
+            if context.is_cancelled():
+                raise
+            return {"status": "generation_failed", "error_type": type(exc).__name__}
+        message = str(result.content or "").strip()
+        if not message:
+            return {"status": "generation_empty"}
         if context.delivery_sink is None:
             return {"status": "delivery_unavailable", "message": message}
         try:
@@ -204,6 +223,15 @@ class HierarchicalCAPDProcessor:
 
     @staticmethod
     def _new_state(task: "TaskState", context: "CoreLoopContext") -> TacticalState:
+        context.emit_activity(
+            phase=ImprovementPhase.PLAN,
+            label="planning phase",
+            message="Planning the next V3 execution phase.",
+            progress={
+                "engine": "hierarchical_v3",
+                "route": str(task.metadata.get("v3_route") or "initial"),
+            },
+        )
         phase = plan_phase(task, context)
         prior = _deduplicated_history_evidence(task.metadata.get("v3_phase_history"))
         return new_tactical_state(phase, cumulative_evidence=prior)
@@ -281,15 +309,6 @@ def _is_initial_human_task(task: "TaskState") -> bool:
     task_id = str(task.task_id or "").strip()
     message_id = str(task.message_id or "").strip()
     return bool(task_id and message_id and task_id == message_id)
-
-
-def _acknowledgement_text(task: "TaskState") -> str:
-    metadata = task.metadata if isinstance(task.metadata, dict) else {}
-    channel = metadata.get("channel") if isinstance(metadata.get("channel"), dict) else {}
-    locale = str(metadata.get("locale") or metadata.get("language") or channel.get("locale") or "").lower()
-    if locale == "es" or locale.startswith("es-") or locale.startswith("es_"):
-        return "Entendido — voy a revisarlo con atención."
-    return "Got it — I’m taking a closer look now."
 
 
 def _deduplicated_history_evidence(raw_history: object) -> list[dict]:

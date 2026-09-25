@@ -6,10 +6,10 @@ Last updated: 2026-09-23
 
 ## Purpose
 
-V3 changes CAPD's unit of work from one tactical tool selection to one meaningful,
-bounded execution phase. An outer CAPD loop owns task outcomes and strategy. A
+V3 changes CAPD's unit of work from one tactical tool selection to one meaningful
+execution phase. An outer CAPD loop owns task outcomes and strategy. A
 smaller tactical executor inside Do selects and runs concrete tools until the phase
-is complete, blocked, interrupted, or out of budget.
+is complete, blocked, or interrupted.
 
 This is a replacement intelligence engine built on the V2 runtime, not a rewrite of
 queues, projects, memory sessions, integrations, tools, authorization, or IPC.
@@ -35,7 +35,7 @@ One-time admission for a new human task
 Outer CAPD
   Check task/steering
   Act defines or amends immutable outcomes
-  Plan selects a bounded phase, including a one-stage reply when appropriate
+  Plan selects a coherent phase, including a one-stage reply when appropriate
           |
           v
 Tactical Phase Executor inside Do
@@ -52,28 +52,29 @@ Outer Check
 ```
 
 The tactical executor is CAPD-like but is not a recursive copy of the outer graph. It
-cannot change acceptance criteria, expand authorized side effects, declare mission
-success, or exceed its phase limits.
+cannot change acceptance criteria, expand authorized side effects, or declare mission
+success.
 
 ## Global principles
 
 - Acceptance criteria remain immutable except for explicit user steering.
 - The outer loop owns strategy; the inner loop owns mechanics.
-- A phase has an objective, subgoals, completion conditions, budgets, and mutation
+- A phase has an objective, subgoals, completion conditions, and mutation
   scope.
 - Tool outputs flow between subgoals through typed, persisted bindings.
 - Tool availability is progressively revealed from capability metadata.
 - Writes are sequential, authorized, and evidenced by verified read-back.
 - Read-only work may be parallel only when the tool descriptor explicitly allows it.
 - Steering and cancellation are checked between tactical actions.
-- Local recovery is bounded; material strategy changes return to outer Act.
+- Local recovery remains within the phase objective; material strategy changes return
+  to outer Act.
 - Overall completion requires phase-level evidence and a final outer Check.
 - The final user response is produced only after task completion is verified.
 
 ## Delivery stages
 
 1. [Phase contracts and persisted state](01-phase-contracts.md)
-2. [Bounded tactical phase executor](02-tactical-executor.md)
+2. [Tactical phase executor](02-tactical-executor.md)
 3. [Progressive tool revealing](03-progressive-tool-revealing.md)
 4. [Outer completion routing and response](04-outer-routing.md)
 5. [Compatibility, observability, evaluation, and rollout](05-rollout.md)

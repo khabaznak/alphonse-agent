@@ -1220,16 +1220,21 @@ const MemoizedMessageBubble = memo(MessageBubble);
 function TaskProgressBubble({ surface }: { surface: A2uiSurface }) {
   const text = (id: string) => String(surface.components[id]?.text || "").trim();
   const steps = Object.values(surface.components).filter((component) => component.id.startsWith("step_") && component.text).sort((left, right) => left.id.localeCompare(right.id, undefined, { numeric: true }));
+  const taskContext = text("task_context");
   const criteria = text("criteria").replace(/^Acceptance criteria\n?/, "").trim();
   const visibleCriteria = criteria === "- (none)" ? "" : criteria;
-  const hasConcreteProgress = Boolean(visibleCriteria || text("intention") || steps.length || text("tool"));
+  const hasConcreteProgress = Boolean(visibleCriteria || text("intention") || steps.length || text("tool") || taskContext);
   return <article className="message assistant task-progress-bubble" aria-live="polite">
     <div className="task-progress-content">
       <div className="task-progress-heading"><span className="task-progress-spinner" aria-hidden="true">◌</span><strong>Alphonse is working</strong></div>
       {!hasConcreteProgress && text("summary") && <p>{text("summary")}</p>}
       {visibleCriteria && <section><small>Acceptance criteria</small><div className="task-progress-checklist"><ReactMarkdown remarkPlugins={[remarkGfm]}>{acceptanceCriteriaMarkdown(visibleCriteria)}</ReactMarkdown></div></section>}
       {text("intention") && <section><small>Intention</small><p>{text("intention").replace(/^Intention:\s*/, "")}</p></section>}
-      {steps.length ? <section className="task-progress-trace"><small>Work log</small>{steps.map((step) => <pre className="task-progress-detail" key={step.id}>{step.text}</pre>)}</section> : <>{text("tool") && <p className="task-progress-detail">{text("tool")}</p>}{text("arguments") && <pre className="task-progress-detail">{text("arguments")}</pre>}{text("result") && <pre className="task-progress-detail">{text("result")}</pre>}</>}
+      {steps.length ? <section className="task-progress-trace"><small>Work log</small>{steps.map((step) => {
+        const [summary, ...detail] = String(step.text || "").split("\n");
+        return <details className="task-progress-step" key={step.id}><summary>{summary}</summary><pre className="task-progress-detail">{detail.filter((line) => line !== "Details:").join("\n") || "No additional action details."}</pre></details>;
+      })}</section> : <>{text("tool") && <p className="task-progress-detail">{text("tool")}</p>}{text("arguments") && <pre className="task-progress-detail">{text("arguments")}</pre>}{text("result") && <pre className="task-progress-detail">{text("result")}</pre>}</>}
+      {taskContext && <details className="task-progress-context"><summary>Task context</summary><pre className="task-progress-detail">{taskContext}</pre></details>}
     </div>
   </article>;
 }
@@ -1478,7 +1483,7 @@ function SystemOneSettingsSection({ user }: { user: string }) {
   useEffect(() => {
     void daemonRequest<{ settings: SystemOneSettings }>("system_one_settings", { actor_user_id: user })
       .then((result) => setSettings(result.settings))
-      .catch((cause: unknown) => setNotice(cause instanceof Error ? cause.message : "System One settings unavailable"));
+      .catch((cause: unknown) => setNotice(errorNotice(cause, "System One settings unavailable")));
   }, [user]);
   const save = async () => {
     if (!settings) return;
@@ -1493,7 +1498,7 @@ function SystemOneSettingsSection({ user }: { user: string }) {
       setApiKey("");
       setNotice(result.settings.enabled ? "Validated and enabled for newly started V3 tasks." : "Saved. System One is disabled.");
     } catch (cause) {
-      setNotice(cause instanceof Error ? cause.message : "System One validation failed");
+      setNotice(errorNotice(cause, "System One validation failed"));
     } finally {
       setSaving(false);
     }
@@ -1523,10 +1528,20 @@ function SystemOneSettingsSection({ user }: { user: string }) {
 }
 
 function inferenceValidationNotice(cause: unknown): string {
-  const message = cause instanceof Error ? cause.message : "Validation failed";
+  const message = errorNotice(cause, "Validation failed");
   return message.startsWith("openai_codex_model_access_rejected") || message.startsWith("openai_codex_model_unavailable")
     ? "Codex temporarily rejected this advertised model. Your saved model and its last successful validation were not changed."
     : message;
+}
+
+function errorNotice(cause: unknown, fallback: string): string {
+  if (cause instanceof Error && cause.message.trim()) return cause.message;
+  if (typeof cause === "string" && cause.trim()) return cause.trim();
+  if (cause && typeof cause === "object" && "message" in cause) {
+    const message = (cause as { message?: unknown }).message;
+    if (typeof message === "string" && message.trim()) return message.trim();
+  }
+  return fallback;
 }
 
 function AgentConfigSettingsSection() {

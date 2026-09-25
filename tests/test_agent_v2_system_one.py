@@ -166,6 +166,49 @@ def test_jev_classifies_complete_static_tool_registry_with_parallel_noul_questio
     assert "Effect:" not in serialized
 
 
+def test_jev_request_curation_receives_plan_instructions_and_session_history() -> None:
+    captured = []
+
+    def transport(url, api_key, payload, timeout):
+        _ = url, api_key, timeout
+        captured.append(payload)
+        return {
+            "answers": {
+                key: {"type": "noul", "noul": 0.93}
+                for key in payload["questions"]
+            },
+            "model": "jev-latest",
+        }
+
+    provider = JevCriterionDecisionProvider(
+        SystemOneSettings(enabled=True, api_key="secret", validated_at="now"),
+        transport=transport,
+    )
+    tools = (
+        ToolDescriptor("artifact.sonos", "Sonos", ToolKind.ARTIFACT, "Check speaker availability."),
+        ToolDescriptor("native.respond", "Respond", ToolKind.NATIVE),
+    )
+
+    result = provider.curate_request_tools(
+        goal="Check Sonos speakers",
+        system_prompt="Strategic Plan uses curated tool descriptors.",
+        session_history="User previously configured Sonos.",
+        tools=tools,
+    )
+
+    assert result.selected_tool_ids == ("artifact.sonos", "native.respond")
+    assert captured[0]["state"] == {
+        "user_request": "Check Sonos speakers",
+        "plan_system_prompt": "Strategic Plan uses curated tool descriptors.",
+        "session_conversation_history": "User previously configured Sonos.",
+        "decision_scope": "Select relevant tool IDs only; do not plan or invent a method.",
+    }
+    assert "Sonos" in str(captured[0]["questions"])
+    serialized_questions = str(captured[0]["questions"])
+    assert "Does this request need Sonos?" in serialized_questions
+    assert "Does this phase need to send a direct response" not in serialized_questions
+
+
 def test_jev_triages_each_plan_message_with_choice_and_relevance_fuse() -> None:
     payloads = []
 
@@ -220,7 +263,8 @@ def test_jev_admission_classifies_work_beyond_one_direct_text_reply() -> None:
 
 
 def test_jev_native_registry_template_covers_every_out_of_box_tool() -> None:
-    assert set(_load_jev_native_tool_registry()) == {
+    registry = _load_jev_native_tool_registry()
+    assert set(registry) == {
         "native.respond",
         "native.bash",
         "native.exact_text_edit",
@@ -231,10 +275,14 @@ def test_jev_native_registry_template_covers_every_out_of_box_tool() -> None:
         "native.ask_question",
         "native.scheduled_task",
         "native.artifact_registration",
+        "native.artifact_metadata_update",
         "native.analyze_image",
         "native.web_search",
         "native.web_fetch",
     }
+    bash_question = registry["native.bash"]
+    assert "CLI-backed artifact" in bash_question["instructions"]
+    assert "Favor Bash alongside that artifact" in bash_question["criteria"]["true"]
 
 
 def test_jev_tactical_review_distinguishes_operational_success_from_semantic_completion() -> None:

@@ -313,7 +313,7 @@ def test_desktop_acknowledgement_delivery_does_not_close_running_task_progress()
     daemon = V2Daemon(runtime)
     outbound = runtime.outbox.enqueue(
         address=ChannelAddress("desktop", "tui", "alex", alphonse_user_id="alex"),
-        message="Got it — I’m taking a closer look now.",
+        message="Revisaré la solicitud de temperatura ahora.",
         kind="task_acknowledgement",
         audience_user_id="alex",
         task_id="task-1",

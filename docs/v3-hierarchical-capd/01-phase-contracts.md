@@ -18,7 +18,6 @@ Introduce typed models equivalent to:
 ```python
 PhasePlan
 PhaseSubgoal
-PhaseLimits
 MutationScope
 CompletionCondition
 TacticalState
@@ -37,7 +36,6 @@ serialization must be explicit and stable.
 - Version and unique phase ID.
 - A concise phase objective tied to the immutable task criteria.
 - Ordered subgoals with stable IDs.
-- Phase-level call and duration limits.
 - Authorized capabilities.
 - Authorized mutation scope.
 - Completion and escalation conditions.
@@ -47,7 +45,7 @@ serialization must be explicit and stable.
 
 - Objective and typed required output.
 - Dependencies on earlier subgoals.
-- Allowed capabilities, side effects, and per-subgoal limits.
+- Allowed capabilities and side effects.
 - Completion predicate.
 - Failure policy: stop, local fallback, wait, or return for strategic review.
 
@@ -57,7 +55,6 @@ serialization must be explicit and stable.
 - Bound outputs from completed subgoals.
 - Revealed capabilities and concrete tools.
 - Ordered tactical actions and results.
-- Remaining budgets and deadline.
 - Steering/cancellation markers.
 - Current terminal or nonterminal phase status.
 
@@ -79,7 +76,6 @@ planned -> running
 running -> subgoal_complete
 running -> waiting_user
 running -> blocked
-running -> budget_exhausted
 running -> cancelled
 subgoal_complete -> running(next subgoal)
 subgoal_complete -> phase_complete(last subgoal)
@@ -94,7 +90,7 @@ Terminal states must be explicit. Invalid transitions must fail closed.
 - [x] Define versioned phase and tactical-state schemas.
 - [x] Define stable enums for statuses, failure policies, and side-effect classes.
 - [x] Add validation for duplicate IDs, missing dependencies, dependency cycles,
-      negative budgets, and invalid mutation scopes.
+      and invalid mutation scopes.
 - [x] Add JSON-safe serialization and restoration.
 - [x] Add a bounded prompt projection separate from the full audit representation.
 - [x] Add V3 fields to task checkpoints behind an explicit engine/schema version.
@@ -102,7 +98,7 @@ Terminal states must be explicit. Invalid transitions must fail closed.
 - [x] Define how subgoal outputs are typed and bound for dependent actions.
 - [x] Define how cumulative V2 evidence is imported into a new V3 phase.
 - [x] Add a compatibility adapter for a legacy one-call plan where appropriate.
-- [x] Add structured logging fields for phase ID, subgoal ID, action ID, and budgets.
+- [x] Add structured logging fields for phase ID, subgoal ID, and action ID.
 - [x] Keep the V2 planner and executor unchanged by default.
 
 ## Tests
@@ -112,7 +108,7 @@ Terminal states must be explicit. Invalid transitions must fail closed.
 - [x] Reject unsafe absolute or parent-traversing mutation paths; runtime project-root
       authorization remains an executor responsibility.
 - [x] Verify state-transition rules and terminal-state immutability.
-- [x] Verify budget decrement and deadline restoration after restart.
+- [x] Verify legacy budget and deadline fields are safely ignored during restoration.
 - [x] Verify full evidence remains append-only while prompt projection is bounded.
 - [x] Verify steering metadata survives checkpoint restoration.
 - [x] Verify a legacy one-call plan maps only to a one-subgoal compatibility phase.
@@ -137,7 +133,9 @@ Terminal states must be explicit. Invalid transitions must fail closed.
 ## Decisions made
 
 - Use dependency-free dataclasses with explicit validation and serialization.
-- Persist deadlines as timezone-aware absolute timestamps.
+- Do not impose planner-authored call, duration, phase-count, retry-count, or
+  no-progress limits. If mission limits are introduced, they must be explicit
+  administrator settings rather than model-generated values or product constants.
 - Use stable semantic output-type identifiers with explicit typed binding; introduce
   JSON Schema later only where a tool family needs field-level validation.
 - Stamp the engine on task state; active V2 tasks remain V2 unless a future explicit,
@@ -146,5 +144,7 @@ Terminal states must be explicit. Invalid transitions must fail closed.
 ## Implementation log
 
 - 2026-09-20 — Added `intelligence/v3` contracts, V3 fields in `TaskState`, legacy
-  one-call adaptation, absolute phase deadlines, typed bindings, bounded projections,
-  and contract/checkpoint tests. Full suite: 428 passed.
+  one-call adaptation, typed bindings, bounded prompt projections, and
+  contract/checkpoint tests. Full suite: 428 passed.
+- 2026-09-23 — Removed planner-authored budgets and hardcoded mission-loop limits.
+  Legacy checkpoint fields remain accepted and ignored for compatibility.

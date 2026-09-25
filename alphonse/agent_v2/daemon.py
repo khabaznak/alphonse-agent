@@ -113,7 +113,7 @@ def _claim_single_instance_lock(daemon_id: str) -> Any:
 class V2Daemon:
     runtime: V2RuntimeHost
     poll_interval_sec: float = 0.05
-    inbound_max_attempts: int = 5
+    inbound_max_attempts: int | None = None
     event_store: EventAutomationStore | None = None
     daemon_id: str = ""
 
@@ -1732,13 +1732,7 @@ class V2Daemon:
             progress = event.get("progress") if isinstance(event.get("progress"), dict) else {}
             if not task_id or not progress or str(progress.get("project_id") or "").strip() != project_id:
                 continue
-            payload = {
-                **progress,
-                "phase": str(event.get("phase") or "working"),
-                "label": str(event.get("label") or "Working"),
-                "message": str(event.get("message") or ""),
-            }
-            rendered.extend({"event": _a2ui_custom(envelope)} for envelope in self._a2ui.task_progress(task_id, payload))
+            rendered.extend({"event": _a2ui_custom(envelope)} for envelope in self._a2ui.task_progress(task_id, progress))
             known.add(task_id)
         return rendered
 

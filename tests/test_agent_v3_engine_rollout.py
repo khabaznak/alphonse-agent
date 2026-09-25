@@ -2,14 +2,15 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from alphonse.agent_v2.core.core import CoreLoopContext, ProcessingResult, StateSnapshot, ToolDescriptor, ToolKind
+from alphonse.agent_v2.core.core import CoreLoopContext, ImprovementPhase, ProcessingResult, StateSnapshot, ToolDescriptor, ToolKind
 from alphonse.agent_v2.core.inference import InferencePurpose, InferenceResult, InferenceRouter, ModelProfile, StubInferenceProvider
 from alphonse.agent_v2.core.intelligence.task_state import TaskState
 from alphonse.agent_v2.core.intelligence.v3 import CompletionCondition
 from alphonse.agent_v2.core.intelligence.v3 import EngineRoutingProcessor, HierarchicalCAPDProcessor
-from alphonse.agent_v2.core.intelligence.v3 import PhaseLimits, PhaseOutcome, PhasePlan, PhaseStatus, PhaseSubgoal
+from alphonse.agent_v2.core.intelligence.v3 import PhaseOutcome, PhasePlan, PhaseStatus, PhaseSubgoal
 from alphonse.agent_v2.core.intelligence.v3 import new_tactical_state
 from alphonse.agent_v2.core.intelligence.v3.processor import _deduplicated_history_evidence
+from alphonse.agent_v2.core.intelligence.v3 import processor as v3_processor_module
 from alphonse.agent_v2.core.messages import CommunicationChannel, InMemoryMessageQueue
 from alphonse.agent_v2.core.projects import ProjectStore
 from alphonse.agent_v2.core.questions import SQLiteQuestionStore
@@ -27,6 +28,9 @@ from alphonse.agent_v2.system_one import SystemOneToolRegistrySelection
 
 
 class _TestJev:
+    def curate_request_tools(self, *, tools, **_values):
+        return SystemOneToolRegistrySelection(selected_tool_ids=tuple(item.tool_id for item in tools))
+
     def select_plan_tools(self, *, goal, phase, tools):
         _ = goal, phase
         return SystemOneToolRegistrySelection(selected_tool_ids=tuple(item.tool_id for item in tools))
@@ -107,7 +111,6 @@ def test_v3_phase_history_stores_only_current_phase_evidence() -> None:
             "result",
             completion=CompletionCondition("output_present", output_type="result"),
         ),),
-        limits=PhaseLimits(1, 10),
     )
     state = new_tactical_state(
         phase,
@@ -163,7 +166,6 @@ def test_hierarchical_processor_completes_one_phase_without_v2_tool_cycles() -> 
                 "criterion_ids": ["ac-1"],
                 "authorized_capabilities": ["project_record_search"],
                 "mutation_scope": {"allowed_paths": [], "allow_external_effects": False},
-                "limits": {"max_tool_calls": 2, "max_duration_seconds": 20},
                 "originating_decision": "initial",
                 "subgoals": [{
                     "subgoal_id": "locate",
@@ -172,12 +174,20 @@ def test_hierarchical_processor_completes_one_phase_without_v2_tool_cycles() -> 
                     "depends_on": [],
                     "allowed_capabilities": ["project_record_search"],
                     "allowed_side_effects": ["read_only"],
-                    "limits": {"max_tool_calls": 1, "max_duration_seconds": 10},
                     "completion": {"kind": "output_present", "output_type": "record_reference"},
                     "failure_policy": "stop",
                 }],
             },
-            InferencePurpose.TACTICAL_ACTION: {"tool_id": "native.project_search", "arguments": {"query": "solar"}},
+            InferencePurpose.TACTICAL_ACTION: {
+                "tool_id": "native.project_search",
+                "arguments": {"query": "solar"},
+                "acceptance_questions": [{
+                    "question_id": "record-found",
+                    "type": "noul",
+                    "instructions": "Did the search find the requested project record?",
+                    "criteria": {"true": "The record was found.", "false": "The record was not found."},
+                }],
+            },
             InferencePurpose.PHASE_REVIEW: {"updates": [{
                 "criterion_id": "ac-1", "status": "satisfied",
                 "evidence_refs": [], "reason": "placeholder",
@@ -233,7 +243,6 @@ def test_hierarchical_processor_plans_one_stage_and_jev_selects_respond_for_gree
                 "criterion_ids": ["ac-1"],
                 "authorized_capabilities": ["user_response"],
                 "mutation_scope": {"allowed_paths": [], "allow_external_effects": True},
-                "limits": {"max_tool_calls": 1, "max_duration_seconds": 10},
                 "originating_decision": "initial",
                 "subgoals": [{
                     "subgoal_id": "reply",
@@ -242,7 +251,6 @@ def test_hierarchical_processor_plans_one_stage_and_jev_selects_respond_for_gree
                     "depends_on": [],
                     "allowed_capabilities": ["user_response"],
                     "allowed_side_effects": ["user_response"],
-                    "limits": {"max_tool_calls": 1, "max_duration_seconds": 10},
                     "completion": {"kind": "output_present", "output_type": "user_response"},
                     "failure_policy": "stop",
                 }],
@@ -250,12 +258,21 @@ def test_hierarchical_processor_plans_one_stage_and_jev_selects_respond_for_gree
             InferencePurpose.TACTICAL_ACTION: {
                 "tool_id": "native.respond",
                 "arguments": {"message": "¡Hola, Alex! Qué gusto saludarte.", "tone": "warm"},
+                "acceptance_questions": [{
+                    "question_id": "greeting-produced",
+                    "type": "noul",
+                    "instructions": "Was the requested greeting produced?",
+                    "criteria": {"true": "A greeting was produced.", "false": "No greeting was produced."},
+                }],
             },
         },
     )
     inference = InferenceRouter(provider=provider, default_profile=ModelProfile("test", "test", "default"))
 
     class SystemOne:
+        def curate_request_tools(self, *, tools, **_values):
+            return SystemOneToolRegistrySelection(selected_tool_ids=tuple(item.tool_id for item in tools))
+
         def select_plan_tools(self, **values):
             assert values["goal"] == "Hola Alphonse!"
             assert {tool.tool_id for tool in values["tools"]} == {"native.respond", "artifact.medical"}
@@ -340,10 +357,36 @@ def test_hierarchical_processor_plans_one_stage_and_jev_selects_respond_for_gree
     assert '"required": ["kind"]' in planning_request.prompt
     assert '"enum": ["read_only", "user_response", "project_mutation"' in planning_request.prompt
     assert "do not declare it unavailable" in planning_request.prompt
+    assert "use native.artifact_metadata_update for the mutation" in planning_request.prompt
+    assert "editing a README or program is not a substitute" in planning_request.prompt
+    assert "plan the necessary duplicate/context inspection, the requested mutation, and verification as one coherent end-to-end phase" in planning_request.prompt
     acceptance_request = next(item for item in provider.requests if item.purpose == InferencePurpose.ACCEPTANCE_CRITERIA)
     assert "All criteria are conjunctive" in acceptance_request.prompt
     assert question_store.load_task_checkpoint("greeting-task") is not None
     assert "tactical action" in [event.label for event in activity]
+
+
+def test_every_v3_plan_pass_emits_a_plan_activity(monkeypatch) -> None:
+    task = TaskState(goal="Continue the task", user="alex", project_id="home")
+    task.metadata["v3_route"] = "strategic_replan"
+    events = []
+    context = CoreLoopContext(messages=InMemoryMessageQueue(), activity_sink=events.append)
+    phase = PhasePlan(
+        "replanned", "Continue with the next execution phase",
+        (PhaseSubgoal(
+            "next", "Do the next step", "result",
+            completion=CompletionCondition("output_present", output_type="result"),
+        ),),
+    )
+    monkeypatch.setattr(v3_processor_module, "plan_phase", lambda _task, _context: phase)
+
+    state = HierarchicalCAPDProcessor._new_state(task, context)
+
+    assert state.phase.phase_id == "replanned"
+    assert len(events) == 1
+    assert events[0].phase == ImprovementPhase.PLAN
+    assert events[0].label == "planning phase"
+    assert events[0].progress["route"] == "strategic_replan"
 
 
 def test_hierarchical_processor_fails_invalid_phase_once_with_controlled_error() -> None:
@@ -358,7 +401,6 @@ def test_hierarchical_processor_fails_invalid_phase_once_with_controlled_error()
                 "criterion_ids": ["ac-1"],
                 "authorized_capabilities": ["project_record_search"],
                 "mutation_scope": {"allowed_paths": []},
-                "limits": {"max_tool_calls": 1, "max_duration_seconds": 20},
                 "originating_decision": "initial",
                 "subgoals": [{
                     "subgoal_id": "missing-completion",
@@ -395,7 +437,6 @@ def test_v3_phase_planner_receives_latest_user_tool_hint() -> None:
                 "criterion_ids": ["ac-1"],
                 "authorized_capabilities": ["device_control"],
                 "mutation_scope": {"allowed_paths": [], "allow_external_effects": False},
-                "limits": {"max_tool_calls": 2, "max_duration_seconds": 20},
                 "originating_decision": "The user named the tool in the latest answer.",
                 "subgoals": [{
                     "subgoal_id": "read-temperature",
@@ -404,7 +445,6 @@ def test_v3_phase_planner_receives_latest_user_tool_hint() -> None:
                     "depends_on": [],
                     "allowed_capabilities": ["device_control"],
                     "allowed_side_effects": ["read_only"],
-                    "limits": {"max_tool_calls": 2, "max_duration_seconds": 20},
                     "completion": {"kind": "output_present", "output_type": "temperature"},
                     "failure_policy": "stop",
                 }],
@@ -455,7 +495,6 @@ def test_v3_phase_planner_receives_project_context_and_durable_memory(tmp_path: 
                 "criterion_ids": ["ac-1"],
                 "authorized_capabilities": ["project_file_inspection"],
                 "mutation_scope": {"allowed_paths": [], "allow_external_effects": False},
-                "limits": {"max_tool_calls": 1, "max_duration_seconds": 20},
                 "originating_decision": "The journal path is established in durable project memory.",
                 "subgoals": [{
                     "subgoal_id": "read-journal",
@@ -464,7 +503,6 @@ def test_v3_phase_planner_receives_project_context_and_durable_memory(tmp_path: 
                     "depends_on": [],
                     "allowed_capabilities": ["project_file_inspection"],
                     "allowed_side_effects": ["read_only"],
-                    "limits": {"max_tool_calls": 1, "max_duration_seconds": 20},
                     "completion": {"kind": "output_present", "output_type": "journal_contents"},
                     "failure_policy": "stop",
                 }],
@@ -529,7 +567,6 @@ def test_v3_known_journal_path_flows_from_memory_to_read_and_verified_edit(tmp_p
         "criterion_ids": ["ac-1"],
         "authorized_capabilities": ["project_file_inspection"],
         "mutation_scope": {"allowed_paths": [], "allow_external_effects": False},
-        "limits": {"max_tool_calls": 1, "max_duration_seconds": 20},
         "originating_decision": "Durable memory establishes workout_journal.md as a read candidate.",
         "subgoals": [{
             "subgoal_id": "read-journal",
@@ -538,7 +575,6 @@ def test_v3_known_journal_path_flows_from_memory_to_read_and_verified_edit(tmp_p
             "depends_on": [],
             "allowed_capabilities": ["project_file_inspection"],
             "allowed_side_effects": ["read_only"],
-            "limits": {"max_tool_calls": 1, "max_duration_seconds": 20},
             "completion": {"kind": "output_present", "output_type": "journal_contents"},
             "failure_policy": "stop",
         }],
@@ -551,7 +587,6 @@ def test_v3_known_journal_path_flows_from_memory_to_read_and_verified_edit(tmp_p
         "criterion_ids": ["ac-1"],
         "authorized_capabilities": ["exact_text_mutation"],
         "mutation_scope": {"allowed_paths": ["workout_journal.md"], "allow_external_effects": False},
-        "limits": {"max_tool_calls": 1, "max_duration_seconds": 20},
         "originating_decision": "The successful read established the exact file and anchor text.",
         "subgoals": [{
             "subgoal_id": "update-journal",
@@ -560,7 +595,6 @@ def test_v3_known_journal_path_flows_from_memory_to_read_and_verified_edit(tmp_p
             "depends_on": [],
             "allowed_capabilities": ["exact_text_mutation"],
             "allowed_side_effects": ["project_mutation"],
-            "limits": {"max_tool_calls": 1, "max_duration_seconds": 20},
             "completion": {"kind": "field_equals", "field": "verification.status", "expected": "verified"},
             "failure_policy": "stop",
         }],
@@ -595,6 +629,9 @@ def test_v3_known_journal_path_flows_from_memory_to_read_and_verified_edit(tmp_p
             raise AssertionError(f"Unexpected tool-planning request: {request.purpose}")
 
     class SystemOne:
+        def curate_request_tools(self, *, tools, **_values):
+            return SystemOneToolRegistrySelection(selected_tool_ids=tuple(item.tool_id for item in tools))
+
         def select_plan_tools(self, **values):
             selected = (
                 "native.read_project_file" if values["phase"]["phase_id"] == "read-known-journal"
@@ -677,7 +714,6 @@ def test_v3_answered_question_replans_with_named_tool_instead_of_repeating_parke
             completion=CompletionCondition("output_present", output_type="source"),
         ),),
         authorized_capabilities=("user_interaction",),
-        limits=PhaseLimits(1, 10),
     )
     waiting_state = new_tactical_state(waiting_phase)
     waiting_state.status = PhaseStatus.WAITING_USER
@@ -692,7 +728,6 @@ def test_v3_answered_question_replans_with_named_tool_instead_of_repeating_parke
             completion=CompletionCondition("output_present", output_type="temperature"),
         ),),
         authorized_capabilities=("device_control",),
-        limits=PhaseLimits(1, 10),
     )
     resumed_state = new_tactical_state(resumed_phase)
     task = TaskState(
@@ -707,7 +742,7 @@ def test_v3_answered_question_replans_with_named_tool_instead_of_repeating_parke
     )
     task.set_acceptance_contract_from_markdown("1.- [ ] La temperatura del estudio se obtiene")
     seen_phase_ids: list[str] = []
-    processor = HierarchicalCAPDProcessor(max_phases=1)
+    processor = HierarchicalCAPDProcessor()
     processor._new_state = lambda _task, _context: resumed_state  # type: ignore[method-assign]
 
     class Executor:
@@ -732,7 +767,7 @@ def test_v3_answered_question_replans_with_named_tool_instead_of_repeating_parke
     assert seen_phase_ids == ["use-device-status"]
 
 
-def test_phase_budget_failure_is_persisted_as_terminal_checkpoint(tmp_path: Path) -> None:
+def test_processor_continues_until_a_real_terminal_state(tmp_path: Path) -> None:
     phase = PhasePlan(
         "only-phase",
         "Attempt one phase",
@@ -742,7 +777,6 @@ def test_phase_budget_failure_is_persisted_as_terminal_checkpoint(tmp_path: Path
             "result",
             completion=CompletionCondition("output_present", output_type="result"),
         ),),
-        limits=PhaseLimits(1, 10),
     )
     state = new_tactical_state(phase)
     state.status = PhaseStatus.PHASE_COMPLETE
@@ -756,18 +790,26 @@ def test_phase_budget_failure_is_persisted_as_terminal_checkpoint(tmp_path: Path
     )
     task.set_acceptance_contract_from_markdown("1.- [ ] Work is complete")
     question_store = SQLiteQuestionStore(tmp_path / "questions.sqlite3")
-    processor = HierarchicalCAPDProcessor(max_phases=1)
-    processor._new_state = lambda _task, _context: state  # type: ignore[method-assign]
+    processor = HierarchicalCAPDProcessor()
+    processor._new_state = lambda _task, _context: new_tactical_state(phase)  # type: ignore[method-assign]
+    phase_count = 0
 
     class Executor:
         @staticmethod
         def run(_task, _state, _context):
+            nonlocal phase_count
+            phase_count += 1
             return PhaseOutcome("only-phase", PhaseStatus.PHASE_COMPLETE)
 
     class Outer:
         @staticmethod
         def review_and_route(current_task, _state, _outcome, _context):
-            current_task.metadata["v3_route"] = "plan_next_phase"
+            if phase_count < 10:
+                current_task.metadata["v3_route"] = "plan_next_phase"
+            else:
+                current_task.status = "completed"
+                current_task.outcome = {"status": "success", "reason": "done"}
+                current_task.metadata["v3_route"] = "respond_and_end"
             return object(), object()
 
     processor.executor = Executor()  # type: ignore[assignment]
@@ -779,10 +821,8 @@ def test_phase_budget_failure_is_persisted_as_terminal_checkpoint(tmp_path: Path
     )
 
     restored = question_store.load_task_checkpoint("budget-task")
-    assert result.status.value == "failed"
+    assert result.status.value == "completed"
     assert restored is not None
-    assert restored.status == "failed"
-    assert restored.outcome == {
-        "status": "failure",
-        "reason": "V3 phase budget exhausted without a terminal outcome.",
-    }
+    assert restored.status == "completed"
+    assert restored.outcome == {"status": "success", "reason": "done"}
+    assert phase_count == 10

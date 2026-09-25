@@ -59,7 +59,6 @@ class V3OuterController:
         outcome: PhaseOutcome,
         context: "CoreLoopContext",
     ) -> tuple[PhaseReview, StrategicDecision]:
-        acceptance_before = _acceptance_progress_signature(task)
         review = review_phase(task, state, outcome, context)
         context.emit_activity(
             phase=ImprovementPhase.CHECK,
@@ -73,7 +72,7 @@ class V3OuterController:
             desired = str(act_directive.get("terminal_outcome") or "failed")
             decision = StrategicDecision(
                 StrategicAction.FAIL if desired == "failed" else StrategicAction.COMPLETE,
-                "Act's bounded final explanation was delivered; closing with the previously selected outcome.",
+                "Act's final explanation was delivered; closing with the previously selected outcome.",
             )
             task.status = "failed" if desired == "failed" else "completed"
             task.outcome = {"status": desired, "reason": str(act_directive.get("reason") or decision.reason)}
@@ -82,12 +81,6 @@ class V3OuterController:
             return review, decision
         decision, recommendation = _recommend_act(task, state, outcome, review, context)
         task.metadata["system_one_act_recommendation"] = recommendation.to_metadata()
-        decision = _apply_no_progress_guard(
-            task,
-            review,
-            decision,
-            acceptance_changed=acceptance_before != _acceptance_progress_signature(task),
-        )
         if (
             decision.action == StrategicAction.FAIL
             and review.status == PhaseReviewStatus.PHASE_VERIFIED_TASK_INCOMPLETE
@@ -123,7 +116,10 @@ class V3OuterController:
             }
             task.metadata["v3_route"] = "respond_and_end"
         elif decision.action == StrategicAction.CONTINUE:
-            if str(task.metadata.get("system_one_act_recommendation", {}).get("action") or "") == "fail_explain":
+            if (
+                str(task.metadata.get("system_one_act_recommendation", {}).get("action") or "") == "fail_explain"
+                and review.status != PhaseReviewStatus.PHASE_VERIFIED_TASK_INCOMPLETE
+            ):
                 task.metadata["act_directive"] = {
                     "action": "fail_explain", "closure_only": True, "response_required": True,
                     "terminal_outcome": "failed", "reason": recommendation.rationale,
@@ -137,7 +133,10 @@ class V3OuterController:
         elif decision.action == StrategicAction.ASK_USER:
             task.metadata["act_directive"] = {"action": "ask_user", "rationale": decision.reason}
             task.metadata["v3_route"] = "strategic_replan"
-        elif recommendation.action == "fail_explain":
+        elif (
+            recommendation.action == "fail_explain"
+            and review.status != PhaseReviewStatus.PHASE_VERIFIED_TASK_INCOMPLETE
+        ):
             task.metadata["act_directive"] = {
                 "action": "fail_explain", "closure_only": True, "response_required": True,
                 "terminal_outcome": "failed", "reason": recommendation.rationale,
@@ -170,7 +169,7 @@ def review_phase(
         return PhaseReview(state.phase.phase_id, PhaseReviewStatus.CANCELLED, outcome.reason, evidence_refs)
     if outcome.status == PhaseStatus.WAITING_USER:
         return PhaseReview(state.phase.phase_id, PhaseReviewStatus.WAITING_USER, outcome.reason, evidence_refs)
-    if outcome.status in {PhaseStatus.BLOCKED, PhaseStatus.BUDGET_EXHAUSTED}:
+    if outcome.status == PhaseStatus.BLOCKED:
         return PhaseReview(state.phase.phase_id, PhaseReviewStatus.PHASE_BLOCKED, outcome.reason, evidence_refs)
     if outcome.status != PhaseStatus.PHASE_COMPLETE:
         return PhaseReview(
@@ -249,7 +248,6 @@ def _recommend_act(task, state, outcome, review: PhaseReview, context):
             "user_constraints": task.metadata.get("user_constraints", {}),
             "failure_reason": task.metadata.get("failure_reason", ""),
             "plan_call_exception_count": task.count_plan_call_exceptions(),
-            "consecutive_no_progress_phases": task.metadata.get("v3_consecutive_no_progress_phases", 0),
         },
     }
     try:
@@ -257,12 +255,24 @@ def _recommend_act(task, state, outcome, review: PhaseReview, context):
     except Exception as exc:
         raise SystemOneUnavailableError(f"act_recommendation:{type(exc).__name__}") from exc
     action = str(recommendation.action)
+    recommended_action = action
     answers = recommendation.answers
     yes_threshold = float(getattr(recommendation, "yes_threshold", 0.8))
-    if action == "complete" and review.status != PhaseReviewStatus.PHASE_VERIFIED_TASK_COMPLETE:
+    if action == "fail_explain" and review.status == PhaseReviewStatus.PHASE_VERIFIED_TASK_INCOMPLETE:
+        # A completed phase is not the same as a completed mission. If the
+        # phase review confirms that required acceptance criteria remain unmet,
+        # do not turn a low continuation score into a user-facing failure while
+        # an authorized next phase may still satisfy them. Give Plan a chance
+        # to continue the unfinished mission; actual blockers are represented
+        # by BLOCKED/VERIFICATION_FAILED reviews and retain the failure route.
+        action = "continue"
+    elif action == "complete" and review.status != PhaseReviewStatus.PHASE_VERIFIED_TASK_COMPLETE:
         action = "continue" if answers.get("continuation_is_worthwhile", 0.0) >= yes_threshold else "replan"
     elif action == "continue" and answers.get("continuation_is_worthwhile", 0.0) < yes_threshold:
-        action = "fail_explain" if answers.get("closure_explanation_is_warranted", 0.0) >= yes_threshold else "fail"
+        # A disagreement between Jev's categorical choice and its continuation
+        # fuse is uncertainty about the current strategy, not evidence that the
+        # mission must fail. Return to Plan for a fresh strategy.
+        action = "replan"
     elif action == "ask_user" and answers.get("user_input_can_unblock", 0.0) < yes_threshold:
         action = "replan" if answers.get("continuation_is_worthwhile", 0.0) >= yes_threshold else "fail_explain"
     elif action == "fail_explain" and answers.get("closure_explanation_is_warranted", 0.0) < yes_threshold:
@@ -270,6 +280,14 @@ def _recommend_act(task, state, outcome, review: PhaseReview, context):
     elif not recommendation.confident and action not in {"fail", "fail_explain"}:
         action = "replan"
     rationale = recommendation.rationale
+    if action != recommended_action:
+        rationale = {
+            "continue": "The task is not yet verified complete; Plan must continue with any useful authorized work.",
+            "replan": "Jev's recommendation and resilience checks disagreed; returning to Plan for a fresh strategy.",
+            "ask_user": "A concrete user answer is needed before useful work can continue.",
+            "fail_explain": "Further work is not worthwhile, and Jev recommends a final evidence-based explanation.",
+            "fail": "Jev determined that the mission must stop without another execution phase.",
+        }[action]
     mapping = {
         "complete": StrategicAction.COMPLETE, "continue": StrategicAction.CONTINUE,
         "replan": StrategicAction.REPLAN, "ask_user": StrategicAction.ASK_USER,
@@ -278,38 +296,6 @@ def _recommend_act(task, state, outcome, review: PhaseReview, context):
     if action not in mapping:
         raise SystemOneUnavailableError("act_recommendation_action_invalid")
     return StrategicDecision(mapping[action], rationale), recommendation
-
-
-def _apply_no_progress_guard(
-    task: "TaskState",
-    review: PhaseReview,
-    decision: StrategicDecision,
-    *,
-    acceptance_changed: bool,
-) -> StrategicDecision:
-    if review.status != PhaseReviewStatus.PHASE_VERIFIED_TASK_INCOMPLETE:
-        task.metadata["v3_consecutive_no_progress_phases"] = 0
-        return decision
-    count = 0 if acceptance_changed else int(task.metadata.get("v3_consecutive_no_progress_phases") or 0) + 1
-    task.metadata["v3_consecutive_no_progress_phases"] = count
-    if count < 3:
-        return decision
-    return StrategicDecision(
-        StrategicAction.FAIL,
-        "Three consecutive completed phases made no acceptance-criteria progress; stopping to prevent repeated work.",
-    )
-
-
-def _acceptance_progress_signature(task: "TaskState") -> tuple[tuple[str, str, tuple[str, ...]], ...]:
-    return tuple(
-        (
-            str(item.get("id") or ""),
-            str(item.get("status") or "pending"),
-            tuple(str(ref) for ref in item.get("evidence_refs") or []),
-        )
-        for item in task.ensure_acceptance_contract().get("criteria") or []
-        if isinstance(item, dict) and item.get("superseded") is not True
-    )
 
 
 def _review_acceptance_statuses(
@@ -334,6 +320,49 @@ def _review_acceptance_statuses(
         dict(update) for update in system_one_result.updates
         if str(update.get("criterion_id") or "") not in ambiguous_ids
     ]
+    focused_rereview = None
+    if ambiguous_ids:
+        # Re-review just the unresolved criteria against the same cumulative,
+        # ordered phase evidence before Check hands uncertainty to Act/Plan.
+        # This is bounded to one additional Jev evaluation per phase review.
+        current_contract = task.ensure_acceptance_contract()
+        focused_contract = {
+            **current_contract,
+            "criteria": [
+                dict(item) for item in current_contract.get("criteria") or []
+                if isinstance(item, dict) and str(item.get("id") or "") in ambiguous_ids
+            ],
+        }
+        focused_phase = {
+            **state.phase.to_dict(),
+            "review_focus": {
+                "criterion_ids": sorted(ambiguous_ids),
+                "instructions": (
+                    "Re-evaluate only these unresolved criteria against all successful evidence in its recorded order. "
+                    "Use each evidence item's phase and subgoal identity and the ordered subgoal objectives; "
+                    "for criteria requiring a prerequisite before a mutation, verify that the successful prerequisite "
+                    "evidence occurs before the mutation evidence. Do not require new tool work if existing evidence suffices."
+                ),
+            },
+        }
+        try:
+            focused_rereview = context.system_one.evaluate(
+                contract=focused_contract,
+                phase=focused_phase,
+                evidence=state.evidence.to_dict(),
+            )
+        except Exception as exc:
+            # A failed focused pass must not erase the original result or
+            # prevent the task from following its existing unresolved-evidence
+            # route.
+            task.metadata["v3_focused_rereview_error"] = type(exc).__name__
+        else:
+            remaining_ambiguous = set(focused_rereview.ambiguous_criterion_ids)
+            confident_updates.extend(
+                dict(update) for update in focused_rereview.updates
+                if str(update.get("criterion_id") or "") not in remaining_ambiguous
+            )
+            ambiguous_ids = remaining_ambiguous
     rejected: list[str] = []
     if confident_updates:
         contract, rejected = apply_status_patch(
@@ -345,33 +374,49 @@ def _review_acceptance_statuses(
         task.sync_acceptance_criteria_view()
     task.metadata["v3_phase_review_rejections"] = rejected
     if not ambiguous_ids:
-        task.metadata["system_one_review"] = {"status": "used", **metadata}
+        review_metadata = {"status": "used", **metadata}
+        if focused_rereview is not None:
+            review_metadata["focused_rereview"] = focused_rereview.to_metadata()
+            review_metadata["status"] = "focused_rereview_resolved"
+        task.metadata["system_one_review"] = review_metadata
         context.emit_telemetry({
             "event": "system_one_review",
             "task_id": task.task_id,
             "phase_id": state.phase.phase_id,
-            "status": "used",
-            "duration_ms": system_one_result.duration_ms,
-            "model": system_one_result.model,
-            "usage": dict(system_one_result.usage),
+            "status": "focused_rereview_resolved" if focused_rereview is not None else "used",
+            "duration_ms": system_one_result.duration_ms + (focused_rereview.duration_ms if focused_rereview else 0),
+            "model": focused_rereview.model if focused_rereview else system_one_result.model,
+            "usage": dict(focused_rereview.usage if focused_rereview else system_one_result.usage),
         })
         return
+    if focused_rereview is not None:
+        metadata = {
+            **metadata,
+            "updates": [*metadata.get("updates", []), *focused_rereview.to_metadata().get("updates", [])],
+            "ambiguous_criterion_ids": sorted(ambiguous_ids),
+            "focused_rereview": focused_rereview.to_metadata(),
+        }
     task.metadata["system_one_review"] = {
-        "status": "partial_fallback" if confident_updates else "ambiguous_fallback",
+        "status": (
+            "focused_rereview_unresolved" if focused_rereview is not None
+            else "partial_fallback" if confident_updates else "ambiguous_fallback"
+        ),
         **metadata,
     }
     context.emit_telemetry({
         "event": "system_one_review",
         "task_id": task.task_id,
         "phase_id": state.phase.phase_id,
-        "status": "partial_fallback" if confident_updates else "ambiguous_fallback",
+        "status": (
+            "focused_rereview_unresolved" if focused_rereview is not None
+            else "partial_fallback" if confident_updates else "ambiguous_fallback"
+        ),
         "ambiguous_criterion_count": len(system_one_result.ambiguous_criterion_ids),
-        "duration_ms": system_one_result.duration_ms,
-        "model": system_one_result.model,
-        "usage": dict(system_one_result.usage),
+        "duration_ms": system_one_result.duration_ms + (focused_rereview.duration_ms if focused_rereview else 0),
+        "model": focused_rereview.model if focused_rereview else system_one_result.model,
+        "usage": dict(focused_rereview.usage if focused_rereview else system_one_result.usage),
     })
-    # Ambiguous evidence remains unresolved. Check does not call the inference
-    # model to break ties; Act receives that uncertainty in its Jev state.
+    # After one focused re-review, any remaining ambiguity is passed to Act.
 
 
 def _successful_evidence_refs(state: TacticalState) -> tuple[str, ...]:

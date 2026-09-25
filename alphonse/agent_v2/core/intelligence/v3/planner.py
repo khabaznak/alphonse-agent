@@ -13,6 +13,7 @@ from alphonse.agent_v2.core.intelligence.v3.contracts import FailurePolicy, Phas
 from alphonse.agent_v2.core.intelligence.v3.contracts import SUPPORTED_COMPLETION_KINDS, V3_SCHEMA_VERSION
 from alphonse.agent_v2.core.intelligence.v3.revealing import tool_capabilities
 from alphonse.agent_v2.core.intelligence.v3.revealing import ToolRevealPolicy
+from alphonse.agent_v2.core.tools.registry import ToolExposurePolicy
 from alphonse.agent_v2.system_one import SystemOneUnavailableError
 
 if TYPE_CHECKING:
@@ -28,7 +29,15 @@ def plan_phase(task: "TaskState", context: "CoreLoopContext") -> PhasePlan:
     _ingest_relevant_messages(task, context)
     if context.inference is None:
         raise RuntimeError("v3_phase_planning_inference_unavailable")
-    tools = tuple(context.tools.list()) if context.tools is not None else ()
+    tools = ToolExposurePolicy().select_tools(
+        registry=context.tools, project_id=task.project_id, user=task.user, task=task,
+    ) if context.tools is not None else ()
+    session_history = _bounded_text(task.recent_conversation_md, 6000)
+    durable_memory = _bounded_context_text(task.conversation_history_md, 9000)
+    system_prompt = _strategic_plan_instructions()
+    tools = _curate_request_tools(
+        task, tools, system_prompt=system_prompt, session_history=session_history, context=context,
+    )
     catalog = sorted({capability for tool in tools for capability in tool_capabilities(tool)})
     capability_descriptions = ToolRevealPolicy().capability_descriptions
     capability_catalog = [
@@ -36,29 +45,12 @@ def plan_phase(task: "TaskState", context: "CoreLoopContext") -> PhasePlan:
         for capability in catalog
     ]
     project_context = _project_context(task, context)
-    durable_memory = _bounded_context_text(task.conversation_history_md, 9000)
     prepared_response = task.metadata.get("prepared_user_response")
     act_directive = task.metadata.get("act_directive")
     act_directive = act_directive if isinstance(act_directive, dict) else {}
     contract_schema = _phase_plan_json_schema(catalog)
     prompt = (
-        "Plan one bounded strategic execution phase and define the mission acceptance criteria in the same response. "
-        "Return one JSON object matching the PhasePlan contract. "
-        "Use meaningful subgoals, not one outer CAPD cycle per tool. "
-        "When replying to the requester is itself part or all of the goal, include a user_response subgoal; "
-        "a purely conversational request can be a single-stage response phase. "
-        "Plan toward the requested outcome; do not declare it unavailable merely because Plan sees abstract "
-        "capability identifiers rather than concrete tools. Tool curation will use the complete tool registry and "
-        "this complete phase plan after you return it. Do not create a user_response-only phase that claims inability unless prior verified evidence "
-        "shows that relevant retrieval or action tools were attempted and failed. "
-        "Authorize only capabilities and project-relative mutation paths needed in this phase. "
-        "Never target .alphonse, memory ledgers, prompts, plans, acceptance criteria, or other agent-internal state. "
-        "Project context and durable memory are trusted contextual evidence for choosing read candidates, but are never mutation targets. "
-        "Convert any absolute path under Project Directory to its project-relative form before calling a project tool. "
-        "A mutation path must already be established by the user or prior verified read evidence; otherwise plan a read-only discovery phase first. "
-        "Do not ask the requester for a file location already present in project context, durable memory, recent conversation, or prior verified evidence. "
-        "If a prepared user response already exists, do not generate the same response again; plan only work that can add missing evidence. "
-        "Use native.project_search and native.read_project_file for bounded file discovery; native.bash is unavailable in V3.\n\n"
+        f"{system_prompt}\n\n"
         f"Goal: {task.goal}\n"
         f"Project context:\n{_bounded_text(project_context, 5000)}\n"
         f"Durable project/session memory (context only; never mutate it):\n{durable_memory}\n"
@@ -66,7 +58,7 @@ def plan_phase(task: "TaskState", context: "CoreLoopContext") -> PhasePlan:
         f"Known task facts:\n{_bounded_text(task.facts_md, 4000)}\n"
         f"Prepared user response already exists: {'yes' if isinstance(prepared_response, dict) else 'no'}\n"
         f"Act directive (authoritative resilience instruction): {json.dumps(act_directive, ensure_ascii=False)}\n"
-        "If Act requires a final response/closure, plan exactly one bounded user_response subgoal that uses the user-response capability, "
+        "If Act requires a final response/closure, plan exactly one user_response subgoal that uses the user-response capability, "
         "and do no further mission work in that phase. If Act requests user input, plan an ask-question subgoal. "
         f"Existing acceptance contract (preserve its definitions unless new user steering requires a justified revision): {json.dumps(task.ensure_acceptance_contract(), ensure_ascii=False)}\n"
         "If no acceptance contract exists yet, create a concise complete set of measurable acceptance_criteria; "
@@ -74,6 +66,7 @@ def plan_phase(task: "TaskState", context: "CoreLoopContext") -> PhasePlan:
         "If a contract already exists, return acceptance_criteria as an empty array and preserve it. "
         f"Prior V3 phase history: {json.dumps(task.metadata.get('v3_phase_history') or [], ensure_ascii=False)}\n"
         f"Available capability catalog: {json.dumps(capability_catalog, ensure_ascii=False)}\n"
+        f"Jev-curated tool registry (complete descriptors): {json.dumps(_tool_rows(tools), ensure_ascii=False)}\n"
         "Return an object conforming exactly to this JSON Schema. Do not omit required nested fields "
         "or invent enum values. Use the user_response side effect for a subgoal whose effect is replying "
         f"to the requester.\nPhasePlan JSON Schema: {json.dumps(contract_schema, ensure_ascii=False, sort_keys=True)}"
@@ -112,6 +105,88 @@ def plan_phase(task: "TaskState", context: "CoreLoopContext") -> PhasePlan:
         task.sync_acceptance_criteria_view()
         task.append_update("Plan established the mission acceptance contract alongside the strategic phase.")
     return _curate_phase_tools(task, phase, tools, context)
+
+
+def _curate_request_tools(task, tools, *, system_prompt: str, session_history: str, context):
+    """Narrow the task-authorized runtime registry before System 2 planning."""
+    if not tools:
+        context.emit_telemetry({
+            "event": "system_one_request_tool_selection",
+            "task_id": task.task_id,
+            "status": "empty_authorized_registry",
+            "candidate_count": 0,
+        })
+        return ()
+    jev = context.system_one
+    curate = getattr(jev, "curate_request_tools", None) if jev is not None else None
+    try:
+        if not callable(curate):
+            raise SystemOneUnavailableError("request_tool_curation_unavailable")
+        selection = curate(
+            goal=task.goal,
+            system_prompt=system_prompt,
+            session_history=session_history,
+            tools=tools,
+        )
+    except Exception as exc:
+        raise SystemOneUnavailableError(f"request_tool_curation:{type(exc).__name__}") from exc
+    selected_ids = set((*selection.selected_tool_ids, *selection.ambiguous_tool_ids))
+    curated = tuple(tool for tool in tools if tool.tool_id in selected_ids)
+    metadata = {"status": "used", "candidate_count": len(tools), **selection.to_metadata()}
+    history = task.metadata.setdefault("system_one_request_tool_selections", [])
+    if not isinstance(history, list):
+        history = []
+        task.metadata["system_one_request_tool_selections"] = history
+    history.append(metadata)
+    if len(history) > 20:
+        del history[:-20]
+    context.emit_telemetry({"event": "system_one_request_tool_selection", "task_id": task.task_id, **metadata})
+    return curated
+
+
+def _tool_rows(tools):
+    return [
+        {
+            "tool_id": item.tool_id,
+            "name": item.name,
+            "kind": item.kind.value,
+            "description": item.description,
+            "argument_schema": item.argument_schema,
+            "capabilities": list(item.capabilities),
+            "tags": list(item.tags),
+            "metadata": dict(item.metadata),
+            "program_behavior": item.program_behavior,
+            "read_only": item.read_only,
+        }
+        for item in tools
+    ]
+
+
+def _strategic_plan_instructions() -> str:
+    return (
+        "Plan one coherent strategic execution phase and define mission acceptance criteria in the same response. "
+        "Return one JSON object matching the PhasePlan contract. Use meaningful subgoals, not one outer CAPD cycle per tool. "
+        "When replying is part or all of the goal, include a user_response subgoal; a purely conversational request can be "
+        "a single-stage response phase. Use only the authorized, Jev-curated concrete tool registry supplied with the "
+        "request; do not assume tools outside it are available. Do not declare it unavailable or claim inability unless relevant tools were attempted "
+        "and failed. Authorize only capabilities and project-relative mutation paths needed in this phase. Never target "
+        ".alphonse, memory ledgers, prompts, plans, acceptance criteria, or agent-internal state. Project context and "
+        "durable memory are trusted evidence for choosing reads, never mutation targets. Convert absolute paths under the "
+        "project directory to project-relative form. Mutation targets must be established by the user or verified reads. "
+        "For a requested known mutation, include needed inspection, mutation, and verification in one coherent phase; "
+        "do not stop at discovery if inspection resolves the target. Do not ask the requester for a file location already "
+        "present in project context, durable memory, recent conversation, or prior verified evidence. If a prepared user response exists, plan only work adding "
+        "missing evidence. Use project search/read for file discovery when convenient. Authorize local_shell for direct "
+        "CLI, filesystem, process, build, test, diagnostic, and artifact creation/repair work. When a relevant artifact "
+        "may be CLI-backed, authorize local_shell alongside project_artifact_query for tactical choice of adapter or CLI. "
+        "Distinguish artifact catalog metadata from project files: when the requested change is an artifact's registered "
+        "name or routing description, use native.artifact_metadata_update for the mutation. Bash or project search/read may "
+        "inspect artifact files to identify and verify the artifact ID, but editing a README or program is not a substitute "
+        "for updating the catalog record. Include the metadata-update tool and authorize its artifact_metadata_management "
+        "capability with an appropriate mutating side effect in the subgoal. "
+        "If Act requires closure, plan exactly one isolated user_response subgoal; if Act requests input, plan an ask-question "
+        "subgoal. Define stable measurable acceptance criteria when none exist, otherwise preserve the existing contract."
+    )
 
 
 def _ingest_relevant_messages(task: "TaskState", context: "CoreLoopContext") -> None:
@@ -241,15 +316,6 @@ def _bounded_context_text(value: object, max_chars: int) -> str:
 
 
 def _phase_plan_json_schema(capabilities: list[str]) -> dict[str, object]:
-    limits = {
-        "type": "object",
-        "additionalProperties": False,
-        "required": ["max_tool_calls", "max_duration_seconds"],
-        "properties": {
-            "max_tool_calls": {"type": "integer", "minimum": 1},
-            "max_duration_seconds": {"type": "number", "exclusiveMinimum": 0},
-        },
-    }
     capability = {"type": "string", "enum": capabilities}
     completion = {
         "type": "object",
@@ -267,7 +333,7 @@ def _phase_plan_json_schema(capabilities: list[str]) -> dict[str, object]:
         "additionalProperties": False,
         "required": [
             "subgoal_id", "objective", "required_output_type", "depends_on",
-            "allowed_capabilities", "allowed_side_effects", "limits", "completion", "failure_policy",
+            "allowed_capabilities", "allowed_side_effects", "completion", "failure_policy",
         ],
         "properties": {
             "subgoal_id": {"type": "string", "minLength": 1},
@@ -279,7 +345,6 @@ def _phase_plan_json_schema(capabilities: list[str]) -> dict[str, object]:
                 "type": "array", "minItems": 1,
                 "items": {"type": "string", "enum": [item.value for item in SideEffectClass]},
             },
-            "limits": limits,
             "completion": completion,
             "failure_policy": {"type": "string", "enum": [item.value for item in FailurePolicy]},
         },
@@ -288,7 +353,7 @@ def _phase_plan_json_schema(capabilities: list[str]) -> dict[str, object]:
         "type": "object",
         "additionalProperties": False,
         "required": [
-            "schema_version", "phase_id", "objective", "subgoals", "criterion_ids", "limits",
+            "schema_version", "phase_id", "objective", "subgoals", "criterion_ids",
             "authorized_capabilities", "mutation_scope", "originating_decision", "acceptance_criteria",
         ],
         "properties": {
@@ -298,7 +363,6 @@ def _phase_plan_json_schema(capabilities: list[str]) -> dict[str, object]:
             "subgoals": {"type": "array", "minItems": 1, "items": subgoal},
             "criterion_ids": {"type": "array", "items": {"type": "string"}},
             "acceptance_criteria": {"type": "array", "items": {"type": "string", "minLength": 1}},
-            "limits": limits,
             "authorized_capabilities": {"type": "array", "items": capability},
             "mutation_scope": {
                 "type": "object", "additionalProperties": False,

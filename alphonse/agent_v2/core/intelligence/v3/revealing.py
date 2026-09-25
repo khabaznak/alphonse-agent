@@ -15,9 +15,11 @@ if TYPE_CHECKING:
 
 
 class Capability(str, Enum):
+    LOCAL_SHELL = "local_shell"
     PROJECT_RECORD_SEARCH = "project_record_search"
     PROJECT_FILE_INSPECTION = "project_file_inspection"
     PROJECT_ARTIFACT_QUERY = "project_artifact_query"
+    ARTIFACT_METADATA_MANAGEMENT = "artifact_metadata_management"
     MEMORY_RECALL = "memory_recall"
     ATTACHMENT_ANALYSIS = "attachment_analysis"
     DOCUMENT_EXTRACTION = "document_extraction"
@@ -50,9 +52,11 @@ class ToolRevealPolicy:
     max_tools: int | None = None
     max_schema_chars: int | None = None
     capability_descriptions: dict[str, str] = field(default_factory=lambda: {
+        Capability.LOCAL_SHELL.value: "Run local Bash commands for filesystem, process, build, test, diagnostic, and artifact work.",
         Capability.PROJECT_RECORD_SEARCH.value: "Find records and indexes inside the authorized project.",
         Capability.PROJECT_FILE_INSPECTION.value: "Inspect authorized project files and local process state.",
         Capability.PROJECT_ARTIFACT_QUERY.value: "Query a registered project artifact through its native client.",
+        Capability.ARTIFACT_METADATA_MANAGEMENT.value: "Update an owned artifact's catalog name and routing description without modifying its files.",
         Capability.MEMORY_RECALL.value: "Search bounded archived memory for the current project.",
         Capability.ATTACHMENT_ANALYSIS.value: "Analyze an image attached to the current task.",
         Capability.DOCUMENT_EXTRACTION.value: "Extract information from a discovered document.",
@@ -147,8 +151,6 @@ def _prerequisite_failure(
     descriptor: "ToolDescriptor",
     capabilities: tuple[str, ...],
 ) -> str:
-    if descriptor.tool_id == "native.bash":
-        return "unbounded_shell_disabled_in_v3"
     capability_set = set(capabilities)
     if Capability.ATTACHMENT_ANALYSIS.value in capability_set and not _has_analyzable_attachment(task, state):
         return "attachment_required"
@@ -159,7 +161,11 @@ def _prerequisite_failure(
             return "mutation_scope_required"
         if SideEffectClass.PROJECT_MUTATION not in subgoal.allowed_side_effects:
             return "project_mutation_not_allowed"
-    if not descriptor.read_only and not subgoal.allowed_side_effects:
+    if (
+        descriptor.kind.value != "artifact"
+        and not descriptor.read_only
+        and not subgoal.allowed_side_effects
+    ):
         return "side_effect_not_allowed"
     required_integration = str(descriptor.metadata.get("integration_id") or "").strip()
     if required_integration:
@@ -180,7 +186,7 @@ def _has_analyzable_attachment(task: "TaskState", state: TacticalState) -> bool:
 
 
 _TOOL_CAPABILITIES: dict[str, tuple[str, ...]] = {
-    "native.bash": (Capability.PROJECT_FILE_INSPECTION.value,),
+    "native.bash": (Capability.LOCAL_SHELL.value,),
     "native.project_search": (Capability.PROJECT_RECORD_SEARCH.value, Capability.PROJECT_FILE_INSPECTION.value),
     "native.read_project_file": (Capability.PROJECT_FILE_INSPECTION.value,),
     "native.search_memory": (Capability.MEMORY_RECALL.value,),
@@ -188,6 +194,7 @@ _TOOL_CAPABILITIES: dict[str, tuple[str, ...]] = {
     "native.exact_text_edit": (Capability.EXACT_TEXT_MUTATION.value,),
     "native.deliver_message": (Capability.COMMUNICATION.value,),
     "native.scheduled_task": (Capability.SCHEDULING.value,),
+    "native.artifact_metadata_update": (Capability.ARTIFACT_METADATA_MANAGEMENT.value,),
     "native.ask_question": (Capability.USER_INTERACTION.value,),
     "native.respond": (Capability.USER_RESPONSE.value,),
 }

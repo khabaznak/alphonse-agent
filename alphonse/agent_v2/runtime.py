@@ -188,7 +188,7 @@ def build_runtime_host(
     # injects the durable store explicitly.
     memory_settings_store = memory_settings_store or SQLiteMemorySettingsStore()
     system_one_settings_store = system_one_settings_store or SQLiteSystemOneSettingsStore()
-    tools = tools or build_native_tool_registry(web_tools_settings_store.get(), asset_store, media_tools_settings_store.get(), artifact_store)
+    tools = tools or build_native_tool_registry(web_tools_settings_store.get(), asset_store, media_tools_settings_store.get(), artifact_store, user_store=user_store)
     inference_settings_store = inference_settings_store or SQLiteInferenceSettingsStore()
     # Persistent daemon/TUI constructors pass `AgentConfigStore.default()`.
     # Generic test and helper runtimes only need the package defaults.
@@ -334,7 +334,7 @@ def refresh_runtime_media_tools(runtime: V2RuntimeHost) -> None:
 
 def refresh_runtime_artifacts(runtime: V2RuntimeHost) -> None:
     """Rebuild native and enabled artifact definitions for later PDCA planning."""
-    registry = build_native_tool_registry(runtime.web_tools_settings_store.get(), runtime.asset_store, runtime.media_tools_settings_store.get(), runtime.artifact_store, lambda: refresh_runtime_artifacts(runtime))
+    registry = build_native_tool_registry(runtime.web_tools_settings_store.get(), runtime.asset_store, runtime.media_tools_settings_store.get(), runtime.artifact_store, lambda: refresh_runtime_artifacts(runtime), runtime.user_store)
     for definition in build_artifact_tool_definitions(runtime.artifact_store, runtime.project_store):
         registry.register(definition)
     runtime.core.tools = registry

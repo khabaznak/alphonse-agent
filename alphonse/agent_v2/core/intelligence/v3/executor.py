@@ -4,11 +4,10 @@ from __future__ import annotations
 
 import json
 import time
-from datetime import datetime
 from typing import TYPE_CHECKING, Any, Callable
 from uuid import uuid4
 
-from alphonse.agent_v2.core.core import ImprovementPhase
+from alphonse.agent_v2.core.core import ImprovementPhase, ToolKind
 from alphonse.agent_v2.core.inference import InferencePurpose, InferenceRequest
 from alphonse.agent_v2.core.intelligence.v3.contracts import PhaseOutcome
 from alphonse.agent_v2.core.intelligence.v3.contracts import PhaseStatus
@@ -19,6 +18,7 @@ from alphonse.agent_v2.core.intelligence.v3.contracts import TacticalState
 from alphonse.agent_v2.core.intelligence.v3.revealing import ToolRevealPolicy
 from alphonse.agent_v2.core.messages.queue import MessageSelector
 from alphonse.agent_v2.core.tools.invocation import ToolInvocationService
+from alphonse.agent_v2.core.tools.registry.native.bash import BASH_TOOL_ID
 from alphonse.agent_v2.core.tools.registry.native.respond import RESPOND_TOOL_ID
 from alphonse.agent_v2.system_one import SystemOneUnavailableError
 
@@ -27,12 +27,11 @@ if TYPE_CHECKING:
     from alphonse.agent_v2.core.intelligence.task_state import TaskState
 
 ActionSelector = Callable[[TacticalState, PhaseSubgoal, tuple["ToolDescriptor", ...]], dict[str, Any] | None]
-MAX_TACTICAL_RETRIES = 2
 TACTICAL_RETRY_BASE_SECONDS = 1.0
 
 
 class PhaseExecutor:
-    """Run tactical actions until a phase reaches a bounded outcome."""
+    """Run tactical actions until a phase reaches a real outcome."""
 
     def __init__(self, *, action_selector: ActionSelector | None = None, reveal_policy: ToolRevealPolicy | None = None) -> None:
         self._action_selector = action_selector
@@ -83,7 +82,6 @@ class PhaseExecutor:
                     if interruption is not None:
                         self._checkpoint(task, state, context)
                         return interruption
-                state.consume_tool_call()
                 state.actions.append(action)
                 self._checkpoint(task, state, context)
                 context.emit_activity(
@@ -96,7 +94,6 @@ class PhaseExecutor:
                         "action_id": action.action_id,
                         "tool_id": action.tool_id,
                         "retry_attempt": retry_count,
-                        "remaining_tool_calls": state.remaining_tool_calls,
                     },
                 )
                 outcome = ToolInvocationService(context=context, task=task).invoke(
@@ -128,13 +125,32 @@ class PhaseExecutor:
                     }
                 )
                 self._checkpoint(task, state, context)
-                completion_met, retry_approved = self._completion_review(task, state, subgoal, completed, context)
+                completion_met, retry_approved, progress_review = self._completion_review(
+                    task, state, subgoal, completed, context
+                )
+                state.evidence.entries[-1]["progress_review"] = {
+                    "complete": completion_met,
+                    "confident": bool(progress_review.get("confident")),
+                    "confidence": progress_review.get("confidence"),
+                    "retry_approved": retry_approved,
+                    "answers": dict(progress_review.get("answers") or {}),
+                }
+                repeated_evidence = (
+                    _matching_prior_incomplete_result(state, completed)
+                    if not completion_met and completed.status == "success"
+                    else None
+                )
+                if repeated_evidence is not None:
+                    blocker = f"tactical_action_repeated_without_progress:{repeated_evidence}"
+                    state.evidence.entries[-1]["semantic_duplicate_of"] = repeated_evidence
+                    state.evidence.entries[-1]["no_progress_blocker"] = blocker
+                    state.transition(PhaseStatus.BLOCKED)
+                    self._checkpoint(task, state, context)
+                    return self._outcome(state, blocker, blockers=(blocker,))
+                self._checkpoint(task, state, context)
                 retry_available = (
                     completed.status == "failed"
                     and retry_approved
-                    and retry_count < MAX_TACTICAL_RETRIES
-                    and int(state.remaining_tool_calls or 0) > 0
-                    and self._subgoal_calls(state, subgoal.subgoal_id) < subgoal.limits.max_tool_calls
                     and _retry_is_safe(completed, context)
                 )
                 if not retry_available:
@@ -167,10 +183,6 @@ class PhaseExecutor:
                     return failure
                 continue
             if not completion_met:
-                if self._subgoal_calls(state, subgoal.subgoal_id) >= subgoal.limits.max_tool_calls:
-                    state.transition(PhaseStatus.BUDGET_EXHAUSTED)
-                    self._checkpoint(task, state, context)
-                    return self._outcome(state, "The subgoal call budget was exhausted before its completion condition was met.")
                 continue
             if completed.tool_id == RESPOND_TOOL_ID and isinstance(completed.result, dict):
                 message = str(completed.result.get("message") or "").strip()
@@ -225,7 +237,13 @@ class PhaseExecutor:
             return selected
         if context.inference is None:
             return None
-        prompt = _tactical_prompt(state, subgoal, tools, goal=task.goal)
+        prompt = _tactical_prompt(
+            state,
+            subgoal,
+            tools,
+            goal=task.goal,
+            task_project_root=_task_project_root(task, context),
+        )
         result = context.inference.generate_json(
             InferenceRequest(
                 prompt=prompt,
@@ -280,7 +298,7 @@ class PhaseExecutor:
         subgoal: PhaseSubgoal,
         action: TacticalAction,
         context: "CoreLoopContext",
-    ) -> tuple[bool, bool]:
+    ) -> tuple[bool, bool, dict[str, Any]]:
         deterministic = _condition_met(subgoal, action.result)
         if context.system_one is None or not hasattr(context.system_one, "evaluate_tactical_progress"):
             raise SystemOneUnavailableError("tactical_acceptance_unavailable")
@@ -315,7 +333,7 @@ class PhaseExecutor:
             "phase_id": state.phase.phase_id, "subgoal_id": subgoal.subgoal_id,
             "action_id": action.action_id, **metadata,
         })
-        return result, retry_approved
+        return result, retry_approved, metadata
 
     @staticmethod
     def _validate_action(
@@ -331,7 +349,16 @@ class PhaseExecutor:
             raise ValueError(f"tactical_tool_not_revealed:{tool_id or '(missing)'}")
         if not isinstance(arguments, dict):
             raise ValueError("tactical_tool_arguments_invalid")
-        if not descriptor.read_only and SideEffectClass.READ_ONLY in subgoal.allowed_side_effects and len(subgoal.allowed_side_effects) == 1:
+        # Registered artifacts and the explicitly restored full Bash capability
+        # are trusted execution paths. Do not apply the generic native-tool
+        # read-only classification to either one.
+        if (
+            descriptor.kind != ToolKind.ARTIFACT
+            and descriptor.tool_id != BASH_TOOL_ID
+            and not descriptor.read_only
+            and SideEffectClass.READ_ONLY in subgoal.allowed_side_effects
+            and len(subgoal.allowed_side_effects) == 1
+        ):
             raise PermissionError(f"tactical_side_effect_not_authorized:{tool_id}")
         if tool_id == "native.exact_text_edit":
             path = str(arguments.get("path") or "").strip().replace("\\", "/")
@@ -381,21 +408,11 @@ class PhaseExecutor:
             state.steering_pending = True
             state.transition(PhaseStatus.BLOCKED)
             return PhaseExecutor._outcome(state, "New steering requires outer contract review.", blockers=("steering_pending",))
-        if int(state.remaining_tool_calls or 0) <= 0:
-            state.transition(PhaseStatus.BUDGET_EXHAUSTED)
-            return PhaseExecutor._outcome(state, "The phase tool-call budget was exhausted.")
-        if state.deadline_at and datetime.now().astimezone() >= datetime.fromisoformat(state.deadline_at):
-            state.transition(PhaseStatus.BUDGET_EXHAUSTED)
-            return PhaseExecutor._outcome(state, "The phase deadline was reached.")
         return None
 
     @staticmethod
     def _active_subgoal(state: TacticalState) -> PhaseSubgoal:
         return next(item for item in state.phase.subgoals if item.subgoal_id == state.active_subgoal_id)
-
-    @staticmethod
-    def _subgoal_calls(state: TacticalState, subgoal_id: str) -> int:
-        return sum(1 for item in state.actions if item.subgoal_id == subgoal_id)
 
     @staticmethod
     def _checkpoint(task: "TaskState", state: TacticalState, context: "CoreLoopContext") -> None:
@@ -462,19 +479,47 @@ def _steering_is_pending(task: "TaskState", context: "CoreLoopContext") -> bool:
 
 
 def _tactical_prompt(
-    state: TacticalState, subgoal: PhaseSubgoal, tools: tuple["ToolDescriptor", ...], *, goal: str = ""
+    state: TacticalState,
+    subgoal: PhaseSubgoal,
+    tools: tuple["ToolDescriptor", ...],
+    *,
+    goal: str = "",
+    task_project_root: str = "",
 ) -> str:
     tool_rows = [
-        {"tool_id": item.tool_id, "name": item.name, "description": item.description, "schema": item.argument_schema}
+        {
+            "tool_id": item.tool_id,
+            "name": item.name,
+            "kind": item.kind.value,
+            "description": item.description,
+            "argument_schema": item.argument_schema,
+            "capabilities": list(item.capabilities),
+            "tags": list(item.tags),
+            "metadata": dict(item.metadata),
+            "program_behavior": item.program_behavior,
+            "read_only": item.read_only,
+        }
         for item in tools
     ]
     return (
-        "Select exactly one concrete tactical action for the current bounded subgoal and define acceptance questions for its result. "
-        "Do not change the objective, acceptance criteria, mutation scope, or budgets. "
+        "Select exactly one concrete tactical action for the current subgoal and define acceptance questions for its result. "
+        "Do not change the objective, acceptance criteria, or mutation scope. "
         "Return JSON with tool_id, arguments, and a non-empty acceptance_questions array. Each item must be a Noul question "
         "shaped as {question_id, type:'noul', instructions, criteria:{true, false}}. Questions must evaluate the tool result "
-        "against the stage goal and relevant acceptance criteria.\n\n"
+        "against the stage goal and relevant acceptance criteria. Treat successful prior action results as authoritative inputs "
+        "for the next action even when they did not complete the subgoal. Do not repeat a successful discovery/list action when "
+        "its result already supplies the identifier needed by another operation in the same tool schema; compose that follow-up "
+        "operation with the discovered identifier.\n\n"
+        "Every completed execution-log entry includes progress_review.complete from Jev. When it is false, the call "
+        "executed but did not make semantic progress. Do not select the same tool with the same arguments again; "
+        "choose different arguments or another revealed tool. For a CLI-backed artifact whose adapter returns the wrong "
+        "result shape, use native.bash to inspect or invoke the underlying CLI when Bash is revealed.\n\n"
+        "The tool entries below include their complete registry descriptors: descriptions, schemas, capabilities, tags, "
+        "metadata, program behavior, and read-only semantics. Treat description and metadata as operational guidance. "
+        "Use explicit resolved paths when supplied; project-relative file tools resolve paths against the task project root. "
+        "For native.bash, an omitted cwd uses the task project root shown below. Artifact project roots may differ from it.\n\n"
         f"Goal: {goal}\n"
+        f"Task project root: {task_project_root or '(unavailable)'}\n"
         f"Strategic plan: {json.dumps(state.phase.to_dict(), ensure_ascii=False)}\n"
         f"Stage goal: {json.dumps(subgoal.__dict__, default=str, ensure_ascii=False)}\n"
         f"Complete tool execution log (every entry, no omissions or truncation):\n{state.prompt_projection(max_evidence_entries=None, max_chars=None)}\n\n"
@@ -487,6 +532,38 @@ def _error_message(value: Any) -> str:
     if isinstance(value, dict):
         return str(value.get("message") or value.get("code") or "").strip()
     return str(value or "").strip()
+
+
+def _task_project_root(task: "TaskState", context: "CoreLoopContext") -> str:
+    if context.project_store is None or not str(task.project_id or "").strip():
+        return ""
+    get_project = getattr(context.project_store, "get_project", None)
+    if not callable(get_project):
+        return ""
+    try:
+        project = get_project(task.project_id, requester_user_id=task.user)
+        if project is None:
+            return ""
+        return str(project.root_path)
+    except (KeyError, OSError, PermissionError):
+        return ""
+
+
+def _matching_prior_incomplete_result(state: TacticalState, completed: TacticalAction) -> str | None:
+    """Find equivalent prior evidence that Jev already judged incomplete."""
+    for evidence in reversed(state.evidence.entries[:-1]):
+        review = evidence.get("progress_review")
+        if not isinstance(review, dict) or review.get("complete") is not False:
+            continue
+        if (
+            str(evidence.get("subgoal_id") or "") == completed.subgoal_id
+            and str(evidence.get("tool_id") or "") == completed.tool_id
+            and evidence.get("arguments") == completed.arguments
+            and evidence.get("result") == completed.result
+        ):
+            action_ref = str(evidence.get("evidence_ref") or "").removeprefix("tactical-action:")
+            return action_ref or "unknown"
+    return None
 
 
 def _retry_is_safe(action: TacticalAction, context: "CoreLoopContext") -> bool:

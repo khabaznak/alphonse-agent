@@ -139,17 +139,16 @@ class A2UiAdapter:
         if not normalized_task_id:
             raise ValueError("task_id_required")
         surface_id = task_progress_surface_id(normalized_task_id)
-        phase = str(progress.get("phase") or "working").strip().title()
-        label = str(progress.get("label") or "Working").strip()
-        message = str(progress.get("message") or "").strip()
+        status = str(progress.get("status") or "running").strip().replace("_", " ").title()
+        goal = str(progress.get("goal") or "").strip()
         criteria = str(progress.get("acceptance_criteria") or "").strip()
         tool_name = str(progress.get("tool_name") or "").strip()
         tool_status = str(progress.get("tool_status") or "").strip()
         children = ["status", "summary"]
         components: list[dict[str, Any]] = [
             {"id": "root", "component": "Card", "children": children},
-            {"id": "status", "component": "Status", "text": f"Alphonse is working · {phase}"},
-            {"id": "summary", "component": "Text", "text": " · ".join(part for part in (label, message) if part)},
+            {"id": "status", "component": "Status", "text": f"Task status · {status}"},
+            {"id": "summary", "component": "Text", "text": goal},
         ]
         if criteria:
             children.append("criteria")
@@ -172,25 +171,36 @@ class A2UiAdapter:
             components.append({"id": "result", "component": "Text", "text": f"Output: {_compact_value(result)}"})
         steps = progress.get("steps") if isinstance(progress.get("steps"), list) else []
         step_ids: list[str] = []
-        table_rows: list[dict[str, Any]] = []
         for index, step in enumerate(steps):
             if not isinstance(step, dict):
                 continue
             component_id = f"step_{index}"
             step_ids.append(component_id)
-            lines = [f"{index + 1}. {str(step.get('tool_name') or 'Tool')} · {str(step.get('status') or 'planned')}"]
+            tool_name = str(step.get("tool_name") or "Tool").strip()
+            status = str(step.get("status") or "planned").strip()
+            attempt = str(step.get("attempt") or index + 1)
+            lines = [f"Attempt {attempt} · {tool_name} · {status}", "Details:"]
             if str(step.get("intention") or "").strip():
                 lines.append(f"Intention: {str(step.get('intention')).strip()}")
+            action = step.get("action")
+            if action not in (None, "", {}, []):
+                lines.append(f"Action: {_compact_value(action, limit=10_000)}")
             if step.get("arguments") not in (None, "", {}, []):
-                lines.append(f"Input: {_compact_value(step.get('arguments'))}")
+                lines.append(f"Input: {_compact_value(step.get('arguments'), limit=6_000)}")
             if step.get("result") not in (None, "", {}, []):
                 lines.append(f"Output: {_compact_value(step.get('result'))}")
             components.append({"id": component_id, "component": "Text", "text": "\n".join(lines)})
-            table_rows.append({"cells": {"step": index + 1, "tool": str(step.get("tool_name") or "Tool"), "status": str(step.get("status") or "planned")}})
         if step_ids:
             components.append({"id": "steps", "component": "List", "children": step_ids, "direction": "vertical"})
-            components.append({"id": "step_table", "component": "Table", "columns": [{"id": "step", "label": "Step", "align": "right"}, {"id": "tool", "label": "Tool"}, {"id": "status", "label": "Status"}], "rows": table_rows})
-            children.extend(["steps", "step_table"])
+            children.append("steps")
+        task_context = []
+        for label, key in (("Goal", "goal"), ("Facts", "facts"), ("Memory facts", "memory_facts"), ("Recent conversation", "recent_conversation"), ("Conversation history", "conversation_history"), ("Task updates", "updates"), ("Evidence", "evidence"), ("Question", "question"), ("Outcome", "outcome")):
+            value = progress.get(key)
+            if value not in (None, "", {}, []):
+                task_context.append(f"{label}: {_compact_value(value)}")
+        if task_context:
+            children.append("task_context")
+            components.append({"id": "task_context", "component": "Text", "text": "\n\n".join(task_context)})
         messages = [
             {"version": A2UI_VERSION, "createSurface": {"surfaceId": surface_id, "catalogId": self.catalog_id, "sendDataModel": False}},
             {"version": A2UI_VERSION, "updateComponents": {"surfaceId": surface_id, "components": components}},
@@ -229,9 +239,9 @@ def _scheduled_date_display(next_run_at: str, timezone_name: str) -> tuple[str, 
     return local.strftime("%b").upper(), str(local.day), f"{local.strftime('%A, %B')} {local.day} at {clock}"
 
 
-def _compact_value(value: Any) -> str:
+def _compact_value(value: Any, *, limit: int = 700) -> str:
     text = str(value)
-    return text if len(text) <= 700 else f"{text[:699]}…"
+    return text if len(text) <= limit else f"{text[:limit - 1]}…"
 
 
 def question_id_from_surface(surface_id: str) -> str:

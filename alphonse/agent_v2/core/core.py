@@ -273,8 +273,8 @@ class CoreLoopContext:
 _SENSITIVE_PROGRESS_KEYS = ("secret", "token", "password", "authorization", "cookie", "api_key", "apikey")
 
 
-def _task_progress_snapshot(task: Any, extra: dict[str, Any] | None = None) -> dict[str, Any]:
-    """Create an owner-safe operational trace without model prompts or reasoning."""
+def _task_progress_snapshot(task: Any) -> dict[str, Any]:
+    """Build the Desktop progress view from the current TaskState only."""
     metadata = getattr(task, "metadata", {}) if isinstance(getattr(task, "metadata", {}), dict) else {}
     planned = metadata.get("planned_tool_call") if isinstance(metadata.get("planned_tool_call"), dict) else None
     latest_call = getattr(task, "get_latest_executed_plan_call", None)
@@ -287,16 +287,21 @@ def _task_progress_snapshot(task: Any, extra: dict[str, Any] | None = None) -> d
     except (TypeError, ValueError):
         plan_calls = []
     steps = []
-    for call in plan_calls[-10:] if isinstance(plan_calls, list) else []:
+    task_calls = plan_calls if isinstance(plan_calls, list) else []
+    recent_calls = task_calls[-10:]
+    for attempt, call in enumerate(recent_calls, start=max(1, len(task_calls) - len(recent_calls) + 1)):
         if not isinstance(call, dict):
             continue
         call_execution = call.get("execution") if isinstance(call.get("execution"), dict) else {}
+        tool_id = str(call.get("tool_id") or "").strip()
         steps.append({
+            "attempt": attempt,
             "intention": _truncate_progress(str(call.get("internal_state") or ""), 500),
-            "tool_name": str(call.get("tool_name") or call.get("tool_id") or "").strip(),
-            "arguments": _safe_progress_value(call.get("arguments")),
+            "tool_name": str(call.get("tool_name") or _progress_tool_label(tool_id) or ("Program (Python)" if call.get("execution_mode") == "program" else "Tool")).strip(),
+            "arguments": _safe_progress_value(call.get("arguments"), limit=6000),
+            "action": _safe_progress_value(call.get("program"), limit=10000) if call.get("execution_mode") == "program" else None,
             "status": str(call_execution.get("status") or "planned").strip(),
-            "result": _safe_progress_value(call_execution.get("result")),
+            "result": _safe_progress_value(call_execution.get("result"), limit=4000),
         })
     hierarchical_state = getattr(task, "hierarchical_state", {})
     hierarchical_state = hierarchical_state if isinstance(hierarchical_state, dict) else {}
@@ -309,18 +314,21 @@ def _task_progress_snapshot(task: Any, extra: dict[str, Any] | None = None) -> d
     v3_actions = [item for item in hierarchical_state.get("actions") or [] if isinstance(item, dict)]
     if v3_actions:
         steps = []
-        for action in v3_actions[-10:]:
+        recent_actions = v3_actions[-10:]
+        for attempt, action in enumerate(recent_actions, start=max(1, len(v3_actions) - len(recent_actions) + 1)):
             subgoal_id = str(action.get("subgoal_id") or "").strip()
             result = action.get("result")
             error = str(action.get("error") or "").strip()
             if result in (None, "", {}, []) and error:
                 result = {"error": error}
             steps.append({
+                "attempt": attempt,
                 "intention": _truncate_progress(subgoal_intentions.get(subgoal_id, ""), 500),
-                "tool_name": str(action.get("tool_id") or "").strip(),
-                "arguments": _safe_progress_value(action.get("arguments")),
+                "tool_name": _progress_tool_label(str(action.get("tool_id") or "").strip()),
+                "arguments": _safe_progress_value(action.get("arguments"), limit=6000),
+                "action": _safe_progress_value(action.get("command") or action.get("action"), limit=10000),
                 "status": str(action.get("status") or "planned").strip(),
-                "result": _safe_progress_value(result),
+                "result": _safe_progress_value(result, limit=4000),
             })
         current = v3_actions[-1]
         current_subgoal_id = str(current.get("subgoal_id") or "").strip()
@@ -343,36 +351,53 @@ def _task_progress_snapshot(task: Any, extra: dict[str, Any] | None = None) -> d
     return {
         "project_id": str(getattr(task, "project_id", "") or "").strip(),
         "acceptance_criteria": _truncate_progress(acceptance_criteria, 1200),
-        "tool_name": str(selected.get("tool_name") or selected.get("tool_id") or "").strip(),
+        "tool_name": str(selected.get("tool_name") or _progress_tool_label(str(selected.get("tool_id") or "").strip())).strip(),
         "tool_arguments": _safe_progress_value(selected.get("arguments") if isinstance(selected, dict) else {}),
-        "tool_result": _safe_progress_value(execution.get("result") if isinstance(execution, dict) else None),
+        "tool_result": _safe_progress_value(execution.get("result") if isinstance(execution, dict) else None, limit=4000),
         "tool_status": str(execution.get("status") or "").strip() if isinstance(execution, dict) else "",
         "intention": _truncate_progress(str(selected.get("internal_state") or ""), 500),
         "steps": steps,
+        "goal": _truncate_progress(str(getattr(task, "goal", "") or ""), 1200),
+        "facts": _truncate_progress(str(getattr(task, "facts_md", "") or ""), 3000),
+        "memory_facts": _truncate_progress(str(getattr(task, "memory_facts_md", "") or ""), 3000),
+        "recent_conversation": _truncate_progress(str(getattr(task, "recent_conversation_md", "") or ""), 3000),
+        "conversation_history": _truncate_progress(str(getattr(task, "conversation_history_md", "") or ""), 5000),
+        "updates": _truncate_progress(str(getattr(task, "updates_md", "") or ""), 3000),
+        "evidence": _safe_progress_value(getattr(task, "evidence_journal", [])[-10:], limit=3000),
+        "question": _safe_progress_value(metadata.get("question_interrupt")),
+        "outcome": _safe_progress_value(getattr(task, "outcome", None)),
         "status": str(getattr(task, "status", "") or "").strip(),
-        **{str(key): _safe_progress_value(value) for key, value in dict(extra or {}).items()},
     }
 
 
-def _safe_progress_value(value: Any, *, key: str = "", depth: int = 0) -> Any:
+def _safe_progress_value(value: Any, *, key: str = "", depth: int = 0, limit: int = 500) -> Any:
     if any(marker in key.lower() for marker in _SENSITIVE_PROGRESS_KEYS):
         return "[redacted]"
     if depth >= 3:
         return "[truncated]"
     if isinstance(value, str):
-        return _truncate_progress(value, 500)
+        return _truncate_progress(value, limit)
     if isinstance(value, (int, float, bool)) or value is None:
         return value
     if isinstance(value, list):
-        return [_safe_progress_value(item, depth=depth + 1) for item in value[:12]]
+        return [_safe_progress_value(item, depth=depth + 1, limit=limit) for item in value[:12]]
     if isinstance(value, dict):
-        return {str(item_key): _safe_progress_value(item_value, key=str(item_key), depth=depth + 1) for item_key, item_value in list(value.items())[:20]}
-    return _truncate_progress(str(value), 500)
+        return {str(item_key): _safe_progress_value(item_value, key=str(item_key), depth=depth + 1, limit=limit) for item_key, item_value in list(value.items())[:20]}
+    return _truncate_progress(str(value), limit)
 
 
 def _truncate_progress(value: str, limit: int) -> str:
     text = str(value or "").strip()
     return text if len(text) <= limit else f"{text[:limit - 1]}…"
+
+
+def _progress_tool_label(tool_id: str) -> str:
+    normalized = str(tool_id or "").strip()
+    if normalized.startswith("native."):
+        return normalized.removeprefix("native.").replace("_", " ").title()
+    if normalized.startswith("artifact."):
+        return f"Artifact · {normalized.removeprefix('artifact.')}"
+    return normalized
 
 
 class IntelligenceProcessor(Protocol):
@@ -552,7 +577,7 @@ class AlphonseCore:
                     user=str(task.user or ""),
                     integration_id=str(channel.get("integration_id") or ""),
                     channel_target=str(channel.get("channel_target") or ""),
-                    progress=_task_progress_snapshot(task, event.progress),
+                    progress=_task_progress_snapshot(task),
                 )
             )
         try:

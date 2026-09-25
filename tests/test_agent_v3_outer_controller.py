@@ -7,7 +7,6 @@ from alphonse.agent_v2.core.inference import InferencePurpose, InferenceRouter, 
 from alphonse.agent_v2.core.intelligence.task_state import TaskState
 from alphonse.agent_v2.core.intelligence.v3 import CompletionCondition
 from alphonse.agent_v2.core.intelligence.v3 import MutationScope
-from alphonse.agent_v2.core.intelligence.v3 import PhaseLimits
 from alphonse.agent_v2.core.intelligence.v3 import PhaseOutcome
 from alphonse.agent_v2.core.intelligence.v3 import PhasePlan
 from alphonse.agent_v2.core.intelligence.v3 import PhaseReviewStatus
@@ -18,7 +17,7 @@ from alphonse.agent_v2.core.intelligence.v3 import SideEffectClass
 from alphonse.agent_v2.core.intelligence.v3 import V3OuterController
 from alphonse.agent_v2.core.intelligence.v3 import new_tactical_state
 from alphonse.agent_v2.core.messages import InMemoryMessageQueue
-from alphonse.agent_v2.system_one import SystemOneReviewResult
+from alphonse.agent_v2.system_one import SystemOneActRecommendation, SystemOneReviewResult
 
 
 def _phase():
@@ -33,7 +32,6 @@ def _phase():
         criterion_ids=("ac-1",),
         authorized_capabilities=("exact_text_mutation",),
         mutation_scope=MutationScope(("backlog.md",)),
-        limits=PhaseLimits(2, 20),
     )
 
 
@@ -110,7 +108,7 @@ def test_completed_phase_with_unmet_criteria_routes_to_next_phase() -> None:
     assert "prepared_user_response" not in task.metadata
 
 
-def test_three_completed_phases_without_acceptance_progress_fail_fast() -> None:
+def test_repeated_completed_phases_without_acceptance_progress_keep_routing() -> None:
     task = _task()
     context, _ = _context(satisfy=False)
     controller = V3OuterController()
@@ -122,17 +120,48 @@ def test_three_completed_phases_without_acceptance_progress_fail_fast() -> None:
             PhaseOutcome("solar", PhaseStatus.PHASE_COMPLETE),
             context,
         )[1]
-        for _ in range(3)
+        for _ in range(5)
     ]
 
-    assert [decision.action for decision in decisions] == [
-        StrategicAction.CONTINUE,
-        StrategicAction.CONTINUE,
-        StrategicAction.FAIL,
-    ]
-    assert task.status == "failed"
-    assert task.metadata["v3_consecutive_no_progress_phases"] == 3
-    assert "no acceptance-criteria progress" in task.outcome["reason"]
+    assert [decision.action for decision in decisions] == [StrategicAction.CONTINUE] * 5
+    assert task.status == "executing"
+    assert "v3_consecutive_no_progress_phases" not in task.metadata
+
+
+def test_continue_choice_with_uncertain_continuation_replans_instead_of_failing() -> None:
+    class Jev:
+        def evaluate(self, **_values):
+            return SystemOneReviewResult(updates=(), ambiguous_criterion_ids=("ac-1",))
+
+        def recommend_act(self, *, state):
+            assert state["check_verdict"] == "wip"
+            return SystemOneActRecommendation(
+                "continue",
+                0.91,
+                True,
+                "More authorized work under the current strategy is likely to make useful progress.",
+                answers={
+                    "continuation_is_worthwhile": 0.72,
+                    "user_input_can_unblock": 0.1,
+                    "closure_explanation_is_warranted": 0.75,
+                },
+            )
+
+    task = _task()
+    context = CoreLoopContext(messages=InMemoryMessageQueue(), system_one=Jev())
+
+    _review, decision = V3OuterController().review_and_route(
+        task,
+        _completed_state(),
+        PhaseOutcome("solar", PhaseStatus.PHASE_COMPLETE),
+        context,
+    )
+
+    assert decision.action == StrategicAction.REPLAN
+    assert task.status != "failed"
+    assert task.metadata["v3_route"] == "strategic_replan"
+    assert "returning to Plan" in decision.reason
+    assert "More authorized work" not in decision.reason
 
 
 def test_scope_violation_prevents_completion_without_model_review() -> None:
@@ -257,6 +286,91 @@ def test_system_one_check_and_act_can_conservatively_withhold_completion() -> No
     assert provider.requests == []
 
 
+def test_ambiguous_acceptance_criterion_is_focused_rereviewed_before_act() -> None:
+    task = _task()
+    context, _ = _context(satisfy=False)
+
+    class _AmbiguousThenResolvedSystemOne(_SystemOne):
+        def __init__(self):
+            super().__init__()
+            self.reviews = []
+
+        def evaluate(self, **values):
+            self.reviews.append(values)
+            if len(self.reviews) == 1:
+                return SystemOneReviewResult(
+                    updates=(), ambiguous_criterion_ids=("ac-1",),
+                )
+            return SystemOneReviewResult(
+                updates=({
+                    "criterion_id": "ac-1",
+                    "status": "satisfied",
+                    "evidence_refs": ["tactical-action:edit"],
+                    "reason": "The ordered inspection evidence precedes the verified update.",
+                },),
+                ambiguous_criterion_ids=(),
+            )
+
+        def recommend_act(self, **_values):
+            return SystemOneActRecommendation(
+                action="complete", confidence=0.99, confident=True,
+                rationale="All criteria have supporting evidence.",
+                answers={
+                    "continuation_is_worthwhile": 0.1,
+                    "user_input_can_unblock": 0.1,
+                    "closure_explanation_is_warranted": 0.9,
+                },
+            )
+
+    system_one = _AmbiguousThenResolvedSystemOne()
+    context.system_one = system_one
+
+    review, _decision = V3OuterController().review_and_route(
+        task, _completed_state(), PhaseOutcome("solar", PhaseStatus.PHASE_COMPLETE), context,
+    )
+
+    assert len(system_one.reviews) == 2
+    assert [item["id"] for item in system_one.reviews[1]["contract"]["criteria"]] == ["ac-1"]
+    assert system_one.reviews[1]["phase"]["review_focus"]["criterion_ids"] == ["ac-1"]
+    assert review.status == PhaseReviewStatus.PHASE_VERIFIED_TASK_COMPLETE
+    assert task.acceptance_criteria_all_complete()
+    assert task.metadata["system_one_review"]["status"] == "focused_rereview_resolved"
+
+
+def test_fail_explain_recommendation_does_not_close_a_completed_incomplete_phase() -> None:
+    task = _task()
+    context, _ = _context(satisfy=False)
+
+    class _FailExplainSystemOne(_SystemOne):
+        def evaluate(self, **_values):
+            return SystemOneReviewResult(
+                updates=(), ambiguous_criterion_ids=(),
+                recommended_route="continue", route_confidence=0.5, route_confident=False,
+            )
+
+        def recommend_act(self, **_values):
+            return SystemOneActRecommendation(
+                action="fail_explain", confidence=0.94, confident=True,
+                rationale="Continue fuse was low after a prerequisite phase.",
+                answers={
+                    "continuation_is_worthwhile": 0.2,
+                    "user_input_can_unblock": 0.1,
+                    "closure_explanation_is_warranted": 0.95,
+                },
+            )
+
+    context.system_one = _FailExplainSystemOne()
+
+    review, decision = V3OuterController().review_and_route(
+        task, _completed_state(), PhaseOutcome("solar", PhaseStatus.PHASE_COMPLETE), context,
+    )
+
+    assert review.status == PhaseReviewStatus.PHASE_VERIFIED_TASK_INCOMPLETE
+    assert decision.action == StrategicAction.CONTINUE
+    assert task.metadata["v3_route"] == "plan_next_phase"
+    assert "act_directive" not in task.metadata
+
+
 def test_system_one_failure_falls_back_to_existing_phase_review() -> None:
     task = _task()
     context, provider = _context()
@@ -322,7 +436,7 @@ def test_system_one_confident_updates_survive_partial_ambiguity_and_response_is_
 
     assert review.status == PhaseReviewStatus.PHASE_VERIFIED_TASK_COMPLETE
     assert decision.action == StrategicAction.COMPLETE
-    assert task.metadata["system_one_review"]["status"] == "partial_fallback"
+    assert task.metadata["system_one_review"]["status"] == "focused_rereview_unresolved"
     assert task.metadata["prepared_user_response"]["tool_call_id"] == "respond-once"
     assert [item.purpose for item in provider.requests] == [InferencePurpose.PHASE_REVIEW]
     assert "The response contains a routine" not in provider.requests[0].prompt

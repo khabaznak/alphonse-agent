@@ -12,7 +12,6 @@ from alphonse.agent_v2.core.intelligence.v3 import CompletionCondition
 from alphonse.agent_v2.core.intelligence.v3 import FailurePolicy
 from alphonse.agent_v2.core.intelligence.v3 import MutationScope
 from alphonse.agent_v2.core.intelligence.v3 import PhaseExecutor
-from alphonse.agent_v2.core.intelligence.v3 import PhaseLimits
 from alphonse.agent_v2.core.intelligence.v3 import PhasePlan
 from alphonse.agent_v2.core.intelligence.v3 import PhaseStatus
 from alphonse.agent_v2.core.intelligence.v3 import PhaseSubgoal
@@ -25,12 +24,18 @@ from alphonse.agent_v2.system_one import SystemOneToolRegistrySelection
 from alphonse.agent_v2.system_one import SystemOneTacticalReview
 
 
-def _tool(tool_id: str, callback, *, read_only: bool) -> ToolDefinition:
+def _tool(
+    tool_id: str,
+    callback,
+    *,
+    read_only: bool,
+    kind: ToolKind = ToolKind.NATIVE,
+) -> ToolDefinition:
     return ToolDefinition(
         descriptor=ToolDescriptor(
             tool_id=tool_id,
             name=tool_id.removeprefix("native."),
-            kind=ToolKind.NATIVE,
+            kind=kind,
             read_only=read_only,
         ),
         callable=callback,
@@ -55,7 +60,19 @@ def _registry(calls: list[str]) -> InMemoryToolRegistry:
         calls.append("read")
         return {"path": arguments["path"], "status": "Complete"}
 
-    registry.register(_tool("native.search", search, read_only=True))
+    registry.register(ToolDefinition(
+        descriptor=ToolDescriptor(
+            tool_id="native.search",
+            name="search",
+            kind=ToolKind.NATIVE,
+            description="Searches authorized project files. Prefer this over shell search for project records.",
+            capabilities=("project_search", "filesystem"),
+            tags=("native", "read_only"),
+            metadata={"v3_capabilities": ["project_record_search"]},
+            read_only=True,
+        ),
+        callable=search,
+    ))
     registry.register(_tool("native.exact_text_edit", edit, read_only=False))
     registry.register(_tool("native.read", read, read_only=True))
     return registry
@@ -67,7 +84,6 @@ def _phase() -> PhasePlan:
         objective="Complete and verify solar project",
         authorized_capabilities=("native.search", "native.exact_text_edit", "native.read"),
         mutation_scope=MutationScope(("mejoras_hogar/backlog.md",)),
-        limits=PhaseLimits(max_tool_calls=5, max_duration_seconds=30),
         subgoals=(
             PhaseSubgoal(
                 "locate", "Locate record", "record_reference",
@@ -175,6 +191,12 @@ def test_phase_executor_supplies_revealed_tools_to_tactical_inference() -> None:
     class Inference:
         def generate_json(self, request):
             selected_tool_sets.append([item.tool_id for item in request.tools])
+            assert '"description"' in request.prompt
+            assert '"argument_schema"' in request.prompt
+            assert '"capabilities"' in request.prompt
+            assert '"tags"' in request.prompt
+            assert '"metadata": {"v3_capabilities": ["project_record_search"]}' in request.prompt
+            assert "Task project root:" in request.prompt
             return type("Result", (), {"json_value": {
                 "tool_id": request.tools[0].tool_id,
                 "arguments": {"query": "solar"},
@@ -188,10 +210,9 @@ def test_phase_executor_supplies_revealed_tools_to_tactical_inference() -> None:
     context.inference = Inference()
     state.phase = PhasePlan(
         "search", "Search", (PhaseSubgoal("locate", "Locate", "record", allowed_capabilities=("native.search", "native.read")),),
-        authorized_capabilities=("native.search", "native.read"), limits=PhaseLimits(1, 20),
+        authorized_capabilities=("native.search", "native.read"),
     )
     state.active_subgoal_id = "locate"
-    state.remaining_tool_calls = 1
     state.revealed_tool_ids = []
 
     outcome = executor.run(task, state, context)
@@ -200,28 +221,36 @@ def test_phase_executor_supplies_revealed_tools_to_tactical_inference() -> None:
     assert selected_tool_sets == [["native.search", "native.read"]]
 
 
-def test_phase_executor_uses_system_one_to_check_semantic_subgoal_completion() -> None:
+def test_phase_executor_continues_until_system_one_confirms_semantic_completion() -> None:
     calls: list[str] = []
     phase = PhasePlan(
         "search", "Find authoritative record",
         (PhaseSubgoal(
             "locate", "Locate exact solar record", "record",
             allowed_capabilities=("native.search",),
-            limits=PhaseLimits(1, 20),
         ),),
         authorized_capabilities=("native.search",),
-        limits=PhaseLimits(1, 20),
     )
     state = new_tactical_state(phase)
     state.revealed_tool_ids = ["native.search"]
 
     class SystemOne:
+        reviews = 0
+
         def evaluate_tactical_progress(self, **values):
             assert values["action"]["status"] == "success"
-            return SystemOneTacticalReview(complete=False, confidence=0.05, confident=True)
+            self.reviews += 1
+            return SystemOneTacticalReview(
+                complete=self.reviews == 2,
+                confidence=0.99 if self.reviews == 2 else 0.05,
+                confident=True,
+            )
 
     executor = PhaseExecutor(
-        action_selector=_selector([{"tool_id": "native.search", "arguments": {"query": "solar"}}])
+        action_selector=_selector([
+            {"tool_id": "native.search", "arguments": {"query": "solar"}},
+            {"tool_id": "native.search", "arguments": {"query": "solar exact"}},
+        ])
     )
     outcome = executor.run(
         TaskState(task_id="task", user="alex", project_id="home"),
@@ -229,8 +258,9 @@ def test_phase_executor_uses_system_one_to_check_semantic_subgoal_completion() -
         CoreLoopContext(messages=InMemoryMessageQueue(), tools=_registry(calls), system_one=SystemOne()),
     )
 
-    assert outcome.status == PhaseStatus.BUDGET_EXHAUSTED
-    assert state.completed_subgoal_ids == []
+    assert outcome.status == PhaseStatus.PHASE_COMPLETE
+    assert state.completed_subgoal_ids == ["locate"]
+    assert calls == ["search", "search"]
 
 
 def test_phase_executor_rejects_unrevealed_tool_before_execution() -> None:
@@ -262,6 +292,104 @@ def test_phase_executor_rejects_mutation_outside_phase_scope() -> None:
     assert calls == []
 
 
+def test_phase_executor_allows_trusted_artifact_in_read_only_subgoal() -> None:
+    calls: list[dict[str, Any]] = []
+    registry = InMemoryToolRegistry()
+    registry.register(_tool(
+        "artifact.lg-thinq-client",
+        lambda arguments: calls.append(dict(arguments)) or {"temperature": 23, "unit": "C"},
+        read_only=False,
+        kind=ToolKind.ARTIFACT,
+    ))
+    phase = PhasePlan(
+        "temperature", "Read studio temperature",
+        (PhaseSubgoal(
+            "read-temperature", "Read studio temperature", "temperature",
+            allowed_capabilities=("artifact.lg-thinq-client",),
+        ),),
+        authorized_capabilities=("artifact.lg-thinq-client",),
+    )
+    state = new_tactical_state(phase)
+    state.revealed_tool_ids = ["artifact.lg-thinq-client"]
+
+    outcome = PhaseExecutor(action_selector=_selector([{
+        "tool_id": "artifact.lg-thinq-client",
+        "arguments": {"command": "status", "device_id": "aire-estudio"},
+    }])).run(
+        TaskState(user="alex", project_id="home"),
+        state,
+        CoreLoopContext(messages=InMemoryMessageQueue(), tools=registry, system_one=_accept_successful_actions()),
+    )
+
+    assert outcome.status == PhaseStatus.PHASE_COMPLETE
+    assert calls == [{"command": "status", "device_id": "aire-estudio"}]
+
+
+def test_phase_executor_still_rejects_non_read_only_native_tool_in_read_only_subgoal() -> None:
+    calls: list[dict[str, Any]] = []
+    registry = InMemoryToolRegistry()
+    registry.register(_tool(
+        "native.external_action",
+        lambda arguments: calls.append(dict(arguments)) or {"status": "changed"},
+        read_only=False,
+    ))
+    phase = PhasePlan(
+        "native-action", "Attempt native action",
+        (PhaseSubgoal(
+            "act", "Run native action", "result",
+            allowed_capabilities=("native.external_action",),
+        ),),
+        authorized_capabilities=("native.external_action",),
+    )
+    state = new_tactical_state(phase)
+    state.revealed_tool_ids = ["native.external_action"]
+
+    outcome = PhaseExecutor(action_selector=_selector([{
+        "tool_id": "native.external_action",
+        "arguments": {},
+    }])).run(
+        TaskState(user="alex", project_id="home"),
+        state,
+        CoreLoopContext(messages=InMemoryMessageQueue(), tools=registry),
+    )
+
+    assert outcome.status == PhaseStatus.BLOCKED
+    assert outcome.blockers == ("tactical_side_effect_not_authorized:native.external_action",)
+    assert calls == []
+
+
+def test_phase_executor_allows_restored_bash_in_read_only_subgoal() -> None:
+    calls: list[dict[str, Any]] = []
+    registry = InMemoryToolRegistry()
+    registry.register(_tool(
+        "native.bash",
+        lambda arguments: calls.append(dict(arguments)) or {"exit_code": 0, "stdout": "ok", "stderr": ""},
+        read_only=False,
+    ))
+    phase = PhasePlan(
+        "shell", "Run local CLI",
+        (PhaseSubgoal(
+            "run", "Run local CLI", "shell_result",
+            allowed_capabilities=("local_shell",),
+        ),),
+        authorized_capabilities=("local_shell",),
+    )
+    state = new_tactical_state(phase)
+    state.revealed_tool_ids = ["native.bash"]
+
+    outcome = PhaseExecutor(action_selector=_selector([{
+        "tool_id": "native.bash",
+        "arguments": {"command": "printf ok"},
+    }])).run(
+        TaskState(user="alex", project_id="home"),
+        state,
+        CoreLoopContext(messages=InMemoryMessageQueue(), tools=registry, system_one=_accept_successful_actions()),
+    )
+
+    assert outcome.status == PhaseStatus.PHASE_COMPLETE
+    assert calls == [{"command": "printf ok"}]
+
+
 def test_phase_executor_uses_bounded_local_fallback() -> None:
     calls: list[str] = []
     registry = InMemoryToolRegistry()
@@ -282,11 +410,9 @@ def test_phase_executor_uses_bounded_local_fallback() -> None:
             "locate", "Locate", "record_reference",
             allowed_capabilities=("native.broken", "native.fallback"),
             failure_policy=FailurePolicy.LOCAL_FALLBACK,
-            limits=PhaseLimits(max_tool_calls=2, max_duration_seconds=10),
             completion=CompletionCondition("output_present", output_type="record_reference"),
         ),),
         authorized_capabilities=("native.broken", "native.fallback"),
-        limits=PhaseLimits(max_tool_calls=2, max_duration_seconds=10),
     )
     state = new_tactical_state(phase)
     state.revealed_tool_ids = ["native.broken", "native.fallback"]
@@ -326,7 +452,7 @@ def test_phase_executor_retries_same_read_only_action_when_jev_approves(monkeypa
     phase = PhasePlan(
         "retry", "Read record",
         (PhaseSubgoal("read", "Read record", "record", allowed_capabilities=("native.flaky_read",)),),
-        authorized_capabilities=("native.flaky_read",), limits=PhaseLimits(3, 20),
+        authorized_capabilities=("native.flaky_read",),
     )
     state = new_tactical_state(phase)
     state.revealed_tool_ids = ["native.flaky_read"]
@@ -421,26 +547,130 @@ def test_phase_executor_resumes_checkpoint_without_repeating_completed_action() 
     assert calls == ["edit", "read"]
 
 
-def test_phase_executor_enforces_subgoal_budget_when_completion_is_unmet() -> None:
+def test_phase_executor_does_not_stop_at_a_planner_authored_call_budget() -> None:
     calls: list[str] = []
     registry = InMemoryToolRegistry()
-    registry.register(_tool("native.empty", lambda arguments: calls.append("empty") or {}, read_only=True))
+    results = iter(({}, {"found": True}))
+    registry.register(_tool("native.empty", lambda arguments: calls.append("empty") or next(results), read_only=True))
     phase = PhasePlan(
         "budget", "Find value",
         (PhaseSubgoal(
             "find", "Find", "value", allowed_capabilities=("native.empty",),
-            limits=PhaseLimits(max_tool_calls=1, max_duration_seconds=10),
             completion=CompletionCondition("field_equals", field="found", expected=True),
         ),),
         authorized_capabilities=("native.empty",),
-        limits=PhaseLimits(max_tool_calls=2, max_duration_seconds=10),
     )
     state = new_tactical_state(phase)
     state.revealed_tool_ids = ["native.empty"]
 
-    outcome = PhaseExecutor(action_selector=_selector([{"tool_id": "native.empty", "arguments": {}}])).run(
+    outcome = PhaseExecutor(action_selector=_selector([
+        {"tool_id": "native.empty", "arguments": {}},
+        {"tool_id": "native.empty", "arguments": {}},
+    ])).run(
         TaskState(user="alex"), state, CoreLoopContext(messages=InMemoryMessageQueue(), tools=registry, system_one=_accept_successful_actions())
     )
 
-    assert outcome.status == PhaseStatus.BUDGET_EXHAUSTED
-    assert calls == ["empty"]
+    assert outcome.status == PhaseStatus.PHASE_COMPLETE
+    assert calls == ["empty", "empty"]
+
+
+def test_phase_executor_rejects_identical_action_after_jev_reports_no_progress() -> None:
+    calls: list[dict[str, Any]] = []
+    registry = InMemoryToolRegistry()
+    registry.register(_tool(
+        "artifact.lg-client",
+        lambda arguments: calls.append(dict(arguments)) or {"devices": [{"name": "Aire Estudio"}]},
+        read_only=False,
+        kind=ToolKind.ARTIFACT,
+    ))
+    phase = PhasePlan(
+        "temperature", "Read studio temperature",
+        (PhaseSubgoal(
+            "read-temperature", "Read studio temperature", "temperature",
+            allowed_capabilities=("artifact.lg-client",),
+        ),),
+        authorized_capabilities=("artifact.lg-client",),
+    )
+    state = new_tactical_state(phase)
+    state.revealed_tool_ids = ["artifact.lg-client"]
+
+    class Jev:
+        def evaluate_tactical_progress(self, **_values):
+            return SystemOneTacticalReview(
+                complete=False,
+                confidence=0.95,
+                confident=True,
+                answers={"temperature_returned": 0.05},
+                retry_approved=False,
+            )
+
+    outcome = PhaseExecutor(action_selector=_selector([
+        {"tool_id": "artifact.lg-client", "arguments": {"command": "status", "device_id": "aire"}},
+        {"tool_id": "artifact.lg-client", "arguments": {"command": "status", "device_id": "aire"}},
+    ])).run(
+        TaskState(user="alex"), state,
+        CoreLoopContext(messages=InMemoryMessageQueue(), tools=registry, system_one=Jev()),
+    )
+
+    assert outcome.status == PhaseStatus.BLOCKED
+    assert outcome.blockers[0].startswith("tactical_action_repeated_without_progress:")
+    assert calls == [
+        {"command": "status", "device_id": "aire"},
+        {"command": "status", "device_id": "aire"},
+    ]
+    assert state.evidence.entries[0]["progress_review"] == {
+        "complete": False,
+        "confident": True,
+        "confidence": 0.95,
+        "retry_approved": False,
+        "answers": {"temperature_returned": 0.05},
+    }
+    assert state.evidence.entries[1]["semantic_duplicate_of"] == state.actions[0].action_id
+
+
+def test_phase_executor_can_pivot_to_bash_after_incomplete_artifact_result() -> None:
+    calls: list[str] = []
+    registry = InMemoryToolRegistry()
+    registry.register(_tool(
+        "artifact.lg-client",
+        lambda _arguments: calls.append("artifact") or {"devices": [{"name": "Aire Estudio"}]},
+        read_only=False,
+        kind=ToolKind.ARTIFACT,
+    ))
+    registry.register(_tool(
+        "native.bash",
+        lambda _arguments: calls.append("bash") or {"temperature": 27.5, "unit": "C"},
+        read_only=False,
+    ))
+    phase = PhasePlan(
+        "temperature", "Read studio temperature",
+        (PhaseSubgoal(
+            "read-temperature", "Read studio temperature", "temperature",
+            allowed_capabilities=("artifact.lg-client", "local_shell"),
+        ),),
+        authorized_capabilities=("artifact.lg-client", "local_shell"),
+    )
+    state = new_tactical_state(phase)
+    state.revealed_tool_ids = ["artifact.lg-client", "native.bash"]
+
+    class Jev:
+        def evaluate_tactical_progress(self, **values):
+            complete = values["action"]["tool_id"] == "native.bash"
+            return SystemOneTacticalReview(
+                complete=complete,
+                confidence=0.98,
+                confident=True,
+                retry_approved=False,
+            )
+
+    outcome = PhaseExecutor(action_selector=_selector([
+        {"tool_id": "artifact.lg-client", "arguments": {"command": "status", "device_id": "aire"}},
+        {"tool_id": "native.bash", "arguments": {"command": "lg-client status aire"}},
+    ])).run(
+        TaskState(user="alex"), state,
+        CoreLoopContext(messages=InMemoryMessageQueue(), tools=registry, system_one=Jev()),
+    )
+
+    assert outcome.status == PhaseStatus.PHASE_COMPLETE
+    assert calls == ["artifact", "bash"]
+    assert [entry["progress_review"]["complete"] for entry in state.evidence.entries] == [False, True]

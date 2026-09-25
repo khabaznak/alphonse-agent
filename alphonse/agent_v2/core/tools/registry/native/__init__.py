@@ -6,6 +6,7 @@ from alphonse.agent_v2.core.tools.registry.native.ask_question import ASK_QUESTI
 from alphonse.agent_v2.core.tools.registry.native.ask_question import build_ask_question_tool_definition
 from alphonse.agent_v2.core.tools.registry.native.ask_question import execute_ask_question
 from alphonse.agent_v2.core.tools.registry.native.artifact_registration import build_artifact_registration_tool_definition
+from alphonse.agent_v2.core.tools.registry.native.artifact_metadata_update import build_artifact_metadata_update_tool_definition
 from alphonse.agent_v2.core.tools.registry.native.bash import BASH_TOOL_ID
 from alphonse.agent_v2.core.tools.registry.native.bash import BASH_TOOL_NAME
 from alphonse.agent_v2.core.tools.registry.native.bash import build_bash_tool_definition
@@ -37,7 +38,7 @@ from alphonse.agent_v2.web_tools_settings import WebToolsSettings
 from alphonse.agent_v2.media_tools_settings import MediaToolsSettings
 
 
-def build_native_tool_registry(web_tools_settings: WebToolsSettings | None = None, asset_store: object | None = None, media_tools_settings: MediaToolsSettings | None = None, artifact_store: object | None = None, on_artifact_changed: object | None = None) -> InMemoryToolRegistry:
+def build_native_tool_registry(web_tools_settings: WebToolsSettings | None = None, asset_store: object | None = None, media_tools_settings: MediaToolsSettings | None = None, artifact_store: object | None = None, on_artifact_changed: object | None = None, user_store: object | None = None) -> InMemoryToolRegistry:
     """Build the default v2-native tool registry."""
     registry = InMemoryToolRegistry()
     registry.register(build_respond_tool_definition())
@@ -51,6 +52,11 @@ def build_native_tool_registry(web_tools_settings: WebToolsSettings | None = Non
     registry.register(build_scheduled_task_tool_definition())
     if artifact_store is not None:
         registry.register(build_artifact_registration_tool_definition(artifact_store, on_artifact_changed if callable(on_artifact_changed) else None))
+        registry.register(build_artifact_metadata_update_tool_definition(
+            artifact_store,
+            is_admin=getattr(user_store, "is_admin", None),
+            on_changed=on_artifact_changed if callable(on_artifact_changed) else None,
+        ))
     media = media_tools_settings or MediaToolsSettings()
     registry.register(build_analyze_image_tool_definition(media.ocr, asset_store))
     settings = web_tools_settings or WebToolsSettings()

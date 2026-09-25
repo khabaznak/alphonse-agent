@@ -4,14 +4,12 @@ from __future__ import annotations
 
 import json
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from enum import Enum
 from pathlib import PurePosixPath
 from typing import Any
 
 V3_SCHEMA_VERSION = 3
-MAX_PHASE_TOOL_CALLS = 64
-MAX_PHASE_DURATION_SECONDS = 3600.0
 SUPPORTED_COMPLETION_KINDS = ("output_present", "tool_call_terminal", "field_equals")
 
 
@@ -21,7 +19,6 @@ class PhaseStatus(str, Enum):
     SUBGOAL_COMPLETE = "subgoal_complete"
     WAITING_USER = "waiting_user"
     BLOCKED = "blocked"
-    BUDGET_EXHAUSTED = "budget_exhausted"
     CANCELLED = "cancelled"
     PHASE_COMPLETE = "phase_complete"
 
@@ -44,7 +41,6 @@ class SideEffectClass(str, Enum):
 _OUTCOME_STATUSES = {
     PhaseStatus.WAITING_USER,
     PhaseStatus.BLOCKED,
-    PhaseStatus.BUDGET_EXHAUSTED,
     PhaseStatus.CANCELLED,
     PhaseStatus.PHASE_COMPLETE,
 }
@@ -55,32 +51,11 @@ _TRANSITIONS = {
         PhaseStatus.SUBGOAL_COMPLETE,
         PhaseStatus.WAITING_USER,
         PhaseStatus.BLOCKED,
-        PhaseStatus.BUDGET_EXHAUSTED,
         PhaseStatus.CANCELLED,
     },
     PhaseStatus.SUBGOAL_COMPLETE: {PhaseStatus.RUNNING, PhaseStatus.PHASE_COMPLETE, PhaseStatus.CANCELLED},
     PhaseStatus.WAITING_USER: {PhaseStatus.RUNNING, PhaseStatus.CANCELLED},
 }
-
-
-@dataclass(frozen=True)
-class PhaseLimits:
-    max_tool_calls: int = 6
-    max_duration_seconds: float = 60.0
-
-    def __post_init__(self) -> None:
-        if not 1 <= int(self.max_tool_calls) <= MAX_PHASE_TOOL_CALLS:
-            raise ValueError("phase_max_tool_calls_invalid")
-        if not 0 < float(self.max_duration_seconds) <= MAX_PHASE_DURATION_SECONDS:
-            raise ValueError("phase_max_duration_invalid")
-
-    @classmethod
-    def from_dict(cls, value: Any) -> "PhaseLimits":
-        raw = value if isinstance(value, dict) else {}
-        return cls(
-            max_tool_calls=int(raw.get("max_tool_calls", 6)),
-            max_duration_seconds=float(raw.get("max_duration_seconds", 60.0)),
-        )
 
 
 @dataclass(frozen=True)
@@ -146,7 +121,6 @@ class PhaseSubgoal:
     depends_on: tuple[str, ...] = ()
     allowed_capabilities: tuple[str, ...] = ()
     allowed_side_effects: tuple[SideEffectClass, ...] = (SideEffectClass.READ_ONLY,)
-    limits: PhaseLimits = field(default_factory=lambda: PhaseLimits(max_tool_calls=3, max_duration_seconds=30.0))
     completion: CompletionCondition = field(default_factory=lambda: CompletionCondition(kind="output_present"))
     failure_policy: FailurePolicy = FailurePolicy.STOP
 
@@ -173,7 +147,6 @@ class PhaseSubgoal:
             allowed_side_effects=tuple(
                 SideEffectClass(str(item)) for item in value.get("allowed_side_effects") or [SideEffectClass.READ_ONLY.value]
             ),
-            limits=PhaseLimits.from_dict(value.get("limits")),
             completion=CompletionCondition.from_dict(value.get("completion")),
             failure_policy=FailurePolicy(str(value.get("failure_policy") or FailurePolicy.STOP.value)),
         )
@@ -185,7 +158,6 @@ class PhasePlan:
     objective: str
     subgoals: tuple[PhaseSubgoal, ...]
     criterion_ids: tuple[str, ...] = ()
-    limits: PhaseLimits = field(default_factory=PhaseLimits)
     authorized_capabilities: tuple[str, ...] = ()
     mutation_scope: MutationScope = field(default_factory=MutationScope)
     originating_decision: str = ""
@@ -216,8 +188,6 @@ class PhasePlan:
             if unknown_capabilities:
                 raise ValueError(f"phase_subgoal_capability_unauthorized:{subgoal.subgoal_id}")
             known.add(subgoal.subgoal_id)
-        if sum(item.limits.max_tool_calls for item in self.subgoals) < 1:
-            raise ValueError("phase_subgoal_budgets_invalid")
         if any(not str(item).strip() for item in self.acceptance_criteria):
             raise ValueError("phase_acceptance_criteria_invalid")
 
@@ -233,7 +203,6 @@ class PhasePlan:
             objective=str(value.get("objective") or "").strip(),
             subgoals=tuple(PhaseSubgoal.from_dict(item) for item in value.get("subgoals") or []),
             criterion_ids=_strings(value.get("criterion_ids")),
-            limits=PhaseLimits.from_dict(value.get("limits")),
             authorized_capabilities=_strings(value.get("authorized_capabilities")),
             mutation_scope=MutationScope.from_dict(value.get("mutation_scope")),
             originating_decision=str(value.get("originating_decision") or "").strip(),
@@ -315,8 +284,6 @@ class TacticalState:
     system_one_tool_registry_status: str = ""
     actions: list[TacticalAction] = field(default_factory=list)
     evidence: PhaseEvidence = field(default_factory=PhaseEvidence)
-    remaining_tool_calls: int | None = None
-    deadline_at: str = ""
     steering_pending: bool = False
     cancellation_pending: bool = False
 
@@ -324,16 +291,9 @@ class TacticalState:
         ids = {item.subgoal_id for item in self.phase.subgoals}
         if self.active_subgoal_id not in ids:
             raise ValueError("tactical_active_subgoal_invalid")
-        if self.remaining_tool_calls is None:
-            self.remaining_tool_calls = self.phase.limits.max_tool_calls
-        if not 0 <= int(self.remaining_tool_calls) <= self.phase.limits.max_tool_calls:
-            raise ValueError("tactical_remaining_tool_calls_invalid")
         unknown_completed = set(self.completed_subgoal_ids) - ids
         if unknown_completed:
             raise ValueError("tactical_completed_subgoal_invalid")
-        if self.deadline_at:
-            deadline = _parse_datetime(self.deadline_at, "tactical_deadline_invalid")
-            object.__setattr__(self, "deadline_at", deadline.isoformat())
 
     def transition(self, status: PhaseStatus) -> None:
         requested = PhaseStatus(status)
@@ -342,11 +302,6 @@ class TacticalState:
         if requested not in _TRANSITIONS.get(self.status, set()):
             raise ValueError(f"phase_transition_invalid:{self.status.value}->{requested.value}")
         self.status = requested
-
-    def consume_tool_call(self) -> None:
-        if int(self.remaining_tool_calls or 0) <= 0:
-            raise ValueError("phase_tool_budget_exhausted")
-        self.remaining_tool_calls = int(self.remaining_tool_calls or 0) - 1
 
     def bind_subgoal_output(self, subgoal_id: str, output_type: str, value: Any) -> None:
         subgoal = next((item for item in self.phase.subgoals if item.subgoal_id == subgoal_id), None)
@@ -373,8 +328,6 @@ class TacticalState:
             "system_one_tool_registry_status": self.system_one_tool_registry_status,
             "actions": [item.to_dict() for item in self.actions],
             "evidence": self.evidence.to_dict(),
-            "remaining_tool_calls": self.remaining_tool_calls,
-            "deadline_at": self.deadline_at,
             "steering_pending": self.steering_pending,
             "cancellation_pending": self.cancellation_pending,
         }
@@ -395,7 +348,7 @@ class TacticalState:
         return cls(
             phase=PhasePlan.from_dict(value.get("phase")),
             active_subgoal_id=str(value.get("active_subgoal_id") or "").strip(),
-            status=PhaseStatus(str(value.get("status") or PhaseStatus.PLANNED.value)),
+            status=_phase_status(value.get("status"), default=PhaseStatus.PLANNED),
             completed_subgoal_ids=list(_strings(value.get("completed_subgoal_ids"))),
             bindings=dict(value.get("bindings") or {}),
             revealed_capabilities=list(_strings(value.get("revealed_capabilities"))),
@@ -404,8 +357,6 @@ class TacticalState:
             system_one_tool_registry_status=str(value.get("system_one_tool_registry_status") or "").strip(),
             actions=[TacticalAction.from_dict(item) for item in value.get("actions") or []],
             evidence=PhaseEvidence.from_dict(value.get("evidence")),
-            remaining_tool_calls=int(value.get("remaining_tool_calls")) if value.get("remaining_tool_calls") is not None else None,
-            deadline_at=str(value.get("deadline_at") or "").strip(),
             steering_pending=bool(value.get("steering_pending", False)),
             cancellation_pending=bool(value.get("cancellation_pending", False)),
         )
@@ -434,7 +385,7 @@ class PhaseOutcome:
             raise ValueError("phase_outcome_invalid")
         return cls(
             phase_id=str(value.get("phase_id") or "").strip(),
-            status=PhaseStatus(str(value.get("status") or "")),
+            status=_phase_status(value.get("status")),
             reason=str(value.get("reason") or "").strip(),
             evidence_refs=_strings(value.get("evidence_refs")),
             blockers=_strings(value.get("blockers")),
@@ -466,12 +417,8 @@ def new_tactical_state(
     phase: PhasePlan,
     *,
     cumulative_evidence: list[dict[str, Any]] | None = None,
-    now: datetime | None = None,
 ) -> TacticalState:
-    """Start a phase with an absolute deadline and imported prior evidence."""
-    started_at = now or datetime.now(timezone.utc)
-    if started_at.tzinfo is None:
-        raise ValueError("tactical_start_time_timezone_required")
+    """Start a phase and import prior evidence without planner-authored budgets."""
     evidence = PhaseEvidence()
     for item in cumulative_evidence or []:
         if isinstance(item, dict):
@@ -480,12 +427,20 @@ def new_tactical_state(
         phase=phase,
         active_subgoal_id=phase.subgoals[0].subgoal_id,
         evidence=evidence,
-        deadline_at=(started_at + timedelta(seconds=phase.limits.max_duration_seconds)).isoformat(),
     )
 
 
 def _strings(value: Any) -> tuple[str, ...]:
     return tuple(str(item).strip() for item in value or [] if str(item).strip()) if isinstance(value, (list, tuple)) else ()
+
+
+def _phase_status(value: Any, *, default: PhaseStatus | None = None) -> PhaseStatus:
+    raw = str(value or (default.value if default is not None else ""))
+    # V3 checkpoints written before administrator-owned limits were adopted may
+    # contain this terminal status. Restore it as an ordinary blocked phase.
+    if raw == "budget_exhausted":
+        return PhaseStatus.BLOCKED
+    return PhaseStatus(raw)
 
 
 def _json_safe(value: Any) -> Any:
@@ -503,13 +458,3 @@ def _enum_values(value: Any) -> Any:
     if isinstance(value, (list, tuple)):
         return [_enum_values(item) for item in value]
     return value
-
-
-def _parse_datetime(value: str, error_code: str) -> datetime:
-    try:
-        parsed = datetime.fromisoformat(value)
-    except ValueError as exc:
-        raise ValueError(error_code) from exc
-    if parsed.tzinfo is None:
-        raise ValueError(error_code)
-    return parsed

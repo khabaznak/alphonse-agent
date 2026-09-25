@@ -22,7 +22,7 @@ class OpenAICodexProviderConfig:
     """Configuration for the Codex CLI subscription provider."""
 
     cli_bin: str = "codex"
-    timeout_seconds: float = 120.0
+    timeout_seconds: float | None = None
     ephemeral: bool = False
     require_explicit_model: bool = False
 
@@ -191,36 +191,43 @@ def _model_for_request(request: InferenceRequest) -> str | None:
 
 
 def _run_interruptible(
-    command: list[str], *, prompt: str, timeout_seconds: float, cwd: str,
+    command: list[str], *, prompt: str, timeout_seconds: float | None, cwd: str,
     cancel_checker: Any = None,
 ) -> subprocess.CompletedProcess[str]:
-    process = subprocess.Popen(
-        command,
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        cwd=cwd,
-        start_new_session=True,
-    )
-    started = time.monotonic()
-    pending_input: str | None = prompt
-    while True:
-        if callable(cancel_checker) and cancel_checker():
-            _terminate_process_group(process)
-            process.communicate()
-            raise ValueError("inference_cancelled")
-        remaining = float(timeout_seconds) - (time.monotonic() - started)
-        if remaining <= 0:
-            _terminate_process_group(process)
-            stdout, stderr = process.communicate()
-            raise subprocess.TimeoutExpired(command, timeout_seconds, output=stdout, stderr=stderr)
-        try:
-            stdout, stderr = process.communicate(input=pending_input, timeout=min(0.1, remaining))
-        except subprocess.TimeoutExpired:
-            pending_input = None
-            continue
-        return subprocess.CompletedProcess(command, int(process.returncode or 0), stdout, stderr)
+    # A finite file gives Codex the complete prompt and an unambiguous EOF before
+    # the cancellation loop starts. Repeated timed communicate(input=...) calls
+    # can strand a prompt larger than the OS pipe buffer after their first timeout,
+    # leaving `codex exec` blocked forever while reading stdin.
+    with tempfile.TemporaryFile(mode="w+", encoding="utf-8") as prompt_stream:
+        prompt_stream.write(prompt)
+        prompt_stream.seek(0)
+        process = subprocess.Popen(
+            command,
+            stdin=prompt_stream,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            cwd=cwd,
+            start_new_session=True,
+        )
+        started = time.monotonic()
+        while True:
+            if callable(cancel_checker) and cancel_checker():
+                _terminate_process_group(process)
+                process.communicate()
+                raise ValueError("inference_cancelled")
+            remaining = None if timeout_seconds is None else float(timeout_seconds) - (time.monotonic() - started)
+            if remaining is not None and remaining <= 0:
+                _terminate_process_group(process)
+                stdout, stderr = process.communicate()
+                raise subprocess.TimeoutExpired(command, timeout_seconds, output=stdout, stderr=stderr)
+            try:
+                stdout, stderr = process.communicate(
+                    timeout=0.1 if remaining is None else min(0.1, remaining),
+                )
+            except subprocess.TimeoutExpired:
+                continue
+            return subprocess.CompletedProcess(command, int(process.returncode or 0), stdout, stderr)
 
 
 def _terminate_process_group(process: subprocess.Popen[str]) -> None:

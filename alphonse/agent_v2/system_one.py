@@ -318,7 +318,6 @@ class JevCriterionDecisionProvider:
             api_url=self.settings.api_url, api_key=self.settings.api_key,
             model=self.settings.model, transport=transport,
         )
-        self._tool_registry: _StaticJevToolRegistry | None = None
 
     def classify_task_admission(self, *, message: str) -> SystemOneAdmissionDecision:
         """Decide whether a new human message needs work beyond one direct reply."""
@@ -369,9 +368,33 @@ class JevCriterionDecisionProvider:
             return SystemOneReviewResult(updates=(), ambiguous_criterion_ids=(), model=self.settings.model)
         state = {
             "acceptance_criteria": {str(item.get("id")): str(item.get("statement")) for item in criteria},
-            "phase": {"phase_id": phase.get("phase_id"), "objective": phase.get("objective")},
-            "verified_evidence": {item["evidence_ref"]: item["summary"] for item in entries},
+            "phase": {
+                "phase_id": phase.get("phase_id"),
+                "objective": phase.get("objective"),
+                "ordered_subgoals": [
+                    {
+                        "subgoal_id": str(item.get("subgoal_id") or ""),
+                        "objective": str(item.get("objective") or ""),
+                        "depends_on": list(item.get("depends_on") or []),
+                        "allowed_side_effects": list(item.get("allowed_side_effects") or []),
+                    }
+                    for item in phase.get("subgoals") or [] if isinstance(item, dict)
+                ],
+            },
+            "verified_evidence": {
+                item["evidence_ref"]: {
+                    "phase_id": item["phase_id"],
+                    "subgoal_id": item["subgoal_id"],
+                    "tool_id": item["tool_id"],
+                    "summary": item["summary"],
+                }
+                for item in entries
+            },
+            "ordered_verified_evidence": entries,
         }
+        review_focus = phase.get("review_focus") if isinstance(phase.get("review_focus"), dict) else {}
+        if review_focus:
+            state["review_focus"] = dict(review_focus)
         questions: dict[str, Any] = {}
         pair_keys: dict[str, tuple[str, str]] = {}
         for criterion_index, criterion in enumerate(criteria):
@@ -379,9 +402,15 @@ class JevCriterionDecisionProvider:
             for evidence_index, entry in enumerate(entries):
                 key = f"supports_{criterion_index}_{evidence_index}"
                 pair_keys[key] = (criterion_id, entry["evidence_ref"])
+                instructions = f"Does verified evidence {entry['evidence_ref']} directly demonstrate acceptance criterion {criterion_id}?"
+                if review_focus:
+                    instructions += (
+                        " This is a focused re-review: use the ordered subgoals and the evidence's subgoal identity "
+                        "to evaluate prerequisite ordering; do not require another tool call when the existing evidence suffices."
+                    )
                 questions[key] = {
                     "type": "noul",
-                    "instructions": f"Does verified evidence {entry['evidence_ref']} directly demonstrate acceptance criterion {criterion_id}?",
+                    "instructions": instructions,
                     "criteria": {
                         "true": "The evidence directly observes or verifies the criterion's required outcome.",
                         "false": "The evidence is unrelated, merely planned, failed, ambiguous, or does not verify the outcome.",
@@ -478,7 +507,7 @@ class JevCriterionDecisionProvider:
         """Recommend the next mission-level action from Check's verdict and durable evidence."""
         actions = {
             "complete": "All required acceptance criteria are verified and the task can end successfully.",
-            "continue": "More authorized work under the current strategy is likely to make useful progress.",
+            "continue": "Continue the task using the current strategy.",
             "replan": "The current strategic approach should change before any further execution.",
             "ask_user": "A specific answer or steering from the user could materially unblock or redirect the mission.",
             "fail_explain": "The mission is no longer worth pursuing, but the user should receive a final evidence-based explanation.",
@@ -492,7 +521,7 @@ class JevCriterionDecisionProvider:
             },
             "continuation_is_worthwhile": {
                 "type": "noul",
-                "instructions": "Would another bounded execution cycle likely create meaningful mission progress under the current strategy?",
+                "instructions": "Would another execution phase likely create meaningful mission progress under the current strategy?",
                 "criteria": {"true": "There is a plausible, authorized next step.", "false": "The same approach is exhausted, blocked, or unlikely to change the outcome."},
             },
             "user_input_can_unblock": {
@@ -502,7 +531,7 @@ class JevCriterionDecisionProvider:
             },
             "closure_explanation_is_warranted": {
                 "type": "noul",
-                "instructions": "If the mission ends unsuccessfully, should Alphonse spend one bounded final cycle explaining why to the user?",
+                "instructions": "If the mission ends unsuccessfully, should Alphonse produce one final response explaining why to the user?",
                 "criteria": {"true": "A concise explanation of the failure is useful and safe to deliver.", "false": "No additional user-facing closure cycle is appropriate."},
             },
         }
@@ -544,11 +573,38 @@ class JevCriterionDecisionProvider:
     ) -> SystemOneToolRegistrySelection:
         if not tools:
             return SystemOneToolRegistrySelection()
-        registry = self._static_tool_registry(tools)
-        state = {
-            "goal": str(goal),
-            "strategic_plan": phase,
-        }
+        return self._select_tools(
+            tools,
+            state={"goal": str(goal), "strategic_plan": phase},
+            question_scope="phase",
+        )
+
+    def curate_request_tools(
+        self,
+        *,
+        goal: str,
+        system_prompt: str,
+        session_history: str,
+        tools: tuple[Any, ...],
+    ) -> SystemOneToolRegistrySelection:
+        """Curate task-relevant tools before strategic planning begins."""
+        if not tools:
+            return SystemOneToolRegistrySelection()
+        return self._select_tools(
+            tools,
+            state={
+                "user_request": str(goal),
+                "plan_system_prompt": str(system_prompt),
+                "session_conversation_history": str(session_history),
+                "decision_scope": "Select relevant tool IDs only; do not plan or invent a method.",
+            },
+            question_scope="request",
+        )
+
+    def _select_tools(
+        self, tools: tuple[Any, ...], *, state: dict[str, Any], question_scope: str,
+    ) -> SystemOneToolRegistrySelection:
+        registry = self._static_tool_registry(tools, question_scope=question_scope)
         started = monotonic()
         response = self.client.evaluate(state=state, questions=registry.questions)
         duration_ms = max(0, round((monotonic() - started) * 1000))
@@ -656,12 +712,8 @@ class JevCriterionDecisionProvider:
             retry_approved=retry_approved,
         )
 
-    def _static_tool_registry(self, tools: tuple[Any, ...]) -> _StaticJevToolRegistry:
+    def _static_tool_registry(self, tools: tuple[Any, ...], *, question_scope: str) -> _StaticJevToolRegistry:
         signature = tuple(str(tool.tool_id) for tool in tools)
-        if self._tool_registry is not None:
-            if self._tool_registry.signature != signature:
-                raise ValueError("system_one_static_tool_registry_changed_restart_required")
-            return self._tool_registry
         questions: dict[str, Any] = {}
         tool_ids_by_question: dict[str, str] = {}
         native_questions = _load_jev_native_tool_registry()
@@ -669,15 +721,15 @@ class JevCriterionDecisionProvider:
             tool_id = str(tool.tool_id)
             question_id = _tool_question_id(tool_id)
             if _tool_kind(tool) == "artifact":
-                question = _artifact_jev_question(tool)
+                question = _artifact_jev_question(tool, scope=question_scope)
             else:
                 question = native_questions.get(tool_id)
                 if question is None:
                     raise ValueError(f"system_one_native_tool_template_missing:{tool_id}")
+                question = _scope_jev_question(question, scope=question_scope)
             questions[question_id] = json.loads(json.dumps(question, ensure_ascii=False))
             tool_ids_by_question[question_id] = tool_id
-        self._tool_registry = _StaticJevToolRegistry(signature, questions, tool_ids_by_question)
-        return self._tool_registry
+        return _StaticJevToolRegistry(signature, questions, tool_ids_by_question)
 
 
 def validate_and_save_system_one_settings(
@@ -749,7 +801,13 @@ def _bounded_evidence(raw_entries: Any) -> list[dict[str, str]]:
         if not evidence_ref:
             continue
         rendered = json.dumps(raw.get("result"), ensure_ascii=False, sort_keys=True, default=str)
-        entries.append({"evidence_ref": evidence_ref, "summary": rendered[:2000]})
+        entries.append({
+            "evidence_ref": evidence_ref,
+            "phase_id": str(raw.get("phase_id") or ""),
+            "subgoal_id": str(raw.get("subgoal_id") or ""),
+            "tool_id": str(raw.get("tool_id") or ""),
+            "summary": rendered[:2000],
+        })
     return entries
 
 
@@ -804,17 +862,42 @@ def _tool_kind(tool: Any) -> str:
     return str(getattr(kind, "value", kind) or "").strip().lower()
 
 
-def _artifact_jev_question(tool: Any) -> dict[str, Any]:
+def _artifact_jev_question(tool: Any, *, scope: str = "phase") -> dict[str, Any]:
     name = _jev_tool_name(tool)
     description = _jev_tool_description(tool)
+    subject = "this request" if scope == "request" else "this phase"
+    need = "request" if scope == "request" else "phase"
     return {
         "type": "noul",
-        "instructions": f"Does this phase need {name}?",
+        "instructions": f"Does {subject} need {name}?",
         "criteria": {
-            "true": f"The phase needs {name}: {description}",
-            "false": f"The phase does not need {name}.",
+            "true": f"The {need} needs {name}: {description}",
+            "false": f"The {need} does not need {name}.",
         },
     }
+
+
+def _scope_jev_question(question: dict[str, Any], *, scope: str) -> dict[str, Any]:
+    if scope != "request":
+        return dict(question)
+    replacements = (
+        ("this phase", "this request"),
+        ("The phase", "The request"),
+        ("the phase", "the request"),
+        ("phase includes", "request includes"),
+        ("phase needs", "request needs"),
+    )
+    result = dict(question)
+    result["instructions"] = str(question.get("instructions") or "")
+    result["criteria"] = dict(question.get("criteria") or {})
+    for key, value in list(result["criteria"].items()):
+        rendered = str(value)
+        for old, new in replacements:
+            rendered = rendered.replace(old, new)
+        result["criteria"][key] = rendered
+    for old, new in replacements:
+        result["instructions"] = result["instructions"].replace(old, new)
+    return result
 
 
 def _jev_tool_name(tool: Any) -> str:
