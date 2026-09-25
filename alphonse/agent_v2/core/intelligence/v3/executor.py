@@ -16,6 +16,7 @@ from alphonse.agent_v2.core.intelligence.v3.contracts import SideEffectClass
 from alphonse.agent_v2.core.intelligence.v3.contracts import TacticalAction
 from alphonse.agent_v2.core.intelligence.v3.contracts import TacticalState
 from alphonse.agent_v2.core.intelligence.v3.revealing import ToolRevealPolicy
+from alphonse.agent_v2.core.intelligence.v3.revealing import Capability
 from alphonse.agent_v2.core.messages.queue import MessageSelector
 from alphonse.agent_v2.core.tools.invocation import ToolInvocationService
 from alphonse.agent_v2.core.tools.registry.native.bash import BASH_TOOL_ID
@@ -243,6 +244,7 @@ class PhaseExecutor:
             tools,
             goal=task.goal,
             task_project_root=_task_project_root(task, context),
+            attachment_manifest=_task_attachment_manifest(task),
         )
         result = context.inference.generate_json(
             InferenceRequest(
@@ -327,6 +329,16 @@ class PhaseExecutor:
             result = review.complete if review.confident else deterministic
             retry_approved = bool(getattr(review, "retry_approved", False))
             metadata["retry_approved"] = retry_approved
+        if (
+            Capability.ATTACHMENT_ANALYSIS.value in subgoal.allowed_capabilities
+            and _has_task_image(task)
+            and not _successful_image_analysis(state, subgoal.subgoal_id)
+        ):
+            # Permission to analyze an attached image in a subgoal is an
+            # explicit plan prerequisite; a successful file lookup or Bash
+            # inspection cannot stand in for OCR/vision evidence.
+            result = False
+            metadata["completion_blocker"] = "required_attachment_analysis_not_completed"
         _record_system_one_tactical_review(task, state, subgoal, action, metadata)
         context.emit_telemetry({
             "event": "system_one_tactical_review", "task_id": task.task_id,
@@ -485,6 +497,7 @@ def _tactical_prompt(
     *,
     goal: str = "",
     task_project_root: str = "",
+    attachment_manifest: list[dict[str, str]] | None = None,
 ) -> str:
     tool_rows = [
         {
@@ -513,13 +526,17 @@ def _tactical_prompt(
         "Every completed execution-log entry includes progress_review.complete from Jev. When it is false, the call "
         "executed but did not make semantic progress. Do not select the same tool with the same arguments again; "
         "choose different arguments or another revealed tool. For a CLI-backed artifact whose adapter returns the wrong "
-        "result shape, use native.bash to inspect or invoke the underlying CLI when Bash is revealed.\n\n"
+        "result shape, use native.bash to inspect or invoke the underlying CLI when Bash is revealed. "
+        "If the current subgoal authorizes attachment_analysis, first call native.analyze_image with the exact asset ID from "
+        "the task attachment manifest and read its returned text. Do not ask the user to repeat image contents before this "
+        "call; Bash file discovery is not image analysis.\n\n"
         "The tool entries below include their complete registry descriptors: descriptions, schemas, capabilities, tags, "
         "metadata, program behavior, and read-only semantics. Treat description and metadata as operational guidance. "
         "Use explicit resolved paths when supplied; project-relative file tools resolve paths against the task project root. "
         "For native.bash, an omitted cwd uses the task project root shown below. Artifact project roots may differ from it.\n\n"
         f"Goal: {goal}\n"
         f"Task project root: {task_project_root or '(unavailable)'}\n"
+        f"Task attachment manifest (metadata only): {json.dumps(attachment_manifest or [], ensure_ascii=False)}\n"
         f"Strategic plan: {json.dumps(state.phase.to_dict(), ensure_ascii=False)}\n"
         f"Stage goal: {json.dumps(subgoal.__dict__, default=str, ensure_ascii=False)}\n"
         f"Complete tool execution log (every entry, no omissions or truncation):\n{state.prompt_projection(max_evidence_entries=None, max_chars=None)}\n\n"
@@ -564,6 +581,40 @@ def _matching_prior_incomplete_result(state: TacticalState, completed: TacticalA
             action_ref = str(evidence.get("evidence_ref") or "").removeprefix("tactical-action:")
             return action_ref or "unknown"
     return None
+
+
+def _has_task_image(task: "TaskState") -> bool:
+    attachments = task.metadata.get("attachments") if isinstance(task.metadata, dict) else None
+    return any(
+        isinstance(item, dict) and str(item.get("mime_type") or "").lower().startswith("image/")
+        for item in (attachments if isinstance(attachments, list) else [])
+    )
+
+
+def _task_attachment_manifest(task: "TaskState") -> list[dict[str, str]]:
+    attachments = task.metadata.get("attachments") if isinstance(task.metadata, dict) else None
+    manifest = []
+    for item in attachments if isinstance(attachments, list) else []:
+        if not isinstance(item, dict) or not str(item.get("asset_id") or "").strip():
+            continue
+        manifest.append({
+            "asset_id": str(item.get("asset_id"))[:200],
+            "filename": str(item.get("filename") or "")[:200],
+            "mime_type": str(item.get("mime_type") or "")[:100],
+            "kind": str(item.get("kind") or "")[:100],
+        })
+        if len(manifest) == 20:
+            break
+    return manifest
+
+
+def _successful_image_analysis(state: TacticalState, subgoal_id: str) -> bool:
+    return any(
+        str(item.get("subgoal_id") or "") == subgoal_id
+        and str(item.get("tool_id") or "") == "native.analyze_image"
+        and str(item.get("status") or "") == "success"
+        for item in state.evidence.entries
+    )
 
 
 def _retry_is_safe(action: TacticalAction, context: "CoreLoopContext") -> bool:

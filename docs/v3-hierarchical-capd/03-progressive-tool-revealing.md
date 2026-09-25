@@ -19,6 +19,15 @@ the method or authorize tools. Strategic Plan then receives the complete
 LLM-oriented descriptors for those candidates, so it can form a feasible plan
 without paying to show System Two the entire registry.
 
+When a task has image attachments, request curation and strategic planning also
+receive a bounded metadata-only manifest (asset ID, filename, MIME type, kind,
+and ingestion status). The manifest contains no image contents. An available
+`native.analyze_image` remains in the request candidate set whenever an image is
+attached, so Jev cannot make the analyzer undiscoverable before System Two has
+planned the work. Planning should authorize `attachment_analysis` only in a
+subgoal that needs image contents; that authorization makes image analysis a
+completion prerequisite for that subgoal.
+
 After the phase is planned, Jev still curates the request-level candidate set for
 that phase. Deterministic authorization and subgoal prerequisites are applied
 before concrete tools are revealed to tactical System Two. This preserves focused
@@ -58,6 +67,11 @@ System Two. Jev can never grant execution permission.
 Tool reveal must enforce prerequisites before model choice:
 
 - Attachment OCR requires an attachment or a discovered image/PDF candidate.
+- A subgoal that authorizes `attachment_analysis` must execute
+  `native.analyze_image` successfully before it can be marked complete. File
+  discovery or shell inspection is not OCR evidence. If analysis fails, report
+  the tool failure; do not characterize the image as illegible without an actual
+  extraction result.
 - Memory search is limited to the authorized current project.
 - Mutation tools require an active mutation scope.
 - Communication tools require a communication subgoal.

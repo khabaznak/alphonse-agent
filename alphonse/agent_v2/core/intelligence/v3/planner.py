@@ -11,7 +11,7 @@ from alphonse.agent_v2.core.messages.queue import MessageSelector
 from alphonse.agent_v2.core.intelligence.acceptance_contract import normalize_contract
 from alphonse.agent_v2.core.intelligence.v3.contracts import FailurePolicy, PhasePlan, SideEffectClass
 from alphonse.agent_v2.core.intelligence.v3.contracts import SUPPORTED_COMPLETION_KINDS, V3_SCHEMA_VERSION
-from alphonse.agent_v2.core.intelligence.v3.revealing import tool_capabilities
+from alphonse.agent_v2.core.intelligence.v3.revealing import Capability, tool_capabilities
 from alphonse.agent_v2.core.intelligence.v3.revealing import ToolRevealPolicy
 from alphonse.agent_v2.core.tools.registry import ToolExposurePolicy
 from alphonse.agent_v2.system_one import SystemOneUnavailableError
@@ -33,10 +33,12 @@ def plan_phase(task: "TaskState", context: "CoreLoopContext") -> PhasePlan:
         registry=context.tools, project_id=task.project_id, user=task.user, task=task,
     ) if context.tools is not None else ()
     session_history = _bounded_text(task.recent_conversation_md, 6000)
+    attachment_manifest = _attachment_manifest(task)
     durable_memory = _bounded_context_text(task.conversation_history_md, 9000)
     system_prompt = _strategic_plan_instructions()
     tools = _curate_request_tools(
-        task, tools, system_prompt=system_prompt, session_history=session_history, context=context,
+        task, tools, system_prompt=system_prompt, session_history=session_history,
+        attachment_manifest=attachment_manifest, context=context,
     )
     catalog = sorted({capability for tool in tools for capability in tool_capabilities(tool)})
     capability_descriptions = ToolRevealPolicy().capability_descriptions
@@ -55,6 +57,7 @@ def plan_phase(task: "TaskState", context: "CoreLoopContext") -> PhasePlan:
         f"Project context:\n{_bounded_text(project_context, 5000)}\n"
         f"Durable project/session memory (context only; never mutate it):\n{durable_memory}\n"
         f"Recent conversation (newest steering and answers are authoritative):\n{_bounded_text(task.recent_conversation_md, 6000)}\n"
+        f"Task attachment manifest (metadata only; use asset IDs exactly as listed):\n{json.dumps(attachment_manifest, ensure_ascii=False)}\n"
         f"Known task facts:\n{_bounded_text(task.facts_md, 4000)}\n"
         f"Prepared user response already exists: {'yes' if isinstance(prepared_response, dict) else 'no'}\n"
         f"Act directive (authoritative resilience instruction): {json.dumps(act_directive, ensure_ascii=False)}\n"
@@ -107,7 +110,7 @@ def plan_phase(task: "TaskState", context: "CoreLoopContext") -> PhasePlan:
     return _curate_phase_tools(task, phase, tools, context)
 
 
-def _curate_request_tools(task, tools, *, system_prompt: str, session_history: str, context):
+def _curate_request_tools(task, tools, *, system_prompt: str, session_history: str, attachment_manifest, context):
     """Narrow the task-authorized runtime registry before System 2 planning."""
     if not tools:
         context.emit_telemetry({
@@ -125,12 +128,20 @@ def _curate_request_tools(task, tools, *, system_prompt: str, session_history: s
         selection = curate(
             goal=task.goal,
             system_prompt=system_prompt,
-            session_history=session_history,
+            session_history=(
+                f"{session_history}\nTask attachment manifest (metadata only): "
+                f"{json.dumps(attachment_manifest, ensure_ascii=False)}"
+            ),
             tools=tools,
         )
     except Exception as exc:
         raise SystemOneUnavailableError(f"request_tool_curation:{type(exc).__name__}") from exc
     selected_ids = set((*selection.selected_tool_ids, *selection.ambiguous_tool_ids))
+    # Jev narrows the planning context, but an attached image must not make
+    # its analyzer undiscoverable when the user's request depends on that image.
+    if attachment_manifest and any(item.get("mime_type", "").startswith("image/") for item in attachment_manifest):
+        if any(tool.tool_id == "native.analyze_image" for tool in tools):
+            selected_ids.add("native.analyze_image")
     curated = tuple(tool for tool in tools if tool.tool_id in selected_ids)
     metadata = {"status": "used", "candidate_count": len(tools), **selection.to_metadata()}
     history = task.metadata.setdefault("system_one_request_tool_selections", [])
@@ -142,6 +153,29 @@ def _curate_request_tools(task, tools, *, system_prompt: str, session_history: s
         del history[:-20]
     context.emit_telemetry({"event": "system_one_request_tool_selection", "task_id": task.task_id, **metadata})
     return curated
+
+
+def _attachment_manifest(task) -> list[dict[str, str]]:
+    """Return bounded, non-content attachment facts for routing and planning."""
+    attachments = task.metadata.get("attachments") if isinstance(task.metadata, dict) else None
+    manifest = []
+    seen: set[str] = set()
+    for item in attachments if isinstance(attachments, list) else []:
+        if not isinstance(item, dict):
+            continue
+        asset_id = str(item.get("asset_id") or "").strip()
+        mime_type = str(item.get("mime_type") or "").strip().lower()
+        if not asset_id or asset_id in seen:
+            continue
+        seen.add(asset_id)
+        manifest.append({
+            "asset_id": asset_id,
+            "filename": str(item.get("filename") or "")[:200],
+            "mime_type": mime_type[:100],
+            "kind": str(item.get("kind") or "")[:100],
+            "ingestion_status": str(item.get("ingestion_status") or "")[:100],
+        })
+    return manifest[:20]
 
 
 def _tool_rows(tools):
@@ -185,7 +219,10 @@ def _strategic_plan_instructions() -> str:
         "for updating the catalog record. Include the metadata-update tool and authorize its artifact_metadata_management "
         "capability with an appropriate mutating side effect in the subgoal. "
         "If Act requires closure, plan exactly one isolated user_response subgoal; if Act requests input, plan an ask-question "
-        "subgoal. Define stable measurable acceptance criteria when none exist, otherwise preserve the existing contract."
+        "subgoal. When an attached image is needed to answer or fulfill the request, authorize attachment_analysis in the "
+        "relevant subgoal and use the listed task asset ID; do not ask the user to repeat image contents before analysis. "
+        "An attachment_analysis authorization means image analysis is a required prerequisite for completing that subgoal. "
+        "Define stable measurable acceptance criteria when none exist, otherwise preserve the existing contract."
     )
 
 
@@ -265,7 +302,14 @@ def _curate_phase_tools(task, phase: PhasePlan, tools, context) -> PhasePlan:
         raise SystemOneUnavailableError(f"tool_curation:{type(exc).__name__}") from exc
     else:
         metadata = {"status": "used", **selection.to_metadata()}
-        selected = tuple(dict.fromkeys((*selection.selected_tool_ids, *selection.ambiguous_tool_ids)))
+        selected_ids = list((*selection.selected_tool_ids, *selection.ambiguous_tool_ids))
+        image_analysis_required = any(
+            Capability.ATTACHMENT_ANALYSIS.value in subgoal.allowed_capabilities
+            for subgoal in phase.subgoals
+        )
+        if image_analysis_required and any(tool.tool_id == "native.analyze_image" for tool in tools):
+            selected_ids.append("native.analyze_image")
+        selected = tuple(dict.fromkeys(selected_ids))
         curated = replace(phase, curated_tool_ids=selected, tool_curation_status="used")
     _record_tool_curation(task, phase, metadata)
     context.emit_telemetry({
