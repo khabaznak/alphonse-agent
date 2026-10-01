@@ -205,7 +205,7 @@ class V2DaemonClient:
         return self.request("system_one_settings", actor_user_id=actor_user_id)
 
     def save_system_one_settings(self, *, actor_user_id: str, values: dict[str, Any]) -> dict[str, Any]:
-        client = V2DaemonClient(self.socket_path, timeout_sec=max(self.timeout_sec, 35.0))
+        client = V2DaemonClient(self.socket_path, timeout_sec=max(self.timeout_sec, 105.0))
         return client.request("save_system_one_settings", actor_user_id=actor_user_id, values=values)
 
     def web_tools_settings(self, *, actor_user_id: str) -> dict[str, Any]:

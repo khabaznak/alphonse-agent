@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from functools import lru_cache
 from pathlib import Path
-from time import monotonic
+from time import monotonic, sleep
 from typing import Any, Callable
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
@@ -20,6 +20,9 @@ from alphonse.agent_v2.database import connect_database, default_database_path
 
 DEFAULT_SYSTEM_ONE_URL = "https://api.typesafe.ai/v1/systemone"
 DEFAULT_SYSTEM_ONE_MODEL = "jev-latest"
+SYSTEM_ONE_TIMEOUT_SECONDS = 10.0
+SYSTEM_ONE_RETRIES = 3
+SYSTEM_ONE_RETRY_BACKOFF_SECONDS = 10.0
 _JEV_TOOL_REGISTRY_PATH = Path(__file__).resolve().parent / "config" / "jev_tool_registry.json"
 _TACTICAL_RETRY_FUSE_QUESTIONS = (
     {
@@ -159,7 +162,7 @@ Transport = Callable[[str, str, dict[str, Any], float], dict[str, Any]]
 
 
 class TypeSafeSystemOneClient:
-    def __init__(self, *, api_url: str, api_key: str, model: str, timeout_seconds: float = 15.0, transport: Transport | None = None) -> None:
+    def __init__(self, *, api_url: str, api_key: str, model: str, timeout_seconds: float = SYSTEM_ONE_TIMEOUT_SECONDS, transport: Transport | None = None) -> None:
         self.api_url = _normalize_url(api_url)
         self.api_key = str(api_key or "").strip()
         self.model = str(model or "").strip() or DEFAULT_SYSTEM_ONE_MODEL
@@ -171,11 +174,15 @@ class TypeSafeSystemOneClient:
             raise ValueError("system_one_api_key_required")
         if not questions:
             raise ValueError("system_one_questions_required")
-        response = self.transport(
-            self.api_url, self.api_key,
-            {"state": state, "model": self.model, "questions": questions},
-            self.timeout_seconds,
-        )
+        payload = {"state": state, "model": self.model, "questions": questions}
+        for attempt in range(SYSTEM_ONE_RETRIES + 1):
+            try:
+                response = self.transport(self.api_url, self.api_key, payload, self.timeout_seconds)
+                break
+            except RuntimeError:
+                if attempt >= SYSTEM_ONE_RETRIES:
+                    raise
+                sleep(SYSTEM_ONE_RETRY_BACKOFF_SECONDS * (attempt + 1))
         answers = response.get("answers") if isinstance(response, dict) else None
         if not isinstance(answers, dict):
             raise ValueError("system_one_response_invalid")
