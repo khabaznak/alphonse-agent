@@ -30,6 +30,9 @@ from alphonse.agent_v2.core.tools.registry.native.scheduled_task import SCHEDULE
 from alphonse.agent_v2.core.tools.registry.native.scheduled_task import SCHEDULED_TASK_TOOL_NAME
 from alphonse.agent_v2.core.tools.registry.native.scheduled_task import build_scheduled_task_tool_definition
 from alphonse.agent_v2.core.tools.registry.native.scheduled_task import execute_scheduled_task
+from alphonse.agent_v2.core.tools.registry.native.scheduled_task_delivery import SCHEDULED_TASK_DELIVERY_TOOL_ID
+from alphonse.agent_v2.core.tools.registry.native.scheduled_task_delivery import SCHEDULED_TASK_DELIVERY_TOOL_NAME
+from alphonse.agent_v2.core.tools.registry.native.scheduled_task_delivery import build_scheduled_task_delivery_tool_definition
 from alphonse.agent_v2.core.tools.registry.native.web import build_web_fetch_tool_definition
 from alphonse.agent_v2.core.tools.registry.native.web import build_web_search_tool_definition
 from alphonse.agent_v2.core.tools.registry.native.project_files import build_project_read_tool_definition
@@ -50,6 +53,7 @@ def build_native_tool_registry(web_tools_settings: WebToolsSettings | None = Non
     registry.register(build_send_attachment_tool_definition(asset_store))
     registry.register(build_ask_question_tool_definition())
     registry.register(build_scheduled_task_tool_definition())
+    registry.register(build_scheduled_task_delivery_tool_definition())
     if artifact_store is not None:
         registry.register(build_artifact_registration_tool_definition(artifact_store, on_artifact_changed if callable(on_artifact_changed) else None))
         registry.register(build_artifact_metadata_update_tool_definition(
@@ -79,6 +83,8 @@ __all__ = [
     "RESPOND_TOOL_NAME",
     "SCHEDULED_TASK_TOOL_ID",
     "SCHEDULED_TASK_TOOL_NAME",
+    "SCHEDULED_TASK_DELIVERY_TOOL_ID",
+    "SCHEDULED_TASK_DELIVERY_TOOL_NAME",
     "build_ask_question_tool_definition",
     "build_bash_tool_definition",
     "build_deliver_message_tool_definition",
@@ -86,6 +92,7 @@ __all__ = [
     "build_native_tool_registry",
     "build_respond_tool_definition",
     "build_scheduled_task_tool_definition",
+    "build_scheduled_task_delivery_tool_definition",
     "execute_ask_question",
     "execute_bash",
     "execute_deliver_message",

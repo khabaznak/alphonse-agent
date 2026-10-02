@@ -1933,37 +1933,52 @@ class V2Daemon:
         """Deliver notification-only schedules without starting an LLM/PDCA run."""
         task = occurrence.task
         memory_session = self.runtime.memory_session_store.ensure_system(project_id=task.project_id, identity=task.scheduled_task_id, created_by_user_id=task.owner_user_id) if task.project_id else None
+        raw_channels = task.origin_channel.get("delivery_channels") if isinstance(task.origin_channel, dict) else None
+        origins = [channel_address_from_metadata({"channel": channel}) for channel in raw_channels if isinstance(channel, dict)] if isinstance(raw_channels, list) else []
+        origins = [address for address in origins if address is not None]
         origin = channel_address_from_metadata({"channel": dict(task.origin_channel)})
-        if origin is None:
+        if origin is not None and origin not in origins:
+            origins.insert(0, origin)
+        if not origins:
             resolved = self.runtime.identity_resolver.resolve_outbound_address(
                 alphonse_user_id=task.owner_user_id,
             )
-            origin = resolved.address if resolved.resolved else None
-        if origin is None:
+            if resolved.resolved and resolved.address is not None:
+                origins.append(resolved.address)
+        if not origins:
             raise RuntimeError("scheduled_reminder_delivery_unresolved")
         message = str(task.description or task.name or "Reminder").strip()
-        outbound = self.runtime.outbox.enqueue(
-            address=origin,
-            message=f"Reminder: {message}",
-            kind="scheduled_reminder",
-            audience_user_id=task.owner_user_id,
-            project_id=task.project_id,
-            metadata={
-                "source": "scheduled_reminder",
-                "scheduled_task_id": task.scheduled_task_id,
-                "occurrence_key": occurrence.occurrence_key,
-            },
-        )
-        self.runtime.conversation_store.record(
-            owner_user_id=task.owner_user_id,
-            project_id=task.project_id,
-            memory_session_id=memory_session.session_id if memory_session is not None else "",
-            role="assistant",
-            content=outbound.message,
-            source=origin.integration_id,
-            source_message_id=f"outbound:{outbound.outbox_message_id}",
-        )
-        return outbound.outbox_message_id
+        outbounds = []
+        seen: set[tuple[str, str, str]] = set()
+        for destination in origins:
+            identity = (destination.integration_id, destination.provider_key, destination.channel_target)
+            if identity in seen:
+                continue
+            seen.add(identity)
+            outbound = self.runtime.outbox.enqueue(
+                address=destination,
+                message=f"Reminder: {message}",
+                kind="scheduled_reminder",
+                audience_user_id=task.owner_user_id,
+                project_id=task.project_id,
+                metadata={
+                    "source": "scheduled_reminder",
+                    "scheduled_task_id": task.scheduled_task_id,
+                    "occurrence_key": occurrence.occurrence_key,
+                },
+                idempotency_key=f"scheduled-reminder:{occurrence.occurrence_key}:{destination.integration_id}:{destination.channel_target}",
+            )
+            outbounds.append(outbound)
+            self.runtime.conversation_store.record(
+                owner_user_id=task.owner_user_id,
+                project_id=task.project_id,
+                memory_session_id=memory_session.session_id if memory_session is not None else "",
+                role="assistant",
+                content=outbound.message,
+                source=destination.integration_id,
+                source_message_id=f"outbound:{outbound.outbox_message_id}",
+            )
+        return outbounds[0].outbox_message_id
 
     def _notify_scheduled_task_failure(self, metadata: dict[str, Any], *, error: str) -> None:
         """Notify the owner when scheduled work cannot run, without involving the model."""
@@ -2282,7 +2297,7 @@ def _model_access_rejection(error: str) -> bool:
 def _scheduled_failure_message(task_name: str, error: str) -> str:
     code = _scheduled_failure_code(error)
     if code == "system_one_unavailable":
-        detail = "Jev is unavailable, so Alphonse is offline until the decision service is back."
+        detail = "A required service is temporarily unavailable. Please try again later."
     elif code == "openai_codex_auth_required":
         detail = "Codex needs to be signed in again before I can run it."
     elif code == "openai_codex_cli_missing":
@@ -2300,12 +2315,12 @@ def _inbound_failure_message(error: str, model_id: str) -> str:
     code = _scheduled_failure_code(error)
     model = str(model_id or "").strip()
     if code == "system_one_unavailable":
-        return "I couldn't complete this task because Jev is unavailable. Alphonse is offline until the decision service is back; please try again later."
+        return "I couldn't complete this task because a required service is temporarily unavailable. Please try again later."
     if code == "v3_task_failed":
         reason = str(error or "").partition(":")[2].strip() or "V3 reported a terminal task failure."
         if reason.startswith("v3_phase_plan_invalid:"):
-            return f"I couldn't complete this task because the V3 execution plan was rejected: {reason}"
-        return f"I couldn't complete this task because V3 stopped without completing it: {reason}"
+            return "I couldn't form a workable plan for this task. Please try rephrasing it or breaking it into smaller steps."
+        return "I couldn't complete this task. Please try again, or rephrase it with the outcome you want."
     if code == "openai_codex_auth_required":
         return "I couldn't complete this task because Codex needs to be signed in again."
     if code == "openai_codex_cli_missing":

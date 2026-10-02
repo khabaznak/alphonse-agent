@@ -315,17 +315,30 @@ class ScheduledTaskStore:
     def cancel_task(self, scheduled_task_id: str) -> ScheduledTaskRecord:
         return self._set_status(scheduled_task_id, "cancelled", clear_next=True)
 
-    def update_task(self, scheduled_task_id: str, *, name: str, prompt: str) -> ScheduledTaskRecord:
+    def update_task(
+        self,
+        scheduled_task_id: str,
+        *,
+        name: str | None = None,
+        prompt: str | None = None,
+        origin_channel: dict[str, Any] | None = None,
+    ) -> ScheduledTaskRecord:
         task = self._require_task(scheduled_task_id)
         if task.status not in {"active", "paused"}:
             raise ValueError("scheduled_task_not_editable")
-        name_value = str(name or "").strip()
-        prompt_value = str(prompt or "").strip()
+        name_value = str(task.name if name is None else name or "").strip()
+        prompt_value = str(task.prompt if prompt is None else prompt or "").strip()
         if not name_value:
             raise ValueError("scheduled_task_name_required")
         if not prompt_value:
             raise ValueError("scheduled_task_prompt_required")
-        updated = _replace_task(task, name=name_value, prompt=prompt_value, updated_at=_now_iso())
+        updated = _replace_task(
+            task,
+            name=name_value,
+            prompt=prompt_value,
+            origin_channel=dict(origin_channel) if origin_channel is not None else task.origin_channel,
+            updated_at=_now_iso(),
+        )
         self._save_task(updated)
         return updated
 

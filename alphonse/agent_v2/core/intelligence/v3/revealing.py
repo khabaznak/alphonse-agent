@@ -194,6 +194,7 @@ _TOOL_CAPABILITIES: dict[str, tuple[str, ...]] = {
     "native.exact_text_edit": (Capability.EXACT_TEXT_MUTATION.value,),
     "native.deliver_message": (Capability.COMMUNICATION.value,),
     "native.scheduled_task": (Capability.SCHEDULING.value,),
+    "native.scheduled_task_delivery": (Capability.SCHEDULING.value,),
     "native.artifact_metadata_update": (Capability.ARTIFACT_METADATA_MANAGEMENT.value,),
     "native.ask_question": (Capability.USER_INTERACTION.value,),
     "native.respond": (Capability.USER_RESPONSE.value,),
