@@ -75,5 +75,28 @@ def test_replay_harness_reports_forbidden_capability_effect_and_outcome() -> Non
 
 def test_loads_the_checked_in_v3_corpus() -> None:
     cases = load_corpus(Path(__file__).parent / "fixtures" / "v3_evaluation_cases.json")
-    assert len(cases) == 9
+    assert len(cases) == 10
     assert cases[0].case_id == "solar-project-completion"
+
+
+def test_cross_channel_reminder_replay_preserves_question_context_and_avoids_side_effects() -> None:
+    cases = load_corpus(Path(__file__).parent / "fixtures" / "v3_evaluation_cases.json")
+    case = next(item for item in cases if item.case_id == "telegram-reminder-cross-channel-continuity")
+
+    report = ReplayHarness(
+        v2_runner=_replay_runner("tactical_v2"),
+        v3_runner=_replay_runner("hierarchical_v3"),
+    ).run([case])
+
+    for engine in ("tactical_v2", "hierarchical_v3"):
+        result = report["cases"][0]["runs"][engine]
+        assert result["passed"] is True
+        assert result["metadata"]["context_preserved"] is True
+        assert result["metadata"]["question_count"] == 0
+        assert result["effects"] == []
+
+
+def _replay_runner(engine: str):
+    from alphonse.agent_v2.evaluation.deterministic_adapters import v2_runner, v3_runner
+
+    return v2_runner if engine == "tactical_v2" else v3_runner

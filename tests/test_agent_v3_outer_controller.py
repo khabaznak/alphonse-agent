@@ -72,7 +72,7 @@ def _context(*, satisfy=True, response="Listo, Alex. El proyecto solar quedó co
     return CoreLoopContext(messages=InMemoryMessageQueue(), inference=router), provider
 
 
-def test_verified_complete_phase_routes_directly_to_response_and_end() -> None:
+def test_verified_complete_phase_routes_to_final_response_planning() -> None:
     task = _task()
     state = _completed_state()
     context, provider = _context()
@@ -82,14 +82,11 @@ def test_verified_complete_phase_routes_directly_to_response_and_end() -> None:
     )
 
     assert review.status == PhaseReviewStatus.PHASE_VERIFIED_TASK_COMPLETE
-    assert decision.action == StrategicAction.COMPLETE
-    assert task.status == "completed"
-    assert task.metadata["v3_route"] == "respond_and_end"
-    assert task.metadata["prepared_user_response"]["message"].startswith("Listo")
-    assert [item.purpose for item in provider.requests] == [
-        InferencePurpose.PHASE_REVIEW,
-        InferencePurpose.FINAL_RESPONSE,
-    ]
+    assert decision.action == StrategicAction.CONTINUE
+    assert task.status == "running"
+    assert task.metadata["v3_route"] == "plan_next_phase"
+    assert task.metadata["act_directive"]["response_required"] is True
+    assert [item.purpose for item in provider.requests] == [InferencePurpose.PHASE_REVIEW]
     assert all(item.tools == () for item in provider.requests)
 
 
@@ -124,7 +121,7 @@ def test_repeated_completed_phases_without_acceptance_progress_keep_routing() ->
     ]
 
     assert [decision.action for decision in decisions] == [StrategicAction.CONTINUE] * 5
-    assert task.status == "executing"
+    assert task.status == "running"
     assert "v3_consecutive_no_progress_phases" not in task.metadata
 
 
@@ -207,7 +204,8 @@ def test_authorized_external_effect_is_not_treated_as_project_path_mutation() ->
     )
 
     assert review.status == PhaseReviewStatus.PHASE_VERIFIED_TASK_COMPLETE
-    assert decision.action == StrategicAction.COMPLETE
+    assert decision.action == StrategicAction.CONTINUE
+    assert task.metadata["v3_route"] == "plan_next_phase"
 
 
 def test_blocked_phase_routes_to_strategic_replan_and_keeps_failure_visible() -> None:
@@ -242,13 +240,13 @@ def test_waiting_phase_parks_task() -> None:
     assert task.status == "waiting_user"
 
 
-def test_final_response_requires_inference_when_no_respond_tool_prepared_a_message() -> None:
+def test_check_requires_available_reviewer_when_inference_and_jev_are_unavailable() -> None:
     task = _task()
     task.acceptance_contract["criteria"][0]["status"] = "satisfied"
     task.sync_acceptance_criteria_view()
     state = _completed_state()
 
-    with pytest.raises(RuntimeError, match="v3_final_response_inference_unavailable"):
+    with pytest.raises(RuntimeError, match="acceptance_review_unavailable"):
         V3OuterController().review_and_route(
             task, state, PhaseOutcome("solar", PhaseStatus.PHASE_COMPLETE),
             CoreLoopContext(messages=InMemoryMessageQueue()),
@@ -264,6 +262,22 @@ class _SystemOne:
         if self.error:
             raise self.error
         return self.result
+
+    def recommend_act(self, *, state):
+        if self.error or self.result is None:
+            raise RuntimeError("unavailable")
+        action = self.result.recommended_route or (
+            "complete" if state.get("check_verdict") == "success" else "continue"
+        )
+        return SystemOneActRecommendation(
+            action=action,
+            confidence=self.result.route_confidence,
+            confident=self.result.route_confident,
+            rationale=f"Test recommendation: {action}.",
+            answers={"continuation_is_worthwhile": 0.99 if action == "continue" else 0.1,
+                     "user_input_can_unblock": 0.99 if action == "ask_user" else 0.1,
+                     "closure_explanation_is_warranted": 0.1},
+        )
 
 
 def test_system_one_check_and_act_can_conservatively_withhold_completion() -> None:
@@ -381,9 +395,10 @@ def test_system_one_failure_falls_back_to_existing_phase_review() -> None:
     )
 
     assert review.status == PhaseReviewStatus.PHASE_VERIFIED_TASK_COMPLETE
-    assert decision.action == StrategicAction.COMPLETE
+    assert decision.action == StrategicAction.CONTINUE
+    assert task.metadata["v3_route"] == "plan_next_phase"
     assert task.metadata["system_one_review"]["status"] == "fallback"
-    assert [item.purpose for item in provider.requests] == [InferencePurpose.PHASE_REVIEW, InferencePurpose.FINAL_RESPONSE]
+    assert [item.purpose for item in provider.requests] == [InferencePurpose.PHASE_REVIEW]
 
 
 def test_system_one_confident_updates_survive_partial_ambiguity_and_response_is_reused() -> None:
@@ -435,8 +450,9 @@ def test_system_one_confident_updates_survive_partial_ambiguity_and_response_is_
     )
 
     assert review.status == PhaseReviewStatus.PHASE_VERIFIED_TASK_COMPLETE
-    assert decision.action == StrategicAction.COMPLETE
-    assert task.metadata["system_one_review"]["status"] == "focused_rereview_unresolved"
+    assert decision.action == StrategicAction.REPLAN
+    assert task.metadata["v3_route"] == "strategic_replan"
+    assert task.metadata["system_one_review"]["status"] == "partial_fallback"
     assert task.metadata["prepared_user_response"]["tool_call_id"] == "respond-once"
     assert [item.purpose for item in provider.requests] == [InferencePurpose.PHASE_REVIEW]
     assert "The response contains a routine" not in provider.requests[0].prompt

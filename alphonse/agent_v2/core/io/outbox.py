@@ -604,6 +604,17 @@ def build_outbox_delivery_sink(
                 "respondent_channel": resolved.address.to_dict(),
             },
         )
+        if conversation_store is not None:
+            conversation_store.record(
+                owner_user_id=respondent,
+                project_id=str(question.get("project_id") or task.get("project_id") or "").strip(),
+                memory_session_id=str(task.get("memory_session_id") or "").strip(),
+                role="assistant",
+                content=str(question.get("message") or "").strip(),
+                source=outbound.integration_id,
+                source_message_id=f"question:{str(question.get('question_id') or '').strip()}",
+                created_at=outbound.created_at,
+            )
         return {
             "outbox_message_id": outbound.outbox_message_id,
             "integration_id": outbound.integration_id,

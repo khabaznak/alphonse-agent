@@ -87,9 +87,22 @@ Status: passed on 2026-09-20 for developer opt-in only. See
 
 ### Gate B: shadow planning
 
+Status: **not passed**. The 2026-10-01 offline replay is preliminary evidence only;
+provider-backed shadow plans, human comparison, and suite/corpus failures remain open.
+
 - V3 plans and reveal decisions are recorded without executing side effects.
 - Compare chosen phases/tools with V2 outcomes and human expectations.
 - Fix tool-recall and scope issues before live execution.
+- Include a sanitized cross-channel reminder case: the user asks in Telegram,
+  Alphonse asks a date clarification, the user answers in Telegram, and the task is
+  resumed from Desktop. Planning must retain the original request, clarification,
+  and answer, resolve the date to today, and schedule without repeating the same
+  question.
+- Verify project context/session continuity across Desktop, CLI, and Telegram for
+  the same user and project, and verify that another project remains isolated.
+- Record plan shape, revealed tool IDs, question text, context-preservation checks,
+  and zero external effects for every shadow case. Fixture-local simulated writes
+  are permitted only inside disposable replay roots.
 
 ### Gate C: selected-project execution
 
@@ -141,6 +154,10 @@ explicit rollback path, not the normal route for new tasks.
 - [ ] A hundreds-of-kilobytes legacy memory ledger does not exceed the configured
       bounded memory projection.
 - [ ] Steering interrupts tactical execution without sending a stale response.
+- [ ] A Telegram reminder clarification answered on Telegram and resumed on Desktop
+      retains the conversation and produces one same-day scheduling plan without
+      asking the answered question again; cross-channel replies resume the original
+      task and no external schedule is created during shadow evaluation.
 - [x] A queue retry restores the same V3 acceptance contract and tactical checkpoint
       instead of creating a new task identity.
 
@@ -162,6 +179,23 @@ explicit rollback path, not the normal route for new tasks.
 
 ## Implementation log
 
+- 2026-10-01 — Fixed the question tool's memory-event context call and added
+  System Two fallback for V3 evidence review when Jev is unavailable or leaves an
+  ambiguous criterion unresolved. Repeated blocked or verification-failed V3 phases
+  now stop after three consecutive phases without new successful evidence. Focused
+  continuity/controller tests pass; the 10-case offline replay passes the reminder
+  case in both engines (V3 passes 6/10 overall), while the full suite has 21 failures.
+  Provider-backed shadow planning and human comparison remain outstanding; Gate B is
+  not passed.
+- 2026-10-01 — Added a sanitized Telegram reminder continuation case to the replay
+  corpus and Gate B requirements. The case checks that clarification and answer
+  survive into both engines' planning prompts; its scripted V3 action is a same-day
+  schedule and its tool is a no-effect stub. Cross-channel session/question regression
+  tests were added. Focused tests passed (17/17), but the full Python suite had 36
+  failures. Deterministic replay passed 5/10 cases under V2 and 4/10 under V3. The
+  reminder fixture passed in both engines but does not evaluate live model behavior.
+  See the dated evidence report; Gate B remains open pending provider-backed shadow
+  plans, human review, and failure resolution.
 - 2026-09-20 — Added persistent safe-default engine settings, ingestion-time engine
   stamping, V2/V3 processor routing, strategic phase planning, end-to-end hierarchical
   processing, daemon/IPC settings and status, nested phase snapshot data, and the

@@ -64,6 +64,20 @@
       "required_capabilities": ["exact_text_mutation", "project_record_search"],
       "allowed_effects": ["records/item.md"],
       "fixture": {"files": {"records/item.md": "Status: open\n"}}
+    },
+    {
+      "id": "telegram-reminder-cross-channel-continuity",
+      "goal": "Alphonse recuérdame a las 9am subirle un yogurt a mi suegra",
+      "required_capabilities": ["scheduling"],
+      "forbidden_questions": ["¿Quieres que te recuerde hoy o mañana", "¿Confirmas que quieres que te recuerde hoy"],
+      "allowed_effects": [],
+      "expected_phase_shape": ["schedule"],
+      "expected_context_preserved": true,
+      "expected_question_count": 0,
+      "fixture": {
+        "recent_conversation": "- alex: \"Alphonse recuérdame a las 9am subirle un yogurt a mi suegra\"\n- Alphonse: \"Claro, te recuerdo hoy a las 9 am subirle un yogurt a tu suegra.\"\n- Alphonse: \"¿Quieres que te recuerde hoy o mañana, a las 9:00 a. m. (hora de Ciudad de México), subirle el yogurt a tu suegra?\"\n- alex: \"Hoy\"\n- Alphonse: \"¿Confirmas que quieres que te recuerde hoy, a las 9:00 a. m. (hora de Ciudad de México), subirle el yogurt a tu suegra?\"\n- alex: \"Sí\"",
+        "required_context_markers": ["¿Quieres que te recuerde hoy o mañana", "alex: \"Hoy\"", "alex: \"Sí\""]
+      }
     }
   ]
 }
