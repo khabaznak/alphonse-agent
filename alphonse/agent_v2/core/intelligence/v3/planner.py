@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import replace
 from typing import TYPE_CHECKING
 
@@ -141,7 +142,18 @@ def _curate_request_tools(
             tools=tools,
         )
     except Exception as exc:
-        raise SystemOneUnavailableError(f"request_tool_curation:{type(exc).__name__}") from exc
+        detail = _safe_system_one_error_code(exc)
+        context.emit_telemetry({
+            "event": "system_one_request_tool_selection",
+            "task_id": task.task_id,
+            "status": "failed",
+            "candidate_count": len(tools),
+            "exception_type": type(exc).__name__,
+            "error_code": detail,
+        })
+        raise SystemOneUnavailableError(
+            f"request_tool_curation:{type(exc).__name__}:{detail}"
+        ) from exc
     selected_ids = set((*selection.selected_tool_ids, *selection.ambiguous_tool_ids))
     # Jev narrows the planning context, but an attached image must not make
     # its analyzer undiscoverable when the user's request depends on that image.
@@ -159,6 +171,34 @@ def _curate_request_tools(
         del history[:-20]
     context.emit_telemetry({"event": "system_one_request_tool_selection", "task_id": task.task_id, **metadata})
     return curated
+
+
+def _safe_system_one_error_code(exc: Exception) -> str:
+    """Keep known diagnostic codes while excluding arbitrary provider text."""
+    message = str(exc).strip()
+    exact_codes = {
+        "system_one_api_key_required",
+        "system_one_api_key_invalid",
+        "system_one_request_invalid",
+        "system_one_response_invalid",
+        "system_one_connection_failed",
+        "system_one_native_tool_template_invalid",
+    }
+    if message in exact_codes:
+        return message
+    if re.fullmatch(r"system_one_(?:temporarily_unavailable|http_error):[0-9]{3}", message):
+        return message
+    relevance_error = re.fullmatch(
+        r"system_one_tool_relevance_answer_invalid:([a-zA-Z0-9_.-]{1,100})", message
+    )
+    if relevance_error:
+        return f"system_one_tool_relevance_answer_invalid:{relevance_error.group(1)}"
+    template_error = re.fullmatch(
+        r"system_one_native_tool_template_(?:missing|invalid):(native\.[a-zA-Z0-9_.-]{1,100})", message
+    )
+    if template_error:
+        return message
+    return "unclassified"
 
 
 def _attachment_manifest(task) -> list[dict[str, str]]:

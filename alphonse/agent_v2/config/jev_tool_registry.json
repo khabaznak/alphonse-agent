@@ -112,6 +112,22 @@
         "true": "The phase has a known public URL whose page contents are needed as evidence or input.",
         "false": "A URL has not been identified, web search is needed first, or no web-page contents are required."
       }
+    },
+    "native.search_memory": {
+      "type": "noul",
+      "instructions": "Does this request need to search archived conversation memory for information from this project?",
+      "criteria": {
+        "true": "The answer depends on details from older or closed conversations that are not present in the current conversation or supplied project context.",
+        "false": "The current conversation, project files, or other available tools provide the needed information without searching archived memory."
+      }
+    },
+    "native.scheduled_task_delivery": {
+      "type": "noul",
+      "instructions": "Does this request need to find an active reminder or change where a pending reminder is delivered?",
+      "criteria": {
+        "true": "The user asks what reminders are active, asks whether a reminder exists, or asks to add or change a delivery channel for an existing reminder.",
+        "false": "The user is creating or changing the reminder's schedule or content, or the request does not concern an existing reminder or its delivery destinations."
+      }
     }
   }
 }
