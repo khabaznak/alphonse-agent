@@ -72,6 +72,10 @@ class SystemOneSettings:
     yes_threshold: float = 0.80
     no_threshold: float = 0.20
     route_confidence_threshold: float = 0.70
+    tool_selection_threshold: float = 0.80
+    act_route_confidence_threshold: float = 0.70
+    check_completion_threshold: float = 0.80
+    task_admission_threshold: float = 0.20
     validated_at: str = ""
     validation_error: str = ""
     updated_at: str = ""
@@ -85,6 +89,10 @@ class SystemOneSettings:
             "yes_threshold": self.yes_threshold,
             "no_threshold": self.no_threshold,
             "route_confidence_threshold": self.route_confidence_threshold,
+            "tool_selection_threshold": self.tool_selection_threshold,
+            "act_route_confidence_threshold": self.act_route_confidence_threshold,
+            "check_completion_threshold": self.check_completion_threshold,
+            "task_admission_threshold": self.task_admission_threshold,
             "validated_at": self.validated_at,
             "validation_error": self.validation_error,
             "updated_at": self.updated_at,
@@ -114,6 +122,10 @@ class SQLiteSystemOneSettingsStore:
             api_key=str(row["api_key"]), yes_threshold=float(row["yes_threshold"]),
             no_threshold=float(row["no_threshold"]),
             route_confidence_threshold=float(row["route_confidence_threshold"]),
+            tool_selection_threshold=float(row["tool_selection_threshold"]),
+            act_route_confidence_threshold=float(row["act_route_confidence_threshold"]),
+            check_completion_threshold=float(row["check_completion_threshold"]),
+            task_admission_threshold=float(row["task_admission_threshold"]),
             validated_at=str(row["validated_at"]), validation_error=str(row["validation_error"]),
             updated_at=str(row["updated_at"]),
         )
@@ -124,10 +136,14 @@ class SQLiteSystemOneSettingsStore:
             conn.execute(
                 """INSERT OR REPLACE INTO v2_system_one_settings
                 (settings_id, enabled, api_url, model, api_key, yes_threshold, no_threshold,
-                 route_confidence_threshold, validated_at, validation_error, updated_at)
-                VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                 route_confidence_threshold, tool_selection_threshold, check_completion_threshold,
+                 act_route_confidence_threshold, task_admission_threshold, validated_at, validation_error, updated_at)
+                VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (int(normalized.enabled), normalized.api_url, normalized.model, normalized.api_key,
                  normalized.yes_threshold, normalized.no_threshold, normalized.route_confidence_threshold,
+                 normalized.tool_selection_threshold, normalized.check_completion_threshold,
+                 normalized.act_route_confidence_threshold,
+                 normalized.task_admission_threshold,
                  normalized.validated_at, normalized.validation_error, _now()),
             )
         return self.get()
@@ -151,11 +167,30 @@ class SQLiteSystemOneSettingsStore:
               yes_threshold REAL NOT NULL DEFAULT 0.8,
               no_threshold REAL NOT NULL DEFAULT 0.2,
               route_confidence_threshold REAL NOT NULL DEFAULT 0.7,
+              tool_selection_threshold REAL NOT NULL DEFAULT 0.8,
+              check_completion_threshold REAL NOT NULL DEFAULT 0.8,
+              act_route_confidence_threshold REAL NOT NULL DEFAULT 0.7,
+              task_admission_threshold REAL NOT NULL DEFAULT 0.2,
               validated_at TEXT NOT NULL DEFAULT '',
               validation_error TEXT NOT NULL DEFAULT '',
               updated_at TEXT NOT NULL
             ) STRICT;
             """)
+            columns = {str(row["name"]) for row in conn.execute("PRAGMA table_info(v2_system_one_settings)")}
+            for name, default in (
+                ("tool_selection_threshold", "0.8"),
+                ("check_completion_threshold", "0.8"),
+                ("act_route_confidence_threshold", "0.7"),
+                ("task_admission_threshold", "0.2"),
+            ):
+                if name not in columns:
+                    conn.execute(
+                        f"ALTER TABLE v2_system_one_settings ADD COLUMN {name} REAL NOT NULL DEFAULT {default}"
+                    )
+                    if name == "act_route_confidence_threshold":
+                        conn.execute(
+                            "UPDATE v2_system_one_settings SET act_route_confidence_threshold=route_confidence_threshold"
+                        )
 
 
 Transport = Callable[[str, str, dict[str, Any], float], dict[str, Any]]
@@ -355,9 +390,9 @@ class JevCriterionDecisionProvider:
             raise ValueError("system_one_admission_answer_invalid")
         probability = max(0.0, min(1.0, float(answer["noul"])))
         return SystemOneAdmissionDecision(
-            requires_task=probability >= self.settings.yes_threshold,
+            requires_task=probability >= self.settings.task_admission_threshold,
             confidence=probability,
-            confident=probability >= self.settings.yes_threshold or probability <= self.settings.no_threshold,
+            confident=True,
             model=str(response.get("model") or self.settings.model),
             usage=dict(response.get("usage") or {}),
             duration_ms=duration_ms,
@@ -437,7 +472,10 @@ class JevCriterionDecisionProvider:
         ambiguous: list[str] = []
         for criterion in criteria:
             criterion_id = str(criterion.get("id") or "")
-            refs = [ref for ref, probability in support.get(criterion_id, []) if probability >= self.settings.yes_threshold]
+            refs = [
+                ref for ref, probability in support.get(criterion_id, [])
+                if probability >= self.settings.check_completion_threshold
+            ]
             probabilities = [probability for _, probability in support.get(criterion_id, [])]
             if refs:
                 updates.append({"criterion_id": criterion_id, "status": "satisfied", "evidence_refs": refs, "reason": "System One evidence decision"})
@@ -562,7 +600,7 @@ class JevCriterionDecisionProvider:
         return SystemOneActRecommendation(
             action=action,
             confidence=confidence,
-            confident=confidence >= self.settings.route_confidence_threshold,
+            confident=confidence >= self.settings.act_route_confidence_threshold,
             rationale=actions[action],
             answers=fuse_answers,
             yes_threshold=self.settings.yes_threshold,
@@ -632,12 +670,10 @@ class JevCriterionDecisionProvider:
                 raise ValueError(f"system_one_tool_relevance_answer_invalid:{question_id}")
             probability = max(0.0, min(1.0, float(answer["noul"])))
             probabilities[tool_id] = probability
-            if probability >= self.settings.yes_threshold:
+            if probability >= self.settings.tool_selection_threshold:
                 selected.append(tool_id)
-            elif probability <= self.settings.no_threshold:
-                rejected.append(tool_id)
             else:
-                ambiguous.append(tool_id)
+                rejected.append(tool_id)
         return SystemOneToolRegistrySelection(
             selected_tool_ids=tuple(selected),
             rejected_tool_ids=tuple(rejected),
@@ -762,6 +798,10 @@ def validate_and_save_system_one_settings(
         yes_threshold=float(values.get("yes_threshold", current.yes_threshold)),
         no_threshold=float(values.get("no_threshold", current.no_threshold)),
         route_confidence_threshold=float(values.get("route_confidence_threshold", current.route_confidence_threshold)),
+        tool_selection_threshold=float(values.get("tool_selection_threshold", current.tool_selection_threshold)),
+        act_route_confidence_threshold=float(values.get("act_route_confidence_threshold", current.act_route_confidence_threshold)),
+        check_completion_threshold=float(values.get("check_completion_threshold", current.check_completion_threshold)),
+        task_admission_threshold=float(values.get("task_admission_threshold", current.task_admission_threshold)),
     ))
     if not candidate.enabled:
         return store.save(candidate)
@@ -786,14 +826,31 @@ def _normalize_settings(settings: SystemOneSettings) -> SystemOneSettings:
     yes = float(settings.yes_threshold)
     no = float(settings.no_threshold)
     route = float(settings.route_confidence_threshold)
+    tool_selection = float(settings.tool_selection_threshold)
+    act_route = float(settings.act_route_confidence_threshold)
+    check_completion = float(settings.check_completion_threshold)
+    task_admission = float(settings.task_admission_threshold)
     if not 0 <= no < yes <= 1:
         raise ValueError("system_one_thresholds_invalid")
     if not 0 <= route <= 1:
         raise ValueError("system_one_route_threshold_invalid")
+    if not 0 <= tool_selection <= 1:
+        raise ValueError("system_one_tool_selection_threshold_invalid")
+    if not 0 <= act_route <= 1:
+        raise ValueError("system_one_act_route_confidence_threshold_invalid")
+    if not 0 <= check_completion <= 1:
+        raise ValueError("system_one_check_completion_threshold_invalid")
+    if check_completion <= no:
+        raise ValueError("system_one_check_thresholds_invalid")
+    if not 0 <= task_admission <= 1:
+        raise ValueError("system_one_task_admission_threshold_invalid")
     return SystemOneSettings(
         enabled=bool(settings.enabled), api_url=api_url, model=model,
         api_key=str(settings.api_key or "").strip(), yes_threshold=yes, no_threshold=no,
-        route_confidence_threshold=route, validated_at=str(settings.validated_at or ""),
+        route_confidence_threshold=route, tool_selection_threshold=tool_selection,
+        act_route_confidence_threshold=act_route,
+        check_completion_threshold=check_completion, task_admission_threshold=task_admission,
+        validated_at=str(settings.validated_at or ""),
         validation_error=str(settings.validation_error or ""), updated_at=str(settings.updated_at or ""),
     )
 
