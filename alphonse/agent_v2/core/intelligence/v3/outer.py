@@ -8,6 +8,7 @@ from enum import Enum
 from typing import TYPE_CHECKING, Any
 
 from alphonse.agent_v2.core.core import ImprovementPhase
+from alphonse.agent_v2.core.inference import InferencePurpose, InferenceRequest
 from alphonse.agent_v2.core.intelligence.acceptance_contract import apply_status_patch
 from alphonse.agent_v2.core.intelligence.v3.contracts import PhaseOutcome, PhaseStatus, SideEffectClass, TacticalState
 from alphonse.agent_v2.system_one import SystemOneUnavailableError
@@ -79,11 +80,39 @@ class V3OuterController:
             task.metadata["v3_route"] = "end"
             task.metadata["v3_strategic_decision"] = {"action": decision.action.value, "reason": decision.reason}
             return review, decision
-        decision, recommendation = _recommend_act(task, state, outcome, review, context)
-        task.metadata["system_one_act_recommendation"] = recommendation.to_metadata()
+        recommendation = None
+        if review.status in {
+            PhaseReviewStatus.WAITING_USER,
+            PhaseReviewStatus.CANCELLED,
+            PhaseReviewStatus.PHASE_BLOCKED,
+            PhaseReviewStatus.VERIFICATION_FAILED,
+        }:
+            decision = decide_next_action(review)
+            if review.status == PhaseReviewStatus.WAITING_USER:
+                task.status = "waiting_user"
+                task.metadata["v3_route"] = "waiting_user"
+                task.metadata["v3_phase_review"] = _review_dict(review)
+                task.metadata["v3_strategic_decision"] = {"action": decision.action.value, "reason": decision.reason}
+                return review, decision
+            if review.status == PhaseReviewStatus.CANCELLED:
+                task.status = "cancelled"
+                task.metadata["v3_route"] = "end"
+                task.metadata["v3_phase_review"] = _review_dict(review)
+                task.metadata["v3_strategic_decision"] = {"action": decision.action.value, "reason": decision.reason}
+                return review, decision
+        elif context.system_one is not None and callable(getattr(context.system_one, "recommend_act", None)):
+            try:
+                decision, recommendation = _recommend_act(task, state, outcome, review, context)
+            except SystemOneUnavailableError:
+                decision = decide_next_action(review)
+        else:
+            decision = decide_next_action(review)
+        if recommendation is not None:
+            task.metadata["system_one_act_recommendation"] = recommendation.to_metadata()
         if (
             decision.action == StrategicAction.FAIL
             and review.status == PhaseReviewStatus.PHASE_VERIFIED_TASK_INCOMPLETE
+            and recommendation is not None
             and recommendation.action != "fail_explain"
             and recommendation.answers.get("closure_explanation_is_warranted", 0.0) >= float(getattr(recommendation, "yes_threshold", 0.8))
         ):
@@ -118,6 +147,7 @@ class V3OuterController:
         elif decision.action == StrategicAction.CONTINUE:
             if (
                 str(task.metadata.get("system_one_act_recommendation", {}).get("action") or "") == "fail_explain"
+                and recommendation is not None
                 and review.status != PhaseReviewStatus.PHASE_VERIFIED_TASK_INCOMPLETE
             ):
                 task.metadata["act_directive"] = {
@@ -134,7 +164,8 @@ class V3OuterController:
             task.metadata["act_directive"] = {"action": "ask_user", "rationale": decision.reason}
             task.metadata["v3_route"] = "strategic_replan"
         elif (
-            recommendation.action == "fail_explain"
+            recommendation is not None
+            and recommendation.action == "fail_explain"
             and review.status != PhaseReviewStatus.PHASE_VERIFIED_TASK_INCOMPLETE
         ):
             task.metadata["act_directive"] = {
@@ -155,7 +186,7 @@ def review_phase(
     outcome: PhaseOutcome,
     context: "CoreLoopContext",
 ) -> PhaseReview:
-    violations = _invariant_violations(state)
+    violations = _invariant_violations(task, state)
     evidence_refs = _successful_evidence_refs(state)
     if violations:
         return PhaseReview(
@@ -304,16 +335,31 @@ def _review_acceptance_statuses(
     evidence_refs: tuple[str, ...],
     context: "CoreLoopContext",
 ) -> None:
-    if context.system_one is None or not hasattr(context.system_one, "evaluate"):
-        raise SystemOneUnavailableError("acceptance_review_unavailable")
-    try:
-        system_one_result = context.system_one.evaluate(
-            contract=task.ensure_acceptance_contract(),
-            phase=state.phase.to_dict(),
-            evidence=state.evidence.to_dict(),
+    system_one_result = None
+    system_one = context.system_one
+    if system_one is not None and callable(getattr(system_one, "evaluate", None)):
+        try:
+            system_one_result = system_one.evaluate(
+                contract=task.ensure_acceptance_contract(),
+                phase=state.phase.to_dict(),
+                evidence=state.evidence.to_dict(),
+            )
+        except Exception:
+            system_one_result = None
+    if system_one_result is None:
+        payload = _system_two_acceptance_review(task, state, context)
+        updates = payload.get("updates")
+        updates = [dict(item) for item in updates or () if isinstance(item, dict)]
+        contract, rejected = apply_status_patch(
+            task.ensure_acceptance_contract(), {"updates": updates}, valid_evidence_refs=set(evidence_refs),
         )
-    except Exception as exc:
-        raise SystemOneUnavailableError(f"acceptance_review:{type(exc).__name__}") from exc
+        task.acceptance_contract = contract
+        task.sync_acceptance_criteria_view()
+        task.metadata["v3_phase_review_rejections"] = rejected
+        task.metadata["criteria_review_updated"] = bool(updates)
+        task.metadata["system_one_review"] = {"status": "fallback", "provider": "system_two"}
+        task.append_update("Check used the System Two phase review because System One was unavailable.")
+        return
     metadata = system_one_result.to_metadata()
     ambiguous_ids = set(system_one_result.ambiguous_criterion_ids)
     confident_updates = [
@@ -396,6 +442,32 @@ def _review_acceptance_statuses(
             "ambiguous_criterion_ids": sorted(ambiguous_ids),
             "focused_rereview": focused_rereview.to_metadata(),
         }
+    focused_contract = {
+        **task.ensure_acceptance_contract(),
+        "criteria": [
+            dict(item) for item in task.ensure_acceptance_contract().get("criteria") or []
+            if isinstance(item, dict) and str(item.get("id") or "") in ambiguous_ids
+        ],
+    }
+    try:
+        fallback_payload = _system_two_acceptance_review(task, state, context, contract=focused_contract)
+    except SystemOneUnavailableError:
+        fallback_payload = {}
+    fallback_updates = [
+        dict(item) for item in fallback_payload.get("updates") or ()
+        if isinstance(item, dict) and str(item.get("criterion_id") or "") in ambiguous_ids
+    ]
+    if fallback_updates:
+        contract, fallback_rejected = apply_status_patch(
+            task.ensure_acceptance_contract(), {"updates": fallback_updates},
+            valid_evidence_refs=set(evidence_refs),
+        )
+        task.acceptance_contract = contract
+        task.sync_acceptance_criteria_view()
+        task.metadata["v3_phase_review_rejections"] = [*rejected, *fallback_rejected]
+        task.metadata["system_one_review"] = {"status": "partial_fallback", **metadata}
+        task.append_update("Check used a focused System Two review for ambiguous evidence.")
+        return
     task.metadata["system_one_review"] = {
         "status": (
             "focused_rereview_unresolved" if focused_rereview is not None
@@ -416,6 +488,38 @@ def _review_acceptance_statuses(
         "model": focused_rereview.model if focused_rereview else system_one_result.model,
         "usage": dict(focused_rereview.usage if focused_rereview else system_one_result.usage),
     })
+
+
+def _system_two_acceptance_review(
+    task: "TaskState",
+    state: TacticalState,
+    context: "CoreLoopContext",
+    *,
+    contract: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    if context.inference is None:
+        raise SystemOneUnavailableError("acceptance_review_unavailable")
+    request = InferenceRequest(
+        prompt=(
+            "Review the verified evidence against the immutable acceptance criteria. Return JSON with an updates array. "
+            "Each update may only reference an existing criterion id and evidence_ref from the supplied evidence. "
+            "Do not invent evidence or rewrite criteria.\n\n"
+            f"Acceptance contract: {json.dumps(contract or task.ensure_acceptance_contract(), ensure_ascii=False)}\n"
+            f"Phase: {json.dumps(state.phase.to_dict(), ensure_ascii=False)}\n"
+            f"Verified evidence: {json.dumps(state.evidence.to_dict(), ensure_ascii=False)}"
+        ),
+        purpose=InferencePurpose.PHASE_REVIEW,
+        project_id=task.project_id,
+        user=task.user,
+        task_id=task.task_id,
+    )
+    try:
+        result = context.inference.generate_json(request)
+    except Exception as exc:
+        raise SystemOneUnavailableError(f"acceptance_review_fallback:{type(exc).__name__}") from exc
+    if not isinstance(result.json_value, dict):
+        raise SystemOneUnavailableError("acceptance_review_fallback_invalid")
+    return result.json_value
     # After one focused re-review, any remaining ambiguity is passed to Act.
 
 
@@ -427,24 +531,61 @@ def _successful_evidence_refs(state: TacticalState) -> tuple[str, ...]:
     )
 
 
-def _invariant_violations(state: TacticalState) -> list[str]:
-    allowed_paths = set(state.phase.mutation_scope.allowed_paths)
-    subgoals = {item.subgoal_id: item for item in state.phase.subgoals}
+def _invariant_violations(task: "TaskState", state: TacticalState) -> list[str]:
+    phase_by_evidence_ref: dict[str, dict[str, Any]] = {}
+    history = task.metadata.get("v3_phase_history") if isinstance(task.metadata, dict) else None
+    for item in history if isinstance(history, list) else []:
+        if not isinstance(item, dict):
+            continue
+        phase = item.get("phase")
+        evidence = item.get("evidence")
+        entries = evidence.get("entries") if isinstance(evidence, dict) else None
+        if not isinstance(phase, dict) or not isinstance(entries, list):
+            continue
+        for entry in entries:
+            if (
+                isinstance(entry, dict)
+                and str(entry.get("phase_id") or "") == str(phase.get("phase_id") or "")
+                and str(entry.get("evidence_ref") or "").strip()
+            ):
+                phase_by_evidence_ref[str(entry["evidence_ref"])] = phase
+
+    # Current phase policy is authoritative for its evidence even if an older
+    # checkpoint happens to reuse an evidence reference.
+    current_phase = state.phase.to_dict()
+    current_refs = {
+        str(item.get("evidence_ref") or "").strip()
+        for item in state.evidence.entries
+        if str(item.get("phase_id") or "") in {"", state.phase.phase_id}
+    }
+    phase_by_evidence_ref.update({ref: current_phase for ref in current_refs if ref})
     violations: list[str] = []
     for entry in state.evidence.entries:
         result = entry.get("result")
         if not isinstance(result, dict):
             continue
+        evidence_ref = str(entry.get("evidence_ref") or "").strip()
+        phase = phase_by_evidence_ref.get(evidence_ref)
+        if phase is None:
+            violations.append(f"phase_scope_missing_for_evidence:{evidence_ref or '(unknown)'}")
+            continue
+        raw_scope = phase.get("mutation_scope") if isinstance(phase.get("mutation_scope"), dict) else {}
+        allowed_paths = set(raw_scope.get("allowed_paths") or ())
+        raw_subgoals = phase.get("subgoals") if isinstance(phase.get("subgoals"), list) else []
+        subgoals = {
+            str(item.get("subgoal_id") or ""): item
+            for item in raw_subgoals if isinstance(item, dict)
+        }
         affected = result.get("affected_paths")
         if isinstance(affected, list):
             subgoal = subgoals.get(str(entry.get("subgoal_id") or ""))
-            effects = set(subgoal.allowed_side_effects) if subgoal is not None else set()
+            effects = set(subgoal.get("allowed_side_effects") or ()) if subgoal is not None else set()
             if SideEffectClass.PROJECT_MUTATION in effects:
                 unauthorized = [str(path) for path in affected if str(path) not in allowed_paths]
                 if unauthorized:
                     violations.append(f"unauthorized_affected_paths:{','.join(unauthorized)}")
             elif effects & {SideEffectClass.EXTERNAL_REVERSIBLE, SideEffectClass.EXTERNAL_IRREVERSIBLE}:
-                if not state.phase.mutation_scope.allow_external_effects:
+                if not bool(raw_scope.get("allow_external_effects", False)):
                     violations.append(f"external_effect_not_authorized:{entry.get('evidence_ref') or '(unknown)'}")
             else:
                 violations.append(f"affected_paths_without_side_effect_authorization:{entry.get('evidence_ref') or '(unknown)'}")

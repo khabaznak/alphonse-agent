@@ -1933,37 +1933,52 @@ class V2Daemon:
         """Deliver notification-only schedules without starting an LLM/PDCA run."""
         task = occurrence.task
         memory_session = self.runtime.memory_session_store.ensure_system(project_id=task.project_id, identity=task.scheduled_task_id, created_by_user_id=task.owner_user_id) if task.project_id else None
+        raw_channels = task.origin_channel.get("delivery_channels") if isinstance(task.origin_channel, dict) else None
+        origins = [channel_address_from_metadata({"channel": channel}) for channel in raw_channels if isinstance(channel, dict)] if isinstance(raw_channels, list) else []
+        origins = [address for address in origins if address is not None]
         origin = channel_address_from_metadata({"channel": dict(task.origin_channel)})
-        if origin is None:
+        if origin is not None and origin not in origins:
+            origins.insert(0, origin)
+        if not origins:
             resolved = self.runtime.identity_resolver.resolve_outbound_address(
                 alphonse_user_id=task.owner_user_id,
             )
-            origin = resolved.address if resolved.resolved else None
-        if origin is None:
+            if resolved.resolved and resolved.address is not None:
+                origins.append(resolved.address)
+        if not origins:
             raise RuntimeError("scheduled_reminder_delivery_unresolved")
         message = str(task.description or task.name or "Reminder").strip()
-        outbound = self.runtime.outbox.enqueue(
-            address=origin,
-            message=f"Reminder: {message}",
-            kind="scheduled_reminder",
-            audience_user_id=task.owner_user_id,
-            project_id=task.project_id,
-            metadata={
-                "source": "scheduled_reminder",
-                "scheduled_task_id": task.scheduled_task_id,
-                "occurrence_key": occurrence.occurrence_key,
-            },
-        )
-        self.runtime.conversation_store.record(
-            owner_user_id=task.owner_user_id,
-            project_id=task.project_id,
-            memory_session_id=memory_session.session_id if memory_session is not None else "",
-            role="assistant",
-            content=outbound.message,
-            source=origin.integration_id,
-            source_message_id=f"outbound:{outbound.outbox_message_id}",
-        )
-        return outbound.outbox_message_id
+        outbounds = []
+        seen: set[tuple[str, str, str]] = set()
+        for destination in origins:
+            identity = (destination.integration_id, destination.provider_key, destination.channel_target)
+            if identity in seen:
+                continue
+            seen.add(identity)
+            outbound = self.runtime.outbox.enqueue(
+                address=destination,
+                message=f"Reminder: {message}",
+                kind="scheduled_reminder",
+                audience_user_id=task.owner_user_id,
+                project_id=task.project_id,
+                metadata={
+                    "source": "scheduled_reminder",
+                    "scheduled_task_id": task.scheduled_task_id,
+                    "occurrence_key": occurrence.occurrence_key,
+                },
+                idempotency_key=f"scheduled-reminder:{occurrence.occurrence_key}:{destination.integration_id}:{destination.channel_target}",
+            )
+            outbounds.append(outbound)
+            self.runtime.conversation_store.record(
+                owner_user_id=task.owner_user_id,
+                project_id=task.project_id,
+                memory_session_id=memory_session.session_id if memory_session is not None else "",
+                role="assistant",
+                content=outbound.message,
+                source=destination.integration_id,
+                source_message_id=f"outbound:{outbound.outbox_message_id}",
+            )
+        return outbounds[0].outbox_message_id
 
     def _notify_scheduled_task_failure(self, metadata: dict[str, Any], *, error: str) -> None:
         """Notify the owner when scheduled work cannot run, without involving the model."""

@@ -56,6 +56,8 @@ class _RunState:
     failures: list[str] = field(default_factory=list)
     v2_index: int = 0
     v3_index: int = 0
+    required_context_markers: tuple[str, ...] = ()
+    context_preserved: bool = True
 
 
 class _DeterministicProvider:
@@ -73,6 +75,7 @@ class _DeterministicProvider:
 
     def generate_json(self, request: InferenceRequest) -> InferenceResult:
         if request.purpose == InferencePurpose.PHASE_PLANNING:
+            self._check_context(request.prompt)
             phase = _phase_plan(self.state.scenario).to_dict()
             if '"response_required": true' in request.prompt.lower() or '"response_required":true' in request.prompt.lower():
                 phase.update({
@@ -118,6 +121,7 @@ class _DeterministicProvider:
         return self._result(json_value=value, request=request)
 
     def plan_tool_call(self, request: InferenceRequest) -> InferenceResult:
+        self._check_context(request.prompt)
         actions = list(self.state.scenario.actions)
         if '"response_required": true' in request.prompt.lower() or '"response_required":true' in request.prompt.lower():
             action = _respond_action(self.state.scenario.final_response)
@@ -135,6 +139,13 @@ class _DeterministicProvider:
             "internal_state": f"{action.role}: {action.capability}",
         }
         return self._result(json_value=value, tool_call=value, request=request)
+
+    def _check_context(self, prompt: str) -> None:
+        if self.state.required_context_markers:
+            self.state.context_preserved = self.state.context_preserved and all(
+                marker.casefold() in prompt.casefold()
+                for marker in self.state.required_context_markers
+            )
 
     def _next_v3_action(self) -> dict[str, Any]:
         actions = list(self.state.scenario.actions)
@@ -186,7 +197,12 @@ def _run(
     engine: str,
 ) -> EngineTrace:
     scenario = _scenario(case.case_id)
-    state = _RunState(scenario=scenario, root=fixture_root / "project", engine=engine)
+    state = _RunState(
+        scenario=scenario,
+        root=fixture_root / "project",
+        engine=engine,
+        required_context_markers=tuple(map(str, case.fixture.get("required_context_markers") or ())),
+    )
     registry = _registry(state)
     provider = _DeterministicProvider(state)
     router = InferenceRouter(
@@ -213,6 +229,7 @@ def _run(
         intelligence_engine=engine,
         intelligence_schema_version=3 if engine == "hierarchical_v3" else 2,
         metadata={"attachments": list(case.fixture.get("attachments") or [])},
+        recent_conversation_md=str(case.fixture.get("recent_conversation") or "- (none)"),
     )
     if scenario.initial_acceptance or scenario.restart_after_role:
         task.set_acceptance_contract_from_markdown(f"- [ ] {scenario.acceptance}")
@@ -368,6 +385,11 @@ class _ReplayJev:
         tool_ids = tuple(str(getattr(tool, "tool_id", "")) for tool in tools)
         return SystemOneToolRegistrySelection(selected_tool_ids=tool_ids)
 
+    def curate_request_tools(self, *, tools, **_values):
+        from alphonse.agent_v2.system_one import SystemOneToolRegistrySelection
+        tool_ids = tuple(str(getattr(tool, "tool_id", "")) for tool in tools)
+        return SystemOneToolRegistrySelection(selected_tool_ids=tool_ids)
+
     def triage_plan_messages(self, *, candidates, **_values):
         return tuple(str(item.get("message_id")) for item in candidates if isinstance(item, dict))
 
@@ -502,6 +524,8 @@ def _trace_metadata(
         "phase_shape": [action.role for action in scenario.actions if action.tool_id not in {"native.respond", "native.ask_question"}],
         "tool_ids": list(state.tool_calls),
         "task_status": task.status,
+        "context_preserved": state.context_preserved,
+        "question_count": len(state.questions),
     }
     if case.case_id == "tool-failure-local-fallback":
         metadata["recovery"] = "bounded project-file search" if state.failures and "fixture.search" in state.tool_calls else ""
@@ -595,6 +619,18 @@ def _scenario(case_id: str) -> _Scenario:
             acceptance="The resumed task updates and verifies the located record without repeating locate.",
             final_response="Reanudé la tarea y verifiqué la actualización sin repetir la búsqueda.",
             mutation_paths=("records/item.md",), restart_after_role="locate",
+        ),
+        "telegram-reminder-cross-channel-continuity": _Scenario(
+            actions=(
+                _Action(
+                    "native.scheduled_task", "scheduling",
+                    {"name": "Subir yogurt a mi suegra", "schedule_kind": "once", "local_time": "09:00", "day": "today"},
+                    role="schedule", read_only=False, result={"scheduled_task_id": "fixture-reminder", "run_at": "today 09:00"},
+                    side_effect="external_reversible",
+                ),
+            ),
+            acceptance="The reminder is scheduled for today at 9:00 a.m.",
+            final_response="Listo, dejé el recordatorio para hoy a las 9:00 a. m.",
         ),
     }
     try:

@@ -78,6 +78,8 @@ export type MemorySettings = { max_ledger_bytes: number; compaction_summary_max_
 export type SystemOneSettings = {
   enabled: boolean; api_url: string; model: string; has_api_key: boolean;
   yes_threshold: number; no_threshold: number; route_confidence_threshold: number;
+  tool_selection_threshold: number; act_route_confidence_threshold: number;
+  check_completion_threshold: number; task_admission_threshold: number;
   validated_at: string; validation_error: string; updated_at: string;
 };
 export type VerificationState = { ready: boolean; verified_at: string; error: string; preview: string };

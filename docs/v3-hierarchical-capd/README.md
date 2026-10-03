@@ -95,6 +95,8 @@ Use a replayable evaluation set containing at least:
 - A tool failure with a valid local fallback.
 - A conflict that requires strategic replanning.
 - A task requiring a user decision.
+- A reminder clarification answered across Telegram and Desktop, preserving the
+  original request and answer in the resumed planning context.
 - Steering during tactical execution.
 - Restart and resume in the middle of a phase.
 

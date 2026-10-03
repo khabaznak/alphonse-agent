@@ -13,11 +13,14 @@ capabilities undiscoverable.
 
 Before strategic System Two planning, Jev receives the runtime tool registry after
 the runtime exposure policy has selected tools available to this task, plus the
-Plan instructions, current request, and session conversation history. Jev returns
-only relevant tool IDs; ambiguous candidates remain available. Jev does not devise
-the method or authorize tools. Strategic Plan then receives the complete
-LLM-oriented descriptors for those candidates, so it can form a feasible plan
-without paying to show System Two the entire registry.
+Plan instructions, current request, session conversation history, bounded context
+for the current project, and bounded durable project/session memory. This lets
+request curation recognize when a short or implicit request refers to a
+project-specific record, workflow, or artifact. These context fields are evidence
+for relevance only; Jev still returns relevant tool IDs and does not devise the
+method or authorize tools. Ambiguous candidates remain available. Strategic Plan
+then receives the complete LLM-oriented descriptors for those candidates, so it
+can form a feasible plan without paying to show System Two the entire registry.
 
 When a task has image attachments, request curation and strategic planning also
 receive a bounded metadata-only manifest (asset ID, filename, MIME type, kind,
@@ -129,7 +132,8 @@ that phase unless new evidence and the phase contract make them relevant.
 - [x] Add V3 capability metadata support with mappings for current native tools and
       exact-ID compatibility for project artifacts.
 - [x] Curate request-relevant tools with Jev before strategic planning.
-- [x] Pass Plan instructions, current request, and session history to request-level curation.
+- [x] Pass Plan instructions, current request, session history, bounded project
+      context, and bounded durable project memory to request-level curation.
 - [x] Give strategic Plan complete descriptors only for Jev-curated candidates.
 - [x] Keep per-phase Jev curation and deterministic authorization before tactical reveal.
 - [x] Implement deterministic prerequisite filtering.

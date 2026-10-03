@@ -482,7 +482,6 @@ class SQLiteQuestionStore:
         task.status = "running"
         task.metadata.pop("pending_question_id", None)
         task.metadata.pop("question_answer", None)
-        task.append_conversation_message(question.respondent_user_id, _answer_text(answer))
         _record_question_answer_tool_result(task=task, question=question, answer=answer)
         task.append_update(f"Question {question.question_id} answered; task resumed.")
 

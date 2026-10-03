@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import pytest
+
 from alphonse.agent_v2.core.io import SQLiteOutboundStore
 from alphonse.agent_v2.core.messages import CommunicationChannel
 from alphonse.agent_v2.core.messages import InMemoryMessageQueue
 from alphonse.agent_v2.core.projects import ProjectStore
+from alphonse.agent_v2.core.intelligence.task_state import TaskState
+from alphonse.agent_v2.core.questions import SQLiteQuestionStore
 from alphonse.agent_v2.services.project_sessions import ProjectInboundRouter
 from alphonse.agent_v2.services.project_sessions import ProjectSessionKey
 from alphonse.agent_v2.services.project_sessions import SQLiteProjectSessionStore
@@ -108,3 +112,49 @@ def test_project_commands_do_not_grant_admins_access_to_other_users_private_proj
     assert private.project_id not in listed
     assert "Project not found or not visible" in denied
     assert f"Active project: {shared.name}." in outbox.list()[-1].message
+
+
+@pytest.mark.parametrize(
+    ("answer_integration", "answer_provider", "answer_target"),
+    [("telegram-home", "telegram", "chat-1"), ("desktop", "tui", "alex")],
+)
+def test_cross_channel_reply_resumes_pending_question_with_original_task_context(
+    tmp_path, answer_integration, answer_provider, answer_target,
+) -> None:
+    queue = InMemoryMessageQueue()
+    projects = ProjectStore(":memory:")
+    project = projects.create_project(name="Home", root_path=str(tmp_path / "home"), owner_user_id="alex")
+    questions = SQLiteQuestionStore()
+    router = ProjectInboundRouter(
+        channel=CommunicationChannel(queue),
+        outbox=SQLiteOutboundStore(),
+        projects=projects,
+        sessions=SQLiteProjectSessionStore(":memory:"),
+        question_store=questions,
+    )
+    task = TaskState(
+        task_id="reminder-task", user="alex", project_id=project.project_id,
+        memory_session_id="home-session", goal="Remind me at 9 to bring yogurt.",
+        metadata={"channel": {
+            "integration_id": "telegram-home", "provider_key": "telegram",
+            "channel_target": "chat-1", "provider_user_id": "alex-telegram",
+            "alphonse_user_id": "alex",
+        }},
+    )
+    task.append_conversation_message("Alphonse", "¿Quieres que te recuerde hoy o mañana?")
+    question = questions.create_question(task=task, question="¿Quieres que te recuerde hoy o mañana?")
+
+    routed = router.ingest(
+        prompt="Hoy", user="alex", integration_id=answer_integration, provider_key=answer_provider,
+        provider_user_id="alex-telegram", channel_target=answer_target, provider_message_id="answer-2",
+    )
+
+    assert routed.queued is not None
+    assert routed.disposition == "correlated_response"
+    assert routed.queued.message.project_id == project.project_id
+    assert routed.queued.message.memory_session_id == "home-session"
+    resumed = TaskState.from_queued_message(routed.queued)
+    assert resumed.metadata["channel"]["integration_id"] == "telegram-home"
+    assert 'Alphonse: "¿Quieres que te recuerde hoy o mañana?"' in resumed.recent_conversation_md
+    assert 'alex: "Hoy"' in resumed.recent_conversation_md
+    assert questions.get_question(question.question_id).status == "answered"

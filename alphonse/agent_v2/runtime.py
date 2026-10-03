@@ -278,6 +278,7 @@ def build_runtime_host(
         delivery_sink=delivery_sink,
         user_context_provider=user_store.read_user_context,
         user_timezone_provider=lambda _user_id: user_store.timezone(),
+        identity_resolver=identity_resolver,
         program_runner=ProgramRunner(settings_provider=code_mode_settings_store.get),
         activity_sink=_activity_sink,
         telemetry_sink=telemetry_sink,

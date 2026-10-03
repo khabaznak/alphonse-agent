@@ -68,15 +68,26 @@ def test_router_stamps_selected_session_before_queueing_and_supports_commands(tm
     router.select_project(key, project.project_id)
 
     router.ingest(prompt="/session new Research", user="alex", integration_id="tui", provider_key="tui", channel_target="alex")
-    selected = sessions.get_binding(MemorySessionBindingKey("alex", "tui", "alex", "", project.project_id))
+    project_binding = MemorySessionBindingKey("alex", "project", "alex", "", project.project_id)
+    selected = sessions.get_binding(project_binding)
     assert selected is not None and selected.name == "Research"
 
     routed = router.ingest(prompt="Investigate", user="alex", integration_id="tui", provider_key="tui", channel_target="alex")
     router.ingest(prompt="/session new Other", user="alex", integration_id="tui", provider_key="tui", channel_target="alex")
+    shared_session = sessions.get_binding(project_binding)
+    telegram_key = ProjectSessionKey("alex", "telegram-home", "chat-1")
+    router.select_project(telegram_key, project.project_id)
+    telegram_routed = router.ingest(
+        prompt="Continue from Telegram", user="alex", integration_id="telegram-home",
+        provider_key="telegram", channel_target="chat-1",
+    )
 
     assert routed.queued is not None
     assert routed.queued.message.memory_session_id == selected.session_id
     assert routed.queued.message.metadata["memory_session_id"] == selected.session_id
+    assert shared_session is not None and shared_session.name == "Other"
+    assert telegram_routed.queued is not None
+    assert telegram_routed.queued.message.memory_session_id == shared_session.session_id
 
 
 def test_legacy_ledgers_are_archived_and_summarized_once(tmp_path) -> None:

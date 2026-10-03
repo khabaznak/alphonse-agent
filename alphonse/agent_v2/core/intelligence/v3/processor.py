@@ -19,6 +19,9 @@ if TYPE_CHECKING:
     from alphonse.agent_v2.core.intelligence.task_state import TaskState
 
 
+_MAX_CONSECUTIVE_NO_PROGRESS_PHASES = 3
+
+
 class HierarchicalCAPDProcessor:
     def __init__(self) -> None:
         self.executor = PhaseExecutor(reveal_policy=ToolRevealPolicy())
@@ -31,6 +34,7 @@ class HierarchicalCAPDProcessor:
         if self._admit_initial_human_task(task, context):
             self._persist(task, context)
             return self._result(task, context)
+        no_progress_phases = int(task.metadata.get("v3_no_progress_phase_count") or 0)
         while task.status not in {"completed", "failed", "waiting_user", "cancelled"}:
             try:
                 if task.hierarchical_state:
@@ -57,6 +61,7 @@ class HierarchicalCAPDProcessor:
                 break
             try:
                 outcome = self.executor.run(task, state, context)
+                evidence_before = _successful_evidence_refs(task.metadata.get("v3_phase_history"))
                 self._append_history(task, state, outcome.to_dict())
                 review, decision = self.outer.review_and_route(task, state, outcome, context)
             except SystemOneUnavailableError as exc:
@@ -65,6 +70,26 @@ class HierarchicalCAPDProcessor:
                 self._persist(task, context)
                 break
             self._persist(task, context)
+            evidence_after = _successful_evidence_refs(task.metadata.get("v3_phase_history"))
+            evidence_progress = bool(evidence_after - evidence_before)
+            review_status = str(getattr(getattr(review, "status", None), "value", ""))
+            if review_status in {
+                "phase_blocked", "verification_failed",
+            } and not evidence_progress:
+                no_progress_phases += 1
+                task.metadata["v3_no_progress_phase_count"] = no_progress_phases
+            else:
+                no_progress_phases = 0
+                task.metadata.pop("v3_no_progress_phase_count", None)
+            if no_progress_phases >= _MAX_CONSECUTIVE_NO_PROGRESS_PHASES:
+                reason = "The task stopped after repeated phases made no acceptance progress."
+                task.status = "failed"
+                task.outcome = {"status": "failure", "reason": reason}
+                task.metadata["v3_route"] = "end"
+                task.metadata["v3_no_progress_stop"] = True
+                task.append_update(reason)
+                self._persist(task, context)
+                break
             if task.metadata.get("v3_route") in {"plan_next_phase", "strategic_replan"}:
                 task.hierarchical_state = {}
                 continue
@@ -328,3 +353,11 @@ def _deduplicated_history_evidence(raw_history: object) -> list[dict]:
             else:
                 unreferenced.append(dict(entry))
     return [*evidence_by_ref.values(), *unreferenced]
+
+
+def _successful_evidence_refs(raw_history: object) -> set[str]:
+    return {
+        str(item.get("evidence_ref"))
+        for item in _deduplicated_history_evidence(raw_history)
+        if str(item.get("status") or "") == "success" and item.get("evidence_ref")
+    }

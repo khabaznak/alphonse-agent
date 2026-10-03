@@ -194,6 +194,15 @@ class ToolExecutionContext:
     user_context_provider: Callable[[str], str] | None = None
     user_timezone_provider: Callable[[str], str] | None = None
     memory: Any | None = None
+    identity_resolver: Any | None = None
+
+    def record_memory_event(self, task: TaskState, heading: str, content: Any) -> None:
+        """Record an event through the task's configured memory adapter."""
+        if self.memory is None:
+            return
+        record = getattr(self.memory, "event", None)
+        if callable(record):
+            record(task, heading, content)
 
 
 @dataclass
@@ -214,6 +223,7 @@ class CoreLoopContext:
     user_timezone_provider: Callable[[str], str] | None = None
     memory: Any | None = None
     program_runner: Any | None = None
+    identity_resolver: Any | None = None
     cancellation_checker: Callable[[], bool] | None = None
     telemetry_sink: Callable[[dict[str, Any]], None] | None = None
     system_one: Any | None = None
@@ -257,6 +267,7 @@ class CoreLoopContext:
             delivery_sink=self.delivery_sink,
             memory=self.memory,
             user_timezone_provider=self.user_timezone_provider,
+            identity_resolver=self.identity_resolver,
         )
 
     def is_cancelled(self) -> bool:
@@ -495,6 +506,7 @@ class AlphonseCore:
     delivery_sink: Callable[[dict[str, Any]], Any] | None = None
     user_context_provider: Callable[[str], str] | None = None
     user_timezone_provider: Callable[[str], str] | None = None
+    identity_resolver: Any | None = None
     program_runner: Any | None = None
     cancellation_checker: Callable[[str], bool] | None = None
     active_task_callback: Callable[[QueuedMessage, TaskState], None] | None = None
@@ -597,6 +609,7 @@ class AlphonseCore:
                 user_context_provider=self.user_context_provider,
                 user_timezone_provider=self.user_timezone_provider,
                 memory=self.memory,
+                identity_resolver=self.identity_resolver,
                 program_runner=self.program_runner,
                 cancellation_checker=(lambda: bool(self.cancellation_checker and self.cancellation_checker(queued.message_id))),
             )

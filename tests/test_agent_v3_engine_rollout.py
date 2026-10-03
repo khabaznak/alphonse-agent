@@ -17,6 +17,7 @@ from alphonse.agent_v2.core.questions import SQLiteQuestionStore
 from alphonse.agent_v2.core.tools.registry import InMemoryToolRegistry, ToolDefinition
 from alphonse.agent_v2.core.tools.registry.native.exact_text_edit import build_exact_text_edit_tool_definition
 from alphonse.agent_v2.core.tools.registry.native.project_files import build_project_read_tool_definition
+from alphonse.agent_v2.core.tools.registry.native.project_files import build_project_search_tool_definition
 from alphonse.agent_v2.core.tools.registry.native.respond import build_respond_tool_definition
 from alphonse.agent_v2.intelligence_engine_settings import HIERARCHICAL_V3, TACTICAL_V2
 from alphonse.agent_v2.intelligence_engine_settings import IntelligenceEngineSettings
@@ -196,8 +197,49 @@ def test_hierarchical_processor_completes_one_phase_without_v2_tool_cycles() -> 
     )
     # The evidence reference is generated dynamically; adapt the test provider at review time.
     original_generate_json = provider.generate_json
+    phase_plan_count = 0
+    tactical_action_count = 0
+    final_response_phase = {
+        "schema_version": 3,
+        "acceptance_criteria": [],
+        "phase_id": "present-result",
+        "objective": "Present the verified project record result",
+        "criterion_ids": ["ac-1"],
+        "authorized_capabilities": ["user_response"],
+        "mutation_scope": {"allowed_paths": [], "allow_external_effects": True},
+        "originating_decision": "The requested record was found and verified.",
+        "subgoals": [{
+            "subgoal_id": "respond",
+            "objective": "Tell Alex that the project record was found",
+            "required_output_type": "user_response",
+            "depends_on": [],
+            "allowed_capabilities": ["user_response"],
+            "allowed_side_effects": ["user_response"],
+            "completion": {"kind": "output_present", "output_type": "user_response"},
+            "failure_policy": "stop",
+        }],
+    }
+    final_response_action = {
+        "tool_id": "native.respond",
+        "arguments": {"message": "Encontré el registro del proyecto.", "tone": "warm"},
+        "acceptance_questions": [{
+            "question_id": "result-presented",
+            "type": "noul",
+            "instructions": "Did the response present the verified project record result?",
+            "criteria": {"true": "The verified result was presented.", "false": "The verified result was not presented."},
+        }],
+    }
 
     def generate_json(request):
+        nonlocal phase_plan_count, tactical_action_count
+        if request.purpose == InferencePurpose.PHASE_PLANNING:
+            phase_plan_count += 1
+            if phase_plan_count == 2:
+                return InferenceResult(json_value=final_response_phase, model_profile=request.model_profile)
+        if request.purpose == InferencePurpose.TACTICAL_ACTION:
+            tactical_action_count += 1
+            if tactical_action_count == 2:
+                return InferenceResult(json_value=final_response_action, model_profile=request.model_profile)
         if request.purpose == InferencePurpose.PHASE_REVIEW:
             import json
             marker = "tactical-action:"
@@ -216,6 +258,7 @@ def test_hierarchical_processor_completes_one_phase_without_v2_tool_cycles() -> 
         ),
         callable=lambda arguments: {"path": "backlog.md", "query": arguments["query"]},
     ))
+    registry.register(build_respond_tool_definition())
     task = TaskState(goal="Find solar", user="alex", project_id="home", intelligence_engine=HIERARCHICAL_V3, intelligence_schema_version=3)
 
     result = HierarchicalCAPDProcessor().process(
@@ -349,19 +392,19 @@ def test_hierarchical_processor_plans_one_stage_and_jev_selects_respond_for_gree
     assert task.metadata["prepared_user_response"]["source"] == "native.respond"
     assert task.acceptance_criteria_all_complete()
     purposes = [item.purpose for item in provider.requests]
-    assert InferencePurpose.ACCEPTANCE_CRITERIA in purposes
+    # V3 creates the acceptance contract as part of strategic phase planning.
+    assert InferencePurpose.ACCEPTANCE_CRITERIA not in purposes
     assert InferencePurpose.PHASE_PLANNING in purposes
     assert InferencePurpose.TACTICAL_ACTION in purposes
     assert InferencePurpose.FINAL_RESPONSE not in purposes
     planning_request = next(item for item in provider.requests if item.purpose == InferencePurpose.PHASE_PLANNING)
     assert '"required": ["kind"]' in planning_request.prompt
     assert '"enum": ["read_only", "user_response", "project_mutation"' in planning_request.prompt
-    assert "do not declare it unavailable" in planning_request.prompt
+    assert "Do not declare it unavailable" in planning_request.prompt
     assert "use native.artifact_metadata_update for the mutation" in planning_request.prompt
     assert "editing a README or program is not a substitute" in planning_request.prompt
-    assert "plan the necessary duplicate/context inspection, the requested mutation, and verification as one coherent end-to-end phase" in planning_request.prompt
-    acceptance_request = next(item for item in provider.requests if item.purpose == InferencePurpose.ACCEPTANCE_CRITERIA)
-    assert "All criteria are conjunctive" in acceptance_request.prompt
+    assert "For a requested known mutation, include needed inspection, mutation, and verification in one coherent phase" in planning_request.prompt
+    assert '"acceptance_criteria"' in planning_request.prompt
     assert question_store.load_task_checkpoint("greeting-task") is not None
     assert "tactical action" in [event.label for event in activity]
 
@@ -534,9 +577,30 @@ def test_v3_phase_planner_receives_project_context_and_durable_memory(tmp_path: 
     )
     task.set_acceptance_contract_from_markdown("1.- [ ] Today's workout is recorded")
 
+    class ContextAwareJev(_TestJev):
+        project_context = ""
+        durable_memory = ""
+
+        def curate_request_tools(self, *, tools, project_context="", durable_memory="", **_values):
+            self.project_context = project_context
+            self.durable_memory = durable_memory
+            # Model the intended relevance judgment: project clues make journal
+            # tools relevant to a short, implicit workout request.
+            tool_ids = [item.tool_id for item in tools if item.tool_id == "native.respond"]
+            if "workout journal" in project_context.lower() or "calisthenics_journal.md" in durable_memory:
+                tool_ids.extend(item.tool_id for item in tools if item.tool_id in {
+                    "native.project_search", "native.read_project_file",
+                })
+            return SystemOneToolRegistrySelection(selected_tool_ids=tuple(tool_ids))
+
+    jev = ContextAwareJev()
+    registry = InMemoryToolRegistry()
+    registry.register(build_project_read_tool_definition())
+    registry.register(build_project_search_tool_definition())
+    registry.register(build_respond_tool_definition())
     state = HierarchicalCAPDProcessor._new_state(
         task,
-        CoreLoopContext(messages=InMemoryMessageQueue(), project_store=projects, inference=inference, system_one=_TestJev()),
+        CoreLoopContext(messages=InMemoryMessageQueue(), tools=registry, project_store=projects, inference=inference, system_one=jev),
     )
 
     request = next(item for item in provider.requests if item.purpose == InferencePurpose.PHASE_PLANNING)
@@ -549,6 +613,10 @@ def test_v3_phase_planner_receives_project_context_and_durable_memory(tmp_path: 
     assert "never mutation targets" in request.prompt
     assert "Do not ask the requester for a file location already present" in request.prompt
     assert state.phase.mutation_scope.allowed_paths == ()
+    assert "Keep a dated workout journal." in jev.project_context
+    assert "calisthenics_journal.md" in jev.durable_memory
+    assert '"tool_id": "native.read_project_file"' in request.prompt
+    assert '"tool_id": "native.project_search"' in request.prompt
 
 
 def test_v3_known_journal_path_flows_from_memory_to_read_and_verified_edit(tmp_path: Path) -> None:
@@ -599,13 +667,42 @@ def test_v3_known_journal_path_flows_from_memory_to_read_and_verified_edit(tmp_p
             "failure_policy": "stop",
         }],
     }
+    response_phase = {
+        "schema_version": 3,
+        "acceptance_criteria": [],
+        "phase_id": "present-workout",
+        "objective": "Present the verified workout journal update",
+        "criterion_ids": ["ac-1"],
+        "authorized_capabilities": ["user_response"],
+        "mutation_scope": {"allowed_paths": [], "allow_external_effects": True},
+        "originating_decision": "The journal update was verified.",
+        "subgoals": [{
+            "subgoal_id": "respond-workout",
+            "objective": "Tell the user the workout was recorded",
+            "required_output_type": "user_response",
+            "depends_on": [],
+            "allowed_capabilities": ["user_response"],
+            "allowed_side_effects": ["user_response"],
+            "completion": {"kind": "output_present", "output_type": "user_response"},
+            "failure_policy": "stop",
+        }],
+    }
 
     class SequencedProvider:
         def __init__(self):
             self.requests = []
-            self.phases = [read_phase, edit_phase]
+            self.phases = [read_phase, edit_phase, response_phase]
             self.actions = [
-                {"tool_id": "native.read_project_file", "arguments": {"path": "workout_journal.md"}},
+                {
+                    "tool_id": "native.read_project_file",
+                    "arguments": {"path": "workout_journal.md"},
+                    "acceptance_questions": [{
+                        "question_id": "journal-read",
+                        "type": "noul",
+                        "instructions": "Did the tool successfully read the workout journal?",
+                        "criteria": {"true": "The journal contents are available.", "false": "The journal contents are unavailable."},
+                    }],
+                },
                 {
                     "tool_id": "native.exact_text_edit",
                     "arguments": {
@@ -613,6 +710,22 @@ def test_v3_known_journal_path_flows_from_memory_to_read_and_verified_edit(tmp_p
                         "expected_text": "- Push-ups: 3 sets\n",
                         "replacement_text": "- Push-ups: 3 sets\n\n## 2026-09-21\n- Push-ups: 5 sets x 10 reps\n",
                     },
+                    "acceptance_questions": [{
+                        "question_id": "journal-edit-verified",
+                        "type": "noul",
+                        "instructions": "Did the exact edit report a verified journal update?",
+                        "criteria": {"true": "The updated journal was read back and verified.", "false": "The update was not verified."},
+                    }],
+                },
+                {
+                    "tool_id": "native.respond",
+                    "arguments": {"message": "Workout journal updated.", "tone": "warm"},
+                    "acceptance_questions": [{
+                        "question_id": "workout-update-presented",
+                        "type": "noul",
+                        "instructions": "Did the response tell the user the verified journal update was complete?",
+                        "criteria": {"true": "The verified journal update was presented.", "false": "The verified journal update was not presented."},
+                    }],
                 },
             ]
 
@@ -633,18 +746,28 @@ def test_v3_known_journal_path_flows_from_memory_to_read_and_verified_edit(tmp_p
             return SystemOneToolRegistrySelection(selected_tool_ids=tuple(item.tool_id for item in tools))
 
         def select_plan_tools(self, **values):
-            selected = (
-                "native.read_project_file" if values["phase"]["phase_id"] == "read-known-journal"
-                else "native.exact_text_edit"
-            )
+            phase_id = values["phase"]["phase_id"]
+            selected = {
+                "read-known-journal": "native.read_project_file",
+                "update-known-journal": "native.exact_text_edit",
+                "present-workout": "native.respond",
+            }[phase_id]
             return SystemOneToolRegistrySelection(selected_tool_ids=(selected,))
 
         def evaluate_tactical_progress(self, **_values):
             return SystemOneTacticalReview(True, 0.99, True)
 
         def evaluate(self, **values):
-            evidence_ref = values["evidence"]["entries"][-1]["evidence_ref"]
-            edited = values["phase"]["phase_id"] == "update-known-journal"
+            entries = values["evidence"]["entries"]
+            verified_edits = [
+                item for item in entries
+                if item.get("tool_id") == "native.exact_text_edit"
+                and item.get("status") == "success"
+                and isinstance(item.get("result"), dict)
+                and item["result"].get("verification", {}).get("status") == "verified"
+            ]
+            edited = bool(verified_edits)
+            evidence_ref = (verified_edits[-1] if edited else entries[-1])["evidence_ref"]
             return SystemOneReviewResult(
                 updates=({
                     "criterion_id": "ac-1",
@@ -670,6 +793,7 @@ def test_v3_known_journal_path_flows_from_memory_to_read_and_verified_edit(tmp_p
     registry = InMemoryToolRegistry()
     registry.register(build_project_read_tool_definition())
     registry.register(build_exact_text_edit_tool_definition())
+    registry.register(build_respond_tool_definition())
     task = TaskState(
         task_id="journal-update",
         goal="Record today's workout",
@@ -693,12 +817,13 @@ def test_v3_known_journal_path_flows_from_memory_to_read_and_verified_edit(tmp_p
 
     assert result.status.value == "completed"
     assert "## 2026-09-21" in journal.read_text(encoding="utf-8")
+    assert task.metadata["prepared_user_response"]["message"] == "Workout journal updated."
     tool_ids = [
         entry["tool_id"]
         for phase in task.metadata["v3_phase_history"]
         for entry in phase["evidence"]["entries"]
     ]
-    assert tool_ids == ["native.read_project_file", "native.exact_text_edit"]
+    assert tool_ids == ["native.read_project_file", "native.exact_text_edit", "native.respond"]
     assert "native.ask_question" not in tool_ids
 
 

@@ -33,11 +33,13 @@ def plan_phase(task: "TaskState", context: "CoreLoopContext") -> PhasePlan:
         registry=context.tools, project_id=task.project_id, user=task.user, task=task,
     ) if context.tools is not None else ()
     session_history = _bounded_text(task.recent_conversation_md, 6000)
-    attachment_manifest = _attachment_manifest(task)
+    project_context = _project_context(task, context)
     durable_memory = _bounded_context_text(task.conversation_history_md, 9000)
+    attachment_manifest = _attachment_manifest(task)
     system_prompt = _strategic_plan_instructions()
     tools = _curate_request_tools(
         task, tools, system_prompt=system_prompt, session_history=session_history,
+        project_context=_bounded_text(project_context, 5000), durable_memory=durable_memory,
         attachment_manifest=attachment_manifest, context=context,
     )
     catalog = sorted({capability for tool in tools for capability in tool_capabilities(tool)})
@@ -46,7 +48,6 @@ def plan_phase(task: "TaskState", context: "CoreLoopContext") -> PhasePlan:
         {"capability": capability, "description": capability_descriptions.get(capability, capability)}
         for capability in catalog
     ]
-    project_context = _project_context(task, context)
     prepared_response = task.metadata.get("prepared_user_response")
     act_directive = task.metadata.get("act_directive")
     act_directive = act_directive if isinstance(act_directive, dict) else {}
@@ -110,7 +111,10 @@ def plan_phase(task: "TaskState", context: "CoreLoopContext") -> PhasePlan:
     return _curate_phase_tools(task, phase, tools, context)
 
 
-def _curate_request_tools(task, tools, *, system_prompt: str, session_history: str, attachment_manifest, context):
+def _curate_request_tools(
+    task, tools, *, system_prompt: str, session_history: str, project_context: str,
+    durable_memory: str, attachment_manifest, context,
+):
     """Narrow the task-authorized runtime registry before System 2 planning."""
     if not tools:
         context.emit_telemetry({
@@ -132,6 +136,8 @@ def _curate_request_tools(task, tools, *, system_prompt: str, session_history: s
                 f"{session_history}\nTask attachment manifest (metadata only): "
                 f"{json.dumps(attachment_manifest, ensure_ascii=False)}"
             ),
+            project_context=project_context,
+            durable_memory=durable_memory,
             tools=tools,
         )
     except Exception as exc:
