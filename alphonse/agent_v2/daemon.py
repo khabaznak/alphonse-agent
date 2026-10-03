@@ -2282,7 +2282,7 @@ def _model_access_rejection(error: str) -> bool:
 def _scheduled_failure_message(task_name: str, error: str) -> str:
     code = _scheduled_failure_code(error)
     if code == "system_one_unavailable":
-        detail = "Jev is unavailable, so Alphonse is offline until the decision service is back."
+        detail = "A required service is temporarily unavailable. Please try again later."
     elif code == "openai_codex_auth_required":
         detail = "Codex needs to be signed in again before I can run it."
     elif code == "openai_codex_cli_missing":
@@ -2300,12 +2300,12 @@ def _inbound_failure_message(error: str, model_id: str) -> str:
     code = _scheduled_failure_code(error)
     model = str(model_id or "").strip()
     if code == "system_one_unavailable":
-        return "I couldn't complete this task because Jev is unavailable. Alphonse is offline until the decision service is back; please try again later."
+        return "I couldn't complete this task because a required service is temporarily unavailable. Please try again later."
     if code == "v3_task_failed":
         reason = str(error or "").partition(":")[2].strip() or "V3 reported a terminal task failure."
         if reason.startswith("v3_phase_plan_invalid:"):
-            return f"I couldn't complete this task because the V3 execution plan was rejected: {reason}"
-        return f"I couldn't complete this task because V3 stopped without completing it: {reason}"
+            return "I couldn't form a workable plan for this task. Please try rephrasing it or breaking it into smaller steps."
+        return "I couldn't complete this task. Please try again, or rephrase it with the outcome you want."
     if code == "openai_codex_auth_required":
         return "I couldn't complete this task because Codex needs to be signed in again."
     if code == "openai_codex_cli_missing":

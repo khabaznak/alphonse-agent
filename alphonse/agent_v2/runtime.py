@@ -243,6 +243,7 @@ def build_runtime_host(
         projects=project_store,
         sessions=project_session_store,
         memory_sessions=memory_session_store,
+        question_store=question_store,
         memory=memory,
         is_admin=user_store.is_admin,
         managed_root=user_store.managed_project_root,
