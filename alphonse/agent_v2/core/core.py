@@ -194,6 +194,7 @@ class ToolExecutionContext:
     user_context_provider: Callable[[str], str] | None = None
     user_timezone_provider: Callable[[str], str] | None = None
     memory: Any | None = None
+    conversation_store: Any | None = None
     identity_resolver: Any | None = None
 
     def record_memory_event(self, task: TaskState, heading: str, content: Any) -> None:
@@ -222,6 +223,7 @@ class CoreLoopContext:
     user_context_provider: Callable[[str], str] | None = None
     user_timezone_provider: Callable[[str], str] | None = None
     memory: Any | None = None
+    conversation_store: Any | None = None
     program_runner: Any | None = None
     identity_resolver: Any | None = None
     cancellation_checker: Callable[[], bool] | None = None
@@ -266,6 +268,7 @@ class CoreLoopContext:
             schedule_store=self.schedule_store,
             delivery_sink=self.delivery_sink,
             memory=self.memory,
+            conversation_store=self.conversation_store,
             user_timezone_provider=self.user_timezone_provider,
             identity_resolver=self.identity_resolver,
         )
@@ -495,6 +498,7 @@ class AlphonseCore:
     prompts: SystemPromptLoader
     state: InternalState
     memory: Memory
+    conversation_store: Any | None = None
     inference: InferenceRouter | None = None
     activity_sink: Callable[[CoreActivityEvent], None] | None = None
     ui_event_sink: Callable[[CoreUiEvent], None] | None = None
@@ -609,6 +613,7 @@ class AlphonseCore:
                 user_context_provider=self.user_context_provider,
                 user_timezone_provider=self.user_timezone_provider,
                 memory=self.memory,
+                conversation_store=self.conversation_store,
                 identity_resolver=self.identity_resolver,
                 program_runner=self.program_runner,
                 cancellation_checker=(lambda: bool(self.cancellation_checker and self.cancellation_checker(queued.message_id))),

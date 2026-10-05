@@ -270,6 +270,7 @@ def build_runtime_host(
         prompts=AgentConfigPromptLoader.from_store(agent_config_store),
         state=visible_state,
         memory=memory,
+        conversation_store=conversation_store,
         inference=inference,
         ui_event_sink=ui_events.append,
         question_store=question_store,

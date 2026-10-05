@@ -181,3 +181,19 @@ def test_desktop_history_imports_legacy_ledger_only_once(monkeypatch) -> None:
     assert [(item["role"], item["content"]) for item in history] == [("user", "Restore me"), ("assistant", "Restored.")]
     assert repeated == history
     assert reads == 1
+
+
+def test_conversation_store_searches_memory_across_projects() -> None:
+    store = SQLiteConversationStore(":memory:")
+    store.record(
+        owner_user_id="member-a", project_id="shopping", role="user",
+        content="The pharmacy receipt total was 420 pesos.", source="test", source_message_id="memory-1",
+    )
+    store.record(
+        owner_user_id="member-b", project_id="shopping", role="user",
+        content="A separate account event.", source="test", source_message_id="memory-2",
+    )
+
+    matches = store.search(owner_user_id="member-a", query="pharmacy receipt", limit=5)
+
+    assert [event.content for event in matches] == ["The pharmacy receipt total was 420 pesos."]

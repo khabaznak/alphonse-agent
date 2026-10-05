@@ -16,6 +16,7 @@ from alphonse.agent_v2.core.intelligence.v3.revealing import Capability, tool_ca
 from alphonse.agent_v2.core.intelligence.v3.revealing import ToolRevealPolicy
 from alphonse.agent_v2.core.tools.registry import ToolExposurePolicy
 from alphonse.agent_v2.system_one import SystemOneUnavailableError
+from alphonse.agent_v2.core.intelligence.v3.context import conversation_context
 
 if TYPE_CHECKING:
     from alphonse.agent_v2.core.core import CoreLoopContext
@@ -36,6 +37,7 @@ def plan_phase(task: "TaskState", context: "CoreLoopContext") -> PhasePlan:
     session_history = _bounded_text(task.recent_conversation_md, 6000)
     project_context = _project_context(task, context)
     durable_memory = _bounded_context_text(task.conversation_history_md, 9000)
+    shared_context = _bounded_text(conversation_context(task, context), 12000)
     attachment_manifest = _attachment_manifest(task)
     system_prompt = _strategic_plan_instructions()
     tools = _curate_request_tools(
@@ -56,6 +58,7 @@ def plan_phase(task: "TaskState", context: "CoreLoopContext") -> PhasePlan:
     prompt = (
         f"{system_prompt}\n\n"
         f"Goal: {task.goal}\n"
+        f"Household conversation, global, and selected project context:\n{shared_context}\n"
         f"Project context:\n{_bounded_text(project_context, 5000)}\n"
         f"Durable project/session memory (context only; never mutate it):\n{durable_memory}\n"
         f"Recent conversation (newest steering and answers are authoritative):\n{_bounded_text(task.recent_conversation_md, 6000)}\n"

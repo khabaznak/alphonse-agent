@@ -13,6 +13,7 @@ from alphonse.agent_v2.core.intelligence.v3.planner import plan_phase
 from alphonse.agent_v2.core.intelligence.v3.planner import V3PhasePlanValidationError
 from alphonse.agent_v2.system_one import SystemOneUnavailableError
 from alphonse.agent_v2.core.intelligence.v3.revealing import ToolRevealPolicy
+from alphonse.agent_v2.core.intelligence.v3.context import conversation_context
 
 if TYPE_CHECKING:
     from alphonse.agent_v2.core.core import CoreLoopContext, IntelligenceProcessor
@@ -112,15 +113,17 @@ class HierarchicalCAPDProcessor:
         if callable(classify):
             try:
                 decision = classify(message=task.goal)
+            except SystemOneUnavailableError:
+                raise
             except Exception as exc:
-                decision_metadata = {"status": "fallback_to_task", "error_type": type(exc).__name__}
+                raise SystemOneUnavailableError(f"task_admission:{type(exc).__name__}") from exc
             else:
                 decision_metadata = {
                     "status": "used" if bool(getattr(decision, "confident", False)) else "ambiguous_fallback",
                     **decision.to_metadata(),
                 }
         else:
-            decision_metadata = {"status": "fallback_to_task", "error_type": "classifier_unavailable"}
+            raise SystemOneUnavailableError("task_admission:classifier_unavailable")
 
         direct_response = bool(
             decision is not None
@@ -179,11 +182,13 @@ class HierarchicalCAPDProcessor:
             message="Preparing a direct conversational response.",
             progress={"engine": "hierarchical_v3", "route": "direct_response"},
         )
+        shared_context = conversation_context(task, context)
         result = context.inference.generate_markdown(InferenceRequest(
             prompt=(
                 "Reply directly to this conversational message. Be warm, brief, natural, and use the user's language. "
                 "The reply must fully satisfy the message without mentioning planning, tools, acceptance criteria, "
                 "or internal processing. Do not claim that any external action occurred.\n\n"
+                f"Available context (use only facts relevant to this message):\n{shared_context or '(none)'}\n\n"
                 f"User message: {task.goal}"
             ),
             purpose=InferencePurpose.FINAL_RESPONSE,

@@ -35,13 +35,13 @@ def test_agent_config_store_rejects_unknown_file_without_writing(tmp_path) -> No
     assert store.read(GLOBAL_CONTEXT_FILE).content == original
 
 
-def test_agent_prompt_loader_is_a_startup_snapshot(tmp_path) -> None:
+def test_agent_prompt_loader_observes_edits_without_runtime_restart(tmp_path) -> None:
     store = AgentConfigStore(tmp_path / "agent-config")
     store.save(PHILOSOPHY_FILE, "first")
     loader = AgentConfigPromptLoader.from_store(store)
     store.save(PHILOSOPHY_FILE, "second")
 
-    assert loader.load(PHILOSOPHY_FILE).content == "first"
+    assert loader.load(PHILOSOPHY_FILE).content == "second"
     assert AgentConfigPromptLoader.from_store(store).load(PHILOSOPHY_FILE).content == "second"
 
 

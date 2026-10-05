@@ -129,6 +129,36 @@ class SQLiteConversationStore:
                 rows = conn.execute("SELECT * FROM v2_conversation_events WHERE owner_user_id=? AND project_id=? AND memory_session_id=? ORDER BY sequence DESC LIMIT ?", (str(owner_user_id or "").strip(), str(project_id or "").strip(), str(memory_session_id or "").strip(), max(1, min(int(limit or 100), 500)))).fetchall()
         return [_event(row) for row in reversed(rows)]
 
+    def list_recent(self, *, owner_user_id: str, limit: int = 30) -> list[ConversationEvent]:
+        """Return the account's recent conversation flow across project boundaries."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM v2_conversation_events WHERE owner_user_id=? ORDER BY sequence DESC LIMIT ?",
+                (str(owner_user_id or "").strip(), max(1, min(int(limit or 30), 200))),
+            ).fetchall()
+        return [_event(row) for row in reversed(rows)]
+
+    def search(self, *, owner_user_id: str, query: str, limit: int = 8) -> list[ConversationEvent]:
+        """Search an account's full event history using FTS5 BM25 when available."""
+        owner = str(owner_user_id or "").strip()
+        terms = [term for term in re.findall(r"[\w'-]+", str(query or "")) if len(term) > 1][:12]
+        if not owner or not terms:
+            return []
+        with self._connect() as conn:
+            try:
+                match = " AND ".join('"' + term.replace('"', '""') + '"' for term in terms)
+                rows = conn.execute(
+                    """SELECT e.* FROM v2_conversation_fts f JOIN v2_conversation_events e ON e.event_id=f.event_id
+                       WHERE f.owner_user_id=? AND v2_conversation_fts MATCH ? ORDER BY bm25(v2_conversation_fts) LIMIT ?""",
+                    (owner, match, max(1, min(int(limit or 8), 30))),
+                ).fetchall()
+            except sqlite3.OperationalError:
+                rows = conn.execute(
+                    "SELECT * FROM v2_conversation_events WHERE owner_user_id=? AND lower(content) LIKE ? ORDER BY sequence DESC LIMIT ?",
+                    (owner, f"%{terms[0].lower()}%", max(1, min(int(limit or 8), 30))),
+                ).fetchall()
+        return [_event(row) for row in rows]
+
     def sequence_for_source_message_id(self, source_message_id: str) -> int:
         with self._connect() as conn:
             row = conn.execute(
@@ -268,6 +298,12 @@ class SQLiteConversationStore:
             else:
                 self._create_events_table(conn)
             conn.execute("CREATE INDEX IF NOT EXISTS idx_v2_conversation_events_scope ON v2_conversation_events(owner_user_id, project_id, sequence)")
+            try:
+                conn.execute("CREATE VIRTUAL TABLE IF NOT EXISTS v2_conversation_fts USING fts5(event_id UNINDEXED, owner_user_id UNINDEXED, content, tokenize='unicode61')")
+                conn.execute("CREATE TRIGGER IF NOT EXISTS v2_conversation_fts_insert AFTER INSERT ON v2_conversation_events BEGIN INSERT INTO v2_conversation_fts(event_id,owner_user_id,content) VALUES (new.event_id,new.owner_user_id,new.content); END")
+                conn.execute("INSERT INTO v2_conversation_fts(event_id,owner_user_id,content) SELECT e.event_id,e.owner_user_id,e.content FROM v2_conversation_events e LEFT JOIN v2_conversation_fts f ON f.event_id=e.event_id WHERE f.event_id IS NULL")
+            except sqlite3.OperationalError:
+                pass
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS v2_desktop_project_cursors (

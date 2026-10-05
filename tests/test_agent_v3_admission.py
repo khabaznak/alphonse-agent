@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from alphonse.agent_v2.conversations import SQLiteConversationStore
 from alphonse.agent_v2.core.core import CoreLoopContext
 from alphonse.agent_v2.core.inference import InferenceResult
@@ -7,7 +9,9 @@ from alphonse.agent_v2.core.intelligence.task_state import TaskState
 from alphonse.agent_v2.core.intelligence.v3.processor import HierarchicalCAPDProcessor
 from alphonse.agent_v2.core.io import SQLiteOutboundStore, build_outbox_delivery_sink, channel_metadata
 from alphonse.agent_v2.core.messages import InMemoryMessageQueue
+from alphonse.agent_v2.agent_config import AgentConfigPromptLoader, AgentConfigStore, GLOBAL_CONTEXT_FILE
 from alphonse.agent_v2.system_one import SystemOneAdmissionDecision
+from alphonse.agent_v2.system_one import SystemOneUnavailableError
 
 
 def _new_task(prompt: str = "Please inspect the project") -> TaskState:
@@ -68,6 +72,37 @@ def test_new_text_only_message_responds_without_entering_plan() -> None:
     assert len(inference.requests) == 1
 
 
+def test_direct_reply_receives_cross_project_history_global_and_selected_project_context(tmp_path) -> None:
+    task = _new_task("And what should I do next?")
+    conversations = SQLiteConversationStore()
+    conversations.record(
+        owner_user_id="alex", project_id="another-project", role="user",
+        content="A clinician recommended a week of rest.", source="test", source_message_id="prior-1",
+    )
+    config = AgentConfigStore(tmp_path / "agent-config")
+    config.save(GLOBAL_CONTEXT_FILE, "Household language preference: Spanish.")
+    project = type("Project", (), {"context_path": str(tmp_path / "project_context.md"), "name": "Recovery"})()
+    (tmp_path / "project_context.md").write_text("Goal: return to activity gradually.", encoding="utf-8")
+    projects = type("Projects", (), {
+        "get_project": lambda self, project_id, **kwargs: project if project_id == "home" else None,
+        "list_visible_projects": lambda self, user_id: [type("VisibleProject", (), {"project_id": "another-project"})()],
+    })()
+    inference = _DirectInference("Descansa y sigue las indicaciones recibidas.")
+    context = CoreLoopContext(
+        messages=InMemoryMessageQueue(), inference=inference,
+        system_one=_AdmissionJev(SystemOneAdmissionDecision(False, 0.04, True, model="test-jev")),
+        prompts=AgentConfigPromptLoader.from_store(config), project_store=projects,
+        conversation_store=conversations,
+    )
+
+    HierarchicalCAPDProcessor().process(task, context)
+
+    prompt = inference.requests[0].prompt
+    assert "A clinician recommended a week of rest." in prompt
+    assert "Household language preference: Spanish." in prompt
+    assert "Goal: return to activity gradually." in prompt
+
+
 def test_new_task_is_acknowledged_once_and_continues_to_plan() -> None:
     task = _new_task()
     jev = _AdmissionJev(SystemOneAdmissionDecision(True, 0.97, True, model="test-jev"))
@@ -94,21 +129,22 @@ def test_new_task_is_acknowledged_once_and_continues_to_plan() -> None:
     assert "prepared_user_response" not in task.metadata
 
 
-def test_ambiguous_or_unavailable_admission_falls_back_to_acknowledged_task() -> None:
-    for system_one in (
-        _AdmissionJev(SystemOneAdmissionDecision(False, 0.5, False, model="test-jev")),
-        None,
-    ):
-        task = _new_task()
-        deliveries = []
-        context = CoreLoopContext(
-            messages=InMemoryMessageQueue(), inference=_DirectInference("I’ll review that request now."), system_one=system_one,
-            delivery_sink=lambda event: deliveries.append(event) or {"status": "queued"},
-        )
+def test_ambiguous_admission_continues_but_missing_jev_fails_closed() -> None:
+    system_one = _AdmissionJev(SystemOneAdmissionDecision(False, 0.5, False, model="test-jev"))
+    task = _new_task()
+    deliveries = []
+    context = CoreLoopContext(
+        messages=InMemoryMessageQueue(), inference=_DirectInference("I’ll review that request now."), system_one=system_one,
+        delivery_sink=lambda event: deliveries.append(event) or {"status": "queued"},
+    )
 
-        assert HierarchicalCAPDProcessor._admit_initial_human_task(task, context) is False
-        assert task.metadata["v3_admission"]["route"] == "task"
-        assert len(deliveries) == 1
+    assert HierarchicalCAPDProcessor._admit_initial_human_task(task, context) is False
+    assert task.metadata["v3_admission"]["route"] == "task"
+    assert len(deliveries) == 1
+
+    with pytest.raises(SystemOneUnavailableError, match="classifier_unavailable"):
+        task = _new_task()
+        HierarchicalCAPDProcessor._admit_initial_human_task(task, CoreLoopContext(messages=InMemoryMessageQueue()))
 
 
 def test_acknowledgement_generation_failure_does_not_block_plan_or_send_a_template() -> None:
