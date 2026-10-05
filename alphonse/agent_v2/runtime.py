@@ -56,6 +56,7 @@ from alphonse.agent_v2.artifacts import SQLiteArtifactStore
 from alphonse.agent_v2.artifacts import build_artifact_tool_definitions
 from alphonse.agent_v2.memory_settings import SQLiteMemorySettingsStore
 from alphonse.agent_v2.core.memory import LedgerMemory
+from alphonse.agent_v2.core.memory.daily_ledger import DailyLedgerProjector
 from alphonse.agent_v2.core.tools.registry.native.memory import build_search_memory_tool_definition
 from alphonse.agent_v2.conversations import SQLiteConversationStore
 from alphonse.agent_v2.memory_sessions import SQLiteMemorySessionStore
@@ -212,6 +213,25 @@ def build_runtime_host(
             purpose=InferencePurpose.MEMORY_COMPACTION,
         ))
         return str(result.content or "")
+
+    def _summarize_daily_conversation(source: str) -> str:
+        from alphonse.agent_v2.core.inference import InferencePurpose, InferenceRequest
+        result = inference.generate_markdown(InferenceRequest(
+            prompt=(
+                "Write a brief narrative summary of the previous day's household conversation. "
+                "Preserve time-sensitive facts, decisions, commitments, and unresolved questions. "
+                "Do not add facts. Return Markdown only.\n\n" + source
+            ),
+            purpose=InferencePurpose.MEMORY_COMPACTION,
+        ))
+        return str(result.content or "")
+
+    conversation_store.set_daily_ledger_projector(DailyLedgerProjector(
+        conversation_store=conversation_store,
+        users_root=user_store.users_root,
+        timezone_provider=user_store.timezone,
+        summarizer=_summarize_daily_conversation,
+    ))
     memory = LedgerMemory(
         users_root=user_store.users_root,
         settings_store=memory_settings_store,

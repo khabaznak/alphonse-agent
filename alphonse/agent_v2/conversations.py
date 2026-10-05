@@ -35,6 +35,7 @@ class SQLiteConversationStore:
     def __init__(self, db_path: str | Path = ":memory:") -> None:
         self.db_path = str(db_path)
         self._memory = sqlite3.connect(":memory:", check_same_thread=False) if self.db_path == ":memory:" else None
+        self._daily_ledger_projector: Any | None = None
         if self._memory is not None:
             self._memory.row_factory = sqlite3.Row
         self._ensure_schema()
@@ -67,7 +68,7 @@ class SQLiteConversationStore:
         source_id = str(source_message_id or "").strip()
         timestamp = _canonical_timestamp(created_at or _now())
         if connection is not None:
-            return self._record(
+            event = self._record(
                 connection,
                 event_id=event_id,
                 owner=owner,
@@ -79,8 +80,9 @@ class SQLiteConversationStore:
                 source_id=source_id,
                 timestamp=timestamp,
             )
+            return event
         with self._connect() as conn:
-            return self._record(
+            event = self._record(
                 conn,
                 event_id=event_id,
                 owner=owner,
@@ -92,6 +94,22 @@ class SQLiteConversationStore:
                 source_id=source_id,
                 timestamp=timestamp,
             )
+        self._project_daily_ledger(event)
+        return event
+
+    def set_daily_ledger_projector(self, projector: Any | None) -> None:
+        self._daily_ledger_projector = projector
+
+    def _project_daily_ledger(self, event: ConversationEvent | None) -> None:
+        if event is None or self._daily_ledger_projector is None:
+            return
+        try:
+            self._daily_ledger_projector.refresh_for_event(event)
+        except Exception:
+            # The event store is authoritative; a failed generated view can be
+            # rebuilt on the next conversation write without blocking chat.
+            import logging
+            logging.getLogger(__name__).exception("daily conversation ledger projection failed")
 
     @staticmethod
     def _record(
@@ -137,6 +155,15 @@ class SQLiteConversationStore:
                 (str(owner_user_id or "").strip(), max(1, min(int(limit or 30), 200))),
             ).fetchall()
         return [_event(row) for row in reversed(rows)]
+
+    def list_between(self, *, owner_user_id: str, start_utc: str, end_utc: str) -> list[ConversationEvent]:
+        """List all events in a UTC half-open interval, ordered by conversation sequence."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM v2_conversation_events WHERE owner_user_id=? AND created_at>=? AND created_at<? ORDER BY sequence",
+                (str(owner_user_id or "").strip(), str(start_utc), str(end_utc)),
+            ).fetchall()
+        return [_event(row) for row in rows]
 
     def search(self, *, owner_user_id: str, query: str, limit: int = 8) -> list[ConversationEvent]:
         """Search an account's full event history using FTS5 BM25 when available."""
