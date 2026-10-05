@@ -5,7 +5,10 @@ import pytest
 from alphonse.agent_v2.agent_config import AgentConfigPromptLoader
 from alphonse.agent_v2.agent_config import AgentConfigStore
 from alphonse.agent_v2.agent_config import GLOBAL_CONTEXT_FILE
+from alphonse.agent_v2.agent_config import GLOBAL_CONTEXT_SECTIONS
 from alphonse.agent_v2.agent_config import PHILOSOPHY_FILE
+from alphonse.agent_v2.agent_config import parse_global_context_sections
+from alphonse.agent_v2.agent_config import packaged_agent_config_dir
 from alphonse.agent_v2.core.intelligence import TaskState
 from alphonse.agent_v2.core.core import CoreLoopContext
 from alphonse.agent_v2.core.messages import InMemoryMessageQueue
@@ -43,6 +46,24 @@ def test_agent_prompt_loader_observes_edits_without_runtime_restart(tmp_path) ->
 
     assert loader.load(PHILOSOPHY_FILE).content == "second"
     assert AgentConfigPromptLoader.from_store(store).load(PHILOSOPHY_FILE).content == "second"
+
+
+def test_packaged_global_context_has_the_standard_household_sections() -> None:
+    sections = parse_global_context_sections(
+        AgentConfigStore(packaged_agent_config_dir()).read(GLOBAL_CONTEXT_FILE).content
+    )
+
+    assert tuple(sections) == GLOBAL_CONTEXT_SECTIONS
+    assert "user_context.md" in sections["Alphonse's household-wide interaction defaults"]
+    assert "application permissions" in sections["Privacy and sharing boundaries"]
+
+
+def test_global_context_parser_keeps_section_bodies_intact() -> None:
+    sections = parse_global_context_sections(
+        "# Global Context\n\n## Family definition\n- Member A\n\n## Household norms\n- Norm A\n"
+    )
+
+    assert sections == {"Family definition": "- Member A", "Household norms": "- Norm A"}
 
 
 def test_capd_prompt_templates_accept_agent_configuration() -> None:

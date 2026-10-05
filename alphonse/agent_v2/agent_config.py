@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -12,6 +13,14 @@ from alphonse.agent_v2.core.core import PromptFile
 GLOBAL_CONTEXT_FILE = "GlobalContext.md"
 PHILOSOPHY_FILE = "Philosophy.md"
 EDITABLE_AGENT_CONFIG_FILES = (GLOBAL_CONTEXT_FILE, PHILOSOPHY_FILE)
+GLOBAL_CONTEXT_SECTIONS = (
+    "Family definition",
+    "Household location and setup",
+    "Household norms",
+    "Alphonse's household-wide interaction defaults",
+    "Privacy and sharing boundaries",
+    "Context maintenance",
+)
 
 
 @dataclass(frozen=True)
@@ -119,6 +128,20 @@ def default_agent_config_dir() -> Path:
 
 def packaged_agent_config_dir() -> Path:
     return Path(__file__).resolve().parent / "config"
+
+
+def parse_global_context_sections(content: str) -> dict[str, str]:
+    """Return level-two Global Context sections without changing their text."""
+    sections: dict[str, list[str]] = {}
+    current = ""
+    for line in str(content or "").splitlines():
+        match = re.match(r"^##\s+(.+?)\s*#*\s*$", line)
+        if match:
+            current = match.group(1).strip()
+            sections.setdefault(current, [])
+        elif current:
+            sections[current].append(line)
+    return {name: "\n".join(lines).strip() for name, lines in sections.items()}
 
 
 def _validate_file_name(file_name: str) -> str:

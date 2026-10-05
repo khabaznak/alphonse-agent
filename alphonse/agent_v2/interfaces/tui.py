@@ -1594,6 +1594,13 @@ def _build_textual_app_class() -> type[Any]:
         def compose(self) -> ComposeResult:
             with Vertical(id="agent-config-editor-dialog"):
                 yield Static(str(self.document.get("display_name") or "Agent Configuration"), classes="dialog-title")
+                if str(self.document.get("file_name") or "") == "GlobalContext.md":
+                    yield Static(
+                        "Use the household sections in GlobalContext.md. Keep language, accessibility, "
+                        "and communication preferences per member in user_context.md or user settings. "
+                        "This document remains editable here.",
+                        id="global-context-editor-help",
+                    )
                 yield TextArea(str(self.document.get("content") or ""), id="agent-config-editor")
                 yield Static("", id="agent-config-notice")
                 with Horizontal(classes="dialog-actions", id="agent-config-actions"):
