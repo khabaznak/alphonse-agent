@@ -111,3 +111,31 @@ When changing artifact registration or execution, inspect
 `alphonse/agent_v2/core/tools/registry/native/artifact_registration.py`, and
 `tests/test_agent_v2_artifacts.py`. When changing artifact discovery or routing,
 consult `docs/v3-hierarchical-capd/03-progressive-tool-revealing.md`.
+
+# Alphonse Version 3 Concepts
+
+Alphonse v3 aims to make interacting with Alphonse reliable and easy for every household member. Conversations should be the normal way to interact; people should not need to remember or select a project just to ask an everyday question. Projects, skills, and memory support the conversation rather than acting as mandatory interaction boundaries.
+
+## Conversation
+
+A **Conversation** is the normal way a household or family member interacts with Alphonse. It carries ongoing context throughout the day and handles questions, tasks, and interactions with other family members. It also records which skills were used, or which mix of skills was involved, in solving each task.
+
+## Memory Ledger
+
+A **Memory Ledger** records durable, time-sensitive, and session-level context. Its design should make clear how information is retrieved and updated.
+
+## Project
+
+A **Project** is a well-defined effort with limited scope, duration, and clear goals that Alphonse can track. It may gather relevant context and skills, and support proactive follow-ups when that behavior is defined and authorized. Projects are finite efforts, not the default container for all interaction with Alphonse.
+
+## Skill
+
+A **Skill** supplies reusable expertise or workflows, available wherever relevant. Skills may guide domain reasoning, behavior, communication, recommendations, or operational workflows, and may refer to supporting artifacts. A project or ordinary conversation can use one or more skills as needed.
+
+## Shared Repositories
+
+Alphonse needs a repository for installed skills and a shared repository for artifacts that skills can reference. Existing artifacts in the local instance should be migrated into the shared artifact repository; Alphonse currently has one user.
+
+Skills are the foundational reusable unit. A named combination of skills (previously called a **Personality**) may be useful as a convenience, but does not need to be a separate core concept unless experience shows it is needed.
+
+Alphonse v3 does not yet have a complete skills system, skill installation flow, shared artifact repository, or a defined conversation and memory-ledger model. These concepts describe intended capabilities and direction.
