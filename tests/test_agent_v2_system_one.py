@@ -269,6 +269,40 @@ def test_jev_admission_classifies_work_beyond_one_direct_text_reply() -> None:
     assert "One immediate conversational text reply" in criteria["false"]
 
 
+def test_jev_admission_and_context_curation_share_one_evaluation() -> None:
+    payloads = []
+
+    def transport(url, api_key, payload, timeout):
+        _ = url, api_key, timeout
+        payloads.append(payload)
+        return {
+            "answers": {
+                "requires_task": {"type": "noul", "noul": 0.1},
+                "context_relevant_0": {"type": "noul", "noul": 0.93},
+                "context_relevant_1": {"type": "noul", "noul": 0.12},
+            },
+            "model": "jev-latest",
+        }
+
+    provider = JevCriterionDecisionProvider(
+        SystemOneSettings(enabled=True, api_key="secret", validated_at="now"), transport=transport,
+    )
+    decision = provider.classify_task_admission(
+        message="What should I prepare this week?",
+        recent_conversation="The household is planning meals for the week.",
+        context_candidates=(
+            {"id": "global:household-norms", "title": "Household norms", "snippet": "Shared food preferences."},
+            {"id": "project:old-plan", "title": "Old project", "snippet": "An unrelated historical plan."},
+        ),
+    )
+
+    assert len(payloads) == 1
+    assert set(payloads[0]["questions"]) == {"requires_task", "context_relevant_0", "context_relevant_1"}
+    assert "context_candidates" in payloads[0]["state"]
+    assert decision.selected_context_ids == ("global:household-norms",)
+    assert decision.context_probabilities == {"global:household-norms": 0.93, "project:old-plan": 0.12}
+
+
 def test_jev_native_registry_template_covers_every_out_of_box_tool() -> None:
     registry = _load_jev_native_tool_registry()
     assert set(registry) == {

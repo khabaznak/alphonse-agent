@@ -7,6 +7,7 @@ from alphonse.agent_v2.core.core import CoreLoopContext
 from alphonse.agent_v2.core.inference import InferenceResult
 from alphonse.agent_v2.core.intelligence.task_state import TaskState
 from alphonse.agent_v2.core.intelligence.v3.processor import HierarchicalCAPDProcessor
+from alphonse.agent_v2.core.intelligence.v3.context import prepare_context_curation
 from alphonse.agent_v2.core.io import SQLiteOutboundStore, build_outbox_delivery_sink, channel_metadata
 from alphonse.agent_v2.core.messages import InMemoryMessageQueue
 from alphonse.agent_v2.agent_config import AgentConfigPromptLoader, AgentConfigStore, GLOBAL_CONTEXT_FILE
@@ -38,10 +39,14 @@ class _AdmissionJev:
     def __init__(self, decision: SystemOneAdmissionDecision) -> None:
         self.decision = decision
         self.calls = 0
+        self.context_candidates = ()
+        self.recent_conversation = ""
 
-    def classify_task_admission(self, *, message: str) -> SystemOneAdmissionDecision:
+    def classify_task_admission(self, *, message: str, recent_conversation: str = "", context_candidates=()) -> SystemOneAdmissionDecision:
         assert message
         self.calls += 1
+        self.context_candidates = tuple(context_candidates)
+        self.recent_conversation = recent_conversation
         return self.decision
 
 
@@ -101,6 +106,94 @@ def test_direct_reply_receives_cross_project_history_global_and_selected_project
     assert "A clinician recommended a week of rest." in prompt
     assert "Household language preference: Spanish." in prompt
     assert "Goal: return to activity gradually." in prompt
+
+
+def test_context_curation_separates_invariants_from_optional_candidates(tmp_path) -> None:
+    config = AgentConfigStore(tmp_path / "agent-config")
+    config.save(GLOBAL_CONTEXT_FILE, """# Global Context
+## Family definition
+- Member A is a parent of Member B.
+## Household location and setup
+- Household is in a generic town.
+## Household norms
+- The household prefers shared meals.
+## Privacy and sharing boundaries
+- Follow member privacy settings.
+## Please remove
+- REMOVAL_SENTINEL
+""")
+    selected_root = tmp_path / "selected"
+    optional_root = tmp_path / "optional"
+    selected_root.mkdir()
+    optional_root.mkdir()
+    (selected_root / "project_context.md").write_text("Selected goal context", encoding="utf-8")
+    (optional_root / "project_context.md").write_text("Optional project context", encoding="utf-8")
+    selected_project = type("Project", (), {
+        "project_id": "selected", "name": "Selected", "description": "Current effort",
+        "context_path": str(selected_root / "project_context.md"),
+    })()
+    optional_project = type("Project", (), {
+        "project_id": "optional", "name": "Optional", "description": "Another active effort",
+        "context_path": str(optional_root / "project_context.md"),
+    })()
+    project_store = type("Projects", (), {
+        "get_project": lambda self, project_id, **kwargs: selected_project if project_id == "selected" else None,
+        "list_visible_projects": lambda self, user_id: [selected_project, optional_project],
+    })()
+    task = _new_task("A request")
+    task.project_id = "selected"
+
+    invariant, candidates = prepare_context_curation(
+        task,
+        CoreLoopContext(
+            messages=InMemoryMessageQueue(), prompts=AgentConfigPromptLoader.from_store(config),
+            project_store=project_store,
+        ),
+    )
+
+    assert "Member A is a parent" in invariant
+    assert "Selected goal context" in invariant
+    assert "The household prefers shared meals" not in invariant
+    assert "Optional project context" not in invariant
+    assert "REMOVAL_SENTINEL" not in invariant
+    assert {item["id"] for item in candidates} == {"global:household-norms", "project:optional"}
+
+
+def test_direct_reply_uses_only_the_context_candidates_selected_at_admission(tmp_path) -> None:
+    task = _new_task("What should we cook this week?")
+    config = AgentConfigStore(tmp_path / "agent-config")
+    config.save(GLOBAL_CONTEXT_FILE, """# Global Context
+## Family definition
+- Member A and Member B are household members.
+## Household norms
+- The household prefers shared meals.
+## Context maintenance
+- Keep context files current.
+## Please remove
+- REMOVAL_SENTINEL
+""")
+    jev = _AdmissionJev(SystemOneAdmissionDecision(
+        False, 0.03, True, model="test-jev",
+        selected_context_ids=("global:household-norms",),
+        context_probabilities={"global:household-norms": 0.94, "global:context-maintenance": 0.11},
+    ))
+    inference = _DirectInference("Let's plan some meals.")
+
+    HierarchicalCAPDProcessor().process(
+        task,
+        CoreLoopContext(
+            messages=InMemoryMessageQueue(), inference=inference, system_one=jev,
+            prompts=AgentConfigPromptLoader.from_store(config),
+        ),
+    )
+
+    prompt = inference.requests[0].prompt
+    assert "The household prefers shared meals." in prompt
+    assert "Keep context files current." not in prompt
+    assert "REMOVAL_SENTINEL" not in prompt
+    assert task.metadata["v3_context_selection"]["selected_context_ids"] == ["global:household-norms"]
+    assert jev.calls == 1
+    assert "global:household-norms" in {item["id"] for item in jev.context_candidates}
 
 
 def test_new_task_is_acknowledged_once_and_continues_to_plan() -> None:

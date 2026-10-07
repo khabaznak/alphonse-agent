@@ -37,7 +37,11 @@ def plan_phase(task: "TaskState", context: "CoreLoopContext") -> PhasePlan:
     session_history = _bounded_text(task.recent_conversation_md, 6000)
     project_context = _project_context(task, context)
     durable_memory = _bounded_context_text(task.conversation_history_md, 9000)
-    shared_context = _bounded_text(conversation_context(task, context), 12000)
+    context_selection = task.metadata.get("v3_context_selection")
+    selected_context_ids = context_selection.get("selected_context_ids", []) if isinstance(context_selection, dict) else []
+    shared_context = _bounded_text(conversation_context(
+        task, context, selected_context_ids=selected_context_ids, include_selected_project=False,
+    ), 12000)
     attachment_manifest = _attachment_manifest(task)
     system_prompt = _strategic_plan_instructions()
     tools = _curate_request_tools(

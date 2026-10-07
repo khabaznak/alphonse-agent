@@ -14,6 +14,8 @@ from alphonse.agent_v2.core.intelligence.v3.planner import V3PhasePlanValidation
 from alphonse.agent_v2.system_one import SystemOneUnavailableError
 from alphonse.agent_v2.core.intelligence.v3.revealing import ToolRevealPolicy
 from alphonse.agent_v2.core.intelligence.v3.context import conversation_context
+from alphonse.agent_v2.core.intelligence.v3.context import prepare_context_curation
+from alphonse.agent_v2.core.intelligence.v3.context import recent_conversation_for_curation
 
 if TYPE_CHECKING:
     from alphonse.agent_v2.core.core import CoreLoopContext, IntelligenceProcessor
@@ -109,10 +111,21 @@ class HierarchicalCAPDProcessor:
 
         decision_metadata: dict[str, object]
         decision = None
+        existing_selection = task.metadata.get("v3_context_selection")
+        if not isinstance(existing_selection, dict):
+            _invariant_context, candidates = prepare_context_curation(task, context)
+            recent_context = recent_conversation_for_curation(task, context)
+        else:
+            candidates = []
+            recent_context = ""
         classify = getattr(context.system_one, "classify_task_admission", None) if context.system_one is not None else None
         if callable(classify):
             try:
-                decision = classify(message=task.goal)
+                decision = classify(
+                    message=task.goal,
+                    recent_conversation=recent_context,
+                    context_candidates=candidates,
+                )
             except SystemOneUnavailableError:
                 raise
             except Exception as exc:
@@ -130,6 +143,15 @@ class HierarchicalCAPDProcessor:
             and bool(getattr(decision, "confident", False))
             and not bool(getattr(decision, "requires_task", True))
         )
+        if not isinstance(existing_selection, dict):
+            selected_ids = list(getattr(decision, "selected_context_ids", ()) or ())
+            probabilities = getattr(decision, "context_probabilities", {})
+            task.metadata["v3_context_selection"] = {
+                "selected_context_ids": selected_ids,
+                "candidate_ids": [str(item.get("id") or "") for item in candidates],
+                "probabilities": dict(probabilities) if isinstance(probabilities, dict) else {},
+                "status": "curated",
+            }
         if direct_response:
             try:
                 cls._complete_direct_response(task, context)
@@ -182,7 +204,9 @@ class HierarchicalCAPDProcessor:
             message="Preparing a direct conversational response.",
             progress={"engine": "hierarchical_v3", "route": "direct_response"},
         )
-        shared_context = conversation_context(task, context)
+        selection = task.metadata.get("v3_context_selection")
+        selected_context_ids = selection.get("selected_context_ids", []) if isinstance(selection, dict) else []
+        shared_context = conversation_context(task, context, selected_context_ids=selected_context_ids)
         result = context.inference.generate_markdown(InferenceRequest(
             prompt=(
                 "Reply directly to this conversational message. Be warm, brief, natural, and use the user's language. "
