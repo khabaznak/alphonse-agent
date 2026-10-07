@@ -54,6 +54,7 @@ from alphonse.agent_v2.media_tools_settings import SQLiteMediaToolsSettingsStore
 from alphonse.agent_v2.assets import SQLiteAssetStore
 from alphonse.agent_v2.artifacts import SQLiteArtifactStore
 from alphonse.agent_v2.artifacts import build_artifact_tool_definitions
+from alphonse.agent_v2.skills import SkillStore
 from alphonse.agent_v2.memory_settings import SQLiteMemorySettingsStore
 from alphonse.agent_v2.core.memory import LedgerMemory
 from alphonse.agent_v2.core.memory.daily_ledger import DailyLedgerProjector
@@ -125,6 +126,7 @@ class V2RuntimeHost:
     artifact_store: SQLiteArtifactStore
     memory_settings_store: SQLiteMemorySettingsStore
     system_one_settings_store: SQLiteSystemOneSettingsStore
+    skill_store: SkillStore
     communication_router: CommunicationRouter
     conversation_store: SQLiteConversationStore
     integration_runtimes: list[Any] = field(default_factory=list)
@@ -166,11 +168,13 @@ def build_runtime_host(
     system_one_settings_store: SQLiteSystemOneSettingsStore | None = None,
     communication_thread_store: SQLiteCommunicationThreadStore | None = None,
     conversation_store: SQLiteConversationStore | None = None,
+    skill_store: SkillStore | None = None,
 ) -> V2RuntimeHost:
     reset_state()
     provided_tools = tools is not None
     queue = messages or InMemoryMessageQueue()
     conversation_store = conversation_store or SQLiteConversationStore()
+    skill_store = skill_store or SkillStore.default()
     intelligence_engine_settings_store = intelligence_engine_settings_store or SQLiteIntelligenceEngineSettingsStore()
     channel = CommunicationChannel(
         queue,
@@ -304,6 +308,7 @@ def build_runtime_host(
         activity_sink=_activity_sink,
         telemetry_sink=telemetry_sink,
         system_one=build_system_one_provider(system_one_settings_store.get()),
+        skill_store=skill_store,
     )
     runtime = V2RuntimeHost(
         user=str(user or (user_store.admin_user().user_id if user_store.admin_user() else "local")).strip() or "local",
@@ -334,6 +339,7 @@ def build_runtime_host(
         artifact_store=artifact_store,
         memory_settings_store=memory_settings_store,
         system_one_settings_store=system_one_settings_store,
+        skill_store=skill_store,
         communication_router=communication_router,
         conversation_store=conversation_store,
         ui_events=ui_events,

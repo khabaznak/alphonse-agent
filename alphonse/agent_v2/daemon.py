@@ -719,6 +719,15 @@ class V2Daemon:
         refresh_runtime_artifacts(self.runtime)
         return {"deleted": artifact_id}
 
+    def list_skills(self, *, actor_user_id: str) -> list[dict[str, str]]:
+        self._require_admin(actor_user_id)
+        return [item.candidate() for item in self.runtime.skill_store.list_skills()]
+
+    def install_skill(self, *, actor_user_id: str, source_directory: str) -> dict[str, str]:
+        self._require_admin(actor_user_id)
+        installed = self.runtime.skill_store.install_directory(source_directory)
+        return installed.candidate()
+
     def web_tools_settings(self, *, actor_user_id: str) -> dict[str, object]:
         self._require_admin(actor_user_id)
         return self.runtime.web_tools_settings_store.get().to_dict()

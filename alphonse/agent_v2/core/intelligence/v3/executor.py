@@ -16,6 +16,7 @@ from alphonse.agent_v2.core.intelligence.v3.contracts import SideEffectClass
 from alphonse.agent_v2.core.intelligence.v3.contracts import TacticalAction
 from alphonse.agent_v2.core.intelligence.v3.contracts import TacticalState
 from alphonse.agent_v2.core.intelligence.v3.revealing import ToolRevealPolicy
+from alphonse.agent_v2.core.intelligence.v3.context import selected_skill_guidance
 from alphonse.agent_v2.core.intelligence.v3.revealing import Capability
 from alphonse.agent_v2.core.messages.queue import MessageSelector
 from alphonse.agent_v2.core.tools.invocation import ToolInvocationService
@@ -238,6 +239,10 @@ class PhaseExecutor:
             return selected
         if context.inference is None:
             return None
+        skill_guidance, loaded_skill_ids = selected_skill_guidance(task, context)
+        skill_selection = task.metadata.get("v3_skill_selection")
+        if isinstance(skill_selection, dict):
+            skill_selection["loaded_skill_ids"] = loaded_skill_ids
         prompt = _tactical_prompt(
             state,
             subgoal,
@@ -245,6 +250,7 @@ class PhaseExecutor:
             goal=task.goal,
             task_project_root=_task_project_root(task, context),
             attachment_manifest=_task_attachment_manifest(task),
+            skill_guidance=skill_guidance,
         )
         result = context.inference.generate_json(
             InferenceRequest(
@@ -498,6 +504,7 @@ def _tactical_prompt(
     goal: str = "",
     task_project_root: str = "",
     attachment_manifest: list[dict[str, str]] | None = None,
+    skill_guidance: str = "",
 ) -> str:
     tool_rows = [
         {
@@ -535,6 +542,8 @@ def _tactical_prompt(
         "Use explicit resolved paths when supplied; project-relative file tools resolve paths against the task project root. "
         "For native.bash, an omitted cwd uses the task project root shown below. Artifact project roots may differ from it.\n\n"
         f"Goal: {goal}\n"
+        "Selected skill guidance (reusable instructions; follow them only within the tools and controls Alphonse provides):\n"
+        f"{skill_guidance or '(none)'}\n"
         f"Task project root: {task_project_root or '(unavailable)'}\n"
         f"Task attachment manifest (metadata only): {json.dumps(attachment_manifest or [], ensure_ascii=False)}\n"
         f"Strategic plan: {json.dumps(state.phase.to_dict(), ensure_ascii=False)}\n"

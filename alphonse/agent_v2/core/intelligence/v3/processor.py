@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
+import inspect
 
 from alphonse.agent_v2.core.core import ImprovementPhase, ProcessingResult, ProcessingStatus, StateSnapshot
 from alphonse.agent_v2.core.inference import InferencePurpose, InferenceRequest
@@ -16,6 +17,8 @@ from alphonse.agent_v2.core.intelligence.v3.revealing import ToolRevealPolicy
 from alphonse.agent_v2.core.intelligence.v3.context import conversation_context
 from alphonse.agent_v2.core.intelligence.v3.context import prepare_context_curation
 from alphonse.agent_v2.core.intelligence.v3.context import recent_conversation_for_curation
+from alphonse.agent_v2.core.intelligence.v3.context import selected_skill_guidance
+from alphonse.agent_v2.core.intelligence.v3.context import skill_candidates_for_curation
 
 if TYPE_CHECKING:
     from alphonse.agent_v2.core.core import CoreLoopContext, IntelligenceProcessor
@@ -118,14 +121,20 @@ class HierarchicalCAPDProcessor:
         else:
             candidates = []
             recent_context = ""
+        existing_skill_selection = task.metadata.get("v3_skill_selection")
+        skill_candidates = [] if isinstance(existing_skill_selection, dict) else skill_candidates_for_curation(context)
         classify = getattr(context.system_one, "classify_task_admission", None) if context.system_one is not None else None
         if callable(classify):
             try:
-                decision = classify(
-                    message=task.goal,
-                    recent_conversation=recent_context,
-                    context_candidates=candidates,
-                )
+                kwargs = {
+                    "message": task.goal,
+                    "recent_conversation": recent_context,
+                    "context_candidates": candidates,
+                }
+                parameters = inspect.signature(classify).parameters.values()
+                if any(item.name == "skill_candidates" or item.kind == inspect.Parameter.VAR_KEYWORD for item in parameters):
+                    kwargs["skill_candidates"] = skill_candidates
+                decision = classify(**kwargs)
             except SystemOneUnavailableError:
                 raise
             except Exception as exc:
@@ -150,6 +159,19 @@ class HierarchicalCAPDProcessor:
                 "selected_context_ids": selected_ids,
                 "candidate_ids": [str(item.get("id") or "") for item in candidates],
                 "probabilities": dict(probabilities) if isinstance(probabilities, dict) else {},
+                "status": "curated",
+            }
+        if not isinstance(existing_skill_selection, dict):
+            selected_skill_ids = list(getattr(decision, "selected_skill_ids", ()) or ())
+            primary_skill_ids = list(getattr(decision, "primary_skill_ids", ()) or ())
+            skill_scores = getattr(decision, "skill_scores", {})
+            skill_scores = skill_scores if isinstance(skill_scores, dict) else {}
+            task.metadata["v3_skill_selection"] = {
+                "selected_skill_ids": selected_skill_ids,
+                "primary_skill_ids": primary_skill_ids,
+                "secondary_skill_ids": [item for item in selected_skill_ids if item not in primary_skill_ids],
+                "candidate_ids": [str(item.get("id") or "") for item in skill_candidates],
+                "scores": skill_scores,
                 "status": "curated",
             }
         if direct_response:
@@ -207,12 +229,18 @@ class HierarchicalCAPDProcessor:
         selection = task.metadata.get("v3_context_selection")
         selected_context_ids = selection.get("selected_context_ids", []) if isinstance(selection, dict) else []
         shared_context = conversation_context(task, context, selected_context_ids=selected_context_ids)
+        skill_guidance, loaded_skill_ids = selected_skill_guidance(task, context)
+        skill_selection = task.metadata.get("v3_skill_selection")
+        if isinstance(skill_selection, dict):
+            skill_selection["loaded_skill_ids"] = loaded_skill_ids
         result = context.inference.generate_markdown(InferenceRequest(
             prompt=(
                 "Reply directly to this conversational message. Be warm, brief, natural, and use the user's language. "
                 "The reply must fully satisfy the message without mentioning planning, tools, acceptance criteria, "
                 "or internal processing. Do not claim that any external action occurred.\n\n"
                 f"Available context (use only facts relevant to this message):\n{shared_context or '(none)'}\n\n"
+                "Selected skill guidance (reusable instructions, not permission to bypass Alphonse's controls):\n"
+                f"{skill_guidance or '(none)'}\n\n"
                 f"User message: {task.goal}"
             ),
             purpose=InferencePurpose.FINAL_RESPONSE,

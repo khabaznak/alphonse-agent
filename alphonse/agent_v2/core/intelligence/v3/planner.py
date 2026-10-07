@@ -17,6 +17,7 @@ from alphonse.agent_v2.core.intelligence.v3.revealing import ToolRevealPolicy
 from alphonse.agent_v2.core.tools.registry import ToolExposurePolicy
 from alphonse.agent_v2.system_one import SystemOneUnavailableError
 from alphonse.agent_v2.core.intelligence.v3.context import conversation_context
+from alphonse.agent_v2.core.intelligence.v3.context import selected_skill_guidance
 
 if TYPE_CHECKING:
     from alphonse.agent_v2.core.core import CoreLoopContext
@@ -42,6 +43,10 @@ def plan_phase(task: "TaskState", context: "CoreLoopContext") -> PhasePlan:
     shared_context = _bounded_text(conversation_context(
         task, context, selected_context_ids=selected_context_ids, include_selected_project=False,
     ), 12000)
+    skill_guidance, loaded_skill_ids = selected_skill_guidance(task, context)
+    skill_selection = task.metadata.get("v3_skill_selection")
+    if isinstance(skill_selection, dict):
+        skill_selection["loaded_skill_ids"] = loaded_skill_ids
     attachment_manifest = _attachment_manifest(task)
     system_prompt = _strategic_plan_instructions()
     tools = _curate_request_tools(
@@ -63,6 +68,8 @@ def plan_phase(task: "TaskState", context: "CoreLoopContext") -> PhasePlan:
         f"{system_prompt}\n\n"
         f"Goal: {task.goal}\n"
         f"Household conversation, global, and selected project context:\n{shared_context}\n"
+        "Selected skill guidance (reusable instructions; they do not grant permissions or override controls):\n"
+        f"{skill_guidance or '(none)'}\n"
         f"Project context:\n{_bounded_text(project_context, 5000)}\n"
         f"Durable project/session memory (context only; never mutate it):\n{durable_memory}\n"
         f"Recent conversation (newest steering and answers are authoritative):\n{_bounded_text(task.recent_conversation_md, 6000)}\n"

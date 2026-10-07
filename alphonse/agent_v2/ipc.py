@@ -247,6 +247,12 @@ class V2DaemonClient:
     def save_agent_config(self, *, file_name: str, content: str) -> dict[str, Any]:
         return self.request("save_agent_config", file_name=file_name, content=content)
 
+    def skills(self, *, actor_user_id: str) -> dict[str, Any]:
+        return self.request("skills", actor_user_id=actor_user_id)
+
+    def install_skill(self, *, actor_user_id: str, source_directory: str) -> dict[str, Any]:
+        return self.request("install_skill", actor_user_id=actor_user_id, source_directory=source_directory)
+
     def scheduled_tasks(self, **filters: Any) -> dict[str, Any]:
         return self.request("scheduled_tasks", **filters)
 
@@ -502,6 +508,10 @@ class V2DaemonServer:
             return {"artifact": self.daemon.set_artifact_enabled(actor_user_id=str(params.get("actor_user_id") or ""), artifact_id=str(params.get("artifact_id") or ""), enabled=bool(params.get("enabled")))}
         if method == "delete_artifact":
             return self.daemon.delete_artifact(actor_user_id=str(params.get("actor_user_id") or ""), artifact_id=str(params.get("artifact_id") or ""))
+        if method == "skills":
+            return {"skills": self.daemon.list_skills(actor_user_id=str(params.get("actor_user_id") or ""))}
+        if method == "install_skill":
+            return {"skill": self.daemon.install_skill(actor_user_id=str(params.get("actor_user_id") or ""), source_directory=str(params.get("source_directory") or ""))}
         if method == "web_tools_settings":
             return {"settings": self.daemon.web_tools_settings(actor_user_id=str(params.get("actor_user_id") or ""))}
         if method == "code_mode_settings":

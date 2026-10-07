@@ -91,6 +91,51 @@ def recent_conversation_for_curation(task: "TaskState", context: "CoreLoopContex
     return _recent_conversation(task, context, active_ids)[:5000]
 
 
+def skill_candidates_for_curation(context: "CoreLoopContext") -> list[dict[str, str]]:
+    store = context.skill_store
+    if store is None:
+        return []
+    list_skills = getattr(store, "list_skills", None)
+    if not callable(list_skills):
+        return []
+    try:
+        return [skill.candidate() for skill in list_skills()]
+    except Exception:
+        return []
+
+
+def selected_skill_guidance(task: "TaskState", context: "CoreLoopContext", *, max_chars: int = 16000) -> tuple[str, list[str]]:
+    """Load selected skill instructions within a deterministic prompt budget."""
+    selection = task.metadata.get("v3_skill_selection")
+    selected_ids = selection.get("selected_skill_ids", []) if isinstance(selection, dict) else []
+    store = context.skill_store
+    getter = getattr(store, "get", None) if store is not None else None
+    if not callable(getter):
+        return "", []
+    blocks: list[str] = []
+    loaded_ids: list[str] = []
+    used_chars = 0
+    for skill_id in selected_ids:
+        try:
+            skill = getter(str(skill_id))
+        except (OSError, UnicodeDecodeError, ValueError):
+            continue
+        if skill is None:
+            continue
+        block = (
+            f"### {skill.name} (`{skill.skill_id}`)\n"
+            f"Description: {skill.description}\n\n{skill.instructions}"
+        )
+        if used_chars + len(block) > max_chars:
+            continue
+        blocks.append(block)
+        loaded_ids.append(skill.skill_id)
+        used_chars += len(block)
+    if not blocks:
+        return "", []
+    return "\n\n".join(blocks), loaded_ids
+
+
 def _global_candidates(content: str) -> list[dict[str, str]]:
     parsed = parse_global_context_sections(content)
     candidates: list[dict[str, str]] = []
