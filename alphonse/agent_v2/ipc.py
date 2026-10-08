@@ -253,6 +253,12 @@ class V2DaemonClient:
     def install_skill(self, *, actor_user_id: str, source_directory: str) -> dict[str, Any]:
         return self.request("install_skill", actor_user_id=actor_user_id, source_directory=source_directory)
 
+    def replace_skill(self, *, actor_user_id: str, skill_id: str, source_directory: str) -> dict[str, Any]:
+        return self.request("replace_skill", actor_user_id=actor_user_id, skill_id=skill_id, source_directory=source_directory)
+
+    def delete_skill(self, *, actor_user_id: str, skill_id: str) -> dict[str, Any]:
+        return self.request("delete_skill", actor_user_id=actor_user_id, skill_id=skill_id)
+
     def scheduled_tasks(self, **filters: Any) -> dict[str, Any]:
         return self.request("scheduled_tasks", **filters)
 
@@ -512,6 +518,10 @@ class V2DaemonServer:
             return {"skills": self.daemon.list_skills(actor_user_id=str(params.get("actor_user_id") or ""))}
         if method == "install_skill":
             return {"skill": self.daemon.install_skill(actor_user_id=str(params.get("actor_user_id") or ""), source_directory=str(params.get("source_directory") or ""))}
+        if method == "replace_skill":
+            return {"skill": self.daemon.replace_skill(actor_user_id=str(params.get("actor_user_id") or ""), skill_id=str(params.get("skill_id") or ""), source_directory=str(params.get("source_directory") or ""))}
+        if method == "delete_skill":
+            return self.daemon.delete_skill(actor_user_id=str(params.get("actor_user_id") or ""), skill_id=str(params.get("skill_id") or ""))
         if method == "web_tools_settings":
             return {"settings": self.daemon.web_tools_settings(actor_user_id=str(params.get("actor_user_id") or ""))}
         if method == "code_mode_settings":

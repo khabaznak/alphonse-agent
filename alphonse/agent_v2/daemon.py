@@ -728,6 +728,15 @@ class V2Daemon:
         installed = self.runtime.skill_store.install_directory(source_directory)
         return installed.candidate()
 
+    def replace_skill(self, *, actor_user_id: str, skill_id: str, source_directory: str) -> dict[str, str]:
+        self._require_admin(actor_user_id)
+        replaced = self.runtime.skill_store.replace_directory(skill_id, source_directory)
+        return replaced.candidate()
+
+    def delete_skill(self, *, actor_user_id: str, skill_id: str) -> dict[str, str]:
+        self._require_admin(actor_user_id)
+        return {"deleted": self.runtime.skill_store.uninstall(skill_id)}
+
     def web_tools_settings(self, *, actor_user_id: str) -> dict[str, object]:
         self._require_admin(actor_user_id)
         return self.runtime.web_tools_settings_store.get().to_dict()

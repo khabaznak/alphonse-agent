@@ -91,6 +91,54 @@ class SkillStore:
         finally:
             shutil.rmtree(staging, ignore_errors=True)
 
+    def replace_directory(self, skill_id: str, source: str | Path) -> SkillRecord:
+        """Atomically replace an installed package with a validated package of the same name."""
+        name = _validate_skill_name(str(skill_id or "").removeprefix("skill:"))
+        source_path = Path(source).expanduser().resolve(strict=True)
+        if not source_path.is_dir():
+            raise ValueError("skill_source_must_be_directory")
+        source_record = self._read_skill(source_path)
+        if source_record.name != name:
+            raise ValueError("skill_update_name_mismatch")
+
+        target = self.skills_dir / name
+        if target.is_symlink():
+            raise ValueError("skill_package_symlink_not_allowed")
+        if not target.is_dir():
+            raise ValueError("skill_not_installed")
+
+        staging = Path(tempfile.mkdtemp(prefix=".skill-update-", dir=self.skills_dir))
+        staged_package = staging / name
+        backup = staging / "previous"
+        try:
+            shutil.copytree(source_path, staged_package, dirs_exist_ok=True, symlinks=False)
+            self._read_skill(staged_package)
+            target.rename(backup)
+            try:
+                staged_package.rename(target)
+                updated = self._read_skill(target)
+            except Exception:
+                if target.is_dir() and not target.is_symlink():
+                    shutil.rmtree(target)
+                backup.rename(target)
+                raise
+            return updated
+        finally:
+            shutil.rmtree(staging, ignore_errors=True)
+
+    def uninstall(self, skill_id: str) -> str:
+        """Remove one installed skill package from the local library."""
+        name = _validate_skill_name(str(skill_id or "").removeprefix("skill:"))
+        target = self.skills_dir / name
+        if target.is_symlink():
+            raise ValueError("skill_package_symlink_not_allowed")
+        if not target.is_dir():
+            raise ValueError("skill_not_installed")
+        if not target.resolve().is_relative_to(self.skills_dir.resolve()):
+            raise ValueError("skill_package_outside_store")
+        shutil.rmtree(target)
+        return f"skill:{name}"
+
     def _read_skill(self, directory: Path) -> SkillRecord:
         if directory.is_symlink():
             raise ValueError("skill_package_symlink_not_allowed")
