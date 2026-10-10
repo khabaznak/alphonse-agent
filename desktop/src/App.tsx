@@ -16,7 +16,7 @@ import { createDesktopNotifier, DESKTOP_NOTIFICATION_PREFERENCES_KEY, notificati
 import { readDismissedScheduledSurfaces, rememberDismissedScheduledSurface, withoutDismissedSurfaces, withoutSurface } from "./dismissedSurfaces";
 import { avatarState, avatarStateLabel, capdActivityLabel, projectKey } from "./layoutState";
 import { formatMessageTime } from "./messageTime";
-import { reuseProjectAttention, reuseQuestions, withoutTaskProgressSurfaces, type ProjectAttention } from "./pollState";
+import { reuseQuestions, withoutTaskProgressSurfaces } from "./pollState";
 import { QueueWorkloadChart } from "./QueueWorkloadChart";
 import { appendQueueSample, type QueueSample } from "./queueHistory";
 import { PdcaActivityChart } from "./PdcaActivityChart";
@@ -35,7 +35,7 @@ type PollResponse = {
   next_ui_sequence?: number;
   deliveries: Array<{ outbox_message_id: string; message: string; task_id?: string; project_id: string; created_at: string; conversation_sequence: number }>;
   questions: Question[];
-  project_attention?: ProjectAttention;
+  active_project_has_unseen_messages?: boolean;
   status: { active_work: Record<string, string>; activity: { state?: string }; queue?: { ready?: number; processing?: number } };
 };
 type HistoryResponse = { messages: ChatMessage[] };
@@ -107,7 +107,7 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
   const [sessionMutationPending, setSessionMutationPending] = useState(false);
   const [queueHistory, setQueueHistory] = useState<QueueSample[]>([]);
   const [pdcaHistory, setPdcaHistory] = useState<PdcaSample[]>([]);
-  const [projectAttention, setProjectAttention] = useState<ProjectAttention>({});
+  const [activeProjectHasUnseenMessages, setActiveProjectHasUnseenMessages] = useState(false);
   const [timezone, setTimezone] = useState("UTC");
   const [progressTaskIds, setProgressTaskIds] = useState<string[]>([]);
   const [pendingProgressMessages, setPendingProgressMessages] = useState<Record<string, ChatMessage>>({});
@@ -205,7 +205,7 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
           );
         });
       }
-      setProjectAttention((current) => reuseProjectAttention(current, response.project_attention || {}));
+      setActiveProjectHasUnseenMessages(Boolean(response.active_project_has_unseen_messages));
       const polledAt = Date.now();
       setQueueHistory((current) => appendQueueSample(current, {
         ready: response.status.queue?.ready || 0,
@@ -290,7 +290,6 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
             if (remaining) progressCompletionTimersRef.current.set(taskId, window.setTimeout(finish, remaining)); else finish();
             await daemonRequest("desktop_ack_delivery", { client_id: clientId, outbox_message_id: delivery.outbox_message_id });
             await daemonRequest("desktop_mark_project_seen", { user, project_id: delivery.project_id, through_sequence: delivery.conversation_sequence });
-            setProjectAttention((current) => clearUnreadAttention(current, delivery.project_id));
             continue;
           }
         }
@@ -302,7 +301,6 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
         await daemonRequest("desktop_ack_delivery", { client_id: clientId, outbox_message_id: delivery.outbox_message_id });
         if (deliveryProjectKey === activeProjectKeyRef.current) {
           await daemonRequest("desktop_mark_project_seen", { user, project_id: delivery.project_id, through_sequence: delivery.conversation_sequence });
-          setProjectAttention((current) => clearUnreadAttention(current, delivery.project_id));
         }
       }
     } catch (cause) {
@@ -393,7 +391,7 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
 
   useEffect(() => {
     const activeProjectId = project?.project_id || "";
-    if (!user || !(projectAttention[activeProjectId]?.unread_messages > 0) || activeHistoryRefreshRef.current || projectHistoryLoadingRef.current) return;
+    if (!user || !activeProjectHasUnseenMessages || activeHistoryRefreshRef.current || projectHistoryLoadingRef.current) return;
     activeHistoryRefreshRef.current = true;
     void daemonRequest<HistoryResponse>("desktop_conversation_history", { user, project_id: activeProjectId, limit: 100 })
       .then(async (history) => {
@@ -404,18 +402,10 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
         });
         const throughSequence = history.messages.reduce((latest, message) => Math.max(latest, message.sequence || 0), 0);
         await daemonRequest("desktop_mark_project_seen", { user, project_id: activeProjectId, through_sequence: throughSequence });
-        setProjectAttention((current) => ({
-          ...current,
-          [activeProjectId]: {
-            unread_messages: 0,
-            pending_questions: current[activeProjectId]?.pending_questions || 0,
-            total: current[activeProjectId]?.pending_questions || 0,
-          },
-        }));
       })
       .catch((cause: unknown) => setError(cause instanceof Error ? cause.message : "Conversation history could not be refreshed"))
       .finally(() => { activeHistoryRefreshRef.current = false; });
-  }, [project?.project_id, projectAttention, user]);
+  }, [activeProjectHasUnseenMessages, project?.project_id, user]);
 
   useEffect(() => {
     const element = timelineRef.current;
@@ -616,14 +606,6 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
         project_id: next.project_id,
         through_sequence: throughSequence,
       });
-      setProjectAttention((current) => ({
-        ...current,
-        [next.project_id]: {
-          unread_messages: 0,
-          pending_questions: current[next.project_id]?.pending_questions || 0,
-          total: current[next.project_id]?.pending_questions || 0,
-        },
-      }));
     } catch (cause) {
       if (projectHistoryRequestRef.current !== historyRequest) {
         messagesDuringHistoryReloadRef.current.delete(historyRequest);
@@ -780,7 +762,7 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
         </div>
         <section className="project-sidebar-section">
           <div className="project-sidebar-header">
-            <button className={`project-selector${projectsOpen ? " selected" : ""}`} title="Projects" onClick={() => setProjectsOpen((open) => !open)}><span className="nav-icon" aria-hidden="true"><FolderKanban /></span><span className="nav-label">Projects</span><small>Manage</small>{attentionTotal(projectAttention) > 0 && <span className="attention-badge" aria-label={`${attentionTotal(projectAttention)} project items need attention`}>{attentionTotal(projectAttention)}</span>}</button>
+            <button className={`project-selector${projectsOpen ? " selected" : ""}`} title="Projects" onClick={() => setProjectsOpen((open) => !open)}><span className="nav-icon" aria-hidden="true"><FolderKanban /></span><span className="nav-label">Projects</span><small>Manage</small></button>
           </div>
           {project && <div className="project-sessions-panel">
             <div className="project-sessions-heading"><span>Sessions</span><button type="button" aria-expanded={newSessionOpen} onClick={() => { setNewSessionOpen((open) => !open); setMemorySessionsError(""); }}>{newSessionOpen ? "Cancel" : <><Plus aria-hidden="true" /> New</>}</button></div>
@@ -800,7 +782,7 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
         <PdcaActivityChart samples={pdcaHistory} now={queueHistory.at(-1)?.at || Date.now()} />
       </aside>}
 
-      {projectsOpen ? <ProjectsWorkspace user={user} attention={projectAttention} onClose={() => setProjectsOpen(false)} /> : <section className="conversation">
+      {projectsOpen ? <ProjectsWorkspace user={user} onClose={() => setProjectsOpen(false)} /> : <section className="conversation">
         <header className="topbar">
           <div className="topbar-project"><p className="eyebrow">Project</p><h1>{project?.name || "Home"}</h1></div>
         </header>
@@ -1225,18 +1207,6 @@ function sourceLabel(source: string): string {
   return source.replace(/[-_]/g, " ").replace(/\b\w/g, (character) => character.toUpperCase());
 }
 
-function attentionTotal(attention: ProjectAttention): number {
-  return Object.values(attention).reduce((total, item) => total + item.total, 0);
-}
-
-function clearUnreadAttention(attention: ProjectAttention, projectId: string): ProjectAttention {
-  const pending = attention[projectId]?.pending_questions || 0;
-  return {
-    ...attention,
-    [projectId]: { unread_messages: 0, pending_questions: pending, total: pending },
-  };
-}
-
 function timezoneSettingsError(cause: unknown): string {
   const message = cause instanceof Error ? cause.message : "Timezone settings unavailable";
   return message.includes("unknown_method") ? "Restart the Alphonse daemon once to enable timezone settings." : message;
@@ -1379,15 +1349,15 @@ function UsersModal({ onClose }: { onClose: () => void }) {
   </ModalFrame>;
 }
 
-function ProjectsWorkspace({ user, attention, onClose }: { user: string; attention: ProjectAttention; onClose: () => void }) {
+function ProjectsWorkspace({ user, onClose }: { user: string; onClose: () => void }) {
   const [projects, setProjects] = useState<ManagedProject[]>([]); const [users, setUsers] = useState<ManagedUser[]>([]); const [ownerId, setOwnerId] = useState(user); const [filter, setFilter] = useState(""); const [showCreate, setShowCreate] = useState(false);
   const [selectedProject, setSelectedProject] = useState<ManagedProject | null>(null);
   const [name, setName] = useState(""); const [description, setDescription] = useState(""); const [visibility, setVisibility] = useState<"private" | "shared">("private"); const [rootPath, setRootPath] = useState(""); const [mode, setMode] = useState<"create" | "import">("create"); const [notice, setNotice] = useState(""); const [newMemberIds, setNewMemberIds] = useState<string[]>([]);
-  const load = useCallback(async () => { try { const [projectResult, userResult] = await Promise.all([daemonRequest<{ projects: ManagedProject[] }>("manageable_projects", { user, status: filter === "updates" ? "" : filter }), daemonRequest<{ users: ManagedUser[] }>("users")]); setProjects(projectResult.projects); setUsers(userResult.users); setOwnerId((current) => userResult.users.some((item) => item.user_id === current) ? current : userResult.users.find((item) => item.user_id === user)?.user_id || userResult.users.find((item) => item.role === "admin")?.user_id || ""); } catch (cause) { setNotice(cause instanceof Error ? cause.message : "Projects could not be loaded."); } }, [filter, user]);
+  const load = useCallback(async () => { try { const [projectResult, userResult] = await Promise.all([daemonRequest<{ projects: ManagedProject[] }>("manageable_projects", { user, status: filter }), daemonRequest<{ users: ManagedUser[] }>("users")]); setProjects(projectResult.projects); setUsers(userResult.users); setOwnerId((current) => userResult.users.some((item) => item.user_id === current) ? current : userResult.users.find((item) => item.user_id === user)?.user_id || userResult.users.find((item) => item.role === "admin")?.user_id || ""); } catch (cause) { setNotice(cause instanceof Error ? cause.message : "Projects could not be loaded."); } }, [filter, user]);
   useEffect(() => { void load(); }, [load]);
   const refreshProjects = async (selectedId?: string) => { await load(); if (selectedId) { const latest = await daemonRequest<{ projects: ManagedProject[] }>("manageable_projects", { user }); setSelectedProject(latest.projects.find((item) => item.project_id === selectedId) || null); } };
   const createOrImport = async (event: FormEvent) => { event.preventDefault(); try { const method = mode === "import" ? "import_project" : "create_project"; const result = await daemonRequest<{ project: ManagedProject }>(method, { user, name, description, root_path: rootPath, visibility }); if (visibility === "shared" && newMemberIds.length) await daemonRequest("update_project", { user, project_id: result.project.project_id, name, description, visibility, member_user_ids: newMemberIds }); setNotice(mode === "import" ? "Project imported." : "Project created."); setShowCreate(false); await refreshProjects(result.project.project_id); } catch (cause) { setNotice(cause instanceof Error ? cause.message : "Project could not be created."); } };
-  const visibleProjects = projects.filter((item) => (item.visibility === "shared" || item.owner_user_id === ownerId) && (filter !== "updates" || (attention[item.project_id]?.total || 0) > 0));
+  const visibleProjects = projects.filter((item) => (item.visibility === "shared" || item.owner_user_id === ownerId));
   return <div className="projects-workspace">
     <aside className="projects-workspace-sidebar">
       <header className="projects-workspace-heading"><button className="back-button" onClick={onClose}>← Conversation</button><h2>Projects</h2><button onClick={() => { setShowCreate((value) => !value); setSelectedProject(null); }}>{showCreate ? "Cancel" : "+ New project"}</button></header>

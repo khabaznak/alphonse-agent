@@ -762,8 +762,7 @@ def test_desktop_questions_and_attention_are_project_scoped() -> None:
     assert [item["question_id"] for item in poll["questions"]] == [alpha.question_id]
     assert alpha.question_id in str(poll["ui_events"])
     assert beta.question_id not in str(poll["ui_events"])
-    assert poll["project_attention"]["alpha"]["pending_questions"] == 1
-    assert poll["project_attention"]["beta"]["pending_questions"] == 1
+    assert "project_attention" not in poll
 
     result = daemon.answer_question(user="alex", question_id=alpha.question_id, text="Alpha answer")
     assert result["resumed_task"]["project_id"] == "alpha"

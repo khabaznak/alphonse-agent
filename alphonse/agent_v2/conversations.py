@@ -216,21 +216,21 @@ class SQLiteConversationStore:
             )
         return applied
 
-    def project_unread_counts(self, *, owner_user_id: str) -> dict[str, int]:
-        owner = str(owner_user_id or "").strip()
+    def project_has_unseen_messages(self, *, owner_user_id: str, project_id: str) -> bool:
+        owner, project = str(owner_user_id or "").strip(), str(project_id or "").strip()
         with self._connect() as conn:
-            rows = conn.execute(
+            row = conn.execute(
                 """
-                SELECT e.project_id, COUNT(*) AS unread
+                SELECT 1
                 FROM v2_conversation_events e
                 LEFT JOIN v2_desktop_project_cursors c
                   ON c.owner_user_id=e.owner_user_id AND c.project_id=e.project_id
-                WHERE e.owner_user_id=? AND e.sequence>COALESCE(c.last_seen_sequence,0)
-                GROUP BY e.project_id
+                WHERE e.owner_user_id=? AND e.project_id=? AND e.sequence>COALESCE(c.last_seen_sequence,0)
+                LIMIT 1
                 """,
-                (owner,),
-            ).fetchall()
-        return {str(row["project_id"] or ""): int(row["unread"] or 0) for row in rows}
+                (owner, project),
+            ).fetchone()
+        return row is not None
 
     def legacy_import_completed(self, *, owner_user_id: str, project_id: str) -> bool:
         with self._connect() as conn:

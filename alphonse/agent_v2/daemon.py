@@ -989,7 +989,10 @@ class V2Daemon:
             "ui_events": ui_events,
             "next_ui_sequence": next_ui_sequence,
             "server_capabilities": self._a2ui.server_capabilities(),
-            "project_attention": self._desktop_project_attention(normalized_user),
+            "active_project_has_unseen_messages": self.runtime.conversation_store.project_has_unseen_messages(
+                owner_user_id=normalized_user,
+                project_id=normalized_project,
+            ) if normalized_project else False,
             "status": {"active_work": self.active_work(), "activity": self.activity_status(), "queue": self._inbound_queue_status()},
         }
 
@@ -1056,18 +1059,6 @@ class V2Daemon:
             through_sequence=through_sequence,
         )
         return {"project_id": normalized_project, "seen_through_sequence": sequence}
-
-    def _desktop_project_attention(self, user: str) -> dict[str, dict[str, int]]:
-        unread = self.runtime.conversation_store.project_unread_counts(owner_user_id=user)
-        questions = self.runtime.question_store.pending_counts_by_project(user)
-        return {
-            project_id: {
-                "unread_messages": int(unread.get(project_id, 0)),
-                "pending_questions": int(questions.get(project_id, 0)),
-                "total": int(unread.get(project_id, 0)) + int(questions.get(project_id, 0)),
-            }
-            for project_id in sorted(set(unread) | set(questions))
-        }
 
     def list_projects(self, *, user: str) -> list[dict[str, str]]:
         normalized = self._admin_user_id(user)
