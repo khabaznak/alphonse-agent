@@ -20,8 +20,7 @@ class Capability(str, Enum):
     PROJECT_RECORD_SEARCH = "project_record_search"
     PROJECT_FILE_INSPECTION = "project_file_inspection"
     PROJECT_ARTIFACT_QUERY = "project_artifact_query"
-    ARTIFACT_REGISTRATION = "artifact_registration"
-    ARTIFACT_METADATA_MANAGEMENT = "artifact_metadata_management"
+    ARTIFACT_REGISTRATION = "skill_artifact_registration"
     SKILL_MANAGEMENT = "skill_management"
     MEMORY_RECALL = "memory_recall"
     ATTACHMENT_ANALYSIS = "attachment_analysis"
@@ -59,8 +58,7 @@ class ToolRevealPolicy:
         Capability.PROJECT_RECORD_SEARCH.value: "Legacy project search capability; use local_shell for new plans.",
         Capability.PROJECT_FILE_INSPECTION.value: "Legacy project file inspection capability; use local_shell for new plans.",
         Capability.PROJECT_ARTIFACT_QUERY.value: "Query a registered project artifact through its native client.",
-        Capability.ARTIFACT_REGISTRATION.value: "Register an executable already created in the owned project as a reusable artifact.",
-        Capability.ARTIFACT_METADATA_MANAGEMENT.value: "Update an owned artifact's catalog name and routing description without modifying its files.",
+        Capability.ARTIFACT_REGISTRATION.value: "Attach a project-local executable and its operating instructions to an installed skill.",
         Capability.SKILL_MANAGEMENT.value: "Install a newly authored reusable SKILL.md instruction package after requester approval.",
         Capability.MEMORY_RECALL.value: "Search bounded archived memory for the current project.",
         Capability.ATTACHMENT_ANALYSIS.value: "Analyze an image attached to the current task.",
@@ -195,12 +193,11 @@ def _has_analyzable_attachment(task: "TaskState", state: TacticalState) -> bool:
 _TOOL_CAPABILITIES: dict[str, tuple[str, ...]] = {
     "native.bash": (Capability.LOCAL_SHELL.value,),
     "native.search_memory": (Capability.MEMORY_RECALL.value,),
-    "native.artifact_registration": (Capability.ARTIFACT_REGISTRATION.value,),
+    "native.skill_artifact_register": (Capability.ARTIFACT_REGISTRATION.value,),
     "native.analyze_image": (Capability.ATTACHMENT_ANALYSIS.value,),
     "native.deliver_message": (Capability.COMMUNICATION.value,),
     "native.scheduled_task": (Capability.SCHEDULING.value,),
     "native.scheduled_task_delivery": (Capability.SCHEDULING.value,),
-    "native.artifact_metadata_update": (Capability.ARTIFACT_METADATA_MANAGEMENT.value,),
     "native.skill_install": (Capability.SKILL_MANAGEMENT.value,),
     "native.ask_question": (Capability.USER_INTERACTION.value,),
     "native.respond": (Capability.USER_RESPONSE.value,),

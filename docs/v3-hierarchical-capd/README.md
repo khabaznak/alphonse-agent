@@ -40,7 +40,7 @@ Outer CAPD
           v
 Tactical Phase Executor inside Do
   Resolve current subgoal
-  Ask Jev about every native and artifact tool, then reveal relevant authorized tools
+  Ask Jev about native tools, then reveal relevant authorized tools
   Choose and execute the next action
   Inspect local result and recover within policy
   Return structured phase evidence

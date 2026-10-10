@@ -721,9 +721,56 @@ class V2Daemon:
         refresh_runtime_artifacts(self.runtime)
         return {"deleted": artifact_id}
 
-    def list_skills(self, *, actor_user_id: str) -> list[dict[str, str]]:
+    def list_skills(self, *, actor_user_id: str) -> list[dict[str, Any]]:
         self._require_admin(actor_user_id)
-        return [item.candidate() for item in self.runtime.skill_store.list_skills()]
+        artifacts = self.runtime.artifact_store.list()
+        return [{**item.candidate(), "directory": item.directory, "editable": Path(item.directory).resolve().is_relative_to(self.runtime.skill_store.skills_dir.resolve()), "instructions": item.instructions,
+                 "files": self.runtime.skill_store.files(item.skill_id),
+                 "artifacts": [record.to_dict() for record in artifacts if record.skill_id == item.skill_id]}
+                for item in self.runtime.skill_store.list_skills()]
+
+    def attach_artifact_to_skill(self, *, actor_user_id: str, artifact_id: str, skill_id: str, instructions: str) -> dict[str, Any]:
+        self._require_admin(actor_user_id)
+        record = self.runtime.artifact_store.get(artifact_id)
+        if record is None:
+            raise KeyError("artifact_not_found")
+        skill = self.runtime.skill_store.get(skill_id)
+        if skill is None or not Path(skill.directory).resolve().is_relative_to(self.runtime.skill_store.skills_dir.resolve()):
+            raise ValueError("installed_skill_required")
+        detail = str(instructions or "").strip()
+        if not detail:
+            raise ValueError("artifact_instructions_required")
+        self.runtime.skill_store.add_artifact_instructions(skill.skill_id, record.artifact_id, record.name, detail, {
+            "description": record.description, "project_id": record.project_id, "entrypoint_path": record.entrypoint_path,
+            "argument_schema": record.argument_schema, "timeout_seconds": record.timeout_seconds,
+        })
+        return self.runtime.artifact_store.set_skill(artifact_id, skill.skill_id).to_dict()
+
+    def list_unassigned_artifacts(self, *, actor_user_id: str) -> list[dict[str, Any]]:
+        self._require_admin(actor_user_id)
+        return [record.to_dict() for record in self.runtime.artifact_store.list() if not record.skill_id]
+
+    def create_skill(self, *, actor_user_id: str, name: str, description: str, instructions: str) -> dict[str, str]:
+        self._require_admin(actor_user_id)
+        return self.runtime.skill_store.create_skill(name, description, instructions).candidate()
+
+    def update_skill(self, *, actor_user_id: str, skill_id: str, description: str) -> dict[str, str]:
+        self._require_admin(actor_user_id)
+        return self.runtime.skill_store.update_description(skill_id, description).candidate()
+
+    def read_skill_file(self, *, actor_user_id: str, skill_id: str, path: str) -> dict[str, str]:
+        self._require_admin(actor_user_id)
+        return {"content": self.runtime.skill_store.read_file(skill_id, path)}
+
+    def write_skill_file(self, *, actor_user_id: str, skill_id: str, path: str, content: str) -> dict[str, str]:
+        self._require_admin(actor_user_id)
+        self.runtime.skill_store.write_file(skill_id, path, content)
+        return {"saved": path}
+
+    def delete_skill_file(self, *, actor_user_id: str, skill_id: str, path: str) -> dict[str, str]:
+        self._require_admin(actor_user_id)
+        self.runtime.skill_store.delete_file(skill_id, path)
+        return {"deleted": path}
 
     def install_skill(self, *, actor_user_id: str, source_directory: str) -> dict[str, str]:
         self._require_admin(actor_user_id)
@@ -737,7 +784,11 @@ class V2Daemon:
 
     def delete_skill(self, *, actor_user_id: str, skill_id: str) -> dict[str, str]:
         self._require_admin(actor_user_id)
-        return {"deleted": self.runtime.skill_store.uninstall(skill_id)}
+        deleted = self.runtime.skill_store.uninstall(skill_id)
+        for artifact in self.runtime.artifact_store.list():
+            if artifact.skill_id == deleted:
+                self.runtime.artifact_store.set_skill(artifact.artifact_id, "")
+        return {"deleted": deleted}
 
     def web_tools_settings(self, *, actor_user_id: str) -> dict[str, object]:
         self._require_admin(actor_user_id)

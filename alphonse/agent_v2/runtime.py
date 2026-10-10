@@ -53,7 +53,6 @@ from alphonse.agent_v2.code_mode_settings import SQLiteCodeModeSettingsStore
 from alphonse.agent_v2.media_tools_settings import SQLiteMediaToolsSettingsStore
 from alphonse.agent_v2.assets import SQLiteAssetStore
 from alphonse.agent_v2.artifacts import SQLiteArtifactStore
-from alphonse.agent_v2.artifacts import build_artifact_tool_definitions
 from alphonse.agent_v2.skills import SkillStore
 from alphonse.agent_v2.memory_settings import SQLiteMemorySettingsStore
 from alphonse.agent_v2.core.memory import LedgerMemory
@@ -203,9 +202,9 @@ def build_runtime_host(
     inference = inference or build_inference_router_from_settings(inference_settings_store.get())
     question_store = question_store or SQLiteQuestionStore()
     project_store = project_store or ProjectStore()
-    if tools is not None:
-        for definition in build_artifact_tool_definitions(artifact_store, project_store):
-            tools.register(definition)
+    # Artifacts are skill-owned implementation details. They are never
+    # materialized as independently curated tools; skills describe when
+    # and how to use their project-local programs through native.bash.
     schedule_store = schedule_store or ScheduledTaskStore()
     outbox = outbox or SQLiteOutboundStore()
     integration_store = integration_store or SQLiteIntegrationStore()
@@ -362,10 +361,9 @@ def refresh_runtime_media_tools(runtime: V2RuntimeHost) -> None:
 
 
 def refresh_runtime_artifacts(runtime: V2RuntimeHost) -> None:
-    """Rebuild native and enabled artifact definitions for later PDCA planning."""
+    """Refresh native management tools after artifact catalog or skill changes."""
     registry = build_native_tool_registry(runtime.web_tools_settings_store.get(), runtime.asset_store, runtime.media_tools_settings_store.get(), runtime.artifact_store, lambda: refresh_runtime_artifacts(runtime), runtime.user_store, runtime.skill_store)
-    for definition in build_artifact_tool_definitions(runtime.artifact_store, runtime.project_store):
-        registry.register(definition)
+    # Artifact programs are not members of the executable tool registry.
     runtime.core.tools = registry
 
 

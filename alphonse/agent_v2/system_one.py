@@ -908,12 +908,11 @@ class JevCriterionDecisionProvider:
             tool_id = str(tool.tool_id)
             question_id = _tool_question_id(tool_id)
             if _tool_kind(tool) == "artifact":
-                question = _artifact_jev_question(tool, scope=question_scope)
-            else:
-                question = native_questions.get(tool_id)
-                if question is None:
-                    raise ValueError(f"system_one_native_tool_template_missing:{tool_id}")
-                question = _scope_jev_question(question, scope=question_scope)
+                continue
+            question = native_questions.get(tool_id)
+            if question is None:
+                raise ValueError(f"system_one_native_tool_template_missing:{tool_id}")
+            question = _scope_jev_question(question, scope=question_scope)
             questions[question_id] = json.loads(json.dumps(question, ensure_ascii=False))
             tool_ids_by_question[question_id] = tool_id
         return _StaticJevToolRegistry(signature, questions, tool_ids_by_question)

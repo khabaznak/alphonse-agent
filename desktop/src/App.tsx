@@ -1,5 +1,5 @@
 import { FormEvent, KeyboardEvent, memo, ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { CalendarClock, ChevronLeft, ChevronRight, FileText, FolderKanban, Plus, Settings, UsersRound, X } from "lucide-react";
+import { CalendarClock, ChevronLeft, ChevronRight, FileText, FolderKanban, Plus, Settings, UsersRound, X, Sparkles } from "lucide-react";
 import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { onAction } from "@tauri-apps/plugin-notification";
@@ -24,7 +24,7 @@ import { appendPdcaActivity, type PdcaSample } from "./pdcaHistory";
 import type { ActivityEvent, AgentDocument, ChatMessage, CodeModeSettings, InferenceSettings, MediaToolsSettings, MemorySettings, Project, Question, SystemOneSettings, WebToolsSettings } from "./types";
 
 type Modal = "scheduled-tasks" | "settings" | "users" | "onboarding" | null;
-type SettingsTab = "general" | "appearance" | "tools" | "artifacts" | "skills" | "integrations" | "automations" | "model" | "system-one" | "agent-config";
+type SettingsTab = "general" | "appearance" | "tools" | "integrations" | "automations" | "model" | "system-one" | "agent-config";
 type ManagedProject = Project & { owner?: { display_name?: string; user_id?: string } | null };
 type PollResponse = {
   daemon_id?: string;
@@ -90,6 +90,7 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
   const [questions, setQuestions] = useState<Question[]>([]);
   const [project, setProject] = useState<Project | null>(null);
   const [projectsOpen, setProjectsOpen] = useState(false);
+  const [skillsOpen, setSkillsOpen] = useState(false);
   const [scheduledTaskForView, setScheduledTaskForView] = useState("");
   const [modal, setModal] = useState<Modal>(null);
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("general");
@@ -655,8 +656,8 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
     }), [clientId, diagnosticBehavior.memoizesMessages, diagnosticBehavior.plainTextMessages, heldProgressSurfaces, messages, morphedMessageTaskIds, pendingProgressMessages, poll, progressTaskIds, questionTaskIds, questions, surfaces, timelineRenderVersion, timezone, user]);
 
   return (
-    <main className={`app-shell ${sidebarCollapsed ? "sidebar-collapsed" : ""} ${projectsOpen ? "projects-mode" : ""}`}>
-      {!projectsOpen && <aside className="sidebar" aria-label="Alphonse navigation">
+    <main className={`app-shell ${sidebarCollapsed ? "sidebar-collapsed" : ""} ${projectsOpen || skillsOpen ? "projects-mode" : ""}`}>
+      {!projectsOpen && !skillsOpen && <aside className="sidebar" aria-label="Alphonse navigation">
         <div className="brand">
           <div className="brand-avatar" title={`Alphonse is ${currentAvatarStateLabel}`}>
             <img key={currentAvatarState} className="brand-mascot" src={`/alphonse-states/${currentAvatarState}.png`} alt={`Alphonse is ${currentAvatarStateLabel}.`} />
@@ -670,6 +671,7 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
             <button className={`project-selector${projectsOpen ? " selected" : ""}`} title="Projects" onClick={() => setProjectsOpen((open) => !open)}><span className="nav-icon" aria-hidden="true"><FolderKanban /></span><span className="nav-label">Projects</span><small>Manage</small></button>
           </div>
         </section>
+        <button title="Skills" onClick={() => setSkillsOpen(true)}><span className="nav-icon" aria-hidden="true"><Sparkles /></span><span className="nav-label">Skills</span></button>
         <button title="Scheduled tasks" onClick={() => setModal("scheduled-tasks")}><span className="nav-icon" aria-hidden="true"><CalendarClock /></span><span className="nav-label">Scheduled tasks</span></button>
         <button title="Users" onClick={() => setModal("users")}><span className="nav-icon" aria-hidden="true"><UsersRound /></span><span className="nav-label">Users</span></button>
         <button title="Settings" onClick={() => { setSettingsTab("general"); setModal("settings"); }}><span className="nav-icon" aria-hidden="true"><Settings /></span><span className="nav-label">Settings</span></button>
@@ -677,7 +679,7 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
         <PdcaActivityChart samples={pdcaHistory} now={queueHistory.at(-1)?.at || Date.now()} />
       </aside>}
 
-      {projectsOpen ? <ProjectsWorkspace user={user} onClose={() => setProjectsOpen(false)} /> : <section className="conversation">
+      {projectsOpen ? <ProjectsWorkspace user={user} onClose={() => setProjectsOpen(false)} /> : skillsOpen ? <SkillsWorkspace user={user} onClose={() => setSkillsOpen(false)} /> : <section className="conversation">
         <header className="topbar">
           <div className="topbar-project"><p className="eyebrow">Project</p><h1>{project?.name || "Home"}</h1></div>
         </header>
@@ -761,7 +763,7 @@ function SettingsModal({ user, initialTab, enterToSend, desktopStyle, desktopNot
   };
   const verify = async (kind: "search" | "fetch") => { try { const current = await daemonRequest<{ user: { user_id: string } | null }>("current_user"); if (!current.user) return; const result = await daemonRequest<{ result: { exception?: { message?: string } } }>("verify_web_tools", { actor_user_id: current.user.user_id, kind }); setWebNotice(result.result.exception?.message || `${kind === "search" ? "SearXNG search" : "Public fetch"} verified.`); } catch (cause) { setWebNotice(cause instanceof Error ? cause.message : "Verification failed"); } };
   const saveMemory = async () => { if (!memory) return; try { const current = await daemonRequest<{ user: { user_id: string } | null }>("current_user"); if (!current.user) return; const result = await daemonRequest<{ settings: MemorySettings }>("save_memory_settings", { actor_user_id: current.user.user_id, values: memory }); setMemory(result.settings); setMemoryNotice("Saved. New tasks use these limits."); } catch (cause) { setMemoryNotice(cause instanceof Error ? cause.message : "Memory settings could not be saved"); } };
-  const tabs = <div className="settings-tabs" role="tablist" aria-label="Settings sections">{(["general", "appearance", "tools", "artifacts", "skills", "integrations", "automations", "model", "system-one", "agent-config"] as SettingsTab[]).map((item) => <button key={item} type="button" role="tab" aria-selected={tab === item} className={tab === item ? "active" : ""} onClick={() => setTab(item)}>{item === "agent-config" ? "Agent configuration" : item === "system-one" ? "System One" : item[0].toUpperCase() + item.slice(1)}</button>)}</div>;
+  const tabs = <div className="settings-tabs" role="tablist" aria-label="Settings sections">{(["general", "appearance", "tools", "integrations", "automations", "model", "system-one", "agent-config"] as SettingsTab[]).map((item) => <button key={item} type="button" role="tab" aria-selected={tab === item} className={tab === item ? "active" : ""} onClick={() => setTab(item)}>{item === "agent-config" ? "Agent configuration" : item === "system-one" ? "System One" : item[0].toUpperCase() + item.slice(1)}</button>)}</div>;
   return <ModalFrame title="Settings" tabs={tabs} className="settings-modal" onClose={onClose}>
     {tab === "general" && <div className="general-settings">
       <section className="setting-group">
@@ -811,8 +813,6 @@ function SettingsModal({ user, initialTab, enterToSend, desktopStyle, desktopNot
       </section>
       <div className="setting-group"><MediaToolsSettingsSection /></div>
     </div>}
-    {tab === "artifacts" && <ArtifactsSettingsSection user={user} />}
-    {tab === "skills" && <SkillsSettingsSection user={user} />}
     {tab === "integrations" && <IntegrationsSettingsSection user={user} />}
     {tab === "automations" && <AutomationsSettingsSection user={user} />}
     {tab === "model" && <ModelSettingsSection />}
@@ -889,104 +889,6 @@ function AppearanceSettingsSection({ value, onChange }: { value: DesktopStyle; o
         <span className="style-preview-selected">{value === option.value ? "Selected" : "Select"}</span>
       </button>)}
     </div>
-  </section>;
-}
-
-type Artifact = { artifact_id: string; name: string; description: string; project_id: string; entrypoint_path: string; enabled: boolean; timeout_seconds: number };
-function ArtifactsSettingsSection({ user }: { user: string }) {
-  const [items, setItems] = useState<Artifact[]>([]); const [notice, setNotice] = useState(""); const [editingArtifactId, setEditingArtifactId] = useState(""); const [draftName, setDraftName] = useState(""); const [draftDescription, setDraftDescription] = useState("");
-  const load = async () => { try { const result = await daemonRequest<{ artifacts: Artifact[] }>("artifacts", { actor_user_id: user }); setItems(result.artifacts); } catch (cause) { setNotice(cause instanceof Error ? cause.message : "Artifacts unavailable"); } };
-  useEffect(() => { void load(); }, [user]);
-  const update = async (item: Artifact): Promise<boolean> => { try { await daemonRequest("update_artifact", { actor_user_id: user, artifact_id: item.artifact_id, name: item.name, description: item.description }); setNotice("Artifact saved."); await load(); return true; } catch (cause) { setNotice(cause instanceof Error ? cause.message : "Save failed"); return false; } };
-  const toggle = async (item: Artifact) => { try { await daemonRequest("set_artifact_enabled", { actor_user_id: user, artifact_id: item.artifact_id, enabled: !item.enabled }); await load(); } catch (cause) { setNotice(cause instanceof Error ? cause.message : "Update failed"); } };
-  const remove = async (item: Artifact) => { if (!window.confirm(`Unregister ${item.name}? Program files and data will not be deleted.`)) return; try { await daemonRequest("delete_artifact", { actor_user_id: user, artifact_id: item.artifact_id }); await load(); } catch (cause) { setNotice(cause instanceof Error ? cause.message : "Unregister failed"); } };
-  const beginEdit = (item: Artifact) => { setEditingArtifactId(item.artifact_id); setDraftName(item.name); setDraftDescription(item.description); };
-  const saveEdit = async (item: Artifact) => { if (await update({ ...item, name: draftName, description: draftDescription })) setEditingArtifactId(""); };
-  return <section className="settings-panel"><h3>Artifacts</h3><p>Registered project-local programs become reusable Alphonse tools. Unregistering leaves their files and data untouched.</p>{items.length ? <div className="stack artifact-list">{items.map((item) => { const editing = editingArtifactId === item.artifact_id; return <article key={item.artifact_id} className="artifact-card"><div className="artifact-card-summary">{editing ? <div className="artifact-fields editing"><label>Name<input value={draftName} onChange={(event) => setDraftName(event.target.value)} /></label><label>Description<input value={draftDescription} onChange={(event) => setDraftDescription(event.target.value)} /></label></div> : <><div className="artifact-card-title"><span aria-hidden="true">⚙️</span><strong>{item.name || item.artifact_id}</strong></div><p className={item.description ? "artifact-description" : "artifact-description empty"}>{item.description || "No description yet."}</p></>}<div className="artifact-project-label"><span aria-hidden="true">🗂️</span><span>Project: <strong>{item.project_id}</strong></span></div><small className="artifact-entrypoint">↗ Entry point: {item.entrypoint_path}</small></div><div className="artifact-card-actions">{editing ? <><button onClick={() => void saveEdit(item)}>Save</button><button className="secondary" onClick={() => setEditingArtifactId("")}>Cancel</button></> : <><button className="secondary" onClick={() => beginEdit(item)}>Edit</button><button className="secondary" onClick={() => void toggle(item)}>{item.enabled ? "Turn off" : "Turn on"}</button><button className="secondary" onClick={() => void remove(item)}>Unregister</button></>}</div></article>; })}</div> : <p>No artifacts registered. Ask Alphonse to register an executable created in an active project.</p>}<p>{notice}</p></section>;
-}
-
-type Skill = { id: string; title: string; description: string; snippet?: string };
-function SkillsSettingsSection({ user }: { user: string }) {
-  const [items, setItems] = useState<Skill[]>([]);
-  const [notice, setNotice] = useState("");
-  const [loading, setLoading] = useState(true);
-  const [busySkillId, setBusySkillId] = useState("");
-
-  const load = async () => {
-    setLoading(true);
-    try {
-      const result = await daemonRequest<{ skills: Skill[] }>("skills", { actor_user_id: user });
-      setItems(result.skills);
-      setNotice("");
-    } catch (cause) {
-      setNotice(cause instanceof Error ? cause.message : "Installed skills unavailable");
-    } finally {
-      setLoading(false);
-    }
-  };
-  useEffect(() => { void load(); }, [user]);
-
-  const choosePackage = async () => {
-    const selected = await openFileDialog({
-      title: "Choose a skill package folder containing SKILL.md",
-      directory: true,
-      multiple: false,
-    });
-    return typeof selected === "string" ? selected : "";
-  };
-
-  const install = async () => {
-    try {
-      const sourceDirectory = await choosePackage();
-      if (!sourceDirectory) return;
-      setBusySkillId("new");
-      const result = await daemonRequest<{ skill: Skill }>("install_skill", { actor_user_id: user, source_directory: sourceDirectory });
-      await load();
-      setNotice(`Installed ${result.skill.title}.`);
-    } catch (cause) {
-      setNotice(cause instanceof Error ? cause.message : "Skill could not be installed");
-    } finally {
-      setBusySkillId("");
-    }
-  };
-
-  const replace = async (skill: Skill) => {
-    try {
-      const sourceDirectory = await choosePackage();
-      if (!sourceDirectory) return;
-      setBusySkillId(skill.id);
-      const result = await daemonRequest<{ skill: Skill }>("replace_skill", { actor_user_id: user, skill_id: skill.id, source_directory: sourceDirectory });
-      await load();
-      setNotice(`Updated ${result.skill.title}.`);
-    } catch (cause) {
-      setNotice(cause instanceof Error ? cause.message : "Skill could not be updated");
-    } finally {
-      setBusySkillId("");
-    }
-  };
-
-  const remove = async (skill: Skill) => {
-    if (!window.confirm(`Uninstall ${skill.title}? Its installed skill files will be deleted.`)) return;
-    setBusySkillId(skill.id);
-    try {
-      await daemonRequest("delete_skill", { actor_user_id: user, skill_id: skill.id });
-      await load();
-      setNotice(`Uninstalled ${skill.title}.`);
-    } catch (cause) {
-      setNotice(cause instanceof Error ? cause.message : "Skill could not be uninstalled");
-    } finally {
-      setBusySkillId("");
-    }
-  };
-
-  return <section className="settings-panel">
-    <div className="setting-group-heading"><h3>Installed skills</h3><p>Skills provide reusable expertise and workflows across conversations and projects. Install a package folder containing a valid SKILL.md. Updates replace the installed package with the selected folder.</p></div>
-    <div className="settings-save-actions"><button type="button" disabled={Boolean(busySkillId)} onClick={() => void install()}>{busySkillId === "new" ? "Installing…" : "Install skill"}</button><button type="button" className="secondary" disabled={loading || Boolean(busySkillId)} onClick={() => void load()}>Refresh</button></div>
-    {notice && <p role="status">{notice}</p>}
-    {loading ? <p>Loading installed skills…</p> : items.length ? <div className="stack artifact-list">{items.map((skill) => <article key={skill.id} className="artifact-card skill-card">
-      <div className="artifact-card-summary"><div className="artifact-card-title"><strong>{skill.title}</strong></div><p className="artifact-description">{skill.description}</p><small className="artifact-entrypoint">{skill.id}</small></div>
-      <div className="artifact-card-actions"><button type="button" className="secondary" disabled={Boolean(busySkillId)} onClick={() => void replace(skill)}>{busySkillId === skill.id ? "Updating…" : "Update"}</button><button type="button" className="secondary" disabled={Boolean(busySkillId)} onClick={() => void remove(skill)}>Uninstall</button></div>
-    </article>)}</div> : <p>No skills installed yet.</p>}
   </section>;
 }
 
@@ -1263,6 +1165,28 @@ function ProjectsWorkspace({ user, onClose }: { user: string; onClose: () => voi
     </aside>
     <section className="projects-workspace-main">{showCreate ? <div className="projects-workspace-empty"><h1>Create a project</h1><p>Fill out the project details in the sidebar.</p></div> : selectedProject ? <ProjectEditorPanel key={selectedProject.project_id} user={user} project={selectedProject} onBack={() => { setSelectedProject(null); void load(); }} onUpdated={() => void refreshProjects(selectedProject.project_id)} onClose={onClose} /> : <div className="projects-workspace-empty"><FolderKanban size={36} /><h1>Choose a project</h1><p>Select a project from the list to manage its context and files.</p></div>}</section>
   </div>;
+}
+
+type SkillWorkspaceRecord = { id: string; title: string; description: string; directory: string; editable: boolean; instructions: string; files: Array<{ path: string; size_bytes: number }>; artifacts: Array<{ artifact_id: string; name: string; description: string; entrypoint_path: string; project_id: string; enabled: boolean }> };
+function SkillsWorkspace({ user, onClose }: { user: string; onClose: () => void }) {
+  const [skills, setSkills] = useState<SkillWorkspaceRecord[]>([]); const [unassigned, setUnassigned] = useState<Array<{ artifact_id: string; name: string; description: string; entrypoint_path: string; project_id: string }>>([]); const [selected, setSelected] = useState<SkillWorkspaceRecord | null>(null); const [showCreate, setShowCreate] = useState(false); const [name, setName] = useState(""); const [description, setDescription] = useState(""); const [instructions, setInstructions] = useState(""); const [filePath, setFilePath] = useState("SKILL.md"); const [fileContent, setFileContent] = useState(""); const [artifactInstructions, setArtifactInstructions] = useState(""); const [notice, setNotice] = useState(""); const [busy, setBusy] = useState(false);
+  const load = useCallback(async (chooseId?: string) => { try { const [result, legacy] = await Promise.all([daemonRequest<{ skills: SkillWorkspaceRecord[] }>("skills", { actor_user_id: user }), daemonRequest<{ artifacts: typeof unassigned }>("unassigned_artifacts", { actor_user_id: user })]); setSkills(result.skills); setUnassigned(legacy.artifacts); setSelected((current) => result.skills.find((item) => item.id === (chooseId || current?.id)) || null); } catch (cause) { setNotice(cause instanceof Error ? cause.message : "Skills could not be loaded."); } }, [user]);
+  useEffect(() => { void load(); }, [load]);
+  const create = async (event: FormEvent) => { event.preventDefault(); const createdDescription = description; const createdInstructions = instructions; setBusy(true); try { const result = await daemonRequest<{ skill: SkillWorkspaceRecord }>("create_skill", { actor_user_id: user, name, description, instructions }); setName(""); setDescription(""); setInstructions(""); setShowCreate(false); setNotice("Skill created."); await load(result.skill.id); setDescription(createdDescription); setInstructions(createdInstructions); setFilePath("SKILL.md"); void selectFileForSkill(result.skill); } catch (cause) { setNotice(cause instanceof Error ? cause.message : "Skill could not be created."); } finally { setBusy(false); } };
+  const saveDescription = async () => { if (!selected) return; try { await daemonRequest("update_skill", { actor_user_id: user, skill_id: selected.id, description }); setNotice("Skill details saved."); await load(selected.id); } catch (cause) { setNotice(cause instanceof Error ? cause.message : "Skill details could not be saved."); } };
+  const saveDefinition = async () => { if (!selected) return; setBusy(true); try { const result = await daemonRequest<{ content: string }>("read_skill_file", { actor_user_id: user, skill_id: selected.id, path: "SKILL.md" }); const next = result.content.replace(/(^---\s*[\s\S]*?---\s*)[\s\S]*/, `$1\n\n${instructions.trim()}\n`); await daemonRequest("write_skill_file", { actor_user_id: user, skill_id: selected.id, path: "SKILL.md", content: next }); setNotice("Skill definition saved."); await load(selected.id); } catch (cause) { setNotice(cause instanceof Error ? cause.message : "Definition could not be saved."); } finally { setBusy(false); } };
+  const selectFile = async (path: string) => { if (!selected) return; try { const result = await daemonRequest<{ content: string }>("read_skill_file", { actor_user_id: user, skill_id: selected.id, path }); setFilePath(path); setFileContent(result.content); } catch (cause) { setNotice(cause instanceof Error ? cause.message : "File could not be opened."); } };
+  const saveFile = async () => { if (!selected) return; try { await daemonRequest("write_skill_file", { actor_user_id: user, skill_id: selected.id, path: filePath, content: fileContent }); setNotice("File saved."); await load(selected.id); } catch (cause) { setNotice(cause instanceof Error ? cause.message : "File could not be saved."); } };
+  const addFile = () => { const path = window.prompt("New file path (inside the skill package)"); if (!path || !selected) return; setFilePath(path); setFileContent(""); };
+  const deleteFile = async () => { if (!selected || filePath === "SKILL.md" || !window.confirm(`Delete ${filePath}?`)) return; try { await daemonRequest("delete_skill_file", { actor_user_id: user, skill_id: selected.id, path: filePath }); setFilePath("SKILL.md"); setFileContent(""); await load(selected.id); } catch (cause) { setNotice(cause instanceof Error ? cause.message : "File could not be deleted."); } };
+  const uninstall = async () => { if (!selected || !window.confirm(`Uninstall ${selected.title} and remove its installed package?`)) return; try { await daemonRequest("delete_skill", { actor_user_id: user, skill_id: selected.id }); setSelected(null); await load(); setNotice("Skill uninstalled."); } catch (cause) { setNotice(cause instanceof Error ? cause.message : "Skill could not be uninstalled."); } };
+  const attachArtifact = async (artifact: (typeof unassigned)[number]) => { if (!selected) return; try { await daemonRequest("attach_artifact_to_skill", { actor_user_id: user, artifact_id: artifact.artifact_id, skill_id: selected.id, instructions: artifactInstructions }); setArtifactInstructions(""); setNotice(`${artifact.name} added to ${selected.title}.`); await load(selected.id); } catch (cause) { setNotice(cause instanceof Error ? cause.message : "Artifact could not be assigned."); } };
+  return <div className="projects-workspace skills-workspace"><aside className="projects-workspace-sidebar"><header className="projects-workspace-heading"><button className="back-button" onClick={onClose}>← Conversation</button><h2>Skills</h2><button onClick={() => { setShowCreate((value) => !value); setSelected(null); }}>{showCreate ? "Cancel" : "+ New skill"}</button></header>
+    {showCreate && <form className="project-create" onSubmit={(event) => void create(event)}><h3>Create a skill</h3><div className="form-field"><label>Name</label><input value={name} onChange={(event) => setName(event.target.value)} placeholder="meal-planning" required /></div><div className="form-field"><label>Description</label><input value={description} onChange={(event) => setDescription(event.target.value)} required /></div><div className="form-field"><label>Instructions</label><textarea value={instructions} onChange={(event) => setInstructions(event.target.value)} required rows={8} /></div><button disabled={busy}>Create skill</button></form>}
+    <nav className="projects-workspace-list" aria-label="Available skills">{skills.map((item) => <button type="button" key={item.id} className={selected?.id === item.id ? "active" : ""} onClick={() => { setShowCreate(false); setSelected(item); setDescription(item.description); setInstructions(item.instructions); void selectFileForSkill(item); }}><Sparkles size={17} /><span>{item.title}<small>{item.description}</small></span><ChevronRight size={16} /></button>)}{!skills.length && <p>No skills installed.</p>}</nav>{notice && <p className="projects-workspace-notice">{notice}</p>}</aside>
+    <section className="projects-workspace-main">{showCreate ? <div className="projects-workspace-empty"><Sparkles size={36} /><h1>Create a skill</h1><p>Define reusable expertise for conversations and projects.</p></div> : selected ? <article className="skill-editor"><header><div><p className="eyebrow">Skill</p><h1>{selected.title}</h1><p>{selected.description}</p></div>{selected.editable && <button className="secondary" onClick={() => void uninstall()}>Uninstall</button>}</header><section><h2>Skill details</h2><label>Description<input disabled={!selected.editable} value={description} onChange={(event) => setDescription(event.target.value)} /></label><button onClick={() => void saveDescription()} disabled={busy || !selected.editable}>Save details</button></section><section><h2>Definition</h2><textarea disabled={!selected.editable} value={instructions} onChange={(event) => setInstructions(event.target.value)} rows={12} /><button onClick={() => void saveDefinition()} disabled={busy || !selected.editable}>Save definition</button></section><section><div className="skill-files-heading"><h2>Files</h2>{selected.editable && <button className="secondary" onClick={addFile}>+ New file</button>}</div><div className="skill-file-tabs">{selected.files.map((file) => <button className={filePath === file.path ? "active" : ""} key={file.path} onClick={() => void selectFile(file.path)}>{file.path}</button>)}</div><input aria-label="File path" disabled={!selected.editable} value={filePath} onChange={(event) => setFilePath(event.target.value)} /><textarea aria-label="File contents" disabled={!selected.editable} value={fileContent} onChange={(event) => setFileContent(event.target.value)} rows={12} /><div className="dialog-actions">{selected.editable && <button onClick={() => void saveFile()}>Save file</button>}{selected.editable && filePath !== "SKILL.md" && <button className="secondary" onClick={() => void deleteFile()}>Delete file</button>}</div></section><section><h2>Artifacts</h2><p>Artifacts are part of this skill's operating knowledge and are not independently curated as tools.</p>{selected.artifacts.length ? selected.artifacts.map((artifact) => <article className="artifact-card" key={artifact.artifact_id}><strong>{artifact.name}</strong><p>{artifact.description}</p><small>{artifact.project_id} · {artifact.entrypoint_path}</small></article>) : <p>No artifacts are registered to this skill.</p>}{selected.editable && unassigned.length > 0 && <div className="unassigned-artifacts"><h3>Unassigned catalog artifacts</h3><p>These existing records need a skill and operating instructions.</p>{unassigned.map((artifact) => <article className="artifact-card" key={artifact.artifact_id}><strong>{artifact.name}</strong><p>{artifact.description}</p><small>{artifact.project_id} · {artifact.entrypoint_path}</small><textarea aria-label={`Instructions for ${artifact.name}`} placeholder="How should this skill use the artifact?" value={artifactInstructions} onChange={(event) => setArtifactInstructions(event.target.value)} /><button disabled={!artifactInstructions.trim()} onClick={() => void attachArtifact(artifact)}>Add to this skill</button></article>)}</div>}</section></article> : <div className="projects-workspace-empty"><Sparkles size={36} /><h1>Choose a skill</h1><p>Select a skill to inspect its definition, package files, and associated artifacts.</p></div>}</section>
+  </div>;
+  async function selectFileForSkill(item: SkillWorkspaceRecord) { try { const result = await daemonRequest<{ content: string }>("read_skill_file", { actor_user_id: user, skill_id: item.id, path: "SKILL.md" }); setFilePath("SKILL.md"); setFileContent(result.content); } catch { /* selection still opens the skill definition */ } }
 }
 
 function ProjectEditorPanel({ user, project, onBack, onUpdated, onClose }: { user: string; project: ManagedProject; onBack: () => void; onUpdated: () => void; onClose: () => void }) {

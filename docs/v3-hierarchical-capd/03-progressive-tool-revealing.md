@@ -37,8 +37,10 @@ completion prerequisite for that subgoal.
 After the phase is planned, Jev still curates the request-level candidate set for
 that phase. Deterministic authorization and subgoal prerequisites are applied
 before concrete tools are revealed to tactical System Two. This preserves focused
-per-phase tactical contexts while preventing the strategic plan from being blind
-to a relevant registered artifact.
+per-phase tactical contexts. Project-local artifacts are owned by skills and are
+not independently listed, curated, or revealed as tools. Their operating
+instructions are maintained in the owning skill and programs are invoked through
+authorized native capabilities when appropriate.
 
 ### Capability catalog
 
@@ -46,7 +48,6 @@ The tactical executor first sees compact capability summaries, for example:
 
 ```text
 local_shell
-project_artifact_query
 memory_recall
 attachment_analysis
 document_extraction
@@ -58,9 +59,10 @@ device_control
 
 ### Concrete tool reveal
 
-Jev's native-tool questions come from the reviewed registry template; artifact
-questions are grounded in each artifact's registered name and description. Jev sees
-this compact decision-oriented registry, not LLM schemas or argument lists. Its
+Jev's tool questions come from the reviewed native registry template. Artifact
+programs do not enter this registry; their definitions and operating expertise are
+maintained inside their owning skill. Jev sees this compact decision-oriented
+registry, not LLM schemas or argument lists. Its
 request-level positive and ambiguous results form the candidate set supplied to Plan.
 The per-phase Jev result then narrows that set, and deterministic policy applies
 authorization and current-subgoal prerequisites before schemas reach tactical
@@ -87,9 +89,8 @@ Tool reveal must enforce prerequisites before model choice:
 - Read-only tools may be exposed more broadly than tools with external side effects.
 - Bash is revealed when the phase authorizes `local_shell`; it is a trusted general
   execution capability for direct CLI, filesystem, process, build, test, diagnostic,
-  and artifact work. Plans involving a CLI-backed artifact should authorize
-  `local_shell` alongside `project_artifact_query`, allowing Jev to favor both when
-  direct CLI invocation, inspection, repair, or verification may be needed.
+  and project-local program work. A skill's artifact instructions guide its use;
+  there is no separately revealed artifact tool.
 - Project file discovery excludes `.alphonse`, source-control metadata, dependencies,
   and generated build directories.
 
@@ -113,7 +114,7 @@ Extend descriptors or companion policy metadata with:
 
 ```text
 Subgoal: locate solar project record
-Reveal: artifact index, local_shell, project-memory search
+Reveal: local_shell, project-memory search
 
 Observed: local_shell locates and reads the linked Markdown record
 
@@ -132,8 +133,8 @@ that phase unless new evidence and the phase contract make them relevant.
 ## Implementation checklist
 
 - [x] Define stable capability identifiers and semantic input/output types.
-- [x] Add V3 capability metadata support with mappings for current native tools and
-      exact-ID compatibility for project artifacts.
+- [x] Add V3 capability metadata support for current native tools; skill-owned
+      artifacts are not represented as tool capabilities.
 - [x] Curate request-relevant tools with Jev before strategic planning.
 - [x] Pass Plan instructions, current request, session history, bounded project
       context, and bounded durable project memory to request-level curation.
@@ -148,8 +149,8 @@ that phase unless new evidence and the phase contract make them relevant.
 - [x] Log why each tool was revealed or excluded without exposing chain-of-thought.
 - [x] Emit structured reveal decisions through the existing UI/debug event stream.
 - [x] Fail visibly and return to outer review when policy reveals no usable tool.
-- [x] Reuse reviewed native-tool Noul questions and artifact-description-grounded
-      questions across request- and phase-level curation.
+- [x] Reuse reviewed native-tool Noul questions across request- and phase-level
+      curation; skill-owned artifacts are excluded from tool curation.
 - [x] Use the authorized `native.bash` local_shell capability for project-file
       search, reading, creation, editing, and verification.
 - [x] Select a phase-wide relevant tool palette with System One while preserving
@@ -167,9 +168,8 @@ that phase unless new evidence and the phase contract make them relevant.
 - [x] Unauthorized integrations and cross-project tools remain hidden.
 - [x] A hidden tool call is rejected at execution even if the model invents it.
 - [x] Tool reveal changes after typed subgoal output is bound.
-- [x] Jev receives calibrated static questions for out-of-the-box tools and simple
-      description-grounded questions for dynamically registered artifacts rather than
-      generated semantic profiles or complete schemas.
+- [x] Jev receives calibrated static questions for registered native tools;
+      artifacts are excluded from tool questions.
 - [x] Project-file discovery excludes `.alphonse`, source-control metadata,
       dependencies, and generated build directories unless specifically requested.
 - [ ] Necessary-tool recall is measured on the V3 evaluation set (Stage 5 rollout
@@ -196,9 +196,9 @@ that phase unless new evidence and the phase contract make them relevant.
 - Jev performs cheap relevance filtering before strategic planning, then phase-level
   relevance filtering. Runtime exposure and deterministic phase authorization stay
   outside Jev; System Two remains responsible for strategy and concrete call selection.
-- Artifact tools use explicit descriptor metadata when available and exact artifact-ID
-  authorization as the compatibility path. Rich artifact manifests can extend this
-  without changing the reveal contract.
+- Artifacts are attached to skills and excluded from runtime tool materialization,
+  request curation, and phase-level reveal. Native shell stays subject to deterministic
+  authorization and mutation scope.
 - The registry is frozen on first use for a runtime. A registry change requires a
   restart so its static Jev question contract cannot silently drift mid-task.
 
@@ -211,6 +211,4 @@ that phase unless new evidence and the phase contract make them relevant.
   full-registry parallel Noul classification. Jev now supplies a phase-wide palette;
   deterministic gates narrow it per subgoal and System Two composes invocations.
 - 2026-09-21 — Moved out-of-the-box tool relevance questions into a versioned,
-  reviewed Jev registry template. Dynamically registered artifacts retain the simple
-  name-and-description question generator. Removed duplicated generated profiles,
-  tags, argument-name lists, and effect prose from Jev's relevance payload.
+  reviewed Jev registry template. Artifact programs do not contribute tool questions.

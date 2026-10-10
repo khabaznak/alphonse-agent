@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import re
+import json
 import shutil
 import tempfile
 from dataclasses import dataclass
@@ -76,6 +77,93 @@ class SkillStore:
         if not bundled.is_dir() or bundled.is_symlink():
             return None
         return self._read_skill(bundled)
+
+    def files(self, skill_id: str) -> list[dict[str, Any]]:
+        record = self.get(skill_id)
+        if record is None:
+            raise KeyError("skill_not_found")
+        root = Path(record.directory)
+        result = []
+        for path in sorted(root.rglob("*")):
+            if path.is_symlink() or not path.is_file():
+                continue
+            result.append({"path": path.relative_to(root).as_posix(), "size_bytes": path.stat().st_size})
+        return result
+
+    def read_file(self, skill_id: str, relative_path: str) -> str:
+        record = self.get(skill_id)
+        if record is None:
+            raise KeyError("skill_not_found")
+        root = Path(record.directory).resolve()
+        path = _skill_path(root, relative_path)
+        if path.is_symlink() or not path.is_file() or path.stat().st_size > MAX_SKILL_FILE_BYTES:
+            raise ValueError("skill_file_invalid")
+        return path.read_text(encoding="utf-8")
+
+    def write_file(self, skill_id: str, relative_path: str, content: str) -> None:
+        root = Path(self._editable(skill_id).directory).resolve()
+        path = _skill_path(root, relative_path)
+        value = str(content)
+        if len(value.encode("utf-8")) > MAX_SKILL_FILE_BYTES:
+            raise ValueError("skill_file_too_large")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if path.is_symlink():
+            raise ValueError("skill_file_invalid")
+        previous = path.read_text(encoding="utf-8") if path.is_file() else None
+        path.write_text(value, encoding="utf-8")
+        try:
+            self._read_skill(root)
+        except Exception:
+            if previous is None:
+                path.unlink(missing_ok=True)
+            else:
+                path.write_text(previous, encoding="utf-8")
+            raise
+
+    def delete_file(self, skill_id: str, relative_path: str) -> None:
+        if relative_path == SKILL_FILE:
+            raise ValueError("skill_definition_required")
+        root = Path(self._editable(skill_id).directory).resolve()
+        path = _skill_path(root, relative_path)
+        if path.is_symlink() or not path.is_file():
+            raise ValueError("skill_file_not_found")
+        path.unlink()
+
+    def add_artifact_instructions(self, skill_id: str, artifact_id: str, name: str, instructions: str, definition: dict[str, Any] | None = None) -> None:
+        record = self._editable(skill_id)
+        path = Path(record.directory) / SKILL_FILE
+        current = path.read_text(encoding="utf-8")
+        manifest = ""
+        if definition:
+            manifest = "\n\nDefinition:\n\n```json\n" + json.dumps(definition, ensure_ascii=False, indent=2, sort_keys=True) + "\n```"
+        section = f"\n\n## Artifact: {name}\n\nArtifact ID: `{artifact_id}`{manifest}\n\nOperating instructions:\n\n{str(instructions).strip()}\n"
+        if f"Artifact ID: `{artifact_id}`" in current:
+            raise ValueError("artifact_already_in_skill")
+        updated = current.rstrip() + section
+        if len(updated.encode("utf-8")) > MAX_SKILL_FILE_BYTES:
+            raise ValueError("skill_file_too_large")
+        path.write_text(updated, encoding="utf-8")
+        self._read_skill(Path(record.directory))
+
+    def update_description(self, skill_id: str, description: str) -> SkillRecord:
+        record = self._editable(skill_id)
+        value = str(description or "").strip()
+        if not value or len(value) > MAX_SKILL_DESCRIPTION_LENGTH:
+            raise ValueError("skill_description_invalid")
+        path = Path(record.directory) / SKILL_FILE
+        content = path.read_text(encoding="utf-8")
+        metadata, instructions = _parse_skill_file(content)
+        metadata["description"] = value
+        serialized = yaml.safe_dump(metadata, allow_unicode=True, sort_keys=False).strip()
+        path.write_text(f"---\n{serialized}\n---\n\n{instructions}\n", encoding="utf-8")
+        return self._read_skill(Path(record.directory))
+
+    def _editable(self, skill_id: str) -> SkillRecord:
+        name = _validate_skill_name(str(skill_id or "").removeprefix("skill:"))
+        target = self.skills_dir / name
+        if target.is_symlink() or not target.is_dir():
+            raise KeyError("installed_skill_not_found")
+        return self._read_skill(target)
 
     @staticmethod
     def _bundled_skills_dir() -> Path:
@@ -221,3 +309,13 @@ def _validate_skill_name(value: Any) -> str:
     if len(name) > MAX_SKILL_NAME_LENGTH or not _SKILL_NAME.fullmatch(name):
         raise ValueError("skill_name_invalid")
     return name
+
+
+def _skill_path(root: Path, relative_path: str) -> Path:
+    value = str(relative_path or "").strip()
+    if not value or Path(value).is_absolute():
+        raise ValueError("skill_file_path_invalid")
+    path = (root / value).resolve()
+    if not path.is_relative_to(root):
+        raise ValueError("skill_file_outside_package")
+    return path

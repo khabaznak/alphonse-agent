@@ -812,6 +812,18 @@ button { border: 0; cursor: pointer; }
 .projects-workspace-empty h1 { margin: 0; color: var(--text); font: 650 28px var(--font-display); }
 .projects-workspace-empty p { margin: 0; }
 .projects-workspace-empty svg { color: var(--accent); }
+.skill-editor { display: grid; gap: 24px; max-width: 980px; margin: 0 auto; padding: 36px clamp(20px, 5vw, 64px); }
+.skill-editor > header, .skill-files-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.skill-editor h1 { margin: 0; color: var(--text); font: 650 30px var(--font-display); }
+.skill-editor h2 { margin: 0 0 12px; color: var(--text); font-size: 18px; }
+.skill-editor section { display: grid; gap: 10px; padding: 18px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface-raised); }
+.skill-editor textarea { width: 100%; min-height: 140px; padding: 12px; border: 1px solid var(--border); border-radius: 6px; color: var(--text); background: var(--surface); resize: vertical; font: 13px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace; }
+.skill-editor input { padding: 9px 10px; border: 1px solid var(--border); border-radius: 6px; }
+.skill-file-tabs { display: flex; flex-wrap: wrap; gap: 6px; }
+.skill-file-tabs button { padding: 7px 10px; border-radius: 5px; color: var(--muted); background: var(--surface-subtle); }
+.skill-file-tabs button.active { color: var(--text); background: var(--accent-soft); }
+.skill-editor .artifact-card { display: grid; gap: 5px; padding: 13px; border: 1px solid var(--border); border-radius: 7px; }
+.skill-editor .artifact-card p, .skill-editor .artifact-card small { margin: 0; color: var(--muted); }
 .project-editor { display: grid; align-content: start; gap: 12px; max-width: 940px; min-height: 100%; margin: 0 auto; padding: 24px clamp(20px, 4vw, 48px) 40px; overflow: auto; }
 .project-editor-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding-bottom: 16px; border-bottom: 1px solid var(--border); }
 .project-editor-header h1 { margin: 0; color: var(--text); font: 650 28px/1.1 var(--font-display); }

@@ -53,24 +53,31 @@ When changing this decision architecture, consult
 `docs/v3-hierarchical-capd/06-system-one-check-act.md`, and
 `alphonse/agent_v2/system_one.py` as relevant to the task.
 
-## Native tools and generated artifacts
+## Native tools, skills, and generated artifacts
 
-Alphonse has two distinct kinds of executable capabilities:
+Alphonse has native tools and skill-owned project programs:
 
 - Native tools are built into Alphonse, shipped from this repository, and
   maintained as part of the product.
-- Artifacts are project-local capabilities created or maintained by a running
-  Alphonse instance in response to its users' tasks and needs.
+- Artifacts are project-local programs created or maintained by a running
+  Alphonse instance in response to its users' tasks and needs. Each artifact
+  belongs to a skill that provides the expertise needed to use it.
 
-This repository owns the artifact framework: registration, discovery,
-authorization, execution, lifecycle management, routing, and user interfaces.
-It does not own the implementation of individual generated artifacts.
+This repository owns artifact catalog registration and persistence, project
+containment checks, skill association, and the user interfaces for managing
+skills and their artifacts. Artifacts are not independent runtime tools: they
+must not be materialized in the tool registry or presented for tool curation.
+Registering an artifact records its definition and adds its operating
+instructions to the owning skill's `SKILL.md`. Runtime use follows that skill's
+instructions and authorized native capabilities. This repository does not own
+the implementation of individual generated artifacts.
 
 When diagnosing a failure involving an artifact, first determine whether the
 failure belongs to the artifact framework or to the implementation of one
 particular artifact.
 
-- Reproduce artifact-framework defects with a minimal disposable test fixture
+- Reproduce artifact catalog or skill-association defects with a minimal
+  disposable test fixture
   and fix them in this repository.
 - Artifact-specific defects belong to Alphonse and the user project that owns
   the artifact. Do not copy, promote, or commit a generated artifact into this
@@ -83,37 +90,37 @@ particular artifact.
   repository. Do not stage or commit them unless the user explicitly asks to
   adopt that capability as a native Alphonse feature.
 - Disposable artifact fixtures created inside temporary test directories are
-  allowed. Keep them to the minimum implementation needed to verify the
-  artifact framework.
+  allowed. Keep them to the minimum implementation needed to verify catalog,
+  project-containment, and skill-association behavior.
 
 ### Artifact framework contract
 
-- The artifact registry stores metadata only. Artifact programs and their data
-  remain inside the owning project.
+- The artifact catalog stores metadata and the owning skill ID only. Artifact
+  programs and their data remain inside the owning project.
 - Artifact entrypoints must be relative to and resolve within the owning
   project's root. Do not weaken this containment check.
-- Only the project owner may register an artifact.
-- Registration and unregistration must not create, modify, or delete the
-  artifact's program or data files. Unregistration removes only the catalog
-  entry.
+- Only the project owner may register an artifact, and registration must name
+  an installed skill.
+- Registration must add the artifact's definition and operating instructions to
+  the owning skill. It must not create, modify, or delete the artifact's program
+  or data files. Unregistration removes only the catalog entry.
 - Artifact IDs use the `artifact.` prefix and remain stable once registered.
-- Artifact names and descriptions are routing inputs, not merely display text.
-  Keep them precise enough for tool discovery and selection.
-- Arguments must be validated against the registered JSON Schema.
-- Artifact executables receive one JSON object on standard input and must
-  return one JSON object on standard output. Use standard error for diagnostic
-  output and a nonzero exit status for failure.
-- Preserve execution timeouts and bounded output handling.
-- Disabled artifacts must not appear in the executable tool registry.
+- Keep artifact names and descriptions accurate for display and management.
+- Keep the registered JSON Schema in the artifact definition included with its
+  owning skill.
+- Artifact executables are not invoked through dedicated artifact tool
+  definitions. Do not add artifact IDs to runtime tool registries, Jev
+  curation, or progressive tool reveal. Native capabilities remain subject to
+  their normal authorization and mutation checks.
 - Changes to the artifact contract must consider registration, persistence,
-  runtime tool materialization, authorization, IPC, Desktop and TUI management,
-  progressive tool revealing, and tests.
+  project containment, skill association and instructions, authorization, IPC,
+  Desktop and TUI management, progressive tool revealing, and tests.
 
-When changing artifact registration or execution, inspect
+When changing artifact registration or skill association, inspect
 `alphonse/agent_v2/artifacts.py`,
 `alphonse/agent_v2/core/tools/registry/native/artifact_registration.py`, and
-`tests/test_agent_v2_artifacts.py`. When changing artifact discovery or routing,
-consult `docs/v3-hierarchical-capd/03-progressive-tool-revealing.md`.
+`tests/test_agent_v2_artifacts.py`. When changing tool curation or skill-owned
+program access, consult `docs/v3-hierarchical-capd/03-progressive-tool-revealing.md`.
 
 # Alphonse Version 3 Concepts
 
@@ -133,12 +140,12 @@ A **Project** is a well-defined effort with limited scope, duration, and clear g
 
 ## Skill
 
-A **Skill** supplies reusable expertise or workflows, available wherever relevant. Skills may guide domain reasoning, behavior, communication, recommendations, or operational workflows, and may refer to supporting artifacts. A project or ordinary conversation can use one or more skills as needed.
+A **Skill** supplies reusable expertise or workflows, available wherever relevant. Skills may guide domain reasoning, behavior, communication, recommendations, or operational workflows. Artifacts belong to skills; a skill includes each artifact's definition and the instructions needed to use it. A project or ordinary conversation can use one or more skills as needed.
 
 ## Shared Repositories
 
-Alphonse needs a repository for installed skills and a shared repository for artifacts that skills can reference. Existing artifacts in the local instance should be migrated into the shared artifact repository; Alphonse currently has one user.
+Alphonse needs a repository for installed skills and a shared repository for artifacts organized under their owning skills. Existing artifacts in the local instance should be associated with the skills that operate them as the shared repositories evolve; Alphonse currently has one user.
 
 Skills are the foundational reusable unit. A named combination of skills (previously called a **Personality**) may be useful as a convenience, but does not need to be a separate core concept unless experience shows it is needed.
 
-Alphonse v3 does not yet have a complete skills system, skill installation flow, shared artifact repository, or a defined conversation and memory-ledger model. These concepts describe intended capabilities and direction.
+Alphonse has an initial skill library, installation flow, and Desktop CRUD workspace, but does not yet have a complete skills system, shared artifact repository, or a defined conversation and memory-ledger model. These concepts describe intended capabilities and direction.

@@ -49,20 +49,12 @@
         "false": "The work should happen now, has no time-based recurrence, or only needs an immediate response."
       }
     },
-    "native.artifact_registration": {
+    "native.skill_artifact_register": {
       "type": "noul",
-      "instructions": "Does this phase need to create or register a reusable project artifact?",
+      "instructions": "Does this phase need to attach an executable project artifact and its operating instructions to an existing skill?",
       "criteria": {
-        "true": "The user requested creating or registering a reusable project artifact. Include this tool when the executable is already present or when Bash will create it earlier in the same phase; registration follows creation and requires the executable, description, and input schema to be ready.",
-        "false": "The phase only needs to use an existing tool, or no reusable artifact was requested."
-      }
-    },
-    "native.artifact_metadata_update": {
-      "type": "noul",
-      "instructions": "Does this phase need to improve or correct the name or routing description of an existing artifact?",
-      "criteria": {
-        "true": "The requester asks to edit an existing artifact's catalog name or description, and the artifact ID is known or can be found in the artifact catalog.",
-        "false": "The phase needs to register a new artifact, modify artifact program files, or merely use an existing artifact."
+        "true": "The requester explicitly asks to register an artifact under an installed skill. The executable, schema, skill ID, and operational instructions are ready.",
+        "false": "The phase only needs to use existing skill knowledge or make an unregistered project program."
       }
     },
     "native.skill_install": {
