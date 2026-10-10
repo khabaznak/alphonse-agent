@@ -2,8 +2,11 @@
 
 ## Project description
 
-Alphonse is an agentic harness that is built for becoming a family butler or
-assistant for a family setting.
+Alphonse is an agentic harness for a trusted household assistant: one agent
+serving the needs of an entire family. It should help with household
+coordination, management, and authorized digital chores while preserving the
+family's privacy, history, trust, and context. The architecture may grow into
+coordinated specialized agents as family needs grow.
 
 ## Repository map
 
