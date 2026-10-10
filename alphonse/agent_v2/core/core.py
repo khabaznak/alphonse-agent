@@ -169,6 +169,7 @@ class CoreActivityEvent:
     integration_id: str = ""
     channel_target: str = ""
     progress: dict[str, Any] = field(default_factory=dict)
+    occurred_at: str = field(default_factory=lambda: datetime.now().astimezone().isoformat())
 
 
 @dataclass(frozen=True)
@@ -193,6 +194,16 @@ class ToolExecutionContext:
     user_context_provider: Callable[[str], str] | None = None
     user_timezone_provider: Callable[[str], str] | None = None
     memory: Any | None = None
+    conversation_store: Any | None = None
+    identity_resolver: Any | None = None
+
+    def record_memory_event(self, task: TaskState, heading: str, content: Any) -> None:
+        """Record an event through the task's configured memory adapter."""
+        if self.memory is None:
+            return
+        record = getattr(self.memory, "event", None)
+        if callable(record):
+            record(task, heading, content)
 
 
 @dataclass
@@ -212,8 +223,13 @@ class CoreLoopContext:
     user_context_provider: Callable[[str], str] | None = None
     user_timezone_provider: Callable[[str], str] | None = None
     memory: Any | None = None
+    conversation_store: Any | None = None
     program_runner: Any | None = None
+    identity_resolver: Any | None = None
     cancellation_checker: Callable[[], bool] | None = None
+    telemetry_sink: Callable[[dict[str, Any]], None] | None = None
+    system_one: Any | None = None
+    skill_store: Any | None = None
     consumed_message_ids: list[str] = field(default_factory=list)
 
     def consume_message(self, selector: MessageSelector | None = None) -> QueuedMessage | None:
@@ -239,6 +255,10 @@ class CoreLoopContext:
             return
         self.ui_event_sink(CoreUiEvent(event_type=event_type, payload=dict(payload or {})))
 
+    def emit_telemetry(self, event: dict[str, Any]) -> None:
+        if self.telemetry_sink is not None:
+            self.telemetry_sink(dict(event))
+
     def tool_execution_context(self, task: TaskState) -> ToolExecutionContext:
         return ToolExecutionContext(
             task=task,
@@ -249,7 +269,9 @@ class CoreLoopContext:
             schedule_store=self.schedule_store,
             delivery_sink=self.delivery_sink,
             memory=self.memory,
+            conversation_store=self.conversation_store,
             user_timezone_provider=self.user_timezone_provider,
+            identity_resolver=self.identity_resolver,
         )
 
     def is_cancelled(self) -> bool:
@@ -266,8 +288,8 @@ class CoreLoopContext:
 _SENSITIVE_PROGRESS_KEYS = ("secret", "token", "password", "authorization", "cookie", "api_key", "apikey")
 
 
-def _task_progress_snapshot(task: Any, extra: dict[str, Any] | None = None) -> dict[str, Any]:
-    """Create an owner-safe operational trace without model prompts or reasoning."""
+def _task_progress_snapshot(task: Any) -> dict[str, Any]:
+    """Build the Desktop progress view from the current TaskState only."""
     metadata = getattr(task, "metadata", {}) if isinstance(getattr(task, "metadata", {}), dict) else {}
     planned = metadata.get("planned_tool_call") if isinstance(metadata.get("planned_tool_call"), dict) else None
     latest_call = getattr(task, "get_latest_executed_plan_call", None)
@@ -280,53 +302,117 @@ def _task_progress_snapshot(task: Any, extra: dict[str, Any] | None = None) -> d
     except (TypeError, ValueError):
         plan_calls = []
     steps = []
-    for call in plan_calls[-10:] if isinstance(plan_calls, list) else []:
+    task_calls = plan_calls if isinstance(plan_calls, list) else []
+    recent_calls = task_calls[-10:]
+    for attempt, call in enumerate(recent_calls, start=max(1, len(task_calls) - len(recent_calls) + 1)):
         if not isinstance(call, dict):
             continue
         call_execution = call.get("execution") if isinstance(call.get("execution"), dict) else {}
+        tool_id = str(call.get("tool_id") or "").strip()
         steps.append({
+            "attempt": attempt,
             "intention": _truncate_progress(str(call.get("internal_state") or ""), 500),
-            "tool_name": str(call.get("tool_name") or call.get("tool_id") or "").strip(),
-            "arguments": _safe_progress_value(call.get("arguments")),
+            "tool_name": str(call.get("tool_name") or _progress_tool_label(tool_id) or ("Program (Python)" if call.get("execution_mode") == "program" else "Tool")).strip(),
+            "arguments": _safe_progress_value(call.get("arguments"), limit=6000),
+            "action": _safe_progress_value(call.get("program"), limit=10000) if call.get("execution_mode") == "program" else None,
             "status": str(call_execution.get("status") or "planned").strip(),
-            "result": _safe_progress_value(call_execution.get("result")),
+            "result": _safe_progress_value(call_execution.get("result"), limit=4000),
         })
+    hierarchical_state = getattr(task, "hierarchical_state", {})
+    hierarchical_state = hierarchical_state if isinstance(hierarchical_state, dict) else {}
+    phase = hierarchical_state.get("phase") if isinstance(hierarchical_state.get("phase"), dict) else {}
+    subgoal_intentions = {
+        str(item.get("subgoal_id") or "").strip(): str(item.get("objective") or "").strip()
+        for item in phase.get("subgoals") or []
+        if isinstance(item, dict) and str(item.get("subgoal_id") or "").strip()
+    }
+    v3_actions = [item for item in hierarchical_state.get("actions") or [] if isinstance(item, dict)]
+    if v3_actions:
+        steps = []
+        recent_actions = v3_actions[-10:]
+        for attempt, action in enumerate(recent_actions, start=max(1, len(v3_actions) - len(recent_actions) + 1)):
+            subgoal_id = str(action.get("subgoal_id") or "").strip()
+            result = action.get("result")
+            error = str(action.get("error") or "").strip()
+            if result in (None, "", {}, []) and error:
+                result = {"error": error}
+            steps.append({
+                "attempt": attempt,
+                "intention": _truncate_progress(subgoal_intentions.get(subgoal_id, ""), 500),
+                "tool_name": _progress_tool_label(str(action.get("tool_id") or "").strip()),
+                "arguments": _safe_progress_value(action.get("arguments"), limit=6000),
+                "action": _safe_progress_value(action.get("command") or action.get("action"), limit=10000),
+                "status": str(action.get("status") or "planned").strip(),
+                "result": _safe_progress_value(result, limit=4000),
+            })
+        current = v3_actions[-1]
+        current_subgoal_id = str(current.get("subgoal_id") or "").strip()
+        current_result = current.get("result")
+        current_error = str(current.get("error") or "").strip()
+        if current_result in (None, "", {}, []) and current_error:
+            current_result = {"error": current_error}
+        selected = {
+            "tool_id": str(current.get("tool_id") or "").strip(),
+            "arguments": current.get("arguments"),
+            "internal_state": subgoal_intentions.get(current_subgoal_id, ""),
+        }
+        execution = {
+            "status": str(current.get("status") or "planned").strip(),
+            "result": current_result,
+        }
     acceptance_criteria = str(getattr(task, "acceptance_criteria_md", "") or "").strip()
     if acceptance_criteria == "- (none)":
         acceptance_criteria = ""
     return {
         "project_id": str(getattr(task, "project_id", "") or "").strip(),
         "acceptance_criteria": _truncate_progress(acceptance_criteria, 1200),
-        "tool_name": str(selected.get("tool_name") or selected.get("tool_id") or "").strip(),
+        "tool_name": str(selected.get("tool_name") or _progress_tool_label(str(selected.get("tool_id") or "").strip())).strip(),
         "tool_arguments": _safe_progress_value(selected.get("arguments") if isinstance(selected, dict) else {}),
-        "tool_result": _safe_progress_value(execution.get("result") if isinstance(execution, dict) else None),
+        "tool_result": _safe_progress_value(execution.get("result") if isinstance(execution, dict) else None, limit=4000),
         "tool_status": str(execution.get("status") or "").strip() if isinstance(execution, dict) else "",
         "intention": _truncate_progress(str(selected.get("internal_state") or ""), 500),
         "steps": steps,
+        "goal": _truncate_progress(str(getattr(task, "goal", "") or ""), 1200),
+        "facts": _truncate_progress(str(getattr(task, "facts_md", "") or ""), 3000),
+        "memory_facts": _truncate_progress(str(getattr(task, "memory_facts_md", "") or ""), 3000),
+        "recent_conversation": _truncate_progress(str(getattr(task, "recent_conversation_md", "") or ""), 3000),
+        "conversation_history": _truncate_progress(str(getattr(task, "conversation_history_md", "") or ""), 5000),
+        "updates": _truncate_progress(str(getattr(task, "updates_md", "") or ""), 3000),
+        "evidence": _safe_progress_value(getattr(task, "evidence_journal", [])[-10:], limit=3000),
+        "question": _safe_progress_value(metadata.get("question_interrupt")),
+        "outcome": _safe_progress_value(getattr(task, "outcome", None)),
         "status": str(getattr(task, "status", "") or "").strip(),
-        **{str(key): _safe_progress_value(value) for key, value in dict(extra or {}).items()},
     }
 
 
-def _safe_progress_value(value: Any, *, key: str = "", depth: int = 0) -> Any:
+def _safe_progress_value(value: Any, *, key: str = "", depth: int = 0, limit: int = 500) -> Any:
     if any(marker in key.lower() for marker in _SENSITIVE_PROGRESS_KEYS):
         return "[redacted]"
     if depth >= 3:
         return "[truncated]"
     if isinstance(value, str):
-        return _truncate_progress(value, 500)
+        return _truncate_progress(value, limit)
     if isinstance(value, (int, float, bool)) or value is None:
         return value
     if isinstance(value, list):
-        return [_safe_progress_value(item, depth=depth + 1) for item in value[:12]]
+        return [_safe_progress_value(item, depth=depth + 1, limit=limit) for item in value[:12]]
     if isinstance(value, dict):
-        return {str(item_key): _safe_progress_value(item_value, key=str(item_key), depth=depth + 1) for item_key, item_value in list(value.items())[:20]}
-    return _truncate_progress(str(value), 500)
+        return {str(item_key): _safe_progress_value(item_value, key=str(item_key), depth=depth + 1, limit=limit) for item_key, item_value in list(value.items())[:20]}
+    return _truncate_progress(str(value), limit)
 
 
 def _truncate_progress(value: str, limit: int) -> str:
     text = str(value or "").strip()
     return text if len(text) <= limit else f"{text[:limit - 1]}…"
+
+
+def _progress_tool_label(tool_id: str) -> str:
+    normalized = str(tool_id or "").strip()
+    if normalized.startswith("native."):
+        return normalized.removeprefix("native.").replace("_", " ").title()
+    if normalized.startswith("artifact."):
+        return f"Artifact · {normalized.removeprefix('artifact.')}"
+    return normalized
 
 
 class IntelligenceProcessor(Protocol):
@@ -347,6 +433,9 @@ class MessageQueue(Protocol):
 
     def dequeue(self, selector: MessageSelector | None = None) -> QueuedMessage | None:
         """Remove and return the next matching message."""
+
+    def list_pending(self, selector: MessageSelector | None = None, *, limit: int = 1000) -> list[QueuedMessage]:
+        """List pending messages in arrival order without claiming them."""
 
     def size(self, selector: MessageSelector | None = None) -> int:
         """Return the number of queued messages matching a selector."""
@@ -410,15 +499,20 @@ class AlphonseCore:
     prompts: SystemPromptLoader
     state: InternalState
     memory: Memory
+    conversation_store: Any | None = None
     inference: InferenceRouter | None = None
     activity_sink: Callable[[CoreActivityEvent], None] | None = None
     ui_event_sink: Callable[[CoreUiEvent], None] | None = None
+    telemetry_sink: Callable[[dict[str, Any]], None] | None = None
+    system_one: Any | None = None
+    skill_store: Any | None = None
     question_store: Any | None = None
     project_store: Any | None = None
     schedule_store: Any | None = None
     delivery_sink: Callable[[dict[str, Any]], Any] | None = None
     user_context_provider: Callable[[str], str] | None = None
     user_timezone_provider: Callable[[str], str] | None = None
+    identity_resolver: Any | None = None
     program_runner: Any | None = None
     cancellation_checker: Callable[[str], bool] | None = None
     active_task_callback: Callable[[QueuedMessage, TaskState], None] | None = None
@@ -465,8 +559,25 @@ class AlphonseCore:
         working = self._transition(MESSAGE_DEQUEUED)
         from alphonse.agent_v2.core.intelligence.task_state import TaskState
 
-        task = TaskState.from_queued_message(queued)
-        if not task.task_id:
+        queued_engine = str(queued.message.metadata.get("intelligence_engine") or "").strip()
+        task = None
+        if queued_engine == "hierarchical_v3" and self.question_store is not None:
+            task = self.question_store.load_task_checkpoint(queued.message_id)
+        if task is None:
+            task = TaskState.from_queued_message(queued)
+        routing_disposition = str(queued.message.metadata.get("routing_disposition") or "")
+        raw_task_state = queued.message.metadata.get("task_state")
+        is_correlated_resume = (
+            routing_disposition == "correlated_response"
+            and isinstance(raw_task_state, dict)
+            and bool(str(task.task_id or "").strip())
+        )
+        if queued_engine == "hierarchical_v3" and not is_correlated_resume:
+            # A queue delivery may be retried, but it is still the same V3 task.
+            # Using the durable message id prevents a retry from silently creating
+            # a new acceptance contract and a different execution history.
+            task.task_id = queued.message_id
+        elif not task.task_id:
             task.task_id = str(uuid4())
         if self.active_task_callback is not None:
             self.active_task_callback(queued, task)
@@ -484,7 +595,7 @@ class AlphonseCore:
                     user=str(task.user or ""),
                     integration_id=str(channel.get("integration_id") or ""),
                     channel_target=str(channel.get("channel_target") or ""),
-                    progress=_task_progress_snapshot(task, event.progress),
+                    progress=_task_progress_snapshot(task),
                 )
             )
         try:
@@ -495,6 +606,9 @@ class AlphonseCore:
                 prompts=self.prompts,
                 activity_sink=_task_activity_sink,
                 ui_event_sink=self.ui_event_sink,
+                telemetry_sink=self.telemetry_sink,
+                system_one=self.system_one,
+                skill_store=self.skill_store,
                 question_store=self.question_store,
                 project_store=self.project_store,
                 schedule_store=self.schedule_store,
@@ -502,6 +616,8 @@ class AlphonseCore:
                 user_context_provider=self.user_context_provider,
                 user_timezone_provider=self.user_timezone_provider,
                 memory=self.memory,
+                conversation_store=self.conversation_store,
+                identity_resolver=self.identity_resolver,
                 program_runner=self.program_runner,
                 cancellation_checker=(lambda: bool(self.cancellation_checker and self.cancellation_checker(queued.message_id))),
             )
@@ -517,13 +633,17 @@ class AlphonseCore:
             if result.status not in {ProcessingStatus.FAILED, ProcessingStatus.CANCELLED}:
                 context.acknowledge_consumed_messages()
         except Exception as exc:
+            cancelled = bool(self.cancellation_checker and self.cancellation_checker(queued.message_id))
+            if cancelled:
+                task.status = "cancelled"
+                task.outcome = {"status": "cancelled", "reason": "Execution was cancelled by the kill switch."}
             result = ProcessingResult(
                 snapshot=StateSnapshot(
                     current_work=task.goal,
-                    metadata={"exception_type": type(exc).__name__},
+                    metadata={"exception_type": type(exc).__name__, "task_state": task.to_dict()},
                 ),
-                status=ProcessingStatus.FAILED,
-                error=str(exc),
+                status=ProcessingStatus.CANCELLED if cancelled else ProcessingStatus.FAILED,
+                error="inference_cancelled" if cancelled else str(exc),
             )
 
         self.state.update(result.snapshot)

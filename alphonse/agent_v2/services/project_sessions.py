@@ -169,6 +169,7 @@ class ProjectInboundRouter:
         kill_switch_handler: Any | None = None,
         active_task_lookup: Any | None = None,
         correlation_authorizer: Any | None = None,
+        question_store: Any | None = None,
     ) -> None:
         self.channel = channel
         self.outbox = outbox
@@ -182,6 +183,7 @@ class ProjectInboundRouter:
         self.kill_switch_handler = kill_switch_handler
         self.active_task_lookup = active_task_lookup or (lambda: {})
         self.correlation_authorizer = correlation_authorizer or (lambda _correlation_id, _user: False)
+        self.question_store = question_store
 
     def ingest(
         self,
@@ -222,6 +224,40 @@ class ProjectInboundRouter:
             text=prompt,
         ):
             return InboundRouteResult(handled_command=True)
+        if self.question_store is not None and not str(prompt or "").lstrip().startswith("/"):
+            answer = self.question_store.route_answer(
+                respondent_user_id=address.alphonse_user_id,
+                text=prompt,
+                reply_to_provider_message_id=address.reply_to_provider_message_id or None,
+            )
+            if answer.handled:
+                if answer.ambiguous or answer.invalid:
+                    self._reply(address, answer.message, correlation_id=correlation_id)
+                    return InboundRouteResult(handled_command=True)
+                if answer.resumed_task is not None:
+                    resumed = answer.resumed_task
+                    queued = self.channel.queue_message(
+                        prompt=prompt,
+                        user=address.alphonse_user_id,
+                        project_id=resumed.project_id,
+                        memory_session_id=resumed.memory_session_id,
+                        correlation_id=resumed.correlation_id,
+                        metadata={
+                            "task_state": resumed.to_dict(),
+                            "answered_question_id": answer.question.question_id if answer.question else "",
+                            "routing_disposition": "correlated_response",
+                        },
+                        integration_id=address.integration_id,
+                        provider_key=address.provider_key,
+                        provider_user_id=address.provider_user_id,
+                        channel_target=address.channel_target,
+                        provider_message_id=address.provider_message_id,
+                        reply_to_provider_message_id=address.reply_to_provider_message_id,
+                        thread_id=address.thread_id,
+                        message_id=message_id,
+                    )
+                    return InboundRouteResult(queued=queued, project_id=resumed.project_id, disposition="correlated_response")
+                return InboundRouteResult(handled_command=True)
         explicit_project = str(project_id or "").strip()
         if not explicit_project:
             command_reply = self._handle_command(prompt, key, address)
@@ -341,7 +377,8 @@ class ProjectInboundRouter:
         return f"Active project: {project.name}."
 
     def _memory_binding_key(self, key: ChannelProjectSelectionKey, project_id: str) -> MemorySessionBindingKey:
-        return MemorySessionBindingKey(key.alphonse_user_id, key.integration_id, key.channel_target, key.thread_id, project_id)
+        # Context belongs to a user within a project, independent of transport.
+        return MemorySessionBindingKey(key.alphonse_user_id, "project", key.alphonse_user_id, "", project_id)
 
     def _active_memory_session(self, key: ChannelProjectSelectionKey, project: ProjectRecord, metadata: dict[str, Any] | None = None) -> MemorySessionRecord:
         source = str((metadata or {}).get("source") or "")

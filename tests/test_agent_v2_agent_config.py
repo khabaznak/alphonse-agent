@@ -5,13 +5,15 @@ import pytest
 from alphonse.agent_v2.agent_config import AgentConfigPromptLoader
 from alphonse.agent_v2.agent_config import AgentConfigStore
 from alphonse.agent_v2.agent_config import GLOBAL_CONTEXT_FILE
+from alphonse.agent_v2.agent_config import GLOBAL_CONTEXT_SECTIONS
 from alphonse.agent_v2.agent_config import PHILOSOPHY_FILE
+from alphonse.agent_v2.agent_config import parse_global_context_sections
+from alphonse.agent_v2.agent_config import packaged_agent_config_dir
 from alphonse.agent_v2.core.intelligence import TaskState
 from alphonse.agent_v2.core.core import CoreLoopContext
 from alphonse.agent_v2.core.messages import InMemoryMessageQueue
 from alphonse.agent_v2.core.intelligence.pdca.nodes.plan_node import plan_node
 from alphonse.agent_v2.core.intelligence.pdca.nodes.act_node import _render_acceptance_criteria_prompt
-from alphonse.agent_v2.core.intelligence.pdca.nodes.check_node import _render_criteria_review_prompt
 from alphonse.agent_v2.core.intelligence.pdca.nodes.plan_node import _render_tool_call_plan_prompt
 
 
@@ -36,14 +38,32 @@ def test_agent_config_store_rejects_unknown_file_without_writing(tmp_path) -> No
     assert store.read(GLOBAL_CONTEXT_FILE).content == original
 
 
-def test_agent_prompt_loader_is_a_startup_snapshot(tmp_path) -> None:
+def test_agent_prompt_loader_observes_edits_without_runtime_restart(tmp_path) -> None:
     store = AgentConfigStore(tmp_path / "agent-config")
     store.save(PHILOSOPHY_FILE, "first")
     loader = AgentConfigPromptLoader.from_store(store)
     store.save(PHILOSOPHY_FILE, "second")
 
-    assert loader.load(PHILOSOPHY_FILE).content == "first"
+    assert loader.load(PHILOSOPHY_FILE).content == "second"
     assert AgentConfigPromptLoader.from_store(store).load(PHILOSOPHY_FILE).content == "second"
+
+
+def test_packaged_global_context_has_the_standard_household_sections() -> None:
+    sections = parse_global_context_sections(
+        AgentConfigStore(packaged_agent_config_dir()).read(GLOBAL_CONTEXT_FILE).content
+    )
+
+    assert tuple(sections) == GLOBAL_CONTEXT_SECTIONS
+    assert "user_context.md" in sections["Alphonse's household-wide interaction defaults"]
+    assert "application permissions" in sections["Privacy and sharing boundaries"]
+
+
+def test_global_context_parser_keeps_section_bodies_intact() -> None:
+    sections = parse_global_context_sections(
+        "# Global Context\n\n## Family definition\n- Member A\n\n## Household norms\n- Norm A\n"
+    )
+
+    assert sections == {"Family definition": "- Member A", "Household norms": "- Norm A"}
 
 
 def test_capd_prompt_templates_accept_agent_configuration() -> None:
@@ -58,7 +78,6 @@ def test_capd_prompt_templates_accept_agent_configuration() -> None:
     for prompt in (
         _render_tool_call_plan_prompt(task, (), **common),
         _render_acceptance_criteria_prompt(task, **common),
-        _render_criteria_review_prompt(task, {}, **common),
     ):
         assert prompt.index("## Philosophy.md") < prompt.index("## GlobalContext.md")
         assert prompt.index("## GlobalContext.md") < prompt.index("## User Context")

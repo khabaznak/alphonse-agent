@@ -1,0 +1,4405 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-09-20T06:21:30.053139+00:00",
+  "summary": {
+    "case_count": 9,
+    "engines": {
+      "tactical_v2": {
+        "passed": 9,
+        "failed": 0,
+        "inference_calls": 54,
+        "tool_calls": 23,
+        "estimated_tokens": 101127,
+        "elapsed_ms": 339
+      },
+      "hierarchical_v3": {
+        "passed": 9,
+        "failed": 0,
+        "inference_calls": 48,
+        "tool_calls": 15,
+        "estimated_tokens": 30724,
+        "elapsed_ms": 57
+      }
+    }
+  },
+  "cases": [
+    {
+      "case_id": "solar-project-completion",
+      "goal": "Mark the solar-cell project complete",
+      "runs": {
+        "tactical_v2": {
+          "engine": "tactical_v2",
+          "outcome": "All acceptance criteria are complete and a user response is prepared.",
+          "status": "completed",
+          "capabilities": [
+            "project_record_search",
+            "exact_text_mutation"
+          ],
+          "effects": [
+            "mejoras_hogar/backlog.md"
+          ],
+          "questions": [],
+          "telemetry": [
+            {
+              "event_type": "inference",
+              "purpose": "acceptance_criteria",
+              "task_id": "replay-solar-project-completion-tactical_v2",
+              "project_id": "fixture-project",
+              "provider": "deterministic",
+              "model": "replay-v1",
+              "profile_id": "offline-replay",
+              "input_chars": 2555,
+              "input_tokens_estimate": 639,
+              "output_chars": 56,
+              "output_tokens_estimate": 14,
+              "tool_count": 0,
+              "tool_schema_chars": 0,
+              "tool_schema_tokens_estimate": 0,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "provider_usage": {
+                "input_tokens": 639,
+                "output_tokens": 14
+              },
+              "metadata": {}
+            },
+            {
+              "event_type": "inference",
+              "purpose": "tool_planning",
+              "task_id": "replay-solar-project-completion-tactical_v2",
+              "project_id": "fixture-project",
+              "provider": "deterministic",
+              "model": "replay-v1",
+              "profile_id": "offline-replay",
+              "input_chars": 10205,
+              "input_tokens_estimate": 2552,
+              "output_chars": 193,
+              "output_tokens_estimate": 49,
+              "tool_count": 4,
+              "tool_schema_chars": 200,
+              "tool_schema_tokens_estimate": 50,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "provider_usage": {
+                "input_tokens": 2552,
+                "output_tokens": 49
+              },
+              "metadata": {}
+            },
+            {
+              "event_type": "tool",
+              "tool_id": "fixture.search",
+              "task_id": "replay-solar-project-completion-tactical_v2",
+              "project_id": "fixture-project",
+              "argument_chars": 18,
+              "result_chars": 36,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "metadata": {
+                "affected_paths": [
+                  "mejoras_hogar/backlog.md"
+                ],
+                "waiting_for_answer": false
+              }
+            },
+            {
+              "event_type": "inference",
+              "purpose": "criteria_review",
+              "task_id": "replay-solar-project-completion-tactical_v2",
+              "project_id": "fixture-project",
+              "provider": "deterministic",
+              "model": "replay-v1",
+              "profile_id": "offline-replay",
+              "input_chars": 4761,
+              "input_tokens_estimate": 1191,
+              "output_chars": 15,
+              "output_tokens_estimate": 4,
+              "tool_count": 0,
+              "tool_schema_chars": 0,
+              "tool_schema_tokens_estimate": 0,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "provider_usage": {
+                "input_tokens": 1191,
+                "output_tokens": 4
+              },
+              "metadata": {}
+            },
+            {
+              "event_type": "inference",
+              "purpose": "tool_planning",
+              "task_id": "replay-solar-project-completion-tactical_v2",
+              "project_id": "fixture-project",
+              "provider": "deterministic",
+              "model": "replay-v1",
+              "profile_id": "offline-replay",
+              "input_chars": 10826,
+              "input_tokens_estimate": 2707,
+              "output_chars": 273,
+              "output_tokens_estimate": 69,
+              "tool_count": 4,
+              "tool_schema_chars": 200,
+              "tool_schema_tokens_estimate": 50,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "provider_usage": {
+                "input_tokens": 2707,
+                "output_tokens": 69
+              },
+              "metadata": {}
+            },
+            {
+              "event_type": "tool",
+              "tool_id": "native.exact_text_edit",
+              "task_id": "replay-solar-project-completion-tactical_v2",
+              "project_id": "fixture-project",
+              "argument_chars": 84,
+              "result_chars": 88,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "metadata": {
+                "affected_paths": [
+                  "mejoras_hogar/backlog.md"
+                ],
+                "waiting_for_answer": false
+              }
+            },
+            {
+              "event_type": "inference",
+              "purpose": "criteria_review",
+              "task_id": "replay-solar-project-completion-tactical_v2",
+              "project_id": "fixture-project",
+              "provider": "deterministic",
+              "model": "replay-v1",
+              "profile_id": "offline-replay",
+              "input_chars": 5706,
+              "input_tokens_estimate": 1427,
+              "output_chars": 15,
+              "output_tokens_estimate": 4,
+              "tool_count": 0,
+              "tool_schema_chars": 0,
+              "tool_schema_tokens_estimate": 0,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "provider_usage": {
+                "input_tokens": 1427,
+                "output_tokens": 4
+              },
+              "metadata": {}
+            },
+            {
+              "event_type": "inference",
+              "purpose": "tool_planning",
+              "task_id": "replay-solar-project-completion-tactical_v2",
+              "project_id": "fixture-project",
+              "provider": "deterministic",
+              "model": "replay-v1",
+              "profile_id": "offline-replay",
+              "input_chars": 11544,
+              "input_tokens_estimate": 2886,
+              "output_chars": 207,
+              "output_tokens_estimate": 52,
+              "tool_count": 4,
+              "tool_schema_chars": 200,
+              "tool_schema_tokens_estimate": 50,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "provider_usage": {
+                "input_tokens": 2886,
+                "output_tokens": 52
+              },
+              "metadata": {}
+            },
+            {
+              "event_type": "tool",
+              "tool_id": "fixture.read",
+              "task_id": "replay-solar-project-completion-tactical_v2",
+              "project_id": "fixture-project",
+              "argument_chars": 36,
+              "result_chars": 68,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "metadata": {
+                "affected_paths": [
+                  "mejoras_hogar/backlog.md"
+                ],
+                "waiting_for_answer": false
+              }
+            },
+            {
+              "event_type": "inference",
+              "purpose": "criteria_review",
+              "task_id": "replay-solar-project-completion-tactical_v2",
+              "project_id": "fixture-project",
+              "provider": "deterministic",
+              "model": "replay-v1",
+              "profile_id": "offline-replay",
+              "input_chars": 6258,
+              "input_tokens_estimate": 1565,
+              "output_chars": 136,
+              "output_tokens_estimate": 34,
+              "tool_count": 0,
+              "tool_schema_chars": 0,
+              "tool_schema_tokens_estimate": 0,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "provider_usage": {
+                "input_tokens": 1565,
+                "output_tokens": 34
+              },
+              "metadata": {}
+            },
+            {
+              "event_type": "inference",
+              "purpose": "tool_planning",
+              "task_id": "replay-solar-project-completion-tactical_v2",
+              "project_id": "fixture-project",
+              "provider": "deterministic",
+              "model": "replay-v1",
+              "profile_id": "offline-replay",
+              "input_chars": 12313,
+              "input_tokens_estimate": 3079,
+              "output_chars": 249,
+              "output_tokens_estimate": 63,
+              "tool_count": 4,
+              "tool_schema_chars": 200,
+              "tool_schema_tokens_estimate": 50,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "provider_usage": {
+                "input_tokens": 3079,
+                "output_tokens": 64
+              },
+              "metadata": {}
+            },
+            {
+              "event_type": "tool",
+              "tool_id": "native.respond",
+              "task_id": "replay-solar-project-completion-tactical_v2",
+              "project_id": "fixture-project",
+              "argument_chars": 80,
+              "result_chars": 80,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "metadata": {
+                "affected_paths": [],
+                "waiting_for_answer": false
+              }
+            },
+            {
+              "event_type": "inference",
+              "purpose": "criteria_review",
+              "task_id": "replay-solar-project-completion-tactical_v2",
+              "project_id": "fixture-project",
+              "provider": "deterministic",
+              "model": "replay-v1",
+              "profile_id": "offline-replay",
+              "input_chars": 7089,
+              "input_tokens_estimate": 1773,
+              "output_chars": 136,
+              "output_tokens_estimate": 34,
+              "tool_count": 0,
+              "tool_schema_chars": 0,
+              "tool_schema_tokens_estimate": 0,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "provider_usage": {
+                "input_tokens": 1773,
+                "output_tokens": 34
+              },
+              "metadata": {}
+            }
+          ],
+          "events": [
+            {
+              "event_type": "tool_call_result",
+              "tool_id": "fixture.search",
+              "status": "success",
+              "affected_paths": []
+            },
+            {
+              "event_type": "tool_call_result",
+              "tool_id": "native.exact_text_edit",
+              "status": "success",
+              "affected_paths": [
+                "mejoras_hogar/backlog.md"
+              ]
+            },
+            {
+              "event_type": "tool_call_result",
+              "tool_id": "fixture.read",
+              "status": "success",
+              "affected_paths": []
+            },
+            {
+              "event_type": "tool_call_result",
+              "tool_id": "native.respond",
+              "status": "success",
+              "affected_paths": []
+            }
+          ],
+          "metadata": {
+            "phase_shape": [
+              "locate",
+              "update",
+              "verify"
+            ],
+            "tool_ids": [
+              "fixture.search",
+              "native.exact_text_edit",
+              "fixture.read",
+              "native.respond"
+            ],
+            "task_status": "completed"
+          },
+          "error": "",
+          "elapsed_ms": 59,
+          "metrics": {
+            "elapsed_ms": 59,
+            "inference_calls": 9,
+            "tool_calls": 4,
+            "failed_inference_calls": 0,
+            "failed_tool_calls": 0,
+            "input_tokens_estimate": 17819,
+            "output_tokens_estimate": 323,
+            "tool_schema_tokens_estimate": 200,
+            "provider_input_tokens": 17819,
+            "provider_output_tokens": 324,
+            "inference_duration_ms": 0,
+            "tool_duration_ms": 0
+          },
+          "violations": [],
+          "passed": true
+        },
+        "hierarchical_v3": {
+          "engine": "hierarchical_v3",
+          "outcome": "Verified phase evidence satisfies all required acceptance criteria.",
+          "status": "completed",
+          "capabilities": [
+            "project_record_search",
+            "exact_text_mutation"
+          ],
+          "effects": [
+            "mejoras_hogar/backlog.md"
+          ],
+          "questions": [],
+          "telemetry": [
+            {
+              "event_type": "inference",
+              "purpose": "acceptance_criteria",
+              "task_id": "replay-solar-project-completion-hierarchical_v3",
+              "project_id": "fixture-project",
+              "provider": "deterministic",
+              "model": "replay-v1",
+              "profile_id": "offline-replay",
+              "input_chars": 2559,
+              "input_tokens_estimate": 640,
+              "output_chars": 56,
+              "output_tokens_estimate": 14,
+              "tool_count": 0,
+              "tool_schema_chars": 0,
+              "tool_schema_tokens_estimate": 0,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "provider_usage": {
+                "input_tokens": 640,
+                "output_tokens": 14
+              },
+              "metadata": {}
+            },
+            {
+              "event_type": "inference",
+              "purpose": "phase_planning",
+              "task_id": "replay-solar-project-completion-hierarchical_v3",
+              "project_id": "fixture-project",
+              "provider": "deterministic",
+              "model": "replay-v1",
+              "profile_id": "offline-replay",
+              "input_chars": 1044,
+              "input_tokens_estimate": 261,
+              "output_chars": 1696,
+              "output_tokens_estimate": 424,
+              "tool_count": 0,
+              "tool_schema_chars": 0,
+              "tool_schema_tokens_estimate": 0,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "provider_usage": {
+                "input_tokens": 261,
+                "output_tokens": 424
+              },
+              "metadata": {}
+            },
+            {
+              "event_type": "inference",
+              "purpose": "tactical_action",
+              "task_id": "replay-solar-project-completion-hierarchical_v3",
+              "project_id": "fixture-project",
+              "provider": "deterministic",
+              "model": "replay-v1",
+              "profile_id": "offline-replay",
+              "input_chars": 3976,
+              "input_tokens_estimate": 994,
+              "output_chars": 90,
+              "output_tokens_estimate": 23,
+              "tool_count": 2,
+              "tool_schema_chars": 100,
+              "tool_schema_tokens_estimate": 25,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "provider_usage": {
+                "input_tokens": 994,
+                "output_tokens": 23
+              },
+              "metadata": {
+                "phase_id": "fixture-phase",
+                "subgoal_id": "locate"
+              }
+            },
+            {
+              "event_type": "tool",
+              "tool_id": "fixture.search",
+              "task_id": "replay-solar-project-completion-hierarchical_v3",
+              "project_id": "fixture-project",
+              "argument_chars": 18,
+              "result_chars": 36,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "metadata": {
+                "affected_paths": [
+                  "mejoras_hogar/backlog.md"
+                ],
+                "waiting_for_answer": false
+              }
+            },
+            {
+              "event_type": "inference",
+              "purpose": "tactical_action",
+              "task_id": "replay-solar-project-completion-hierarchical_v3",
+              "project_id": "fixture-project",
+              "provider": "deterministic",
+              "model": "replay-v1",
+              "profile_id": "offline-replay",
+              "input_chars": 4585,
+              "input_tokens_estimate": 1147,
+              "output_chars": 164,
+              "output_tokens_estimate": 41,
+              "tool_count": 1,
+              "tool_schema_chars": 50,
+              "tool_schema_tokens_estimate": 13,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "provider_usage": {
+                "input_tokens": 1147,
+                "output_tokens": 41
+              },
+              "metadata": {
+                "phase_id": "fixture-phase",
+                "subgoal_id": "update"
+              }
+            },
+            {
+              "event_type": "tool",
+              "tool_id": "native.exact_text_edit",
+              "task_id": "replay-solar-project-completion-hierarchical_v3",
+              "project_id": "fixture-project",
+              "argument_chars": 84,
+              "result_chars": 88,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "metadata": {
+                "affected_paths": [
+                  "mejoras_hogar/backlog.md"
+                ],
+                "waiting_for_answer": false
+              }
+            },
+            {
+              "event_type": "inference",
+              "purpose": "tactical_action",
+              "task_id": "replay-solar-project-completion-hierarchical_v3",
+              "project_id": "fixture-project",
+              "provider": "deterministic",
+              "model": "replay-v1",
+              "profile_id": "offline-replay",
+              "input_chars": 5912,
+              "input_tokens_estimate": 1478,
+              "output_chars": 106,
+              "output_tokens_estimate": 27,
+              "tool_count": 2,
+              "tool_schema_chars": 100,
+              "tool_schema_tokens_estimate": 25,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "provider_usage": {
+                "input_tokens": 1478,
+                "output_tokens": 27
+              },
+              "metadata": {
+                "phase_id": "fixture-phase",
+                "subgoal_id": "verify"
+              }
+            },
+            {
+              "event_type": "tool",
+              "tool_id": "fixture.read",
+              "task_id": "replay-solar-project-completion-hierarchical_v3",
+              "project_id": "fixture-project",
+              "argument_chars": 36,
+              "result_chars": 68,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "metadata": {
+                "affected_paths": [
+                  "mejoras_hogar/backlog.md"
+                ],
+                "waiting_for_answer": false
+              }
+            },
+            {
+              "event_type": "inference",
+              "purpose": "phase_review",
+              "task_id": "replay-solar-project-completion-hierarchical_v3",
+              "project_id": "fixture-project",
+              "provider": "deterministic",
+              "model": "replay-v1",
+              "profile_id": "offline-replay",
+              "input_chars": 3169,
+              "input_tokens_estimate": 793,
+              "output_chars": 142,
+              "output_tokens_estimate": 36,
+              "tool_count": 0,
+              "tool_schema_chars": 0,
+              "tool_schema_tokens_estimate": 0,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "provider_usage": {
+                "input_tokens": 793,
+                "output_tokens": 36
+              },
+              "metadata": {
+                "phase_id": "fixture-phase"
+              }
+            },
+            {
+              "event_type": "inference",
+              "purpose": "final_response",
+              "task_id": "replay-solar-project-completion-hierarchical_v3",
+              "project_id": "fixture-project",
+              "provider": "deterministic",
+              "model": "replay-v1",
+              "profile_id": "offline-replay",
+              "input_chars": 1140,
+              "input_tokens_estimate": 285,
+              "output_chars": 65,
+              "output_tokens_estimate": 17,
+              "tool_count": 0,
+              "tool_schema_chars": 0,
+              "tool_schema_tokens_estimate": 0,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "provider_usage": {
+                "input_tokens": 285,
+                "output_tokens": 17
+              },
+              "metadata": {
+                "phase_id": "fixture-phase"
+              }
+            }
+          ],
+          "events": [
+            {
+              "event_type": "tactical_tools_revealed",
+              "phase_id": "fixture-phase",
+              "subgoal_id": "locate",
+              "capabilities": [
+                "project_record_search"
+              ],
+              "tool_ids": [
+                "fixture.read",
+                "fixture.search"
+              ]
+            },
+            {
+              "event_type": "tool_call_result",
+              "tool_id": "fixture.search",
+              "status": "success",
+              "affected_paths": []
+            },
+            {
+              "event_type": "tactical_tools_revealed",
+              "phase_id": "fixture-phase",
+              "subgoal_id": "update",
+              "capabilities": [
+                "exact_text_mutation"
+              ],
+              "tool_ids": [
+                "native.exact_text_edit"
+              ]
+            },
+            {
+              "event_type": "tool_call_result",
+              "tool_id": "native.exact_text_edit",
+              "status": "success",
+              "affected_paths": [
+                "mejoras_hogar/backlog.md"
+              ]
+            },
+            {
+              "event_type": "tactical_tools_revealed",
+              "phase_id": "fixture-phase",
+              "subgoal_id": "verify",
+              "capabilities": [
+                "project_record_search"
+              ],
+              "tool_ids": [
+                "fixture.read",
+                "fixture.search"
+              ]
+            },
+            {
+              "event_type": "tool_call_result",
+              "tool_id": "fixture.read",
+              "status": "success",
+              "affected_paths": []
+            }
+          ],
+          "metadata": {
+            "phase_shape": [
+              "locate",
+              "update",
+              "verify"
+            ],
+            "tool_ids": [
+              "fixture.search",
+              "native.exact_text_edit",
+              "fixture.read"
+            ],
+            "task_status": "completed"
+          },
+          "error": "",
+          "elapsed_ms": 9,
+          "metrics": {
+            "elapsed_ms": 9,
+            "inference_calls": 7,
+            "tool_calls": 3,
+            "failed_inference_calls": 0,
+            "failed_tool_calls": 0,
+            "input_tokens_estimate": 5598,
+            "output_tokens_estimate": 582,
+            "tool_schema_tokens_estimate": 63,
+            "provider_input_tokens": 5598,
+            "provider_output_tokens": 582,
+            "inference_duration_ms": 0,
+            "tool_duration_ms": 0
+          },
+          "violations": [],
+          "passed": true
+        }
+      }
+    },
+    {
+      "case_id": "lg-temperature-native-client",
+      "goal": "Read the current indoor temperature using the existing LG client",
+      "runs": {
+        "tactical_v2": {
+          "engine": "tactical_v2",
+          "outcome": "All acceptance criteria are complete and a user response is prepared.",
+          "status": "completed",
+          "capabilities": [
+            "device_control"
+          ],
+          "effects": [],
+          "questions": [],
+          "telemetry": [
+            {
+              "event_type": "inference",
+              "purpose": "acceptance_criteria",
+              "task_id": "replay-lg-temperature-native-client-tactical_v2",
+              "project_id": "fixture-project",
+              "provider": "deterministic",
+              "model": "replay-v1",
+              "profile_id": "offline-replay",
+              "input_chars": 2591,
+              "input_tokens_estimate": 648,
+              "output_chars": 59,
+              "output_tokens_estimate": 15,
+              "tool_count": 0,
+              "tool_schema_chars": 0,
+              "tool_schema_tokens_estimate": 0,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "provider_usage": {
+                "input_tokens": 648,
+                "output_tokens": 15
+              },
+              "metadata": {}
+            },
+            {
+              "event_type": "inference",
+              "purpose": "tool_planning",
+              "task_id": "replay-lg-temperature-native-client-tactical_v2",
+              "project_id": "fixture-project",
+              "provider": "deterministic",
+              "model": "replay-v1",
+              "profile_id": "offline-replay",
+              "input_chars": 9879,
+              "input_tokens_estimate": 2470,
+              "output_chars": 184,
+              "output_tokens_estimate": 46,
+              "tool_count": 2,
+              "tool_schema_chars": 100,
+              "tool_schema_tokens_estimate": 25,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "provider_usage": {
+                "input_tokens": 2470,
+                "output_tokens": 46
+              },
+              "metadata": {}
+            },
+            {
+              "event_type": "tool",
+              "tool_id": "artifact.lg",
+              "task_id": "replay-lg-temperature-native-client-tactical_v2",
+              "project_id": "fixture-project",
+              "argument_chars": 2,
+              "result_chars": 21,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "metadata": {
+                "affected_paths": [],
+                "waiting_for_answer": false
+              }
+            },
+            {
+              "event_type": "inference",
+              "purpose": "criteria_review",
+              "task_id": "replay-lg-temperature-native-client-tactical_v2",
+              "project_id": "fixture-project",
+              "provider": "deterministic",
+              "model": "replay-v1",
+              "profile_id": "offline-replay",
+              "input_chars": 4794,
+              "input_tokens_estimate": 1199,
+              "output_chars": 146,
+              "output_tokens_estimate": 37,
+              "tool_count": 0,
+              "tool_schema_chars": 0,
+              "tool_schema_tokens_estimate": 0,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "provider_usage": {
+                "input_tokens": 1199,
+                "output_tokens": 37
+              },
+              "metadata": {}
+            },
+            {
+              "event_type": "inference",
+              "purpose": "tool_planning",
+              "task_id": "replay-lg-temperature-native-client-tactical_v2",
+              "project_id": "fixture-project",
+              "provider": "deterministic",
+              "model": "replay-v1",
+              "profile_id": "offline-replay",
+              "input_chars": 10631,
+              "input_tokens_estimate": 2658,
+              "output_chars": 206,
+              "output_tokens_estimate": 52,
+              "tool_count": 2,
+              "tool_schema_chars": 100,
+              "tool_schema_tokens_estimate": 25,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "provider_usage": {
+                "input_tokens": 2658,
+                "output_tokens": 53
+              },
+              "metadata": {}
+            },
+            {
+              "event_type": "tool",
+              "tool_id": "native.respond",
+              "task_id": "replay-lg-temperature-native-client-tactical_v2",
+              "project_id": "fixture-project",
+              "argument_chars": 37,
+              "result_chars": 37,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "metadata": {
+                "affected_paths": [],
+                "waiting_for_answer": false
+              }
+            },
+            {
+              "event_type": "inference",
+              "purpose": "criteria_review",
+              "task_id": "replay-lg-temperature-native-client-tactical_v2",
+              "project_id": "fixture-project",
+              "provider": "deterministic",
+              "model": "replay-v1",
+              "profile_id": "offline-replay",
+              "input_chars": 5607,
+              "input_tokens_estimate": 1402,
+              "output_chars": 137,
+              "output_tokens_estimate": 35,
+              "tool_count": 0,
+              "tool_schema_chars": 0,
+              "tool_schema_tokens_estimate": 0,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "provider_usage": {
+                "input_tokens": 1402,
+                "output_tokens": 35
+              },
+              "metadata": {}
+            }
+          ],
+          "events": [
+            {
+              "event_type": "tool_call_result",
+              "tool_id": "artifact.lg",
+              "status": "success",
+              "affected_paths": []
+            },
+            {
+              "event_type": "tool_call_result",
+              "tool_id": "native.respond",
+              "status": "success",
+              "affected_paths": []
+            }
+          ],
+          "metadata": {
+            "phase_shape": [
+              "read_temperature"
+            ],
+            "tool_ids": [
+              "artifact.lg",
+              "native.respond"
+            ],
+            "task_status": "completed"
+          },
+          "error": "",
+          "elapsed_ms": 31,
+          "metrics": {
+            "elapsed_ms": 31,
+            "inference_calls": 5,
+            "tool_calls": 2,
+            "failed_inference_calls": 0,
+            "failed_tool_calls": 0,
+            "input_tokens_estimate": 8377,
+            "output_tokens_estimate": 185,
+            "tool_schema_tokens_estimate": 50,
+            "provider_input_tokens": 8377,
+            "provider_output_tokens": 186,
+            "inference_duration_ms": 0,
+            "tool_duration_ms": 0
+          },
+          "violations": [],
+          "passed": true
+        },
+        "hierarchical_v3": {
+          "engine": "hierarchical_v3",
+          "outcome": "Verified phase evidence satisfies all required acceptance criteria.",
+          "status": "completed",
+          "capabilities": [
+            "device_control"
+          ],
+          "effects": [],
+          "questions": [],
+          "telemetry": [
+            {
+              "event_type": "inference",
+              "purpose": "acceptance_criteria",
+              "task_id": "replay-lg-temperature-native-client-hierarchical_v3",
+              "project_id": "fixture-project",
+              "provider": "deterministic",
+              "model": "replay-v1",
+              "profile_id": "offline-replay",
+              "input_chars": 2595,
+              "input_tokens_estimate": 649,
+              "output_chars": 59,
+              "output_tokens_estimate": 15,
+              "tool_count": 0,
+              "tool_schema_chars": 0,
+              "tool_schema_tokens_estimate": 0,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "provider_usage": {
+                "input_tokens": 649,
+                "output_tokens": 15
+              },
+              "metadata": {}
+            },
+            {
+              "event_type": "inference",
+              "purpose": "phase_planning",
+              "task_id": "replay-lg-temperature-native-client-hierarchical_v3",
+              "project_id": "fixture-project",
+              "provider": "deterministic",
+              "model": "replay-v1",
+              "profile_id": "offline-replay",
+              "input_chars": 1049,
+              "input_tokens_estimate": 263,
+              "output_chars": 840,
+              "output_tokens_estimate": 210,
+              "tool_count": 0,
+              "tool_schema_chars": 0,
+              "tool_schema_tokens_estimate": 0,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "provider_usage": {
+                "input_tokens": 263,
+                "output_tokens": 210
+              },
+              "metadata": {}
+            },
+            {
+              "event_type": "inference",
+              "purpose": "tactical_action",
+              "task_id": "replay-lg-temperature-native-client-hierarchical_v3",
+              "project_id": "fixture-project",
+              "provider": "deterministic",
+              "model": "replay-v1",
+              "profile_id": "offline-replay",
+              "input_chars": 2442,
+              "input_tokens_estimate": 611,
+              "output_chars": 81,
+              "output_tokens_estimate": 21,
+              "tool_count": 1,
+              "tool_schema_chars": 50,
+              "tool_schema_tokens_estimate": 13,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "provider_usage": {
+                "input_tokens": 611,
+                "output_tokens": 21
+              },
+              "metadata": {
+                "phase_id": "fixture-phase",
+                "subgoal_id": "read_temperature"
+              }
+            },
+            {
+              "event_type": "tool",
+              "tool_id": "artifact.lg",
+              "task_id": "replay-lg-temperature-native-client-hierarchical_v3",
+              "project_id": "fixture-project",
+              "argument_chars": 2,
+              "result_chars": 21,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "metadata": {
+                "affected_paths": [],
+                "waiting_for_answer": false
+              }
+            },
+            {
+              "event_type": "inference",
+              "purpose": "phase_review",
+              "task_id": "replay-lg-temperature-native-client-hierarchical_v3",
+              "project_id": "fixture-project",
+              "provider": "deterministic",
+              "model": "replay-v1",
+              "profile_id": "offline-replay",
+              "input_chars": 1754,
+              "input_tokens_estimate": 439,
+              "output_chars": 152,
+              "output_tokens_estimate": 38,
+              "tool_count": 0,
+              "tool_schema_chars": 0,
+              "tool_schema_tokens_estimate": 0,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "provider_usage": {
+                "input_tokens": 439,
+                "output_tokens": 38
+              },
+              "metadata": {
+                "phase_id": "fixture-phase"
+              }
+            },
+            {
+              "event_type": "inference",
+              "purpose": "final_response",
+              "task_id": "replay-lg-temperature-native-client-hierarchical_v3",
+              "project_id": "fixture-project",
+              "provider": "deterministic",
+              "model": "replay-v1",
+              "profile_id": "offline-replay",
+              "input_chars": 657,
+              "input_tokens_estimate": 165,
+              "output_chars": 22,
+              "output_tokens_estimate": 6,
+              "tool_count": 0,
+              "tool_schema_chars": 0,
+              "tool_schema_tokens_estimate": 0,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "provider_usage": {
+                "input_tokens": 165,
+                "output_tokens": 6
+              },
+              "metadata": {
+                "phase_id": "fixture-phase"
+              }
+            }
+          ],
+          "events": [
+            {
+              "event_type": "tactical_tools_revealed",
+              "phase_id": "fixture-phase",
+              "subgoal_id": "read_temperature",
+              "capabilities": [
+                "device_control"
+              ],
+              "tool_ids": [
+                "artifact.lg"
+              ]
+            },
+            {
+              "event_type": "tool_call_result",
+              "tool_id": "artifact.lg",
+              "status": "success",
+              "affected_paths": []
+            }
+          ],
+          "metadata": {
+            "phase_shape": [
+              "read_temperature"
+            ],
+            "tool_ids": [
+              "artifact.lg"
+            ],
+            "task_status": "completed"
+          },
+          "error": "",
+          "elapsed_ms": 6,
+          "metrics": {
+            "elapsed_ms": 6,
+            "inference_calls": 5,
+            "tool_calls": 1,
+            "failed_inference_calls": 0,
+            "failed_tool_calls": 0,
+            "input_tokens_estimate": 2127,
+            "output_tokens_estimate": 290,
+            "tool_schema_tokens_estimate": 13,
+            "provider_input_tokens": 2127,
+            "provider_output_tokens": 290,
+            "inference_duration_ms": 0,
+            "tool_duration_ms": 0
+          },
+          "violations": [],
+          "passed": true
+        }
+      }
+    },
+    {
+      "case_id": "medical-treatment-recall",
+      "goal": "Record a health event using the previously supplied treatment",
+      "runs": {
+        "tactical_v2": {
+          "engine": "tactical_v2",
+          "outcome": "All acceptance criteria are complete and a user response is prepared.",
+          "status": "completed",
+          "capabilities": [
+            "memory_recall",
+            "project_artifact_query"
+          ],
+          "effects": [
+            "resolved medical artifact"
+          ],
+          "questions": [],
+          "telemetry": [
+            {
+              "event_type": "inference",
+              "purpose": "acceptance_criteria",
+              "task_id": "replay-medical-treatment-recall-tactical_v2",
+              "project_id": "fixture-project",
+              "provider": "deterministic",
+              "model": "replay-v1",
+              "profile_id": "offline-replay",
+              "input_chars": 2580,
+              "input_tokens_estimate": 645,
+              "output_chars": 71,
+              "output_tokens_estimate": 18,
+              "tool_count": 0,
+              "tool_schema_chars": 0,
+              "tool_schema_tokens_estimate": 0,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "provider_usage": {
+                "input_tokens": 645,
+                "output_tokens": 18
+              },
+              "metadata": {}
+            },
+            {
+              "event_type": "inference",
+              "purpose": "tool_planning",
+              "task_id": "replay-medical-treatment-recall-tactical_v2",
+              "project_id": "fixture-project",
+              "provider": "deterministic",
+              "model": "replay-v1",
+              "profile_id": "offline-replay",
+              "input_chars": 10088,
+              "input_tokens_estimate": 2522,
+              "output_chars": 201,
+              "output_tokens_estimate": 51,
+              "tool_count": 3,
+              "tool_schema_chars": 150,
+              "tool_schema_tokens_estimate": 38,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "provider_usage": {
+                "input_tokens": 2522,
+                "output_tokens": 51
+              },
+              "metadata": {}
+            },
+            {
+              "event_type": "tool",
+              "tool_id": "native.search_memory",
+              "task_id": "replay-medical-treatment-recall-tactical_v2",
+              "project_id": "fixture-project",
+              "argument_chars": 22,
+              "result_chars": 27,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "metadata": {
+                "affected_paths": [],
+                "waiting_for_answer": false
+              }
+            },
+            {
+              "event_type": "inference",
+              "purpose": "criteria_review",
+              "task_id": "replay-medical-treatment-recall-tactical_v2",
+              "project_id": "fixture-project",
+              "provider": "deterministic",
+              "model": "replay-v1",
+              "profile_id": "offline-replay",
+              "input_chars": 4818,
+              "input_tokens_estimate": 1205,
+              "output_chars": 15,
+              "output_tokens_estimate": 4,
+              "tool_count": 0,
+              "tool_schema_chars": 0,
+              "tool_schema_tokens_estimate": 0,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "provider_usage": {
+                "input_tokens": 1205,
+                "output_tokens": 4
+              },
+              "metadata": {}
+            },
+            {
+              "event_type": "inference",
+              "purpose": "tool_planning",
+              "task_id": "replay-medical-treatment-recall-tactical_v2",
+              "project_id": "fixture-project",
+              "provider": "deterministic",
+              "model": "replay-v1",
+              "profile_id": "offline-replay",
+              "input_chars": 10704,
+              "input_tokens_estimate": 2676,
+              "output_chars": 207,
+              "output_tokens_estimate": 52,
+              "tool_count": 3,
+              "tool_schema_chars": 150,
+              "tool_schema_tokens_estimate": 38,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "provider_usage": {
+                "input_tokens": 2676,
+                "output_tokens": 52
+              },
+              "metadata": {}
+            },
+            {
+              "event_type": "tool",
+              "tool_id": "artifact.medical",
+              "task_id": "replay-medical-treatment-recall-tactical_v2",
+              "project_id": "fixture-project",
+              "argument_chars": 27,
+              "result_chars": 67,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "metadata": {
+                "affected_paths": [
+                  "resolved medical artifact"
+                ],
+                "waiting_for_answer": false
+              }
+            },
+            {
+              "event_type": "inference",
+              "purpose": "criteria_review",
+              "task_id": "replay-medical-treatment-recall-tactical_v2",
+              "project_id": "fixture-project",
+              "provider": "deterministic",
+              "model": "replay-v1",
+              "profile_id": "offline-replay",
+              "input_chars": 5604,
+              "input_tokens_estimate": 1401,
+              "output_chars": 136,
+              "output_tokens_estimate": 34,
+              "tool_count": 0,
+              "tool_schema_chars": 0,
+              "tool_schema_tokens_estimate": 0,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "provider_usage": {
+                "input_tokens": 1401,
+                "output_tokens": 34
+              },
+              "metadata": {}
+            },
+            {
+              "event_type": "inference",
+              "purpose": "tool_planning",
+              "task_id": "replay-medical-treatment-recall-tactical_v2",
+              "project_id": "fixture-project",
+              "provider": "deterministic",
+              "model": "replay-v1",
+              "profile_id": "offline-replay",
+              "input_chars": 11501,
+              "input_tokens_estimate": 2876,
+              "output_chars": 238,
+              "output_tokens_estimate": 60,
+              "tool_count": 3,
+              "tool_schema_chars": 150,
+              "tool_schema_tokens_estimate": 38,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "provider_usage": {
+                "input_tokens": 2876,
+                "output_tokens": 61
+              },
+              "metadata": {}
+            },
+            {
+              "event_type": "tool",
+              "tool_id": "native.respond",
+              "task_id": "replay-medical-treatment-recall-tactical_v2",
+              "project_id": "fixture-project",
+              "argument_chars": 69,
+              "result_chars": 69,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "metadata": {
+                "affected_paths": [],
+                "waiting_for_answer": false
+              }
+            },
+            {
+              "event_type": "inference",
+              "purpose": "criteria_review",
+              "task_id": "replay-medical-treatment-recall-tactical_v2",
+              "project_id": "fixture-project",
+              "provider": "deterministic",
+              "model": "replay-v1",
+              "profile_id": "offline-replay",
+              "input_chars": 6387,
+              "input_tokens_estimate": 1597,
+              "output_chars": 137,
+              "output_tokens_estimate": 35,
+              "tool_count": 0,
+              "tool_schema_chars": 0,
+              "tool_schema_tokens_estimate": 0,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "provider_usage": {
+                "input_tokens": 1597,
+                "output_tokens": 35
+              },
+              "metadata": {}
+            }
+          ],
+          "events": [
+            {
+              "event_type": "tool_call_result",
+              "tool_id": "native.search_memory",
+              "status": "success",
+              "affected_paths": []
+            },
+            {
+              "event_type": "tool_call_result",
+              "tool_id": "artifact.medical",
+              "status": "success",
+              "affected_paths": [
+                "resolved medical artifact"
+              ]
+            },
+            {
+              "event_type": "tool_call_result",
+              "tool_id": "native.respond",
+              "status": "success",
+              "affected_paths": []
+            }
+          ],
+          "metadata": {
+            "phase_shape": [
+              "recall",
+              "record"
+            ],
+            "tool_ids": [
+              "native.search_memory",
+              "artifact.medical",
+              "native.respond"
+            ],
+            "task_status": "completed"
+          },
+          "error": "",
+          "elapsed_ms": 45,
+          "metrics": {
+            "elapsed_ms": 45,
+            "inference_calls": 7,
+            "tool_calls": 3,
+            "failed_inference_calls": 0,
+            "failed_tool_calls": 0,
+            "input_tokens_estimate": 12922,
+            "output_tokens_estimate": 254,
+            "tool_schema_tokens_estimate": 114,
+            "provider_input_tokens": 12922,
+            "provider_output_tokens": 255,
+            "inference_duration_ms": 0,
+            "tool_duration_ms": 0
+          },
+          "violations": [],
+          "passed": true
+        },
+        "hierarchical_v3": {
+          "engine": "hierarchical_v3",
+          "outcome": "Verified phase evidence satisfies all required acceptance criteria.",
+          "status": "completed",
+          "capabilities": [
+            "memory_recall",
+            "project_artifact_query"
+          ],
+          "effects": [
+            "resolved medical artifact"
+          ],
+          "questions": [],
+          "telemetry": [
+            {
+              "event_type": "inference",
+              "purpose": "acceptance_criteria",
+              "task_id": "replay-medical-treatment-recall-hierarchical_v3",
+              "project_id": "fixture-project",
+              "provider": "deterministic",
+              "model": "replay-v1",
+              "profile_id": "offline-replay",
+              "input_chars": 2584,
+              "input_tokens_estimate": 646,
+              "output_chars": 71,
+              "output_tokens_estimate": 18,
+              "tool_count": 0,
+              "tool_schema_chars": 0,
+              "tool_schema_tokens_estimate": 0,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "provider_usage": {
+                "input_tokens": 646,
+                "output_tokens": 18
+              },
+              "metadata": {}
+            },
+            {
+              "event_type": "inference",
+              "purpose": "phase_planning",
+              "task_id": "replay-medical-treatment-recall-hierarchical_v3",
+              "project_id": "fixture-project",
+              "provider": "deterministic",
+              "model": "replay-v1",
+              "profile_id": "offline-replay",
+              "input_chars": 1079,
+              "input_tokens_estimate": 270,
+              "output_chars": 1264,
+              "output_tokens_estimate": 316,
+              "tool_count": 0,
+              "tool_schema_chars": 0,
+              "tool_schema_tokens_estimate": 0,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "provider_usage": {
+                "input_tokens": 270,
+                "output_tokens": 316
+              },
+              "metadata": {}
+            },
+            {
+              "event_type": "inference",
+              "purpose": "tactical_action",
+              "task_id": "replay-medical-treatment-recall-hierarchical_v3",
+              "project_id": "fixture-project",
+              "provider": "deterministic",
+              "model": "replay-v1",
+              "profile_id": "offline-replay",
+              "input_chars": 3092,
+              "input_tokens_estimate": 773,
+              "output_chars": 100,
+              "output_tokens_estimate": 25,
+              "tool_count": 1,
+              "tool_schema_chars": 50,
+              "tool_schema_tokens_estimate": 13,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "provider_usage": {
+                "input_tokens": 773,
+                "output_tokens": 25
+              },
+              "metadata": {
+                "phase_id": "fixture-phase",
+                "subgoal_id": "recall"
+              }
+            },
+            {
+              "event_type": "tool",
+              "tool_id": "native.search_memory",
+              "task_id": "replay-medical-treatment-recall-hierarchical_v3",
+              "project_id": "fixture-project",
+              "argument_chars": 22,
+              "result_chars": 27,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "metadata": {
+                "affected_paths": [],
+                "waiting_for_answer": false
+              }
+            },
+            {
+              "event_type": "inference",
+              "purpose": "tactical_action",
+              "task_id": "replay-medical-treatment-recall-hierarchical_v3",
+              "project_id": "fixture-project",
+              "provider": "deterministic",
+              "model": "replay-v1",
+              "profile_id": "offline-replay",
+              "input_chars": 3879,
+              "input_tokens_estimate": 970,
+              "output_chars": 101,
+              "output_tokens_estimate": 26,
+              "tool_count": 1,
+              "tool_schema_chars": 50,
+              "tool_schema_tokens_estimate": 13,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "provider_usage": {
+                "input_tokens": 970,
+                "output_tokens": 26
+              },
+              "metadata": {
+                "phase_id": "fixture-phase",
+                "subgoal_id": "record"
+              }
+            },
+            {
+              "event_type": "tool",
+              "tool_id": "artifact.medical",
+              "task_id": "replay-medical-treatment-recall-hierarchical_v3",
+              "project_id": "fixture-project",
+              "argument_chars": 27,
+              "result_chars": 67,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "metadata": {
+                "affected_paths": [
+                  "resolved medical artifact"
+                ],
+                "waiting_for_answer": false
+              }
+            },
+            {
+              "event_type": "inference",
+              "purpose": "phase_review",
+              "task_id": "replay-medical-treatment-recall-hierarchical_v3",
+              "project_id": "fixture-project",
+              "provider": "deterministic",
+              "model": "replay-v1",
+              "profile_id": "offline-replay",
+              "input_chars": 2448,
+              "input_tokens_estimate": 612,
+              "output_chars": 142,
+              "output_tokens_estimate": 36,
+              "tool_count": 0,
+              "tool_schema_chars": 0,
+              "tool_schema_tokens_estimate": 0,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "provider_usage": {
+                "input_tokens": 612,
+                "output_tokens": 36
+              },
+              "metadata": {
+                "phase_id": "fixture-phase"
+              }
+            },
+            {
+              "event_type": "inference",
+              "purpose": "final_response",
+              "task_id": "replay-medical-treatment-recall-hierarchical_v3",
+              "project_id": "fixture-project",
+              "provider": "deterministic",
+              "model": "replay-v1",
+              "profile_id": "offline-replay",
+              "input_chars": 907,
+              "input_tokens_estimate": 227,
+              "output_chars": 54,
+              "output_tokens_estimate": 14,
+              "tool_count": 0,
+              "tool_schema_chars": 0,
+              "tool_schema_tokens_estimate": 0,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "provider_usage": {
+                "input_tokens": 227,
+                "output_tokens": 14
+              },
+              "metadata": {
+                "phase_id": "fixture-phase"
+              }
+            }
+          ],
+          "events": [
+            {
+              "event_type": "tactical_tools_revealed",
+              "phase_id": "fixture-phase",
+              "subgoal_id": "recall",
+              "capabilities": [
+                "memory_recall"
+              ],
+              "tool_ids": [
+                "native.search_memory"
+              ]
+            },
+            {
+              "event_type": "tool_call_result",
+              "tool_id": "native.search_memory",
+              "status": "success",
+              "affected_paths": []
+            },
+            {
+              "event_type": "tactical_tools_revealed",
+              "phase_id": "fixture-phase",
+              "subgoal_id": "record",
+              "capabilities": [
+                "project_artifact_query"
+              ],
+              "tool_ids": [
+                "artifact.medical"
+              ]
+            },
+            {
+              "event_type": "tool_call_result",
+              "tool_id": "artifact.medical",
+              "status": "success",
+              "affected_paths": [
+                "resolved medical artifact"
+              ]
+            }
+          ],
+          "metadata": {
+            "phase_shape": [
+              "recall",
+              "record"
+            ],
+            "tool_ids": [
+              "native.search_memory",
+              "artifact.medical"
+            ],
+            "task_status": "completed"
+          },
+          "error": "",
+          "elapsed_ms": 7,
+          "metrics": {
+            "elapsed_ms": 7,
+            "inference_calls": 6,
+            "tool_calls": 2,
+            "failed_inference_calls": 0,
+            "failed_tool_calls": 0,
+            "input_tokens_estimate": 3498,
+            "output_tokens_estimate": 435,
+            "tool_schema_tokens_estimate": 26,
+            "provider_input_tokens": 3498,
+            "provider_output_tokens": 435,
+            "inference_duration_ms": 0,
+            "tool_duration_ms": 0
+          },
+          "violations": [],
+          "passed": true
+        }
+      }
+    },
+    {
+      "case_id": "prescription-image-ocr",
+      "goal": "Extract medicine names from the attached prescription image",
+      "runs": {
+        "tactical_v2": {
+          "engine": "tactical_v2",
+          "outcome": "All acceptance criteria are complete and a user response is prepared.",
+          "status": "completed",
+          "capabilities": [
+            "attachment_analysis"
+          ],
+          "effects": [],
+          "questions": [],
+          "telemetry": [
+            {
+              "event_type": "inference",
+              "purpose": "acceptance_criteria",
+              "task_id": "replay-prescription-image-ocr-tactical_v2",
+              "project_id": "fixture-project",
+              "provider": "deterministic",
+              "model": "replay-v1",
+              "profile_id": "offline-replay",
+              "input_chars": 2663,
+              "input_tokens_estimate": 666,
+              "output_chars": 66,
+              "output_tokens_estimate": 17,
+              "tool_count": 0,
+              "tool_schema_chars": 0,
+              "tool_schema_tokens_estimate": 0,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "provider_usage": {
+                "input_tokens": 666,
+                "output_tokens": 17
+              },
+              "metadata": {}
+            },
+            {
+              "event_type": "inference",
+              "purpose": "tool_planning",
+              "task_id": "replay-prescription-image-ocr-tactical_v2",
+              "project_id": "fixture-project",
+              "provider": "deterministic",
+              "model": "replay-v1",
+              "profile_id": "offline-replay",
+              "input_chars": 9986,
+              "input_tokens_estimate": 2497,
+              "output_chars": 221,
+              "output_tokens_estimate": 56,
+              "tool_count": 2,
+              "tool_schema_chars": 100,
+              "tool_schema_tokens_estimate": 25,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "provider_usage": {
+                "input_tokens": 2497,
+                "output_tokens": 56
+              },
+              "metadata": {}
+            },
+            {
+              "event_type": "tool",
+              "tool_id": "native.analyze_image",
+              "task_id": "replay-prescription-image-ocr-tactical_v2",
+              "project_id": "fixture-project",
+              "argument_chars": 34,
+              "result_chars": 29,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "metadata": {
+                "affected_paths": [],
+                "waiting_for_answer": false
+              }
+            },
+            {
+              "event_type": "inference",
+              "purpose": "criteria_review",
+              "task_id": "replay-prescription-image-ocr-tactical_v2",
+              "project_id": "fixture-project",
+              "provider": "deterministic",
+              "model": "replay-v1",
+              "profile_id": "offline-replay",
+              "input_chars": 4949,
+              "input_tokens_estimate": 1238,
+              "output_chars": 137,
+              "output_tokens_estimate": 35,
+              "tool_count": 0,
+              "tool_schema_chars": 0,
+              "tool_schema_tokens_estimate": 0,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "provider_usage": {
+                "input_tokens": 1238,
+                "output_tokens": 35
+              },
+              "metadata": {}
+            },
+            {
+              "event_type": "inference",
+              "purpose": "tool_planning",
+              "task_id": "replay-prescription-image-ocr-tactical_v2",
+              "project_id": "fixture-project",
+              "provider": "deterministic",
+              "model": "replay-v1",
+              "profile_id": "offline-replay",
+              "input_chars": 10762,
+              "input_tokens_estimate": 2691,
+              "output_chars": 231,
+              "output_tokens_estimate": 58,
+              "tool_count": 2,
+              "tool_schema_chars": 100,
+              "tool_schema_tokens_estimate": 25,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "provider_usage": {
+                "input_tokens": 2691,
+                "output_tokens": 58
+              },
+              "metadata": {}
+            },
+            {
+              "event_type": "tool",
+              "tool_id": "native.respond",
+              "task_id": "replay-prescription-image-ocr-tactical_v2",
+              "project_id": "fixture-project",
+              "argument_chars": 62,
+              "result_chars": 62,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "metadata": {
+                "affected_paths": [],
+                "waiting_for_answer": false
+              }
+            },
+            {
+              "event_type": "inference",
+              "purpose": "criteria_review",
+              "task_id": "replay-prescription-image-ocr-tactical_v2",
+              "project_id": "fixture-project",
+              "provider": "deterministic",
+              "model": "replay-v1",
+              "profile_id": "offline-replay",
+              "input_chars": 5759,
+              "input_tokens_estimate": 1440,
+              "output_chars": 137,
+              "output_tokens_estimate": 35,
+              "tool_count": 0,
+              "tool_schema_chars": 0,
+              "tool_schema_tokens_estimate": 0,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "provider_usage": {
+                "input_tokens": 1440,
+                "output_tokens": 35
+              },
+              "metadata": {}
+            }
+          ],
+          "events": [
+            {
+              "event_type": "tool_call_result",
+              "tool_id": "native.analyze_image",
+              "status": "success",
+              "affected_paths": []
+            },
+            {
+              "event_type": "tool_call_result",
+              "tool_id": "native.respond",
+              "status": "success",
+              "affected_paths": []
+            }
+          ],
+          "metadata": {
+            "phase_shape": [
+              "extract"
+            ],
+            "tool_ids": [
+              "native.analyze_image",
+              "native.respond"
+            ],
+            "task_status": "completed"
+          },
+          "error": "",
+          "elapsed_ms": 31,
+          "metrics": {
+            "elapsed_ms": 31,
+            "inference_calls": 5,
+            "tool_calls": 2,
+            "failed_inference_calls": 0,
+            "failed_tool_calls": 0,
+            "input_tokens_estimate": 8532,
+            "output_tokens_estimate": 201,
+            "tool_schema_tokens_estimate": 50,
+            "provider_input_tokens": 8532,
+            "provider_output_tokens": 201,
+            "inference_duration_ms": 0,
+            "tool_duration_ms": 0
+          },
+          "violations": [],
+          "passed": true
+        },
+        "hierarchical_v3": {
+          "engine": "hierarchical_v3",
+          "outcome": "Verified phase evidence satisfies all required acceptance criteria.",
+          "status": "completed",
+          "capabilities": [
+            "attachment_analysis"
+          ],
+          "effects": [],
+          "questions": [],
+          "telemetry": [
+            {
+              "event_type": "inference",
+              "purpose": "acceptance_criteria",
+              "task_id": "replay-prescription-image-ocr-hierarchical_v3",
+              "project_id": "fixture-project",
+              "provider": "deterministic",
+              "model": "replay-v1",
+              "profile_id": "offline-replay",
+              "input_chars": 2667,
+              "input_tokens_estimate": 667,
+              "output_chars": 66,
+              "output_tokens_estimate": 17,
+              "tool_count": 0,
+              "tool_schema_chars": 0,
+              "tool_schema_tokens_estimate": 0,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "provider_usage": {
+                "input_tokens": 667,
+                "output_tokens": 17
+              },
+              "metadata": {}
+            },
+            {
+              "event_type": "inference",
+              "purpose": "phase_planning",
+              "task_id": "replay-prescription-image-ocr-hierarchical_v3",
+              "project_id": "fixture-project",
+              "provider": "deterministic",
+              "model": "replay-v1",
+              "profile_id": "offline-replay",
+              "input_chars": 1050,
+              "input_tokens_estimate": 263,
+              "output_chars": 839,
+              "output_tokens_estimate": 210,
+              "tool_count": 0,
+              "tool_schema_chars": 0,
+              "tool_schema_tokens_estimate": 0,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "provider_usage": {
+                "input_tokens": 263,
+                "output_tokens": 210
+              },
+              "metadata": {}
+            },
+            {
+              "event_type": "inference",
+              "purpose": "tactical_action",
+              "task_id": "replay-prescription-image-ocr-hierarchical_v3",
+              "project_id": "fixture-project",
+              "provider": "deterministic",
+              "model": "replay-v1",
+              "profile_id": "offline-replay",
+              "input_chars": 2456,
+              "input_tokens_estimate": 614,
+              "output_chars": 113,
+              "output_tokens_estimate": 29,
+              "tool_count": 1,
+              "tool_schema_chars": 50,
+              "tool_schema_tokens_estimate": 13,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "provider_usage": {
+                "input_tokens": 614,
+                "output_tokens": 29
+              },
+              "metadata": {
+                "phase_id": "fixture-phase",
+                "subgoal_id": "extract"
+              }
+            },
+            {
+              "event_type": "tool",
+              "tool_id": "native.analyze_image",
+              "task_id": "replay-prescription-image-ocr-hierarchical_v3",
+              "project_id": "fixture-project",
+              "argument_chars": 34,
+              "result_chars": 29,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "metadata": {
+                "affected_paths": [],
+                "waiting_for_answer": false
+              }
+            },
+            {
+              "event_type": "inference",
+              "purpose": "phase_review",
+              "task_id": "replay-prescription-image-ocr-hierarchical_v3",
+              "project_id": "fixture-project",
+              "provider": "deterministic",
+              "model": "replay-v1",
+              "profile_id": "offline-replay",
+              "input_chars": 1744,
+              "input_tokens_estimate": 436,
+              "output_chars": 143,
+              "output_tokens_estimate": 36,
+              "tool_count": 0,
+              "tool_schema_chars": 0,
+              "tool_schema_tokens_estimate": 0,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "provider_usage": {
+                "input_tokens": 436,
+                "output_tokens": 36
+              },
+              "metadata": {
+                "phase_id": "fixture-phase"
+              }
+            },
+            {
+              "event_type": "inference",
+              "purpose": "final_response",
+              "task_id": "replay-prescription-image-ocr-hierarchical_v3",
+              "project_id": "fixture-project",
+              "provider": "deterministic",
+              "model": "replay-v1",
+              "profile_id": "offline-replay",
+              "input_chars": 658,
+              "input_tokens_estimate": 165,
+              "output_chars": 47,
+              "output_tokens_estimate": 12,
+              "tool_count": 0,
+              "tool_schema_chars": 0,
+              "tool_schema_tokens_estimate": 0,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "provider_usage": {
+                "input_tokens": 165,
+                "output_tokens": 12
+              },
+              "metadata": {
+                "phase_id": "fixture-phase"
+              }
+            }
+          ],
+          "events": [
+            {
+              "event_type": "tactical_tools_revealed",
+              "phase_id": "fixture-phase",
+              "subgoal_id": "extract",
+              "capabilities": [
+                "attachment_analysis"
+              ],
+              "tool_ids": [
+                "native.analyze_image"
+              ]
+            },
+            {
+              "event_type": "tool_call_result",
+              "tool_id": "native.analyze_image",
+              "status": "success",
+              "affected_paths": []
+            }
+          ],
+          "metadata": {
+            "phase_shape": [
+              "extract"
+            ],
+            "tool_ids": [
+              "native.analyze_image"
+            ],
+            "task_status": "completed"
+          },
+          "error": "",
+          "elapsed_ms": 6,
+          "metrics": {
+            "elapsed_ms": 6,
+            "inference_calls": 5,
+            "tool_calls": 1,
+            "failed_inference_calls": 0,
+            "failed_tool_calls": 0,
+            "input_tokens_estimate": 2145,
+            "output_tokens_estimate": 304,
+            "tool_schema_tokens_estimate": 13,
+            "provider_input_tokens": 2145,
+            "provider_output_tokens": 304,
+            "inference_duration_ms": 0,
+            "tool_duration_ms": 0
+          },
+          "violations": [],
+          "passed": true
+        }
+      }
+    },
+    {
+      "case_id": "markdown-prescription-no-ocr",
+      "goal": "Read medicine names from the existing Receta markdown record",
+      "runs": {
+        "tactical_v2": {
+          "engine": "tactical_v2",
+          "outcome": "All acceptance criteria are complete and a user response is prepared.",
+          "status": "completed",
+          "capabilities": [
+            "project_record_search"
+          ],
+          "effects": [],
+          "questions": [],
+          "telemetry": [
+            {
+              "event_type": "inference",
+              "purpose": "acceptance_criteria",
+              "task_id": "replay-markdown-prescription-no-ocr-tactical_v2",
+              "project_id": "fixture-project",
+              "provider": "deterministic",
+              "model": "replay-v1",
+              "profile_id": "offline-replay",
+              "input_chars": 2587,
+              "input_tokens_estimate": 647,
+              "output_chars": 64,
+              "output_tokens_estimate": 16,
+              "tool_count": 0,
+              "tool_schema_chars": 0,
+              "tool_schema_tokens_estimate": 0,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "provider_usage": {
+                "input_tokens": 647,
+                "output_tokens": 16
+              },
+              "metadata": {}
+            },
+            {
+              "event_type": "inference",
+              "purpose": "tool_planning",
+              "task_id": "replay-markdown-prescription-no-ocr-tactical_v2",
+              "project_id": "fixture-project",
+              "provider": "deterministic",
+              "model": "replay-v1",
+              "profile_id": "offline-replay",
+              "input_chars": 9892,
+              "input_tokens_estimate": 2473,
+              "output_chars": 202,
+              "output_tokens_estimate": 51,
+              "tool_count": 2,
+              "tool_schema_chars": 100,
+              "tool_schema_tokens_estimate": 25,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "provider_usage": {
+                "input_tokens": 2473,
+                "output_tokens": 51
+              },
+              "metadata": {}
+            },
+            {
+              "event_type": "tool",
+              "tool_id": "fixture.read",
+              "task_id": "replay-markdown-prescription-no-ocr-tactical_v2",
+              "project_id": "fixture-project",
+              "argument_chars": 21,
+              "result_chars": 59,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "metadata": {
+                "affected_paths": [
+                  "Receta.md"
+                ],
+                "waiting_for_answer": false
+              }
+            },
+            {
+              "event_type": "inference",
+              "purpose": "criteria_review",
+              "task_id": "replay-markdown-prescription-no-ocr-tactical_v2",
+              "project_id": "fixture-project",
+              "provider": "deterministic",
+              "model": "replay-v1",
+              "profile_id": "offline-replay",
+              "input_chars": 4896,
+              "input_tokens_estimate": 1224,
+              "output_chars": 141,
+              "output_tokens_estimate": 36,
+              "tool_count": 0,
+              "tool_schema_chars": 0,
+              "tool_schema_tokens_estimate": 0,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "provider_usage": {
+                "input_tokens": 1224,
+                "output_tokens": 36
+              },
+              "metadata": {}
+            },
+            {
+              "event_type": "inference",
+              "purpose": "tool_planning",
+              "task_id": "replay-markdown-prescription-no-ocr-tactical_v2",
+              "project_id": "fixture-project",
+              "provider": "deterministic",
+              "model": "replay-v1",
+              "profile_id": "offline-replay",
+              "input_chars": 10684,
+              "input_tokens_estimate": 2671,
+              "output_chars": 221,
+              "output_tokens_estimate": 56,
+              "tool_count": 2,
+              "tool_schema_chars": 100,
+              "tool_schema_tokens_estimate": 25,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "provider_usage": {
+                "input_tokens": 2671,
+                "output_tokens": 57
+              },
+              "metadata": {}
+            },
+            {
+              "event_type": "tool",
+              "tool_id": "native.respond",
+              "task_id": "replay-markdown-prescription-no-ocr-tactical_v2",
+              "project_id": "fixture-project",
+              "argument_chars": 52,
+              "result_chars": 52,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "metadata": {
+                "affected_paths": [],
+                "waiting_for_answer": false
+              }
+            },
+            {
+              "event_type": "inference",
+              "purpose": "criteria_review",
+              "task_id": "replay-markdown-prescription-no-ocr-tactical_v2",
+              "project_id": "fixture-project",
+              "provider": "deterministic",
+              "model": "replay-v1",
+              "profile_id": "offline-replay",
+              "input_chars": 5679,
+              "input_tokens_estimate": 1420,
+              "output_chars": 137,
+              "output_tokens_estimate": 35,
+              "tool_count": 0,
+              "tool_schema_chars": 0,
+              "tool_schema_tokens_estimate": 0,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "provider_usage": {
+                "input_tokens": 1420,
+                "output_tokens": 35
+              },
+              "metadata": {}
+            }
+          ],
+          "events": [
+            {
+              "event_type": "tool_call_result",
+              "tool_id": "fixture.read",
+              "status": "success",
+              "affected_paths": []
+            },
+            {
+              "event_type": "tool_call_result",
+              "tool_id": "native.respond",
+              "status": "success",
+              "affected_paths": []
+            }
+          ],
+          "metadata": {
+            "phase_shape": [
+              "read_record"
+            ],
+            "tool_ids": [
+              "fixture.read",
+              "native.respond"
+            ],
+            "task_status": "completed"
+          },
+          "error": "",
+          "elapsed_ms": 31,
+          "metrics": {
+            "elapsed_ms": 31,
+            "inference_calls": 5,
+            "tool_calls": 2,
+            "failed_inference_calls": 0,
+            "failed_tool_calls": 0,
+            "input_tokens_estimate": 8435,
+            "output_tokens_estimate": 194,
+            "tool_schema_tokens_estimate": 50,
+            "provider_input_tokens": 8435,
+            "provider_output_tokens": 195,
+            "inference_duration_ms": 0,
+            "tool_duration_ms": 0
+          },
+          "violations": [],
+          "passed": true
+        },
+        "hierarchical_v3": {
+          "engine": "hierarchical_v3",
+          "outcome": "Verified phase evidence satisfies all required acceptance criteria.",
+          "status": "completed",
+          "capabilities": [
+            "project_record_search"
+          ],
+          "effects": [],
+          "questions": [],
+          "telemetry": [
+            {
+              "event_type": "inference",
+              "purpose": "acceptance_criteria",
+              "task_id": "replay-markdown-prescription-no-ocr-hierarchical_v3",
+              "project_id": "fixture-project",
+              "provider": "deterministic",
+              "model": "replay-v1",
+              "profile_id": "offline-replay",
+              "input_chars": 2591,
+              "input_tokens_estimate": 648,
+              "output_chars": 64,
+              "output_tokens_estimate": 16,
+              "tool_count": 0,
+              "tool_schema_chars": 0,
+              "tool_schema_tokens_estimate": 0,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "provider_usage": {
+                "input_tokens": 648,
+                "output_tokens": 16
+              },
+              "metadata": {}
+            },
+            {
+              "event_type": "inference",
+              "purpose": "phase_planning",
+              "task_id": "replay-markdown-prescription-no-ocr-hierarchical_v3",
+              "project_id": "fixture-project",
+              "provider": "deterministic",
+              "model": "replay-v1",
+              "profile_id": "offline-replay",
+              "input_chars": 1057,
+              "input_tokens_estimate": 265,
+              "output_chars": 849,
+              "output_tokens_estimate": 213,
+              "tool_count": 0,
+              "tool_schema_chars": 0,
+              "tool_schema_tokens_estimate": 0,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "provider_usage": {
+                "input_tokens": 265,
+                "output_tokens": 213
+              },
+              "metadata": {}
+            },
+            {
+              "event_type": "inference",
+              "purpose": "tactical_action",
+              "task_id": "replay-markdown-prescription-no-ocr-hierarchical_v3",
+              "project_id": "fixture-project",
+              "provider": "deterministic",
+              "model": "replay-v1",
+              "profile_id": "offline-replay",
+              "input_chars": 2460,
+              "input_tokens_estimate": 615,
+              "output_chars": 96,
+              "output_tokens_estimate": 24,
+              "tool_count": 1,
+              "tool_schema_chars": 50,
+              "tool_schema_tokens_estimate": 13,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "provider_usage": {
+                "input_tokens": 615,
+                "output_tokens": 24
+              },
+              "metadata": {
+                "phase_id": "fixture-phase",
+                "subgoal_id": "read_record"
+              }
+            },
+            {
+              "event_type": "tool",
+              "tool_id": "fixture.read",
+              "task_id": "replay-markdown-prescription-no-ocr-hierarchical_v3",
+              "project_id": "fixture-project",
+              "argument_chars": 21,
+              "result_chars": 59,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "metadata": {
+                "affected_paths": [
+                  "Receta.md"
+                ],
+                "waiting_for_answer": false
+              }
+            },
+            {
+              "event_type": "inference",
+              "purpose": "phase_review",
+              "task_id": "replay-markdown-prescription-no-ocr-hierarchical_v3",
+              "project_id": "fixture-project",
+              "provider": "deterministic",
+              "model": "replay-v1",
+              "profile_id": "offline-replay",
+              "input_chars": 1792,
+              "input_tokens_estimate": 448,
+              "output_chars": 147,
+              "output_tokens_estimate": 37,
+              "tool_count": 0,
+              "tool_schema_chars": 0,
+              "tool_schema_tokens_estimate": 0,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "provider_usage": {
+                "input_tokens": 448,
+                "output_tokens": 37
+              },
+              "metadata": {
+                "phase_id": "fixture-phase"
+              }
+            },
+            {
+              "event_type": "inference",
+              "purpose": "final_response",
+              "task_id": "replay-markdown-prescription-no-ocr-hierarchical_v3",
+              "project_id": "fixture-project",
+              "provider": "deterministic",
+              "model": "replay-v1",
+              "profile_id": "offline-replay",
+              "input_chars": 687,
+              "input_tokens_estimate": 172,
+              "output_chars": 37,
+              "output_tokens_estimate": 10,
+              "tool_count": 0,
+              "tool_schema_chars": 0,
+              "tool_schema_tokens_estimate": 0,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "provider_usage": {
+                "input_tokens": 172,
+                "output_tokens": 10
+              },
+              "metadata": {
+                "phase_id": "fixture-phase"
+              }
+            }
+          ],
+          "events": [
+            {
+              "event_type": "tactical_tools_revealed",
+              "phase_id": "fixture-phase",
+              "subgoal_id": "read_record",
+              "capabilities": [
+                "project_record_search"
+              ],
+              "tool_ids": [
+                "fixture.read"
+              ]
+            },
+            {
+              "event_type": "tool_call_result",
+              "tool_id": "fixture.read",
+              "status": "success",
+              "affected_paths": []
+            }
+          ],
+          "metadata": {
+            "phase_shape": [
+              "read_record"
+            ],
+            "tool_ids": [
+              "fixture.read"
+            ],
+            "task_status": "completed"
+          },
+          "error": "",
+          "elapsed_ms": 7,
+          "metrics": {
+            "elapsed_ms": 7,
+            "inference_calls": 5,
+            "tool_calls": 1,
+            "failed_inference_calls": 0,
+            "failed_tool_calls": 0,
+            "input_tokens_estimate": 2148,
+            "output_tokens_estimate": 300,
+            "tool_schema_tokens_estimate": 13,
+            "provider_input_tokens": 2148,
+            "provider_output_tokens": 300,
+            "inference_duration_ms": 0,
+            "tool_duration_ms": 0
+          },
+          "violations": [],
+          "passed": true
+        }
+      }
+    },
+    {
+      "case_id": "tool-failure-local-fallback",
+      "goal": "Locate a project record when its artifact index is unavailable",
+      "runs": {
+        "tactical_v2": {
+          "engine": "tactical_v2",
+          "outcome": "All acceptance criteria are complete and a user response is prepared.",
+          "status": "completed",
+          "capabilities": [
+            "project_artifact_query",
+            "project_record_search"
+          ],
+          "effects": [],
+          "questions": [],
+          "telemetry": [
+            {
+              "event_type": "inference",
+              "purpose": "acceptance_criteria",
+              "task_id": "replay-tool-failure-local-fallback-tactical_v2",
+              "project_id": "fixture-project",
+              "provider": "deterministic",
+              "model": "replay-v1",
+              "profile_id": "offline-replay",
+              "input_chars": 2587,
+              "input_tokens_estimate": 647,
+              "output_chars": 58,
+              "output_tokens_estimate": 15,
+              "tool_count": 0,
+              "tool_schema_chars": 0,
+              "tool_schema_tokens_estimate": 0,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "provider_usage": {
+                "input_tokens": 647,
+                "output_tokens": 15
+              },
+              "metadata": {}
+            },
+            {
+              "event_type": "inference",
+              "purpose": "tool_planning",
+              "task_id": "replay-tool-failure-local-fallback-tactical_v2",
+              "project_id": "fixture-project",
+              "provider": "deterministic",
+              "model": "replay-v1",
+              "profile_id": "offline-replay",
+              "input_chars": 10060,
+              "input_tokens_estimate": 2515,
+              "output_chars": 176,
+              "output_tokens_estimate": 44,
+              "tool_count": 3,
+              "tool_schema_chars": 150,
+              "tool_schema_tokens_estimate": 38,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "provider_usage": {
+                "input_tokens": 2515,
+                "output_tokens": 44
+              },
+              "metadata": {}
+            },
+            {
+              "event_type": "tool",
+              "tool_id": "artifact.index",
+              "task_id": "replay-tool-failure-local-fallback-tactical_v2",
+              "project_id": "fixture-project",
+              "argument_chars": 2,
+              "result_chars": 0,
+              "duration_ms": 0,
+              "status": "failed",
+              "error": "RuntimeError: fixture index unavailable",
+              "metadata": {}
+            },
+            {
+              "event_type": "inference",
+              "purpose": "criteria_review",
+              "task_id": "replay-tool-failure-local-fallback-tactical_v2",
+              "project_id": "fixture-project",
+              "provider": "deterministic",
+              "model": "replay-v1",
+              "profile_id": "offline-replay",
+              "input_chars": 4758,
+              "input_tokens_estimate": 1190,
+              "output_chars": 15,
+              "output_tokens_estimate": 4,
+              "tool_count": 0,
+              "tool_schema_chars": 0,
+              "tool_schema_tokens_estimate": 0,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "provider_usage": {
+                "input_tokens": 1190,
+                "output_tokens": 4
+              },
+              "metadata": {}
+            },
+            {
+              "event_type": "inference",
+              "purpose": "tool_planning",
+              "task_id": "replay-tool-failure-local-fallback-tactical_v2",
+              "project_id": "fixture-project",
+              "provider": "deterministic",
+              "model": "replay-v1",
+              "profile_id": "offline-replay",
+              "input_chars": 10687,
+              "input_tokens_estimate": 2672,
+              "output_chars": 198,
+              "output_tokens_estimate": 50,
+              "tool_count": 3,
+              "tool_schema_chars": 150,
+              "tool_schema_tokens_estimate": 38,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "provider_usage": {
+                "input_tokens": 2672,
+                "output_tokens": 50
+              },
+              "metadata": {}
+            },
+            {
+              "event_type": "tool",
+              "tool_id": "fixture.search",
+              "task_id": "replay-tool-failure-local-fallback-tactical_v2",
+              "project_id": "fixture-project",
+              "argument_chars": 19,
+              "result_chars": 27,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "metadata": {
+                "affected_paths": [
+                  "records/item.md"
+                ],
+                "waiting_for_answer": false
+              }
+            },
+            {
+              "event_type": "inference",
+              "purpose": "criteria_review",
+              "task_id": "replay-tool-failure-local-fallback-tactical_v2",
+              "project_id": "fixture-project",
+              "provider": "deterministic",
+              "model": "replay-v1",
+              "profile_id": "offline-replay",
+              "input_chars": 5440,
+              "input_tokens_estimate": 1360,
+              "output_chars": 138,
+              "output_tokens_estimate": 35,
+              "tool_count": 0,
+              "tool_schema_chars": 0,
+              "tool_schema_tokens_estimate": 0,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "provider_usage": {
+                "input_tokens": 1360,
+                "output_tokens": 35
+              },
+              "metadata": {}
+            },
+            {
+              "event_type": "inference",
+              "purpose": "tool_planning",
+              "task_id": "replay-tool-failure-local-fallback-tactical_v2",
+              "project_id": "fixture-project",
+              "provider": "deterministic",
+              "model": "replay-v1",
+              "profile_id": "offline-replay",
+              "input_chars": 11417,
+              "input_tokens_estimate": 2855,
+              "output_chars": 242,
+              "output_tokens_estimate": 61,
+              "tool_count": 3,
+              "tool_schema_chars": 150,
+              "tool_schema_tokens_estimate": 38,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "provider_usage": {
+                "input_tokens": 2855,
+                "output_tokens": 63
+              },
+              "metadata": {}
+            },
+            {
+              "event_type": "tool",
+              "tool_id": "native.respond",
+              "task_id": "replay-tool-failure-local-fallback-tactical_v2",
+              "project_id": "fixture-project",
+              "argument_chars": 73,
+              "result_chars": 73,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "metadata": {
+                "affected_paths": [],
+                "waiting_for_answer": false
+              }
+            },
+            {
+              "event_type": "inference",
+              "purpose": "criteria_review",
+              "task_id": "replay-tool-failure-local-fallback-tactical_v2",
+              "project_id": "fixture-project",
+              "provider": "deterministic",
+              "model": "replay-v1",
+              "profile_id": "offline-replay",
+              "input_chars": 6308,
+              "input_tokens_estimate": 1577,
+              "output_chars": 137,
+              "output_tokens_estimate": 35,
+              "tool_count": 0,
+              "tool_schema_chars": 0,
+              "tool_schema_tokens_estimate": 0,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "provider_usage": {
+                "input_tokens": 1577,
+                "output_tokens": 35
+              },
+              "metadata": {}
+            }
+          ],
+          "events": [
+            {
+              "event_type": "tool_call_result",
+              "tool_id": "artifact.index",
+              "status": "exception",
+              "affected_paths": []
+            },
+            {
+              "event_type": "tool_call_result",
+              "tool_id": "fixture.search",
+              "status": "success",
+              "affected_paths": []
+            },
+            {
+              "event_type": "tool_call_result",
+              "tool_id": "native.respond",
+              "status": "success",
+              "affected_paths": []
+            }
+          ],
+          "metadata": {
+            "phase_shape": [
+              "index",
+              "fallback"
+            ],
+            "tool_ids": [
+              "artifact.index",
+              "fixture.search",
+              "native.respond"
+            ],
+            "task_status": "completed",
+            "recovery": "bounded project-file search"
+          },
+          "error": "",
+          "elapsed_ms": 44,
+          "metrics": {
+            "elapsed_ms": 44,
+            "inference_calls": 7,
+            "tool_calls": 3,
+            "failed_inference_calls": 0,
+            "failed_tool_calls": 1,
+            "input_tokens_estimate": 12816,
+            "output_tokens_estimate": 244,
+            "tool_schema_tokens_estimate": 114,
+            "provider_input_tokens": 12816,
+            "provider_output_tokens": 246,
+            "inference_duration_ms": 0,
+            "tool_duration_ms": 0
+          },
+          "violations": [],
+          "passed": true
+        },
+        "hierarchical_v3": {
+          "engine": "hierarchical_v3",
+          "outcome": "Verified phase evidence satisfies all required acceptance criteria.",
+          "status": "completed",
+          "capabilities": [
+            "project_artifact_query",
+            "project_record_search"
+          ],
+          "effects": [],
+          "questions": [],
+          "telemetry": [
+            {
+              "event_type": "inference",
+              "purpose": "acceptance_criteria",
+              "task_id": "replay-tool-failure-local-fallback-hierarchical_v3",
+              "project_id": "fixture-project",
+              "provider": "deterministic",
+              "model": "replay-v1",
+              "profile_id": "offline-replay",
+              "input_chars": 2591,
+              "input_tokens_estimate": 648,
+              "output_chars": 58,
+              "output_tokens_estimate": 15,
+              "tool_count": 0,
+              "tool_schema_chars": 0,
+              "tool_schema_tokens_estimate": 0,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "provider_usage": {
+                "input_tokens": 648,
+                "output_tokens": 15
+              },
+              "metadata": {}
+            },
+            {
+              "event_type": "inference",
+              "purpose": "phase_planning",
+              "task_id": "replay-tool-failure-local-fallback-hierarchical_v3",
+              "project_id": "fixture-project",
+              "provider": "deterministic",
+              "model": "replay-v1",
+              "profile_id": "offline-replay",
+              "input_chars": 1078,
+              "input_tokens_estimate": 270,
+              "output_chars": 910,
+              "output_tokens_estimate": 228,
+              "tool_count": 0,
+              "tool_schema_chars": 0,
+              "tool_schema_tokens_estimate": 0,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "provider_usage": {
+                "input_tokens": 270,
+                "output_tokens": 228
+              },
+              "metadata": {}
+            },
+            {
+              "event_type": "inference",
+              "purpose": "tactical_action",
+              "task_id": "replay-tool-failure-local-fallback-hierarchical_v3",
+              "project_id": "fixture-project",
+              "provider": "deterministic",
+              "model": "replay-v1",
+              "profile_id": "offline-replay",
+              "input_chars": 2820,
+              "input_tokens_estimate": 705,
+              "output_chars": 73,
+              "output_tokens_estimate": 19,
+              "tool_count": 2,
+              "tool_schema_chars": 100,
+              "tool_schema_tokens_estimate": 25,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "provider_usage": {
+                "input_tokens": 705,
+                "output_tokens": 19
+              },
+              "metadata": {
+                "phase_id": "fixture-phase",
+                "subgoal_id": "locate"
+              }
+            },
+            {
+              "event_type": "tool",
+              "tool_id": "artifact.index",
+              "task_id": "replay-tool-failure-local-fallback-hierarchical_v3",
+              "project_id": "fixture-project",
+              "argument_chars": 2,
+              "result_chars": 0,
+              "duration_ms": 0,
+              "status": "failed",
+              "error": "RuntimeError: fixture index unavailable",
+              "metadata": {}
+            },
+            {
+              "event_type": "inference",
+              "purpose": "tactical_action",
+              "task_id": "replay-tool-failure-local-fallback-hierarchical_v3",
+              "project_id": "fixture-project",
+              "provider": "deterministic",
+              "model": "replay-v1",
+              "profile_id": "offline-replay",
+              "input_chars": 3325,
+              "input_tokens_estimate": 832,
+              "output_chars": 93,
+              "output_tokens_estimate": 24,
+              "tool_count": 2,
+              "tool_schema_chars": 100,
+              "tool_schema_tokens_estimate": 25,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "provider_usage": {
+                "input_tokens": 832,
+                "output_tokens": 24
+              },
+              "metadata": {
+                "phase_id": "fixture-phase",
+                "subgoal_id": "locate"
+              }
+            },
+            {
+              "event_type": "tool",
+              "tool_id": "fixture.search",
+              "task_id": "replay-tool-failure-local-fallback-hierarchical_v3",
+              "project_id": "fixture-project",
+              "argument_chars": 19,
+              "result_chars": 27,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "metadata": {
+                "affected_paths": [
+                  "records/item.md"
+                ],
+                "waiting_for_answer": false
+              }
+            },
+            {
+              "event_type": "inference",
+              "purpose": "phase_review",
+              "task_id": "replay-tool-failure-local-fallback-hierarchical_v3",
+              "project_id": "fixture-project",
+              "provider": "deterministic",
+              "model": "replay-v1",
+              "profile_id": "offline-replay",
+              "input_chars": 2009,
+              "input_tokens_estimate": 503,
+              "output_chars": 144,
+              "output_tokens_estimate": 36,
+              "tool_count": 0,
+              "tool_schema_chars": 0,
+              "tool_schema_tokens_estimate": 0,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "provider_usage": {
+                "input_tokens": 503,
+                "output_tokens": 36
+              },
+              "metadata": {
+                "phase_id": "fixture-phase"
+              }
+            },
+            {
+              "event_type": "inference",
+              "purpose": "final_response",
+              "task_id": "replay-tool-failure-local-fallback-hierarchical_v3",
+              "project_id": "fixture-project",
+              "provider": "deterministic",
+              "model": "replay-v1",
+              "profile_id": "offline-replay",
+              "input_chars": 645,
+              "input_tokens_estimate": 162,
+              "output_chars": 58,
+              "output_tokens_estimate": 15,
+              "tool_count": 0,
+              "tool_schema_chars": 0,
+              "tool_schema_tokens_estimate": 0,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "provider_usage": {
+                "input_tokens": 162,
+                "output_tokens": 15
+              },
+              "metadata": {
+                "phase_id": "fixture-phase"
+              }
+            }
+          ],
+          "events": [
+            {
+              "event_type": "tactical_tools_revealed",
+              "phase_id": "fixture-phase",
+              "subgoal_id": "locate",
+              "capabilities": [
+                "project_artifact_query",
+                "project_record_search"
+              ],
+              "tool_ids": [
+                "artifact.index",
+                "fixture.search"
+              ]
+            },
+            {
+              "event_type": "tool_call_result",
+              "tool_id": "artifact.index",
+              "status": "failed",
+              "affected_paths": []
+            },
+            {
+              "event_type": "tool_call_result",
+              "tool_id": "fixture.search",
+              "status": "success",
+              "affected_paths": []
+            }
+          ],
+          "metadata": {
+            "phase_shape": [
+              "index",
+              "fallback"
+            ],
+            "tool_ids": [
+              "artifact.index",
+              "fixture.search"
+            ],
+            "task_status": "completed",
+            "recovery": "bounded project-file search"
+          },
+          "error": "",
+          "elapsed_ms": 7,
+          "metrics": {
+            "elapsed_ms": 7,
+            "inference_calls": 6,
+            "tool_calls": 2,
+            "failed_inference_calls": 0,
+            "failed_tool_calls": 1,
+            "input_tokens_estimate": 3120,
+            "output_tokens_estimate": 337,
+            "tool_schema_tokens_estimate": 50,
+            "provider_input_tokens": 3120,
+            "provider_output_tokens": 337,
+            "inference_duration_ms": 0,
+            "tool_duration_ms": 0
+          },
+          "violations": [],
+          "passed": true
+        }
+      }
+    },
+    {
+      "case_id": "conflicting-authoritative-records",
+      "goal": "Update a record when two authoritative sources disagree",
+      "runs": {
+        "tactical_v2": {
+          "engine": "tactical_v2",
+          "outcome": "waiting_user",
+          "status": "waiting_user",
+          "capabilities": [
+            "project_artifact_query",
+            "user_interaction"
+          ],
+          "effects": [],
+          "questions": [
+            "Which source should be authoritative?"
+          ],
+          "telemetry": [
+            {
+              "event_type": "inference",
+              "purpose": "acceptance_criteria",
+              "task_id": "replay-conflicting-authoritative-records-tactical_v2",
+              "project_id": "fixture-project",
+              "provider": "deterministic",
+              "model": "replay-v1",
+              "profile_id": "offline-replay",
+              "input_chars": 2592,
+              "input_tokens_estimate": 648,
+              "output_chars": 65,
+              "output_tokens_estimate": 17,
+              "tool_count": 0,
+              "tool_schema_chars": 0,
+              "tool_schema_tokens_estimate": 0,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "provider_usage": {
+                "input_tokens": 648,
+                "output_tokens": 17
+              },
+              "metadata": {}
+            },
+            {
+              "event_type": "inference",
+              "purpose": "tool_planning",
+              "task_id": "replay-conflicting-authoritative-records-tactical_v2",
+              "project_id": "fixture-project",
+              "provider": "deterministic",
+              "model": "replay-v1",
+              "profile_id": "offline-replay",
+              "input_chars": 10088,
+              "input_tokens_estimate": 2522,
+              "output_chars": 184,
+              "output_tokens_estimate": 46,
+              "tool_count": 3,
+              "tool_schema_chars": 150,
+              "tool_schema_tokens_estimate": 38,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "provider_usage": {
+                "input_tokens": 2522,
+                "output_tokens": 46
+              },
+              "metadata": {}
+            },
+            {
+              "event_type": "tool",
+              "tool_id": "artifact.records",
+              "task_id": "replay-conflicting-authoritative-records-tactical_v2",
+              "project_id": "fixture-project",
+              "argument_chars": 2,
+              "result_chars": 41,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "metadata": {
+                "affected_paths": [],
+                "waiting_for_answer": false
+              }
+            },
+            {
+              "event_type": "inference",
+              "purpose": "criteria_review",
+              "task_id": "replay-conflicting-authoritative-records-tactical_v2",
+              "project_id": "fixture-project",
+              "provider": "deterministic",
+              "model": "replay-v1",
+              "profile_id": "offline-replay",
+              "input_chars": 4886,
+              "input_tokens_estimate": 1222,
+              "output_chars": 137,
+              "output_tokens_estimate": 35,
+              "tool_count": 0,
+              "tool_schema_chars": 0,
+              "tool_schema_tokens_estimate": 0,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "provider_usage": {
+                "input_tokens": 1222,
+                "output_tokens": 35
+              },
+              "metadata": {}
+            },
+            {
+              "event_type": "inference",
+              "purpose": "tool_planning",
+              "task_id": "replay-conflicting-authoritative-records-tactical_v2",
+              "project_id": "fixture-project",
+              "provider": "deterministic",
+              "model": "replay-v1",
+              "profile_id": "offline-replay",
+              "input_chars": 10889,
+              "input_tokens_estimate": 2723,
+              "output_chars": 235,
+              "output_tokens_estimate": 59,
+              "tool_count": 3,
+              "tool_schema_chars": 150,
+              "tool_schema_tokens_estimate": 38,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "provider_usage": {
+                "input_tokens": 2723,
+                "output_tokens": 59
+              },
+              "metadata": {}
+            },
+            {
+              "event_type": "tool",
+              "tool_id": "native.ask_question",
+              "task_id": "replay-conflicting-authoritative-records-tactical_v2",
+              "project_id": "fixture-project",
+              "argument_chars": 53,
+              "result_chars": 81,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "metadata": {
+                "affected_paths": [],
+                "waiting_for_answer": true
+              }
+            }
+          ],
+          "events": [
+            {
+              "event_type": "tool_call_result",
+              "tool_id": "artifact.records",
+              "status": "success",
+              "affected_paths": []
+            },
+            {
+              "event_type": "tool_call_result",
+              "tool_id": "native.ask_question",
+              "status": "waiting",
+              "affected_paths": []
+            }
+          ],
+          "metadata": {
+            "phase_shape": [
+              "compare"
+            ],
+            "tool_ids": [
+              "artifact.records",
+              "native.ask_question"
+            ],
+            "task_status": "waiting_user",
+            "outer_route": "strategic_replan_or_ask_user"
+          },
+          "error": "",
+          "elapsed_ms": 26,
+          "metrics": {
+            "elapsed_ms": 26,
+            "inference_calls": 4,
+            "tool_calls": 2,
+            "failed_inference_calls": 0,
+            "failed_tool_calls": 0,
+            "input_tokens_estimate": 7115,
+            "output_tokens_estimate": 157,
+            "tool_schema_tokens_estimate": 76,
+            "provider_input_tokens": 7115,
+            "provider_output_tokens": 157,
+            "inference_duration_ms": 0,
+            "tool_duration_ms": 0
+          },
+          "violations": [],
+          "passed": true
+        },
+        "hierarchical_v3": {
+          "engine": "hierarchical_v3",
+          "outcome": "waiting_user",
+          "status": "waiting_user",
+          "capabilities": [
+            "project_artifact_query",
+            "user_interaction"
+          ],
+          "effects": [],
+          "questions": [
+            "Which source should be authoritative?"
+          ],
+          "telemetry": [
+            {
+              "event_type": "inference",
+              "purpose": "acceptance_criteria",
+              "task_id": "replay-conflicting-authoritative-records-hierarchical_v3",
+              "project_id": "fixture-project",
+              "provider": "deterministic",
+              "model": "replay-v1",
+              "profile_id": "offline-replay",
+              "input_chars": 2596,
+              "input_tokens_estimate": 649,
+              "output_chars": 65,
+              "output_tokens_estimate": 17,
+              "tool_count": 0,
+              "tool_schema_chars": 0,
+              "tool_schema_tokens_estimate": 0,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "provider_usage": {
+                "input_tokens": 649,
+                "output_tokens": 17
+              },
+              "metadata": {}
+            },
+            {
+              "event_type": "inference",
+              "purpose": "phase_planning",
+              "task_id": "replay-conflicting-authoritative-records-hierarchical_v3",
+              "project_id": "fixture-project",
+              "provider": "deterministic",
+              "model": "replay-v1",
+              "profile_id": "offline-replay",
+              "input_chars": 1079,
+              "input_tokens_estimate": 270,
+              "output_chars": 1260,
+              "output_tokens_estimate": 315,
+              "tool_count": 0,
+              "tool_schema_chars": 0,
+              "tool_schema_tokens_estimate": 0,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "provider_usage": {
+                "input_tokens": 270,
+                "output_tokens": 315
+              },
+              "metadata": {}
+            },
+            {
+              "event_type": "inference",
+              "purpose": "tactical_action",
+              "task_id": "replay-conflicting-authoritative-records-hierarchical_v3",
+              "project_id": "fixture-project",
+              "provider": "deterministic",
+              "model": "replay-v1",
+              "profile_id": "offline-replay",
+              "input_chars": 3106,
+              "input_tokens_estimate": 777,
+              "output_chars": 77,
+              "output_tokens_estimate": 20,
+              "tool_count": 1,
+              "tool_schema_chars": 50,
+              "tool_schema_tokens_estimate": 13,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "provider_usage": {
+                "input_tokens": 777,
+                "output_tokens": 20
+              },
+              "metadata": {
+                "phase_id": "fixture-phase",
+                "subgoal_id": "compare"
+              }
+            },
+            {
+              "event_type": "tool",
+              "tool_id": "artifact.records",
+              "task_id": "replay-conflicting-authoritative-records-hierarchical_v3",
+              "project_id": "fixture-project",
+              "argument_chars": 2,
+              "result_chars": 41,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "metadata": {
+                "affected_paths": [],
+                "waiting_for_answer": false
+              }
+            },
+            {
+              "event_type": "inference",
+              "purpose": "tactical_action",
+              "task_id": "replay-conflicting-authoritative-records-hierarchical_v3",
+              "project_id": "fixture-project",
+              "provider": "deterministic",
+              "model": "replay-v1",
+              "profile_id": "offline-replay",
+              "input_chars": 3986,
+              "input_tokens_estimate": 997,
+              "output_chars": 131,
+              "output_tokens_estimate": 33,
+              "tool_count": 1,
+              "tool_schema_chars": 50,
+              "tool_schema_tokens_estimate": 13,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "provider_usage": {
+                "input_tokens": 997,
+                "output_tokens": 33
+              },
+              "metadata": {
+                "phase_id": "fixture-phase",
+                "subgoal_id": "clarify"
+              }
+            },
+            {
+              "event_type": "tool",
+              "tool_id": "native.ask_question",
+              "task_id": "replay-conflicting-authoritative-records-hierarchical_v3",
+              "project_id": "fixture-project",
+              "argument_chars": 53,
+              "result_chars": 81,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "metadata": {
+                "affected_paths": [],
+                "waiting_for_answer": true
+              }
+            }
+          ],
+          "events": [
+            {
+              "event_type": "tactical_tools_revealed",
+              "phase_id": "fixture-phase",
+              "subgoal_id": "compare",
+              "capabilities": [
+                "project_artifact_query"
+              ],
+              "tool_ids": [
+                "artifact.records"
+              ]
+            },
+            {
+              "event_type": "tool_call_result",
+              "tool_id": "artifact.records",
+              "status": "success",
+              "affected_paths": []
+            },
+            {
+              "event_type": "tactical_tools_revealed",
+              "phase_id": "fixture-phase",
+              "subgoal_id": "clarify",
+              "capabilities": [
+                "user_interaction"
+              ],
+              "tool_ids": [
+                "native.ask_question"
+              ]
+            },
+            {
+              "event_type": "tool_call_result",
+              "tool_id": "native.ask_question",
+              "status": "waiting",
+              "affected_paths": []
+            }
+          ],
+          "metadata": {
+            "phase_shape": [
+              "compare"
+            ],
+            "tool_ids": [
+              "artifact.records",
+              "native.ask_question"
+            ],
+            "task_status": "waiting_user",
+            "outer_route": "strategic_replan_or_ask_user"
+          },
+          "error": "",
+          "elapsed_ms": 7,
+          "metrics": {
+            "elapsed_ms": 7,
+            "inference_calls": 4,
+            "tool_calls": 2,
+            "failed_inference_calls": 0,
+            "failed_tool_calls": 0,
+            "input_tokens_estimate": 2693,
+            "output_tokens_estimate": 385,
+            "tool_schema_tokens_estimate": 26,
+            "provider_input_tokens": 2693,
+            "provider_output_tokens": 385,
+            "inference_duration_ms": 0,
+            "tool_duration_ms": 0
+          },
+          "violations": [],
+          "passed": true
+        }
+      }
+    },
+    {
+      "case_id": "steering-during-phase",
+      "goal": "Stop using Home Assistant and use the LG client",
+      "runs": {
+        "tactical_v2": {
+          "engine": "tactical_v2",
+          "outcome": "All acceptance criteria are complete and a user response is prepared.",
+          "status": "completed",
+          "capabilities": [
+            "device_control"
+          ],
+          "effects": [],
+          "questions": [],
+          "telemetry": [
+            {
+              "event_type": "inference",
+              "purpose": "acceptance_criteria",
+              "task_id": "replay-steering-during-phase-tactical_v2",
+              "project_id": "fixture-project",
+              "provider": "deterministic",
+              "model": "replay-v1",
+              "profile_id": "offline-replay",
+              "input_chars": 1366,
+              "input_tokens_estimate": 342,
+              "output_chars": 18,
+              "output_tokens_estimate": 5,
+              "tool_count": 0,
+              "tool_schema_chars": 0,
+              "tool_schema_tokens_estimate": 0,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "provider_usage": {
+                "input_tokens": 342,
+                "output_tokens": 5
+              },
+              "metadata": {}
+            },
+            {
+              "event_type": "inference",
+              "purpose": "tool_planning",
+              "task_id": "replay-steering-during-phase-tactical_v2",
+              "project_id": "fixture-project",
+              "provider": "deterministic",
+              "model": "replay-v1",
+              "profile_id": "offline-replay",
+              "input_chars": 9947,
+              "input_tokens_estimate": 2487,
+              "output_chars": 164,
+              "output_tokens_estimate": 41,
+              "tool_count": 2,
+              "tool_schema_chars": 100,
+              "tool_schema_tokens_estimate": 25,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "provider_usage": {
+                "input_tokens": 2487,
+                "output_tokens": 41
+              },
+              "metadata": {}
+            },
+            {
+              "event_type": "tool",
+              "tool_id": "artifact.lg",
+              "task_id": "replay-steering-during-phase-tactical_v2",
+              "project_id": "fixture-project",
+              "argument_chars": 2,
+              "result_chars": 21,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "metadata": {
+                "affected_paths": [],
+                "waiting_for_answer": false
+              }
+            },
+            {
+              "event_type": "inference",
+              "purpose": "criteria_review",
+              "task_id": "replay-steering-during-phase-tactical_v2",
+              "project_id": "fixture-project",
+              "provider": "deterministic",
+              "model": "replay-v1",
+              "profile_id": "offline-replay",
+              "input_chars": 4795,
+              "input_tokens_estimate": 1199,
+              "output_chars": 136,
+              "output_tokens_estimate": 34,
+              "tool_count": 0,
+              "tool_schema_chars": 0,
+              "tool_schema_tokens_estimate": 0,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "provider_usage": {
+                "input_tokens": 1199,
+                "output_tokens": 34
+              },
+              "metadata": {}
+            },
+            {
+              "event_type": "inference",
+              "purpose": "tool_planning",
+              "task_id": "replay-steering-during-phase-tactical_v2",
+              "project_id": "fixture-project",
+              "provider": "deterministic",
+              "model": "replay-v1",
+              "profile_id": "offline-replay",
+              "input_chars": 10640,
+              "input_tokens_estimate": 2660,
+              "output_chars": 227,
+              "output_tokens_estimate": 57,
+              "tool_count": 2,
+              "tool_schema_chars": 100,
+              "tool_schema_tokens_estimate": 25,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "provider_usage": {
+                "input_tokens": 2660,
+                "output_tokens": 60
+              },
+              "metadata": {}
+            },
+            {
+              "event_type": "tool",
+              "tool_id": "native.respond",
+              "task_id": "replay-steering-during-phase-tactical_v2",
+              "project_id": "fixture-project",
+              "argument_chars": 58,
+              "result_chars": 58,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "metadata": {
+                "affected_paths": [],
+                "waiting_for_answer": false
+              }
+            },
+            {
+              "event_type": "inference",
+              "purpose": "criteria_review",
+              "task_id": "replay-steering-during-phase-tactical_v2",
+              "project_id": "fixture-project",
+              "provider": "deterministic",
+              "model": "replay-v1",
+              "profile_id": "offline-replay",
+              "input_chars": 5652,
+              "input_tokens_estimate": 1413,
+              "output_chars": 136,
+              "output_tokens_estimate": 34,
+              "tool_count": 0,
+              "tool_schema_chars": 0,
+              "tool_schema_tokens_estimate": 0,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "provider_usage": {
+                "input_tokens": 1413,
+                "output_tokens": 34
+              },
+              "metadata": {}
+            }
+          ],
+          "events": [
+            {
+              "event_type": "tool_call_result",
+              "tool_id": "artifact.lg",
+              "status": "success",
+              "affected_paths": []
+            },
+            {
+              "event_type": "tool_call_result",
+              "tool_id": "native.respond",
+              "status": "success",
+              "affected_paths": []
+            }
+          ],
+          "metadata": {
+            "phase_shape": [
+              "use_lg"
+            ],
+            "tool_ids": [
+              "artifact.lg",
+              "native.respond"
+            ],
+            "task_status": "completed",
+            "outer_route": "explicit_contract_review"
+          },
+          "error": "",
+          "elapsed_ms": 28,
+          "metrics": {
+            "elapsed_ms": 28,
+            "inference_calls": 5,
+            "tool_calls": 2,
+            "failed_inference_calls": 0,
+            "failed_tool_calls": 0,
+            "input_tokens_estimate": 8101,
+            "output_tokens_estimate": 171,
+            "tool_schema_tokens_estimate": 50,
+            "provider_input_tokens": 8101,
+            "provider_output_tokens": 174,
+            "inference_duration_ms": 0,
+            "tool_duration_ms": 0
+          },
+          "violations": [],
+          "passed": true
+        },
+        "hierarchical_v3": {
+          "engine": "hierarchical_v3",
+          "outcome": "Verified phase evidence satisfies all required acceptance criteria.",
+          "status": "completed",
+          "capabilities": [
+            "device_control"
+          ],
+          "effects": [],
+          "questions": [],
+          "telemetry": [
+            {
+              "event_type": "inference",
+              "purpose": "phase_planning",
+              "task_id": "replay-steering-during-phase-hierarchical_v3",
+              "project_id": "fixture-project",
+              "provider": "deterministic",
+              "model": "replay-v1",
+              "profile_id": "offline-replay",
+              "input_chars": 1020,
+              "input_tokens_estimate": 255,
+              "output_chars": 815,
+              "output_tokens_estimate": 204,
+              "tool_count": 0,
+              "tool_schema_chars": 0,
+              "tool_schema_tokens_estimate": 0,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "provider_usage": {
+                "input_tokens": 255,
+                "output_tokens": 204
+              },
+              "metadata": {}
+            },
+            {
+              "event_type": "inference",
+              "purpose": "acceptance_criteria",
+              "task_id": "replay-steering-during-phase-hierarchical_v3",
+              "project_id": "fixture-project",
+              "provider": "deterministic",
+              "model": "replay-v1",
+              "profile_id": "offline-replay",
+              "input_chars": 1366,
+              "input_tokens_estimate": 342,
+              "output_chars": 18,
+              "output_tokens_estimate": 5,
+              "tool_count": 0,
+              "tool_schema_chars": 0,
+              "tool_schema_tokens_estimate": 0,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "provider_usage": {
+                "input_tokens": 342,
+                "output_tokens": 5
+              },
+              "metadata": {}
+            },
+            {
+              "event_type": "inference",
+              "purpose": "phase_planning",
+              "task_id": "replay-steering-during-phase-hierarchical_v3",
+              "project_id": "fixture-project",
+              "provider": "deterministic",
+              "model": "replay-v1",
+              "profile_id": "offline-replay",
+              "input_chars": 2051,
+              "input_tokens_estimate": 513,
+              "output_chars": 815,
+              "output_tokens_estimate": 204,
+              "tool_count": 0,
+              "tool_schema_chars": 0,
+              "tool_schema_tokens_estimate": 0,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "provider_usage": {
+                "input_tokens": 513,
+                "output_tokens": 204
+              },
+              "metadata": {}
+            },
+            {
+              "event_type": "inference",
+              "purpose": "tactical_action",
+              "task_id": "replay-steering-during-phase-hierarchical_v3",
+              "project_id": "fixture-project",
+              "provider": "deterministic",
+              "model": "replay-v1",
+              "profile_id": "offline-replay",
+              "input_chars": 2387,
+              "input_tokens_estimate": 597,
+              "output_chars": 71,
+              "output_tokens_estimate": 18,
+              "tool_count": 1,
+              "tool_schema_chars": 50,
+              "tool_schema_tokens_estimate": 13,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "provider_usage": {
+                "input_tokens": 597,
+                "output_tokens": 18
+              },
+              "metadata": {
+                "phase_id": "fixture-phase",
+                "subgoal_id": "use_lg"
+              }
+            },
+            {
+              "event_type": "tool",
+              "tool_id": "artifact.lg",
+              "task_id": "replay-steering-during-phase-hierarchical_v3",
+              "project_id": "fixture-project",
+              "argument_chars": 2,
+              "result_chars": 21,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "metadata": {
+                "affected_paths": [],
+                "waiting_for_answer": false
+              }
+            },
+            {
+              "event_type": "inference",
+              "purpose": "phase_review",
+              "task_id": "replay-steering-during-phase-hierarchical_v3",
+              "project_id": "fixture-project",
+              "provider": "deterministic",
+              "model": "replay-v1",
+              "profile_id": "offline-replay",
+              "input_chars": 1687,
+              "input_tokens_estimate": 422,
+              "output_chars": 142,
+              "output_tokens_estimate": 36,
+              "tool_count": 0,
+              "tool_schema_chars": 0,
+              "tool_schema_tokens_estimate": 0,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "provider_usage": {
+                "input_tokens": 422,
+                "output_tokens": 36
+              },
+              "metadata": {
+                "phase_id": "fixture-phase"
+              }
+            },
+            {
+              "event_type": "inference",
+              "purpose": "final_response",
+              "task_id": "replay-steering-during-phase-hierarchical_v3",
+              "project_id": "fixture-project",
+              "provider": "deterministic",
+              "model": "replay-v1",
+              "profile_id": "offline-replay",
+              "input_chars": 615,
+              "input_tokens_estimate": 154,
+              "output_chars": 43,
+              "output_tokens_estimate": 11,
+              "tool_count": 0,
+              "tool_schema_chars": 0,
+              "tool_schema_tokens_estimate": 0,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "provider_usage": {
+                "input_tokens": 154,
+                "output_tokens": 11
+              },
+              "metadata": {
+                "phase_id": "fixture-phase"
+              }
+            }
+          ],
+          "events": [
+            {
+              "event_type": "tactical_tools_revealed",
+              "phase_id": "fixture-phase",
+              "subgoal_id": "use_lg",
+              "capabilities": [
+                "device_control"
+              ],
+              "tool_ids": [
+                "artifact.lg"
+              ]
+            },
+            {
+              "event_type": "tool_call_result",
+              "tool_id": "artifact.lg",
+              "status": "success",
+              "affected_paths": []
+            }
+          ],
+          "metadata": {
+            "phase_shape": [
+              "use_lg"
+            ],
+            "tool_ids": [
+              "artifact.lg"
+            ],
+            "task_status": "completed",
+            "outer_route": "explicit_contract_review"
+          },
+          "error": "",
+          "elapsed_ms": 3,
+          "metrics": {
+            "elapsed_ms": 3,
+            "inference_calls": 6,
+            "tool_calls": 1,
+            "failed_inference_calls": 0,
+            "failed_tool_calls": 0,
+            "input_tokens_estimate": 2283,
+            "output_tokens_estimate": 478,
+            "tool_schema_tokens_estimate": 13,
+            "provider_input_tokens": 2283,
+            "provider_output_tokens": 478,
+            "inference_duration_ms": 0,
+            "tool_duration_ms": 0
+          },
+          "violations": [],
+          "passed": true
+        }
+      }
+    },
+    {
+      "case_id": "restart-mid-phase",
+      "goal": "Resume after locating a record without repeating a completed write",
+      "runs": {
+        "tactical_v2": {
+          "engine": "tactical_v2",
+          "outcome": "All acceptance criteria are complete and a user response is prepared.",
+          "status": "completed",
+          "capabilities": [
+            "exact_text_mutation",
+            "project_record_search"
+          ],
+          "effects": [
+            "records/item.md"
+          ],
+          "questions": [],
+          "telemetry": [
+            {
+              "event_type": "inference",
+              "purpose": "criteria_review",
+              "task_id": "replay-restart-mid-phase-tactical_v2",
+              "project_id": "fixture-project",
+              "provider": "deterministic",
+              "model": "replay-v1",
+              "profile_id": "offline-replay",
+              "input_chars": 4309,
+              "input_tokens_estimate": 1078,
+              "output_chars": 15,
+              "output_tokens_estimate": 4,
+              "tool_count": 0,
+              "tool_schema_chars": 0,
+              "tool_schema_tokens_estimate": 0,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "provider_usage": {
+                "input_tokens": 1078,
+                "output_tokens": 4
+              },
+              "metadata": {}
+            },
+            {
+              "event_type": "inference",
+              "purpose": "tool_planning",
+              "task_id": "replay-restart-mid-phase-tactical_v2",
+              "project_id": "fixture-project",
+              "provider": "deterministic",
+              "model": "replay-v1",
+              "profile_id": "offline-replay",
+              "input_chars": 10654,
+              "input_tokens_estimate": 2664,
+              "output_chars": 266,
+              "output_tokens_estimate": 67,
+              "tool_count": 4,
+              "tool_schema_chars": 200,
+              "tool_schema_tokens_estimate": 50,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "provider_usage": {
+                "input_tokens": 2664,
+                "output_tokens": 67
+              },
+              "metadata": {}
+            },
+            {
+              "event_type": "tool",
+              "tool_id": "native.exact_text_edit",
+              "task_id": "replay-restart-mid-phase-tactical_v2",
+              "project_id": "fixture-project",
+              "argument_chars": 77,
+              "result_chars": 79,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "metadata": {
+                "affected_paths": [
+                  "records/item.md"
+                ],
+                "waiting_for_answer": false
+              }
+            },
+            {
+              "event_type": "inference",
+              "purpose": "criteria_review",
+              "task_id": "replay-restart-mid-phase-tactical_v2",
+              "project_id": "fixture-project",
+              "provider": "deterministic",
+              "model": "replay-v1",
+              "profile_id": "offline-replay",
+              "input_chars": 5424,
+              "input_tokens_estimate": 1356,
+              "output_chars": 15,
+              "output_tokens_estimate": 4,
+              "tool_count": 0,
+              "tool_schema_chars": 0,
+              "tool_schema_tokens_estimate": 0,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "provider_usage": {
+                "input_tokens": 1356,
+                "output_tokens": 4
+              },
+              "metadata": {}
+            },
+            {
+              "event_type": "inference",
+              "purpose": "tool_planning",
+              "task_id": "replay-restart-mid-phase-tactical_v2",
+              "project_id": "fixture-project",
+              "provider": "deterministic",
+              "model": "replay-v1",
+              "profile_id": "offline-replay",
+              "input_chars": 11363,
+              "input_tokens_estimate": 2841,
+              "output_chars": 198,
+              "output_tokens_estimate": 50,
+              "tool_count": 4,
+              "tool_schema_chars": 200,
+              "tool_schema_tokens_estimate": 50,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "provider_usage": {
+                "input_tokens": 2841,
+                "output_tokens": 50
+              },
+              "metadata": {}
+            },
+            {
+              "event_type": "tool",
+              "tool_id": "fixture.read",
+              "task_id": "replay-restart-mid-phase-tactical_v2",
+              "project_id": "fixture-project",
+              "argument_chars": 27,
+              "result_chars": 60,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "metadata": {
+                "affected_paths": [
+                  "records/item.md"
+                ],
+                "waiting_for_answer": false
+              }
+            },
+            {
+              "event_type": "inference",
+              "purpose": "criteria_review",
+              "task_id": "replay-restart-mid-phase-tactical_v2",
+              "project_id": "fixture-project",
+              "provider": "deterministic",
+              "model": "replay-v1",
+              "profile_id": "offline-replay",
+              "input_chars": 5967,
+              "input_tokens_estimate": 1492,
+              "output_chars": 136,
+              "output_tokens_estimate": 34,
+              "tool_count": 0,
+              "tool_schema_chars": 0,
+              "tool_schema_tokens_estimate": 0,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "provider_usage": {
+                "input_tokens": 1492,
+                "output_tokens": 34
+              },
+              "metadata": {}
+            },
+            {
+              "event_type": "inference",
+              "purpose": "tool_planning",
+              "task_id": "replay-restart-mid-phase-tactical_v2",
+              "project_id": "fixture-project",
+              "provider": "deterministic",
+              "model": "replay-v1",
+              "profile_id": "offline-replay",
+              "input_chars": 12124,
+              "input_tokens_estimate": 3031,
+              "output_chars": 254,
+              "output_tokens_estimate": 64,
+              "tool_count": 4,
+              "tool_schema_chars": 200,
+              "tool_schema_tokens_estimate": 50,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "provider_usage": {
+                "input_tokens": 3031,
+                "output_tokens": 69
+              },
+              "metadata": {}
+            },
+            {
+              "event_type": "tool",
+              "tool_id": "native.respond",
+              "task_id": "replay-restart-mid-phase-tactical_v2",
+              "project_id": "fixture-project",
+              "argument_chars": 85,
+              "result_chars": 85,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "metadata": {
+                "affected_paths": [],
+                "waiting_for_answer": false
+              }
+            },
+            {
+              "event_type": "inference",
+              "purpose": "criteria_review",
+              "task_id": "replay-restart-mid-phase-tactical_v2",
+              "project_id": "fixture-project",
+              "provider": "deterministic",
+              "model": "replay-v1",
+              "profile_id": "offline-replay",
+              "input_chars": 6830,
+              "input_tokens_estimate": 1708,
+              "output_chars": 136,
+              "output_tokens_estimate": 34,
+              "tool_count": 0,
+              "tool_schema_chars": 0,
+              "tool_schema_tokens_estimate": 0,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "provider_usage": {
+                "input_tokens": 1708,
+                "output_tokens": 34
+              },
+              "metadata": {}
+            }
+          ],
+          "events": [
+            {
+              "event_type": "tool_call_result",
+              "tool_id": "native.exact_text_edit",
+              "status": "success",
+              "affected_paths": [
+                "records/item.md"
+              ]
+            },
+            {
+              "event_type": "tool_call_result",
+              "tool_id": "fixture.read",
+              "status": "success",
+              "affected_paths": []
+            },
+            {
+              "event_type": "tool_call_result",
+              "tool_id": "native.respond",
+              "status": "success",
+              "affected_paths": []
+            }
+          ],
+          "metadata": {
+            "phase_shape": [
+              "locate",
+              "update",
+              "verify"
+            ],
+            "tool_ids": [
+              "native.exact_text_edit",
+              "fixture.read",
+              "native.respond"
+            ],
+            "task_status": "completed",
+            "property": "checkpointed action idempotency"
+          },
+          "error": "",
+          "elapsed_ms": 44,
+          "metrics": {
+            "elapsed_ms": 44,
+            "inference_calls": 7,
+            "tool_calls": 3,
+            "failed_inference_calls": 0,
+            "failed_tool_calls": 0,
+            "input_tokens_estimate": 14170,
+            "output_tokens_estimate": 257,
+            "tool_schema_tokens_estimate": 150,
+            "provider_input_tokens": 14170,
+            "provider_output_tokens": 262,
+            "inference_duration_ms": 0,
+            "tool_duration_ms": 0
+          },
+          "violations": [],
+          "passed": true
+        },
+        "hierarchical_v3": {
+          "engine": "hierarchical_v3",
+          "outcome": "Verified phase evidence satisfies all required acceptance criteria.",
+          "status": "completed",
+          "capabilities": [
+            "exact_text_mutation",
+            "project_record_search"
+          ],
+          "effects": [
+            "records/item.md"
+          ],
+          "questions": [],
+          "telemetry": [
+            {
+              "event_type": "inference",
+              "purpose": "tactical_action",
+              "task_id": "replay-restart-mid-phase-hierarchical_v3",
+              "project_id": "fixture-project",
+              "provider": "deterministic",
+              "model": "replay-v1",
+              "profile_id": "offline-replay",
+              "input_chars": 4424,
+              "input_tokens_estimate": 1106,
+              "output_chars": 157,
+              "output_tokens_estimate": 40,
+              "tool_count": 1,
+              "tool_schema_chars": 50,
+              "tool_schema_tokens_estimate": 13,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "provider_usage": {
+                "input_tokens": 1106,
+                "output_tokens": 40
+              },
+              "metadata": {
+                "phase_id": "fixture-phase",
+                "subgoal_id": "update"
+              }
+            },
+            {
+              "event_type": "tool",
+              "tool_id": "native.exact_text_edit",
+              "task_id": "replay-restart-mid-phase-hierarchical_v3",
+              "project_id": "fixture-project",
+              "argument_chars": 77,
+              "result_chars": 79,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "metadata": {
+                "affected_paths": [
+                  "records/item.md"
+                ],
+                "waiting_for_answer": false
+              }
+            },
+            {
+              "event_type": "inference",
+              "purpose": "tactical_action",
+              "task_id": "replay-restart-mid-phase-hierarchical_v3",
+              "project_id": "fixture-project",
+              "provider": "deterministic",
+              "model": "replay-v1",
+              "profile_id": "offline-replay",
+              "input_chars": 5719,
+              "input_tokens_estimate": 1430,
+              "output_chars": 97,
+              "output_tokens_estimate": 25,
+              "tool_count": 2,
+              "tool_schema_chars": 100,
+              "tool_schema_tokens_estimate": 25,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "provider_usage": {
+                "input_tokens": 1430,
+                "output_tokens": 25
+              },
+              "metadata": {
+                "phase_id": "fixture-phase",
+                "subgoal_id": "verify"
+              }
+            },
+            {
+              "event_type": "tool",
+              "tool_id": "fixture.read",
+              "task_id": "replay-restart-mid-phase-hierarchical_v3",
+              "project_id": "fixture-project",
+              "argument_chars": 27,
+              "result_chars": 60,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "metadata": {
+                "affected_paths": [
+                  "records/item.md"
+                ],
+                "waiting_for_answer": false
+              }
+            },
+            {
+              "event_type": "inference",
+              "purpose": "phase_review",
+              "task_id": "replay-restart-mid-phase-hierarchical_v3",
+              "project_id": "fixture-project",
+              "provider": "deterministic",
+              "model": "replay-v1",
+              "profile_id": "offline-replay",
+              "input_chars": 3190,
+              "input_tokens_estimate": 798,
+              "output_chars": 142,
+              "output_tokens_estimate": 36,
+              "tool_count": 0,
+              "tool_schema_chars": 0,
+              "tool_schema_tokens_estimate": 0,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "provider_usage": {
+                "input_tokens": 798,
+                "output_tokens": 36
+              },
+              "metadata": {
+                "phase_id": "fixture-phase"
+              }
+            },
+            {
+              "event_type": "inference",
+              "purpose": "final_response",
+              "task_id": "replay-restart-mid-phase-hierarchical_v3",
+              "project_id": "fixture-project",
+              "provider": "deterministic",
+              "model": "replay-v1",
+              "profile_id": "offline-replay",
+              "input_chars": 1169,
+              "input_tokens_estimate": 293,
+              "output_chars": 70,
+              "output_tokens_estimate": 18,
+              "tool_count": 0,
+              "tool_schema_chars": 0,
+              "tool_schema_tokens_estimate": 0,
+              "duration_ms": 0,
+              "status": "success",
+              "error": "",
+              "provider_usage": {
+                "input_tokens": 293,
+                "output_tokens": 18
+              },
+              "metadata": {
+                "phase_id": "fixture-phase"
+              }
+            }
+          ],
+          "events": [
+            {
+              "event_type": "tactical_tools_revealed",
+              "phase_id": "fixture-phase",
+              "subgoal_id": "update",
+              "capabilities": [
+                "exact_text_mutation"
+              ],
+              "tool_ids": [
+                "native.exact_text_edit"
+              ]
+            },
+            {
+              "event_type": "tool_call_result",
+              "tool_id": "native.exact_text_edit",
+              "status": "success",
+              "affected_paths": [
+                "records/item.md"
+              ]
+            },
+            {
+              "event_type": "tactical_tools_revealed",
+              "phase_id": "fixture-phase",
+              "subgoal_id": "verify",
+              "capabilities": [
+                "project_record_search"
+              ],
+              "tool_ids": [
+                "fixture.read",
+                "fixture.search"
+              ]
+            },
+            {
+              "event_type": "tool_call_result",
+              "tool_id": "fixture.read",
+              "status": "success",
+              "affected_paths": []
+            }
+          ],
+          "metadata": {
+            "phase_shape": [
+              "locate",
+              "update",
+              "verify"
+            ],
+            "tool_ids": [
+              "native.exact_text_edit",
+              "fixture.read"
+            ],
+            "task_status": "completed",
+            "property": "checkpointed action idempotency"
+          },
+          "error": "",
+          "elapsed_ms": 5,
+          "metrics": {
+            "elapsed_ms": 5,
+            "inference_calls": 4,
+            "tool_calls": 2,
+            "failed_inference_calls": 0,
+            "failed_tool_calls": 0,
+            "input_tokens_estimate": 3627,
+            "output_tokens_estimate": 119,
+            "tool_schema_tokens_estimate": 38,
+            "provider_input_tokens": 3627,
+            "provider_output_tokens": 119,
+            "inference_duration_ms": 0,
+            "tool_duration_ms": 0
+          },
+          "violations": [],
+          "passed": true
+        }
+      }
+    }
+  ]
+}

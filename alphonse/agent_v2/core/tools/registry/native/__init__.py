@@ -6,14 +6,13 @@ from alphonse.agent_v2.core.tools.registry.native.ask_question import ASK_QUESTI
 from alphonse.agent_v2.core.tools.registry.native.ask_question import build_ask_question_tool_definition
 from alphonse.agent_v2.core.tools.registry.native.ask_question import execute_ask_question
 from alphonse.agent_v2.core.tools.registry.native.artifact_registration import build_artifact_registration_tool_definition
+from alphonse.agent_v2.core.tools.registry.native.artifact_metadata_update import build_artifact_metadata_update_tool_definition
+from alphonse.agent_v2.core.tools.registry.native.skill_install import SKILL_INSTALL_TOOL_ID
+from alphonse.agent_v2.core.tools.registry.native.skill_install import build_skill_install_tool_definition
 from alphonse.agent_v2.core.tools.registry.native.bash import BASH_TOOL_ID
 from alphonse.agent_v2.core.tools.registry.native.bash import BASH_TOOL_NAME
 from alphonse.agent_v2.core.tools.registry.native.bash import build_bash_tool_definition
 from alphonse.agent_v2.core.tools.registry.native.bash import execute_bash
-from alphonse.agent_v2.core.tools.registry.native.exact_text_edit import EXACT_TEXT_EDIT_TOOL_ID
-from alphonse.agent_v2.core.tools.registry.native.exact_text_edit import EXACT_TEXT_EDIT_TOOL_NAME
-from alphonse.agent_v2.core.tools.registry.native.exact_text_edit import build_exact_text_edit_tool_definition
-from alphonse.agent_v2.core.tools.registry.native.exact_text_edit import execute_exact_text_edit
 from alphonse.agent_v2.core.tools.registry.native.deliver_message import DELIVER_MESSAGE_TOOL_ID
 from alphonse.agent_v2.core.tools.registry.native.deliver_message import DELIVER_MESSAGE_TOOL_NAME
 from alphonse.agent_v2.core.tools.registry.native.deliver_message import build_deliver_message_tool_definition
@@ -29,24 +28,37 @@ from alphonse.agent_v2.core.tools.registry.native.scheduled_task import SCHEDULE
 from alphonse.agent_v2.core.tools.registry.native.scheduled_task import SCHEDULED_TASK_TOOL_NAME
 from alphonse.agent_v2.core.tools.registry.native.scheduled_task import build_scheduled_task_tool_definition
 from alphonse.agent_v2.core.tools.registry.native.scheduled_task import execute_scheduled_task
+from alphonse.agent_v2.core.tools.registry.native.scheduled_task_delivery import SCHEDULED_TASK_DELIVERY_TOOL_ID
+from alphonse.agent_v2.core.tools.registry.native.scheduled_task_delivery import SCHEDULED_TASK_DELIVERY_TOOL_NAME
+from alphonse.agent_v2.core.tools.registry.native.scheduled_task_delivery import build_scheduled_task_delivery_tool_definition
 from alphonse.agent_v2.core.tools.registry.native.web import build_web_fetch_tool_definition
 from alphonse.agent_v2.core.tools.registry.native.web import build_web_search_tool_definition
 from alphonse.agent_v2.web_tools_settings import WebToolsSettings
 from alphonse.agent_v2.media_tools_settings import MediaToolsSettings
+from alphonse.agent_v2.skills import SkillStore
 
 
-def build_native_tool_registry(web_tools_settings: WebToolsSettings | None = None, asset_store: object | None = None, media_tools_settings: MediaToolsSettings | None = None, artifact_store: object | None = None, on_artifact_changed: object | None = None) -> InMemoryToolRegistry:
+def build_native_tool_registry(web_tools_settings: WebToolsSettings | None = None, asset_store: object | None = None, media_tools_settings: MediaToolsSettings | None = None, artifact_store: object | None = None, on_artifact_changed: object | None = None, user_store: object | None = None, skill_store: SkillStore | None = None) -> InMemoryToolRegistry:
     """Build the default v2-native tool registry."""
     registry = InMemoryToolRegistry()
     registry.register(build_respond_tool_definition())
     registry.register(build_bash_tool_definition())
-    registry.register(build_exact_text_edit_tool_definition())
     registry.register(build_deliver_message_tool_definition())
     registry.register(build_send_attachment_tool_definition(asset_store))
     registry.register(build_ask_question_tool_definition())
     registry.register(build_scheduled_task_tool_definition())
+    registry.register(build_scheduled_task_delivery_tool_definition())
+    if skill_store is not None:
+        registry.register(build_skill_install_tool_definition(
+            skill_store, is_admin=getattr(user_store, "is_admin", None),
+        ))
     if artifact_store is not None:
         registry.register(build_artifact_registration_tool_definition(artifact_store, on_artifact_changed if callable(on_artifact_changed) else None))
+        registry.register(build_artifact_metadata_update_tool_definition(
+            artifact_store,
+            is_admin=getattr(user_store, "is_admin", None),
+            on_changed=on_artifact_changed if callable(on_artifact_changed) else None,
+        ))
     media = media_tools_settings or MediaToolsSettings()
     registry.register(build_analyze_image_tool_definition(media.ocr, asset_store))
     settings = web_tools_settings or WebToolsSettings()
@@ -63,23 +75,24 @@ __all__ = [
     "BASH_TOOL_NAME",
     "DELIVER_MESSAGE_TOOL_ID",
     "DELIVER_MESSAGE_TOOL_NAME",
-    "EXACT_TEXT_EDIT_TOOL_ID",
-    "EXACT_TEXT_EDIT_TOOL_NAME",
     "RESPOND_TOOL_ID",
     "RESPOND_TOOL_NAME",
     "SCHEDULED_TASK_TOOL_ID",
     "SCHEDULED_TASK_TOOL_NAME",
+    "SCHEDULED_TASK_DELIVERY_TOOL_ID",
+    "SCHEDULED_TASK_DELIVERY_TOOL_NAME",
+    "SKILL_INSTALL_TOOL_ID",
     "build_ask_question_tool_definition",
     "build_bash_tool_definition",
     "build_deliver_message_tool_definition",
-    "build_exact_text_edit_tool_definition",
     "build_native_tool_registry",
     "build_respond_tool_definition",
     "build_scheduled_task_tool_definition",
+    "build_scheduled_task_delivery_tool_definition",
+    "build_skill_install_tool_definition",
     "execute_ask_question",
     "execute_bash",
     "execute_deliver_message",
-    "execute_exact_text_edit",
     "execute_respond",
     "execute_scheduled_task",
 ]

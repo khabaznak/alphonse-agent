@@ -72,6 +72,19 @@ class SQLiteMessageQueue:
             ).fetchone()
         return _row_to_message(row) if row is not None else None
 
+    def list_pending(self, selector: MessageSelector | None = None, *, limit: int = 1000) -> list[QueuedMessage]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT * FROM v2_inbound_messages
+                WHERE (status = 'pending' OR (status = 'retry_wait' AND next_attempt_at <= ?))
+                  {_where(selector)}
+                ORDER BY sequence LIMIT ?
+                """,
+                (_now_iso(), *_values(selector), max(0, int(limit))),
+            ).fetchall()
+        return [_row_to_message(row) for row in rows]
+
     def dequeue(self, selector: MessageSelector | None = None) -> QueuedMessage | None:
         return self.claim_next(selector=selector)
 
@@ -345,6 +358,8 @@ def _where(selector: MessageSelector | None) -> str:
             filters.append("tag = ?")
         if selector.correlation_id is not None:
             filters.append("correlation_id = ?")
+        if selector.message_id is not None:
+            filters.append("message_id = ?")
     return f"AND {' AND '.join(filters)}" if filters else ""
 
 
@@ -352,7 +367,7 @@ def _values(selector: MessageSelector | None) -> tuple[str, ...]:
     if selector is None:
         return ()
     values: list[str] = []
-    for value in (selector.user, selector.project_id, selector.tag, selector.correlation_id):
+    for value in (selector.user, selector.project_id, selector.tag, selector.correlation_id, selector.message_id):
         if value is not None:
             values.append(str(value))
     return tuple(values)

@@ -70,6 +70,16 @@ def test_peek_does_not_remove_messages() -> None:
     assert queue.size() == 0
 
 
+def test_list_pending_preserves_fifo_and_can_select_exact_message() -> None:
+    queue = InMemoryMessageQueue()
+    first = queue.enqueue(_message("first"))
+    second = queue.enqueue(_message("second"))
+
+    assert [item.message.prompt for item in queue.list_pending()] == ["first", "second"]
+    assert queue.peek(MessageSelector(message_id=second.message_id)).message.prompt == "second"
+    assert queue.size() == 2
+
+
 def test_core_run_once_processes_only_matching_message() -> None:
     reset_state()
     queue = InMemoryMessageQueue()

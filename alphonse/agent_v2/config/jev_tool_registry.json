@@ -1,0 +1,117 @@
+{
+  "schema_version": 1,
+  "questions": {
+    "native.respond": {
+      "type": "noul",
+      "instructions": "Does this phase need to send a direct response to the requester?",
+      "criteria": {
+        "true": "The phase includes a user-visible answer, greeting, status update, clarification, or presentation of completed work. Select this when the task completes and needs to inform the user of the results, or when the task fails and needs to communicate the reason for failure to the requester.",
+        "false": "The phase only performs or verifies work and does not need to send the requester an answer, status update, result summary, or explanation of failure."
+      }
+    },
+    "native.bash": {
+      "type": "noul",
+      "instructions": "Does this phase need Bash for local shell, project-file, or artifact work, including direct work with a relevant CLI-backed artifact?",
+      "criteria": {
+        "true": "The phase needs any local command or project-file operation: discover files or search contents with find, rg, or grep; inspect or read files with cat or sed; create or edit files with shell commands; verify edits by reading them back or comparing diffs; run local processes, builds, tests, or diagnostics; or create, inspect, repair, or invoke an artifact or its CLI. Select Bash for these tasks even when the file path or CLI is already known. Favor Bash alongside a relevant CLI-backed artifact when either route may be needed.",
+        "false": "The phase is conversational or can be completed entirely by a relevant non-shell tool without local commands, filesystem access, project-file changes, or artifact CLI work."
+      }
+    },
+    "native.deliver_message": {
+      "type": "noul",
+      "instructions": "Does this phase need to send a message to another registered Alphonse user?",
+      "criteria": {
+        "true": "The requested outcome requires delivering information or a question to a person other than the current requester.",
+        "false": "The phase only needs to reply to the requester, perform local work, or does not require person-to-person delivery."
+      }
+    },
+    "native.send_attachment": {
+      "type": "noul",
+      "instructions": "Does this phase need to send an existing durable attachment to a registered person?",
+      "criteria": {
+        "true": "The requested outcome requires delivering a specific known asset to a registered recipient.",
+        "false": "No attachment must be delivered, the asset has not been identified, or a text-only response is sufficient."
+      }
+    },
+    "native.ask_question": {
+      "type": "noul",
+      "instructions": "Does this phase need information or a decision that only a user can provide?",
+      "criteria": {
+        "true": "A required fact, choice, approval, or clarification is missing and the task must pause until the appropriate user answers.",
+        "false": "Available tools or evidence can continue the work, or the phase can answer without requesting user input."
+      }
+    },
+    "native.scheduled_task": {
+      "type": "noul",
+      "instructions": "Does this phase need to create or change future or recurring work?",
+      "criteria": {
+        "true": "The user requested a reminder, delayed action, recurring action, or another task that must be queued at a specified time or cadence.",
+        "false": "The work should happen now, has no time-based recurrence, or only needs an immediate response."
+      }
+    },
+    "native.artifact_registration": {
+      "type": "noul",
+      "instructions": "Does this phase need to create or register a reusable project artifact?",
+      "criteria": {
+        "true": "The user requested creating or registering a reusable project artifact. Include this tool when the executable is already present or when Bash will create it earlier in the same phase; registration follows creation and requires the executable, description, and input schema to be ready.",
+        "false": "The phase only needs to use an existing tool, or no reusable artifact was requested."
+      }
+    },
+    "native.artifact_metadata_update": {
+      "type": "noul",
+      "instructions": "Does this phase need to improve or correct the name or routing description of an existing artifact?",
+      "criteria": {
+        "true": "The requester asks to edit an existing artifact's catalog name or description, and the artifact ID is known or can be found in the artifact catalog.",
+        "false": "The phase needs to register a new artifact, modify artifact program files, or merely use an existing artifact."
+      }
+    },
+    "native.skill_install": {
+      "type": "noul",
+      "instructions": "Does this phase need to install a new reusable Alphonse skill that the requester has already reviewed and approved?",
+      "criteria": {
+        "true": "The requester explicitly asked to create a reusable skill, its complete draft has been shown, and the requester approved installing it.",
+        "false": "The phase is drafting or revising a skill proposal, the requester has not approved installation, or the task only needs to use an existing skill."
+      }
+    },
+    "native.analyze_image": {
+      "type": "noul",
+      "instructions": "Does this phase need to inspect or extract text from an image attached to the task?",
+      "criteria": {
+        "true": "An attached image contains visual or textual information required for the current phase, including OCR of receipts or documents.",
+        "false": "There is no relevant image attachment, the source is already text, or image contents are unnecessary."
+      }
+    },
+    "native.web_search": {
+      "type": "noul",
+      "instructions": "Does this phase need to discover current or external information on the public web?",
+      "criteria": {
+        "true": "The phase needs web sources or current external information and does not yet have a specific authoritative page to fetch.",
+        "false": "The answer is available locally, a known URL can be fetched directly, or no public-web research is needed."
+      }
+    },
+    "native.web_fetch": {
+      "type": "noul",
+      "instructions": "Does this phase need readable text from a specific public web page?",
+      "criteria": {
+        "true": "The phase has a known public URL whose page contents are needed as evidence or input.",
+        "false": "A URL has not been identified, web search is needed first, or no web-page contents are required."
+      }
+    },
+    "native.search_memory": {
+      "type": "noul",
+      "instructions": "Does this request need to search archived conversation memory for information from this project?",
+      "criteria": {
+        "true": "The answer depends on details from older or closed conversations that are not present in the current conversation or supplied project context.",
+        "false": "The current conversation, project files, or other available tools provide the needed information without searching archived memory."
+      }
+    },
+    "native.scheduled_task_delivery": {
+      "type": "noul",
+      "instructions": "Does this request need to find an active reminder or change where a pending reminder is delivered?",
+      "criteria": {
+        "true": "The user asks what reminders are active, asks whether a reminder exists, or asks to add or change a delivery channel for an existing reminder.",
+        "false": "The user is creating or changing the reminder's schedule or content, or the request does not concern an existing reminder or its delivery destinations."
+      }
+    }
+  }
+}

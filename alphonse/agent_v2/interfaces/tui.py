@@ -308,6 +308,7 @@ def refresh_tui_identity_resolver(runtime: TuiRuntime) -> None:
     runtime.core.delivery_sink = build_outbox_delivery_sink(
         outbox=runtime.outbox,
         identity_resolver=runtime.identity_resolver,
+        conversation_store=runtime.conversation_store,
     )
 
 
@@ -897,13 +898,14 @@ def _build_textual_app_class() -> type[Any]:
         def compose(self) -> ComposeResult:
             with Vertical(id="project-context-dialog"):
                 yield Static("Projects", classes="dialog-title")
-                yield Select([("All projects", ""), ("Active", "active"), ("Archived", "archived")], value="", id="project-manager-status", allow_blank=False)
+                yield Select([("All projects", ""), ("Active", "active"), ("Paused", "paused"), ("Completed", "completed"), ("Archived", "archived")], value="", id="project-manager-status", allow_blank=False)
                 yield Select([], id="project-manager-select", prompt="Choose a project", allow_blank=True)
                 yield Static("", id="project-manager-details")
                 yield Input(placeholder="Name", id="project-manager-name")
                 yield Input(placeholder="Description", id="project-manager-description")
                 yield Select([("Private", "private"), ("Shared", "shared")], value="private", id="project-manager-visibility", allow_blank=False)
                 yield Input(placeholder="Parent directory (new) or existing folder (import)", id="project-manager-root")
+                yield Static("Project config JSON (legacy project_context.md is preserved)")
                 yield TextArea("", id="project-manager-context")
                 yield Input(placeholder="Type project ID to remove", id="project-manager-confirmation")
                 yield Static("", id="project-manager-notice")
@@ -1593,6 +1595,13 @@ def _build_textual_app_class() -> type[Any]:
         def compose(self) -> ComposeResult:
             with Vertical(id="agent-config-editor-dialog"):
                 yield Static(str(self.document.get("display_name") or "Agent Configuration"), classes="dialog-title")
+                if str(self.document.get("file_name") or "") == "GlobalContext.md":
+                    yield Static(
+                        "Use the household sections in GlobalContext.md. Keep language, accessibility, "
+                        "and communication preferences per member in user_context.md or user settings. "
+                        "This document remains editable here.",
+                        id="global-context-editor-help",
+                    )
                 yield TextArea(str(self.document.get("content") or ""), id="agent-config-editor")
                 yield Static("", id="agent-config-notice")
                 with Horizontal(classes="dialog-actions", id="agent-config-actions"):
@@ -2128,14 +2137,18 @@ def _build_textual_app_class() -> type[Any]:
                 return self.daemon.list_users() if self.daemon is not None else []
             def _context(project_id: str) -> str:
                 if self.external_daemon:
-                    return str(self.daemon_client.project_context(user=self.runtime.user, project_id=project_id).get("content") or "")
-                return str(self.daemon.read_project_context(user=self.runtime.user, project_id=project_id).get("content") or "")
+                    result = self.daemon_client.project_config(user=self.runtime.user, project_id=project_id)
+                    return json.dumps(result.get("config") or {}, ensure_ascii=False, indent=2)
+                return json.dumps(self.daemon.project_config(user=self.runtime.user, project_id=project_id), ensure_ascii=False, indent=2)
             def _save(project_id: str, name: str, description: str, visibility: str, content: str) -> None:
                 values = {"user": self.runtime.user, "project_id": project_id, "name": name, "description": description, "visibility": visibility}
+                config = json.loads(content or "{}")
+                if not isinstance(config, dict):
+                    raise ValueError("project_config_invalid")
                 if self.external_daemon:
-                    self.daemon_client.request("update_project", **values); self.daemon_client.save_project_context(user=self.runtime.user, project_id=project_id, content=content)
+                    self.daemon_client.request("update_project", **values); self.daemon_client.save_project_config(user=self.runtime.user, project_id=project_id, config=config)
                 else:
-                    self.daemon.update_project(**values); self.daemon.save_project_context(user=self.runtime.user, project_id=project_id, content=content)
+                    self.daemon.update_project(**values); self.daemon.save_project_config(user=self.runtime.user, project_id=project_id, config=config)
             def _create_or_import(importing: bool, name: str, description: str, root_path: str, visibility: str) -> dict[str, Any]:
                 values = {"user": self.runtime.user, "name": name, "description": description, "root_path": root_path, "visibility": visibility}
                 method = "import_project" if importing else "create_project"

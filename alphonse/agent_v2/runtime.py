@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import json
+import logging
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Callable
 
 from alphonse.agent_v2.core.core import AlphonseCore
 from alphonse.agent_v2.core.core import CoreActivityEvent
@@ -16,6 +18,8 @@ from alphonse.agent_v2.core.core import ToolDescriptor
 from alphonse.agent_v2.core.core import ToolRegistry
 from alphonse.agent_v2.core.inference import InferenceRouter
 from alphonse.agent_v2.core.intelligence import PDCAIntelligenceProcessor
+from alphonse.agent_v2.core.intelligence.v3 import EngineRoutingProcessor, HierarchicalCAPDProcessor
+from alphonse.agent_v2.intelligence_engine_settings import SQLiteIntelligenceEngineSettingsStore
 from alphonse.agent_v2.core.io import IntegrationIdentity
 from alphonse.agent_v2.core.io import SQLiteOutboundStore
 from alphonse.agent_v2.core.io import V2IdentityResolver
@@ -50,11 +54,19 @@ from alphonse.agent_v2.media_tools_settings import SQLiteMediaToolsSettingsStore
 from alphonse.agent_v2.assets import SQLiteAssetStore
 from alphonse.agent_v2.artifacts import SQLiteArtifactStore
 from alphonse.agent_v2.artifacts import build_artifact_tool_definitions
+from alphonse.agent_v2.skills import SkillStore
 from alphonse.agent_v2.memory_settings import SQLiteMemorySettingsStore
 from alphonse.agent_v2.core.memory import LedgerMemory
+from alphonse.agent_v2.core.memory.daily_ledger import DailyLedgerProjector
 from alphonse.agent_v2.core.tools.registry.native.memory import build_search_memory_tool_definition
 from alphonse.agent_v2.conversations import SQLiteConversationStore
 from alphonse.agent_v2.memory_sessions import SQLiteMemorySessionStore
+from alphonse.agent_v2.system_one import SQLiteSystemOneSettingsStore
+from alphonse.agent_v2.system_one import SystemOneSettings
+from alphonse.agent_v2.system_one import build_system_one_provider
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -101,6 +113,7 @@ class V2RuntimeHost:
     integration_registry: IntegrationRegistry
     presence_projector: PresenceProjector
     inference_settings_store: SQLiteInferenceSettingsStore
+    intelligence_engine_settings_store: SQLiteIntelligenceEngineSettingsStore
     agent_config_store: AgentConfigStore
     project_session_store: SQLiteProjectSessionStore
     memory_session_store: SQLiteMemorySessionStore
@@ -112,12 +125,18 @@ class V2RuntimeHost:
     asset_store: SQLiteAssetStore
     artifact_store: SQLiteArtifactStore
     memory_settings_store: SQLiteMemorySettingsStore
+    system_one_settings_store: SQLiteSystemOneSettingsStore
+    skill_store: SkillStore
     communication_router: CommunicationRouter
     conversation_store: SQLiteConversationStore
     integration_runtimes: list[Any] = field(default_factory=list)
     active_project_id: str = ""
     ui_events: list[CoreUiEvent] = field(default_factory=list)
     activity_events: list[CoreActivityEvent] = field(default_factory=list)
+    telemetry_events: list[dict[str, Any]] = field(default_factory=list)
+
+    def record_telemetry(self, event: dict[str, Any]) -> None:
+        _record_runtime_telemetry(self.telemetry_events, event)
 
 
 def build_runtime_host(
@@ -135,6 +154,7 @@ def build_runtime_host(
     integration_store: SQLiteIntegrationStore | None = None,
     integration_registry: IntegrationRegistry | None = None,
     inference_settings_store: SQLiteInferenceSettingsStore | None = None,
+    intelligence_engine_settings_store: SQLiteIntelligenceEngineSettingsStore | None = None,
     agent_config_store: AgentConfigStore | None = None,
     project_session_store: SQLiteProjectSessionStore | None = None,
     memory_session_store: SQLiteMemorySessionStore | None = None,
@@ -145,16 +165,24 @@ def build_runtime_host(
     asset_store: SQLiteAssetStore | None = None,
     artifact_store: SQLiteArtifactStore | None = None,
     memory_settings_store: SQLiteMemorySettingsStore | None = None,
+    system_one_settings_store: SQLiteSystemOneSettingsStore | None = None,
     communication_thread_store: SQLiteCommunicationThreadStore | None = None,
     conversation_store: SQLiteConversationStore | None = None,
+    skill_store: SkillStore | None = None,
 ) -> V2RuntimeHost:
     reset_state()
     provided_tools = tools is not None
     queue = messages or InMemoryMessageQueue()
     conversation_store = conversation_store or SQLiteConversationStore()
-    channel = CommunicationChannel(queue, conversation_store=conversation_store)
+    skill_store = skill_store or SkillStore.default()
+    intelligence_engine_settings_store = intelligence_engine_settings_store or SQLiteIntelligenceEngineSettingsStore()
+    channel = CommunicationChannel(
+        queue,
+        conversation_store=conversation_store,
+        intelligence_engine_provider=lambda project_id: intelligence_engine_settings_store.get().engine_for(project_id),
+    )
     visible_state = InMemoryInternalState()
-    processor = processor or PDCAIntelligenceProcessor()
+    processor = processor or EngineRoutingProcessor(v2=PDCAIntelligenceProcessor(), v3=HierarchicalCAPDProcessor())
     web_tools_settings_store = web_tools_settings_store or SQLiteWebToolsSettingsStore()
     code_mode_settings_store = code_mode_settings_store or SQLiteCodeModeSettingsStore()
     media_tools_settings_store = media_tools_settings_store or SQLiteMediaToolsSettingsStore()
@@ -164,7 +192,8 @@ def build_runtime_host(
     # Generic embedded/test hosts are intentionally ephemeral. The daemon
     # injects the durable store explicitly.
     memory_settings_store = memory_settings_store or SQLiteMemorySettingsStore()
-    tools = tools or build_native_tool_registry(web_tools_settings_store.get(), asset_store, media_tools_settings_store.get(), artifact_store)
+    system_one_settings_store = system_one_settings_store or SQLiteSystemOneSettingsStore()
+    tools = tools or build_native_tool_registry(web_tools_settings_store.get(), asset_store, media_tools_settings_store.get(), artifact_store, user_store=user_store, skill_store=skill_store)
     inference_settings_store = inference_settings_store or SQLiteInferenceSettingsStore()
     # Persistent daemon/TUI constructors pass `AgentConfigStore.default()`.
     # Generic test and helper runtimes only need the package defaults.
@@ -188,6 +217,25 @@ def build_runtime_host(
             purpose=InferencePurpose.MEMORY_COMPACTION,
         ))
         return str(result.content or "")
+
+    def _summarize_daily_conversation(source: str) -> str:
+        from alphonse.agent_v2.core.inference import InferencePurpose, InferenceRequest
+        result = inference.generate_markdown(InferenceRequest(
+            prompt=(
+                "Write a brief narrative summary of the previous day's household conversation. "
+                "Preserve time-sensitive facts, decisions, commitments, and unresolved questions. "
+                "Do not add facts. Return Markdown only.\n\n" + source
+            ),
+            purpose=InferencePurpose.MEMORY_COMPACTION,
+        ))
+        return str(result.content or "")
+
+    conversation_store.set_daily_ledger_projector(DailyLedgerProjector(
+        conversation_store=conversation_store,
+        users_root=user_store.users_root,
+        timezone_provider=user_store.timezone,
+        summarizer=_summarize_daily_conversation,
+    ))
     memory = LedgerMemory(
         users_root=user_store.users_root,
         settings_store=memory_settings_store,
@@ -207,13 +255,19 @@ def build_runtime_host(
     presence_projector.register("tui", TuiPresenceAdapter())
     identity_resolver = identity_resolver or build_identity_resolver(integration_store, user_store=user_store)
     communication_router = CommunicationRouter(users=user_store, resolver=identity_resolver, outbox=outbox, threads=communication_thread_store)
-    delivery_sink = build_outbox_delivery_sink(outbox=outbox, identity_resolver=identity_resolver, communication_router=communication_router)
+    delivery_sink = build_outbox_delivery_sink(
+        outbox=outbox,
+        identity_resolver=identity_resolver,
+        communication_router=communication_router,
+        conversation_store=conversation_store,
+    )
     inbound_router = ProjectInboundRouter(
         channel=channel,
         outbox=outbox,
         projects=project_store,
         sessions=project_session_store,
         memory_sessions=memory_session_store,
+        question_store=question_store,
         memory=memory,
         is_admin=user_store.is_admin,
         managed_root=user_store.managed_project_root,
@@ -225,6 +279,9 @@ def build_runtime_host(
     )
     ui_events: list[CoreUiEvent] = []
     activity_events: list[CoreActivityEvent] = []
+    telemetry_events: list[dict[str, Any]] = []
+    telemetry_sink = lambda event: _record_runtime_telemetry(telemetry_events, event)
+    _append_router_telemetry_sink(inference, telemetry_sink)
 
     def _activity_sink(event: CoreActivityEvent) -> None:
         presence_projector.on_activity(event)
@@ -237,6 +294,7 @@ def build_runtime_host(
         prompts=AgentConfigPromptLoader.from_store(agent_config_store),
         state=visible_state,
         memory=memory,
+        conversation_store=conversation_store,
         inference=inference,
         ui_event_sink=ui_events.append,
         question_store=question_store,
@@ -245,8 +303,12 @@ def build_runtime_host(
         delivery_sink=delivery_sink,
         user_context_provider=user_store.read_user_context,
         user_timezone_provider=lambda _user_id: user_store.timezone(),
+        identity_resolver=identity_resolver,
         program_runner=ProgramRunner(settings_provider=code_mode_settings_store.get),
         activity_sink=_activity_sink,
+        telemetry_sink=telemetry_sink,
+        system_one=build_system_one_provider(system_one_settings_store.get()),
+        skill_store=skill_store,
     )
     runtime = V2RuntimeHost(
         user=str(user or (user_store.admin_user().user_id if user_store.admin_user() else "local")).strip() or "local",
@@ -264,6 +326,7 @@ def build_runtime_host(
         integration_registry=integration_registry,
         presence_projector=presence_projector,
         inference_settings_store=inference_settings_store,
+        intelligence_engine_settings_store=intelligence_engine_settings_store,
         agent_config_store=agent_config_store,
         project_session_store=project_session_store,
         memory_session_store=memory_session_store,
@@ -275,10 +338,13 @@ def build_runtime_host(
         asset_store=asset_store,
         artifact_store=artifact_store,
         memory_settings_store=memory_settings_store,
+        system_one_settings_store=system_one_settings_store,
+        skill_store=skill_store,
         communication_router=communication_router,
         conversation_store=conversation_store,
         ui_events=ui_events,
         activity_events=activity_events,
+        telemetry_events=telemetry_events,
     )
     if not provided_tools:
         refresh_runtime_artifacts(runtime)
@@ -297,7 +363,7 @@ def refresh_runtime_media_tools(runtime: V2RuntimeHost) -> None:
 
 def refresh_runtime_artifacts(runtime: V2RuntimeHost) -> None:
     """Rebuild native and enabled artifact definitions for later PDCA planning."""
-    registry = build_native_tool_registry(runtime.web_tools_settings_store.get(), runtime.asset_store, runtime.media_tools_settings_store.get(), runtime.artifact_store, lambda: refresh_runtime_artifacts(runtime))
+    registry = build_native_tool_registry(runtime.web_tools_settings_store.get(), runtime.asset_store, runtime.media_tools_settings_store.get(), runtime.artifact_store, lambda: refresh_runtime_artifacts(runtime), runtime.user_store, runtime.skill_store)
     for definition in build_artifact_tool_definitions(runtime.artifact_store, runtime.project_store):
         registry.register(definition)
     runtime.core.tools = registry
@@ -314,8 +380,41 @@ def refresh_runtime_inference(runtime: V2RuntimeHost, settings: InferenceSetting
     router here cannot alter a task already being processed.
     """
     selected = settings or runtime.inference_settings_store.get()
-    runtime.core.inference = build_inference_router_from_settings(selected)
+    router = build_inference_router_from_settings(selected)
+    _append_router_telemetry_sink(router, runtime.record_telemetry)
+    runtime.core.inference = router
     return selected
+
+
+def refresh_runtime_system_one(runtime: V2RuntimeHost, settings: SystemOneSettings | None = None) -> SystemOneSettings:
+    """Apply validated System One settings to tasks started after this call."""
+    selected = settings or runtime.system_one_settings_store.get()
+    runtime.core.system_one = build_system_one_provider(selected)
+    return selected
+
+
+def _append_router_telemetry_sink(router: InferenceRouter, sink: Callable[[dict[str, Any]], None]) -> None:
+    """Fan runtime collection into a router without discarding an injected sink."""
+    existing = router.telemetry_sink
+    if existing is None:
+        router.telemetry_sink = sink
+        return
+    if existing is sink:
+        return
+
+    def _fanout(event: dict[str, Any]) -> None:
+        existing(event)
+        sink(event)
+
+    router.telemetry_sink = _fanout
+
+
+def _record_runtime_telemetry(events: list[dict[str, Any]], event: dict[str, Any]) -> None:
+    item = dict(event)
+    events.append(item)
+    if len(events) > 2_000:
+        del events[:-2_000]
+    logger.info("execution_telemetry %s", json.dumps(item, ensure_ascii=False, sort_keys=True, default=str))
 
 
 def build_identity_resolver(store: SQLiteIntegrationStore, *, user_store: V2UserStore | None = None) -> V2IdentityResolver:
@@ -338,6 +437,7 @@ def refresh_runtime_identity_resolver(runtime: V2RuntimeHost) -> None:
         outbox=runtime.outbox,
         identity_resolver=runtime.identity_resolver,
         communication_router=runtime.communication_router,
+        conversation_store=runtime.conversation_store,
     )
 
 

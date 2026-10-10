@@ -32,6 +32,17 @@ def test_sqlite_queue_persists_messages_and_acknowledges_processing(tmp_path: Pa
     assert queued.message_id == claimed.message_id
 
 
+def test_sqlite_queue_lists_pending_in_arrival_order_and_filters_by_message_id(tmp_path: Path) -> None:
+    queue = SQLiteMessageQueue(tmp_path / "messages.sqlite3")
+    queue.enqueue(CoreMessage(timestamp=datetime.now(timezone.utc), prompt="first", user="alex"))
+    second = queue.enqueue(CoreMessage(timestamp=datetime.now(timezone.utc), prompt="second", user="alex"))
+
+    assert [item.message.prompt for item in queue.list_pending()] == ["first", "second"]
+    selected = queue.peek(MessageSelector(message_id=second.message_id))
+    assert selected is not None
+    assert selected.message.prompt == "second"
+
+
 def test_sqlite_queue_reclaims_expired_processing_messages(tmp_path: Path) -> None:
     path = tmp_path / "messages.sqlite3"
     queue = SQLiteMessageQueue(path, lease_owner="worker-1")

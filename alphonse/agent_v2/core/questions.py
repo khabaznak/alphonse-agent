@@ -405,19 +405,6 @@ class SQLiteQuestionStore:
             ).fetchall()
         return [_question_from_row(row) for row in rows]
 
-    def pending_counts_by_project(self, respondent_user_id: str) -> dict[str, int]:
-        self.expire_questions()
-        with self._connect() as conn:
-            rows = conn.execute(
-                """
-                SELECT project_id,COUNT(*) AS pending FROM v2_questions
-                WHERE respondent_user_id=? AND status='pending'
-                GROUP BY project_id
-                """,
-                (str(respondent_user_id or "").strip(),),
-            ).fetchall()
-        return {str(row["project_id"] or ""): int(row["pending"] or 0) for row in rows}
-
     def is_pending_correlation_respondent(self, *, correlation_id: str, respondent_user_id: str) -> bool:
         """Whether this user is currently authorized to answer this task correlation."""
         correlation = str(correlation_id or "").strip()
@@ -482,7 +469,6 @@ class SQLiteQuestionStore:
         task.status = "running"
         task.metadata.pop("pending_question_id", None)
         task.metadata.pop("question_answer", None)
-        task.append_conversation_message(question.respondent_user_id, _answer_text(answer))
         _record_question_answer_tool_result(task=task, question=question, answer=answer)
         task.append_update(f"Question {question.question_id} answered; task resumed.")
 

@@ -6,5 +6,6 @@ describe("Desktop slash commands", () => {
     expect(matchingCommands("/agent")).toEqual(["/agent-config"]);
     expect(matchingCommands("/project")).toEqual(["/project", "/project-context"]);
     expect(matchingCommands("/scheduled")).toEqual(["/scheduled-tasks"]);
+    expect(matchingCommands("/kill")).toEqual(["/killswitch"]);
   });
 });

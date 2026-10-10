@@ -1,0 +1,244 @@
+# Stage 5: Compatibility, observability, evaluation, and rollout
+
+Status: in progress
+Depends on: Stages 1 through 4
+
+## Objective
+
+Make hierarchical CAPD safely operable, measurable, restartable, and reversible as
+the single-user installation moves to V3 by default.
+
+## Engine compatibility
+
+Support an explicit engine setting during rollout:
+
+```text
+tactical_v2
+hierarchical_v3
+```
+
+The selected engine is stamped onto a task at ingestion and persisted. A configuration
+change must not switch an already-queued or active task to another engine.
+
+## Checkpoint and queue compatibility
+
+- Existing V2 tasks finish under V2 unless explicitly migrated through a tested tool.
+- Legacy messages without an engine stamp use the configured compatibility default.
+- V3 checkpoint schema versions are validated before resume.
+- Unknown future schema versions fail visibly and preserve the checkpoint.
+- Resuming never repeats a completed non-idempotent side effect.
+
+## Observability
+
+Record structured events for:
+
+- Outer CAPD transition.
+- Phase creation and completion.
+- Subgoal activation and completion.
+- Capability and concrete-tool reveal decisions.
+- Tactical action start/result.
+- Budget consumption.
+- Local recovery and strategic escalation.
+- Mutation authorization and actual affected targets.
+- Verification and terminal routing.
+- Model calls, prompt estimates, latency, and provider/model profile.
+
+Do not log secrets, unrestricted file contents, or hidden chain-of-thought.
+
+## Desktop and IPC
+
+Expose enough structured state for a nested progress view:
+
+```text
+Phase: Complete solar project
+  done  Locate record
+  done  Update exact record
+  doing Verify final state
+```
+
+IPC additions should be versioned and backward compatible. Existing clients must not
+break when V3 fields are absent or ignored.
+
+## Evaluation harness
+
+Build a replayable corpus from sanitized real failures and synthetic boundary cases.
+Every case includes:
+
+- Initial message and authorized project fixture.
+- Relevant memory/session fixture.
+- Available tool/integration fixture.
+- Expected allowed and forbidden effects.
+- Expected questions or final response properties.
+- Token, model-call, tool-call, and latency measurements.
+
+Run V2 and V3 on the same corpus where semantics permit. Store machine-readable
+results and a concise human review report.
+
+## Rollout gates
+
+### Gate A: developer opt-in
+
+Status: passed on 2026-09-20 for developer opt-in only. See
+[`evidence/2026-09-20-gate-a/`](evidence/2026-09-20-gate-a/README.md).
+
+- Unit and integration suites pass.
+- Checkpoint/resume and cancellation pass fault injection.
+- No unauthorized mutation in the evaluation corpus.
+
+### Gate B: shadow planning
+
+Status: **not passed**. The 2026-10-01 offline replay is preliminary evidence only;
+provider-backed shadow plans, human comparison, and suite/corpus failures remain open.
+
+- V3 plans and reveal decisions are recorded without executing side effects.
+- Compare chosen phases/tools with V2 outcomes and human expectations.
+- Fix tool-recall and scope issues before live execution.
+- Include a sanitized cross-channel reminder case: the user asks in Telegram,
+  Alphonse asks a date clarification, the user answers in Telegram, and the task is
+  resumed from Desktop. Planning must retain the original request, clarification,
+  and answer, resolve the date to today, and schedule without repeating the same
+  question.
+- Verify project context/session continuity across Desktop, CLI, and Telegram for
+  the same user and project, and verify that another project remains isolated.
+- Record plan shape, revealed tool IDs, question text, context-preservation checks,
+  and zero external effects for every shadow case. Fixture-local simulated writes
+  are permitted only inside disposable replay roots.
+
+### Gate C: selected-project execution
+
+- Enable V3 only for explicitly selected projects/users.
+- Provide immediate engine fallback for new tasks.
+- Do not migrate an active phase automatically.
+
+### Gate D: default with rollback
+
+Status: developer default enabled on 2026-09-20 by owner decision. V2 remains an
+explicit rollback path, not the normal route for new tasks.
+
+- Correctness and silent-failure rates are no worse than V2.
+- Simple-task model calls, token usage, and latency improve materially.
+- Operational dashboards and logs can diagnose failed phases.
+- V2 remains available for a defined stabilization period.
+
+## Implementation checklist
+
+- [x] Add engine selection to persistent settings with V3 as the new-task default and
+      an explicit V2 rollback setting.
+- [x] Stamp engine and schema version at message ingestion.
+- [x] Preserve engine selection across queue and checkpoint persistence.
+- [x] Add V2/V3 compatibility loaders and explicit engine routing.
+- [x] Add structured phase/subgoal/action events and budget state.
+- [x] Extend daemon status and IPC with engine settings; V3 snapshots include nested
+      phase progress.
+- [ ] Add functional nested progress rendering to the desktop client.
+- [x] Add the initial machine-readable replay/evaluation corpus and an isolated V2/V3
+      runner that writes JSON and Markdown comparisons.
+- [x] Add automated failure, restart, cancellation, steering, scope, and budget tests.
+- [x] Measure deterministic prompt/output/tool-schema token estimates, inference/tool
+      latency, call failures, and provider-reported usage when an adapter supplies it.
+- [x] Add administrator-authorized IPC controls for V3 enablement and rollback.
+- [ ] Document operational recovery for stuck or incompatible tasks.
+- [ ] Complete each rollout gate with a dated evidence report.
+
+## Required regression scenarios
+
+- [ ] Solar-project completion uses one outer phase, exact mutation, verified read-back,
+      and a warm response without unrelated edits.
+- [ ] A known LG capability is selected without attempting unrelated Home Assistant
+      tools when project evidence routes to LG.
+- [ ] A prior medical treatment is retrieved from authorized memory/artifacts before
+      asking the user to repeat it.
+- [ ] An OCR failure is reported as an infrastructure/extraction failure, not proof
+      that the source is unreliable.
+- [ ] A nonzero command exit is a failed action and cannot prove success.
+- [ ] A hundreds-of-kilobytes legacy memory ledger does not exceed the configured
+      bounded memory projection.
+- [ ] Steering interrupts tactical execution without sending a stale response.
+- [ ] A Telegram reminder clarification answered on Telegram and resumed on Desktop
+      retains the conversation and produces one same-day scheduling plan without
+      asking the answered question again; cross-channel replies resume the original
+      task and no external schedule is created during shadow evaluation.
+- [x] A queue retry restores the same V3 acceptance contract and tactical checkpoint
+      instead of creating a new task identity.
+
+## Exit criteria
+
+- V3 can be enabled, observed, and disabled safely.
+- Queue and checkpoint behavior is deterministic across restarts.
+- Desktop and daemon expose actionable nested progress and failures.
+- The replay corpus shows no correctness or authorization regression.
+- Measured simple-task efficiency improves enough to justify default rollout.
+- A rollback procedure has been exercised, not merely documented.
+
+## Open decisions
+
+- Exact numerical thresholds for token, latency, and reliability rollout gates.
+- Length of the V2 stabilization/fallback period.
+- Whether shadow planning runs for every opted-in task or a sampled subset.
+- Retention policy for detailed tactical action telemetry.
+
+## Implementation log
+
+- 2026-10-01 — Fixed the question tool's memory-event context call and added
+  System Two fallback for V3 evidence review when Jev is unavailable or leaves an
+  ambiguous criterion unresolved. Repeated blocked or verification-failed V3 phases
+  now stop after three consecutive phases without new successful evidence. Focused
+  continuity/controller tests pass; the 10-case offline replay passes the reminder
+  case in both engines (V3 passes 6/10 overall), while the full suite has 21 failures.
+  Provider-backed shadow planning and human comparison remain outstanding; Gate B is
+  not passed.
+- 2026-10-01 — Added a sanitized Telegram reminder continuation case to the replay
+  corpus and Gate B requirements. The case checks that clarification and answer
+  survive into both engines' planning prompts; its scripted V3 action is a same-day
+  schedule and its tool is a no-effect stub. Cross-channel session/question regression
+  tests were added. Focused tests passed (17/17), but the full Python suite had 36
+  failures. Deterministic replay passed 5/10 cases under V2 and 4/10 under V3. The
+  reminder fixture passed in both engines but does not evaluate live model behavior.
+  See the dated evidence report; Gate B remains open pending provider-backed shadow
+  plans, human review, and failure resolution.
+- 2026-09-20 — Added persistent safe-default engine settings, ingestion-time engine
+  stamping, V2/V3 processor routing, strategic phase planning, end-to-end hierarchical
+  processing, daemon/IPC settings and status, nested phase snapshot data, and the
+  initial evaluation corpus. Full suite: 455 passed. Desktop nested rendering,
+  provider token/latency measurement, operational recovery documentation, and rollout
+  gate evidence remain open; V3 is not approved for default rollout or merge.
+- 2026-09-20 — Added provider-independent inference and tool telemetry, bounded runtime
+  collection with structured logs, provider-usage passthrough, affected-path metadata,
+  and a fixture-isolated V2/V3 replay harness. The harness enforces corpus capability,
+  question, outcome, and effect constraints and emits `v3-comparison.json` plus
+  `v3-comparison.md`. It deliberately requires explicit engine adapters so evaluation
+  cannot accidentally run against live projects. At that point, Gate A had not yet
+  been claimed.
+- 2026-09-20 — Added deterministic adapters that run the real V2 and V3 processors
+  against isolated fixtures. Fixed the external-effect/project-path invariant exposed
+  by the medical-artifact replay. Full suite: 463 passed. Both engines passed all nine
+  replay cases; V3 used 48 versus 54 inference calls, 15 versus 23 tool calls, and
+  30,724 versus 101,127 estimated tokens. Gate A is approved for developer opt-in;
+  Gate B shadow planning remains next.
+- 2026-09-20 — Owner chose V3 as the default for this single-user installation.
+  New messages are stamped `hierarchical_v3`; V2 is retained only for rollback.
+  Added stable message-keyed checkpoints, deterministic non-retry of controlled V3
+  failures, interruptible inference cancellation, and a working Desktop kill switch.
+
+## Running an offline comparison
+
+Replay adapters are ordinary Python callables with this signature:
+
+```python
+runner(case, fixture_root, telemetry_sink) -> EngineTrace
+```
+
+They must execute only inside `fixture_root` and report observable capabilities,
+effects, questions, outcomes, and metadata. Run a comparison with:
+
+```bash
+python -m alphonse.agent_v2.evaluation.replay \
+  --corpus tests/fixtures/v3_evaluation_cases.json \
+  --output-dir build/v3-evaluation \
+  --v2-runner alphonse.agent_v2.evaluation.deterministic_adapters:v2_runner \
+  --v3-runner alphonse.agent_v2.evaluation.deterministic_adapters:v3_runner
+```
+
+The checked-in harness never enables V3 in persistent settings and never points an
+adapter at a real project. The next evaluation task is Gate B shadow planning with all
+side effects disabled.

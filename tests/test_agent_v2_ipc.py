@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+from datetime import datetime, timezone
+from types import SimpleNamespace
 
 import pytest
 
@@ -9,6 +11,9 @@ from alphonse.agent_v2.core.inference import InferenceRouter
 from alphonse.agent_v2.core.inference import ModelProfile
 from alphonse.agent_v2.core.inference import StubInferenceProvider
 from alphonse.agent_v2.core.core import CoreActivityEvent
+from alphonse.agent_v2.core.core import CoreMessage
+from alphonse.agent_v2.core.core import LoopStepStatus
+from alphonse.agent_v2.core.core import StateSnapshot
 from alphonse.agent_v2.core.core import CoreUiEvent
 from alphonse.agent_v2.core.core import ImprovementPhase
 from alphonse.agent_v2.core.core import _task_progress_snapshot
@@ -16,6 +21,7 @@ from alphonse.agent_v2.core.intelligence.task_state import TaskState
 from alphonse.agent_v2.core.io import ChannelAddress
 from alphonse.agent_v2.core.questions import SQLiteQuestionStore
 from alphonse.agent_v2.core.scheduled_tasks import ScheduledTaskStore
+from alphonse.agent_v2.core.messages.queue import InMemoryMessageQueue
 from alphonse.agent_v2.daemon import V2Daemon
 from alphonse.agent_v2.agent_config import AgentConfigStore
 from alphonse.agent_v2.agent_config import GLOBAL_CONTEXT_FILE
@@ -28,6 +34,7 @@ from alphonse.agent_v2.runtime import build_runtime_host
 from alphonse.agent_v2.users import V2UserStore
 from alphonse.agent_v2.web_tools_settings import SQLiteWebToolsSettingsStore
 from alphonse.agent_v2.code_mode_settings import SQLiteCodeModeSettingsStore
+from alphonse.agent_v2.system_one import SQLiteSystemOneSettingsStore
 
 
 def _router() -> InferenceRouter:
@@ -61,6 +68,20 @@ def test_daemon_ipc_dispatches_ping_status_and_queue_message() -> None:
     assert daemon.ipc._dispatch({"method": "status"})["queue_size"] == 1
     daemon.run_once()
     assert daemon.ipc._dispatch({"method": "status"})["queue_size"] == 0
+
+
+def test_daemon_ipc_killswitch_reaches_active_runtime(tmp_path) -> None:
+    users = V2UserStore(":memory:")
+    admin = users.onboard(display_name="Admin", users_root=tmp_path / "users")
+    runtime = build_runtime_host(user=admin.user_id, user_store=users)
+    daemon = V2Daemon(runtime)
+    queued = runtime.channel.queue_message(prompt="work", user=admin.user_id)
+    daemon._activate_kill_switch_task(queued, type("Task", (), {"task_id": "task", "user": admin.user_id, "project_id": ""})())
+
+    result = daemon.ipc._dispatch({"method": "trigger_killswitch", "params": {"actor_user_id": admin.user_id}})
+
+    assert result["status"] == "cancel_requested"
+    assert daemon.kill_switch.is_cancelled(queued.message_id) is True
 
 
 def test_daemon_ipc_exposes_inference_configuration() -> None:
@@ -141,6 +162,47 @@ def test_model_settings_request_uses_validation_timeout(monkeypatch) -> None:
     client.set_inference_settings(provider_key="openai_codex", model_id="gpt-5.5")
 
     assert captured == {"timeout": 35.0, "method": "set_inference_settings"}
+
+
+def test_daemon_ipc_system_one_settings_are_admin_only_and_mask_secrets(tmp_path) -> None:
+    users = V2UserStore(":memory:")
+    admin = users.onboard(display_name="Admin", users_root=tmp_path / "users")
+    runtime = build_runtime_host(
+        user_store=users,
+        system_one_settings_store=SQLiteSystemOneSettingsStore(":memory:"),
+        schedule_store=ScheduledTaskStore(":memory:"),
+    )
+    daemon = V2Daemon(runtime)
+
+    with pytest.raises(PermissionError, match="admin_required"):
+        daemon.ipc._dispatch({"method": "system_one_settings", "params": {"actor_user_id": "not-admin"}})
+    saved = daemon.ipc._dispatch({
+        "method": "save_system_one_settings",
+        "params": {
+            "actor_user_id": admin.user_id,
+            "values": {"enabled": False, "api_key": "secret"},
+        },
+    })["settings"]
+
+    assert saved["enabled"] is False
+    assert saved["has_api_key"] is True
+    assert "api_key" not in saved
+    assert runtime.core.system_one is None
+
+
+def test_system_one_settings_request_uses_validation_timeout(monkeypatch) -> None:
+    client = __import__("alphonse.agent_v2.ipc", fromlist=["V2DaemonClient"]).V2DaemonClient("/tmp/test.sock", timeout_sec=2)
+    captured = {}
+
+    def fake_request(self, method, **params):
+        captured["timeout"] = self.timeout_sec
+        captured["method"] = method
+        return {"settings": {}}
+
+    monkeypatch.setattr("alphonse.agent_v2.ipc.V2DaemonClient.request", fake_request)
+    client.save_system_one_settings(actor_user_id="admin", values={"enabled": True})
+
+    assert captured == {"timeout": 35.0, "method": "save_system_one_settings"}
 
 
 def test_daemon_ipc_reads_and_saves_agent_configuration(tmp_path) -> None:
@@ -236,6 +298,7 @@ def test_desktop_poll_is_cursor_based_and_acknowledges_only_its_delivery() -> No
     assert poll["daemon_id"] == daemon.daemon_id
     assert poll["daemon_changed"] is False
     assert poll["events"][0]["sequence"] == 1
+    assert poll["events"][0]["occurred_at"]
     assert poll["deliveries"][0]["integration_id"] == "desktop"
     delivery_id = poll["deliveries"][0]["outbox_message_id"]
     assert daemon.ipc._dispatch(
@@ -249,6 +312,26 @@ def test_desktop_poll_is_cursor_based_and_acknowledges_only_its_delivery() -> No
     )
     assert repeat["events"] == []
     assert repeat["deliveries"] == []
+
+
+def test_desktop_acknowledgement_delivery_does_not_close_running_task_progress() -> None:
+    runtime = build_runtime_host(inference=_router(), schedule_store=ScheduledTaskStore(":memory:"))
+    daemon = V2Daemon(runtime)
+    outbound = runtime.outbox.enqueue(
+        address=ChannelAddress("desktop", "tui", "alex", alphonse_user_id="alex"),
+        message="Revisaré la solicitud de temperatura ahora.",
+        kind="task_acknowledgement",
+        audience_user_id="alex",
+        task_id="task-1",
+    )
+    poll = daemon.poll_desktop(client_id="desktop-a", user="alex")
+    assert poll["deliveries"][0]["outbox_message_id"] == outbound.outbox_message_id
+
+    assert daemon.acknowledge_desktop_delivery(
+        client_id="desktop-a", outbox_message_id=outbound.outbox_message_id,
+    ) is True
+
+    assert "task-1" not in daemon._desktop_progress_closures.get(("desktop-a", "alex"), set())
 
 
 def test_desktop_poll_replays_journals_when_daemon_instance_changes() -> None:
@@ -473,10 +556,190 @@ def test_desktop_task_progress_a2ui_is_admin_desktop_only_and_sanitized(tmp_path
     assert "telegram-task" not in str(excluded["ui_events"])
 
 
+def test_terminal_failed_run_closes_desktop_task_progress_surface(tmp_path) -> None:
+    users = V2UserStore(":memory:")
+    admin = users.onboard(display_name="Admin", users_root=tmp_path / "users")
+    queue = InMemoryMessageQueue()
+    project_id = "project-failed-progress"
+    runtime = build_runtime_host(
+        user_store=users, messages=queue,
+        schedule_store=ScheduledTaskStore(":memory:"), inference=_router(),
+    )
+    daemon = V2Daemon(runtime)
+    task_id = "task-terminal-failure"
+    task = TaskState(
+        task_id=task_id, user=admin.user_id, project_id=project_id,
+        goal="Complete and report the task", acceptance_criteria_md="1. [ ] Verified result",
+    )
+    runtime.activity_events.append(CoreActivityEvent(
+        phase=ImprovementPhase.PLAN, label="thinking", message="Planning.",
+        task_id=task_id, user=admin.user_id, integration_id="desktop",
+        channel_target=admin.user_id, progress=_task_progress_snapshot(task),
+    ))
+    initial = daemon.poll_desktop(
+        client_id="desktop-failure", user=admin.user_id, project_id=project_id,
+        client_capabilities={"supportedCatalogIds": [ALPHONSE_DESKTOP_CATALOG_ID]},
+    )
+    assert any("task-progress:" + task_id in str(item) for item in initial["ui_events"])
+
+    queued = queue.enqueue(CoreMessage(
+        timestamp=datetime.now(timezone.utc), prompt="Run a failing task",
+        user=admin.user_id, project_id=project_id,
+    ))
+    runtime.visible_state.update(StateSnapshot(metadata={"task_state": {"task_id": task_id, "user": admin.user_id}}))
+    runtime.core.step = lambda: SimpleNamespace(
+        status=LoopStepStatus.FAILED, queued_message_id=queued.message_id,
+        error="v3_task_failed:verification_failed",
+    )
+    runtime.core.clear_failure = lambda: None
+    daemon._notify_inbound_failure = lambda *_args, **_kwargs: None
+
+    daemon.run_once()
+    after = daemon.poll_desktop(
+        client_id="desktop-failure", user=admin.user_id, project_id=project_id,
+        after_sequence=initial["next_sequence"], after_ui_sequence=initial["next_ui_sequence"],
+        client_capabilities={"supportedCatalogIds": [ALPHONSE_DESKTOP_CATALOG_ID]},
+    )
+
+    envelopes = [item["event"]["value"] for item in after["ui_events"] if item["event"].get("name") == "a2ui.envelope"]
+    assert any(envelope.get("deleteSurface", {}).get("surfaceId") == f"task-progress:{task_id}" for envelope in envelopes)
+
+
 def test_task_progress_omits_empty_acceptance_criteria_sentinel() -> None:
     progress = _task_progress_snapshot(TaskState(user="alex"))
 
     assert progress["acceptance_criteria"] == ""
+
+
+def test_v3_task_progress_projects_hierarchical_actions_without_private_reasoning() -> None:
+    task = TaskState(
+        task_id="v3-progress",
+        user="alex",
+        project_id="home",
+        acceptance_criteria_md="1. [ ] Report the current device status",
+        intelligence_engine="hierarchical_v3",
+        intelligence_schema_version=3,
+    )
+    task.hierarchical_state = {
+        "phase": {
+            "phase_id": "inspect-device",
+            "objective": "Inspect the device",
+            "subgoals": [{
+                "subgoal_id": "read-status",
+                "objective": "Read the current device status",
+            }],
+        },
+        "actions": [
+            {
+                "action_id": "action-1",
+                "subgoal_id": "read-status",
+                "tool_id": "native.device_status",
+                "arguments": {"device_id": "studio", "api_token": "secret-input"},
+                "status": "success",
+                "result": {"temperature_c": 23, "access_token": "secret-output"},
+                "error": "",
+            },
+            {
+                "action_id": "action-2",
+                "subgoal_id": "read-status",
+                "tool_id": "native.respond",
+                "arguments": {"message": "The studio is 23 C."},
+                "status": "failed",
+                "result": None,
+                "error": "Response delivery failed.",
+            },
+        ],
+    }
+
+    progress = _task_progress_snapshot(task)
+
+    assert progress["tool_name"] == "native.respond"
+    assert progress["tool_status"] == "failed"
+    assert progress["tool_result"] == {"error": "Response delivery failed."}
+    assert progress["intention"] == "Read the current device status"
+    assert progress["steps"] == [
+        {
+            "intention": "Read the current device status",
+            "tool_name": "native.device_status",
+            "arguments": {"device_id": "studio", "api_token": "[redacted]"},
+            "status": "success",
+            "result": {"temperature_c": 23, "access_token": "[redacted]"},
+        },
+        {
+            "intention": "Read the current device status",
+            "tool_name": "native.respond",
+            "arguments": {"message": "The studio is 23 C."},
+            "status": "failed",
+            "result": {"error": "Response delivery failed."},
+        },
+    ]
+
+
+def test_desktop_task_progress_a2ui_renders_v3_capd_work_log(tmp_path) -> None:
+    users = V2UserStore(":memory:")
+    admin = users.onboard(display_name="Admin", users_root=tmp_path / "users")
+    runtime = build_runtime_host(user_store=users, schedule_store=ScheduledTaskStore(":memory:"), inference=_router())
+    daemon = V2Daemon(runtime)
+    task = TaskState(
+        task_id="v3-desktop-progress",
+        user=admin.user_id,
+        project_id="home",
+        acceptance_criteria_md="1. [ ] Report the current device status",
+        intelligence_engine="hierarchical_v3",
+        intelligence_schema_version=3,
+    )
+    task.hierarchical_state = {
+        "phase": {
+            "phase_id": "inspect-device",
+            "objective": "Inspect the device",
+            "subgoals": [{
+                "subgoal_id": "read-status",
+                "objective": "Read the current device status",
+            }],
+        },
+        "actions": [{
+            "action_id": "action-1",
+            "subgoal_id": "read-status",
+            "tool_id": "native.device_status",
+            "arguments": {"device_id": "studio", "api_key": "secret-input"},
+            "status": "success",
+            "result": {"temperature_c": 23, "access_token": "secret-output"},
+            "error": "",
+        }],
+    }
+    runtime.activity_events.append(CoreActivityEvent(
+        phase=ImprovementPhase.DO,
+        label="subgoal completed",
+        message="Read the current device status",
+        task_id=task.task_id,
+        user=admin.user_id,
+        integration_id="desktop",
+        channel_target=admin.user_id,
+        progress=_task_progress_snapshot(task),
+    ))
+
+    response = daemon.ipc._dispatch({
+        "method": "desktop_poll",
+        "params": {
+            "client_id": "v3-rich",
+            "user": admin.user_id,
+            "project_id": "home",
+            "client_capabilities": {"supportedCatalogIds": [ALPHONSE_DESKTOP_CATALOG_ID]},
+        },
+    })
+    envelopes = [
+        item["event"]["value"] for item in response["ui_events"]
+        if item["event"].get("name") == "a2ui.envelope"
+    ]
+    rendered = str(envelopes)
+
+    assert "task-progress:v3-desktop-progress" in rendered
+    assert "native.device_status · success" in rendered
+    assert "Intention: Read the current device status" in rendered
+    assert "device_id" in rendered
+    assert "temperature_c" in rendered
+    assert "secret-input" not in rendered
+    assert "secret-output" not in rendered
 
 
 def test_desktop_a2ui_question_surface_is_negotiated_and_actions_resume_only_the_question() -> None:
@@ -554,8 +817,7 @@ def test_desktop_questions_and_attention_are_project_scoped() -> None:
     assert [item["question_id"] for item in poll["questions"]] == [alpha.question_id]
     assert alpha.question_id in str(poll["ui_events"])
     assert beta.question_id not in str(poll["ui_events"])
-    assert poll["project_attention"]["alpha"]["pending_questions"] == 1
-    assert poll["project_attention"]["beta"]["pending_questions"] == 1
+    assert "project_attention" not in poll
 
     result = daemon.answer_question(user="alex", question_id=alpha.question_id, text="Alpha answer")
     assert result["resumed_task"]["project_id"] == "alpha"

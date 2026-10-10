@@ -8,6 +8,7 @@ from alphonse.agent_v2.core.inference import ModelProfile
 from alphonse.agent_v2.core.inference import StubInferenceProvider
 from alphonse.agent_v2.core.scheduled_tasks import ScheduledTaskStore
 from alphonse.agent_v2.daemon import V2Daemon
+from alphonse.agent_v2.daemon import _inbound_failure_message
 from alphonse.agent_v2.daemon import _scheduled_failure_is_non_retryable
 from alphonse.agent_v2.core.io import ChannelAddress
 from alphonse.agent_v2.inference_settings import InferenceSettingsRecord
@@ -203,6 +204,36 @@ def test_daemon_marks_scheduled_occurrence_delivered_after_outbox_delivery() -> 
     assert store.get_task(task.scheduled_task_id).status == "completed"
 
 
+def test_direct_reminder_delivery_enqueues_one_idempotent_copy_per_destination() -> None:
+    store = ScheduledTaskStore(":memory:")
+    now = datetime(2026, 7, 10, 12, 30, tzinfo=timezone.utc)
+    task = store.create_task(
+        owner_user_id="u-alex", project_id="home", name="Meet link", description="Send the meet link",
+        prompt="Reminder to send the meet link", schedule_kind="once", run_at=(now - timedelta(seconds=1)).isoformat(),
+        timezone_name="UTC", delivery_mode="direct",
+        origin_channel={
+            "integration_id": "desktop", "provider_key": "desktop", "channel_target": "u-alex", "alphonse_user_id": "u-alex",
+            "delivery_channels": [
+                {"integration_id": "desktop", "provider_key": "desktop", "channel_target": "u-alex", "alphonse_user_id": "u-alex"},
+                {"integration_id": "telegram-home", "provider_key": "telegram", "channel_target": "123", "alphonse_user_id": "u-alex"},
+            ],
+        }, now=now - timedelta(minutes=1),
+    )
+    runtime = build_runtime_host(schedule_store=store)
+    daemon = V2Daemon(runtime)
+    occurrence = store.claim_due_occurrences(worker_id="worker-1", now=now)[0]
+
+    result_id = daemon._deliver_scheduled_reminder(occurrence)
+    first = runtime.outbox.list()
+    retried_id = daemon._deliver_scheduled_reminder(occurrence)
+    second = runtime.outbox.list()
+
+    assert result_id == retried_id
+    assert len(first) == len(second) == 2
+    assert {(item.integration_id, item.channel_target) for item in second} == {("desktop", "u-alex"), ("telegram-home", "123")}
+    assert all(item.metadata["occurrence_key"] == occurrence.occurrence_key for item in second)
+
+
 def test_scheduled_processing_failure_marks_task_failed_and_notifies_owner() -> None:
     store = ScheduledTaskStore(":memory:")
     runtime = build_runtime_host(schedule_store=store)
@@ -291,3 +322,22 @@ def test_model_access_rejection_is_retryable_and_preserves_validation() -> None:
 
 def test_legacy_model_unavailable_diagnostic_is_also_retryable() -> None:
     assert _scheduled_failure_is_non_retryable("openai_codex_model_unavailable: gpt-5.5") is False
+
+
+def test_controlled_v3_plan_validation_failure_is_not_retried() -> None:
+    error = "v3_task_failed:v3_phase_plan_invalid:completion_condition_invalid"
+
+    assert _scheduled_failure_is_non_retryable(error) is True
+    message = _inbound_failure_message(error, "gpt-5.5")
+    assert "workable plan" in message
+    assert "completion_condition_invalid" not in message
+    assert "gpt-5.5" not in message
+
+
+def test_non_plan_v3_failure_message_does_not_claim_plan_rejection() -> None:
+    message = _inbound_failure_message(
+        "v3_task_failed:V3 phase budget exhausted without a terminal outcome.", "gpt-5.5"
+    )
+
+    assert "couldn't complete this task" in message
+    assert "execution plan was rejected" not in message

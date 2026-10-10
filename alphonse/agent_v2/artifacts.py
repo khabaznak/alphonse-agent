@@ -132,7 +132,21 @@ def build_artifact_tool_definitions(store: SQLiteArtifactStore, project_store: A
         root = Path(project.root_path).resolve()
         entrypoint = (root / record.entrypoint_path).resolve()
         if not _within(entrypoint, root): continue
-        descriptor = ToolDescriptor(record.artifact_id, record.name, ToolKind.ARTIFACT, record.description, dict(record.argument_schema), ("artifact", "local_execution"), ("artifact",), {"project_id": record.project_id, "entrypoint_path": record.entrypoint_path})
+        descriptor = ToolDescriptor(
+            record.artifact_id,
+            record.name,
+            ToolKind.ARTIFACT,
+            record.description,
+            dict(record.argument_schema),
+            ("artifact", "local_execution"),
+            ("artifact",),
+            {
+                "project_id": record.project_id,
+                "entrypoint_path": record.entrypoint_path,
+                "resolved_entrypoint_path": str(entrypoint),
+                "project_root_path": str(root),
+            },
+        )
         definitions.append(ToolDefinition(descriptor, lambda arguments, r=record, p=entrypoint, cwd=root: execute_artifact(r, p, cwd, arguments), dict(record.argument_schema)))
     return definitions
 

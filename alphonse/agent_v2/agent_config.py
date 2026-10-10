@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -12,6 +13,14 @@ from alphonse.agent_v2.core.core import PromptFile
 GLOBAL_CONTEXT_FILE = "GlobalContext.md"
 PHILOSOPHY_FILE = "Philosophy.md"
 EDITABLE_AGENT_CONFIG_FILES = (GLOBAL_CONTEXT_FILE, PHILOSOPHY_FILE)
+GLOBAL_CONTEXT_SECTIONS = (
+    "Family definition",
+    "Household location and setup",
+    "Household norms",
+    "Alphonse's household-wide interaction defaults",
+    "Privacy and sharing boundaries",
+    "Context maintenance",
+)
 
 
 @dataclass(frozen=True)
@@ -94,18 +103,22 @@ class AgentConfigStore:
 
 
 class AgentConfigPromptLoader:
-    """Immutable prompt snapshot loaded once while building a runtime."""
+    """Load the current editable prompt documents for each model request."""
 
-    def __init__(self, documents: dict[str, AgentConfigDocument]) -> None:
-        self._documents = dict(documents)
+    def __init__(self, store: AgentConfigStore) -> None:
+        self._store = store
 
     @classmethod
     def from_store(cls, store: AgentConfigStore) -> "AgentConfigPromptLoader":
-        return cls({document.file_name: document for document in store.list_documents()})
+        return cls(store)
 
     def load(self, name: str) -> PromptFile:
-        document = self._documents.get(str(name or "").strip())
-        return PromptFile(name=str(name or ""), content=document.content if document is not None else "")
+        normalized = str(name or "").strip()
+        try:
+            document = self._store.read(normalized)
+        except ValueError:
+            return PromptFile(name=normalized, content="")
+        return PromptFile(name=normalized, content=document.content)
 
 
 def default_agent_config_dir() -> Path:
@@ -115,6 +128,20 @@ def default_agent_config_dir() -> Path:
 
 def packaged_agent_config_dir() -> Path:
     return Path(__file__).resolve().parent / "config"
+
+
+def parse_global_context_sections(content: str) -> dict[str, str]:
+    """Return level-two Global Context sections without changing their text."""
+    sections: dict[str, list[str]] = {}
+    current = ""
+    for line in str(content or "").splitlines():
+        match = re.match(r"^##\s+(.+?)\s*#*\s*$", line)
+        if match:
+            current = match.group(1).strip()
+            sections.setdefault(current, [])
+        elif current:
+            sections[current].append(line)
+    return {name: "\n".join(lines).strip() for name, lines in sections.items()}
 
 
 def _validate_file_name(file_name: str) -> str:
