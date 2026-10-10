@@ -142,12 +142,12 @@ button { border: 0; cursor: pointer; }
   font-size: 20px;
   line-height: 1;
 }
-.nav-icon svg, .collapse-toggle svg, .project-disclosure svg, .recent-file-icon svg { width: 24px; height: 24px; stroke-width: 1.75; }
+.nav-icon svg, .collapse-toggle svg { width: 24px; height: 24px; stroke-width: 1.75; }
 .sidebar > button .nav-icon { grid-row: span 2; }
 .sidebar > button .nav-label { min-width: 0; }
 
 .project-sidebar-section { border-radius: 7px; }
-.project-sidebar-header { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: stretch; }
+.project-sidebar-header { display: grid; grid-template-columns: 1fr; align-items: stretch; }
 .project-selector {
   position: relative;
   display: grid;
@@ -162,7 +162,7 @@ button { border: 0; cursor: pointer; }
   border-radius: 7px;
   text-align: left;
 }
-.project-selector:hover, .project-disclosure:hover { background: var(--accent-hover); }
+.project-selector:hover { background: var(--accent-hover); }
 .project-selector .nav-icon { grid-row: span 2; }
 .attention-badge {
   display: inline-flex;
@@ -179,7 +179,6 @@ button { border: 0; cursor: pointer; }
   vertical-align: middle;
 }
 .project-selector > .attention-badge { position: absolute; top: 5px; right: 5px; margin: 0; }
-.project-disclosure { width: 32px; height: 32px; color: inherit; background: transparent; border-radius: 7px; font-size: 20px; }
 .project-sessions-panel { margin: 2px 4px 6px; padding: 8px; border-radius: 6px; background: var(--sidebar-panel); }
 .project-sessions-heading { display: flex; justify-content: space-between; gap: 8px; align-items: center; color: var(--sidebar-muted); font-size: 10px; text-transform: uppercase; letter-spacing: .08em; }
 .project-sessions-heading button { display: inline-flex; gap: 3px; align-items: center; padding: 3px 0; color: var(--highlight); background: transparent; font-size: 10px; text-transform: none; letter-spacing: 0; }
@@ -198,17 +197,6 @@ button { border: 0; cursor: pointer; }
 .new-session-form button:disabled { opacity: .5; }
 .project-sessions-empty, .project-sessions-error { margin: 7px 0 0; color: var(--sidebar-muted); font-size: 11px; line-height: 1.35; }
 .project-sessions-error { color: #f0b7a6; }
-.recent-files-panel { margin: 2px 4px 8px; padding: 8px; border-radius: 6px; background: var(--sidebar-panel); }
-.recent-files-heading { display: flex; justify-content: space-between; gap: 8px; align-items: center; color: var(--sidebar-muted); font-size: 10px; text-transform: uppercase; letter-spacing: .08em; }
-.recent-files-heading button { padding: 3px 0; color: var(--highlight); background: transparent; font-size: 10px; text-transform: none; letter-spacing: 0; }
-.recent-files-panel ul { display: grid; gap: 5px; margin: 8px 0 0; padding: 0; list-style: none; }
-.recent-files-panel li { display: grid; grid-template-columns: auto minmax(0, 1fr); column-gap: 6px; align-items: center; font-size: 11px; }
-.recent-file-icon { display: grid; width: 32px; height: 32px; place-items: center; color: var(--highlight); }
-.recent-file-icon { font-size: 13px; }
-.recent-file-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.recent-files-panel li small { grid-column: 2; font-size: 9px; }
-.recent-files-empty, .recent-files-error { margin: 8px 0 0; color: var(--sidebar-muted); font-size: 11px; line-height: 1.35; }
-.recent-files-error { color: #f0b7a6; }
 
 .sidebar-collapsed .brand { grid-template-columns: 32px; justify-content: center; }
 .sidebar-collapsed .brand-avatar { width: 32px; }
@@ -219,9 +207,7 @@ button { border: 0; cursor: pointer; }
 .sidebar-collapsed .sidebar > button small,
 .sidebar-collapsed .project-selector .nav-label,
 .sidebar-collapsed .project-selector small,
-.sidebar-collapsed .project-disclosure,
-.sidebar-collapsed .project-sessions-panel,
-.sidebar-collapsed .recent-files-panel { display: none; }
+.sidebar-collapsed .project-sessions-panel { display: none; }
 .sidebar-collapsed .collapse-toggle { margin-top: 8px; }
 .sidebar-collapsed .sidebar > button { min-height: 52px; padding: 10px; grid-template-columns: 1fr; justify-items: center; }
 .sidebar-collapsed .sidebar > button .nav-icon { grid-row: auto; }

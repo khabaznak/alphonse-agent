@@ -1,5 +1,5 @@
 import { FormEvent, KeyboardEvent, memo, ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { CalendarClock, ChevronDown, ChevronLeft, ChevronRight, FileText, Folder, FolderKanban, Plus, Settings, UsersRound, X } from "lucide-react";
+import { CalendarClock, ChevronLeft, ChevronRight, FileText, FolderKanban, Plus, Settings, UsersRound, X } from "lucide-react";
 import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { onAction } from "@tauri-apps/plugin-notification";
@@ -39,7 +39,6 @@ type PollResponse = {
   status: { active_work: Record<string, string>; activity: { state?: string }; queue?: { ready?: number; processing?: number } };
 };
 type HistoryResponse = { messages: ChatMessage[] };
-type RecentFilesResponse = { files: Array<{ name: string; kind: "file" | "directory"; modified_at: string }> };
 type MemorySessionsResponse = { sessions: MemorySession[]; active_session: MemorySession };
 type DesktopProjectFile = { filename: string; mime_type: string; size_bytes: number; project_path: string; relative_path: string };
 type Provider = {
@@ -99,9 +98,6 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
   const [error, setError] = useState("");
   const [surfaces, setSurfaces] = useState<Record<string, import("./a2ui").A2uiSurface>>({});
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  const [recentFilesOpen, setRecentFilesOpen] = useState(false);
-  const [recentFiles, setRecentFiles] = useState<RecentFilesResponse["files"]>([]);
-  const [recentFilesError, setRecentFilesError] = useState("");
   const [memorySessions, setMemorySessions] = useState<MemorySession[]>([]);
   const [activeMemorySessionId, setActiveMemorySessionId] = useState("");
   const [memorySessionsLoading, setMemorySessionsLoading] = useState(false);
@@ -446,20 +442,6 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
   }, [prompt]);
 
   useEffect(() => {
-    if (!recentFilesOpen || !project) return;
-    let active = true;
-    setRecentFilesError("");
-    void daemonRequest<RecentFilesResponse>("project_recent_files", { user, project_id: project.project_id, limit: 4 })
-      .then((result) => { if (active) setRecentFiles(result.files); })
-      .catch((cause: unknown) => {
-        if (!active) return;
-        setRecentFiles([]);
-        setRecentFilesError(cause instanceof Error ? cause.message : "Recent files could not be loaded");
-      });
-    return () => { active = false; };
-  }, [project, recentFilesOpen, user]);
-
-  useEffect(() => {
     if (!project || !user) {
       setMemorySessions([]);
       setActiveMemorySessionId("");
@@ -595,9 +577,6 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
     setMessageBuckets((buckets) => ({ ...buckets, [currentProjectKey]: messages }));
     setProject(next);
     setAttachmentPaths([]);
-    setRecentFilesOpen(false);
-    setRecentFiles([]);
-    setRecentFilesError("");
     setMemorySessions([]);
     setActiveMemorySessionId("");
     setMemorySessionsError("");
@@ -747,16 +726,6 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
     void submitPrompt();
   };
 
-  const revealProjectInFinder = async () => {
-    if (!project) return;
-    try {
-      await showInFinder(project.root_path);
-      setRecentFilesError("");
-    } catch (cause) {
-      setRecentFilesError(cause instanceof Error ? cause.message : "Finder could not be opened");
-    }
-  };
-
   const runCommand = async (command: string) => {
     if (command === "/project") return setProjectsOpen(true);
     if (command === "/integrations") { setSettingsTab("integrations"); return setModal("settings"); }
@@ -812,7 +781,6 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
         <section className="project-sidebar-section">
           <div className="project-sidebar-header">
             <button className={`project-selector${projectsOpen ? " selected" : ""}`} title="Projects" onClick={() => setProjectsOpen((open) => !open)}><span className="nav-icon" aria-hidden="true"><FolderKanban /></span><span className="nav-label">Projects</span><small>Manage</small>{attentionTotal(projectAttention) > 0 && <span className="attention-badge" aria-label={`${attentionTotal(projectAttention)} project items need attention`}>{attentionTotal(projectAttention)}</span>}</button>
-            {project && <button className="project-disclosure" type="button" title={recentFilesOpen ? "Hide recent files" : "Show recent files"} aria-label={recentFilesOpen ? "Hide recent files" : "Show recent files"} aria-expanded={recentFilesOpen} onClick={() => setRecentFilesOpen((open) => !open)}>{recentFilesOpen ? <ChevronDown aria-hidden="true" /> : <ChevronRight aria-hidden="true" />}</button>}
           </div>
           {project && <div className="project-sessions-panel">
             <div className="project-sessions-heading"><span>Sessions</span><button type="button" aria-expanded={newSessionOpen} onClick={() => { setNewSessionOpen((open) => !open); setMemorySessionsError(""); }}>{newSessionOpen ? "Cancel" : <><Plus aria-hidden="true" /> New</>}</button></div>
@@ -823,11 +791,6 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
               const isActive = session.session_id === activeMemorySessionId;
               return <li key={session.session_id}><button type="button" className={isActive ? "active" : ""} aria-pressed={isActive} disabled={sessionMutationPending} title={isActive ? `${session.name} (active)` : `Switch to ${session.name}`} onClick={() => void selectMemorySession(session)}><span className="session-status" aria-hidden="true" /><span>{session.name}</span>{isActive && <small>Active</small>}</button></li>;
             })}</ul> : <p className="project-sessions-empty">No open sessions.</p>)}
-          </div>}
-          {project && recentFilesOpen && <div className="recent-files-panel">
-            <div className="recent-files-heading"><span>Recent files</span><button type="button" onClick={() => void revealProjectInFinder()}>Show in Finder</button></div>
-            {recentFilesError && <p className="recent-files-error" role="alert">{recentFilesError}</p>}
-            {!recentFilesError && (recentFiles.length ? <ul>{recentFiles.map((file) => <li key={`${file.kind}:${file.name}`}><span className="recent-file-icon" aria-hidden="true">{file.kind === "directory" ? <Folder /> : <FileText />}</span><span className="recent-file-name" title={file.name}>{file.name}</span><small>{dateLabel(file.modified_at)}</small></li>)}</ul> : <p className="recent-files-empty">No accessible files yet.</p>)}
           </div>}
         </section>
         <button title="Scheduled tasks" onClick={() => setModal("scheduled-tasks")}><span className="nav-icon" aria-hidden="true"><CalendarClock /></span><span className="nav-label">Scheduled tasks</span></button>
