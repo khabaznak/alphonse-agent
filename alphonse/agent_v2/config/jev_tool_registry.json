@@ -89,6 +89,14 @@
         "false": "The phase needs to register a new artifact, modify artifact program files, or merely use an existing artifact."
       }
     },
+    "native.skill_install": {
+      "type": "noul",
+      "instructions": "Does this phase need to install a new reusable Alphonse skill that the requester has already reviewed and approved?",
+      "criteria": {
+        "true": "The requester explicitly asked to create a reusable skill, its complete draft has been shown, and the requester approved installing it.",
+        "false": "The phase is drafting or revising a skill proposal, the requester has not approved installation, or the task only needs to use an existing skill."
+      }
+    },
     "native.analyze_image": {
       "type": "noul",
       "instructions": "Does this phase need to inspect or extract text from an image attached to the task?",

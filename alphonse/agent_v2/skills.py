@@ -91,6 +91,32 @@ class SkillStore:
         finally:
             shutil.rmtree(staging, ignore_errors=True)
 
+    def create_skill(self, name: str, description: str, instructions: str) -> SkillRecord:
+        """Create and install a plain-instruction skill package atomically."""
+        skill_name = _validate_skill_name(name)
+        skill_description = str(description or "").strip()
+        skill_instructions = str(instructions or "").strip()
+        if not skill_description or len(skill_description) > MAX_SKILL_DESCRIPTION_LENGTH:
+            raise ValueError("skill_description_invalid")
+        if not skill_instructions:
+            raise ValueError("skill_instructions_required")
+        if self.get(skill_name) is not None:
+            raise ValueError("skill_already_installed")
+        staging = Path(tempfile.mkdtemp(prefix=".skill-author-", dir=self.skills_dir))
+        source = staging / skill_name
+        try:
+            source.mkdir()
+            metadata = yaml.safe_dump(
+                {"name": skill_name, "description": skill_description},
+                allow_unicode=True, sort_keys=False,
+            ).strip()
+            skill_file = source / SKILL_FILE
+            skill_file.write_text(f"---\n{metadata}\n---\n\n{skill_instructions}\n", encoding="utf-8")
+            self._read_skill(source)
+            return self.install_directory(source)
+        finally:
+            shutil.rmtree(staging, ignore_errors=True)
+
     def replace_directory(self, skill_id: str, source: str | Path) -> SkillRecord:
         """Atomically replace an installed package with a validated package of the same name."""
         name = _validate_skill_name(str(skill_id or "").removeprefix("skill:"))

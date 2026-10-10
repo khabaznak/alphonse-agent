@@ -34,6 +34,7 @@ class SideEffectClass(str, Enum):
     READ_ONLY = "read_only"
     USER_RESPONSE = "user_response"
     PROJECT_MUTATION = "project_mutation"
+    LOCAL_SKILL_INSTALLATION = "local_skill_installation"
     EXTERNAL_REVERSIBLE = "external_reversible"
     EXTERNAL_IRREVERSIBLE = "external_irreversible"
 

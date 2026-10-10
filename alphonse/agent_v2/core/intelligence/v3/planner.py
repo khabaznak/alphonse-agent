@@ -88,7 +88,9 @@ def plan_phase(task: "TaskState", context: "CoreLoopContext") -> PhasePlan:
         f"Jev-curated tool registry (complete descriptors): {json.dumps(_tool_rows(tools), ensure_ascii=False)}\n"
         "Return an object conforming exactly to this JSON Schema. Do not omit required nested fields "
         "or invent enum values. Use the user_response side effect for a subgoal whose effect is replying "
-        f"to the requester.\nPhasePlan JSON Schema: {json.dumps(contract_schema, ensure_ascii=False, sort_keys=True)}"
+        "to the requester. Use local_skill_installation only for a new reusable skill explicitly requested by the requester, "
+        "and only after showing the complete draft and receiving approval. "
+        f"\nPhasePlan JSON Schema: {json.dumps(contract_schema, ensure_ascii=False, sort_keys=True)}"
     )
     result = context.inference.generate_json(
         InferenceRequest(

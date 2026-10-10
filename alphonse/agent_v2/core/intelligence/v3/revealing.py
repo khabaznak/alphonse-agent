@@ -20,6 +20,7 @@ class Capability(str, Enum):
     PROJECT_FILE_INSPECTION = "project_file_inspection"
     PROJECT_ARTIFACT_QUERY = "project_artifact_query"
     ARTIFACT_METADATA_MANAGEMENT = "artifact_metadata_management"
+    SKILL_MANAGEMENT = "skill_management"
     MEMORY_RECALL = "memory_recall"
     ATTACHMENT_ANALYSIS = "attachment_analysis"
     DOCUMENT_EXTRACTION = "document_extraction"
@@ -57,6 +58,7 @@ class ToolRevealPolicy:
         Capability.PROJECT_FILE_INSPECTION.value: "Inspect authorized project files and local process state.",
         Capability.PROJECT_ARTIFACT_QUERY.value: "Query a registered project artifact through its native client.",
         Capability.ARTIFACT_METADATA_MANAGEMENT.value: "Update an owned artifact's catalog name and routing description without modifying its files.",
+        Capability.SKILL_MANAGEMENT.value: "Install a newly authored reusable SKILL.md instruction package after requester approval.",
         Capability.MEMORY_RECALL.value: "Search bounded archived memory for the current project.",
         Capability.ATTACHMENT_ANALYSIS.value: "Analyze an image attached to the current task.",
         Capability.DOCUMENT_EXTRACTION.value: "Extract information from a discovered document.",
@@ -161,6 +163,8 @@ def _prerequisite_failure(
             return "mutation_scope_required"
         if SideEffectClass.PROJECT_MUTATION not in subgoal.allowed_side_effects:
             return "project_mutation_not_allowed"
+    if Capability.SKILL_MANAGEMENT.value in capability_set and SideEffectClass.LOCAL_SKILL_INSTALLATION not in subgoal.allowed_side_effects:
+        return "skill_installation_not_allowed"
     if (
         descriptor.kind.value != "artifact"
         and not descriptor.read_only
@@ -196,6 +200,7 @@ _TOOL_CAPABILITIES: dict[str, tuple[str, ...]] = {
     "native.scheduled_task": (Capability.SCHEDULING.value,),
     "native.scheduled_task_delivery": (Capability.SCHEDULING.value,),
     "native.artifact_metadata_update": (Capability.ARTIFACT_METADATA_MANAGEMENT.value,),
+    "native.skill_install": (Capability.SKILL_MANAGEMENT.value,),
     "native.ask_question": (Capability.USER_INTERACTION.value,),
     "native.respond": (Capability.USER_RESPONSE.value,),
 }
