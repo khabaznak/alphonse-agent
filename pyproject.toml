@@ -16,3 +16,6 @@ alphonse = "alphonse.agent_v2.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["alphonse*"]
+
+[tool.setuptools.package-data]
+"alphonse.agent_v2" = ["builtin_skills/*/SKILL.md"]

@@ -37,7 +37,7 @@ export type Project = {
   root_path: string;
   visibility: "private" | "shared";
   owner_user_id: string;
-  status: "active" | "archived";
+  status: "active" | "paused" | "completed" | "archived";
   archived_at: string | null;
   created_at: string;
   updated_at: string;

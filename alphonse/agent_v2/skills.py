@@ -53,24 +53,33 @@ class SkillStore:
         return cls()
 
     def list_skills(self) -> list[SkillRecord]:
-        records: list[SkillRecord] = []
-        for path in sorted(self.skills_dir.iterdir(), key=lambda item: item.name.casefold()):
-            if not path.is_dir() or path.is_symlink():
+        records: dict[str, SkillRecord] = {}
+        for directory in (self._bundled_skills_dir(), self.skills_dir):
+            if not directory.is_dir():
                 continue
-            try:
-                records.append(self._read_skill(path))
-            except (OSError, UnicodeDecodeError, ValueError, yaml.YAMLError):
-                # Invalid packages stay on disk for the admin to repair, but
-                # must not enter the model-facing discovery catalog.
-                continue
-        return records
+            for path in sorted(directory.iterdir(), key=lambda item: item.name.casefold()):
+                if not path.is_dir() or path.is_symlink():
+                    continue
+                try:
+                    record = self._read_skill(path)
+                    records[record.skill_id] = record
+                except (OSError, UnicodeDecodeError, ValueError, yaml.YAMLError):
+                    continue
+        return sorted(records.values(), key=lambda item: item.name.casefold())
 
     def get(self, skill_id: str) -> SkillRecord | None:
         name = _validate_skill_name(str(skill_id or "").removeprefix("skill:"))
         path = self.skills_dir / name
-        if not path.is_dir() or path.is_symlink():
+        if path.is_dir() and not path.is_symlink():
+            return self._read_skill(path)
+        bundled = self._bundled_skills_dir() / name
+        if not bundled.is_dir() or bundled.is_symlink():
             return None
-        return self._read_skill(path)
+        return self._read_skill(bundled)
+
+    @staticmethod
+    def _bundled_skills_dir() -> Path:
+        return Path(__file__).resolve().parent / "builtin_skills"
 
     def install_directory(self, source: str | Path) -> SkillRecord:
         """Copy a validated skill package into the local library."""

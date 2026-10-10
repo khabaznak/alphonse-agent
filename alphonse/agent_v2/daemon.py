@@ -178,6 +178,8 @@ class V2Daemon:
         try:
             self._stop.clear()
             self._ensure_home_projects()
+            family_users = [user.user_id for user in self.runtime.user_store.list_users() if user.is_active]
+            self.runtime.project_store.migrate_legacy_shared_access(family_users)
             self._migrate_blank_project_records()
             self._memory_migration_thread = threading.Thread(target=self._migrate_project_memories, name="alphonse-v2-memory-migration", daemon=True)
             self._memory_migration_thread.start()
@@ -1100,6 +1102,45 @@ class V2Daemon:
         bounded_limit = max(1, min(int(limit or 4), 4))
         return [entry for _, entry in entries[:bounded_limit]]
 
+    def project_files(self, *, user: str, project_id: str) -> list[dict[str, str]]:
+        actor = self._admin_user_id(user)
+        project = self.runtime.project_store.get_project(project_id, requester_user_id=actor, requester_is_admin=True)
+        if project is None:
+            raise ValueError("project_not_found")
+        root = Path(project.root_path).resolve()
+        if not root.is_dir():
+            return []
+        rows: list[dict[str, str]] = []
+        for current, directories, filenames in os.walk(root, followlinks=False):
+            directories[:] = [name for name in directories if not name.startswith(".") and not (Path(current) / name).is_symlink()]
+            for filename in filenames:
+                child = Path(current) / filename
+                if filename.startswith(".") or filename in {"project_config.json", "project_context.md"} or child.is_symlink():
+                    continue
+                relative = child.relative_to(root).as_posix()
+                rows.append({"name": relative, "kind": "file"})
+                if len(rows) >= 1000:
+                    return sorted(rows, key=lambda item: item["name"].casefold())
+        return sorted(rows, key=lambda item: item["name"].casefold())
+
+    def remove_project_file(self, *, user: str, project_id: str, name: str) -> dict[str, Any]:
+        actor = self._admin_user_id(user)
+        project = self.runtime.project_store.get_project(project_id, requester_user_id=actor, requester_is_admin=True)
+        if project is None:
+            raise ValueError("project_not_found")
+        file_name = str(name or "").strip()
+        relative = Path(file_name)
+        if not file_name or relative.is_absolute() or ".." in relative.parts or any(part.startswith(".") for part in relative.parts) or relative.name in {"project_config.json", "project_context.md"}:
+            raise ValueError("project_file_removal_not_allowed")
+        root = Path(project.root_path).resolve()
+        target = root / relative
+        if any((root / Path(*relative.parts[:index])).is_symlink() for index in range(1, len(relative.parts))):
+            raise ValueError("project_file_not_found")
+        if not target.resolve().is_relative_to(root) or target.is_symlink() or not target.is_file():
+            raise ValueError("project_file_not_found")
+        target.unlink()
+        return {"removed": True, "name": file_name}
+
     def copy_desktop_project_files(self, *, user: str, project_id: str, source_paths: list[str]) -> list[dict[str, Any]]:
         """Copy user-selected Desktop files into an authorized project root at send time."""
         actor = self._admin_user_id(user)
@@ -1224,9 +1265,27 @@ class V2Daemon:
         self.runtime.memory_session_store.ensure_general(project_id=project.project_id, created_by_user_id=owner)
         return project.to_dict()
 
-    def update_project(self, *, user: str, project_id: str, name: str, description: str, visibility: str) -> dict[str, Any]:
+    def update_project(self, *, user: str, project_id: str, name: str, description: str, visibility: str, member_user_ids: list[str] | None = None) -> dict[str, Any]:
         actor = self._admin_user_id(user)
-        return self.runtime.project_store.update_project(project_id, name=name, description=description, visibility=visibility, requester_user_id=actor, requester_is_admin=True).to_dict()  # type: ignore[arg-type]
+        members = member_user_ids
+        for member in members or []:
+            if self.runtime.user_store.get_user(str(member)) is None:
+                raise KeyError("user_not_found")
+        return self.runtime.project_store.update_project(project_id, name=name, description=description, visibility=visibility, requester_user_id=actor, requester_is_admin=True, member_user_ids=members).to_dict()  # type: ignore[arg-type]
+
+    def set_project_status(self, *, user: str, project_id: str, status: str) -> dict[str, Any]:
+        actor = self._admin_user_id(user)
+        if status == "archived":
+            self._ensure_project_has_no_live_schedules(project_id)
+        return self.runtime.project_store.set_status(project_id, status, requester_user_id=actor, requester_is_admin=True).to_dict()  # type: ignore[arg-type]
+
+    def project_config(self, *, user: str, project_id: str) -> dict[str, Any]:
+        actor = self._admin_user_id(user)
+        return self.runtime.project_store.read_project_config(project_id, requester_user_id=actor, requester_is_admin=True)
+
+    def save_project_config(self, *, user: str, project_id: str, config: dict[str, Any]) -> dict[str, Any]:
+        actor = self._admin_user_id(user)
+        return self.runtime.project_store.write_project_config(project_id, config, requester_user_id=actor, requester_is_admin=True).to_dict()
 
     def archive_project(self, *, user: str, project_id: str) -> dict[str, Any]:
         actor = self._admin_user_id(user)

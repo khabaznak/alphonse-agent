@@ -125,6 +125,12 @@ class V2DaemonClient:
     def save_project_context(self, *, user: str, project_id: str, content: str) -> dict[str, Any]:
         return self.request("save_project_context", user=user, project_id=project_id, content=content)
 
+    def project_config(self, *, user: str, project_id: str) -> dict[str, Any]:
+        return self.request("project_config", user=user, project_id=project_id)
+
+    def save_project_config(self, *, user: str, project_id: str, config: dict[str, Any]) -> dict[str, Any]:
+        return self.request("save_project_config", user=user, project_id=project_id, config=config)
+
     def select_project_session(self, **values: Any) -> dict[str, Any]:
         return self.request("select_project_session", **values)
 
@@ -586,6 +592,10 @@ class V2DaemonServer:
                     limit=int(params.get("limit") or 4),
                 )
             }
+        if method == "project_files":
+            return {"files": self.daemon.project_files(user=str(params.get("user") or "local"), project_id=str(params.get("project_id") or ""))}
+        if method == "remove_project_file":
+            return self.daemon.remove_project_file(user=str(params.get("user") or "local"), project_id=str(params.get("project_id") or ""), name=str(params.get("name") or ""))
         if method == "copy_desktop_project_files":
             source_paths = params.get("source_paths") if isinstance(params.get("source_paths"), list) else []
             return {
@@ -610,7 +620,15 @@ class V2DaemonServer:
         if method == "import_project":
             return {"project": self.daemon.import_project(user=str(params.get("user") or "local"), name=str(params.get("name") or ""), description=str(params.get("description") or ""), root_path=str(params.get("root_path") or ""), visibility=str(params.get("visibility") or "private"))}
         if method == "update_project":
-            return {"project": self.daemon.update_project(user=str(params.get("user") or "local"), project_id=str(params.get("project_id") or ""), name=str(params.get("name") or ""), description=str(params.get("description") or ""), visibility=str(params.get("visibility") or "private"))}
+            members = params.get("member_user_ids")
+            return {"project": self.daemon.update_project(user=str(params.get("user") or "local"), project_id=str(params.get("project_id") or ""), name=str(params.get("name") or ""), description=str(params.get("description") or ""), visibility=str(params.get("visibility") or "private"), member_user_ids=[str(item) for item in members] if isinstance(members, list) else None)}
+        if method == "set_project_status":
+            return {"project": self.daemon.set_project_status(user=str(params.get("user") or "local"), project_id=str(params.get("project_id") or ""), status=str(params.get("status") or ""))}
+        if method == "project_config":
+            return {"config": self.daemon.project_config(user=str(params.get("user") or "local"), project_id=str(params.get("project_id") or ""))}
+        if method == "save_project_config":
+            config = params.get("config")
+            return {"project": self.daemon.save_project_config(user=str(params.get("user") or "local"), project_id=str(params.get("project_id") or ""), config=config if isinstance(config, dict) else {})}
         if method == "archive_project":
             return {"project": self.daemon.archive_project(user=str(params.get("user") or "local"), project_id=str(params.get("project_id") or ""))}
         if method == "restore_project":
