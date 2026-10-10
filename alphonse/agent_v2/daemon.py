@@ -740,11 +740,22 @@ class V2Daemon:
         detail = str(instructions or "").strip()
         if not detail:
             raise ValueError("artifact_instructions_required")
-        self.runtime.skill_store.add_artifact_instructions(skill.skill_id, record.artifact_id, record.name, detail, {
-            "description": record.description, "project_id": record.project_id, "entrypoint_path": record.entrypoint_path,
-            "argument_schema": record.argument_schema, "timeout_seconds": record.timeout_seconds,
-        })
-        return self.runtime.artifact_store.set_skill(artifact_id, skill.skill_id).to_dict()
+        if record.skill_id and record.skill_id != skill.skill_id:
+            raise ValueError("artifact_already_assigned")
+        assigned = self.runtime.artifact_store.assign_to_skill(artifact_id, skill.skill_id)
+        try:
+            self.runtime.skill_store.add_artifact_instructions(skill.skill_id, assigned.artifact_id, assigned.name, detail, {
+                "description": assigned.description, "project_id": assigned.project_id, "entrypoint_path": assigned.entrypoint_path,
+                "argument_schema": assigned.argument_schema, "timeout_seconds": assigned.timeout_seconds,
+            })
+        except Exception:
+            if not record.skill_id:
+                self.runtime.artifact_store.set_skill(artifact_id, "")
+            raise
+        saved = self.runtime.artifact_store.get(artifact_id)
+        if saved is None:
+            raise KeyError("artifact_not_found")
+        return saved.to_dict()
 
     def list_unassigned_artifacts(self, *, actor_user_id: str) -> list[dict[str, Any]]:
         self._require_admin(actor_user_id)
@@ -771,6 +782,10 @@ class V2Daemon:
         self._require_admin(actor_user_id)
         self.runtime.skill_store.delete_file(skill_id, path)
         return {"deleted": path}
+
+    def add_skill_file(self, *, actor_user_id: str, skill_id: str, source_path: str) -> dict[str, str]:
+        self._require_admin(actor_user_id)
+        return {"path": self.runtime.skill_store.add_file_from_path(skill_id, source_path)}
 
     def install_skill(self, *, actor_user_id: str, source_directory: str) -> dict[str, str]:
         self._require_admin(actor_user_id)

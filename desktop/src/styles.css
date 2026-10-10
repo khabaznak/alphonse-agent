@@ -822,6 +822,8 @@ button { border: 0; cursor: pointer; }
 .skill-file-tabs { display: flex; flex-wrap: wrap; gap: 6px; }
 .skill-file-tabs button { padding: 7px 10px; border-radius: 5px; color: var(--muted); background: var(--surface-subtle); }
 .skill-file-tabs button.active { color: var(--text); background: var(--accent-soft); }
+.skill-new-file-form { display: grid; gap: 8px; padding: 12px; border: 1px solid var(--border); border-radius: 7px; background: var(--surface-subtle); }
+.skill-new-file-form label { color: var(--muted); font-size: 12px; }
 .skill-editor .artifact-card { display: grid; gap: 5px; padding: 13px; border: 1px solid var(--border); border-radius: 7px; }
 .skill-editor .artifact-card p, .skill-editor .artifact-card small { margin: 0; color: var(--muted); }
 .project-editor { display: grid; align-content: start; gap: 12px; max-width: 940px; min-height: 100%; margin: 0 auto; padding: 24px clamp(20px, 4vw, 48px) 40px; overflow: auto; }

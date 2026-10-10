@@ -129,6 +129,25 @@ class SkillStore:
             raise ValueError("skill_file_not_found")
         path.unlink()
 
+    def add_file_from_path(self, skill_id: str, source: str | Path) -> str:
+        root = Path(self._editable(skill_id).directory).resolve()
+        source_path = Path(source).expanduser()
+        if source_path.is_symlink():
+            raise ValueError("skill_source_file_symlink_not_allowed")
+        source_path = source_path.resolve(strict=True)
+        if not source_path.is_file():
+            raise ValueError("skill_source_file_required")
+        if source_path.stat().st_size > MAX_SKILL_FILE_BYTES:
+            raise ValueError("skill_file_too_large")
+        name = source_path.name
+        if name == SKILL_FILE:
+            raise ValueError("skill_definition_cannot_be_replaced_by_import")
+        target = _skill_path(root, name)
+        if target.exists() or target.is_symlink():
+            raise ValueError("skill_file_already_exists")
+        shutil.copyfile(source_path, target)
+        return name
+
     def add_artifact_instructions(self, skill_id: str, artifact_id: str, name: str, instructions: str, definition: dict[str, Any] | None = None) -> None:
         record = self._editable(skill_id)
         path = Path(record.directory) / SKILL_FILE
@@ -138,7 +157,7 @@ class SkillStore:
             manifest = "\n\nDefinition:\n\n```json\n" + json.dumps(definition, ensure_ascii=False, indent=2, sort_keys=True) + "\n```"
         section = f"\n\n## Artifact: {name}\n\nArtifact ID: `{artifact_id}`{manifest}\n\nOperating instructions:\n\n{str(instructions).strip()}\n"
         if f"Artifact ID: `{artifact_id}`" in current:
-            raise ValueError("artifact_already_in_skill")
+            return
         updated = current.rstrip() + section
         if len(updated.encode("utf-8")) > MAX_SKILL_FILE_BYTES:
             raise ValueError("skill_file_too_large")

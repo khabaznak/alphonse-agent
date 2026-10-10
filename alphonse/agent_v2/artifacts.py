@@ -109,6 +109,22 @@ class SQLiteArtifactStore:
             raise KeyError("artifact_not_found")
         return result
 
+    def assign_to_skill(self, artifact_id: str, skill_id: str) -> ArtifactRecord:
+        """Assign an unassigned catalog entry once, safely across concurrent clients."""
+        normalized_id = _artifact_id(artifact_id)
+        normalized_skill_id = _required(skill_id, "artifact_skill_required")
+        with self._connect() as conn:
+            cursor = conn.execute(
+                "UPDATE v2_artifacts SET skill_id=?,updated_at=? WHERE artifact_id=? AND skill_id=''",
+                (normalized_skill_id, _now(), normalized_id),
+            )
+        record = self.get(normalized_id)
+        if record is None:
+            raise KeyError("artifact_not_found")
+        if cursor.rowcount == 0 and record.skill_id != normalized_skill_id:
+            raise ValueError("artifact_already_assigned")
+        return record
+
     def delete(self, artifact_id: str) -> None:
         with self._connect() as conn:
             cursor = conn.execute("DELETE FROM v2_artifacts WHERE artifact_id=?", (_artifact_id(artifact_id),))
