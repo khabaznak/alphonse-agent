@@ -71,6 +71,7 @@ button { border: 0; cursor: pointer; }
 }
 
 .app-shell.sidebar-collapsed { grid-template-columns: 72px minmax(520px, 1fr); }
+.app-shell.projects-mode { grid-template-columns: minmax(0, 1fr); }
 
 .sidebar {
   min-height: 0;
@@ -841,6 +842,41 @@ button { border: 0; cursor: pointer; }
 .modal button.secondary { color: var(--accent); background: var(--accent-soft); }
 .back-button { padding: 0 !important; color: var(--accent) !important; background: transparent !important; }
 .project-detail, .project-create { display: grid; gap: 12px; margin-top: 14px; }
+.projects-workspace { display: grid; min-width: 0; min-height: 0; height: 100dvh; grid-template-columns: minmax(230px, 300px) minmax(0, 1fr); overflow: hidden; background: var(--canvas); }
+.projects-workspace-sidebar { display: grid; min-width: 0; min-height: 0; grid-template-rows: auto auto minmax(0, 1fr) auto; gap: 12px; padding: 18px 14px; overflow: hidden; border-right: 1px solid var(--border); background: var(--sidebar); color: var(--sidebar-text); }
+.projects-workspace-heading { display: grid; gap: 12px; align-content: start; }
+.projects-workspace-heading h2 { margin: 0; color: var(--sidebar-text); font: 650 25px/1 var(--font-display); }
+.projects-workspace-heading > button:last-child { width: 100%; padding: 10px; border-radius: 7px; color: var(--sidebar); background: var(--highlight); text-align: left; }
+.projects-workspace-filters { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 6px 8px; color: var(--sidebar-muted); font-size: 11px; }
+.projects-workspace-filters select { min-width: 0; padding: 6px 8px; border: 1px solid var(--sidebar-muted); border-radius: 5px; color: var(--sidebar-text); background: var(--sidebar-panel); }
+.projects-workspace-list { display: grid; align-content: start; gap: 4px; min-height: 0; overflow: auto; }
+.projects-workspace-list > button { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 9px; width: 100%; padding: 10px 8px; border-radius: 6px; color: var(--sidebar-text); background: transparent; text-align: left; }
+.projects-workspace-list > button:hover, .projects-workspace-list > button.active { background: var(--accent-hover); }
+.projects-workspace-list > button.active { color: var(--highlight); box-shadow: inset 3px 0 var(--highlight); }
+.projects-workspace-list > button > span { display: grid; gap: 4px; min-width: 0; overflow-wrap: anywhere; }
+.projects-workspace-list > button small { color: var(--sidebar-muted); font-size: 10px; }
+.projects-workspace-list > p, .projects-workspace-notice { color: var(--sidebar-muted); font-size: 12px; }
+.projects-workspace-main { min-width: 0; min-height: 0; overflow: auto; }
+.projects-workspace-empty { display: grid; min-height: 100%; align-content: center; justify-items: center; gap: 10px; padding: 32px; color: var(--muted); text-align: center; }
+.projects-workspace-empty h1 { margin: 0; color: var(--text); font: 650 28px var(--font-display); }
+.projects-workspace-empty p { margin: 0; }
+.projects-workspace-empty svg { color: var(--accent); }
+.project-editor { display: grid; align-content: start; gap: 12px; max-width: 940px; min-height: 100%; margin: 0 auto; padding: 24px clamp(20px, 4vw, 48px) 40px; overflow: auto; }
+.project-editor-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding-bottom: 16px; border-bottom: 1px solid var(--border); }
+.project-editor-header h1 { margin: 0; color: var(--text); font: 650 28px/1.1 var(--font-display); }
+.project-editor .project-detail { margin-top: 0; }
+.project-editor .form-field { background: var(--surface); }
+.project-editor .project-detail > h3 { margin: 12px 0 0; }
+.project-editor ul { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.project-editor li { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px; overflow-wrap: anywhere; }
+.project-editor .secondary { padding: 7px 10px; color: var(--accent); background: var(--accent-soft); }
+.project-editor .dialog-actions { justify-content: flex-start; }
+@media (max-width: 760px) {
+  .projects-workspace { grid-template-columns: minmax(190px, 36%) minmax(0, 1fr); }
+  .projects-workspace-sidebar { padding: 12px 8px; }
+  .projects-workspace-heading h2 { font-size: 21px; }
+  .project-editor-header { align-items: flex-start; flex-direction: column; }
+}
 .scheduled-task-list { max-height: 230px; overflow-y: auto; }
 .stack .scheduled-task-row {
   grid-template-columns: 58px minmax(0, 1fr);
