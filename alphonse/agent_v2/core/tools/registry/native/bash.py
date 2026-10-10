@@ -53,8 +53,11 @@ def build_bash_tool_definition() -> ToolDefinition:
         name=BASH_TOOL_NAME,
         kind=ToolKind.NATIVE,
         description=(
-            "Execute one Bash command on the local host and return stdout/stderr. "
-            "Use for direct filesystem, process, build, test, diagnostic, and artifact work. "
+            "Execute one Bash command on the local host and return stdout/stderr. Use Bash for project-file work: "
+            "search filenames and file contents with find, rg, or grep; read files with cat or sed; create and edit "
+            "files with shell redirection or standard command-line editors; and verify changes by reading them back "
+            "or comparing diffs. Bash replaces dedicated project search, project file read, and exact text edit tools. "
+            "Use it for direct filesystem, process, build, test, diagnostic, and artifact creation or repair work. "
             "Favor Bash alongside a relevant CLI-backed artifact when the phase may need to invoke its CLI directly, "
             "inspect or repair its implementation, or verify behavior outside the registered artifact adapter. "
             "Do not use Bash for multi-tool orchestration or aggregation of tool results."

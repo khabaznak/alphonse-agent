@@ -16,9 +16,11 @@ if TYPE_CHECKING:
 
 class Capability(str, Enum):
     LOCAL_SHELL = "local_shell"
+    # Retained for loading old phase records; no built-in project-file tools map to these.
     PROJECT_RECORD_SEARCH = "project_record_search"
     PROJECT_FILE_INSPECTION = "project_file_inspection"
     PROJECT_ARTIFACT_QUERY = "project_artifact_query"
+    ARTIFACT_REGISTRATION = "artifact_registration"
     ARTIFACT_METADATA_MANAGEMENT = "artifact_metadata_management"
     SKILL_MANAGEMENT = "skill_management"
     MEMORY_RECALL = "memory_recall"
@@ -54,15 +56,16 @@ class ToolRevealPolicy:
     max_schema_chars: int | None = None
     capability_descriptions: dict[str, str] = field(default_factory=lambda: {
         Capability.LOCAL_SHELL.value: "Run local Bash commands for filesystem, process, build, test, diagnostic, and artifact work.",
-        Capability.PROJECT_RECORD_SEARCH.value: "Find records and indexes inside the authorized project.",
-        Capability.PROJECT_FILE_INSPECTION.value: "Inspect authorized project files and local process state.",
+        Capability.PROJECT_RECORD_SEARCH.value: "Legacy project search capability; use local_shell for new plans.",
+        Capability.PROJECT_FILE_INSPECTION.value: "Legacy project file inspection capability; use local_shell for new plans.",
         Capability.PROJECT_ARTIFACT_QUERY.value: "Query a registered project artifact through its native client.",
+        Capability.ARTIFACT_REGISTRATION.value: "Register an executable already created in the owned project as a reusable artifact.",
         Capability.ARTIFACT_METADATA_MANAGEMENT.value: "Update an owned artifact's catalog name and routing description without modifying its files.",
         Capability.SKILL_MANAGEMENT.value: "Install a newly authored reusable SKILL.md instruction package after requester approval.",
         Capability.MEMORY_RECALL.value: "Search bounded archived memory for the current project.",
         Capability.ATTACHMENT_ANALYSIS.value: "Analyze an image attached to the current task.",
         Capability.DOCUMENT_EXTRACTION.value: "Extract information from a discovered document.",
-        Capability.EXACT_TEXT_MUTATION.value: "Atomically change one exact string in an authorized project file.",
+        Capability.EXACT_TEXT_MUTATION.value: "Legacy exact text mutation capability; use local_shell for new plans.",
         Capability.COMMUNICATION.value: "Deliver a message to another registered user.",
         Capability.SCHEDULING.value: "Create or manage a requested time-based action.",
         Capability.HOME_AUTOMATION.value: "Read or control an authorized home-automation service.",
@@ -191,11 +194,9 @@ def _has_analyzable_attachment(task: "TaskState", state: TacticalState) -> bool:
 
 _TOOL_CAPABILITIES: dict[str, tuple[str, ...]] = {
     "native.bash": (Capability.LOCAL_SHELL.value,),
-    "native.project_search": (Capability.PROJECT_RECORD_SEARCH.value, Capability.PROJECT_FILE_INSPECTION.value),
-    "native.read_project_file": (Capability.PROJECT_FILE_INSPECTION.value,),
     "native.search_memory": (Capability.MEMORY_RECALL.value,),
+    "native.artifact_registration": (Capability.ARTIFACT_REGISTRATION.value,),
     "native.analyze_image": (Capability.ATTACHMENT_ANALYSIS.value,),
-    "native.exact_text_edit": (Capability.EXACT_TEXT_MUTATION.value,),
     "native.deliver_message": (Capability.COMMUNICATION.value,),
     "native.scheduled_task": (Capability.SCHEDULING.value,),
     "native.scheduled_task_delivery": (Capability.SCHEDULING.value,),

@@ -10,6 +10,7 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 from alphonse.agent_v2.core.inference import InferencePurpose, InferenceRequest
 from alphonse.agent_v2.core.intelligence.acceptance_contract import apply_amendment
 from alphonse.agent_v2.core.intelligence.acceptance_contract import contract_from_markdown
+from alphonse.agent_v2.core.intelligence.v3.context import selected_project_context
 
 if TYPE_CHECKING:
     from alphonse.agent_v2.core.core import CoreLoopContext
@@ -112,10 +113,7 @@ def _render_acceptance_criteria_amendment_prompt(task: "TaskState", *, user_cont
 
 
 def _project_context_md(task: "TaskState", context: "CoreLoopContext") -> str:
-    if context.project_store is None or not str(task.project_id or "").strip():
-        return ""
-    render = getattr(context.project_store, "render_project_context", None)
-    return str(render(task.project_id, requester_user_id=task.user) or "").strip() if callable(render) else ""
+    return selected_project_context(task, context)
 
 
 def _user_context_md(task: "TaskState", context: "CoreLoopContext") -> str:

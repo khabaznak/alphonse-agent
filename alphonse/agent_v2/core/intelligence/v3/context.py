@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 import re
 from typing import TYPE_CHECKING
@@ -26,8 +27,6 @@ def prepare_context_curation(task: "TaskState", context: "CoreLoopContext") -> t
     sections: list[str] = []
     active_projects = _visible_active_projects(task, context)
     active_ids = {str(getattr(item, "project_id", "") or "").strip() for item in active_projects}
-    if task.project_id:
-        active_ids.add(str(task.project_id).strip())
     recent_text = _recent_conversation(task, context, active_ids)
     if recent_text:
         sections.append(recent_text)
@@ -47,19 +46,15 @@ def prepare_context_curation(task: "TaskState", context: "CoreLoopContext") -> t
             # Preserve older free-form documents until they are structured.
             sections.append("Household and global context:\n" + global_context)
 
-    selected_project = _project_candidate(task, context)
-    if selected_project is not None:
-        sections.append(f"Selected project context ({selected_project['title']}):\n{selected_project['content']}")
-
     candidates = _global_candidates(global_context)
     for project in active_projects:
         project_id = str(getattr(project, "project_id", "") or "").strip()
-        if not project_id or project_id == str(task.project_id or "").strip():
+        if not project_id:
             continue
         candidate = _project_candidate_for_record(project, context)
         if candidate is not None:
             candidates.append(candidate)
-    return "\n\n".join(sections)[:12000], candidates[:24]
+    return "\n\n".join(sections)[:12000], candidates[:64]
 
 
 def conversation_context(
@@ -67,7 +62,6 @@ def conversation_context(
     context: "CoreLoopContext",
     *,
     selected_context_ids: list[str] | tuple[str, ...] = (),
-    include_selected_project: bool = True,
 ) -> str:
     """Render invariant context plus the optional candidates selected at admission."""
     invariant, candidates = prepare_context_curation(task, context)
@@ -76,18 +70,20 @@ def conversation_context(
     for candidate in candidates:
         if candidate["id"] in selected:
             sections.append(f"{candidate['title']}:\n{candidate['content']}")
-    if not include_selected_project:
-        project = _project_candidate(task, context)
-        if project is not None:
-            sections = [section for section in sections if not section.startswith(f"Selected project context ({project['title']}):")]
     return "\n\n".join(sections)[:24000]
+
+
+def selected_project_context(task: "TaskState", context: "CoreLoopContext") -> str:
+    selection = task.metadata.get("v3_context_selection")
+    selected = set(selection.get("selected_context_ids", [])) if isinstance(selection, dict) else set()
+    _invariant, candidates = prepare_context_curation(task, context)
+    blocks = [f"{item['title']}:\n{item['content']}" for item in candidates if item.get("id", "").startswith("project:") and item.get("id") in selected]
+    return "\n\n".join(blocks)
 
 
 def recent_conversation_for_curation(task: "TaskState", context: "CoreLoopContext") -> str:
     active_projects = _visible_active_projects(task, context)
     active_ids = {str(getattr(item, "project_id", "") or "").strip() for item in active_projects}
-    if task.project_id:
-        active_ids.add(str(task.project_id).strip())
     return _recent_conversation(task, context, active_ids)[:5000]
 
 
@@ -153,23 +149,17 @@ def _global_candidates(content: str) -> list[dict[str, str]]:
     return candidates
 
 
-def _project_candidate(task: "TaskState", context: "CoreLoopContext") -> dict[str, str] | None:
-    if context.project_store is None or not task.project_id:
-        return None
-    getter = getattr(context.project_store, "get_project", None)
-    if not callable(getter):
-        return None
-    try:
-        project = getter(task.project_id, requester_user_id=task.user)
-    except TypeError:
-        project = getter(task.project_id)
-    return _project_candidate_for_record(project, context) if project is not None else None
-
-
 def _project_candidate_for_record(project: Any, context: "CoreLoopContext") -> dict[str, str] | None:
     try:
-        content = Path(project.context_path).read_text(encoding="utf-8").strip()
+        config_path = getattr(project, "config_path", "") or str(Path(project.root_path) / "project_config.json")
+        content = Path(config_path).read_text(encoding="utf-8").strip()
+        parsed = json.loads(content)
+        if not isinstance(parsed, dict) or parsed.get("schema_version") != 1:
+            return None
+        content = json.dumps(parsed, ensure_ascii=False, indent=2)
     except (OSError, UnicodeDecodeError, AttributeError):
+        content = ""
+    except json.JSONDecodeError:
         content = ""
     if not content:
         return None
@@ -179,7 +169,7 @@ def _project_candidate_for_record(project: Any, context: "CoreLoopContext") -> d
     candidate_content = f"{description}\n\n{content}".strip() if description else content
     return {
         "id": f"project:{project_id}",
-        "title": f"Active project — {title}",
+        "title": f"Project — {title}",
         "content": candidate_content[:8000],
         "snippet": candidate_content[:500],
     }

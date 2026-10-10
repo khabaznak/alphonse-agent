@@ -13,10 +13,13 @@ capabilities undiscoverable.
 
 Before strategic System Two planning, Jev receives the runtime tool registry after
 the runtime exposure policy has selected tools available to this task, plus the
-Plan instructions, current request, session conversation history, bounded context
-for the current project, and bounded durable project/session memory. This lets
+Plan instructions, current request, conversation history, bounded authorized
+project-config candidates, and bounded durable project/session memory. This lets
 request curation recognize when a short or implicit request refers to a
-project-specific record, workflow, or artifact. These context fields are evidence
+project-specific record, workflow, or artifact. Jev may select multiple relevant
+projects; equal qualifying relevance probabilities are all retained. Project
+context candidates come from `project_config.json`; legacy `project_context.md`
+files are retained as user data and are not loaded into prompts. These context fields are evidence
 for relevance only; Jev still returns relevant tool IDs and does not devise the
 method or authorize tools. Ambiguous candidates remain available. Strategic Plan
 then receives the complete LLM-oriented descriptors for those candidates, so it
@@ -43,12 +46,10 @@ The tactical executor first sees compact capability summaries, for example:
 
 ```text
 local_shell
-project_record_search
 project_artifact_query
 memory_recall
 attachment_analysis
 document_extraction
-exact_text_mutation
 communication
 scheduling
 home_automation
@@ -76,7 +77,9 @@ Tool reveal must enforce prerequisites before model choice:
   the tool failure; do not characterize the image as illegible without an actual
   extraction result.
 - Memory search is limited to the authorized current project.
-- Mutation tools require an active mutation scope.
+- Mutating native operations require the matching side-effect authorization. Bash is
+  a trusted local-shell capability for project-file reads and writes; its work is
+  described to Jev and System Two and verified from command output/read-back.
 - Communication tools require a communication subgoal.
 - Scheduling tools require a time-based requested outcome.
 - Integration tools require that the integration is installed, available, authorized,
@@ -110,17 +113,17 @@ Extend descriptors or companion policy metadata with:
 
 ```text
 Subgoal: locate solar project record
-Reveal: artifact index, project-file search, project-memory search
+Reveal: artifact index, local_shell, project-memory search
 
-Observed: linked Markdown record
+Observed: local_shell locates and reads the linked Markdown record
 
 Subgoal: update resolved record
-Reveal: exact_text_edit only
+Reveal: local_shell only
 
-Observed: verified atomic diff
+Observed: local_shell edits the file and verifies it by reading it back or comparing a diff
 
 Subgoal: verify record
-Reveal: structured text read if additional observation is needed
+Reveal: local_shell if additional observation is needed
 ```
 
 OCR, Home Assistant, LG, web, scheduling, and communication are never revealed in
@@ -147,8 +150,8 @@ that phase unless new evidence and the phase contract make them relevant.
 - [x] Fail visibly and return to outer review when policy reveals no usable tool.
 - [x] Reuse reviewed native-tool Noul questions and artifact-description-grounded
       questions across request- and phase-level curation.
-- [x] Add bounded authorized `native.project_search` and
-      `native.read_project_file` primitives.
+- [x] Use the authorized `native.bash` local_shell capability for project-file
+      search, reading, creation, editing, and verification.
 - [x] Select a phase-wide relevant tool palette with System One while preserving
       System Two ownership of invocation composition.
 
@@ -159,15 +162,16 @@ that phase unless new evidence and the phase contract make them relevant.
 - [x] OCR remains hidden for a plain Markdown prescription record.
 - [x] A prior-conversation fact exposes current-project memory search, not other
       projects.
-- [x] Exact mutation is hidden until a target and mutation scope exist.
+- [x] Project mutation is authorized by the phase side-effect contract; local_shell
+      remains available for the full requested filesystem operation.
 - [x] Unauthorized integrations and cross-project tools remain hidden.
 - [x] A hidden tool call is rejected at execution even if the model invents it.
 - [x] Tool reveal changes after typed subgoal output is bound.
 - [x] Jev receives calibrated static questions for out-of-the-box tools and simple
       description-grounded questions for dynamically registered artifacts rather than
       generated semantic profiles or complete schemas.
-- [x] Internal `.alphonse` memory cannot be searched, read, or mutated through the
-      V3 project-file path.
+- [x] Project-file discovery excludes `.alphonse`, source-control metadata,
+      dependencies, and generated build directories unless specifically requested.
 - [ ] Necessary-tool recall is measured on the V3 evaluation set (Stage 5 rollout
       gate).
 

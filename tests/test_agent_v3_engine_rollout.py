@@ -15,9 +15,7 @@ from alphonse.agent_v2.core.messages import CommunicationChannel, InMemoryMessag
 from alphonse.agent_v2.core.projects import ProjectStore
 from alphonse.agent_v2.core.questions import SQLiteQuestionStore
 from alphonse.agent_v2.core.tools.registry import InMemoryToolRegistry, ToolDefinition
-from alphonse.agent_v2.core.tools.registry.native.exact_text_edit import build_exact_text_edit_tool_definition
-from alphonse.agent_v2.core.tools.registry.native.project_files import build_project_read_tool_definition
-from alphonse.agent_v2.core.tools.registry.native.project_files import build_project_search_tool_definition
+from alphonse.agent_v2.core.tools.registry.native.bash import build_bash_tool_definition
 from alphonse.agent_v2.core.tools.registry.native.respond import build_respond_tool_definition
 from alphonse.agent_v2.intelligence_engine_settings import HIERARCHICAL_V3, TACTICAL_V2
 from alphonse.agent_v2.intelligence_engine_settings import IntelligenceEngineSettings
@@ -584,19 +582,16 @@ def test_v3_phase_planner_receives_project_context_and_durable_memory(tmp_path: 
         def curate_request_tools(self, *, tools, project_context="", durable_memory="", **_values):
             self.project_context = project_context
             self.durable_memory = durable_memory
-            # Model the intended relevance judgment: project clues make journal
-            # tools relevant to a short, implicit workout request.
+            # Model the intended relevance judgment: project clues make Bash
+            # relevant to a short, implicit workout request.
             tool_ids = [item.tool_id for item in tools if item.tool_id == "native.respond"]
             if "workout journal" in project_context.lower() or "calisthenics_journal.md" in durable_memory:
-                tool_ids.extend(item.tool_id for item in tools if item.tool_id in {
-                    "native.project_search", "native.read_project_file",
-                })
+                tool_ids.extend(item.tool_id for item in tools if item.tool_id == "native.bash")
             return SystemOneToolRegistrySelection(selected_tool_ids=tuple(tool_ids))
 
     jev = ContextAwareJev()
     registry = InMemoryToolRegistry()
-    registry.register(build_project_read_tool_definition())
-    registry.register(build_project_search_tool_definition())
+    registry.register(build_bash_tool_definition())
     registry.register(build_respond_tool_definition())
     state = HierarchicalCAPDProcessor._new_state(
         task,
@@ -615,8 +610,7 @@ def test_v3_phase_planner_receives_project_context_and_durable_memory(tmp_path: 
     assert state.phase.mutation_scope.allowed_paths == ()
     assert "Keep a dated workout journal." in jev.project_context
     assert "calisthenics_journal.md" in jev.durable_memory
-    assert '"tool_id": "native.read_project_file"' in request.prompt
-    assert '"tool_id": "native.project_search"' in request.prompt
+    assert '"tool_id": "native.bash"' in request.prompt
 
 
 def test_v3_known_journal_path_flows_from_memory_to_read_and_verified_edit(tmp_path: Path) -> None:
@@ -633,7 +627,7 @@ def test_v3_known_journal_path_flows_from_memory_to_read_and_verified_edit(tmp_p
         "phase_id": "read-known-journal",
         "objective": "Read the journal path established by project memory",
         "criterion_ids": ["ac-1"],
-        "authorized_capabilities": ["project_file_inspection"],
+        "authorized_capabilities": ["local_shell"],
         "mutation_scope": {"allowed_paths": [], "allow_external_effects": False},
         "originating_decision": "Durable memory establishes workout_journal.md as a read candidate.",
         "subgoals": [{
@@ -641,7 +635,7 @@ def test_v3_known_journal_path_flows_from_memory_to_read_and_verified_edit(tmp_p
             "objective": "Read workout_journal.md before editing it",
             "required_output_type": "journal_contents",
             "depends_on": [],
-            "allowed_capabilities": ["project_file_inspection"],
+            "allowed_capabilities": ["local_shell"],
             "allowed_side_effects": ["read_only"],
             "completion": {"kind": "output_present", "output_type": "journal_contents"},
             "failure_policy": "stop",
@@ -653,7 +647,7 @@ def test_v3_known_journal_path_flows_from_memory_to_read_and_verified_edit(tmp_p
         "phase_id": "update-known-journal",
         "objective": "Append the verified workout entry using an exact edit",
         "criterion_ids": ["ac-1"],
-        "authorized_capabilities": ["exact_text_mutation"],
+        "authorized_capabilities": ["local_shell"],
         "mutation_scope": {"allowed_paths": ["workout_journal.md"], "allow_external_effects": False},
         "originating_decision": "The successful read established the exact file and anchor text.",
         "subgoals": [{
@@ -661,9 +655,9 @@ def test_v3_known_journal_path_flows_from_memory_to_read_and_verified_edit(tmp_p
             "objective": "Append today's workout and verify the write",
             "required_output_type": "verified_mutation",
             "depends_on": [],
-            "allowed_capabilities": ["exact_text_mutation"],
+            "allowed_capabilities": ["local_shell"],
             "allowed_side_effects": ["project_mutation"],
-            "completion": {"kind": "field_equals", "field": "verification.status", "expected": "verified"},
+            "completion": {"kind": "output_present", "output_type": "verified_mutation"},
             "failure_policy": "stop",
         }],
     }
@@ -694,8 +688,8 @@ def test_v3_known_journal_path_flows_from_memory_to_read_and_verified_edit(tmp_p
             self.phases = [read_phase, edit_phase, response_phase]
             self.actions = [
                 {
-                    "tool_id": "native.read_project_file",
-                    "arguments": {"path": "workout_journal.md"},
+                    "tool_id": "native.bash",
+                    "arguments": {"command": "cat workout_journal.md"},
                     "acceptance_questions": [{
                         "question_id": "journal-read",
                         "type": "noul",
@@ -704,17 +698,15 @@ def test_v3_known_journal_path_flows_from_memory_to_read_and_verified_edit(tmp_p
                     }],
                 },
                 {
-                    "tool_id": "native.exact_text_edit",
+                    "tool_id": "native.bash",
                     "arguments": {
-                        "path": "workout_journal.md",
-                        "expected_text": "- Push-ups: 3 sets\n",
-                        "replacement_text": "- Push-ups: 3 sets\n\n## 2026-09-21\n- Push-ups: 5 sets x 10 reps\n",
+                        "command": "cat >> workout_journal.md <<'EOF'\n\n## 2026-09-21\n- Push-ups: 5 sets x 10 reps\nEOF\ncat workout_journal.md",
                     },
                     "acceptance_questions": [{
                         "question_id": "journal-edit-verified",
                         "type": "noul",
-                        "instructions": "Did the exact edit report a verified journal update?",
-                        "criteria": {"true": "The updated journal was read back and verified.", "false": "The update was not verified."},
+                        "instructions": "Did Bash append and read back the workout journal entry?",
+                        "criteria": {"true": "The updated journal contents include the new entry.", "false": "The update was not verified."},
                     }],
                 },
                 {
@@ -748,8 +740,8 @@ def test_v3_known_journal_path_flows_from_memory_to_read_and_verified_edit(tmp_p
         def select_plan_tools(self, **values):
             phase_id = values["phase"]["phase_id"]
             selected = {
-                "read-known-journal": "native.read_project_file",
-                "update-known-journal": "native.exact_text_edit",
+                "read-known-journal": "native.bash",
+                "update-known-journal": "native.bash",
                 "present-workout": "native.respond",
             }[phase_id]
             return SystemOneToolRegistrySelection(selected_tool_ids=(selected,))
@@ -761,10 +753,10 @@ def test_v3_known_journal_path_flows_from_memory_to_read_and_verified_edit(tmp_p
             entries = values["evidence"]["entries"]
             verified_edits = [
                 item for item in entries
-                if item.get("tool_id") == "native.exact_text_edit"
+                if item.get("tool_id") == "native.bash"
                 and item.get("status") == "success"
                 and isinstance(item.get("result"), dict)
-                and item["result"].get("verification", {}).get("status") == "verified"
+                and "## 2026-09-21" in str(item["result"].get("stdout", ""))
             ]
             edited = bool(verified_edits)
             evidence_ref = (verified_edits[-1] if edited else entries[-1])["evidence_ref"]
@@ -791,8 +783,7 @@ def test_v3_known_journal_path_flows_from_memory_to_read_and_verified_edit(tmp_p
     provider = SequencedProvider()
     inference = InferenceRouter(provider=provider, default_profile=ModelProfile("test", "test", "default"))
     registry = InMemoryToolRegistry()
-    registry.register(build_project_read_tool_definition())
-    registry.register(build_exact_text_edit_tool_definition())
+    registry.register(build_bash_tool_definition())
     registry.register(build_respond_tool_definition())
     task = TaskState(
         task_id="journal-update",
@@ -823,7 +814,7 @@ def test_v3_known_journal_path_flows_from_memory_to_read_and_verified_edit(tmp_p
         for phase in task.metadata["v3_phase_history"]
         for entry in phase["evidence"]["entries"]
     ]
-    assert tool_ids == ["native.read_project_file", "native.exact_text_edit", "native.respond"]
+    assert tool_ids == ["native.bash", "native.bash", "native.respond"]
     assert "native.ask_question" not in tool_ids
 
 

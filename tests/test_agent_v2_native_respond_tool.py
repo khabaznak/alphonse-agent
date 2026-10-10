@@ -28,8 +28,8 @@ def test_native_registry_exposes_native_tools() -> None:
     names = {descriptor.name for descriptor in build_native_tool_registry().list()}
 
     assert names == {
-        "respond", "bash", "exact_text_edit", "ask_question", "deliver_message",
-        "send_attachment", "scheduled_task", "project_search", "read_project_file",
+        "respond", "bash", "ask_question", "deliver_message", "send_attachment",
+        "scheduled_task", "scheduled_task_delivery",
     }
 
 
@@ -42,7 +42,8 @@ def test_respond_descriptor_and_schema_are_visible_to_plan_prompt() -> None:
     assert RESPOND_TOOL_ID in prompt
     assert RESPOND_TOOL_NAME in prompt
     assert "Use `native.respond` for greetings" in prompt
-    assert "Use `native.bash` only" in prompt
+    assert "Use `native.bash` for local commands and all project-file operations" in prompt
+    assert "create or edit files" in prompt
 
 
 def test_respond_tool_executes_normal_response() -> None:

@@ -392,7 +392,7 @@ class JevCriterionDecisionProvider:
                     "title": str(item.get("title") or "")[:160],
                     "snippet": str(item.get("snippet") or "")[:500],
                 }
-                for item in candidates[:24]
+            for item in candidates[:64]
             },
             "skill_candidates": {
                 str(item["id"]): {
@@ -425,7 +425,7 @@ class JevCriterionDecisionProvider:
             }
         }
         context_question_ids: dict[str, str] = {}
-        for index, item in enumerate(candidates[:24]):
+        for index, item in enumerate(candidates[:64]):
             question_id = f"context_relevant_{index}"
             context_question_ids[question_id] = str(item["id"])
             questions[question_id] = {
@@ -476,6 +476,8 @@ class JevCriterionDecisionProvider:
                 raise ValueError(f"system_one_context_relevance_answer_invalid:{question_id}")
             relevance = max(0.0, min(1.0, float(candidate_answer["noul"])))
             context_probabilities[candidate_id] = relevance
+            # Keep every qualifying candidate. In particular, equal-probability
+            # project candidates are all retained instead of choosing one winner.
             if relevance >= self.settings.yes_threshold:
                 selected_context_ids.append(candidate_id)
         skill_scores: dict[str, dict[str, Any]] = {}

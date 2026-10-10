@@ -17,6 +17,7 @@ from alphonse.agent_v2.core.inference import InferencePurpose
 from alphonse.agent_v2.core.inference import InferenceRequest
 from alphonse.agent_v2.core.intelligence.task_state import TaskState
 from alphonse.agent_v2.core.intelligence.acceptance_planning import plan_acceptance_contract
+from alphonse.agent_v2.core.intelligence.v3.context import selected_project_context
 from alphonse.agent_v2.core.tools.registry import ToolExposurePolicy
 
 if TYPE_CHECKING:
@@ -141,12 +142,7 @@ def _tools_from_context(context: CoreLoopContext | None) -> tuple[ToolDescriptor
 
 
 def _project_context_md(task: TaskState, context: CoreLoopContext | None) -> str:
-    if context is None or context.project_store is None or not str(task.project_id or "").strip():
-        return ""
-    render = getattr(context.project_store, "render_project_context", None)
-    if not callable(render):
-        return ""
-    return str(render(task.project_id, requester_user_id=task.user) or "").strip()
+    return selected_project_context(task, context) if context is not None else ""
 
 
 def _user_context_md(task: TaskState, context: CoreLoopContext | None) -> str:

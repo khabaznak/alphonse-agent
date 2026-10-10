@@ -124,7 +124,7 @@ def test_jev_classifies_complete_static_tool_registry_with_parallel_noul_questio
         payloads.append(payload)
         answers = {}
         for key, question in payload["questions"].items():
-            probability = 0.94 if "locate text or records" in question["instructions"] else 0.03
+            probability = 0.94 if "need Bash for local shell" in question["instructions"] else 0.03
             answers[key] = {"type": "noul", "noul": probability}
         return {"answers": answers, "model": "jev-latest"}
 
@@ -133,7 +133,7 @@ def test_jev_classifies_complete_static_tool_registry_with_parallel_noul_questio
         transport=transport,
     )
     tools = (
-        ToolDescriptor("native.project_search", "project_search", ToolKind.NATIVE),
+        ToolDescriptor("native.bash", "bash", ToolKind.NATIVE, description="Search project files and read or write files with shell commands."),
         ToolDescriptor("native.respond", "respond", ToolKind.NATIVE),
     )
 
@@ -143,27 +143,60 @@ def test_jev_classifies_complete_static_tool_registry_with_parallel_noul_questio
     )
     provider.select_plan_tools(goal="Another goal", phase={"phase_id": "p2", "objective": "Another plan"}, tools=tools)
 
-    assert result.selected_tool_ids == ("native.project_search",)
+    assert result.selected_tool_ids == ("native.bash",)
     assert result.rejected_tool_ids == ("native.respond",)
     assert len(payloads[0]["questions"]) == len(tools)
     assert payloads[0]["questions"] == payloads[1]["questions"]
     assert all(question["type"] == "noul" for question in payloads[0]["questions"].values())
     instructions = [question["instructions"] for question in payloads[0]["questions"].values()]
-    assert "Does this phase need to locate text or records inside the authorized project?" in instructions
+    assert instructions[0].startswith("Does this phase need Bash for local shell, project-file, or artifact work")
     assert "Does this phase need to send a direct response to the requester?" in instructions
     questions = list(payloads[0]["questions"].values())
-    assert questions[0]["criteria"] == {
-        "true": "The phase needs to discover which project file contains a relevant term, record, or reference before reading or changing it.",
-        "false": "The relevant file is already known, the information is outside the project, or no project-file discovery is needed.",
-    }
+    assert "find, rg, or grep" in questions[0]["criteria"]["true"]
+    assert "create or edit files" in questions[0]["criteria"]["true"]
     assert questions[1]["criteria"] == {
-        "true": "The phase includes a user-visible answer, greeting, status update, clarification, or presentation of completed work.",
-        "false": "The phase must perform or verify other work before responding, or it has no requester-facing response subgoal.",
+        "true": "The phase includes a user-visible answer, greeting, status update, clarification, or presentation of completed work. Select this when the task completes and needs to inform the user of the results, or when the task fails and needs to communicate the reason for failure to the requester.",
+        "false": "The phase only performs or verifies work and does not need to send the requester an answer, status update, result summary, or explanation of failure.",
     }
     serialized = str(payloads[0]["questions"])
     assert "Semantic tags:" not in serialized
     assert "Expected inputs:" not in serialized
     assert "Effect:" not in serialized
+
+
+def test_jev_tool_selection_uses_configured_threshold_for_request_and_phase() -> None:
+    def transport(url, api_key, payload, timeout):
+        _ = url, api_key, timeout
+        return {
+            "answers": {
+                key: {"type": "noul", "noul": 0.70}
+                for key in payload["questions"]
+            },
+            "model": "jev-latest",
+        }
+
+    provider = JevCriterionDecisionProvider(
+        SystemOneSettings(
+            enabled=True, api_key="secret", validated_at="now", tool_selection_threshold=0.65,
+        ),
+        transport=transport,
+    )
+    tools = (
+        ToolDescriptor("native.bash", "Bash", ToolKind.NATIVE),
+        ToolDescriptor("native.respond", "Respond", ToolKind.NATIVE),
+    )
+
+    request_selection = provider.curate_request_tools(
+        goal="Update a record and tell me what changed",
+        system_prompt="Plan the task.", session_history="", tools=tools,
+    )
+    phase_selection = provider.select_plan_tools(
+        goal="Update a record and tell me what changed",
+        phase={"phase_id": "p1", "objective": "Update and report"}, tools=tools,
+    )
+
+    assert request_selection.selected_tool_ids == ("native.bash", "native.respond")
+    assert phase_selection.selected_tool_ids == ("native.bash", "native.respond")
 
 
 def test_jev_request_curation_receives_plan_instructions_and_bounded_context() -> None:
@@ -308,22 +341,26 @@ def test_jev_native_registry_template_covers_every_out_of_box_tool() -> None:
     assert set(registry) == {
         "native.respond",
         "native.bash",
-        "native.exact_text_edit",
-        "native.project_search",
-        "native.read_project_file",
         "native.deliver_message",
         "native.send_attachment",
         "native.ask_question",
         "native.scheduled_task",
+        "native.scheduled_task_delivery",
         "native.artifact_registration",
         "native.artifact_metadata_update",
         "native.analyze_image",
         "native.web_search",
         "native.web_fetch",
+        "native.search_memory",
     }
     bash_question = registry["native.bash"]
+    assert "find, rg, or grep" in bash_question["criteria"]["true"]
+    assert "create or edit files" in bash_question["criteria"]["true"]
+    assert "verify edits" in bash_question["criteria"]["true"]
+    registration_question = registry["native.artifact_registration"]
+    assert "when Bash will create it earlier in the same phase" in registration_question["criteria"]["true"]
     assert "CLI-backed artifact" in bash_question["instructions"]
-    assert "Favor Bash alongside that artifact" in bash_question["criteria"]["true"]
+    assert "Favor Bash alongside a relevant CLI-backed artifact" in bash_question["criteria"]["true"]
 
 
 def test_jev_tactical_review_distinguishes_operational_success_from_semantic_completion() -> None:
@@ -336,7 +373,7 @@ def test_jev_tactical_review_distinguishes_operational_success_from_semantic_com
         goal="Find the solar record",
         phase={"phase_id": "p", "objective": "Locate record"},
         subgoal={"subgoal_id": "s", "objective": "Find authoritative record"},
-        action={"tool_id": "native.project_search", "status": "success", "result": {"path": "backlog.md"}},
+        action={"tool_id": "native.bash", "status": "success", "result": {"stdout": "backlog.md"}},
     )
 
     assert result.complete is True

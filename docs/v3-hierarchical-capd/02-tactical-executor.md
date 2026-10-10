@@ -35,10 +35,11 @@ apply the generic native-tool `read_only` authorization gate to them. Native too
 continue to be checked against the phase's declared side-effect permissions.
 
 `native.bash` is also available to V3 as the trusted `local_shell` capability. It may
-run direct CLI, filesystem, process, build, test, diagnostic, and artifact-authoring
-commands. Its calls honor an explicit caller-supplied timeout when present, retain
-bounded output capture, and are recorded through the normal tactical evidence path;
-the executor does not apply the generic read-only gate to Bash.
+search project paths and contents, read and write project files, verify edits, run
+direct CLI, process, build, test, diagnostic, and artifact-authoring commands. Its
+calls honor an explicit caller-supplied timeout when present, retain bounded output
+capture, and are recorded through the normal tactical evidence path; the executor
+does not apply the generic read-only gate to Bash.
 
 Bash has no product-imposed default or maximum execution timeout. A caller may set
 an explicit positive timeout when the command itself warrants a deadline; otherwise
@@ -80,7 +81,7 @@ Local recovery is appropriate when it preserves the same objective and authoriza
 for example:
 
 ```text
-artifact index has no match -> try allowed project-file search
+artifact index has no match -> use native.bash to search project files
 artifact adapter returns the wrong shape -> invoke or inspect its CLI with native.bash
 ```
 

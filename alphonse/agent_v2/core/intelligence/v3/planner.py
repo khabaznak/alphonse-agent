@@ -17,6 +17,7 @@ from alphonse.agent_v2.core.intelligence.v3.revealing import ToolRevealPolicy
 from alphonse.agent_v2.core.tools.registry import ToolExposurePolicy
 from alphonse.agent_v2.system_one import SystemOneUnavailableError
 from alphonse.agent_v2.core.intelligence.v3.context import conversation_context
+from alphonse.agent_v2.core.intelligence.v3.context import selected_project_context
 from alphonse.agent_v2.core.intelligence.v3.context import selected_skill_guidance
 
 if TYPE_CHECKING:
@@ -41,7 +42,7 @@ def plan_phase(task: "TaskState", context: "CoreLoopContext") -> PhasePlan:
     context_selection = task.metadata.get("v3_context_selection")
     selected_context_ids = context_selection.get("selected_context_ids", []) if isinstance(context_selection, dict) else []
     shared_context = _bounded_text(conversation_context(
-        task, context, selected_context_ids=selected_context_ids, include_selected_project=False,
+        task, context, selected_context_ids=selected_context_ids,
     ), 12000)
     skill_guidance, loaded_skill_ids = selected_skill_guidance(task, context)
     skill_selection = task.metadata.get("v3_skill_selection")
@@ -272,11 +273,13 @@ def _strategic_plan_instructions() -> str:
         "For a requested known mutation, include needed inspection, mutation, and verification in one coherent phase; "
         "do not stop at discovery if inspection resolves the target. Do not ask the requester for a file location already "
         "present in project context, durable memory, recent conversation, or prior verified evidence. If a prepared user response exists, plan only work adding "
-        "missing evidence. Use project search/read for file discovery when convenient. Authorize local_shell for direct "
+        "missing evidence. Use local_shell for project-file discovery and reading with find, rg, grep, cat, or sed; "
+        "use shell commands to create or edit project files and verify changes with read-back or diff checks. "
+        "Authorize local_shell for direct "
         "CLI, filesystem, process, build, test, diagnostic, and artifact creation/repair work. When a relevant artifact "
         "may be CLI-backed, authorize local_shell alongside project_artifact_query for tactical choice of adapter or CLI. "
         "Distinguish artifact catalog metadata from project files: when the requested change is an artifact's registered "
-        "name or routing description, use native.artifact_metadata_update for the mutation. Bash or project search/read may "
+        "name or routing description, use native.artifact_metadata_update for the mutation. Bash may "
         "inspect artifact files to identify and verify the artifact ID, but editing a README or program is not a substitute "
         "for updating the catalog record. Include the metadata-update tool and authorize its artifact_metadata_management "
         "capability with an appropriate mutating side effect in the subgoal. "
@@ -398,15 +401,7 @@ def _record_tool_curation(task, phase: PhasePlan, metadata: dict) -> None:
 
 
 def _project_context(task: "TaskState", context: "CoreLoopContext") -> str:
-    if context.project_store is None or not str(task.project_id or "").strip():
-        return "- (none)"
-    render = getattr(context.project_store, "render_project_context", None)
-    if not callable(render):
-        return "- (none)"
-    try:
-        return str(render(task.project_id, requester_user_id=task.user) or "").strip() or "- (none)"
-    except (KeyError, OSError, PermissionError):
-        return "- (none)"
+    return selected_project_context(task, context) or "- (none)"
 
 
 def _bounded_text(value: object, max_chars: int) -> str:
