@@ -722,12 +722,20 @@ class V2Daemon:
         return {"deleted": artifact_id}
 
     def list_skills(self, *, actor_user_id: str) -> list[dict[str, Any]]:
+        return self.list_skills_workspace(actor_user_id=actor_user_id)["skills"]
+
+    def list_skills_workspace(self, *, actor_user_id: str) -> dict[str, list[dict[str, Any]]]:
         self._require_admin(actor_user_id)
         artifacts = self.runtime.artifact_store.list()
-        return [{**item.candidate(), "directory": item.directory, "editable": Path(item.directory).resolve().is_relative_to(self.runtime.skill_store.skills_dir.resolve()), "instructions": item.instructions,
+        return {
+            "skills": [
+                {**item.candidate(), "directory": item.directory, "editable": Path(item.directory).resolve().is_relative_to(self.runtime.skill_store.skills_dir.resolve()), "instructions": item.instructions,
                  "files": self.runtime.skill_store.files(item.skill_id),
                  "artifacts": [record.to_dict() for record in artifacts if record.skill_id == item.skill_id]}
-                for item in self.runtime.skill_store.list_skills()]
+                for item in self.runtime.skill_store.list_skills()
+            ],
+            "unassigned_artifacts": [record.to_dict() for record in artifacts if not record.skill_id],
+        }
 
     def attach_artifact_to_skill(self, *, actor_user_id: str, artifact_id: str, skill_id: str, instructions: str) -> dict[str, Any]:
         self._require_admin(actor_user_id)

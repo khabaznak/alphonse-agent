@@ -521,7 +521,7 @@ class V2DaemonServer:
         if method == "delete_artifact":
             return self.daemon.delete_artifact(actor_user_id=str(params.get("actor_user_id") or ""), artifact_id=str(params.get("artifact_id") or ""))
         if method == "skills":
-            return {"skills": self.daemon.list_skills(actor_user_id=str(params.get("actor_user_id") or ""))}
+            return self.daemon.list_skills_workspace(actor_user_id=str(params.get("actor_user_id") or ""))
         if method == "unassigned_artifacts":
             return {"artifacts": self.daemon.list_unassigned_artifacts(actor_user_id=str(params.get("actor_user_id") or ""))}
         if method == "attach_artifact_to_skill":
