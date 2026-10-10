@@ -1937,6 +1937,8 @@ class V2Daemon:
                 )
             status_for = getattr(self.runtime.queue, "status_for", None)
             terminal = non_retryable or (callable(status_for) and status_for(step.queued_message_id) == "failed")
+            if terminal:
+                self._close_terminal_task_progress(snapshot)
             if scheduled_occurrence and terminal:
                 self.runtime.schedule_store.mark_occurrence_processing_failed(scheduled_occurrence, error=error)
                 self._notify_scheduled_task_failure(metadata, error=error)

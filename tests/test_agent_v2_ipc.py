@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+from datetime import datetime, timezone
+from types import SimpleNamespace
 
 import pytest
 
@@ -9,6 +11,9 @@ from alphonse.agent_v2.core.inference import InferenceRouter
 from alphonse.agent_v2.core.inference import ModelProfile
 from alphonse.agent_v2.core.inference import StubInferenceProvider
 from alphonse.agent_v2.core.core import CoreActivityEvent
+from alphonse.agent_v2.core.core import CoreMessage
+from alphonse.agent_v2.core.core import LoopStepStatus
+from alphonse.agent_v2.core.core import StateSnapshot
 from alphonse.agent_v2.core.core import CoreUiEvent
 from alphonse.agent_v2.core.core import ImprovementPhase
 from alphonse.agent_v2.core.core import _task_progress_snapshot
@@ -16,6 +21,7 @@ from alphonse.agent_v2.core.intelligence.task_state import TaskState
 from alphonse.agent_v2.core.io import ChannelAddress
 from alphonse.agent_v2.core.questions import SQLiteQuestionStore
 from alphonse.agent_v2.core.scheduled_tasks import ScheduledTaskStore
+from alphonse.agent_v2.core.messages.queue import InMemoryMessageQueue
 from alphonse.agent_v2.daemon import V2Daemon
 from alphonse.agent_v2.agent_config import AgentConfigStore
 from alphonse.agent_v2.agent_config import GLOBAL_CONTEXT_FILE
@@ -548,6 +554,55 @@ def test_desktop_task_progress_a2ui_is_admin_desktop_only_and_sanitized(tmp_path
     ))
     excluded = daemon.ipc._dispatch({"method": "desktop_poll", "params": {"client_id": "rich", "user": admin.user_id, "client_capabilities": {"supportedCatalogIds": [ALPHONSE_DESKTOP_CATALOG_ID]}}})
     assert "telegram-task" not in str(excluded["ui_events"])
+
+
+def test_terminal_failed_run_closes_desktop_task_progress_surface(tmp_path) -> None:
+    users = V2UserStore(":memory:")
+    admin = users.onboard(display_name="Admin", users_root=tmp_path / "users")
+    queue = InMemoryMessageQueue()
+    project_id = "project-failed-progress"
+    runtime = build_runtime_host(
+        user_store=users, messages=queue,
+        schedule_store=ScheduledTaskStore(":memory:"), inference=_router(),
+    )
+    daemon = V2Daemon(runtime)
+    task_id = "task-terminal-failure"
+    task = TaskState(
+        task_id=task_id, user=admin.user_id, project_id=project_id,
+        goal="Complete and report the task", acceptance_criteria_md="1. [ ] Verified result",
+    )
+    runtime.activity_events.append(CoreActivityEvent(
+        phase=ImprovementPhase.PLAN, label="thinking", message="Planning.",
+        task_id=task_id, user=admin.user_id, integration_id="desktop",
+        channel_target=admin.user_id, progress=_task_progress_snapshot(task),
+    ))
+    initial = daemon.poll_desktop(
+        client_id="desktop-failure", user=admin.user_id, project_id=project_id,
+        client_capabilities={"supportedCatalogIds": [ALPHONSE_DESKTOP_CATALOG_ID]},
+    )
+    assert any("task-progress:" + task_id in str(item) for item in initial["ui_events"])
+
+    queued = queue.enqueue(CoreMessage(
+        timestamp=datetime.now(timezone.utc), prompt="Run a failing task",
+        user=admin.user_id, project_id=project_id,
+    ))
+    runtime.visible_state.update(StateSnapshot(metadata={"task_state": {"task_id": task_id, "user": admin.user_id}}))
+    runtime.core.step = lambda: SimpleNamespace(
+        status=LoopStepStatus.FAILED, queued_message_id=queued.message_id,
+        error="v3_task_failed:verification_failed",
+    )
+    runtime.core.clear_failure = lambda: None
+    daemon._notify_inbound_failure = lambda *_args, **_kwargs: None
+
+    daemon.run_once()
+    after = daemon.poll_desktop(
+        client_id="desktop-failure", user=admin.user_id, project_id=project_id,
+        after_sequence=initial["next_sequence"], after_ui_sequence=initial["next_ui_sequence"],
+        client_capabilities={"supportedCatalogIds": [ALPHONSE_DESKTOP_CATALOG_ID]},
+    )
+
+    envelopes = [item["event"]["value"] for item in after["ui_events"] if item["event"].get("name") == "a2ui.envelope"]
+    assert any(envelope.get("deleteSurface", {}).get("surfaceId") == f"task-progress:{task_id}" for envelope in envelopes)
 
 
 def test_task_progress_omits_empty_acceptance_criteria_sentinel() -> None:
