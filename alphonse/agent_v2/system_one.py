@@ -639,40 +639,47 @@ class JevCriterionDecisionProvider:
         questions: dict[str, Any] = {}
         key_to_id: dict[str, str] = {}
         for index, item in enumerate(candidates):
-            key = f"message_class_{index}"
+            key = f"message_relevance_{index}"
             key_to_id[key] = str(item["message_id"])
             questions[key] = {
-                "type": "choice",
-                "instructions": "Classify this queued message only by its relevance to the active task.",
-                "criteria": {
-                    "steering": "It changes, clarifies, or adds a requirement to the active task.",
-                    "question_answer": "It answers an open question that blocks or informs the active task.",
-                    "relevant_context": "It provides information or a dependency needed to complete the active task.",
-                    "independent_task": "It requests separate work that belongs to a different task.",
-                    "unrelated": "It is unrelated to the active task or is not actionable context for it.",
-                },
-            }
-            questions[f"relevant_{index}"] = {
-                "type": "noul",
-                "instructions": f"Is queued message {item['message_id']} relevant to the active task?",
-                "criteria": {
-                    "true": "The message should be incorporated before planning or continuing this task.",
-                    "false": "The message is unrelated, independent work, or should remain queued for another task.",
-                },
+                "type": "score",
+                "instructions": (
+                    f"Score how the queued message {item['message_id']} relates to the active task. "
+                    "Compare it with the task goal, acceptance contract, and current plan. "
+                    "A separate request belongs to its own queued task."
+                ),
+                "criteria": [
+                    "Unrelated or independent: it does not affect this task and should remain queued separately.",
+                    "Relevant context: it provides useful information for this task without changing its requirements.",
+                    "Steering: it changes, clarifies, or adds a requirement to this task.",
+                ],
             }
         response = self.client.evaluate(state=state, questions=questions)
         selected: list[str] = []
         answers = response["answers"]
-        for index, (key, message_id) in enumerate(key_to_id.items()):
-            choice = answers.get(key)
-            fuse = answers.get(f"relevant_{index}")
-            if not isinstance(choice, dict) or choice.get("type") != "choice":
-                raise ValueError(f"system_one_message_classification_invalid:{key}")
-            if not isinstance(fuse, dict) or fuse.get("type") != "noul" or not isinstance(fuse.get("noul"), (int, float)):
-                raise ValueError(f"system_one_message_relevance_invalid:{index}")
-            label = str(choice.get("choice") or "")
-            probability = float((choice.get("probabilities") or {}).get(label) or 0.0)
-            if label in {"steering", "question_answer", "relevant_context"} and probability >= self.settings.route_confidence_threshold and float(fuse["noul"]) >= self.settings.yes_threshold:
+        for key, message_id in key_to_id.items():
+            answer = answers.get(key)
+            if not isinstance(answer, dict) or answer.get("type") != "score":
+                raise ValueError(f"system_one_message_score_invalid:{key}")
+            try:
+                score = float(answer["score"])
+                confidence = float(answer["confidence"])
+                raw_probabilities = answer["probabilities"]
+                probabilities = {
+                    str(level): max(0.0, min(1.0, float(raw_probabilities.get(str(level), raw_probabilities.get(level, 0.0)))))
+                    for level in range(3)
+                }
+            except (KeyError, TypeError, ValueError, AttributeError) as exc:
+                raise ValueError(f"system_one_message_score_invalid:{key}") from exc
+            total_probability = sum(probabilities.values())
+            if (
+                not 0.99 <= total_probability <= 1.01
+                or not 0.0 <= score <= 2.0
+                or not 0.0 <= confidence <= 1.0
+            ):
+                raise ValueError(f"system_one_message_score_invalid:{key}")
+            relevant_probability = probabilities["1"] + probabilities["2"]
+            if relevant_probability >= self.settings.route_confidence_threshold:
                 selected.append(message_id)
         return tuple(selected)
 

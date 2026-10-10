@@ -486,7 +486,11 @@ def _steering_is_pending(task: "TaskState", context: "CoreLoopContext") -> bool:
         message = pending.message
         metadata = message.metadata if isinstance(message.metadata, dict) else {}
         disposition = str(metadata.get("routing_disposition") or "")
-        if disposition == "steering" and message.user == task.user and message.project_id == task.project_id:
+        if (
+            disposition in {"steering", "pdca_task"}
+            and message.user == task.user
+            and not str(message.prompt or "").lstrip().startswith("/")
+        ):
             return True
         if disposition == "correlated_response" and task.correlation_id and message.correlation_id == task.correlation_id:
             question_id = str(metadata.get("answered_question_id") or "")

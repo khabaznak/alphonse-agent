@@ -301,9 +301,15 @@ def _ingest_relevant_messages(task: "TaskState", context: "CoreLoopContext") -> 
         metadata = message.metadata if isinstance(message.metadata, dict) else {}
         if queued.message_id in ignored or metadata.get("source") in {"scheduled_task", "event_automation"}:
             continue
-        disposition = str(metadata.get("routing_disposition") or "")
+        disposition = str(metadata.get("routing_disposition") or "pdca_task")
+        # Project identity is not a relevance boundary: Jev compares same-user
+        # queued requests against the active task, including requests routed
+        # under a different project. Slash commands are normally intercepted at
+        # ingress; keep them out of inference if one reaches the queue anyway.
         eligible = (
-            disposition == "steering" and message.user == task.user and message.project_id == task.project_id
+            disposition in {"steering", "pdca_task"}
+            and message.user == task.user
+            and not str(message.prompt or "").lstrip().startswith("/")
         )
         question_id = str(metadata.get("answered_question_id") or "")
         if disposition == "correlated_response" and task.correlation_id and message.correlation_id == task.correlation_id and question_id:
