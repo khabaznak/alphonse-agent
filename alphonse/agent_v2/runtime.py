@@ -172,8 +172,9 @@ def build_runtime_host(
     reset_state()
     provided_tools = tools is not None
     queue = messages or InMemoryMessageQueue()
+    user_store = user_store or V2UserStore()
     conversation_store = conversation_store or SQLiteConversationStore()
-    skill_store = skill_store or SkillStore.default()
+    skill_store = skill_store or SkillStore(user_store.skills_root())
     intelligence_engine_settings_store = intelligence_engine_settings_store or SQLiteIntelligenceEngineSettingsStore()
     channel = CommunicationChannel(
         queue,
@@ -185,7 +186,6 @@ def build_runtime_host(
     web_tools_settings_store = web_tools_settings_store or SQLiteWebToolsSettingsStore()
     code_mode_settings_store = code_mode_settings_store or SQLiteCodeModeSettingsStore()
     media_tools_settings_store = media_tools_settings_store or SQLiteMediaToolsSettingsStore()
-    user_store = user_store or V2UserStore()
     asset_store = asset_store or SQLiteAssetStore(users_root=user_store.users_root)
     artifact_store = artifact_store or SQLiteArtifactStore()
     # Generic embedded/test hosts are intentionally ephemeral. The daemon
@@ -301,7 +301,7 @@ def build_runtime_host(
         schedule_store=schedule_store,
         delivery_sink=delivery_sink,
         user_context_provider=user_store.read_user_context,
-        user_timezone_provider=lambda _user_id: user_store.timezone(),
+        user_timezone_provider=lambda user_id: user_store.timezone(user_id),
         identity_resolver=identity_resolver,
         program_runner=ProgramRunner(settings_provider=code_mode_settings_store.get),
         activity_sink=_activity_sink,

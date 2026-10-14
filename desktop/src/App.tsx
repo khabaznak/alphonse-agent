@@ -1,5 +1,5 @@
 import { FormEvent, KeyboardEvent, memo, ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { CalendarClock, ChevronLeft, ChevronRight, FileText, FolderKanban, Plus, Settings, UsersRound, X, Sparkles } from "lucide-react";
+import { CalendarClock, ChevronLeft, ChevronRight, FileText, FolderKanban, FolderOpen, Plus, Settings, UsersRound, X, Sparkles } from "lucide-react";
 import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { onAction } from "@tauri-apps/plugin-notification";
@@ -14,7 +14,7 @@ import { DESKTOP_STYLE_STORAGE_KEY, parseDesktopStyle, type DesktopStyle } from 
 import { desktopDiagnosticBehavior, type DesktopDiagnosticMode } from "./diagnosticMode";
 import { createDesktopNotifier, DESKTOP_NOTIFICATION_PREFERENCES_KEY, notificationForCompletion, notificationForQuestion, readDesktopNotificationPreferences, type DesktopNotificationPreferences } from "./desktopNotifications";
 import { readDismissedScheduledSurfaces, rememberDismissedScheduledSurface, withoutDismissedSurfaces, withoutSurface } from "./dismissedSurfaces";
-import { avatarState, avatarStateLabel, capdActivityLabel, projectKey } from "./layoutState";
+import { avatarState, avatarStateLabel, capdActivityLabel } from "./layoutState";
 import { formatMessageTime } from "./messageTime";
 import { reuseQuestions, withoutTaskProgressSurfaces } from "./pollState";
 import { QueueWorkloadChart } from "./QueueWorkloadChart";
@@ -35,7 +35,7 @@ type PollResponse = {
   next_ui_sequence?: number;
   deliveries: Array<{ outbox_message_id: string; message: string; task_id?: string; project_id: string; created_at: string; conversation_sequence: number }>;
   questions: Question[];
-  active_project_has_unseen_messages?: boolean;
+  conversation_has_unseen_messages?: boolean;
   status: { active_work: Record<string, string>; activity: { state?: string }; queue?: { ready?: number; processing?: number } };
 };
 type HistoryResponse = { messages: ChatMessage[] };
@@ -51,6 +51,18 @@ type Provider = {
 };
 const REMARK_PLUGINS = [remarkGfm];
 const fileNameFromPath = (path: string) => path.split(/[\\/]/).pop() || "attachment";
+const localDay = (timezone: string) => {
+  const parts = new Intl.DateTimeFormat("en-CA", { timeZone: timezone || "UTC", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(new Date());
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${values.year}-${values.month}-${values.day}`;
+};
+const messageLocalDay = (value: string | undefined, timezone: string) => {
+  if (!value) return "";
+  const parts = new Intl.DateTimeFormat("en-CA", { timeZone: timezone || "UTC", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(new Date(value));
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${values.year}-${values.month}-${values.day}`;
+};
+const shiftDay = (value: string, amount: number) => { const date = new Date(`${value}T12:00:00Z`); date.setUTCDate(date.getUTCDate() + amount); return date.toISOString().slice(0, 10); };
 
 export default function App({ diagnosticMode = "normal", diagnosticProjectId = "" }: { diagnosticMode?: DesktopDiagnosticMode; diagnosticProjectId?: string }) {
   const diagnosticBehavior = useMemo(() => desktopDiagnosticBehavior(diagnosticMode), [diagnosticMode]);
@@ -64,11 +76,10 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
   const progressStartedAtRef = useRef(new Map<string, number>());
   const progressMeaningfulAtRef = useRef(new Map<string, number>());
   const progressCompletionTimersRef = useRef(new Map<string, number>());
-  const projectHistoryRequestRef = useRef(0);
-  const projectHistoryLoadingRef = useRef(0);
+  const conversationHistoryRequestRef = useRef(0);
+  const conversationHistoryLoadingRef = useRef(0);
   const activeHistoryRefreshRef = useRef(false);
-  const activeProjectKeyRef = useRef(projectKey());
-  const messagesDuringHistoryReloadRef = useRef(new Map<number, ChatMessage[]>());
+  const messagesDuringConversationReloadRef = useRef(new Map<number, ChatMessage[]>());
   const timelineRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const composerRef = useRef<HTMLFormElement | null>(null);
@@ -81,7 +92,6 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
     playSound: playAlertSound,
   }));
   const [messages, setMessages] = useState<ChatMessage[]>([{ id: "welcome", role: "assistant", content: "Alphonse Desktop is connected locally." }]);
-  const [messageBuckets, setMessageBuckets] = useState<Record<string, ChatMessage[]>>({});
   const [prompt, setPrompt] = useState("");
   const [attachmentPaths, setAttachmentPaths] = useState<string[]>([]);
   const [composerDragActive, setComposerDragActive] = useState(false);
@@ -89,19 +99,24 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
   const [activity, setActivity] = useState("idle");
   const [questions, setQuestions] = useState<Question[]>([]);
   const [project, setProject] = useState<Project | null>(null);
+  const [contextProjects, setContextProjects] = useState<Project[]>([]);
+  const [conversationDay, setConversationDay] = useState(() => localDay("UTC"));
+  const conversationDayRef = useRef(conversationDay);
   const [projectsOpen, setProjectsOpen] = useState(false);
   const [skillsOpen, setSkillsOpen] = useState(false);
   const [scheduledTaskForView, setScheduledTaskForView] = useState("");
   const [modal, setModal] = useState<Modal>(null);
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("general");
   const [user, setUser] = useState("");
+  const [workspaceRequired, setWorkspaceRequired] = useState(false);
   const [error, setError] = useState("");
   const [surfaces, setSurfaces] = useState<Record<string, import("./a2ui").A2uiSurface>>({});
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [queueHistory, setQueueHistory] = useState<QueueSample[]>([]);
   const [pdcaHistory, setPdcaHistory] = useState<PdcaSample[]>([]);
-  const [activeProjectHasUnseenMessages, setActiveProjectHasUnseenMessages] = useState(false);
+  const [conversationHasUnseenMessages, setConversationHasUnseenMessages] = useState(false);
   const [timezone, setTimezone] = useState("UTC");
+  const timezoneRef = useRef(timezone);
   const [progressTaskIds, setProgressTaskIds] = useState<string[]>([]);
   const [pendingProgressMessages, setPendingProgressMessages] = useState<Record<string, ChatMessage>>({});
   const [morphedMessageTaskIds, setMorphedMessageTaskIds] = useState<Record<string, string>>({});
@@ -110,10 +125,10 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
   const [desktopStyle, setDesktopStyle] = useState<DesktopStyle>(() => parseDesktopStyle(window.localStorage.getItem(DESKTOP_STYLE_STORAGE_KEY)));
   const [desktopNotifications, setDesktopNotifications] = useState<DesktopNotificationPreferences>(() => readDesktopNotificationPreferences(window.localStorage));
   const [diagnosticRenderTick, forceDiagnosticRender] = useState(0);
-  const currentProjectKey = projectKey(project?.project_id);
   const currentAvatarState = avatarState(connected, error, activity);
   const currentAvatarStateLabel = avatarStateLabel(currentAvatarState);
-  activeProjectKeyRef.current = currentProjectKey;
+  conversationDayRef.current = conversationDay;
+  timezoneRef.current = timezone;
 
   const dismissScheduledSurface = useCallback((surfaceId: string) => {
     dismissedScheduledSurfacesRef.current = rememberDismissedScheduledSurface(
@@ -126,25 +141,25 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
   }, []);
 
   const appendMessage = useCallback((message: ChatMessage) => {
-    const activeKey = activeProjectKeyRef.current;
-    const loadingRequest = projectHistoryLoadingRef.current;
+    const messageDay = messageLocalDay(message.created_at, timezoneRef.current);
+    if (messageDay && messageDay !== conversationDayRef.current) return;
+    const loadingRequest = conversationHistoryLoadingRef.current;
     if (loadingRequest) {
-      const pending = messagesDuringHistoryReloadRef.current.get(loadingRequest) || [];
-      messagesDuringHistoryReloadRef.current.set(loadingRequest, [...pending, message]);
+      const pending = messagesDuringConversationReloadRef.current.get(loadingRequest) || [];
+      messagesDuringConversationReloadRef.current.set(loadingRequest, [...pending, message]);
     }
     setMessages((current) => {
       const next = mergeFreshConversationHistory(current, [message]);
-      setMessageBuckets((buckets) => ({ ...buckets, [activeKey]: next }));
       return next;
     });
   }, []);
 
   const pollTransport = useCallback(async () => {
-    const requestedProjectId = project?.project_id || "";
     const response = await daemonRequest<PollResponse>("desktop_poll", {
         client_id: clientId,
         user,
-        project_id: requestedProjectId,
+        project_id: "",
+        local_date: conversationDay,
         after_sequence: sequence.current,
         after_ui_sequence: uiSequence.current,
         daemon_id: daemonId.current,
@@ -156,12 +171,12 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
     if (response.daemon_id) daemonId.current = response.daemon_id;
     sequence.current = response.next_sequence;
     uiSequence.current = response.next_ui_sequence ?? uiSequence.current;
-    return { requestedProjectId, response, daemonChanged };
-  }, [clientId, project?.project_id, user]);
+    return { response, daemonChanged };
+  }, [clientId, conversationDay, user]);
 
   const poll = useCallback(async () => {
     try {
-      const { requestedProjectId, response, daemonChanged } = await pollTransport();
+      const { response, daemonChanged } = await pollTransport();
       if (!diagnosticBehavior.commitsPollResponses) return;
       if (daemonChanged) {
         progressCompletionTimersRef.current.forEach((timer) => window.clearTimeout(timer));
@@ -179,26 +194,21 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
       }
       setConnected(true);
       setError("");
-      const responseIsForActiveProject = projectKey(requestedProjectId) === activeProjectKeyRef.current;
-      if (responseIsForActiveProject) setQuestions((current) => reuseQuestions(current, response.questions));
-      if (responseIsForActiveProject) {
-        response.questions.forEach((question) => appendMessage({
-          id: `question:${question.question_id}`,
-          role: "assistant",
-          content: question.message,
-          source: "desktop",
-          created_at: question.created_at,
-          project_id: question.project_id,
-          sequence: question.conversation_sequence,
-        }));
-        response.questions.forEach((question) => {
-          void desktopNotifierRef.current.notify(
-            notificationForQuestion(question, question.project_id === project?.project_id ? project.name : ""),
-            desktopNotifications,
-          );
-        });
-      }
-      setActiveProjectHasUnseenMessages(Boolean(response.active_project_has_unseen_messages));
+      setQuestions((current) => reuseQuestions(current, response.questions));
+      response.questions.forEach((question) => appendMessage({
+        id: `question:${question.question_id}`,
+        role: "assistant",
+        content: question.message,
+        source: "desktop",
+        created_at: question.created_at,
+        project_id: question.project_id,
+        sequence: question.conversation_sequence,
+      }));
+      response.questions.forEach((question) => {
+        const projectName = contextProjects.find((item) => item.project_id === question.project_id)?.name || "";
+        void desktopNotifierRef.current.notify(notificationForQuestion(question, projectName), desktopNotifications);
+      });
+      setConversationHasUnseenMessages(Boolean(response.conversation_has_unseen_messages));
       const polledAt = Date.now();
       setQueueHistory((current) => appendQueueSample(current, {
         ready: response.status.queue?.ready || 0,
@@ -210,7 +220,7 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
         response.status.activity.state || "idle",
         polledAt,
       ));
-      const newProgressTaskIds = responseIsForActiveProject ? taskProgressIds(response.ui_events || []) : [];
+      const newProgressTaskIds = taskProgressIds(response.ui_events || []);
       if (newProgressTaskIds.length) {
         newProgressTaskIds.forEach((taskId) => {
           progressTaskIdsRef.current.add(taskId);
@@ -218,16 +228,12 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
         });
         setProgressTaskIds((current) => [...current, ...newProgressTaskIds.filter((taskId) => !current.includes(taskId))]);
       }
-      const projectedSurfaces = responseIsForActiveProject
-        ? withoutDismissedSurfaces(
-            (response.ui_events || []).reduce((next, item) => applyA2uiEvent(next, item.event), surfacesRef.current),
-            dismissedScheduledSurfacesRef.current,
-          )
-        : surfacesRef.current;
-      if (responseIsForActiveProject) {
-        surfacesRef.current = projectedSurfaces;
-        setSurfaces(projectedSurfaces);
-      }
+      const projectedSurfaces = withoutDismissedSurfaces(
+        (response.ui_events || []).reduce((next, item) => applyA2uiEvent(next, item.event), surfacesRef.current),
+        dismissedScheduledSurfacesRef.current,
+      );
+      surfacesRef.current = projectedSurfaces;
+      setSurfaces(projectedSurfaces);
       newProgressTaskIds.forEach((taskId) => {
         const components = projectedSurfaces[`task-progress:${taskId}`]?.components || {};
         if (["criteria", "intention", "tool", "result"].some((componentId) => String(components[componentId]?.text || "").trim()) || Object.keys(components).some((componentId) => componentId.startsWith("step_"))) {
@@ -239,9 +245,8 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
       for (const delivery of response.deliveries) {
         if (delivered.current.has(delivery.outbox_message_id)) continue;
         delivered.current.add(delivery.outbox_message_id);
-        const deliveryProjectKey = projectKey(delivery.project_id);
         void desktopNotifierRef.current.notify(
-          notificationForCompletion(delivery, delivery.project_id === project?.project_id ? project.name : ""),
+          notificationForCompletion(delivery, contextProjects.find((item) => item.project_id === delivery.project_id)?.name || ""),
           desktopNotifications,
         );
         const completedMessage: ChatMessage = {
@@ -252,7 +257,7 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
           project_id: delivery.project_id,
           sequence: delivery.conversation_sequence,
         };
-        if (delivery.task_id && deliveryProjectKey === activeProjectKeyRef.current) {
+        if (delivery.task_id) {
           if (progressTaskIdsRef.current.has(delivery.task_id)) {
             const taskId = delivery.task_id;
             const progressSurface = surfacesRef.current[`task-progress:${taskId}`];
@@ -282,19 +287,11 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
             const remaining = Math.max(0, 1500 - elapsed);
             if (remaining) progressCompletionTimersRef.current.set(taskId, window.setTimeout(finish, remaining)); else finish();
             await daemonRequest("desktop_ack_delivery", { client_id: clientId, outbox_message_id: delivery.outbox_message_id });
-            await daemonRequest("desktop_mark_project_seen", { user, project_id: delivery.project_id, through_sequence: delivery.conversation_sequence });
             continue;
           }
         }
-        if (deliveryProjectKey === activeProjectKeyRef.current) appendMessage(completedMessage);
-        else setMessageBuckets((current) => ({
-          ...current,
-          [deliveryProjectKey]: mergeFreshConversationHistory(current[deliveryProjectKey] || [], [completedMessage]),
-        }));
+        appendMessage(completedMessage);
         await daemonRequest("desktop_ack_delivery", { client_id: clientId, outbox_message_id: delivery.outbox_message_id });
-        if (deliveryProjectKey === activeProjectKeyRef.current) {
-          await daemonRequest("desktop_mark_project_seen", { user, project_id: delivery.project_id, through_sequence: delivery.conversation_sequence });
-        }
       }
     } catch (cause) {
       if (!diagnosticBehavior.commitsPollResponses) return;
@@ -302,7 +299,7 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
       setError(cause instanceof Error ? cause.message : "Daemon connection lost");
       setActivity("idle");
     }
-  }, [appendMessage, clientId, desktopNotifications, diagnosticBehavior.commitsPollResponses, pollTransport, project, user]);
+  }, [appendMessage, clientId, contextProjects, desktopNotifications, diagnosticBehavior.commitsPollResponses, pollTransport, user]);
 
   useEffect(() => {
     const runCycle = diagnosticBehavior.cycle === "ping"
@@ -319,10 +316,12 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
         });
         setUser(current.user.user_id);
         setMessages(history.messages);
-        setMessageBuckets({ [projectKey(diagnosticProjectId)]: history.messages });
       } else if (diagnosticMode === "normal") {
-        const current = await daemonRequest<{ onboarded: boolean; user: { user_id: string } | null }>("current_user");
-        if (!current.onboarded || !current.user) setModal("onboarding"); else setUser(current.user.user_id);
+        const current = await daemonRequest<{ onboarded: boolean; workspace_configured?: boolean; user: { user_id: string } | null }>("current_user");
+        if (!current.onboarded || !current.user) setModal("onboarding"); else {
+          setUser(current.user.user_id);
+          if (!current.workspace_configured) { setWorkspaceRequired(true); setModal("settings"); }
+        }
       }
       if (runCycle) await runCycle();
     }).catch((cause: unknown) => {
@@ -383,22 +382,47 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
   }, [user]);
 
   useEffect(() => {
-    const activeProjectId = project?.project_id || "";
-    if (!user || !activeProjectHasUnseenMessages || activeHistoryRefreshRef.current || projectHistoryLoadingRef.current) return;
+    if (!user) return;
+    setConversationDay(localDay(timezone));
+    void daemonRequest<{ projects: Project[] }>("manageable_projects", { user }).then((result) => setContextProjects(result.projects)).catch(() => setContextProjects([]));
+  }, [timezone, user]);
+
+  useEffect(() => {
+    if (!user) return;
+    const request = ++conversationHistoryRequestRef.current;
+    conversationHistoryLoadingRef.current = request;
+    messagesDuringConversationReloadRef.current.set(request, []);
+    setMessages([]);
+    void daemonRequest<HistoryResponse>("desktop_conversation_history", { user, local_date: conversationDay, limit: 500 })
+      .then(async (history) => {
+        if (conversationHistoryRequestRef.current !== request) return;
+        const pending = messagesDuringConversationReloadRef.current.get(request) || [];
+        const refreshed = mergeFreshConversationHistory(history.messages, pending);
+        setMessages(refreshed);
+        conversationHistoryLoadingRef.current = 0;
+        messagesDuringConversationReloadRef.current.delete(request);
+        await daemonRequest("desktop_mark_conversation_seen", { user, local_date: conversationDay });
+        setConversationHasUnseenMessages(false);
+      })
+      .catch((cause: unknown) => { if (conversationHistoryRequestRef.current === request) setError(cause instanceof Error ? cause.message : "Conversation history could not be loaded"); })
+      .finally(() => { if (conversationHistoryRequestRef.current === request) { conversationHistoryLoadingRef.current = 0; messagesDuringConversationReloadRef.current.delete(request); } });
+  }, [conversationDay, user, timezone]);
+
+  useEffect(() => {
+    if (!user || !conversationHasUnseenMessages || activeHistoryRefreshRef.current || conversationHistoryLoadingRef.current) return;
     activeHistoryRefreshRef.current = true;
-    void daemonRequest<HistoryResponse>("desktop_conversation_history", { user, project_id: activeProjectId, limit: 100 })
+    void daemonRequest<HistoryResponse>("desktop_conversation_history", { user, local_date: conversationDay, limit: 500 })
       .then(async (history) => {
         setMessages((current) => {
           const refreshed = mergeFreshConversationHistory(history.messages, current);
-          setMessageBuckets((buckets) => ({ ...buckets, [projectKey(activeProjectId)]: refreshed }));
           return refreshed;
         });
-        const throughSequence = history.messages.reduce((latest, message) => Math.max(latest, message.sequence || 0), 0);
-        await daemonRequest("desktop_mark_project_seen", { user, project_id: activeProjectId, through_sequence: throughSequence });
+        await daemonRequest("desktop_mark_conversation_seen", { user, local_date: conversationDay });
+        setConversationHasUnseenMessages(false);
       })
       .catch((cause: unknown) => setError(cause instanceof Error ? cause.message : "Conversation history could not be refreshed"))
       .finally(() => { activeHistoryRefreshRef.current = false; });
-  }, [activeProjectHasUnseenMessages, project?.project_id, user]);
+  }, [conversationDay, conversationHasUnseenMessages, user]);
 
   useEffect(() => {
     const element = timelineRef.current;
@@ -465,76 +489,12 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
     return () => { unlisten?.(); };
   }, [queueAttachmentPaths]);
 
-  const selectProject = useCallback(async (next: Project) => {
-    if (attachmentPaths.length && next.project_id !== project?.project_id && !window.confirm("Remove the files queued for the current project before switching projects?")) return;
-    const nextKey = projectKey(next.project_id);
-    activeProjectKeyRef.current = nextKey;
-    const previousHistoryRequest = projectHistoryLoadingRef.current;
-    if (previousHistoryRequest) messagesDuringHistoryReloadRef.current.delete(previousHistoryRequest);
-    const historyRequest = projectHistoryRequestRef.current + 1;
-    projectHistoryRequestRef.current = historyRequest;
-    projectHistoryLoadingRef.current = historyRequest;
-    messagesDuringHistoryReloadRef.current.set(historyRequest, []);
-    setMessageBuckets((buckets) => ({ ...buckets, [currentProjectKey]: messages }));
+  const selectProject = useCallback((next: Project | null) => {
+    if (attachmentPaths.length && next?.project_id !== project?.project_id && !window.confirm("Remove the files queued for the current project before changing task context?")) return;
     setProject(next);
     setAttachmentPaths([]);
-    setModal(null);
-    setSurfaces({});
-    surfacesRef.current = {};
-    progressTaskIdsRef.current.clear();
-    autoScrolledProgressTaskIdsRef.current.clear();
-    progressCompletionTimersRef.current.forEach((timer) => window.clearTimeout(timer));
-    progressCompletionTimersRef.current.clear();
-    progressStartedAtRef.current.clear();
-    progressMeaningfulAtRef.current.clear();
-    setProgressTaskIds([]);
-    setPendingProgressMessages({});
-    setMorphedMessageTaskIds({});
-    setHeldProgressSurfaces({});
-    setQuestions([]);
-    delivered.current.clear();
-    setMessages([]);
-    try {
-      const history = await daemonRequest<HistoryResponse>("desktop_conversation_history", { user, project_id: next.project_id, limit: 100 });
-      if (projectHistoryRequestRef.current !== historyRequest) {
-        messagesDuringHistoryReloadRef.current.delete(historyRequest);
-        return;
-      }
-      const pending = messagesDuringHistoryReloadRef.current.get(historyRequest) || [];
-      const refreshed = mergeFreshConversationHistory(history.messages, pending);
-      projectHistoryLoadingRef.current = 0;
-      messagesDuringHistoryReloadRef.current.delete(historyRequest);
-      setMessages(refreshed);
-      setMessageBuckets((buckets) => ({ ...buckets, [nextKey]: refreshed }));
-      const throughSequence = refreshed.reduce((latest, message) => Math.max(latest, message.sequence || 0), 0);
-      await daemonRequest("desktop_mark_project_seen", {
-        user,
-        project_id: next.project_id,
-        through_sequence: throughSequence,
-      });
-    } catch (cause) {
-      if (projectHistoryRequestRef.current !== historyRequest) {
-        messagesDuringHistoryReloadRef.current.delete(historyRequest);
-        return;
-      }
-      const pending = messagesDuringHistoryReloadRef.current.get(historyRequest) || [];
-      projectHistoryLoadingRef.current = 0;
-      messagesDuringHistoryReloadRef.current.delete(historyRequest);
-      setMessages(pending);
-      setError(cause instanceof Error ? cause.message : "Conversation history could not be loaded");
-    }
-  }, [attachmentPaths.length, currentProjectKey, messages, project?.project_id, user]);
-
-  useEffect(() => {
-    if (!user || project) return;
-    void daemonRequest<{ projects: Project[] }>("manageable_projects", { user })
-      .then((result) => {
-        const home = result.projects.find((item) => item.is_system_home);
-        if (home) return selectProject(home);
-        return undefined;
-      })
-      .catch((cause: unknown) => setError(cause instanceof Error ? cause.message : "Home project could not be opened"));
-  }, [project, selectProject, user]);
+    setError("");
+  }, [attachmentPaths.length, project?.project_id]);
 
   const submitPrompt = async () => {
     const value = prompt.trim();
@@ -587,6 +547,9 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
       });
       setPrompt("");
       setAttachmentPaths([]);
+      const today = localDay(timezone);
+      conversationDayRef.current = today;
+      setConversationDay(today);
       appendMessage({
         id: queued.message_id,
         role: "user",
@@ -595,7 +558,7 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
         project_id: queued.project_id,
         sequence: queued.conversation_sequence,
       });
-      await daemonRequest("desktop_mark_project_seen", { user, project_id: queued.project_id, through_sequence: queued.conversation_sequence });
+      await daemonRequest("desktop_mark_conversation_seen", { user, local_date: today });
       setActivity("doing");
       await poll();
     } catch (cause) {
@@ -645,7 +608,7 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
         const questionSurface = question ? surfaces[`question:${question.question_id}`] : undefined;
         if (questionSurface) return <article className="message assistant task-question-bubble" key={item.key}><A2uiSurfaceView surface={questionSurface} clientId={clientId} user={user} onDone={poll} /></article>;
         const Bubble = diagnosticBehavior.memoizesMessages ? MemoizedMessageBubble : MessageBubble;
-        return <Bubble key={item.key} message={item.message} timezone={timezone} renderMarkdown={!diagnosticBehavior.plainTextMessages} />;
+        return <Bubble key={item.key} message={item.message} timezone={timezone} projectName={contextProjects.find((projectItem) => projectItem.project_id === item.message.project_id)?.name || ""} renderMarkdown={!diagnosticBehavior.plainTextMessages} />;
       }
       const surface = surfaces[`task-progress:${item.taskId}`] || heldProgressSurfaces[item.taskId];
       const questionSurface = Object.values(surfaces).find((candidate) => questionTaskId(candidate) === item.taskId);
@@ -653,7 +616,7 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
         return <article className="message assistant task-question-bubble" key={item.key}><A2uiSurfaceView surface={questionSurface} clientId={clientId} user={user} onDone={poll} /></article>;
       }
       return surface ? <TaskProgressBubble key={item.key} surface={surface} /> : null;
-    }), [clientId, diagnosticBehavior.memoizesMessages, diagnosticBehavior.plainTextMessages, heldProgressSurfaces, messages, morphedMessageTaskIds, pendingProgressMessages, poll, progressTaskIds, questionTaskIds, questions, surfaces, timelineRenderVersion, timezone, user]);
+    }), [clientId, contextProjects, diagnosticBehavior.memoizesMessages, diagnosticBehavior.plainTextMessages, heldProgressSurfaces, messages, morphedMessageTaskIds, pendingProgressMessages, poll, progressTaskIds, questionTaskIds, questions, surfaces, timelineRenderVersion, timezone, user]);
 
   return (
     <main className={`app-shell ${sidebarCollapsed ? "sidebar-collapsed" : ""} ${projectsOpen || skillsOpen ? "projects-mode" : ""}`}>
@@ -681,7 +644,18 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
 
       {projectsOpen ? <ProjectsWorkspace user={user} onClose={() => setProjectsOpen(false)} /> : skillsOpen ? <SkillsWorkspace user={user} onClose={() => setSkillsOpen(false)} /> : <section className="conversation">
         <header className="topbar">
-          <div className="topbar-project"><p className="eyebrow">Project</p><h1>{project?.name || "Home"}</h1></div>
+          <div className="topbar-project"><p className="eyebrow">Main conversation</p><h1>Conversation</h1></div>
+          <label className="conversation-project-context">Task project
+            <select aria-label="Task project context" value={project?.project_id || ""} onChange={(event) => selectProject(contextProjects.find((item) => item.project_id === event.target.value) || null)}>
+              <option value="">No project</option>{contextProjects.map((item) => <option key={item.project_id} value={item.project_id}>{item.name}</option>)}
+            </select>
+          </label>
+          <div className="conversation-day-controls" aria-label="Conversation day history">
+            <button type="button" aria-label="Previous day" onClick={() => setConversationDay((day) => shiftDay(day, -1))}>‹</button>
+            <input aria-label="Conversation date" type="date" value={conversationDay} max={localDay(timezone)} onChange={(event) => event.target.value && setConversationDay(event.target.value)} />
+            <button type="button" aria-label="Next day" disabled={conversationDay >= localDay(timezone)} onClick={() => setConversationDay((day) => shiftDay(day, 1))}>›</button>
+            {conversationDay !== localDay(timezone) && <button type="button" onClick={() => setConversationDay(localDay(timezone))}>Today</button>}
+          </div>
         </header>
         {error && <div className="error" role="alert">{error}</div>}
         <div className="timeline" ref={timelineRef} aria-live="polite">
@@ -705,9 +679,9 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
       </section>}
 
       {modal === "scheduled-tasks" && <ScheduledTasksModal actorUserId={user} initialTaskId={scheduledTaskForView} onClose={() => { setScheduledTaskForView(""); setModal(null); }} />}
-      {modal === "settings" && <SettingsModal user={user} initialTab={settingsTab} enterToSend={enterToSend} desktopStyle={desktopStyle} desktopNotifications={desktopNotifications} onDesktopStyleChange={setDesktopStyle} onDesktopNotificationsChange={setDesktopNotifications} onEnterToSendChange={setEnterToSend} onTimezoneChange={setTimezone} onTestDesktopNotification={() => void desktopNotifierRef.current.notify({ id: `test:${Date.now()}`, title: "Alphonse test alert", body: "Desktop notifications are ready." }, { ...desktopNotifications, onlyWhenUnfocused: false })} onClose={() => setModal(null)} />}
+      {modal === "settings" && <SettingsModal user={user} initialTab={settingsTab} workspaceRequired={workspaceRequired} enterToSend={enterToSend} desktopStyle={desktopStyle} desktopNotifications={desktopNotifications} onDesktopStyleChange={setDesktopStyle} onDesktopNotificationsChange={setDesktopNotifications} onEnterToSendChange={setEnterToSend} onTimezoneChange={setTimezone} onWorkspaceConfigured={() => setWorkspaceRequired(false)} onTestDesktopNotification={() => void desktopNotifierRef.current.notify({ id: `test:${Date.now()}`, title: "Alphonse test alert", body: "Desktop notifications are ready." }, { ...desktopNotifications, onlyWhenUnfocused: false })} onClose={() => { if (!workspaceRequired) setModal(null); }} />}
       {modal === "users" && <UsersModal onClose={() => setModal(null)} />}
-      {modal === "onboarding" && <OnboardingModal onComplete={(next) => { setUser(next); setModal(null); void poll(); }} />}
+      {modal === "onboarding" && <OnboardingModal onComplete={(next) => { setUser(next); setWorkspaceRequired(false); setModal(null); void poll(); }} />}
     </main>
   );
 }
@@ -737,20 +711,20 @@ function ModalFrame({ title, children, tabs, className = "", onClose }: { title:
 }
 
 function OnboardingModal({ onComplete }: { onComplete: (userId: string) => void }) {
-  const [name, setName] = useState(""); const [root, setRoot] = useState("~/.alphonse/users"); const [error, setError] = useState("");
-  const save = async () => { try { const result = await daemonRequest<{ admin_user: { user_id: string } }>("onboard", { display_name: name, users_root: root }); onComplete(result.admin_user.user_id); } catch (cause) { setError(cause instanceof Error ? cause.message : "Onboarding failed"); } };
-  return <ModalFrame title="Set up Alphonse" onClose={() => undefined}><p>Create the local administrator and choose where user data is stored.</p><input value={name} onChange={(event) => setName(event.target.value)} placeholder="Your name" /><input value={root} onChange={(event) => setRoot(event.target.value)} placeholder="Users root" /><button onClick={() => void save()}>Create administrator</button><p>{error}</p></ModalFrame>;
+  const [name, setName] = useState(""); const [root, setRoot] = useState(""); const [error, setError] = useState("");
+  const save = async () => { try { const result = await daemonRequest<{ admin_user: { user_id: string } }>("onboard", { display_name: name, workspace_root: root }); onComplete(result.admin_user.user_id); } catch (cause) { setError(cause instanceof Error ? cause.message : "Onboarding failed"); } };
+  return <ModalFrame title="Set up Alphonse" onClose={() => undefined}><p>Create the local administrator and choose Alphonse’s Workspace directory. This is the root for users, projects, skills, and agent configuration.</p><label>Workspace directory<input value={root} onChange={(event) => setRoot(event.target.value)} placeholder="/Users/you/Workspace" /></label><label>Your name<input value={name} onChange={(event) => setName(event.target.value)} placeholder="Your name" /></label><button disabled={!name.trim() || !root.trim()} onClick={() => void save()}>Create administrator</button><p>{error}</p></ModalFrame>;
 }
 
-function SettingsModal({ user, initialTab, enterToSend, desktopStyle, desktopNotifications, onDesktopStyleChange, onDesktopNotificationsChange, onEnterToSendChange, onTimezoneChange, onTestDesktopNotification, onClose }: { user: string; initialTab: SettingsTab; enterToSend: boolean; desktopStyle: DesktopStyle; desktopNotifications: DesktopNotificationPreferences; onDesktopStyleChange: (value: DesktopStyle) => void; onDesktopNotificationsChange: (value: DesktopNotificationPreferences) => void; onEnterToSendChange: (value: boolean) => void; onTimezoneChange: (value: string) => void; onTestDesktopNotification: () => void; onClose: () => void }) {
+function SettingsModal({ user, initialTab, workspaceRequired, enterToSend, desktopStyle, desktopNotifications, onDesktopStyleChange, onDesktopNotificationsChange, onEnterToSendChange, onTimezoneChange, onWorkspaceConfigured, onTestDesktopNotification, onClose }: { user: string; initialTab: SettingsTab; workspaceRequired: boolean; enterToSend: boolean; desktopStyle: DesktopStyle; desktopNotifications: DesktopNotificationPreferences; onDesktopStyleChange: (value: DesktopStyle) => void; onDesktopNotificationsChange: (value: DesktopNotificationPreferences) => void; onEnterToSendChange: (value: boolean) => void; onTimezoneChange: (value: string) => void; onWorkspaceConfigured: () => void; onTestDesktopNotification: () => void; onClose: () => void }) {
   const [root, setRoot] = useState(""); const [timezone, setTimezone] = useState("UTC"); const [mirrorAutomationMessages, setMirrorAutomationMessages] = useState(false); const [notice, setNotice] = useState(""); const [tab, setTab] = useState<SettingsTab>(initialTab);
   const [web, setWeb] = useState<WebToolsSettings | null>(null); const [webNotice, setWebNotice] = useState("");
   const [memory, setMemory] = useState<MemorySettings | null>(null); const [memoryNotice, setMemoryNotice] = useState("");
-  useEffect(() => { void daemonRequest<{ users_root: string; mirror_automation_messages_to_preferred_channel: boolean }>("settings").then((result) => { setRoot(result.users_root); setMirrorAutomationMessages(Boolean(result.mirror_automation_messages_to_preferred_channel)); }); void daemonRequest<{ timezone: string }>("timezone_settings", { actor_user_id: user }).then((result) => setTimezone(result.timezone)).catch((cause: unknown) => setNotice(timezoneSettingsError(cause))); }, [user]);
+  useEffect(() => { void daemonRequest<{ workspace_root: string; workspace_configured: boolean; legacy_users_root: string; mirror_automation_messages_to_preferred_channel: boolean }>("settings").then((result) => { setRoot(result.workspace_root || ""); setMirrorAutomationMessages(Boolean(result.mirror_automation_messages_to_preferred_channel)); if (!result.workspace_configured) setNotice("Workspace directory is not configured. Set it here to continue."); }); void daemonRequest<{ timezone: string }>("timezone_settings", { actor_user_id: user }).then((result) => setTimezone(result.timezone)).catch((cause: unknown) => setNotice(timezoneSettingsError(cause))); }, [user]);
   useEffect(() => { setTab(initialTab); }, [initialTab]);
   useEffect(() => { if (tab === "tools") void daemonRequest<{ user: { user_id: string } | null }>("current_user").then(async (current) => { if (!current.user) return; const result = await daemonRequest<{ settings: WebToolsSettings }>("web_tools_settings", { actor_user_id: current.user.user_id }); setWeb(result.settings); }).catch((cause: unknown) => setWebNotice(cause instanceof Error ? cause.message : "Web Tools unavailable")); }, [tab]);
   useEffect(() => { void daemonRequest<{ user: { user_id: string } | null }>("current_user").then(async (current) => { if (!current.user) return; const result = await daemonRequest<{ settings: MemorySettings }>("memory_settings", { actor_user_id: current.user.user_id }); setMemory(result.settings); }).catch((cause: unknown) => setMemoryNotice(cause instanceof Error ? cause.message : "Memory settings unavailable")); }, []);
-  const save = async () => { try { const timezoneResult = await daemonRequest<{ timezone: string }>("save_timezone_settings", { actor_user_id: user, timezone }); if (timezoneResult.timezone !== timezone.trim()) throw new Error("The daemon did not persist the requested timezone"); setTimezone(timezoneResult.timezone); onTimezoneChange(timezoneResult.timezone); const result = await daemonRequest<{ users_root: string; warning_repository_path?: boolean; mirror_automation_messages_to_preferred_channel: boolean }>("save_settings", { users_root: root, mirror_automation_messages_to_preferred_channel: mirrorAutomationMessages }); setMirrorAutomationMessages(Boolean(result.mirror_automation_messages_to_preferred_channel)); setNotice(result.warning_repository_path ? "Saved. This path is inside the repository; keep it ignored." : "Saved."); } catch (cause) { setNotice(timezoneSettingsError(cause)); } };
+  const save = async () => { try { const result = await daemonRequest<{ workspace_root: string; warning_repository_path?: boolean; mirror_automation_messages_to_preferred_channel: boolean }>("save_settings", { actor_user_id: user, workspace_root: root, timezone, mirror_automation_messages_to_preferred_channel: mirrorAutomationMessages }); setRoot(result.workspace_root); setMirrorAutomationMessages(Boolean(result.mirror_automation_messages_to_preferred_channel)); onWorkspaceConfigured(); const timezoneResult = await daemonRequest<{ timezone: string }>("timezone_settings", { actor_user_id: user }); setTimezone(timezoneResult.timezone); onTimezoneChange(timezoneResult.timezone); setNotice(result.warning_repository_path ? "Saved. This path is inside the repository; keep it ignored." : "Workspace saved."); } catch (cause) { setNotice(timezoneSettingsError(cause)); } };
   const saveWeb = async () => { if (!web) return; try { const current = await daemonRequest<{ user: { user_id: string } | null }>("current_user"); if (!current.user) return; const result = await daemonRequest<{ settings: WebToolsSettings }>("save_web_tools_settings", { actor_user_id: current.user.user_id, values: web }); setWeb(result.settings); setWebNotice("Saved. Newly started tasks can use enabled Web Tools."); } catch (cause) { setWebNotice(cause instanceof Error ? cause.message : "Save failed"); } };
   const chooseNotificationSound = async () => {
     const selected = await openFileDialog({
@@ -763,8 +737,8 @@ function SettingsModal({ user, initialTab, enterToSend, desktopStyle, desktopNot
   };
   const verify = async (kind: "search" | "fetch") => { try { const current = await daemonRequest<{ user: { user_id: string } | null }>("current_user"); if (!current.user) return; const result = await daemonRequest<{ result: { exception?: { message?: string } } }>("verify_web_tools", { actor_user_id: current.user.user_id, kind }); setWebNotice(result.result.exception?.message || `${kind === "search" ? "SearXNG search" : "Public fetch"} verified.`); } catch (cause) { setWebNotice(cause instanceof Error ? cause.message : "Verification failed"); } };
   const saveMemory = async () => { if (!memory) return; try { const current = await daemonRequest<{ user: { user_id: string } | null }>("current_user"); if (!current.user) return; const result = await daemonRequest<{ settings: MemorySettings }>("save_memory_settings", { actor_user_id: current.user.user_id, values: memory }); setMemory(result.settings); setMemoryNotice("Saved. New tasks use these limits."); } catch (cause) { setMemoryNotice(cause instanceof Error ? cause.message : "Memory settings could not be saved"); } };
-  const tabs = <div className="settings-tabs" role="tablist" aria-label="Settings sections">{(["general", "appearance", "tools", "integrations", "automations", "model", "system-one", "agent-config"] as SettingsTab[]).map((item) => <button key={item} type="button" role="tab" aria-selected={tab === item} className={tab === item ? "active" : ""} onClick={() => setTab(item)}>{item === "agent-config" ? "Agent configuration" : item === "system-one" ? "System One" : item[0].toUpperCase() + item.slice(1)}</button>)}</div>;
-  return <ModalFrame title="Settings" tabs={tabs} className="settings-modal" onClose={onClose}>
+  const tabs = <div className="settings-tabs" role="tablist" aria-label="Settings sections">{(workspaceRequired ? ["general"] as SettingsTab[] : ["general", "appearance", "tools", "integrations", "automations", "model", "system-one", "agent-config"] as SettingsTab[]).map((item) => <button key={item} type="button" role="tab" aria-selected={tab === item} className={tab === item ? "active" : ""} onClick={() => setTab(item)}>{item === "agent-config" ? "Agent configuration" : item === "system-one" ? "System One" : item[0].toUpperCase() + item.slice(1)}</button>)}</div>;
+  return <ModalFrame title={workspaceRequired ? "Set up Alphonse Workspace" : "Settings"} tabs={tabs} className="settings-modal" onClose={onClose}>
     {tab === "general" && <div className="general-settings">
       <section className="setting-group">
         <div className="setting-group-heading"><h3>Messaging</h3><p>Choose how messages are sent from the desktop conversation.</p></div>
@@ -780,8 +754,9 @@ function SettingsModal({ user, initialTab, enterToSend, desktopStyle, desktopNot
         <div className="settings-save-actions"><button type="button" disabled={!desktopNotifications.enabled} onClick={onTestDesktopNotification}>Test alert</button></div>
       </section>
       <section className="setting-group">
-        <div className="setting-group-heading"><h3>Workspace &amp; time</h3><p>Set where Alphonse stores user data and the default timezone for new scheduled tasks.</p></div>
-        <label>Users root<input value={root} onChange={(event) => setRoot(event.target.value)} /></label>
+        <div className="setting-group-heading"><h3>Workspace &amp; time</h3><p>Set the root directory Alphonse uses for users, projects, skills, and agent configuration. This must match the Workspace directory selected by the administrator.</p></div>
+        {!root && <p role="alert">No Workspace directory has been configured. Choose one to enable normal use.</p>}
+        <label>Workspace directory<input value={root} onChange={(event) => setRoot(event.target.value)} placeholder="/Users/you/Workspace" /></label>
         <label>Timezone<input value={timezone} placeholder="America/Mexico_City" onChange={(event) => setTimezone(event.target.value)} /><small>Use an IANA timezone. New scheduled tasks use this unless one is explicitly specified.</small></label>
       </section>
       <section className="setting-group">
@@ -1019,10 +994,11 @@ function taskProgressIds(events: Array<{ event: { type: string; name?: string; v
   return [...ids];
 }
 
-function MessageBubble({ message, timezone, renderMarkdown = true }: { message: ChatMessage; timezone: string; renderMarkdown?: boolean }) {
+function MessageBubble({ message, timezone, projectName = "", renderMarkdown = true }: { message: ChatMessage; timezone: string; projectName?: string; renderMarkdown?: boolean }) {
   const timestamp = message.created_at ? formatMessageTime(message.created_at, timezone) : null;
   return <article className={`message ${message.role}`}>
     {message.source && !["desktop", "ledger"].includes(message.source) && <small className="message-source" title={`Sent from ${message.source}`}>↗ {sourceLabel(message.source)}</small>}
+    {message.project_id && <small className="message-project-association" title="Task project context">Project · {projectName || message.project_id}</small>}
     {message.role === "assistant" && renderMarkdown ? <div className="message-markdown"><ReactMarkdown remarkPlugins={REMARK_PLUGINS}>{message.content}</ReactMarkdown></div> : message.content}
     {timestamp && <time className="message-timestamp" dateTime={message.created_at} title={timestamp.tooltip}>{timestamp.visible}</time>}
   </article>;
@@ -1167,6 +1143,11 @@ function ProjectsWorkspace({ user, onClose }: { user: string; onClose: () => voi
   </div>;
 }
 
+const SKILL_NAME_MAX_LENGTH = 64;
+const SKILL_DESCRIPTION_MAX_LENGTH = 512;
+const SKILL_INSTRUCTIONS_MAX_LENGTH = 12_000;
+const SKILL_INSTRUCTIONS_TEMPLATE = "# Purpose\n[What reusable expertise does this skill provide?]\n\n## When to use\n- [Describe the requests that should use this skill.]\n\n## Workflow\n1. [Describe the steps Alphonse should follow.]\n\n## Files and tools\n- [List useful files relative to this skill directory and explain how to use them.]\n\n## Boundaries\n- [Describe safety, privacy, authorization, and uncertainty limits.]\n\n## Response\n- [Describe what a helpful answer or result should include.]";
+
 type SkillWorkspaceRecord = { id: string; title: string; description: string; directory: string; editable: boolean; instructions: string; files: Array<{ path: string; size_bytes: number }>; artifacts: Array<{ artifact_id: string; name: string; description: string; entrypoint_path: string; project_id: string; enabled: boolean }> };
 function SkillsWorkspace({ user, onClose }: { user: string; onClose: () => void }) {
   const [skills, setSkills] = useState<SkillWorkspaceRecord[]>([]); const [unassigned, setUnassigned] = useState<Array<{ artifact_id: string; name: string; description: string; entrypoint_path: string; project_id: string }>>([]); const [selected, setSelected] = useState<SkillWorkspaceRecord | null>(null); const [showCreate, setShowCreate] = useState(false); const [name, setName] = useState(""); const [description, setDescription] = useState(""); const [instructions, setInstructions] = useState(""); const [filePath, setFilePath] = useState("SKILL.md"); const [fileContent, setFileContent] = useState(""); const [artifactInstructions, setArtifactInstructions] = useState(""); const [notice, setNotice] = useState(""); const [busy, setBusy] = useState(false);
@@ -1181,10 +1162,12 @@ function SkillsWorkspace({ user, onClose }: { user: string; onClose: () => void 
   const deleteFile = async () => { if (!selected || filePath === "SKILL.md" || !window.confirm(`Delete ${filePath}?`)) return; try { await daemonRequest("delete_skill_file", { actor_user_id: user, skill_id: selected.id, path: filePath }); setFilePath("SKILL.md"); setFileContent(""); await load(selected.id); } catch (cause) { setNotice(cause instanceof Error ? cause.message : "File could not be deleted."); } };
   const uninstall = async () => { if (!selected || !window.confirm(`Uninstall ${selected.title} and remove its installed package?`)) return; try { await daemonRequest("delete_skill", { actor_user_id: user, skill_id: selected.id }); setSelected(null); await load(); setNotice("Skill uninstalled."); } catch (cause) { setNotice(cause instanceof Error ? cause.message : "Skill could not be uninstalled."); } };
   const attachArtifact = async (artifact: (typeof unassigned)[number]) => { if (!selected) return; try { await daemonRequest("attach_artifact_to_skill", { actor_user_id: user, artifact_id: artifact.artifact_id, skill_id: selected.id, instructions: artifactInstructions }); setUnassigned((current) => current.filter((item) => item.artifact_id !== artifact.artifact_id)); setArtifactInstructions(""); setNotice(`${artifact.name} added to ${selected.title}.`); await load(selected.id); } catch (cause) { setNotice(cause instanceof Error ? cause.message : "Artifact could not be assigned."); } };
-  return <div className="projects-workspace skills-workspace"><aside className="projects-workspace-sidebar"><header className="projects-workspace-heading"><button className="back-button" onClick={onClose}>← Conversation</button><h2>Skills</h2><button onClick={() => { setShowCreate((value) => !value); setSelected(null); }}>{showCreate ? "Cancel" : "+ New skill"}</button></header>
-    {showCreate && <form className="project-create" onSubmit={(event) => void create(event)}><h3>Create a skill</h3><div className="form-field"><label>Name</label><input value={name} onChange={(event) => setName(event.target.value)} placeholder="meal-planning" required /></div><div className="form-field"><label>Description</label><input value={description} onChange={(event) => setDescription(event.target.value)} required /></div><div className="form-field"><label>Instructions</label><textarea value={instructions} onChange={(event) => setInstructions(event.target.value)} required rows={8} /></div><button disabled={busy}>Create skill</button></form>}
+  const deleteArtifact = async (artifact: { artifact_id: string; name: string }) => { if (!window.confirm(`Remove ${artifact.name} from Alphonse's artifact catalog? Project files will remain.`)) return; try { await daemonRequest("delete_artifact", { actor_user_id: user, artifact_id: artifact.artifact_id }); setNotice(`${artifact.name} removed from the artifact catalog.`); await load(selected?.id); } catch (cause) { setNotice(cause instanceof Error ? cause.message : "Artifact could not be deleted."); } };
+  const openSkillFolder = async (item: SkillWorkspaceRecord) => { try { await showInFinder(item.directory); } catch (cause) { setNotice(cause instanceof Error ? cause.message : "Skill folder could not be opened."); } };
+  const startCreate = () => { setName(""); setDescription(""); setInstructions(""); setSelected(null); setShowCreate(true); setNotice(""); };
+  return <div className="projects-workspace skills-workspace"><aside className="projects-workspace-sidebar"><header className="projects-workspace-heading"><button className="back-button" onClick={onClose}>← Conversation</button><h2>Skills</h2><button onClick={() => showCreate ? setShowCreate(false) : startCreate()}>{showCreate ? "Cancel" : "+ New skill"}</button></header>
     <nav className="projects-workspace-list" aria-label="Available skills">{skills.map((item) => <button type="button" key={item.id} className={selected?.id === item.id ? "active" : ""} onClick={() => { setShowCreate(false); setSelected(item); setDescription(item.description); setInstructions(item.instructions); void selectFileForSkill(item); }}><Sparkles size={17} /><span>{item.title}<small>{item.description}</small></span><ChevronRight size={16} /></button>)}{!skills.length && <p>No skills installed.</p>}</nav>{notice && <p className="projects-workspace-notice">{notice}</p>}</aside>
-    <section className="projects-workspace-main">{showCreate ? <div className="projects-workspace-empty"><Sparkles size={36} /><h1>Create a skill</h1><p>Define reusable expertise for conversations and projects.</p></div> : selected ? <article className="skill-editor"><header><div><p className="eyebrow">Skill</p><h1>{selected.title}</h1><p>{selected.description}</p></div>{selected.editable && <button className="secondary" onClick={() => void uninstall()}>Uninstall</button>}</header><section><h2>Skill details</h2><label>Description<input disabled={!selected.editable} value={description} onChange={(event) => setDescription(event.target.value)} /></label><button onClick={() => void saveDescription()} disabled={busy || !selected.editable}>Save details</button></section><section><h2>Definition</h2><textarea disabled={!selected.editable} value={instructions} onChange={(event) => setInstructions(event.target.value)} rows={12} /><button onClick={() => void saveDefinition()} disabled={busy || !selected.editable}>Save definition</button></section><section><div className="skill-files-heading"><h2>Files</h2>{selected.editable && <button type="button" className="secondary" disabled={busy} onClick={() => void addFile()}>+ Add file</button>}</div><div className="skill-file-tabs">{selected.files.map((file) => <button type="button" className={filePath === file.path ? "active" : ""} key={file.path} onClick={() => void selectFile(file.path)}>{file.path}</button>)}</div><input aria-label="File path" disabled={!selected.editable} value={filePath} onChange={(event) => setFilePath(event.target.value)} /><textarea aria-label="File contents" disabled={!selected.editable} value={fileContent} onChange={(event) => setFileContent(event.target.value)} rows={12} /><div className="dialog-actions">{selected.editable && <button onClick={() => void saveFile()}>Save file</button>}{selected.editable && filePath !== "SKILL.md" && <button className="secondary" onClick={() => void deleteFile()}>Delete file</button>}</div></section><section><h2>Artifacts</h2><p>Artifacts are part of this skill's operating knowledge and are not independently curated as tools.</p>{selected.artifacts.length ? selected.artifacts.map((artifact) => <article className="artifact-card" key={artifact.artifact_id}><strong>{artifact.name}</strong><p>{artifact.description}</p><small>{artifact.project_id} · {artifact.entrypoint_path}</small></article>) : <p>No artifacts are registered to this skill.</p>}{selected.editable && unassigned.length > 0 && <div className="unassigned-artifacts"><h3>Unassigned catalog artifacts</h3><p>These existing records need a skill and operating instructions.</p>{unassigned.map((artifact) => <article className="artifact-card" key={artifact.artifact_id}><strong>{artifact.name}</strong><p>{artifact.description}</p><small>{artifact.project_id} · {artifact.entrypoint_path}</small><textarea aria-label={`Instructions for ${artifact.name}`} placeholder="How should this skill use the artifact?" value={artifactInstructions} onChange={(event) => setArtifactInstructions(event.target.value)} /><button disabled={!artifactInstructions.trim()} onClick={() => void attachArtifact(artifact)}>Add to this skill</button></article>)}</div>}</section></article> : <div className="projects-workspace-empty"><Sparkles size={36} /><h1>Choose a skill</h1><p>Select a skill to inspect its definition, package files, and associated artifacts.</p></div>}</section>
+    <section className="projects-workspace-main">{showCreate ? <article className="skill-editor skill-create-editor"><header><div><p className="eyebrow">New skill</p><h1>Create a skill</h1><p>Keep the instructions focused so Alphonse can load them alongside other relevant skills.</p></div></header><form onSubmit={(event) => void create(event)}><section><h2>Skill name</h2><label htmlFor="new-skill-name">Use a short lowercase name with hyphens between words.</label><input id="new-skill-name" value={name} onChange={(event) => setName(event.target.value)} maxLength={SKILL_NAME_MAX_LENGTH} placeholder="family-doctor" required /><small className="skill-character-count">{name.length}/{SKILL_NAME_MAX_LENGTH} characters</small></section><section><h2>Description</h2><label htmlFor="new-skill-description">Summarize the skill’s expertise and when Alphonse should use it.</label><textarea id="new-skill-description" value={description} onChange={(event) => setDescription(event.target.value)} maxLength={SKILL_DESCRIPTION_MAX_LENGTH} placeholder="Family health guidance, medical history, medications, and appointments. Use for health records or family medical questions." required rows={3} /><small className="skill-character-count">{description.length}/{SKILL_DESCRIPTION_MAX_LENGTH} characters</small></section><section><h2>Instructions</h2><label htmlFor="new-skill-instructions">Describe a practical workflow, relevant files, tools, and boundaries. Keep this under 12,000 characters.</label><textarea id="new-skill-instructions" className="skill-instructions-input" value={instructions} onChange={(event) => setInstructions(event.target.value)} maxLength={SKILL_INSTRUCTIONS_MAX_LENGTH} placeholder={SKILL_INSTRUCTIONS_TEMPLATE} required rows={18} /><small className="skill-character-count">{instructions.length}/{SKILL_INSTRUCTIONS_MAX_LENGTH} characters</small></section><div className="dialog-actions"><button type="submit" disabled={busy || !name.trim() || !description.trim() || !instructions.trim()}>Create skill</button></div></form></article> : selected ? <article className="skill-editor"><header><div><p className="eyebrow">Skill</p><div className="skill-title-row"><h1>{selected.title}</h1><button type="button" className="skill-open-folder" aria-label={`Open ${selected.title} folder in Finder`} title="Open skill folder in Finder" onClick={() => void openSkillFolder(selected)}><FolderOpen size={17} /></button></div><p>{selected.description}</p></div>{selected.editable && <button className="secondary" onClick={() => void uninstall()}>Uninstall</button>}</header><section><h2>Skill details</h2><label>Description<input disabled={!selected.editable} value={description} onChange={(event) => setDescription(event.target.value)} maxLength={SKILL_DESCRIPTION_MAX_LENGTH} /></label><button onClick={() => void saveDescription()} disabled={busy || !selected.editable}>Save details</button></section><section><h2>Definition</h2><textarea disabled={!selected.editable} value={instructions} onChange={(event) => setInstructions(event.target.value)} rows={12} /><button onClick={() => void saveDefinition()} disabled={busy || !selected.editable}>Save definition</button></section><section><div className="skill-files-heading"><h2>Files</h2>{selected.editable && <button type="button" className="secondary" disabled={busy} onClick={() => void addFile()}>+ Add file</button>}</div><div className="skill-file-tabs">{selected.files.map((file) => <button type="button" className={filePath === file.path ? "active" : ""} key={file.path} onClick={() => void selectFile(file.path)}>{file.path}</button>)}</div><input aria-label="File path" disabled={!selected.editable} value={filePath} onChange={(event) => setFilePath(event.target.value)} /><textarea aria-label="File contents" disabled={!selected.editable} value={fileContent} onChange={(event) => setFileContent(event.target.value)} rows={12} /><div className="dialog-actions">{selected.editable && <button onClick={() => void saveFile()}>Save file</button>}{selected.editable && filePath !== "SKILL.md" && <button className="secondary" onClick={() => void deleteFile()}>Delete file</button>}</div></section><section><h2>Artifacts</h2><p>Artifacts are part of this skill's operating knowledge and are not independently curated as tools.</p>{selected.artifacts.length ? selected.artifacts.map((artifact) => <article className="artifact-card" key={artifact.artifact_id}><strong>{artifact.name}</strong><p>{artifact.description}</p><small>{artifact.project_id} · {artifact.entrypoint_path}</small><button type="button" className="secondary" onClick={() => void deleteArtifact(artifact)}>Delete artifact</button></article>) : <p>No artifacts are registered to this skill.</p>}{unassigned.length > 0 && <div className="unassigned-artifacts"><h3>Unassigned catalog artifacts</h3><p>These existing records need a skill and operating instructions.</p>{unassigned.map((artifact) => <article className="artifact-card" key={artifact.artifact_id}><strong>{artifact.name}</strong><p>{artifact.description}</p><small>{artifact.project_id} · {artifact.entrypoint_path}</small>{selected.editable && <><textarea aria-label={`Instructions for ${artifact.name}`} placeholder="How should this skill use the artifact?" value={artifactInstructions} onChange={(event) => setArtifactInstructions(event.target.value)} /><button disabled={!artifactInstructions.trim()} onClick={() => void attachArtifact(artifact)}>Add to this skill</button></>}<button type="button" className="secondary" onClick={() => void deleteArtifact(artifact)}>Delete artifact</button></article>)}</div>}</section></article> : <div className="projects-workspace-empty"><Sparkles size={36} /><h1>Choose a skill</h1><p>Select a skill to inspect its definition, package files, and associated artifacts.</p></div>}</section>
   </div>;
   async function selectFileForSkill(item: SkillWorkspaceRecord) { try { const result = await daemonRequest<{ content: string }>("read_skill_file", { actor_user_id: user, skill_id: item.id, path: "SKILL.md" }); setFilePath("SKILL.md"); setFileContent(result.content); } catch { /* selection still opens the skill definition */ } }
 }

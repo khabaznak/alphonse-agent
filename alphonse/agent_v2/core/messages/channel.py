@@ -47,17 +47,6 @@ class CommunicationChannel:
         if not user_value:
             raise ValueError("user_required")
         project_value = str(project_id or "").strip()
-        legacy_provenance = bool(
-            raw_prompt.startswith("/")
-            or integration_id != "tui"
-            or provider_message_id
-            or channel_target
-            or metadata
-            or self.conversation_store is not None
-        )
-        if not project_value and not legacy_provenance:
-            raise ValueError("project_id_required")
-
         merged_metadata = {
             **_command_metadata(raw_prompt),
             **dict(metadata or {}),

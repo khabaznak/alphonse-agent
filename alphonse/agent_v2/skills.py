@@ -17,7 +17,8 @@ import yaml
 SKILL_FILE = "SKILL.md"
 _SKILL_NAME = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 MAX_SKILL_NAME_LENGTH = 64
-MAX_SKILL_DESCRIPTION_LENGTH = 1024
+MAX_SKILL_DESCRIPTION_LENGTH = 512
+MAX_SKILL_INSTRUCTIONS_LENGTH = 12_000
 MAX_SKILL_FILE_BYTES = 256_000
 
 
@@ -164,6 +165,23 @@ class SkillStore:
         path.write_text(updated, encoding="utf-8")
         self._read_skill(Path(record.directory))
 
+    def remove_artifact_instructions(self, skill_id: str, artifact_id: str) -> None:
+        record = self._editable(skill_id)
+        path = Path(record.directory) / SKILL_FILE
+        current = path.read_text(encoding="utf-8")
+        marker = f"Artifact ID: `{artifact_id}`"
+        marker_index = current.find(marker)
+        if marker_index < 0:
+            return
+        heading_start = current.rfind("\n## Artifact:", 0, marker_index)
+        if heading_start < 0:
+            return
+        next_heading = current.find("\n## ", marker_index)
+        section_end = len(current) if next_heading < 0 else next_heading + 1
+        updated = (current[:heading_start].rstrip() + "\n\n" + current[section_end:].lstrip()).rstrip() + "\n"
+        path.write_text(updated, encoding="utf-8")
+        self._read_skill(Path(record.directory))
+
     def update_description(self, skill_id: str, description: str) -> SkillRecord:
         record = self._editable(skill_id)
         value = str(description or "").strip()
@@ -216,6 +234,8 @@ class SkillStore:
             raise ValueError("skill_description_invalid")
         if not skill_instructions:
             raise ValueError("skill_instructions_required")
+        if len(skill_instructions) > MAX_SKILL_INSTRUCTIONS_LENGTH:
+            raise ValueError("skill_instructions_too_long")
         if self.get(skill_name) is not None:
             raise ValueError("skill_already_installed")
         staging = Path(tempfile.mkdtemp(prefix=".skill-author-", dir=self.skills_dir))

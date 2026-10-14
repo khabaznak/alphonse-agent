@@ -392,16 +392,20 @@ class SQLiteQuestionStore:
             ).fetchall()
         return [_question_from_row(row) for row in rows]
 
-    def list_for_conversation(self, respondent_user_id: str, *, project_id: str) -> list[QuestionInterrupt]:
-        """Return the questions that belong in a project's durable conversation."""
+    def list_for_conversation(self, respondent_user_id: str, *, project_id: str | None = None) -> list[QuestionInterrupt]:
+        """Return questions that belong in the user's conversation, optionally narrowed by project."""
+        project_filter = " AND project_id = ?" if project_id is not None else ""
+        values: tuple[str, ...] = (str(respondent_user_id or "").strip(),)
+        if project_id is not None:
+            values += (str(project_id or "").strip(),)
         with self._connect() as conn:
             rows = conn.execute(
-                """
+                f"""
                 SELECT * FROM v2_questions
-                WHERE respondent_user_id = ? AND project_id = ?
+                WHERE respondent_user_id = ? {project_filter}
                 ORDER BY created_at ASC
                 """,
-                (str(respondent_user_id or "").strip(), str(project_id or "").strip()),
+                values,
             ).fetchall()
         return [_question_from_row(row) for row in rows]
 

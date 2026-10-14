@@ -1,4 +1,4 @@
-"""Bounded read-only recall from the current project's archived memory."""
+"""Bounded read-only recall from the user's conversation and authorized memory."""
 
 from __future__ import annotations
 
@@ -38,7 +38,7 @@ def execute_search_memory(arguments: dict[str, Any], *, context: ToolExecutionCo
 def build_search_memory_tool_definition() -> ToolDefinition:
     schema = {
         "type": "object",
-        "properties": {"query": {"type": "string", "description": "Words or phrase to find in closed sessions and legacy project memory."}},
+        "properties": {"query": {"type": "string", "description": "Words or phrase to find in the user's conversation history and archived memory."}},
         "required": ["query"],
         "additionalProperties": False,
     }
@@ -47,7 +47,10 @@ def build_search_memory_tool_definition() -> ToolDefinition:
             tool_id=SEARCH_MEMORY_TOOL_ID,
             name=SEARCH_MEMORY_TOOL_NAME,
             kind=ToolKind.NATIVE,
-            description="Search archived memory in the current project and return bounded cited excerpts.",
+            description=(
+                "Search the user's conversation history across projects and bounded archived memory in the "
+                "current task's authorized scope; return cited excerpts."
+            ),
             argument_schema=schema,
             capabilities=("memory", "search"),
             read_only=True,

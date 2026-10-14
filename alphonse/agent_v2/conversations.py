@@ -165,6 +165,48 @@ class SQLiteConversationStore:
             ).fetchall()
         return [_event(row) for row in rows]
 
+    def list_owner(self, *, owner_user_id: str, limit: int = 100) -> list[ConversationEvent]:
+        """Return the user's conversation across all project associations."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM v2_conversation_events WHERE owner_user_id=? ORDER BY sequence DESC LIMIT ?",
+                (str(owner_user_id or "").strip(), max(1, min(int(limit or 100), 500))),
+            ).fetchall()
+        return [_event(row) for row in reversed(rows)]
+
+    def mark_user_seen(self, *, owner_user_id: str, local_date: str = "", through_sequence: int | None = None, start_utc: str = "", end_utc: str = "") -> int:
+        owner = str(owner_user_id or "").strip()
+        day = str(local_date or "").strip()
+        with self._connect() as conn:
+            if through_sequence is None:
+                query = "SELECT COALESCE(MAX(sequence),0) AS latest FROM v2_conversation_events WHERE owner_user_id=?"
+                values: tuple[Any, ...] = (owner,)
+                if start_utc and end_utc:
+                    query += " AND created_at>=? AND created_at<?"
+                    values += (start_utc, end_utc)
+                row = conn.execute(query, values).fetchone()
+                through_sequence = int(row["latest"] or 0)
+            applied = max(0, int(through_sequence or 0))
+            conn.execute(
+                """INSERT INTO v2_desktop_user_cursors(owner_user_id,local_date,last_seen_sequence,updated_at) VALUES (?,?,?,?)
+                   ON CONFLICT(owner_user_id,local_date) DO UPDATE SET last_seen_sequence=MAX(last_seen_sequence,excluded.last_seen_sequence),updated_at=excluded.updated_at""",
+                (owner, day, applied, _now()),
+            )
+        return applied
+
+    def user_has_unseen_messages(self, *, owner_user_id: str, local_date: str = "", start_utc: str = "", end_utc: str = "") -> bool:
+        with self._connect() as conn:
+            interval = " AND e.created_at>=? AND e.created_at<?" if start_utc and end_utc else ""
+            values: tuple[Any, ...] = (str(owner_user_id or "").strip(), str(local_date or "").strip())
+            if interval:
+                values += (start_utc, end_utc)
+            row = conn.execute(
+                f"""SELECT 1 FROM v2_conversation_events e LEFT JOIN v2_desktop_user_cursors c ON c.owner_user_id=e.owner_user_id AND c.local_date=?
+                   WHERE e.owner_user_id=? AND e.sequence>COALESCE(c.last_seen_sequence,0){interval} LIMIT 1""",
+                (values[1], values[0], *values[2:]),
+            ).fetchone()
+        return row is not None
+
     def search(self, *, owner_user_id: str, query: str, limit: int = 8) -> list[ConversationEvent]:
         """Search an account's full event history using FTS5 BM25 when available."""
         owner = str(owner_user_id or "").strip()
@@ -342,6 +384,7 @@ class SQLiteConversationStore:
                 ) STRICT
                 """
             )
+            conn.execute("CREATE TABLE IF NOT EXISTS v2_desktop_user_cursors (owner_user_id TEXT NOT NULL,local_date TEXT NOT NULL DEFAULT '',last_seen_sequence INTEGER NOT NULL DEFAULT 0,updated_at TEXT NOT NULL,PRIMARY KEY(owner_user_id,local_date)) STRICT")
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS v2_conversation_imports (
@@ -408,7 +451,7 @@ def legacy_ledger_events(content: str, *, owner_user_id: str, project_id: str, l
         for assistant_index, match in enumerate(re.finditer(r"^#### Conversation\n- Alphonse: (.*?)(?=\n#### |\Z)", block, flags=re.MULTILINE | re.DOTALL)):
             if match.group(1).strip():
                 events.append({"id": f"legacy:{owner_user_id}:{project_id}:{index}:assistant:{assistant_index}", "role": "assistant", "content": match.group(1).strip(), "source": "telegram", "created_at": ""})
-    return events[-max(1, min(int(limit or 100), 500)):]
+    return events[-max(1, min(int(limit or 100), 10_000)):]
 
 
 class _Connection:

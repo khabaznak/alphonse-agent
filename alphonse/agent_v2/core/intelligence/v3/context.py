@@ -26,8 +26,7 @@ def prepare_context_curation(task: "TaskState", context: "CoreLoopContext") -> t
     """Return always-included context and bounded optional context candidates."""
     sections: list[str] = []
     active_projects = _visible_active_projects(task, context)
-    active_ids = {str(getattr(item, "project_id", "") or "").strip() for item in active_projects}
-    recent_text = _recent_conversation(task, context, active_ids)
+    recent_text = _recent_conversation(task, context)
     if recent_text:
         sections.append(recent_text)
     global_context = _prompt_file(context, "GlobalContext.md")
@@ -82,9 +81,7 @@ def selected_project_context(task: "TaskState", context: "CoreLoopContext") -> s
 
 
 def recent_conversation_for_curation(task: "TaskState", context: "CoreLoopContext") -> str:
-    active_projects = _visible_active_projects(task, context)
-    active_ids = {str(getattr(item, "project_id", "") or "").strip() for item in active_projects}
-    return _recent_conversation(task, context, active_ids)[:5000]
+    return _recent_conversation(task, context)[:5000]
 
 
 def skill_candidates_for_curation(context: "CoreLoopContext") -> list[dict[str, str]]:
@@ -104,6 +101,11 @@ def selected_skill_guidance(task: "TaskState", context: "CoreLoopContext", *, ma
     """Load selected skill instructions within a deterministic prompt budget."""
     selection = task.metadata.get("v3_skill_selection")
     selected_ids = selection.get("selected_skill_ids", []) if isinstance(selection, dict) else []
+    if isinstance(selection, dict):
+        selected_set = {str(item) for item in selected_ids}
+        primary_ids = [str(item) for item in selection.get("primary_skill_ids", []) if str(item) in selected_set]
+        primary_set = set(primary_ids)
+        selected_ids = primary_ids + [str(item) for item in selected_ids if str(item) not in primary_set]
     store = context.skill_store
     getter = getattr(store, "get", None) if store is not None else None
     if not callable(getter):
@@ -120,7 +122,8 @@ def selected_skill_guidance(task: "TaskState", context: "CoreLoopContext", *, ma
             continue
         block = (
             f"### {skill.name} (`{skill.skill_id}`)\n"
-            f"Description: {skill.description}\n\n{skill.instructions}"
+            f"Description: {skill.description}\n"
+            f"Skill package directory: {skill.directory}\n\n{skill.instructions}"
         )
         if used_chars + len(block) > max_chars:
             continue
@@ -185,7 +188,7 @@ def _visible_active_projects(task: "TaskState", context: "CoreLoopContext") -> l
         return []
 
 
-def _recent_conversation(task: "TaskState", context: "CoreLoopContext", active_project_ids: set[str]) -> str:
+def _recent_conversation(task: "TaskState", context: "CoreLoopContext") -> str:
     store = context.conversation_store
     recent = getattr(store, "list_recent", None)
     if not callable(recent) or not task.user:
@@ -199,8 +202,6 @@ def _recent_conversation(task: "TaskState", context: "CoreLoopContext", active_p
         role = str(getattr(event, "role", "")).strip().capitalize()
         content = str(getattr(event, "content", "")).strip()
         project = str(getattr(event, "project_id", "")).strip()
-        if project and project not in active_project_ids:
-            continue
         if content:
             label = f"{role} [{project}]" if project else role
             rows.append(f"- {label}: {content[:600]}")

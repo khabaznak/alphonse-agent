@@ -96,17 +96,17 @@ def test_plain_markdown_record_does_not_satisfy_ocr_prerequisite() -> None:
     assert result.tools == ()
 
 
-def test_memory_recall_requires_current_project() -> None:
+def test_memory_recall_is_available_for_unassociated_conversation() -> None:
     subgoal = PhaseSubgoal(
         "recall", "Recall treatment", "memory_matches",
         allowed_capabilities=(Capability.MEMORY_RECALL.value,),
     )
     tool = _descriptor("native.search_memory", Capability.MEMORY_RECALL)
 
-    hidden = ToolRevealPolicy().reveal(TaskState(), _state(subgoal), subgoal, (tool,))
+    unassociated = ToolRevealPolicy().reveal(TaskState(), _state(subgoal), subgoal, (tool,))
     visible = ToolRevealPolicy().reveal(TaskState(project_id="health"), _state(subgoal), subgoal, (tool,))
 
-    assert hidden.tools == ()
+    assert [item.tool_id for item in unassociated.tools] == ["native.search_memory"]
     assert [item.tool_id for item in visible.tools] == ["native.search_memory"]
 
 

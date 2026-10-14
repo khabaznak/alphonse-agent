@@ -13,6 +13,7 @@ from typing import Any, Literal
 from uuid import uuid4
 
 from alphonse.agent_v2.database import connect_database, default_database_path
+from alphonse.agent_v2.workspace import copy_tree_missing
 
 ProjectVisibility = Literal["private", "shared"]
 ProjectStatus = Literal["active", "paused", "completed", "archived"]
@@ -221,6 +222,42 @@ class ProjectStore:
                     (user_value, user_value),
                 ).fetchall()
         return [_project_from_row(row) for row in rows if _project_from_row(row) is not None]
+
+    def migrate_managed_roots(self, previous_roots: dict[str, str | Path], workspace_root: str | Path) -> int:
+        """Copy managed project trees into Workspace and update their registered roots.
+
+        Imported projects outside the previous managed roots remain at their
+        original paths. Sources are retained so an interrupted migration can
+        be retried without losing the prior copy.
+        """
+        workspace = Path(workspace_root).expanduser().resolve()
+        with self._connect() as conn:
+            rows = conn.execute("SELECT * FROM v2_projects ORDER BY project_id").fetchall()
+            migrated = 0
+            for row in rows:
+                project = _project_from_row(row)
+                if project is None:
+                    continue
+                previous = previous_roots.get(project.owner_user_id)
+                if previous is None:
+                    continue
+                source = Path(project.root_path).expanduser().resolve()
+                previous_path = Path(previous).expanduser().resolve()
+                try:
+                    source.relative_to(previous_path)
+                except ValueError:
+                    continue
+                target = workspace / "projects" / project.owner_user_id / project.project_id
+                if source != target.resolve():
+                    copy_tree_missing(source, target)
+                target.mkdir(parents=True, exist_ok=True)
+                self._ensure_project_config(target, project.owner_user_id, project.description)
+                conn.execute(
+                    "UPDATE v2_projects SET root_path=?,updated_at=? WHERE project_id=?",
+                    (str(target.resolve()), _now_iso(), project.project_id),
+                )
+                migrated += 1
+        return migrated
 
     def list_manageable_projects(self, user_id: str, *, requester_is_admin: bool = False, status: ProjectStatus | None = None) -> list[ProjectRecord]:
         filters = ["owner_user_id = ?"]

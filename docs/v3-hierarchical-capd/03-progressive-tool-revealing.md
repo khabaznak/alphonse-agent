@@ -78,7 +78,7 @@ Tool reveal must enforce prerequisites before model choice:
   discovery or shell inspection is not OCR evidence. If analysis fails, report
   the tool failure; do not characterize the image as illegible without an actual
   extraction result.
-- Memory search is limited to the authorized current project.
+- Memory search covers the requester's conversation history across projects and bounded archived memory in the task's authorized scope. Project memory remains scoped to the authorized project.
 - Mutating native operations require the matching side-effect authorization. Bash is
   a trusted local-shell capability for project-file reads and writes; its work is
   described to Jev and System Two and verified from command output/read-back.

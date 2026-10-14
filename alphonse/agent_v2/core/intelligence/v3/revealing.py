@@ -60,7 +60,7 @@ class ToolRevealPolicy:
         Capability.PROJECT_ARTIFACT_QUERY.value: "Query a registered project artifact through its native client.",
         Capability.ARTIFACT_REGISTRATION.value: "Attach a project-local executable and its operating instructions to an installed skill.",
         Capability.SKILL_MANAGEMENT.value: "Install a newly authored reusable SKILL.md instruction package after requester approval.",
-        Capability.MEMORY_RECALL.value: "Search bounded archived memory for the current project.",
+        Capability.MEMORY_RECALL.value: "Search the user's conversation history and bounded memory for the task's authorized scope.",
         Capability.ATTACHMENT_ANALYSIS.value: "Analyze an image attached to the current task.",
         Capability.DOCUMENT_EXTRACTION.value: "Extract information from a discovered document.",
         Capability.EXACT_TEXT_MUTATION.value: "Legacy exact text mutation capability; use local_shell for new plans.",
@@ -157,8 +157,6 @@ def _prerequisite_failure(
     capability_set = set(capabilities)
     if Capability.ATTACHMENT_ANALYSIS.value in capability_set and not _has_analyzable_attachment(task, state):
         return "attachment_required"
-    if Capability.MEMORY_RECALL.value in capability_set and not str(task.project_id or "").strip():
-        return "authorized_project_required"
     if Capability.EXACT_TEXT_MUTATION.value in capability_set:
         if not state.phase.mutation_scope.allowed_paths:
             return "mutation_scope_required"

@@ -19,7 +19,7 @@ class DailyLedgerProjector:
         *,
         conversation_store: Any,
         users_root: Callable[[], str | Path],
-        timezone_provider: Callable[[], str] | None = None,
+        timezone_provider: Callable[..., str] | None = None,
         summarizer: Callable[[str], str] | None = None,
     ) -> None:
         self._conversations = conversation_store
@@ -29,13 +29,17 @@ class DailyLedgerProjector:
 
     def refresh_for_event(self, event: Any) -> Path | None:
         """Refresh today's file and ensure the previous day's summary exists."""
-        try:
-            zone = ZoneInfo(str(self._timezone_provider() or "UTC"))
-        except Exception:
-            zone = ZoneInfo("UTC")
         owner = str(getattr(event, "owner_user_id", "") or "").strip()
         if not owner:
             return None
+        try:
+            try:
+                timezone_name = self._timezone_provider(owner)
+            except TypeError:
+                timezone_name = self._timezone_provider()
+            zone = ZoneInfo(str(timezone_name or "UTC"))
+        except Exception:
+            zone = ZoneInfo("UTC")
         try:
             instant = datetime.fromisoformat(str(event.created_at).replace("Z", "+00:00"))
             if instant.tzinfo is None:

@@ -116,13 +116,16 @@ def test_daemon_settings_persist_automation_preferred_channel_copy(tmp_path) -> 
         {
             "method": "save_settings",
             "params": {
-                "users_root": str(tmp_path / "users"),
+                "actor_user_id": users.admin_user().user_id,
+                "workspace_root": str(tmp_path / "workspace"),
                 "mirror_automation_messages_to_preferred_channel": True,
             },
         }
     )
 
     assert saved["mirror_automation_messages_to_preferred_channel"] is True
+    assert saved["workspace_root"] == str((tmp_path / "workspace").resolve())
+    assert saved["users_root"] == str((tmp_path / "workspace" / "users").resolve())
     assert daemon.ipc._dispatch({"method": "settings"})["mirror_automation_messages_to_preferred_channel"] is True
 
 
@@ -221,7 +224,7 @@ def test_daemon_ipc_reads_and_saves_agent_configuration(tmp_path) -> None:
     assert saved["content"] == "Updated philosophy"
 
 
-def test_daemon_ipc_project_session_enriches_queued_message(tmp_path) -> None:
+def test_daemon_ipc_project_session_does_not_route_ordinary_message(tmp_path) -> None:
     runtime = build_runtime_host(
         schedule_store=ScheduledTaskStore(":memory:"),
         project_session_store=SQLiteProjectSessionStore(":memory:"),
@@ -242,8 +245,8 @@ def test_daemon_ipc_project_session_enriches_queued_message(tmp_path) -> None:
         }
     )
 
-    assert queued["project_id"] == project.project_id
-    assert runtime.queue.peek().message.project_id == project.project_id
+    assert queued["project_id"] == ""
+    assert runtime.queue.peek().message.project_id == ""
 
 
 def test_daemon_ipc_memory_sessions_reports_desktop_active_session(tmp_path) -> None:
@@ -404,7 +407,7 @@ def test_event_journals_recover_from_oversized_legacy_cursors() -> None:
     assert next_ui_sequence == 1
 
 
-def test_desktop_conversation_history_is_project_scoped() -> None:
+def test_desktop_conversation_history_spans_all_projects() -> None:
     runtime = build_runtime_host(inference=_router(), schedule_store=ScheduledTaskStore(":memory:"))
     daemon = V2Daemon(runtime)
     first = runtime.conversation_store.record(
@@ -415,7 +418,7 @@ def test_desktop_conversation_history_is_project_scoped() -> None:
         source="desktop",
         source_message_id="outbound:first",
     )
-    runtime.conversation_store.record(
+    second = runtime.conversation_store.record(
         owner_user_id="alex",
         project_id="project-two",
         role="assistant",
@@ -437,7 +440,16 @@ def test_desktop_conversation_history_is_project_scoped() -> None:
             "created_at": first.created_at,
             "project_id": "project-one",
             "sequence": first.sequence,
-        }
+        },
+        {
+            "id": "second",
+            "role": "assistant",
+            "content": "Project two response.",
+            "source": "desktop",
+            "created_at": second.created_at,
+            "project_id": "project-two",
+            "sequence": second.sequence,
+        },
     ]
 
 
@@ -791,7 +803,7 @@ def test_desktop_a2ui_question_surface_is_negotiated_and_actions_resume_only_the
     assert any(event["event"].get("name") == "a2ui.envelope" and "deleteSurface" in event["event"]["value"] for event in after["ui_events"])
 
 
-def test_desktop_questions_and_attention_are_project_scoped() -> None:
+def test_desktop_questions_and_attention_span_project_contexts() -> None:
     store = SQLiteQuestionStore(":memory:")
     runtime = build_runtime_host(inference=_router(), schedule_store=ScheduledTaskStore(":memory:"), question_store=store)
     daemon = V2Daemon(runtime)
@@ -814,9 +826,9 @@ def test_desktop_questions_and_attention_are_project_scoped() -> None:
         },
     })
 
-    assert [item["question_id"] for item in poll["questions"]] == [alpha.question_id]
+    assert [item["question_id"] for item in poll["questions"]] == [alpha.question_id, beta.question_id]
     assert alpha.question_id in str(poll["ui_events"])
-    assert beta.question_id not in str(poll["ui_events"])
+    assert beta.question_id in str(poll["ui_events"])
     assert "project_attention" not in poll
 
     result = daemon.answer_question(user="alex", question_id=alpha.question_id, text="Alpha answer")
@@ -825,6 +837,7 @@ def test_desktop_questions_and_attention_are_project_scoped() -> None:
     history = daemon.desktop_conversation_history(user="alex", project_id="alpha")
     assert [(item["role"], item["content"]) for item in history] == [
         ("assistant", "Alpha question?"),
+        ("assistant", "Beta question?"),
         ("user", "Alpha answer"),
     ]
     assert history[0]["sequence"] < history[1]["sequence"]

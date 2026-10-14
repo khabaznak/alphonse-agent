@@ -8,13 +8,14 @@ import fcntl
 import logging
 import mimetypes
 import os
+import re
 import sqlite3
 import shutil
 import threading
 import time
 import traceback
 from dataclasses import dataclass, replace
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 from pathlib import Path
 from typing import Any
@@ -81,6 +82,7 @@ from alphonse.agent_v2.artifacts import SQLiteArtifactStore
 from alphonse.agent_v2.conversations import SQLiteConversationStore, legacy_ledger_events
 from alphonse.agent_v2.automations import EventAutomationStore
 from alphonse.agent_v2.storage_migration import migrate_legacy_databases
+from alphonse.agent_v2.workspace import copy_tree_missing
 from alphonse.agent_v2.retention import prune_operational_data
 from alphonse.agent_v2.system_one import SQLiteSystemOneSettingsStore
 from alphonse.agent_v2.system_one import validate_and_save_system_one_settings
@@ -334,12 +336,18 @@ class V2Daemon:
     def onboarding_status(self) -> dict[str, object]:
         return self.runtime.user_store.status()
 
-    def onboard(self, *, display_name: str, users_root: str, import_v1: bool = False) -> dict[str, object]:
+    def onboard(self, *, display_name: str, workspace_root: str = "", users_root: str = "", import_v1: bool = False) -> dict[str, object]:
         store = self.runtime.user_store
         # Kept as an ignored IPC parameter so an already-installed desktop client
         # can complete onboarding after the v1 code has been removed.
         del import_v1
-        admin = store.onboard(display_name=display_name, users_root=users_root)
+        if str(workspace_root or "").strip():
+            store.set_workspace_root(workspace_root)
+            admin = store.onboard(display_name=display_name)
+        else:
+            # Compatibility for existing clients. New Desktop setup always
+            # asks for the canonical Workspace directory.
+            admin = store.onboard(display_name=display_name, users_root=users_root)
         imported = {}
         self.runtime.user = admin.user_id
         self._ensure_home_projects()
@@ -351,7 +359,7 @@ class V2Daemon:
         self._migrate_blank_project_records()
         self.runtime.asset_store.migrate_to_user_directories()
         refresh_runtime_identity_resolver(self.runtime)
-        return {"admin_user": admin.to_dict(), "migration": {**imported, **migrated}, "users_root": str(store.users_root())}
+        return {"admin_user": admin.to_dict(), "migration": {**imported, **migrated}, "users_root": str(store.users_root()), "workspace_root": str(store.workspace_root() or "")}
 
     def _migrate_legacy_local(self, admin_user_id: str) -> dict[str, int]:
         """Idempotently claim records created before canonical-user onboarding."""
@@ -373,7 +381,9 @@ class V2Daemon:
 
     def current_user(self) -> dict[str, object]:
         admin = self.runtime.user_store.admin_user()
-        return {"user": admin.to_dict() if admin else None, "onboarded": admin is not None}
+        workspace = self.runtime.user_store.workspace_root()
+        return {"user": admin.to_dict() if admin else None, "onboarded": admin is not None,
+                "workspace_root": str(workspace or ""), "workspace_configured": workspace is not None}
 
     def _admin_user_id(self, requested: str = "") -> str:
         admin = self.runtime.user_store.admin_user()
@@ -562,43 +572,41 @@ class V2Daemon:
             project = self.runtime.project_store.ensure_home_project(user.user_id, root_path=str(root))
             migrate = getattr(self.runtime.core.memory, "migrate_legacy_project_ledgers", None)
             if callable(migrate):
-                migrate(project.project_id, include_generic=True)
+                migrate(project.project_id)
+            if not self.runtime.conversation_store.legacy_import_completed(owner_user_id=user.user_id, project_id=""):
+                legacy = self.runtime.core.memory.latest_content(user_id=user.user_id, project_id="")
+                self.runtime.conversation_store.import_legacy_events(
+                    owner_user_id=user.user_id,
+                    project_id="",
+                    events=legacy_ledger_events(legacy, owner_user_id=user.user_id, project_id="", limit=10_000),
+                )
         migrate = getattr(self.runtime.core.memory, "migrate_legacy_project_ledgers", None)
         if callable(migrate):
             for project in self.runtime.project_store.list_manageable_projects("", requester_is_admin=True):
                 migrate(project.project_id)
+                if not self.runtime.conversation_store.legacy_import_completed(owner_user_id=project.owner_user_id, project_id=project.project_id):
+                    legacy = self.runtime.core.memory.latest_content(user_id=project.owner_user_id, project_id=project.project_id)
+                    if project.is_system_home:
+                        # Older releases copied the generic user ledger into Home's
+                        # project ledger. It is imported separately above with no project.
+                        marker = re.search(r"(?ms)^## Migrated legacy Home ledger:.*\Z", legacy)
+                        if marker:
+                            legacy = legacy[:marker.start()]
+                    self.runtime.conversation_store.import_legacy_events(
+                        owner_user_id=project.owner_user_id,
+                        project_id=project.project_id,
+                        events=legacy_ledger_events(legacy, owner_user_id=project.owner_user_id, project_id=project.project_id, limit=10_000),
+                    )
 
     def _migrate_blank_project_records(self) -> None:
-        """Assign legacy unscoped records to their known owner's Home project."""
+        """Preserve optional project provenance on unscoped records."""
         path = str(getattr(self.runtime.queue, "db_path", ":memory:"))
         if path == ":memory:":
             return
-        homes = {user.user_id: self.runtime.project_store.home_project(user.user_id) for user in self.runtime.user_store.list_users()}
-        ids = {user: project.project_id for user, project in homes.items() if project is not None}
-        if not ids:
-            return
         with connect_database(path) as conn:
             tables = {str(row[0]) for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
-            def update(table: str, owner_column: str) -> None:
-                if table not in tables:
-                    return
-                for owner, project_id in ids.items():
-                    conn.execute(
-                        f"UPDATE {table} SET project_id=? WHERE (project_id='' OR project_id IS NULL) AND {owner_column}=?",
-                        (project_id, owner),
-                    )
-            update("v2_inbound_messages", "user_id")
-            update("v2_conversation_events", "owner_user_id")
-            update("v2_scheduled_tasks", "owner_user_id")
-            update("v2_automations", "owner_user_id")
-            update("v2_task_checkpoints", "owner_id")
-            update("v2_outbox", "audience_user_id")
             if "v2_project_sessions" in tables:
-                for owner, project_id in ids.items():
-                    conn.execute(
-                        "UPDATE v2_project_sessions SET active_project_id=?, project_name='Home' WHERE active_project_id='' AND alphonse_user_id=?",
-                        (project_id, owner),
-                    )
+                conn.execute("DELETE FROM v2_project_sessions WHERE active_project_id='' OR active_project_id IS NULL")
             if "v2_scheduled_task_executions" in tables:
                 conn.execute("UPDATE v2_scheduled_task_executions SET project_id=(SELECT project_id FROM v2_scheduled_tasks t WHERE t.scheduled_task_id=v2_scheduled_task_executions.scheduled_task_id) WHERE project_id='' OR project_id IS NULL")
             if "v2_automation_executions" in tables:
@@ -611,19 +619,6 @@ class V2Daemon:
                     "UPDATE v2_inbound_messages SET metadata_json=json_set(COALESCE(metadata_json, '{}'), '$.routing_disposition', 'pdca_task') "
                     "WHERE json_extract(COALESCE(metadata_json, '{}'), '$.routing_disposition') IS NULL"
                 )
-            unresolved: dict[str, int] = {}
-            for table in (
-                "v2_inbound_messages", "v2_conversation_events", "v2_scheduled_tasks",
-                "v2_automations", "v2_task_checkpoints", "v2_outbox", "v2_questions",
-            ):
-                if table in tables:
-                    count = conn.execute(
-                        f"SELECT COUNT(*) FROM {table} WHERE project_id='' OR project_id IS NULL"
-                    ).fetchone()[0]
-                    if count:
-                        unresolved[table] = int(count)
-            if unresolved:
-                logger.warning("project provenance migration left rows unresolved: %s", unresolved)
 
     def reject_access_request(self, *, request_id: str) -> dict[str, object]:
         return self.runtime.user_store.reject_access_request(request_id).to_dict()
@@ -634,31 +629,58 @@ class V2Daemon:
     def save_settings(
         self,
         *,
-        users_root: str,
+        actor_user_id: str,
+        workspace_root: str,
         timezone_name: str = "",
         mirror_automation_messages_to_preferred_channel: bool | None = None,
     ) -> dict[str, object]:
+        self._require_admin(actor_user_id)
+        root = Path(str(workspace_root or "").strip()).expanduser().resolve()
+        if not str(workspace_root or "").strip():
+            raise ValueError("workspace_root_required")
+        root.mkdir(parents=True, exist_ok=True)
+        user_store = self.runtime.user_store
+        previous_project_roots = {
+            user.user_id: user_store.managed_project_root(user.user_id)
+            for user in user_store.list_users()
+        }
+        old_skills_root = Path(self.runtime.skill_store.skills_dir).expanduser().resolve()
+        old_agent_config_root = Path(self.runtime.agent_config_store.config_dir).expanduser().resolve()
+        new_skills_root = root / "skills"
+        new_agent_config_root = root / "agent-config"
+        if old_skills_root != new_skills_root.resolve():
+            copy_tree_missing(old_skills_root, new_skills_root)
+        if old_agent_config_root != new_agent_config_root.resolve():
+            copy_tree_missing(old_agent_config_root, new_agent_config_root)
+        migrated_projects = self.runtime.project_store.migrate_managed_roots(previous_project_roots, root)
+        saved_workspace_root = user_store.set_workspace_root(root)
+        self.runtime.skill_store.skills_dir = new_skills_root
+        self.runtime.agent_config_store.config_dir = new_agent_config_root
+        self.runtime.agent_config_store._ensure_seeded()
         timezone_value = self.runtime.user_store.set_timezone(timezone_name) if str(timezone_name).strip() else self.runtime.user_store.timezone()
         if mirror_automation_messages_to_preferred_channel is not None:
             self.runtime.user_store.set_mirror_automation_messages_to_preferred_channel(
                 mirror_automation_messages_to_preferred_channel
             )
-        saved_users_root = self.runtime.user_store.set_users_root(users_root)
         self.runtime.asset_store.migrate_to_user_directories()
         return {
-            "users_root": saved_users_root,
+            "workspace_root": saved_workspace_root,
+            "users_root": str(self.runtime.user_store.users_root()),
+            "migrated_projects": migrated_projects,
             "timezone": timezone_value,
             "mirror_automation_messages_to_preferred_channel": self.runtime.user_store.mirror_automation_messages_to_preferred_channel(),
-            "warning_repository_path": "/Alphonse/" in str(users_root),
+            "warning_repository_path": "/Alphonse/" in str(root),
         }
 
     def timezone_settings(self, *, actor_user_id: str) -> dict[str, str]:
         self._require_admin(actor_user_id)
-        return {"timezone": self.runtime.user_store.timezone()}
+        actor = self._admin_user_id(actor_user_id)
+        return {"timezone": self.runtime.user_store.timezone(actor)}
 
     def save_timezone_settings(self, *, actor_user_id: str, timezone_name: str) -> dict[str, str]:
         self._require_admin(actor_user_id)
-        return {"timezone": self.runtime.user_store.set_timezone(timezone_name)}
+        actor = self._admin_user_id(actor_user_id)
+        return {"timezone": self.runtime.user_store.set_timezone(timezone_name, user_id=actor)}
 
     def memory_settings(self, *, actor_user_id: str) -> dict[str, object]:
         self._require_admin(actor_user_id)
@@ -716,7 +738,12 @@ class V2Daemon:
         return saved.to_dict()
 
     def delete_artifact(self, *, actor_user_id: str, artifact_id: str) -> dict[str, Any]:
-        self._require_artifact_manager(actor_user_id, self.runtime.artifact_store.get(artifact_id))
+        record = self.runtime.artifact_store.get(artifact_id)
+        self._require_artifact_manager(actor_user_id, record)
+        if record and record.skill_id:
+            skill = self.runtime.skill_store.get(record.skill_id)
+            if skill and Path(skill.directory).resolve().is_relative_to(self.runtime.skill_store.skills_dir.resolve()):
+                self.runtime.skill_store.remove_artifact_instructions(skill.skill_id, record.artifact_id)
         self.runtime.artifact_store.delete(artifact_id)
         refresh_runtime_artifacts(self.runtime)
         return {"deleted": artifact_id}
@@ -984,6 +1011,7 @@ class V2Daemon:
         client_id: str,
         user: str,
         project_id: str = "",
+        local_date: str = "",
         after_sequence: int = 0,
         after_ui_sequence: int = 0,
         daemon_id: str = "",
@@ -992,7 +1020,12 @@ class V2Daemon:
     ) -> dict[str, Any]:
         """Collect Desktop activity and atomically lease its pending messages."""
         normalized_user = self._admin_user_id(user)
-        normalized_project = str(project_id or "").strip()
+        # Desktop polling is user scoped. Project IDs remain on tasks and events
+        # but never constrain the main conversation or its pending surfaces.
+        normalized_project = ""
+        zone = ZoneInfo(self.runtime.user_store.timezone(normalized_user))
+        day = _conversation_day(local_date, zone)
+        day_start, day_end = _conversation_day_bounds(day, zone)
         normalized_client = str(client_id or "desktop").strip() or "desktop"
         client_daemon_id = str(daemon_id or "").strip()
         daemon_changed = bool(client_daemon_id and client_daemon_id != self.daemon_id)
@@ -1024,7 +1057,7 @@ class V2Daemon:
         questions = []
         for question in self.runtime.question_store.list_pending_for_respondent(
             normalized_user,
-            project_id=normalized_project,
+            project_id=None,
         ):
             event = self._record_question_conversation_event(question)
             questions.append({
@@ -1065,10 +1098,7 @@ class V2Daemon:
             "ui_events": ui_events,
             "next_ui_sequence": next_ui_sequence,
             "server_capabilities": self._a2ui.server_capabilities(),
-            "active_project_has_unseen_messages": self.runtime.conversation_store.project_has_unseen_messages(
-                owner_user_id=normalized_user,
-                project_id=normalized_project,
-            ) if normalized_project else False,
+            "conversation_has_unseen_messages": self.runtime.conversation_store.user_has_unseen_messages(owner_user_id=normalized_user, local_date=day.isoformat(), start_utc=day_start.isoformat(), end_utc=day_end.isoformat()),
             "status": {"active_work": self.active_work(), "activity": self.activity_status(), "queue": self._inbound_queue_status()},
         }
 
@@ -1083,36 +1113,28 @@ class V2Daemon:
             self._desktop_progress_closures.setdefault(key, set()).add(str(delivery.task_id))
         return acknowledged
 
-    def desktop_conversation_history(self, *, user: str, project_id: str = "", limit: int = 100) -> list[dict[str, Any]]:
+    def desktop_conversation_history(self, *, user: str, project_id: str = "", local_date: str = "", limit: int = 100) -> list[dict[str, Any]]:
         normalized_user = self._admin_user_id(user)
-        normalized_project = str(project_id or "").strip()
+        # project_id remains accepted for old clients, but Desktop history is owner scoped.
+        zone = ZoneInfo(self.runtime.user_store.timezone(normalized_user))
+        day = _conversation_day(local_date, zone)
+        start, end = _conversation_day_bounds(day, zone)
+        legacy_project = str(project_id or "").strip()
+        if legacy_project and not self.runtime.conversation_store.legacy_import_completed(owner_user_id=normalized_user, project_id=legacy_project):
+            project = self.runtime.project_store.get_project(legacy_project, requester_user_id=normalized_user, requester_is_admin=self.runtime.user_store.is_admin(normalized_user))
+            if project is not None:
+                legacy = self.runtime.core.memory.latest_content(user_id=normalized_user, project_id=legacy_project)
+                self.runtime.conversation_store.import_legacy_events(
+                    owner_user_id=normalized_user,
+                    project_id=legacy_project,
+                    events=legacy_ledger_events(legacy, owner_user_id=normalized_user, project_id=legacy_project, limit=10_000),
+                )
         for question in self.runtime.question_store.list_for_conversation(
             normalized_user,
-            project_id=normalized_project,
+            project_id=None,
         ):
             self._record_question_conversation_event(question)
-        timeline = self.runtime.conversation_store.list(owner_user_id=normalized_user, project_id=normalized_project, limit=limit)
-        if not timeline and not self.runtime.conversation_store.legacy_import_completed(
-            owner_user_id=normalized_user,
-            project_id=normalized_project,
-        ):
-            legacy = self.runtime.core.memory.latest_content(user_id=normalized_user, project_id=normalized_project)
-            recovered = legacy_ledger_events(
-                legacy,
-                owner_user_id=normalized_user,
-                project_id=normalized_project,
-                limit=limit,
-            )
-            self.runtime.conversation_store.import_legacy_events(
-                owner_user_id=normalized_user,
-                project_id=normalized_project,
-                events=recovered,
-            )
-            timeline = self.runtime.conversation_store.list(
-                owner_user_id=normalized_user,
-                project_id=normalized_project,
-                limit=limit,
-            )
+        timeline = self.runtime.conversation_store.list_between(owner_user_id=normalized_user, start_utc=start.isoformat(), end_utc=end.isoformat())
         return [
             {
                 "id": _conversation_message_id(event.source_message_id, event.event_id),
@@ -1126,15 +1148,13 @@ class V2Daemon:
             for event in timeline
         ]
 
-    def mark_desktop_project_seen(self, *, user: str, project_id: str, through_sequence: int | None = None) -> dict[str, Any]:
+    def mark_desktop_project_seen(self, *, user: str, project_id: str = "", local_date: str = "", through_sequence: int | None = None) -> dict[str, Any]:
         normalized_user = self._admin_user_id(user)
-        normalized_project = str(project_id or "").strip()
-        sequence = self.runtime.conversation_store.mark_project_seen(
-            owner_user_id=normalized_user,
-            project_id=normalized_project,
-            through_sequence=through_sequence,
-        )
-        return {"project_id": normalized_project, "seen_through_sequence": sequence}
+        zone = ZoneInfo(self.runtime.user_store.timezone(normalized_user))
+        day = _conversation_day(local_date, zone)
+        start, end = _conversation_day_bounds(day, zone)
+        sequence = self.runtime.conversation_store.mark_user_seen(owner_user_id=normalized_user, local_date=day.isoformat(), through_sequence=through_sequence, start_utc=start.isoformat(), end_utc=end.isoformat())
+        return {"local_date": day.isoformat(), "seen_through_sequence": sequence}
 
     def list_projects(self, *, user: str) -> list[dict[str, str]]:
         normalized = self._admin_user_id(user)
@@ -1570,7 +1590,7 @@ class V2Daemon:
             try:
                 parsed = datetime.fromisoformat(raw)
                 if parsed.tzinfo is None:
-                    payload = {**payload, "datetime": _local_datetime_to_utc(parsed, timezone_name=self.runtime.user_store.timezone())}
+                    payload = {**payload, "datetime": _local_datetime_to_utc(parsed, timezone_name=self.runtime.user_store.timezone(normalized_user))}
             except (ValueError, TypeError):
                 pass
         result = self.runtime.question_store.route_answer(
@@ -1707,7 +1727,7 @@ class V2Daemon:
                 local = datetime.fromisoformat(raw)
                 if local.tzinfo is not None:
                     raise ValueError
-                converted = _local_datetime_to_utc(local, timezone_name=self.runtime.user_store.timezone())
+                converted = _local_datetime_to_utc(local, timezone_name=self.runtime.user_store.timezone(str(question.respondent_user_id or "")))
             except (ValueError, TypeError):
                 raise ValueError("a2ui_datetime_invalid") from None
             if source != "submit":
@@ -1731,7 +1751,7 @@ class V2Daemon:
                 continue
             payload = event.get("value") if isinstance(event.get("value"), dict) else {}
             task = payload.get("scheduled_task") if isinstance(payload.get("scheduled_task"), dict) else {}
-            if str(task.get("project_id") or "").strip() != project_id:
+            if project_id and str(task.get("project_id") or "").strip() != project_id:
                 continue
             try:
                 rendered.extend({"event": _a2ui_custom(envelope)} for envelope in self._a2ui.scheduled_task_created(task, project_name=str(payload.get("project_name") or "")))
@@ -1872,7 +1892,7 @@ class V2Daemon:
                 continue
             task_id = str(event.get("task_id") or "").strip()
             progress = event.get("progress") if isinstance(event.get("progress"), dict) else {}
-            if not task_id or not progress or str(progress.get("project_id") or "").strip() != project_id:
+            if not task_id or not progress or (project_id and str(progress.get("project_id") or "").strip() != project_id):
                 continue
             rendered.extend({"event": _a2ui_custom(envelope)} for envelope in self._a2ui.task_progress(task_id, progress))
             known.add(task_id)
@@ -1923,14 +1943,14 @@ class V2Daemon:
         """
         key = (client_id, user, project_id)
         known = self._desktop_surfaces.setdefault(key, set())
-        pending = self.runtime.question_store.list_pending_for_respondent(user, project_id=project_id)
+        pending = self.runtime.question_store.list_pending_for_respondent(user, project_id=project_id or None)
         expected = {surface_id_for_question(question.question_id): question for question in pending}
         events: list[dict[str, Any]] = []
         for surface_id in sorted(known - set(expected)):
             events.append({"event": _a2ui_custom(self._a2ui.question_closed(question_id_from_surface(surface_id)))})
         for surface_id, question in expected.items():
             if surface_id not in known:
-                events.extend({"event": _a2ui_custom(message)} for message in self._a2ui.question_opened(question, timezone=self.runtime.user_store.timezone()))
+                events.extend({"event": _a2ui_custom(message)} for message in self._a2ui.question_opened(question, timezone=self.runtime.user_store.timezone(user)))
         self._desktop_surfaces[key] = set(expected)
         return events
 
@@ -2366,6 +2386,19 @@ def _without_sequence(event: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in event.items() if key != "sequence"}
 
 
+def _conversation_day(value: str, zone: ZoneInfo) -> date:
+    try:
+        return datetime.strptime(str(value or "").strip(), "%Y-%m-%d").date() if str(value or "").strip() else datetime.now(zone).date()
+    except ValueError as exc:
+        raise ValueError("invalid_conversation_day") from exc
+
+
+def _conversation_day_bounds(day: date, zone: ZoneInfo) -> tuple[datetime, datetime]:
+    start = datetime.combine(day, datetime.min.time(), tzinfo=zone).astimezone(timezone.utc)
+    end = datetime.combine(day + timedelta(days=1), datetime.min.time(), tzinfo=zone).astimezone(timezone.utc)
+    return start, end
+
+
 def _conversation_message_id(source_message_id: str, fallback_event_id: str) -> str:
     value = str(source_message_id or "").strip()
     for prefix in ("inbound:", "outbound:"):
@@ -2586,7 +2619,7 @@ def main() -> None:
                 outbox=SQLiteOutboundStore.default(),
                 integration_store=SQLiteIntegrationStore.default(),
                 inference_settings_store=SQLiteInferenceSettingsStore.default(),
-                agent_config_store=AgentConfigStore.default(),
+                agent_config_store=AgentConfigStore(user_store.agent_config_root()),
                 project_session_store=SQLiteProjectSessionStore.default(),
                 memory_session_store=SQLiteMemorySessionStore.default(),
                 communication_thread_store=SQLiteCommunicationThreadStore.default(),

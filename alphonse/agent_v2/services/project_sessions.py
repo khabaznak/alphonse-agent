@@ -258,28 +258,26 @@ class ProjectInboundRouter:
                     )
                     return InboundRouteResult(queued=queued, project_id=resumed.project_id, disposition="correlated_response")
                 return InboundRouteResult(handled_command=True)
+        command_reply = self._handle_command(prompt, key, address)
+        if command_reply is not None:
+            self._reply(address, command_reply, correlation_id=correlation_id)
+            return InboundRouteResult(handled_command=True)
         explicit_project = str(project_id or "").strip()
-        if not explicit_project:
-            command_reply = self._handle_command(prompt, key, address)
-            if command_reply is not None:
-                self._reply(address, command_reply, correlation_id=correlation_id)
-                return InboundRouteResult(handled_command=True)
-            active = self.active_project(key)
-            explicit_project = active.project_id if active is not None else ""
         project = self.projects.get_project(
             explicit_project,
             requester_user_id=address.alphonse_user_id,
             requester_is_admin=bool(self.is_admin(address.alphonse_user_id)),
-        )
-        if project is None:
+        ) if explicit_project else None
+        if explicit_project and project is None:
             raise ValueError("project_not_accessible")
         merged_metadata = dict(metadata or {})
-        memory_session = self._active_memory_session(key, project, merged_metadata)
-        self.memory_sessions.touch(memory_session.session_id)
-        merged_metadata["memory_session_id"] = memory_session.session_id
+        memory_session = self._active_memory_session(key, project, merged_metadata) if project is not None else None
+        if memory_session is not None:
+            self.memory_sessions.touch(memory_session.session_id)
+            merged_metadata["memory_session_id"] = memory_session.session_id
         disposition = self._disposition_for(
             user=address.alphonse_user_id,
-            project_id=project.project_id,
+            project_id=project.project_id if project is not None else "",
             correlation_id=correlation_id,
             prompt=prompt,
             metadata=merged_metadata,
@@ -288,8 +286,8 @@ class ProjectInboundRouter:
         queued = self.channel.queue_message(
             prompt=prompt,
             user=address.alphonse_user_id,
-            project_id=project.project_id,
-            memory_session_id=memory_session.session_id,
+            project_id=project.project_id if project is not None else "",
+            memory_session_id=memory_session.session_id if memory_session is not None else "",
             tag=tag,
             correlation_id=correlation_id,
             metadata=merged_metadata,
@@ -303,21 +301,18 @@ class ProjectInboundRouter:
             message_id=message_id,
         )
         turns_ahead = self._turns_ahead(queued.message_id) if disposition == "pdca_task" else 0
-        if turns_ahead > 0 and not str(merged_metadata.get("source") or "").strip():
+        if turns_ahead > 0 and project is not None and not str(merged_metadata.get("source") or "").strip():
             self._queue_waiting_notice(address, project.project_id, queued.message_id, turns_ahead)
-        return InboundRouteResult(queued=queued, project_id=project.project_id, disposition=disposition, turns_ahead=turns_ahead)
+        return InboundRouteResult(queued=queued, project_id=project.project_id if project is not None else "", disposition=disposition, turns_ahead=turns_ahead)
 
     def active_project(self, key: ChannelProjectSelectionKey) -> ProjectRecord | None:
         session = self.sessions.get(key)
         if session is None:
-            home = self._home_project(key.alphonse_user_id)
-            self.sessions.set(key, home)
-            return home
+            return None
         project = self.projects.get_project(session.active_project_id, requester_user_id=key.alphonse_user_id)
         if project is None:
-            home = self._home_project(key.alphonse_user_id)
-            self.sessions.set(key, home)
-            return home
+            self.sessions.clear(key)
+            return None
         return project
 
     def select_project(self, key: ChannelProjectSelectionKey, project_id_or_name: str) -> ProjectRecord:

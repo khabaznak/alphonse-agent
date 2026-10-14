@@ -1014,7 +1014,8 @@ def _build_textual_app_class() -> type[Any]:
         def compose(self) -> ComposeResult:
             with Vertical(id="project-dialog"):
                 yield Static("Settings", classes="dialog-title")
-                yield Input(value=str(self.settings.get("users_root") or ""), id="users-root")
+                yield Static("Workspace directory (root for users, projects, skills, and agent configuration)")
+                yield Input(value=str(self.settings.get("workspace_root") or ""), id="users-root")
                 yield Static("Memory context budget limits project/session memory injected into model prompts; it does not include instructions, tools, or the current request.")
                 yield Input(value=str(self.settings.get("memory_context_token_budget") or 4096), id="memory-context-token-budget")
                 migration = self.settings.get("memory_migration") if isinstance(self.settings.get("memory_migration"), dict) else {}
@@ -1356,13 +1357,13 @@ def _build_textual_app_class() -> type[Any]:
             with Vertical(id="project-dialog"):
                 yield Static("Set up Alphonse", classes="dialog-title")
                 yield Input(placeholder="Administrator name", id="admin-name")
-                yield Input(value="~/.alphonse/users", id="onboarding-root")
+                yield Input(placeholder="Workspace directory, e.g. ~/Workspace", id="onboarding-root")
                 yield Button("Create administrator", id="complete-onboarding", variant="primary")
                 yield Static("", id="onboarding-error")
 
         def on_button_pressed(self, event: Button.Pressed) -> None:
             if event.button.id == "complete-onboarding":
-                self.dismiss({"display_name": self.query_one("#admin-name", Input).value, "users_root": self.query_one("#onboarding-root", Input).value})
+                self.dismiss({"display_name": self.query_one("#admin-name", Input).value, "workspace_root": self.query_one("#onboarding-root", Input).value})
 
     class IntegrationsScreen(ModalScreen[str | None]):
         def __init__(self, runtime: TuiRuntime) -> None:
@@ -1911,7 +1912,7 @@ def _build_textual_app_class() -> type[Any]:
             super().__init__()
             integration_store = SQLiteIntegrationStore.default()
             inference_settings_store = SQLiteInferenceSettingsStore.default()
-            agent_config_store = AgentConfigStore.default()
+            agent_config_store = AgentConfigStore(V2UserStore.default().agent_config_root())
             project_session_store = SQLiteProjectSessionStore.default()
             self.daemon_client = V2DaemonClient()
             self.external_daemon = _daemon_is_available(self.daemon_client)
@@ -1997,8 +1998,12 @@ def _build_textual_app_class() -> type[Any]:
                         admin = result.get("admin_user") if isinstance(result, dict) else None
                         if isinstance(admin, dict): self.runtime.user = str(admin.get("user_id") or self.runtime.user)
                     else:
-                        admin = self.runtime.user_store.onboard(**values)
+                        workspace_root = str(values.get("workspace_root") or "")
+                        self.runtime.user_store.set_workspace_root(workspace_root)
+                        admin = self.runtime.user_store.onboard(display_name=str(values.get("display_name") or ""))
                         self.runtime.user = admin.user_id
+                        if self.daemon is not None:
+                            self.daemon.save_settings(actor_user_id=admin.user_id, workspace_root=workspace_root)
                 except Exception as exc:
                     self.query_one("#activity", Static).update(f"Onboarding failed: {exc}")
             self.push_screen(OnboardingScreen(), callback=_complete)
@@ -2234,12 +2239,17 @@ def _build_textual_app_class() -> type[Any]:
                 if self.external_daemon:
                     self.daemon_client.request(
                         "save_settings",
-                        users_root=root,
+                        actor_user_id=self.runtime.user,
+                        workspace_root=root,
                         mirror_automation_messages_to_preferred_channel=mirror_automation_messages,
                     )
                     return self.daemon_client.request("save_memory_settings", actor_user_id=self.runtime.user, values={"memory_context_token_budget": context_tokens, "max_ledger_bytes": max_bytes, "compaction_summary_max_words": max_words})
-                self.runtime.user_store.set_users_root(root)
-                self.runtime.user_store.set_mirror_automation_messages_to_preferred_channel(mirror_automation_messages)
+                assert self.daemon is not None
+                self.daemon.save_settings(
+                    actor_user_id=self.runtime.user,
+                    workspace_root=root,
+                    mirror_automation_messages_to_preferred_channel=mirror_automation_messages,
+                )
                 from alphonse.agent_v2.memory_settings import MemorySettings
                 return self.runtime.memory_settings_store.save(MemorySettings(max_ledger_bytes=max_bytes, compaction_summary_max_words=max_words, memory_context_token_budget=context_tokens)).to_dict()
             try:

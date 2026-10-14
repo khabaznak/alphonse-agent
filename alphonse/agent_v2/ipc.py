@@ -76,6 +76,7 @@ class V2DaemonClient:
         client_id: str,
         user: str,
         project_id: str = "",
+        local_date: str = "",
         after_sequence: int = 0,
         after_ui_sequence: int = 0,
         daemon_id: str = "",
@@ -87,6 +88,7 @@ class V2DaemonClient:
             client_id=client_id,
             user=user,
             project_id=project_id,
+            local_date=local_date,
             after_sequence=after_sequence,
             after_ui_sequence=after_ui_sequence,
             daemon_id=daemon_id,
@@ -97,8 +99,8 @@ class V2DaemonClient:
     def acknowledge_desktop_delivery(self, *, client_id: str, outbox_message_id: str) -> dict[str, Any]:
         return self.request("desktop_ack_delivery", client_id=client_id, outbox_message_id=outbox_message_id)
 
-    def desktop_conversation_history(self, *, user: str, project_id: str = "", limit: int = 100) -> dict[str, Any]:
-        return self.request("desktop_conversation_history", user=user, project_id=project_id, limit=limit)
+    def desktop_conversation_history(self, *, user: str, project_id: str = "", local_date: str = "", limit: int = 100) -> dict[str, Any]:
+        return self.request("desktop_conversation_history", user=user, project_id=project_id, local_date=local_date, limit=limit)
 
     def mark_desktop_project_seen(self, *, user: str, project_id: str, through_sequence: int | None = None) -> dict[str, Any]:
         return self.request(
@@ -107,6 +109,9 @@ class V2DaemonClient:
             project_id=project_id,
             through_sequence=through_sequence,
         )
+
+    def mark_desktop_conversation_seen(self, *, user: str, local_date: str = "", through_sequence: int | None = None) -> dict[str, Any]:
+        return self.request("desktop_mark_conversation_seen", user=user, local_date=local_date, through_sequence=through_sequence)
 
     def projects(self, *, user: str) -> dict[str, Any]:
         return self.request("projects", user=user)
@@ -416,6 +421,7 @@ class V2DaemonServer:
                 client_id=str(params.get("client_id") or "desktop"),
                 user=str(params.get("user") or "local"),
                 project_id=str(params.get("project_id") or ""),
+                local_date=str(params.get("local_date") or ""),
                 after_sequence=int(params.get("after_sequence") or 0),
                 after_ui_sequence=int(params.get("after_ui_sequence") or 0),
                 daemon_id=str(params.get("daemon_id") or ""),
@@ -434,6 +440,7 @@ class V2DaemonServer:
                 "messages": self.daemon.desktop_conversation_history(
                     user=str(params.get("user") or "local"),
                     project_id=str(params.get("project_id") or ""),
+                    local_date=str(params.get("local_date") or ""),
                     limit=int(params.get("limit") or 100),
                 )
             }
@@ -442,6 +449,13 @@ class V2DaemonServer:
             return self.daemon.mark_desktop_project_seen(
                 user=str(params.get("user") or "local"),
                 project_id=str(params.get("project_id") or ""),
+                through_sequence=int(through) if through is not None else None,
+            )
+        if method == "desktop_mark_conversation_seen":
+            through = params.get("through_sequence")
+            return self.daemon.mark_desktop_project_seen(
+                user=str(params.get("user") or "local"),
+                local_date=str(params.get("local_date") or ""),
                 through_sequence=int(through) if through is not None else None,
             )
         if method == "restart_integrations":
@@ -484,7 +498,7 @@ class V2DaemonServer:
         if method == "onboarding_status":
             return self.daemon.onboarding_status()
         if method == "onboard":
-            return self.daemon.onboard(display_name=str(params.get("display_name") or ""), users_root=str(params.get("users_root") or ""), import_v1=bool(params.get("import_v1")))
+            return self.daemon.onboard(display_name=str(params.get("display_name") or ""), workspace_root=str(params.get("workspace_root") or ""), users_root=str(params.get("users_root") or ""), import_v1=bool(params.get("import_v1")))
         if method == "current_user":
             return self.daemon.current_user()
         if method == "settings":
@@ -492,7 +506,8 @@ class V2DaemonServer:
         if method == "save_settings":
             mirror = params.get("mirror_automation_messages_to_preferred_channel")
             return self.daemon.save_settings(
-                users_root=str(params.get("users_root") or ""),
+                actor_user_id=str(params.get("actor_user_id") or ""),
+                workspace_root=str(params.get("workspace_root") or ""),
                 timezone_name=str(params.get("timezone") or ""),
                 mirror_automation_messages_to_preferred_channel=bool(mirror) if mirror is not None else None,
             )
