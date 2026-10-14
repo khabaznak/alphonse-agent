@@ -1,5 +1,5 @@
 import { FormEvent, KeyboardEvent, memo, ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { CalendarClock, ChevronLeft, ChevronRight, FileText, FolderKanban, FolderOpen, Plus, Settings, UsersRound, X, Sparkles } from "lucide-react";
+import { CalendarClock, ChevronLeft, ChevronRight, FolderKanban, FolderOpen, Settings, UsersRound, Sparkles } from "lucide-react";
 import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { onAction } from "@tauri-apps/plugin-notification";
@@ -39,7 +39,6 @@ type PollResponse = {
   status: { active_work: Record<string, string>; activity: { state?: string }; queue?: { ready?: number; processing?: number } };
 };
 type HistoryResponse = { messages: ChatMessage[] };
-type DesktopProjectFile = { filename: string; mime_type: string; size_bytes: number; project_path: string; relative_path: string };
 type Provider = {
   provider_key: string;
   display_name: string;
@@ -50,7 +49,6 @@ type Provider = {
   catalog_cli_matches_runtime?: boolean | null;
 };
 const REMARK_PLUGINS = [remarkGfm];
-const fileNameFromPath = (path: string) => path.split(/[\\/]/).pop() || "attachment";
 const localDay = (timezone: string) => {
   const parts = new Intl.DateTimeFormat("en-CA", { timeZone: timezone || "UTC", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(new Date());
   const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
@@ -82,7 +80,6 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
   const messagesDuringConversationReloadRef = useRef(new Map<number, ChatMessage[]>());
   const timelineRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
-  const composerRef = useRef<HTMLFormElement | null>(null);
   const surfacesRef = useRef<Record<string, A2uiSurface>>({});
   const dismissedScheduledSurfacesRef = useRef(readDismissedScheduledSurfaces(window.localStorage));
   const windowFocusedRef = useRef(document.hasFocus());
@@ -93,12 +90,9 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
   }));
   const [messages, setMessages] = useState<ChatMessage[]>([{ id: "welcome", role: "assistant", content: "Alphonse Desktop is connected locally." }]);
   const [prompt, setPrompt] = useState("");
-  const [attachmentPaths, setAttachmentPaths] = useState<string[]>([]);
-  const [composerDragActive, setComposerDragActive] = useState(false);
   const [connected, setConnected] = useState(false);
   const [activity, setActivity] = useState("idle");
   const [questions, setQuestions] = useState<Question[]>([]);
-  const [project, setProject] = useState<Project | null>(null);
   const [contextProjects, setContextProjects] = useState<Project[]>([]);
   const [conversationDay, setConversationDay] = useState(() => localDay("UTC"));
   const conversationDayRef = useRef(conversationDay);
@@ -448,62 +442,10 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
     element.style.height = `${Math.min(element.scrollHeight, 4 * 22 + 24)}px`;
   }, [prompt]);
 
-  const queueAttachmentPaths = useCallback((paths: string[]) => {
-    if (!project) {
-      setError("Select a project before attaching files.");
-      return;
-    }
-    const normalized = paths.map((path) => path.trim()).filter(Boolean);
-    if (!normalized.length) return;
-    setAttachmentPaths((current) => [...new Set([...current, ...normalized])]);
-    setError("");
-  }, [project]);
-
-  const chooseAttachments = async () => {
-    if (!project) {
-      setError("Select a project before attaching files.");
-      return;
-    }
-    try {
-      const selected = await openFileDialog({ title: "Attach files to this project", multiple: true, directory: false });
-      queueAttachmentPaths(selected ? (Array.isArray(selected) ? selected : [selected]) : []);
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "File picker could not be opened");
-    }
-  };
-
-  useEffect(() => {
-    if (!("__TAURI_INTERNALS__" in window)) return;
-    let unlisten: (() => void) | undefined;
-    void getCurrentWindow().onDragDropEvent((event) => {
-      const composer = composerRef.current;
-      const scale = window.devicePixelRatio || 1;
-      const point = "position" in event.payload ? event.payload.position : null;
-      const rect = composer?.getBoundingClientRect();
-      const overComposer = Boolean(point && rect && point.x / scale >= rect.left && point.x / scale <= rect.right && point.y / scale >= rect.top && point.y / scale <= rect.bottom);
-      if (event.payload.type === "leave") { setComposerDragActive(false); return; }
-      if (event.payload.type === "enter" || event.payload.type === "over") { setComposerDragActive(overComposer); return; }
-      setComposerDragActive(false);
-      if (event.payload.type === "drop" && overComposer) queueAttachmentPaths(event.payload.paths);
-    }).then((stop) => { unlisten = stop; }).catch(() => undefined);
-    return () => { unlisten?.(); };
-  }, [queueAttachmentPaths]);
-
-  const selectProject = useCallback((next: Project | null) => {
-    if (attachmentPaths.length && next?.project_id !== project?.project_id && !window.confirm("Remove the files queued for the current project before changing task context?")) return;
-    setProject(next);
-    setAttachmentPaths([]);
-    setError("");
-  }, [attachmentPaths.length, project?.project_id]);
-
   const submitPrompt = async () => {
     const value = prompt.trim();
-    if (!value && !attachmentPaths.length) return;
+    if (!value) return;
     if (value.startsWith("/")) {
-      if (attachmentPaths.length) {
-        setError("Commands cannot be sent with file attachments.");
-        return;
-      }
       const command = value.split(/\s+/, 1)[0].toLowerCase();
       if (command === "/killswitch") {
         setPrompt("");
@@ -514,7 +456,7 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
             role: "assistant",
             content: result.status === "cancel_requested" ? "Kill switch engaged. The active task is being cancelled." : "Kill switch checked: no active task is running.",
             created_at: new Date().toISOString(),
-            project_id: project?.project_id || "",
+            project_id: "",
           });
         } catch (cause) {
           setError(cause instanceof Error ? cause.message : "Kill switch failed");
@@ -527,26 +469,18 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
         return;
       }
     }
-    if (attachmentPaths.length && !project) {
-      setError("Select a project before sending files.");
-      return;
-    }
     try {
-      const files = attachmentPaths.length
-        ? await daemonRequest<{ files: DesktopProjectFile[] }>("copy_desktop_project_files", { user, project_id: project?.project_id || "", source_paths: attachmentPaths })
-        : { files: [] };
-      const messagePrompt = value || "Please analyze the attached files.";
+      const messagePrompt = value;
       const queued = await daemonRequest<{ message_id: string; project_id: string; created_at: string; conversation_sequence: number }>("queue_message", {
         prompt: messagePrompt,
         user,
-        project_id: project?.project_id || "",
+        project_id: "",
         integration_id: "desktop",
         provider_key: "tui",
         channel_target: user,
-        metadata: files.files.length ? { attachments: files.files, project_files: files.files } : {},
+        metadata: {},
       });
       setPrompt("");
-      setAttachmentPaths([]);
       const today = localDay(timezone);
       conversationDayRef.current = today;
       setConversationDay(today);
@@ -645,11 +579,6 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
       {projectsOpen ? <ProjectsWorkspace user={user} onClose={() => setProjectsOpen(false)} /> : skillsOpen ? <SkillsWorkspace user={user} onClose={() => setSkillsOpen(false)} /> : <section className="conversation">
         <header className="topbar">
           <div className="topbar-project"><p className="eyebrow">Main conversation</p><h1>Conversation</h1></div>
-          <label className="conversation-project-context">Task project
-            <select aria-label="Task project context" value={project?.project_id || ""} onChange={(event) => selectProject(contextProjects.find((item) => item.project_id === event.target.value) || null)}>
-              <option value="">No project</option>{contextProjects.map((item) => <option key={item.project_id} value={item.project_id}>{item.name}</option>)}
-            </select>
-          </label>
           <div className="conversation-day-controls" aria-label="Conversation day history">
             <button type="button" aria-label="Previous day" onClick={() => setConversationDay((day) => shiftDay(day, -1))}>‹</button>
             <input aria-label="Conversation date" type="date" value={conversationDay} max={localDay(timezone)} onChange={(event) => event.target.value && setConversationDay(event.target.value)} />
@@ -667,10 +596,8 @@ export default function App({ diagnosticMode = "normal", diagnosticProjectId = "
           ) : fallbackQuestion ? (
             <QuestionCard question={fallbackQuestion} onDone={poll} />
           ) : (
-            <form ref={composerRef} className={`composer${composerDragActive ? " drag-active" : ""}`} onSubmit={submit}>
+            <form className="composer" onSubmit={submit}>
               {suggestions.length > 0 && <div className="suggestions">{suggestions.map((item) => <button type="button" key={item} onClick={() => setPrompt(item)}>{item}</button>)}</div>}
-              {attachmentPaths.length > 0 && <div className="composer-attachments" aria-label="Files ready to send">{attachmentPaths.map((path) => <span className="attachment-chip" key={path}><FileText aria-hidden="true" /><span title={path}>{fileNameFromPath(path)}</span><button type="button" aria-label={`Remove ${fileNameFromPath(path)}`} onClick={() => setAttachmentPaths((current) => current.filter((item) => item !== path))}><X aria-hidden="true" /></button></span>)}</div>}
-              <button className="attach-files" type="button" onClick={() => void chooseAttachments()} title={project ? "Attach files" : "Select a project to attach files"} aria-label={project ? "Attach files" : "Select a project to attach files"}><Plus aria-hidden="true" /></button>
               <textarea ref={textareaRef} value={prompt} onKeyDown={onComposerKeyDown} onChange={(event) => setPrompt(event.target.value)} placeholder="Message Alphonse... Type / for commands" rows={1} />
               <button className="send" type="submit">Send</button>
             </form>
@@ -726,7 +653,7 @@ function SettingsModal({ user, initialTab, workspaceRequired, enterToSend, deskt
   useEffect(() => { if (tab === "tools") void daemonRequest<{ user: { user_id: string } | null }>("current_user").then(async (current) => { if (!current.user) return; const result = await daemonRequest<{ settings: WebToolsSettings }>("web_tools_settings", { actor_user_id: current.user.user_id }); setWeb(result.settings); }).catch((cause: unknown) => setWebNotice(cause instanceof Error ? cause.message : "Web Tools unavailable")); }, [tab]);
   useEffect(() => { void daemonRequest<{ user: { user_id: string } | null }>("current_user").then(async (current) => { if (!current.user) return; const result = await daemonRequest<{ settings: MemorySettings }>("memory_settings", { actor_user_id: current.user.user_id }); setMemory(result.settings); }).catch((cause: unknown) => setMemoryNotice(cause instanceof Error ? cause.message : "Memory settings unavailable")); }, []);
   const save = async () => { try { const result = await daemonRequest<{ workspace_root: string; warning_repository_path?: boolean; mirror_automation_messages_to_preferred_channel: boolean }>("save_settings", { actor_user_id: user, workspace_root: root, mirror_automation_messages_to_preferred_channel: mirrorAutomationMessages }); setRoot(result.workspace_root); setMirrorAutomationMessages(Boolean(result.mirror_automation_messages_to_preferred_channel)); onWorkspaceConfigured(); setNotice(result.warning_repository_path ? "Saved. This path is inside the repository; keep it ignored." : "Delivery settings saved."); } catch (cause) { setNotice(timezoneSettingsError(cause)); } };
-  const saveWorkspace = async () => { if (!root.trim() || savingWorkspace) return; setSavingWorkspace(true); setWorkspaceNotice(""); let workspaceSaved = false; try { const result = await daemonRequest<{ workspace_root: string; warning_repository_path?: boolean }>("save_settings", { actor_user_id: user, workspace_root: root }); setRoot(result.workspace_root); onWorkspaceConfigured(); workspaceSaved = true; const timezoneResult = await daemonRequest<{ timezone: string }>("save_timezone_settings", { actor_user_id: user, timezone }); if (timezoneResult.timezone !== timezone.trim()) throw new Error("The daemon did not persist the requested timezone"); setTimezone(timezoneResult.timezone); onTimezoneChange(timezoneResult.timezone); setWorkspaceNotice(result.warning_repository_path ? `Workspace and timezone saved. Workspace: ${result.workspace_root}. This path is inside the repository; keep it ignored.` : `Workspace and timezone saved. Workspace: ${result.workspace_root}.`); } catch (cause) { const message = cause instanceof Error ? cause.message : "Settings could not be saved."; setWorkspaceNotice(workspaceSaved ? `Workspace saved, but timezone could not be saved: ${message}` : timezoneSettingsError(cause)); } finally { setSavingWorkspace(false); } };
+  const saveWorkspace = async () => { if (!root.trim() || savingWorkspace) return; setSavingWorkspace(true); setWorkspaceNotice("Checking and migrating existing files if needed. The first save can take a few minutes while skills and managed project files are copied."); let workspaceSaved = false; try { const result = await daemonRequest<{ workspace_root: string; warning_repository_path?: boolean }>("save_settings", { actor_user_id: user, workspace_root: root }); setRoot(result.workspace_root); onWorkspaceConfigured(); workspaceSaved = true; setWorkspaceNotice("Workspace saved. Saving timezone…"); const timezoneResult = await daemonRequest<{ timezone: string }>("save_timezone_settings", { actor_user_id: user, timezone }); if (timezoneResult.timezone !== timezone.trim()) throw new Error("The daemon did not persist the requested timezone"); setTimezone(timezoneResult.timezone); onTimezoneChange(timezoneResult.timezone); setWorkspaceNotice(result.warning_repository_path ? `Workspace and timezone saved. Workspace: ${result.workspace_root}. This path is inside the repository; keep it ignored.` : `Workspace and timezone saved. Workspace: ${result.workspace_root}.`); } catch (cause) { const message = cause instanceof Error ? cause.message : "Settings could not be saved."; setWorkspaceNotice(workspaceSaved ? `Workspace saved, but timezone could not be saved: ${message}` : timezoneSettingsError(cause)); } finally { setSavingWorkspace(false); } };
   const chooseWorkspace = async () => { try { const selected = await openFileDialog({ title: "Choose Alphonse Workspace", multiple: false, directory: true }); if (typeof selected === "string") { setRoot(selected); setWorkspaceNotice(""); } } catch (cause) { setWorkspaceNotice(cause instanceof Error ? cause.message : "Folder picker could not be opened."); } };
   const saveWeb = async () => { if (!web) return; try { const current = await daemonRequest<{ user: { user_id: string } | null }>("current_user"); if (!current.user) return; const result = await daemonRequest<{ settings: WebToolsSettings }>("save_web_tools_settings", { actor_user_id: current.user.user_id, values: web }); setWeb(result.settings); setWebNotice("Saved. Newly started tasks can use enabled Web Tools."); } catch (cause) { setWebNotice(cause instanceof Error ? cause.message : "Save failed"); } };
   const chooseNotificationSound = async () => {
@@ -761,7 +688,7 @@ function SettingsModal({ user, initialTab, workspaceRequired, enterToSend, deskt
         {!root && <p role="alert">No Workspace directory has been configured. Choose one to enable normal use.</p>}
         <label>Workspace directory</label><div className="workspace-picker"><input aria-label="Selected Workspace directory" readOnly value={root} placeholder="Choose a folder in Finder" /><button type="button" onClick={() => void chooseWorkspace()}>Choose folder…</button></div>
         <label>Timezone<input value={timezone} placeholder="America/Mexico_City" onChange={(event) => setTimezone(event.target.value)} /><small>Use an IANA timezone. New scheduled tasks use this unless one is explicitly specified.</small></label>
-        <div className="settings-save-actions"><button type="button" disabled={!root.trim() || savingWorkspace} onClick={() => void saveWorkspace()}>{savingWorkspace ? "Saving…" : "Save Workspace & time"}</button>{workspaceNotice && <p role="status">{workspaceNotice}</p>}</div>
+        <div className="settings-save-actions"><button type="button" disabled={!root.trim() || savingWorkspace} onClick={() => void saveWorkspace()}>{savingWorkspace ? "Migrating & saving…" : "Save Workspace & time"}</button>{workspaceNotice && <p role="status" aria-live="polite">{workspaceNotice}</p>}</div>
       </section>
       <section className="setting-group">
         <div className="setting-group-heading"><h3>Delivery</h3><p>Control whether automation messages are also delivered outside of Desktop.</p></div>

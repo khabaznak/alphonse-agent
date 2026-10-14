@@ -269,8 +269,8 @@ button { border: 0; cursor: pointer; }
 
 .topbar-project { min-width: 0; }
 .topbar { display: flex; justify-content: space-between; flex-wrap: wrap; max-height: none; }
-.conversation-project-context, .conversation-day-controls { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; }
-.conversation-project-context select, .conversation-day-controls input { min-height: 34px; padding: 6px 9px; border: 1px solid var(--border); border-radius: 6px; color: var(--text); background: var(--surface); }
+.conversation-day-controls { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; }
+.conversation-day-controls input { min-height: 34px; padding: 6px 9px; border: 1px solid var(--border); border-radius: 6px; color: var(--text); background: var(--surface); }
 .conversation-day-controls button { min-width: 32px; min-height: 32px; padding: 4px 8px; border: 1px solid var(--border); border-radius: 6px; color: var(--text); background: var(--surface); }
 .conversation-day-controls button:disabled { opacity: .45; cursor: default; }
 .eyebrow { color: var(--muted); font-size: 10px; margin: 0 0 4px; letter-spacing: .14em; text-transform: uppercase; }
@@ -377,7 +377,7 @@ button { border: 0; cursor: pointer; }
 .composer {
   position: relative;
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: end;
   gap: 12px;
 }
