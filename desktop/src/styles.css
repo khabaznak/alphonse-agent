@@ -610,6 +610,9 @@ button { border: 0; cursor: pointer; }
 .modal-content > p,
 .modal-content > label,
 .modal-content > .form-field { margin-top: 12px; }
+.workspace-picker { display: flex; align-items: stretch; gap: 8px; margin-top: 8px; }
+.workspace-picker input { flex: 1; min-width: 0; padding: 9px 10px; border: 1px solid var(--border); border-radius: 6px; color: var(--text); background: var(--surface); }
+.workspace-picker button { flex: 0 0 auto; padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; color: var(--text); background: var(--surface-raised); }
 
 .form-field {
   display: grid;
