@@ -5,14 +5,25 @@ from alphonse.agent_v2.core.intelligence.v3.context import _recent_conversation
 from alphonse.agent_v2.core.tools.registry.native.memory import execute_search_memory
 
 
+from alphonse.agent_v2.conversations import ConversationEvent
+
+
+def event(**kwargs):
+    values = dict(sequence=1, event_id="test-event", owner_user_id="alex", project_id="",
+                  memory_session_id="", role="user", content="", source="test", source_message_id="",
+                  created_at="2026-10-11", recorded_at="2026-10-11", observed_at="2026-10-11")
+    values.update(kwargs)
+    return ConversationEvent(**values)
+
+
 class _ConversationStore:
     def list_recent(self, *, owner_user_id: str, limit: int):
         assert owner_user_id == "alex"
         assert limit == 30
         return [
-            SimpleNamespace(role="user", content="Earlier unassociated question", project_id=""),
-            SimpleNamespace(role="assistant", content="Reply from archived project task", project_id="old-project"),
-            SimpleNamespace(role="user", content="Current project request", project_id="current-project"),
+            event(event_id="earlier", role="user", content="Earlier unassociated question", project_id=""),
+            event(event_id="reply", role="assistant", content="Reply from archived project task", project_id="old-project"),
+            event(role="user", content="Current project request", project_id="current-project"),
         ]
 
 
@@ -32,7 +43,7 @@ def test_memory_recall_searches_user_history_without_project_scope() -> None:
             assert owner_user_id == "alex"
             assert query == "Adrian"
             assert limit == 8
-            return [SimpleNamespace(created_at="2026-10-11", project_id="health", role="assistant", content="Adrian's appointment is Friday.")]
+            return [event(created_at="2026-10-11", project_id="health", role="assistant", content="Adrian's appointment is Friday.")]
 
     class _Memory:
         def search(self, **_kwargs):
@@ -55,7 +66,7 @@ def test_transcript_preserves_current_message_and_labels_legacy_imports() -> Non
 
     class Store:
         def list_recent(self, **_kwargs):
-            return [SimpleNamespace(role="user", content="Old imported question", source="ledger")]
+            return [event(role="user", content="Old imported question", source="ledger", provenance="legacy_import")]
 
     task = TaskState(user="alex")
     task.append_conversation_message("alex", 'Check the "study" temperature')
@@ -69,7 +80,7 @@ def test_transcript_keeps_newest_messages_when_history_exceeds_budget() -> None:
 
     class Store:
         def list_recent(self, **_kwargs):
-            return [SimpleNamespace(role="assistant", content="old " * 5000)]
+            return [event(role="assistant", content="old " * 5000)]
 
     task = TaskState(user="alex")
     task.append_conversation_message("alex", "Current temperature request")
@@ -84,7 +95,7 @@ def test_transcript_does_not_duplicate_current_recorded_user_message() -> None:
 
     class Store:
         def list_recent(self, **_kwargs):
-            return [SimpleNamespace(role="user", content='Check the "study" temperature')]
+            return [event(role="user", content='Check the "study" temperature')]
 
     task = TaskState(user="alex")
     task.append_conversation_message("alex", 'Check the "study" temperature')

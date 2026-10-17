@@ -371,6 +371,19 @@ class TaskState:
         }
         self.evidence_journal.append(entry)
 
+    def evidence_items(self, requester_user_id: str) -> list[Any]:
+        """Source-linked audit projection; repeated attempts keep distinct IDs."""
+        from alphonse.agent_v2.core.memory.contracts import AccessScope, ContextItem, SourceReference
+
+        task_id = self.task_id or self.message_id
+        if not task_id or not self.user or requester_user_id != self.user:
+            return []
+        return [ContextItem(
+            SourceReference(f"task-evidence:{task_id}:{index}", "task_evidence", AccessScope(self.user),
+                            sequence=index, recorded_at=entry.get("recorded_at") or None),
+            json.dumps(entry, ensure_ascii=False, sort_keys=True), "audit",
+        ) for index, entry in enumerate(self.evidence_journal)]
+
     def append_acceptance_criterion(self, criterion: str) -> None:
         self.acceptance_criteria_md = _append_markdown_line(self.acceptance_criteria_md, criterion)
         self.acceptance_contract = contract_from_markdown(

@@ -150,3 +150,8 @@ V2 already provides several V3 foundations:
 
 All architectural stages are implemented. Current work focuses on live reliability,
 evaluation regressions, and operational recovery under the V3 default.
+
+## Memory source contracts
+
+See [canonical history and source-linked memory](08-memory-contracts.md) for the
+accepted contract layer, provenance, visibility, migration and retention boundaries.

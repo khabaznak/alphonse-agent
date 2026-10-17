@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import os
+import json
+import hashlib
 import re
 import sqlite3
+from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -27,6 +30,14 @@ class ConversationEvent:
     source_message_id: str
     created_at: str
 
+    schema_version: int = 1
+    recorded_at: str = ""
+    observed_at: str = ""
+    speaker_id: str = ""
+    visibility: str = "private"
+    shared_with: tuple[str, ...] = ()
+    provenance: str = "recorded"
+
     def to_dict(self) -> dict[str, Any]:
         return self.__dict__.copy()
 
@@ -48,7 +59,7 @@ class SQLiteConversationStore:
         self,
         *,
         owner_user_id: str,
-        project_id: str,
+        project_id: str = "",
         memory_session_id: str = "",
         role: str,
         content: str,
@@ -56,11 +67,15 @@ class SQLiteConversationStore:
         source_message_id: str,
         created_at: str = "",
         connection: sqlite3.Connection | None = None,
+        visibility: str = "private",
+        shared_with: tuple[str, ...] = (),
     ) -> ConversationEvent | None:
         owner, message = str(owner_user_id or "").strip(), str(content or "").strip()
         normalized_role = str(role or "").strip().lower()
         if not owner or not message or normalized_role not in {"user", "assistant"}:
             return None
+        from alphonse.agent_v2.core.memory.contracts import AccessScope
+        AccessScope(owner, visibility, shared_with)
         event_id = str(uuid4())
         project = str(project_id or "").strip()
         session = str(memory_session_id or "").strip()
@@ -78,7 +93,7 @@ class SQLiteConversationStore:
                 message=message,
                 source=source_value,
                 source_id=source_id,
-                timestamp=timestamp,
+                timestamp=timestamp, visibility=visibility, shared_with=shared_with,
             )
             return event
         with self._connect() as conn:
@@ -92,7 +107,7 @@ class SQLiteConversationStore:
                 message=message,
                 source=source_value,
                 source_id=source_id,
-                timestamp=timestamp,
+                timestamp=timestamp, visibility=visibility, shared_with=shared_with,
             )
         self._project_daily_ledger(event)
         return event
@@ -124,20 +139,29 @@ class SQLiteConversationStore:
         source: str,
         source_id: str,
         timestamp: str,
+        visibility: str = "private",
+        shared_with: tuple[str, ...] = (),
     ) -> ConversationEvent | None:
         if source_id:
+            digest = hashlib.sha256(source_id.encode()).hexdigest()
+            if conn.execute("SELECT 1 FROM v2_conversation_tombstones WHERE source_digest=?", (digest,)).fetchone():
+                return None
             exists = conn.execute(
                 "SELECT * FROM v2_conversation_events WHERE source_message_id=?",
                 (source_id,),
             ).fetchone()
             if exists is not None:
                 return None
-        cursor = conn.execute(
-            "INSERT INTO v2_conversation_events(event_id,owner_user_id,project_id,memory_session_id,role,content,source,source_message_id,created_at) VALUES (?,?,?,?,?,?,?,?,?)",
-            (event_id, owner, project, session, role, message, source, source_id, timestamp),
+        recorded_at = _now()
+        speaker = owner if role == "user" else "alphonse"
+        conn.execute(
+            """INSERT INTO v2_conversation_events(event_id,owner_user_id,project_id,memory_session_id,
+               role,content,source,source_message_id,created_at,recorded_at,observed_at,speaker_id,
+               visibility,shared_with,provenance,schema_version) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1)""",
+            (event_id, owner, project, session, role, message, source, source_id, timestamp,
+             recorded_at, _known_instant(timestamp), speaker, visibility, json.dumps(list(shared_with)), "recorded"),
         )
-        sequence = int(cursor.lastrowid)
-        return ConversationEvent(sequence, event_id, owner, project, session, role, message, source, source_id, timestamp)
+        return _event(conn.execute("SELECT * FROM v2_conversation_events WHERE event_id=?", (event_id,)).fetchone())
 
     def list(self, *, owner_user_id: str, project_id: str = "", memory_session_id: str | None = None, limit: int = 100) -> list[ConversationEvent]:
         with self._connect() as conn:
@@ -160,9 +184,16 @@ class SQLiteConversationStore:
         """List all events in a UTC half-open interval, ordered by conversation sequence."""
         with self._connect() as conn:
             rows = conn.execute(
-                "SELECT * FROM v2_conversation_events WHERE owner_user_id=? AND created_at>=? AND created_at<? ORDER BY sequence",
+                "SELECT * FROM v2_conversation_events WHERE owner_user_id=? AND observed_at>=? AND observed_at<? ORDER BY sequence",
                 (str(owner_user_id or "").strip(), str(start_utc), str(end_utc)),
             ).fetchall()
+        return [_event(row) for row in rows]
+
+    def list_all(self, *, owner_user_id: str) -> list[ConversationEvent]:
+        """Unbounded owner export for rebuild/retention, never a prompt API."""
+        with self._connect() as conn:
+            rows = conn.execute("SELECT * FROM v2_conversation_events WHERE owner_user_id=? ORDER BY sequence",
+                                (owner_user_id,)).fetchall()
         return [_event(row) for row in rows]
 
     def list_owner(self, *, owner_user_id: str, limit: int = 100) -> list[ConversationEvent]:
@@ -182,7 +213,7 @@ class SQLiteConversationStore:
                 query = "SELECT COALESCE(MAX(sequence),0) AS latest FROM v2_conversation_events WHERE owner_user_id=?"
                 values: tuple[Any, ...] = (owner,)
                 if start_utc and end_utc:
-                    query += " AND created_at>=? AND created_at<?"
+                    query += " AND observed_at>=? AND observed_at<?"
                     values += (start_utc, end_utc)
                 row = conn.execute(query, values).fetchone()
                 through_sequence = int(row["latest"] or 0)
@@ -196,7 +227,7 @@ class SQLiteConversationStore:
 
     def user_has_unseen_messages(self, *, owner_user_id: str, local_date: str = "", start_utc: str = "", end_utc: str = "") -> bool:
         with self._connect() as conn:
-            interval = " AND e.created_at>=? AND e.created_at<?" if start_utc and end_utc else ""
+            interval = " AND e.observed_at>=? AND e.observed_at<?" if start_utc and end_utc else ""
             values: tuple[Any, ...] = (str(owner_user_id or "").strip(), str(local_date or "").strip())
             if interval:
                 values += (start_utc, end_utc)
@@ -227,6 +258,41 @@ class SQLiteConversationStore:
                     (owner, f"%{terms[0].lower()}%", max(1, min(int(limit or 8), 30))),
                 ).fetchall()
         return [_event(row) for row in rows]
+
+    def read(self, *, event_id: str, requester_user_id: str) -> ConversationEvent | None:
+        """Resolve a historical ID using current access, never historical permission."""
+        from alphonse.agent_v2.core.memory.contracts import conversation_item
+        with self._connect() as conn:
+            row = conn.execute("SELECT * FROM v2_conversation_events WHERE event_id=?", (event_id,)).fetchone()
+        event = _event(row) if row is not None else None
+        return event if event is not None and conversation_item(event, requester_user_id) is not None else None
+
+    def delete(self, *, event_id: str, owner_user_id: str) -> bool:
+        """Owner-scoped erasure; references retain identity but no longer resolve."""
+        guard = self._daily_ledger_projector.mutation_guard() if self._daily_ledger_projector is not None else nullcontext()
+        with guard:
+            return self._delete(event_id=event_id, owner_user_id=owner_user_id)
+
+    def _delete(self, *, event_id: str, owner_user_id: str) -> bool:
+        with self._connect() as conn:
+            row = conn.execute("SELECT * FROM v2_conversation_events WHERE event_id=? AND owner_user_id=?",
+                               (event_id, owner_user_id)).fetchone()
+            if row is None:
+                return False
+            if self._daily_ledger_projector is not None:
+                # Remove cached content before committing erasure. A failed
+                # rebuild then leaves no generated copy of the deleted text.
+                self._daily_ledger_projector.invalidate_owner(owner_user_id)
+            conn.execute("INSERT OR IGNORE INTO v2_conversation_tombstones VALUES (?,?,?,?)",
+                         (event_id, owner_user_id, _now(), hashlib.sha256(row["source_message_id"].encode()).hexdigest()))
+            conn.execute("DELETE FROM v2_conversation_events WHERE event_id=?", (event_id,))
+            try:
+                conn.execute("DELETE FROM v2_conversation_fts WHERE event_id=?", (event_id,))
+            except sqlite3.OperationalError:
+                pass
+        if self._daily_ledger_projector is not None:
+            self._daily_ledger_projector.rebuild_owner(owner_user_id)
+        return True
 
     def sequence_for_source_message_id(self, source_message_id: str) -> int:
         with self._connect() as conn:
@@ -311,6 +377,9 @@ class SQLiteConversationStore:
                 if role not in {"user", "assistant"} or not content:
                     continue
                 source_id = str(event.get("id") or f"legacy:{owner}:{project}:{index}").strip()
+                if conn.execute("SELECT 1 FROM v2_conversation_tombstones WHERE source_digest=?",
+                                (hashlib.sha256(source_id.encode()).hexdigest(),)).fetchone():
+                    continue
                 cursor = conn.execute(
                     """
                     INSERT OR IGNORE INTO v2_conversation_events(
@@ -325,9 +394,13 @@ class SQLiteConversationStore:
                         content,
                         str(event.get("source") or "ledger").strip() or "ledger",
                         source_id,
-                        _canonical_timestamp(str(event.get("created_at") or "").strip()) or _now(),
+                        _canonical_timestamp(str(event.get("created_at") or "").strip()),
                     ),
                 )
+                if cursor.rowcount:
+                    conn.execute("""UPDATE v2_conversation_events SET recorded_at=?, observed_at=?,
+                                 provenance='legacy_import', speaker_id='', schema_version=1 WHERE source_message_id=?""",
+                                 (_now(), _known_instant(str(event.get("created_at") or "")), source_id))
                 imported += int(cursor.rowcount)
             conn.execute(
                 """
@@ -366,6 +439,30 @@ class SQLiteConversationStore:
                     conn.execute("ALTER TABLE v2_conversation_events ADD COLUMN memory_session_id TEXT NOT NULL DEFAULT ''")
             else:
                 self._create_events_table(conn)
+            columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(v2_conversation_events)")}
+            additions = {
+                "schema_version": "INTEGER NOT NULL DEFAULT 1",
+                "recorded_at": "TEXT NOT NULL DEFAULT ''",
+                "observed_at": "TEXT NOT NULL DEFAULT ''",
+                "speaker_id": "TEXT NOT NULL DEFAULT ''",
+                "visibility": "TEXT NOT NULL DEFAULT 'private'",
+                "shared_with": "TEXT NOT NULL DEFAULT '[]'",
+                "provenance": "TEXT NOT NULL DEFAULT 'legacy_unverified'",
+            }
+            upgrading = "provenance" not in columns
+            for name, definition in additions.items():
+                if name not in columns:
+                    conn.execute(f"ALTER TABLE v2_conversation_events ADD COLUMN {name} {definition}")
+            if upgrading:
+                conn.execute("""UPDATE v2_conversation_events SET observed_at=created_at,
+                    provenance=CASE WHEN source='ledger' OR source_message_id LIKE 'legacy:%'
+                    THEN 'legacy_import' ELSE 'legacy_unverified' END""")
+                # Existing import dates may be fabricated by the old importer. Keep
+                # created_at for recovery, but never promote it to observed time.
+                conn.execute("UPDATE v2_conversation_events SET observed_at='' WHERE provenance='legacy_import'")
+            conn.execute("""CREATE TABLE IF NOT EXISTS v2_conversation_tombstones (
+                event_id TEXT PRIMARY KEY, owner_user_id TEXT NOT NULL, deleted_at TEXT NOT NULL, source_digest TEXT NOT NULL
+            ) STRICT""")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_v2_conversation_events_scope ON v2_conversation_events(owner_user_id, project_id, sequence)")
             try:
                 conn.execute("CREATE VIRTUAL TABLE IF NOT EXISTS v2_conversation_fts USING fts5(event_id UNINDEXED, owner_user_id UNINDEXED, content, tokenize='unicode61')")
@@ -407,6 +504,10 @@ class SQLiteConversationStore:
                     (_now(),),
                 )
             self._normalize_existing_timestamps(conn)
+            for row in conn.execute("SELECT event_id,observed_at FROM v2_conversation_events WHERE observed_at<>''").fetchall():
+                observed = _known_instant(row["observed_at"])
+                if observed != row["observed_at"]:
+                    conn.execute("UPDATE v2_conversation_events SET observed_at=? WHERE event_id=?", (observed, row["event_id"]))
 
     @staticmethod
     def _create_events_table(conn: sqlite3.Connection) -> None:
@@ -450,7 +551,7 @@ def legacy_ledger_events(content: str, *, owner_user_id: str, project_id: str, l
             events.append({"id": f"legacy:{owner_user_id}:{project_id}:{index}:user", "role": "user", "content": user.group(1).strip(), "source": "ledger", "created_at": ""})
         for assistant_index, match in enumerate(re.finditer(r"^#### Conversation\n- Alphonse: (.*?)(?=\n#### |\Z)", block, flags=re.MULTILINE | re.DOTALL)):
             if match.group(1).strip():
-                events.append({"id": f"legacy:{owner_user_id}:{project_id}:{index}:assistant:{assistant_index}", "role": "assistant", "content": match.group(1).strip(), "source": "telegram", "created_at": ""})
+                events.append({"id": f"legacy:{owner_user_id}:{project_id}:{index}:assistant:{assistant_index}", "role": "assistant", "content": match.group(1).strip(), "source": "ledger", "created_at": ""})
     return events[-max(1, min(int(limit or 100), 10_000)):]
 
 
@@ -460,7 +561,13 @@ class _Connection:
     def __exit__(self, typ, value, traceback): self.connection.commit() if typ is None else self.connection.rollback()
 
 
-def _event(row: Any) -> ConversationEvent: return ConversationEvent(**dict(row))
+def _event(row: Any) -> ConversationEvent:
+    values = dict(row)
+    recipients = json.loads(values.get("shared_with") or "[]")
+    if not isinstance(recipients, list):
+        raise ValueError("invalid_conversation_recipients")
+    values["shared_with"] = tuple(recipients)
+    return ConversationEvent(**values)
 def _now() -> str: return datetime.now(timezone.utc).isoformat()
 
 
@@ -476,3 +583,11 @@ def _canonical_timestamp(value: str) -> str:
     if parsed.tzinfo is None:
         return text
     return parsed.astimezone(timezone.utc).isoformat()
+
+
+def _known_instant(value: str) -> str:
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        return parsed.astimezone(timezone.utc).isoformat() if parsed.tzinfo is not None else ""
+    except ValueError:
+        return ""
