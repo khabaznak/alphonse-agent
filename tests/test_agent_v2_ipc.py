@@ -1052,3 +1052,17 @@ def test_project_management_ipc_archives_imports_and_safely_removes(tmp_path) ->
     removed = daemon.ipc._dispatch({"method": "delete_project", "params": {"user": admin.user_id, "project_id": imported["project_id"], "confirmation": imported["project_id"]}})
     assert removed["removed_managed_files"] is False
     assert external.exists()
+
+
+def test_task_context_ui_preserves_latest_message_after_snapshot_truncation() -> None:
+    from alphonse.agent_v2.interfaces.a2ui import A2UiAdapter
+
+    prompt = "Please, revisa la temperatura del estudio"
+    task = TaskState(task_id="current", goal=prompt, user="alex")
+    task.conversation_history_md = "- Assistant: " + "old context " * 1000 + "\n- User: " + prompt
+    envelopes = A2UiAdapter().task_progress("current", _task_progress_snapshot(task))
+    components = next(item["updateComponents"]["components"] for item in envelopes if "updateComponents" in item)
+    context = next(item["text"] for item in components if item["id"] == "task_context")
+    history = context.split("Conversation history: ", 1)[1].split("\n\n", 1)[0]
+    assert prompt in history
+    assert "earlier context omitted" in history

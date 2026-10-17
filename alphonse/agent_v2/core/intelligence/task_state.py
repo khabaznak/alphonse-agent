@@ -43,6 +43,7 @@ class TaskState:
     facts_md: str = EMPTY_MARKDOWN
     recent_conversation_md: str = EMPTY_MARKDOWN
     conversation_history_md: str = EMPTY_MARKDOWN
+    memory_context_md: str = EMPTY_MARKDOWN
     plan_json: str = EMPTY_MARKDOWN
     acceptance_criteria_md: str = EMPTY_MARKDOWN
     acceptance_contract: dict[str, Any] = field(default_factory=dict)
@@ -112,6 +113,7 @@ class TaskState:
             facts_md=_markdown_or_default(value.get("facts_md")),
             recent_conversation_md=_markdown_or_default(value.get("recent_conversation_md")),
             conversation_history_md=_markdown_or_default(value.get("conversation_history_md")),
+            memory_context_md=_markdown_or_default(value.get("memory_context_md")),
             plan_json=_markdown_or_default(
                 value.get("plan_json") if value.get("plan_json") is not None else value.get("plan_md")
             ),
@@ -154,6 +156,7 @@ class TaskState:
             "facts_md": self.facts_md,
             "recent_conversation_md": self.recent_conversation_md,
             "conversation_history_md": self.conversation_history_md,
+            "memory_context_md": self.memory_context_md,
             "plan_json": self.plan_json,
             "acceptance_criteria_md": self.acceptance_criteria_md,
             "acceptance_contract": dict(self.acceptance_contract or {}),
@@ -178,6 +181,7 @@ class TaskState:
         """Serialize resumable state without duplicating the project memory ledger."""
         checkpoint = self.to_dict()
         checkpoint["conversation_history_md"] = EMPTY_MARKDOWN
+        checkpoint["memory_context_md"] = EMPTY_MARKDOWN
         checkpoint["metadata"] = {
             key: value
             for key, value in dict(self.metadata or {}).items()
@@ -197,6 +201,7 @@ class TaskState:
         return template.render(
             task=self,
             conversation_history_md=self.conversation_history_md if include_memory else EMPTY_MARKDOWN,
+            memory_context_md=self.memory_context_md if include_memory else EMPTY_MARKDOWN,
             operational_plan_json=self.operational_plan_json() if include_plan else EMPTY_MARKDOWN,
         ).strip()
 

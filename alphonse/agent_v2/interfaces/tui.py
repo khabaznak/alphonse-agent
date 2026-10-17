@@ -1122,8 +1122,10 @@ def _build_textual_app_class() -> type[Any]:
                 yield Input(placeholder="Name", id="artifact-name")
                 yield Input(placeholder="Description", id="artifact-description")
                 yield Static("", id="artifact-details")
+                yield Input(placeholder="Location JSON: storage_kind, entrypoint_path, execution, shared_with_user_ids", id="artifact-location")
                 with Horizontal(classes="dialog-actions"):
                     yield Button("Save", id="save-artifact", variant="primary")
+                    yield Button("Save location", id="relocate-artifact")
                     yield Button("Turn On/Off", id="toggle-artifact")
                     yield Button("Unregister", id="delete-artifact")
                     yield Button("Close", id="close-artifacts")
@@ -1139,7 +1141,9 @@ def _build_textual_app_class() -> type[Any]:
             if item is None: return
             self.query_one("#artifact-name", Input).value = str(item.get("name") or "")
             self.query_one("#artifact-description", Input).value = str(item.get("description") or "")
-            self.query_one("#artifact-details", Static).update(f"Project: {item.get('project_id')} | Entry point: {item.get('entrypoint_path')} | {'enabled' if item.get('enabled') else 'disabled'}")
+            resource = item.get("resource") or {}
+            self.query_one("#artifact-details", Static).update(f"Skill: {item.get('skill_id')} | Storage: {item.get('storage_kind', 'project')} | Entry point: {resource.get('resolved_entrypoint_path', item.get('entrypoint_path'))} | {resource.get('status', 'unknown')} | {', '.join(resource.get('issues', []))}")
+            self.query_one("#artifact-location", Input).value = json.dumps({"storage_kind": item.get("storage_kind", "project"), "entrypoint_path": item.get("entrypoint_path"), "execution": item.get("execution", {}), "shared_with_user_ids": item.get("shared_with_user_ids", [])})
         def on_button_pressed(self, event: Button.Pressed) -> None:
             if event.button.id == "close-artifacts": self.dismiss(True); return
             item = self._selected()
@@ -1147,6 +1151,7 @@ def _build_textual_app_class() -> type[Any]:
             try:
                 action = str(event.button.id or "")
                 if action == "save-artifact": payload = {"artifact_id": item["artifact_id"], "name": self.query_one("#artifact-name", Input).value, "description": self.query_one("#artifact-description", Input).value}
+                elif action == "relocate-artifact": payload = {**json.loads(self.query_one("#artifact-location", Input).value), "artifact_id": item["artifact_id"]}
                 elif action == "toggle-artifact": payload = {"artifact_id": item["artifact_id"], "enabled": not bool(item.get("enabled"))}
                 else: payload = {"artifact_id": item["artifact_id"]}
                 self.items = self.action(action, payload)
@@ -2275,11 +2280,13 @@ def _build_textual_app_class() -> type[Any]:
             def action(action_name: str, values: dict[str, Any]) -> list[dict[str, Any]]:
                 if self.external_daemon:
                     if action_name == "save-artifact": self.daemon_client.request("update_artifact", actor_user_id=self.runtime.user, **values)
+                    elif action_name == "relocate-artifact": self.daemon_client.request("relocate_artifact", actor_user_id=self.runtime.user, **values)
                     elif action_name == "toggle-artifact": self.daemon_client.request("set_artifact_enabled", actor_user_id=self.runtime.user, **values)
                     else: self.daemon_client.request("delete_artifact", actor_user_id=self.runtime.user, **values)
                     return list(self.daemon_client.request("artifacts", actor_user_id=self.runtime.user).get("artifacts", []))
                 if self.daemon is None: return []
                 if action_name == "save-artifact": self.daemon.update_artifact(actor_user_id=self.runtime.user, **values)
+                elif action_name == "relocate-artifact": self.daemon.relocate_artifact(actor_user_id=self.runtime.user, **values)
                 elif action_name == "toggle-artifact": self.daemon.set_artifact_enabled(actor_user_id=self.runtime.user, **values)
                 else: self.daemon.delete_artifact(actor_user_id=self.runtime.user, **values)
                 return self.daemon.list_artifacts(actor_user_id=self.runtime.user)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import sys
 
 import pytest
 
@@ -26,28 +27,35 @@ def _project(tmp_path: Path):
     return projects, project
 
 
-def test_registration_requires_owner_and_project_local_executable(tmp_path: Path) -> None:
-    projects, project = _project(tmp_path); _executable(Path(project.root_path))
-    store = SQLiteArtifactStore(tmp_path / "artifacts.sqlite3")
-    task = TaskState(task_id="task", user="alex", project_id=project.project_id, goal="register")
-    # ToolExecutionContext is intentionally constructed directly for the native executor.
+def test_legacy_registration_requires_owner_installed_skill_and_contained_executable(tmp_path: Path) -> None:
     from alphonse.agent_v2.core.core import ToolExecutionContext
-    result = execute_artifact_registration({"name": "Sensor check", "description": "Reads sensor", "entrypoint_path": "artifact.py", "argument_schema": {"type": "object", "properties": {"value": {"type": "string"}}, "required": ["value"]}}, context=ToolExecutionContext(task=task, messages=InMemoryMessageQueue(), project_store=projects), store=store)
-    assert result["artifact"]["artifact_id"] == "artifact.sensor-check"
-    assert store.get("artifact.sensor-check") is not None
-    with pytest.raises(ValueError, match="outside_project"):
-        execute_artifact_registration({"name": "Bad", "description": "Bad", "entrypoint_path": "../outside", "argument_schema": {"type": "object"}}, context=ToolExecutionContext(task=task, messages=InMemoryMessageQueue(), project_store=projects), store=store)
+    from alphonse.agent_v2.skills import SkillStore
 
-
-def test_enabled_artifact_executes_json_and_disabled_is_not_materialized(tmp_path: Path) -> None:
-    projects, project = _project(tmp_path); _executable(Path(project.root_path))
+    projects, project = _project(tmp_path)
+    _executable(Path(project.root_path))
     store = SQLiteArtifactStore(tmp_path / "artifacts.sqlite3")
-    record = store.register(artifact_id="artifact.sensor", name="Sensor", description="Read", project_id=project.project_id, owner_user_id="alex", entrypoint_path="artifact.py", argument_schema={"type": "object", "properties": {"value": {"type": "string"}}, "required": ["value"]})
-    tools = build_artifact_tool_definitions(store, projects)
-    assert tools[0].descriptor.metadata["entrypoint_path"] == "artifact.py"
-    assert tools[0].descriptor.metadata["resolved_entrypoint_path"] == str(Path(project.root_path) / "artifact.py")
-    assert tools[0].descriptor.metadata["project_root_path"] == project.root_path
-    assert tools[0].callable({"value": "42"}) == {"value": "42"}
+    skills = SkillStore(tmp_path / "skills")
+    skill = skills.create_skill("sensor", "Read a sensor", "# Sensor\nRead the registered fixture.")
+    args = {"name": "Sensor check", "description": "Reads sensor", "entrypoint_path": "artifact.py",
+            "skill_id": skill.skill_id, "instructions": "Run the fixture.", "storage_kind": "project", "execution": {"runtime_path": sys.executable},
+            "argument_schema": {"type": "object", "properties": {"value": {"type": "string"}}, "required": ["value"]}}
+    task = TaskState(task_id="task", user="alex", project_id=project.project_id)
+    context = ToolExecutionContext(task=task, messages=InMemoryMessageQueue(), project_store=projects)
+    result = execute_artifact_registration(args, context=context, store=store, skill_store=skills)
+    assert result["artifact"]["artifact_id"] == "artifact.sensor-check"
+    with pytest.raises(ValueError, match="outside_storage"):
+        execute_artifact_registration({**args, "name": "Bad", "entrypoint_path": "../outside"}, context=context, store=store, skill_store=skills)
+    task.user = "other"
+    with pytest.raises(PermissionError, match="project_owner_required"):
+        execute_artifact_registration({**args, "name": "Other"}, context=context, store=store, skill_store=skills)
+
+
+def test_artifacts_never_materialize_as_runtime_tools(tmp_path: Path) -> None:
+    projects, project = _project(tmp_path)
+    _executable(Path(project.root_path))
+    store = SQLiteArtifactStore(tmp_path / "artifacts.sqlite3")
+    record = store.register(artifact_id="artifact.sensor", name="Sensor", description="Read", project_id=project.project_id, owner_user_id="alex", entrypoint_path="artifact.py", argument_schema={"type": "object"})
+    assert build_artifact_tool_definitions(store, projects) == []
     store.set_enabled(record.artifact_id, False)
     assert build_artifact_tool_definitions(store, projects) == []
 

@@ -163,6 +163,37 @@ class SkillStore:
         if len(updated.encode("utf-8")) > MAX_SKILL_FILE_BYTES:
             raise ValueError("skill_file_too_large")
         path.write_text(updated, encoding="utf-8")
+
+    def artifact_instructions(self, skill_id: str, artifact_id: str) -> str:
+        skill = self.get(skill_id)
+        if skill is None:
+            return ""
+        for section in re.split(r"(?m)^## Artifact: ", skill.instructions)[1:]:
+            if f"Artifact ID: `{artifact_id}`" in section:
+                return section.partition("Operating instructions:")[2].strip()
+        return ""
+
+    def update_artifact_definition(self, skill_id: str, artifact_id: str, name: str, definition: dict[str, Any]) -> None:
+        record = self._editable(skill_id)
+        path = Path(record.directory) / SKILL_FILE
+        current = path.read_text(encoding="utf-8")
+        sections = re.split(r"(?m)(?=^## Artifact: )", current)
+        for index, section in enumerate(sections):
+            if f"Artifact ID: `{artifact_id}`" not in section:
+                continue
+            detail = section.partition("Operating instructions:")[2].strip()
+            if not detail:
+                raise ValueError("artifact_instructions_required")
+            manifest = json.dumps(definition, ensure_ascii=False, indent=2, sort_keys=True)
+            sections[index] = f"## Artifact: {name}\n\nArtifact ID: `{artifact_id}`\n\nDefinition:\n\n```json\n{manifest}\n```\n\nOperating instructions:\n\n{detail}\n\n"
+            updated = "".join(sections).rstrip() + "\n"
+            if len(updated.encode("utf-8")) > MAX_SKILL_FILE_BYTES:
+                raise ValueError("skill_file_too_large")
+            temporary = path.with_suffix(".tmp")
+            temporary.write_text(updated, encoding="utf-8")
+            temporary.replace(path)
+            return
+        raise ValueError("artifact_skill_definition_missing")
         self._read_skill(Path(record.directory))
 
     def remove_artifact_instructions(self, skill_id: str, artifact_id: str) -> None:

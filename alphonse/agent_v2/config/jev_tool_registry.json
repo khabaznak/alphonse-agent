@@ -51,10 +51,10 @@
     },
     "native.skill_artifact_register": {
       "type": "noul",
-      "instructions": "Does this phase need to attach an executable project artifact and its operating instructions to an existing skill?",
+      "instructions": "Does this phase need to register an existing skill-owned artifact in shared storage (or an explicit legacy location), with its schema, execution metadata and operating instructions?",
       "criteria": {
-        "true": "The requester explicitly asks to register an artifact under an installed skill. The executable, schema, skill ID, and operational instructions are ready.",
-        "false": "The phase only needs to use existing skill knowledge or make an unregistered project program."
+        "true": "The requester asks to register an artifact under an installed skill. The executable, schema, skill ID, explicit runtime and operating instructions are ready, or will be ready when Bash will create it earlier in the same phase. No active project is needed for shared or skill-package storage.",
+        "false": "The phase only uses an existing artifact, repairs an existing registration, or creates a program without registering it under a skill."
       }
     },
     "native.skill_install": {
@@ -103,6 +103,14 @@
       "criteria": {
         "true": "The user asks what reminders are active, asks whether a reminder exists, or asks to add or change a delivery channel for an existing reminder.",
         "false": "The user is creating or changing the reminder's schedule or content, or the request does not concern an existing reminder or its delivery destinations."
+      }
+    },
+    "native.artifact_metadata_update": {
+      "type": "noul",
+      "instructions": "Does this phase need to update or repair the catalog metadata, verified resource location, execution configuration paths, or explicit sharing of an existing skill-owned artifact?",
+      "criteria": {
+        "true": "The requester asks to correct an existing artifact registration's name, description, storage location, runtime/working directory, declared configuration paths, or sharing. Select this when a verified replacement location has been identified or Bash will verify it earlier in the same phase. It changes catalog and skill-definition metadata, never program/data files. The current task does not need to belong to the artifact's legacy storage project.",
+        "false": "The phase only invokes a working artifact, edits its program or data, repairs dependencies, or registers a new artifact; no existing catalog metadata needs updating. Relevance is not authorization to change another household member's registration."
       }
     }
   }

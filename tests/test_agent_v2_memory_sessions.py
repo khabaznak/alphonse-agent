@@ -119,7 +119,7 @@ def test_memory_session_store_keeps_bindings_per_project_and_rejects_closed_sess
 
 
 def test_operational_task_prompt_omits_memory_context() -> None:
-    task = TaskState(goal="continue", conversation_history_md="expensive historical secret")
+    task = TaskState(goal="continue", memory_context_md="expensive historical secret")
 
     assert "expensive historical secret" in task.to_markdown_prompt()
     assert "expensive historical secret" not in task.to_markdown_prompt(include_memory=False)

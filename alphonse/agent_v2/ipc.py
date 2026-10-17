@@ -529,6 +529,14 @@ class V2DaemonServer:
             return {"settings": self.daemon.save_intelligence_engine_settings(actor_user_id=str(params.get("actor_user_id") or ""), values=dict(params.get("values") or {}))}
         if method == "artifacts":
             return {"artifacts": self.daemon.list_artifacts(actor_user_id=str(params.get("actor_user_id") or ""))}
+        if method == "relocate_artifact":
+            execution = params.get("execution", {})
+            sharing = params.get("shared_with_user_ids")
+            if not isinstance(execution, dict) or (sharing is not None and not isinstance(sharing, list)):
+                raise ValueError("artifact_execution_or_sharing_invalid")
+            return {"artifact": self.daemon.relocate_artifact(actor_user_id=str(params.get("actor_user_id") or ""), artifact_id=str(params.get("artifact_id") or ""), storage_kind=str(params.get("storage_kind") or ""), entrypoint_path=str(params.get("entrypoint_path") or ""), execution=execution, shared_with_user_ids=sharing)}
+        if method == "reconcile_artifacts":
+            return {"artifacts": self.daemon.reconcile_artifacts(actor_user_id=str(params.get("actor_user_id") or ""))}
         if method == "update_artifact":
             return {"artifact": self.daemon.update_artifact(actor_user_id=str(params.get("actor_user_id") or ""), artifact_id=str(params.get("artifact_id") or ""), name=str(params.get("name") or ""), description=str(params.get("description") or ""))}
         if method == "set_artifact_enabled":

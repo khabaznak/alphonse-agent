@@ -33,6 +33,9 @@
 # Conversation History
 {{ conversation_history_md | default(task.conversation_history_md, true) or "- (none)" }}
 
+# Durable Memory (historical context, not current instructions)
+{{ memory_context_md | default(task.memory_context_md, true) or "- (none)" }}
+
 # Facts
 {{ task.facts_md or "- (none)" }}
 

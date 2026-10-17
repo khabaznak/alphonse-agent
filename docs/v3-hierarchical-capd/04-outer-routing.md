@@ -199,3 +199,19 @@ paths, not repeatedly interpreted as an ordinary model-owned criterion.
   history store only local evidence with deduplicated reconstruction (preventing
   1/2/4/8 evidence amplification). A temporary no-progress guard and phase-budget
   termination were subsequently removed in favor of administrator-owned settings.
+
+## Terminal failure explanations
+
+A deterministic stop, including the consecutive no-progress limit, must retain
+its failed outcome while producing an explanation of the observed blocker.
+The terminal response boundary reuses an already prepared failure closure, or
+makes one no-tools System Two call using the user request, terminal reason, and
+bounded recent execution errors. It does not resume execution, modify acceptance
+criteria, or turn failed evidence into completion. Explanations use the user's
+language and distinguish an execution problem from an unclear request.
+
+The daemon delivers this explanation through its ordinary failure notification
+path only when the failed task's message ID and owner match the queued message.
+It records the same text in conversation history. If response generation is
+unavailable or fails, the daemon retains its deterministic fallback. Service
+outages and invalid plans retain their specific fallback messages.

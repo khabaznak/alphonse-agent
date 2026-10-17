@@ -48,3 +48,57 @@ def test_memory_recall_searches_user_history_without_project_scope() -> None:
 
     assert result["project_id"] == ""
     assert "appointment is Friday" in result["matches_markdown"]
+
+
+def test_transcript_preserves_current_message_and_labels_legacy_imports() -> None:
+    from alphonse.agent_v2.core.memory.transcript import conversation_transcript
+
+    class Store:
+        def list_recent(self, **_kwargs):
+            return [SimpleNamespace(role="user", content="Old imported question", source="ledger")]
+
+    task = TaskState(user="alex")
+    task.append_conversation_message("alex", 'Check the "study" temperature')
+    rendered = conversation_transcript(task, Store())
+    assert "legacy ledger import; unverified provenance" in rendered
+    assert 'Check the \\"study\\" temperature' in rendered
+
+
+def test_transcript_keeps_newest_messages_when_history_exceeds_budget() -> None:
+    from alphonse.agent_v2.core.memory.transcript import conversation_transcript
+
+    class Store:
+        def list_recent(self, **_kwargs):
+            return [SimpleNamespace(role="assistant", content="old " * 5000)]
+
+    task = TaskState(user="alex")
+    task.append_conversation_message("alex", "Current temperature request")
+    rendered = conversation_transcript(task, Store(), max_chars=500)
+    assert len(rendered) <= 500
+    assert "Current temperature request" in rendered
+    assert "earlier conversation omitted" in rendered
+
+
+def test_transcript_does_not_duplicate_current_recorded_user_message() -> None:
+    from alphonse.agent_v2.core.memory.transcript import conversation_transcript
+
+    class Store:
+        def list_recent(self, **_kwargs):
+            return [SimpleNamespace(role="user", content='Check the "study" temperature')]
+
+    task = TaskState(user="alex")
+    task.append_conversation_message("alex", 'Check the "study" temperature')
+    assert conversation_transcript(task, Store()).count("temperature") == 1
+
+
+def test_decision_context_keeps_memory_and_conversation_separate() -> None:
+    from alphonse.agent_v2.core.core import CoreLoopContext
+    from alphonse.agent_v2.core.intelligence.v3.context import task_context_for_decision
+    from alphonse.agent_v2.core.messages import InMemoryMessageQueue
+
+    task = TaskState(user="alex", goal="Current request", memory_context_md="Known project file: journal.md")
+    task.append_conversation_message("alex", "Current request")
+    rendered = task_context_for_decision(task, CoreLoopContext(messages=InMemoryMessageQueue()))
+    assert "Current request" in rendered
+    assert "Known project file: journal.md" in rendered
+    assert "Durable project/session memory:" in rendered

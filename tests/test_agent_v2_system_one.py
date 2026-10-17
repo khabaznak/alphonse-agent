@@ -346,7 +346,8 @@ def test_jev_native_registry_template_covers_every_out_of_box_tool() -> None:
         "native.ask_question",
         "native.scheduled_task",
         "native.scheduled_task_delivery",
-        "native.artifact_registration",
+        "native.skill_artifact_register",
+        "native.skill_install",
         "native.artifact_metadata_update",
         "native.analyze_image",
         "native.web_search",
@@ -357,7 +358,7 @@ def test_jev_native_registry_template_covers_every_out_of_box_tool() -> None:
     assert "find, rg, or grep" in bash_question["criteria"]["true"]
     assert "create or edit files" in bash_question["criteria"]["true"]
     assert "verify edits" in bash_question["criteria"]["true"]
-    registration_question = registry["native.artifact_registration"]
+    registration_question = registry["native.skill_artifact_register"]
     assert "when Bash will create it earlier in the same phase" in registration_question["criteria"]["true"]
     assert "CLI-backed artifact" in bash_question["instructions"]
     assert "Favor Bash alongside a relevant CLI-backed artifact" in bash_question["criteria"]["true"]

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import inspect
 from dataclasses import dataclass
 from enum import Enum
 from typing import TYPE_CHECKING, Any
@@ -12,6 +13,7 @@ from alphonse.agent_v2.core.inference import InferencePurpose, InferenceRequest
 from alphonse.agent_v2.core.intelligence.acceptance_contract import apply_status_patch
 from alphonse.agent_v2.core.intelligence.v3.contracts import PhaseOutcome, PhaseStatus, SideEffectClass, TacticalState
 from alphonse.agent_v2.system_one import SystemOneUnavailableError
+from alphonse.agent_v2.core.intelligence.v3.context import task_context_for_decision
 
 if TYPE_CHECKING:
     from alphonse.agent_v2.core.core import CoreLoopContext
@@ -273,13 +275,10 @@ def _recommend_act(task, state, outcome, review: PhaseReview, context):
         "strategic_plan": state.phase.to_dict(),
         "phase_outcome": outcome.to_dict(),
         "complete_tool_execution_log": state.to_dict(),
-        "task_context": {
-            "recent_conversation": task.recent_conversation_md,
-            "facts": task.facts_md,
-            "user_constraints": task.metadata.get("user_constraints", {}),
-            "failure_reason": task.metadata.get("failure_reason", ""),
-            "plan_call_exception_count": task.count_plan_call_exceptions(),
-        },
+        "task_context": _task_context(task, context),
+        "user_constraints": task.metadata.get("user_constraints", {}),
+        "failure_reason": task.metadata.get("failure_reason", ""),
+        "plan_call_exception_count": task.count_plan_call_exceptions(),
     }
     try:
         recommendation = context.system_one.recommend_act(state=input_state)
@@ -339,10 +338,12 @@ def _review_acceptance_statuses(
     system_one = context.system_one
     if system_one is not None and callable(getattr(system_one, "evaluate", None)):
         try:
-            system_one_result = system_one.evaluate(
+            system_one_result = _evaluate_system_one_with_context(
+                system_one,
                 contract=task.ensure_acceptance_contract(),
                 phase=state.phase.to_dict(),
                 evidence=state.evidence.to_dict(),
+                task_context=_task_context(task, context),
             )
         except Exception:
             system_one_result = None
@@ -392,10 +393,12 @@ def _review_acceptance_statuses(
             },
         }
         try:
-            focused_rereview = context.system_one.evaluate(
+            focused_rereview = _evaluate_system_one_with_context(
+                context.system_one,
                 contract=focused_contract,
                 phase=focused_phase,
                 evidence=state.evidence.to_dict(),
+                task_context=_task_context(task, context),
             )
         except Exception as exc:
             # A failed focused pass must not erase the original result or
@@ -521,6 +524,25 @@ def _system_two_acceptance_review(
         raise SystemOneUnavailableError("acceptance_review_fallback_invalid")
     return result.json_value
     # After one focused re-review, any remaining ambiguity is passed to Act.
+
+
+def _task_context(task, context) -> str:
+    selection = task.metadata.get("v3_context_selection")
+    selected_ids = selection.get("selected_context_ids", []) if isinstance(selection, dict) else []
+    return task_context_for_decision(task, context, selected_context_ids=selected_ids)
+
+
+def _evaluate_system_one_with_context(system_one, *, contract, phase, evidence, task_context):
+    evaluate = system_one.evaluate
+    parameters = inspect.signature(evaluate).parameters.values()
+    accepts_context = any(
+        item.name == "task_context" or item.kind == inspect.Parameter.VAR_KEYWORD
+        for item in parameters
+    )
+    kwargs = {"contract": contract, "phase": phase, "evidence": evidence}
+    if accepts_context:
+        kwargs["task_context"] = task_context
+    return evaluate(**kwargs)
 
 
 def _successful_evidence_refs(state: TacticalState) -> tuple[str, ...]:

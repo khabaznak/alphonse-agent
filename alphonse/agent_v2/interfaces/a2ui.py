@@ -194,10 +194,11 @@ class A2UiAdapter:
             components.append({"id": "steps", "component": "List", "children": step_ids, "direction": "vertical"})
             children.append("steps")
         task_context = []
-        for label, key in (("Goal", "goal"), ("Facts", "facts"), ("Memory facts", "memory_facts"), ("Recent conversation", "recent_conversation"), ("Conversation history", "conversation_history"), ("Task updates", "updates"), ("Evidence", "evidence"), ("Question", "question"), ("Outcome", "outcome")):
+        for label, key in (("Goal", "goal"), ("Facts", "facts"), ("Memory facts", "memory_facts"), ("Recent conversation", "recent_conversation"), ("Conversation history", "conversation_history"), ("Durable memory", "durable_memory"), ("Task updates", "updates"), ("Evidence", "evidence"), ("Question", "question"), ("Outcome", "outcome")):
             value = progress.get(key)
             if value not in (None, "", {}, []):
-                task_context.append(f"{label}: {_compact_value(value)}")
+                limit = 6000 if key in {"recent_conversation", "conversation_history", "durable_memory"} else 700
+                task_context.append(f"{label}: {_compact_value(value, limit=limit)}")
         if task_context:
             children.append("task_context")
             components.append({"id": "task_context", "component": "Text", "text": "\n\n".join(task_context)})

@@ -55,16 +55,17 @@ When changing this decision architecture, consult
 
 ## Native tools, skills, and generated artifacts
 
-Alphonse has native tools and skill-owned project programs:
+Alphonse has native tools and skill-owned artifact programs:
 
 - Native tools are built into Alphonse, shipped from this repository, and
   maintained as part of the product.
-- Artifacts are project-local programs created or maintained by a running
-  Alphonse instance in response to its users' tasks and needs. Each artifact
-  belongs to a skill that provides the expertise needed to use it.
+- Artifacts are programs created or maintained by a running Alphonse instance
+  in response to its users' tasks and needs. Each artifact belongs to a skill.
+  New artifacts use the shared repository organized by skill; legacy project
+  storage and existing skill-package files remain supported.
 
 This repository owns artifact catalog registration and persistence, project
-containment checks, skill association, and the user interfaces for managing
+storage containment checks, skill association, and the user interfaces for managing
 skills and their artifacts. Artifacts are not independent runtime tools: they
 must not be materialized in the tool registry or presented for tool curation.
 Registering an artifact records its definition and adds its operating
@@ -79,10 +80,10 @@ particular artifact.
 - Reproduce artifact catalog or skill-association defects with a minimal
   disposable test fixture
   and fix them in this repository.
-- Artifact-specific defects belong to Alphonse and the user project that owns
-  the artifact. Do not copy, promote, or commit a generated artifact into this
+- Artifact-specific defects belong to Alphonse and the user-owned skill/artifact
+  storage that holds the program. Do not copy, promote, or commit a generated artifact into this
   repository, and do not modify product code merely to compensate for a defect
-  in one artifact. Leave the artifact in its owning project for Alphonse to
+  in one artifact. Leave the artifact in its registered storage for Alphonse to
   repair, or report the artifact failure clearly if it cannot be repaired in
   the current task.
 - Generated artifact programs, supporting files, and runtime data are not
@@ -95,15 +96,31 @@ particular artifact.
 
 ### Artifact framework contract
 
-- The artifact catalog stores metadata and the owning skill ID only. Artifact
-  programs and their data remain inside the owning project.
-- Artifact entrypoints must be relative to and resolve within the owning
-  project's root. Do not weaken this containment check.
-- Only the project owner may register an artifact, and registration must name
-  an installed skill.
-- Registration must add the artifact's definition and operating instructions to
-  the owning skill. It must not create, modify, or delete the artifact's program
-  or data files. Unregistration removes only the catalog entry.
+- The artifact catalog stores metadata and the owning skill ID only. Programs,
+  environments, configuration, and data remain in registered storage. Shared
+  storage is `<workspace>/artifacts/<skill-name>/<artifact-id-without-prefix>/`.
+- Entrypoints, working directories, required files and configuration paths must
+  be relative to and resolve within the registered storage root. Do not weaken
+  containment checks, including protection against traversal and symlink escape.
+  Explicit runtime executables may be absolute; a contained virtual environment
+  may link its interpreter to an external executable.
+- Shared or skill-package registration requires an authenticated owner and an
+  installed editable skill, not an active project. Legacy project registration
+  still requires that project's owner and enforces its root containment.
+- Access follows artifact ownership, explicit sharing, and administrator rights,
+  independently of the current task's project. Jev selection is relevance, never
+  permission. Native tools retain normal authorization and mutation checks.
+- Registration adds the definition, JSON Schema and operating instructions to
+  the owning skill; it never creates, modifies, moves or deletes program/data
+  files. Unregistration must never delete program/data files. Location updates
+  validate the intended existing resource and preserve its stable artifact ID.
+- Legacy migration is metadata-only: preserve registered roots and IDs. Report
+  stale/ambiguous locations for explicit reconciliation; never select a copy by
+  guessing or repair an individual artifact inside product source code.
+- Selected skills receive verified resource manifests from the catalog. Use
+  native Bash with `artifact_id` to validate availability and obtain the correct
+  working directory, entrypoint and runtime. Generic Bash remains a trusted host
+  capability, not an OS filesystem sandbox.
 - Artifact IDs use the `artifact.` prefix and remain stable once registered.
 - Keep artifact names and descriptions accurate for display and management.
 - Keep the registered JSON Schema in the artifact definition included with its
@@ -113,11 +130,12 @@ particular artifact.
   curation, or progressive tool reveal. Native capabilities remain subject to
   their normal authorization and mutation checks.
 - Changes to the artifact contract must consider registration, persistence,
-  project containment, skill association and instructions, authorization, IPC,
+  storage containment, skill association and instructions, authorization, IPC,
   Desktop and TUI management, progressive tool revealing, and tests.
 
 When changing artifact registration or skill association, inspect
 `alphonse/agent_v2/artifacts.py`,
+`alphonse/agent_v2/artifact_resources.py`,
 `alphonse/agent_v2/core/tools/registry/native/artifact_registration.py`, and
 `tests/test_agent_v2_artifacts.py`. When changing tool curation or skill-owned
 program access, consult `docs/v3-hierarchical-capd/03-progressive-tool-revealing.md`.

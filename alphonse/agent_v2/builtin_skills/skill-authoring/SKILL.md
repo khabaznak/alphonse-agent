@@ -11,7 +11,7 @@ Use this skill when a user asks Alphonse to create reusable expertise or a workf
 
 - A skill contains reusable instructions, domain expertise, communication preferences, or a repeatable workflow.
 - A project contains project-specific facts, goals, constraints, owners, and progress. Keep those in the project configuration or project files.
-- Artifacts belong to a skill. Registering one records its project-local entry point and schema, and adds its operating instructions to that skill's definition. Artifacts are not independently curated or invoked as tools; use the skill instructions and authorized native capabilities.
+- Artifacts belong to a skill. Registering one records its entry point, schema, working directory, runtime and configuration paths, and adds its operating instructions to that skill's definition. New artifact programs belong in the shared artifact repository under the skill name and artifact ID without its `artifact.` prefix. No active project is needed. Registration validates the existing files and never writes or moves program/data files. Legacy project storage remains supported with containment checks. Artifacts are not independently curated or invoked as tools; use the skill instructions and authorized native capabilities.
 - A skill does not grant access to tools, files, users, or integrations.
 - Keep each skill focused on a coherent use case. Prefer a small set of complementary skills over a broad persona that combines unrelated responsibilities.
 

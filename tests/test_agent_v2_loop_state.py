@@ -368,3 +368,49 @@ class _NullPrompts:
 
 class _NullMemory:
     pass
+
+
+def test_task_context_separates_recorded_conversation_from_audit_memory(tmp_path) -> None:
+    from alphonse.agent_v2.conversations import SQLiteConversationStore
+    from alphonse.agent_v2.core.core import _task_progress_snapshot
+    from alphonse.agent_v2.core.memory import LedgerMemory
+    from alphonse.agent_v2.memory_settings import SQLiteMemorySettingsStore
+
+    memory = LedgerMemory(users_root=lambda: tmp_path / "users", settings_store=SQLiteMemorySettingsStore(":memory:"))
+    old = TaskState(task_id="old", user="alex", goal="Old ledger question")
+    memory.start_task(old)
+    memory.event(old, "Acceptance Criteria", "Old mission criterion")
+    memory.event(old, "Plan", "Old proposed answer")
+    store = SQLiteConversationStore(":memory:")
+    store.record(owner_user_id="alex", project_id="", role="assistant", content="Actual previous reply", source="desktop", source_message_id="prior")
+    prompt = "Please, revisa la temperatura del estudio"
+    store.record(owner_user_id="alex", project_id="", role="user", content=prompt, source="desktop", source_message_id="current")
+
+    class CaptureProcessor:
+        received = None
+
+        def process(self, task, context):
+            self.received = task
+            return ProcessingResult(snapshot=StateSnapshot(current_work=task.goal))
+
+    processor = CaptureProcessor()
+    core, queue, _ = _core(processor)
+    core.memory = memory
+    core.conversation_store = store
+    queue.enqueue(_message(prompt))
+    core.step()
+
+    task = processor.received
+    assert task is not None
+    assert task.goal == prompt
+    assert prompt in task.conversation_history_md
+    assert "Actual previous reply" in task.conversation_history_md
+    assert "Old ledger question" not in task.conversation_history_md
+    assert "Old mission criterion" not in task.to_markdown_prompt()
+    assert "Old proposed answer" not in task.to_markdown_prompt()
+    assert "Old ledger question" in task.memory_context_md
+    progress = _task_progress_snapshot(task)
+    assert prompt in progress["conversation_history"]
+    assert "Old ledger question" not in progress["conversation_history"]
+    restored = TaskState.from_dict(task.to_dict())
+    assert restored.memory_context_md == task.memory_context_md

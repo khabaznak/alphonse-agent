@@ -196,6 +196,7 @@ class ToolExecutionContext:
     memory: Any | None = None
     conversation_store: Any | None = None
     identity_resolver: Any | None = None
+    artifact_resources: Any | None = None
 
     def record_memory_event(self, task: TaskState, heading: str, content: Any) -> None:
         """Record an event through the task's configured memory adapter."""
@@ -230,6 +231,7 @@ class CoreLoopContext:
     telemetry_sink: Callable[[dict[str, Any]], None] | None = None
     system_one: Any | None = None
     skill_store: Any | None = None
+    artifact_resources: Any | None = None
     consumed_message_ids: list[str] = field(default_factory=list)
 
     def consume_message(self, selector: MessageSelector | None = None) -> QueuedMessage | None:
@@ -272,6 +274,7 @@ class CoreLoopContext:
             conversation_store=self.conversation_store,
             user_timezone_provider=self.user_timezone_provider,
             identity_resolver=self.identity_resolver,
+            artifact_resources=self.artifact_resources,
         )
 
     def is_cancelled(self) -> bool:
@@ -375,8 +378,9 @@ def _task_progress_snapshot(task: Any) -> dict[str, Any]:
         "goal": _truncate_progress(str(getattr(task, "goal", "") or ""), 1200),
         "facts": _truncate_progress(str(getattr(task, "facts_md", "") or ""), 3000),
         "memory_facts": _truncate_progress(str(getattr(task, "memory_facts_md", "") or ""), 3000),
-        "recent_conversation": _truncate_progress(str(getattr(task, "recent_conversation_md", "") or ""), 3000),
-        "conversation_history": _truncate_progress(str(getattr(task, "conversation_history_md", "") or ""), 5000),
+        "recent_conversation": _truncate_progress_tail(str(getattr(task, "recent_conversation_md", "") or ""), 3000),
+        "conversation_history": _truncate_progress_tail(str(getattr(task, "conversation_history_md", "") or ""), 5000),
+        "durable_memory": _truncate_progress_tail(str(getattr(task, "memory_context_md", "") or ""), 5000),
         "updates": _truncate_progress(str(getattr(task, "updates_md", "") or ""), 3000),
         "evidence": _safe_progress_value(getattr(task, "evidence_journal", [])[-10:], limit=3000),
         "question": _safe_progress_value(metadata.get("question_interrupt")),
@@ -404,6 +408,12 @@ def _safe_progress_value(value: Any, *, key: str = "", depth: int = 0, limit: in
 def _truncate_progress(value: str, limit: int) -> str:
     text = str(value or "").strip()
     return text if len(text) <= limit else f"{text[:limit - 1]}…"
+
+
+def _truncate_progress_tail(value: str, limit: int) -> str:
+    text = str(value or "").strip()
+    marker = "(earlier context omitted)\n"
+    return text if len(text) <= limit else marker + text[-(limit - len(marker)):]
 
 
 def _progress_tool_label(tool_id: str) -> str:
@@ -506,6 +516,7 @@ class AlphonseCore:
     telemetry_sink: Callable[[dict[str, Any]], None] | None = None
     system_one: Any | None = None
     skill_store: Any | None = None
+    artifact_resources: Any | None = None
     question_store: Any | None = None
     project_store: Any | None = None
     schedule_store: Any | None = None
@@ -609,6 +620,7 @@ class AlphonseCore:
                 telemetry_sink=self.telemetry_sink,
                 system_one=self.system_one,
                 skill_store=self.skill_store,
+                artifact_resources=self.artifact_resources,
                 question_store=self.question_store,
                 project_store=self.project_store,
                 schedule_store=self.schedule_store,
@@ -623,7 +635,9 @@ class AlphonseCore:
             )
             start_memory = getattr(self.memory, "start_task", None)
             if callable(start_memory):
-                task.conversation_history_md = str(start_memory(task) or "")
+                task.memory_context_md = str(start_memory(task) or "")
+            from alphonse.agent_v2.core.memory.transcript import conversation_transcript
+            task.conversation_history_md = conversation_transcript(task, self.conversation_store)
             result = self.intelligence.process(task, context)
             finish_memory = getattr(self.memory, "finish_task", None)
             if callable(finish_memory):

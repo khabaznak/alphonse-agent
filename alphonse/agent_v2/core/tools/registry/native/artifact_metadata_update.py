@@ -4,6 +4,7 @@ from __future__ import annotations
 from typing import Any, Callable
 
 from alphonse.agent_v2.artifacts import SQLiteArtifactStore
+from alphonse.agent_v2.artifact_resources import EXECUTION_SCHEMA
 from alphonse.agent_v2.core.core import ToolDescriptor, ToolExecutionContext, ToolKind
 from alphonse.agent_v2.core.tools.registry import ToolDefinition
 
@@ -15,6 +16,10 @@ ARTIFACT_METADATA_UPDATE_ARGUMENT_SCHEMA: dict[str, Any] = {
         "artifact_id": {"type": "string", "minLength": 1},
         "name": {"type": "string", "minLength": 1},
         "description": {"type": "string", "minLength": 1},
+        "storage_kind": {"type": "string", "enum": ["shared", "skill", "project"]},
+        "entrypoint_path": {"type": "string", "minLength": 1},
+        "execution": EXECUTION_SCHEMA,
+        "shared_with_user_ids": {"type": "array", "items": {"type": "string"}, "uniqueItems": True},
     },
     "required": ["artifact_id", "name", "description"],
 }
@@ -30,7 +35,7 @@ def build_artifact_metadata_update_tool_definition(
         ARTIFACT_METADATA_UPDATE_TOOL_ID,
         "artifact_metadata_update",
         ToolKind.NATIVE,
-        "Use this tool to change the registered catalog name or routing description of an artifact owned by the requester or managed by an admin. This updates the artifact registry metadata only; it does not edit README files, artifact programs, or other project files. Bash may inspect project files to identify and verify the artifact ID, but must not substitute file edits for this catalog update.",
+        "Use this tool to change the registered catalog name or routing description of an artifact owned by the requester or managed by an admin. This updates the catalog and owning skill definition only; it never edits or moves program, configuration or data files. Optional storage_kind, entrypoint_path and execution fields repair a verified registration, independent of the task project. Preserve the existing location unless an intended replacement was verified; do not choose among ambiguous copies. Bash may inspect project files to identify and verify the artifact ID, but must not substitute file edits for this catalog update.",
         dict(ARTIFACT_METADATA_UPDATE_ARGUMENT_SCHEMA),
         ("artifact_metadata_management",),
         ("native", "artifacts", "metadata"),
@@ -69,7 +74,18 @@ def execute_artifact_metadata_update(
     description = str(arguments.get("description") or "").strip()
     if not name or not description:
         raise ValueError("artifact_name_and_description_required")
-    saved = store.update_metadata(artifact_id, name=name, description=description)
+    resources = context.artifact_resources
+    if any(key in arguments for key in ("storage_kind", "entrypoint_path", "execution", "shared_with_user_ids")):
+        if resources is None:
+            raise ValueError("artifact_resource_context_required")
+        saved = resources.relocate(artifact_id, actor, storage_kind=str(arguments.get("storage_kind", record.storage_kind)),
+                                   entrypoint_path=str(arguments.get("entrypoint_path", record.entrypoint_path)),
+                                   execution=arguments.get("execution", record.execution),
+                                   shared_with_user_ids=arguments.get("shared_with_user_ids"), name=name, description=description)
+    elif resources is not None:
+        saved = resources.update_metadata(artifact_id, actor, name=name, description=description)
+    else:
+        saved = store.update_metadata(artifact_id, name=name, description=description)
     if on_changed:
         on_changed()
     return {"artifact": saved.to_dict(), "message": f'Updated metadata for artifact "{saved.artifact_id}".'}

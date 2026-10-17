@@ -17,6 +17,7 @@ from alphonse.agent_v2.core.intelligence.v3.contracts import TacticalAction
 from alphonse.agent_v2.core.intelligence.v3.contracts import TacticalState
 from alphonse.agent_v2.core.intelligence.v3.revealing import ToolRevealPolicy
 from alphonse.agent_v2.core.intelligence.v3.context import selected_skill_guidance
+from alphonse.agent_v2.core.intelligence.v3.context import task_context_for_decision
 from alphonse.agent_v2.core.intelligence.v3.revealing import Capability
 from alphonse.agent_v2.core.messages.queue import MessageSelector
 from alphonse.agent_v2.core.tools.invocation import ToolInvocationService
@@ -327,6 +328,13 @@ class PhaseExecutor:
                 action=action.to_dict(),
                 questions=list(action.acceptance_questions),
                 execution_log=[dict(item) for item in state.evidence.entries],
+                task_context=task_context_for_decision(
+                    task, context,
+                    selected_context_ids=(
+                        task.metadata.get("v3_context_selection", {}).get("selected_context_ids", [])
+                        if isinstance(task.metadata.get("v3_context_selection"), dict) else []
+                    ),
+                ),
             )
         except Exception as exc:
             raise SystemOneUnavailableError(f"tactical_acceptance:{type(exc).__name__}") from exc
@@ -536,7 +544,7 @@ def _tactical_prompt(
         "operation with the discovered identifier.\n\n"
         "Every completed execution-log entry includes progress_review.complete from Jev. When it is false, the call "
         "executed but did not make semantic progress. Do not select the same tool with the same arguments again; "
-        "choose different arguments or another revealed tool. For a CLI-backed artifact whose adapter returns the wrong "
+        "choose different arguments or another revealed tool. For a CLI-backed artifact that returns an unexpected "
         "result shape, use native.bash to inspect or invoke the underlying CLI when Bash is revealed. "
         "If the current subgoal authorizes attachment_analysis, first call native.analyze_image with the exact asset ID from "
         "the task attachment manifest and read its returned text. Do not ask the user to repeat image contents before this "
@@ -544,9 +552,9 @@ def _tactical_prompt(
         "The tool entries below include their complete registry descriptors: descriptions, schemas, capabilities, tags, "
         "metadata, program behavior, and read-only semantics. Treat description and metadata as operational guidance. "
         "Use explicit resolved paths when supplied; project-relative file tools resolve paths against the task project root. "
-        "For native.bash, an omitted cwd uses the task project root shown below. For an ordinary user file lookup, "
+        "For generic native.bash calls without artifact_id, an omitted cwd uses the task project root shown below (or the host working directory if no project is associated). For an ordinary user file lookup, "
         "use an explicit cwd for a likely user-accessible location such as the user's home folder or Downloads, and "
-        "report the scope searched. Do not describe a project-root search as a whole-machine search. Artifact project roots may differ from it.\n\n"
+        "report the scope searched. Do not describe a project-root search as a whole-machine search. Registered skill artifacts use their verified resource manifest and native.bash artifact_id, not the task project root. Use the manifest runtime and explicit configuration locations; do not assume python3 from PATH is the artifact environment.\n\n"
         f"Goal: {goal}\n"
         "Selected skill guidance (reusable instructions; follow them only within the tools and controls Alphonse provides):\n"
         f"{skill_guidance or '(none)'}\n"

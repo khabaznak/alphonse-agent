@@ -72,6 +72,31 @@ def conversation_context(
     return "\n\n".join(sections)[:24000]
 
 
+def task_context_for_decision(
+    task: "TaskState",
+    context: "CoreLoopContext",
+    *,
+    selected_context_ids: list[str] | tuple[str, ...] = (),
+) -> str:
+    """Render the shared task context used by Jev and System Two."""
+    sections = [conversation_context(task, context, selected_context_ids=selected_context_ids)]
+    sections.extend(task_context_addenda(task))
+    return "\n\n".join(sections)[:36000]
+
+
+def task_context_addenda(task: "TaskState") -> list[str]:
+    """Render task memory and fact sections shared across decision systems."""
+    durable_memory = str(task.memory_context_md or "").strip() or "- (none)"
+    if len(durable_memory) > 9000:
+        durable_memory = durable_memory[-8982:].lstrip() + "\n... truncated"
+    return [
+        f"Current goal:\n{str(task.goal or '').strip() or '- (none)'}",
+        f"Durable project/session memory:\n{durable_memory}",
+        f"Known task facts:\n{_bounded_context_value(task.facts_md, 4000)}",
+        f"Memory facts:\n{_bounded_context_value(task.memory_facts_md, 3000)}",
+    ]
+
+
 def selected_project_context(task: "TaskState", context: "CoreLoopContext") -> str:
     selection = task.metadata.get("v3_context_selection")
     selected = set(selection.get("selected_context_ids", [])) if isinstance(selection, dict) else set()
@@ -81,7 +106,9 @@ def selected_project_context(task: "TaskState", context: "CoreLoopContext") -> s
 
 
 def recent_conversation_for_curation(task: "TaskState", context: "CoreLoopContext") -> str:
-    return _recent_conversation(task, context)[:5000]
+    from alphonse.agent_v2.core.memory.transcript import conversation_transcript
+
+    return conversation_transcript(task, context.conversation_store, max_chars=5000)
 
 
 def skill_candidates_for_curation(context: "CoreLoopContext") -> list[dict[str, str]]:
@@ -120,16 +147,49 @@ def selected_skill_guidance(task: "TaskState", context: "CoreLoopContext", *, ma
             continue
         if skill is None:
             continue
+        resources = context.artifact_resources
+        # Artifact sections may contain another household member's private
+        # paths. Load only catalog-backed, authorized sections for this task.
+        base_instructions = re.split(r"(?m)^## Artifact: ", skill.instructions)[0].rstrip()
+        resource_blocks = []
+        operating_blocks = []
+        if resources is not None:
+            for record in resources.store.list():
+                if record.skill_id != skill.skill_id or not resources.can_use(record, str(task.user or "")):
+                    continue
+                detail = resources.describe(record, str(task.user or ""))
+                operating = resources.skills.artifact_instructions(skill.skill_id, record.artifact_id)
+                resource_blocks.append(
+                    f"Artifact {record.artifact_id} ({record.name}):\n"
+                    f"Verified resource manifest: {json.dumps(detail, ensure_ascii=False)}\n"
+                    f"Registered argument schema: {json.dumps(record.argument_schema, ensure_ascii=False)}"
+                )
+                operating_blocks.append(f"Operating instructions for {record.artifact_id}:\n{operating}")
+        location_guidance = (
+            f"Shared artifact repository: {resources.repository_root}\n"
+            f"New artifact directory convention: {resources.repository_root}/{skill.skill_id.removeprefix('skill:')}/ARTIFACT_ID_WITHOUT_PREFIX/\n"
+        ) if resources is not None else ""
         block = (
             f"### {skill.name} (`{skill.skill_id}`)\n"
             f"Description: {skill.description}\n"
-            f"Skill package directory: {skill.directory}\n\n{skill.instructions}"
+            f"Skill package directory: {skill.directory}\n"
+            f"{location_guidance}"
+            "Skill files resolve against the skill package directory, independently of the current project. "
+            "Artifact programs resolve ONLY against their verified resource manifest. Use native.bash with artifact_id "
+            "and the registered runtime; never substitute the task project or daemon directory. "
+            "An unavailable resource is a registration/runtime problem, not a reason to search the current project. "
+            "Skill selection and resource manifests do not grant permission for effects.\n\n"
+            + "\n\n".join(resource_blocks) + "\n\n" + base_instructions + "\n\n" + "\n\n".join(operating_blocks)
         )
-        if used_chars + len(block) > max_chars:
-            continue
+        remaining = max_chars - used_chars
+        if remaining < 300:
+            break
+        if len(block) > remaining:
+            marker = "\n(skill guidance truncated; inspect the authorized skill package for remaining instructions)"
+            block = block[:remaining - len(marker)] + marker
         blocks.append(block)
         loaded_ids.append(skill.skill_id)
-        used_chars += len(block)
+        used_chars += len(block) + 2
     if not blocks:
         return "", []
     return "\n\n".join(blocks), loaded_ids
@@ -189,23 +249,10 @@ def _visible_active_projects(task: "TaskState", context: "CoreLoopContext") -> l
 
 
 def _recent_conversation(task: "TaskState", context: "CoreLoopContext") -> str:
-    store = context.conversation_store
-    recent = getattr(store, "list_recent", None)
-    if not callable(recent) or not task.user:
-        return ""
-    try:
-        events = recent(owner_user_id=task.user, limit=30)
-    except Exception:
-        return ""
-    rows = []
-    for event in events:
-        role = str(getattr(event, "role", "")).strip().capitalize()
-        content = str(getattr(event, "content", "")).strip()
-        project = str(getattr(event, "project_id", "")).strip()
-        if content:
-            label = f"{role} [{project}]" if project else role
-            rows.append(f"- {label}: {content[:600]}")
-    return "Recent household conversation across projects:\n" + "\n".join(rows) if rows else ""
+    from alphonse.agent_v2.core.memory.transcript import conversation_transcript
+
+    rendered = conversation_transcript(task, context.conversation_store)
+    return "Recent household conversation across projects:\n" + rendered if rendered != "- (none)" else ""
 
 
 def _global_preamble(content: str) -> str:
@@ -219,6 +266,16 @@ def _global_preamble(content: str) -> str:
 
 def _slug(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", str(value or "").casefold()).strip("-")[:80] or "section"
+
+
+def _bounded_context_value(value: object, max_chars: int) -> str:
+    rendered = str(value or "").strip() or "- (none)"
+    if len(rendered) <= max_chars:
+        return rendered
+    marker = "\n... context truncated ...\n"
+    available = max(2, max_chars - len(marker))
+    front = available // 2
+    return rendered[:front].rstrip() + marker + rendered[-(available - front):].lstrip()
 
 
 def _prompt_file(context: "CoreLoopContext", name: str) -> str:

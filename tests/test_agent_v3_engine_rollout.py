@@ -564,7 +564,7 @@ def test_v3_phase_planner_receives_project_context_and_durable_memory(tmp_path: 
         goal="Update today's workout",
         user="alex",
         project_id=project.project_id,
-        conversation_history_md=(
+        memory_context_md=(
             "# Durable Project Memory\n"
             f"Primary journal path: {root / 'calisthenics_journal.md'}\n"
             "Never duplicate a same-date entry.\n"
@@ -792,7 +792,7 @@ def test_v3_known_journal_path_flows_from_memory_to_read_and_verified_edit(tmp_p
         project_id=project.project_id,
         intelligence_engine=HIERARCHICAL_V3,
         intelligence_schema_version=3,
-        conversation_history_md=(
+        memory_context_md=(
             "# Durable Project Memory\nPrimary journal path: " + str(journal)
         ),
     )

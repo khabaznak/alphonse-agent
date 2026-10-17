@@ -342,7 +342,13 @@ class V2Daemon:
         # can complete onboarding after the v1 code has been removed.
         del import_v1
         if str(workspace_root or "").strip():
+            old_skills_root = Path(self.runtime.skill_store.skills_dir).expanduser().resolve()
             store.set_workspace_root(workspace_root)
+            new_skills_root = store.skills_root()
+            if old_skills_root != new_skills_root.resolve():
+                copy_tree_missing(old_skills_root, new_skills_root)
+            new_skills_root.mkdir(parents=True, exist_ok=True)
+            self.runtime.skill_store.skills_dir = new_skills_root
             admin = store.onboard(display_name=display_name)
         else:
             # Compatibility for existing clients. New Desktop setup always
@@ -359,6 +365,9 @@ class V2Daemon:
         self._migrate_blank_project_records()
         self.runtime.asset_store.migrate_to_user_directories()
         refresh_runtime_identity_resolver(self.runtime)
+        if store.workspace_root() is not None:
+            self.runtime.core.artifact_resources.ensure_repository()
+        self.runtime.artifact_store.capture_legacy_roots(self.runtime.project_store)
         return {"admin_user": admin.to_dict(), "migration": {**imported, **migrated}, "users_root": str(store.users_root()), "workspace_root": str(store.workspace_root() or "")}
 
     def _migrate_legacy_local(self, admin_user_id: str) -> dict[str, int]:
@@ -644,6 +653,7 @@ class V2Daemon:
             user.user_id: user_store.managed_project_root(user.user_id)
             for user in user_store.list_users()
         }
+        old_artifacts_root = self.runtime.user_store.artifacts_root()
         old_skills_root = Path(self.runtime.skill_store.skills_dir).expanduser().resolve()
         old_agent_config_root = Path(self.runtime.agent_config_store.config_dir).expanduser().resolve()
         new_skills_root = root / "skills"
@@ -652,9 +662,16 @@ class V2Daemon:
             copy_tree_missing(old_skills_root, new_skills_root)
         if old_agent_config_root != new_agent_config_root.resolve():
             copy_tree_missing(old_agent_config_root, new_agent_config_root)
+        if old_artifacts_root.resolve() != (root / "artifacts").resolve():
+            if (root / "artifacts").exists() and any((root / "artifacts").iterdir()):
+                raise ValueError("artifact_repository_destination_not_empty")
+            if old_artifacts_root.is_dir():
+                shutil.copytree(old_artifacts_root, root / "artifacts", dirs_exist_ok=True, symlinks=True)
         migrated_projects = self.runtime.project_store.migrate_managed_roots(previous_project_roots, root)
+        self.runtime.artifact_store.capture_legacy_roots(self.runtime.project_store, refresh=True)
         saved_workspace_root = user_store.set_workspace_root(root)
         self.runtime.skill_store.skills_dir = new_skills_root
+        self.runtime.core.artifact_resources.ensure_repository()
         self.runtime.agent_config_store.config_dir = new_agent_config_root
         self.runtime.agent_config_store._ensure_seeded()
         timezone_value = self.runtime.user_store.set_timezone(timezone_name) if str(timezone_name).strip() else self.runtime.user_store.timezone()
@@ -722,14 +739,30 @@ class V2Daemon:
     def list_artifacts(self, *, actor_user_id: str) -> list[dict[str, Any]]:
         actor = str(actor_user_id or "").strip()
         if not actor: raise PermissionError("artifact_manager_required")
-        owner = "" if self.runtime.user_store.is_admin(actor) else actor
-        return [item.to_dict() for item in self.runtime.artifact_store.list(owner_user_id=owner)]
+        resources = self.runtime.core.artifact_resources
+        return [{**item.to_dict(), "resource": resources.describe(item, actor)}
+                for item in self.runtime.artifact_store.list() if resources.can_use(item, actor)]
 
     def update_artifact(self, *, actor_user_id: str, artifact_id: str, name: str, description: str) -> dict[str, Any]:
         self._require_artifact_manager(actor_user_id, self.runtime.artifact_store.get(artifact_id))
-        saved = self.runtime.artifact_store.update_metadata(artifact_id, name=name, description=description)
+        saved = self.runtime.core.artifact_resources.update_metadata(artifact_id, actor_user_id, name=name, description=description)
         refresh_runtime_artifacts(self.runtime)
         return saved.to_dict()
+
+    def relocate_artifact(self, *, actor_user_id: str, artifact_id: str, storage_kind: str, entrypoint_path: str, execution: dict[str, Any], shared_with_user_ids: list[str] | None = None) -> dict[str, Any]:
+        resources = self.runtime.core.artifact_resources
+        saved = resources.relocate(artifact_id, actor_user_id, storage_kind=storage_kind, entrypoint_path=entrypoint_path,
+                                   execution=execution, shared_with_user_ids=shared_with_user_ids)
+        refresh_runtime_artifacts(self.runtime)
+        return {**saved.to_dict(), "resource": resources.describe(saved, actor_user_id)}
+
+    def reconcile_artifacts(self, *, actor_user_id: str) -> list[dict[str, Any]]:
+        actor = str(actor_user_id or "").strip()
+        if not actor:
+            raise PermissionError("artifact_manager_required")
+        resources = self.runtime.core.artifact_resources
+        return [resources.reconcile(item, actor) for item in self.runtime.artifact_store.list()
+                if item.owner_user_id == actor or resources.is_admin(actor)]
 
     def set_artifact_enabled(self, *, actor_user_id: str, artifact_id: str, enabled: bool) -> dict[str, Any]:
         self._require_artifact_manager(actor_user_id, self.runtime.artifact_store.get(artifact_id))
@@ -758,10 +791,11 @@ class V2Daemon:
             "skills": [
                 {**item.candidate(), "directory": item.directory, "editable": Path(item.directory).resolve().is_relative_to(self.runtime.skill_store.skills_dir.resolve()), "instructions": item.instructions,
                  "files": self.runtime.skill_store.files(item.skill_id),
-                 "artifacts": [record.to_dict() for record in artifacts if record.skill_id == item.skill_id]}
+                 "artifacts": [{**record.to_dict(), "resource": self.runtime.core.artifact_resources.describe(record, actor_user_id)} for record in artifacts if record.skill_id == item.skill_id]}
                 for item in self.runtime.skill_store.list_skills()
             ],
             "unassigned_artifacts": [record.to_dict() for record in artifacts if not record.skill_id],
+            "artifact_repository_root": str(self.runtime.core.artifact_resources.repository_root),
         }
 
     def attach_artifact_to_skill(self, *, actor_user_id: str, artifact_id: str, skill_id: str, instructions: str) -> dict[str, Any]:
@@ -779,10 +813,8 @@ class V2Daemon:
             raise ValueError("artifact_already_assigned")
         assigned = self.runtime.artifact_store.assign_to_skill(artifact_id, skill.skill_id)
         try:
-            self.runtime.skill_store.add_artifact_instructions(skill.skill_id, assigned.artifact_id, assigned.name, detail, {
-                "description": assigned.description, "project_id": assigned.project_id, "entrypoint_path": assigned.entrypoint_path,
-                "argument_schema": assigned.argument_schema, "timeout_seconds": assigned.timeout_seconds,
-            })
+            self.runtime.skill_store.add_artifact_instructions(skill.skill_id, assigned.artifact_id, assigned.name, detail, assigned.skill_definition())
+            self.runtime.skill_store.update_artifact_definition(skill.skill_id, assigned.artifact_id, assigned.name, assigned.skill_definition())
         except Exception:
             if not record.skill_id:
                 self.runtime.artifact_store.set_skill(artifact_id, "")
@@ -829,11 +861,17 @@ class V2Daemon:
 
     def replace_skill(self, *, actor_user_id: str, skill_id: str, source_directory: str) -> dict[str, str]:
         self._require_admin(actor_user_id)
+        canonical_id = "skill:" + str(skill_id).removeprefix("skill:")
+        if any(item.skill_id == canonical_id for item in self.runtime.artifact_store.list()):
+            raise ValueError("skill_has_registered_artifacts: preserve and unregister its artifacts before replacing the package")
         replaced = self.runtime.skill_store.replace_directory(skill_id, source_directory)
         return replaced.candidate()
 
     def delete_skill(self, *, actor_user_id: str, skill_id: str) -> dict[str, str]:
         self._require_admin(actor_user_id)
+        canonical_id = "skill:" + str(skill_id).removeprefix("skill:")
+        if any(item.skill_id == canonical_id for item in self.runtime.artifact_store.list()):
+            raise ValueError("skill_has_registered_artifacts: unregister its artifacts first; program and data files must be preserved")
         deleted = self.runtime.skill_store.uninstall(skill_id)
         for artifact in self.runtime.artifact_store.list():
             if artifact.skill_id == deleted:
@@ -2037,7 +2075,7 @@ class V2Daemon:
                 self.runtime.schedule_store.mark_occurrence_processing_failed(scheduled_occurrence, error=error)
                 self._notify_scheduled_task_failure(metadata, error=error)
             elif terminal and queued is not None:
-                self._notify_inbound_failure(queued, error=error)
+                self._notify_inbound_failure(queued, error=error, task_state=snapshot.metadata.get("task_state"))
             self.runtime.core.clear_failure()
         if step.status != LoopStepStatus.BUSY:
             self.kill_switch.clear(str(step.queued_message_id or ""))
@@ -2175,7 +2213,7 @@ class V2Daemon:
             source_message_id=f"outbound:{outbound.outbox_message_id}",
         )
 
-    def _notify_inbound_failure(self, queued: Any, *, error: str) -> None:
+    def _notify_inbound_failure(self, queued: Any, *, error: str, task_state: Any = None) -> None:
         """Tell the originating user when ordinary work has terminally failed."""
         inbound = getattr(queued, "message", None)
         metadata = getattr(inbound, "metadata", {}) or {}
@@ -2189,6 +2227,17 @@ class V2Daemon:
             logger.error("inbound failure could not be delivered message_id=%s error=%s", getattr(queued, "message_id", ""), error)
             return
         message = _inbound_failure_message(error, self.runtime.inference_settings_store.get().model_id)
+        if (
+            _scheduled_failure_code(error) == "v3_task_failed"
+            and isinstance(task_state, dict)
+            and task_state.get("status") == "failed"
+            and str(task_state.get("user") or "") == user_id
+            and str(task_state.get("message_id") or "") == str(getattr(queued, "message_id", ""))
+        ):
+            task_metadata = task_state.get("metadata")
+            response = task_metadata.get("v3_failure_response") if isinstance(task_metadata, dict) else None
+            if isinstance(response, dict) and str(response.get("message") or "").strip():
+                message = str(response["message"]).strip()
         outbound = self.runtime.outbox.enqueue(
             address=origin,
             message=message,
@@ -2497,7 +2546,7 @@ def _inbound_failure_message(error: str, model_id: str) -> str:
         reason = str(error or "").partition(":")[2].strip() or "V3 reported a terminal task failure."
         if reason.startswith("v3_phase_plan_invalid:"):
             return "I couldn't form a workable plan for this task. Please try rephrasing it or breaking it into smaller steps."
-        return "I couldn't complete this task. Please try again, or rephrase it with the outcome you want."
+        return "I couldn't complete this task. Execution stopped before I could verify the requested result."
     if code == "openai_codex_auth_required":
         return "I couldn't complete this task because Codex needs to be signed in again."
     if code == "openai_codex_cli_missing":

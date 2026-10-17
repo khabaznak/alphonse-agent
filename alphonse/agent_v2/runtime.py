@@ -53,6 +53,7 @@ from alphonse.agent_v2.code_mode_settings import SQLiteCodeModeSettingsStore
 from alphonse.agent_v2.media_tools_settings import SQLiteMediaToolsSettingsStore
 from alphonse.agent_v2.assets import SQLiteAssetStore
 from alphonse.agent_v2.artifacts import SQLiteArtifactStore
+from alphonse.agent_v2.artifact_resources import ArtifactResources
 from alphonse.agent_v2.skills import SkillStore
 from alphonse.agent_v2.memory_settings import SQLiteMemorySettingsStore
 from alphonse.agent_v2.core.memory import LedgerMemory
@@ -202,9 +203,13 @@ def build_runtime_host(
     inference = inference or build_inference_router_from_settings(inference_settings_store.get())
     question_store = question_store or SQLiteQuestionStore()
     project_store = project_store or ProjectStore()
+    artifact_store.capture_legacy_roots(project_store)
+    artifact_resources = ArtifactResources(artifact_store, skill_store, project_store, repository_root=user_store.artifacts_root, is_admin=user_store.is_admin)
+    if user_store.workspace_root() is not None:
+        artifact_resources.ensure_repository()
     # Artifacts are skill-owned implementation details. They are never
     # materialized as independently curated tools; skills describe when
-    # and how to use their project-local programs through native.bash.
+    # and how to use their registered resources through native.bash.
     schedule_store = schedule_store or ScheduledTaskStore()
     outbox = outbox or SQLiteOutboundStore()
     integration_store = integration_store or SQLiteIntegrationStore()
@@ -308,6 +313,7 @@ def build_runtime_host(
         telemetry_sink=telemetry_sink,
         system_one=build_system_one_provider(system_one_settings_store.get()),
         skill_store=skill_store,
+        artifact_resources=artifact_resources,
     )
     runtime = V2RuntimeHost(
         user=str(user or (user_store.admin_user().user_id if user_store.admin_user() else "local")).strip() or "local",

@@ -29,6 +29,7 @@ BASH_ARGUMENT_SCHEMA: dict[str, Any] = {
             "type": "string",
             "description": "Shell command to execute with bash.",
         },
+        "artifact_id": {"type": "string", "description": "Optional registered resource from a selected skill. Validates access and availability, supplies its working directory, and exposes ALPHONSE_ARTIFACT_ENTRYPOINT and ALPHONSE_ARTIFACT_RUNTIME. Does not invoke a dedicated artifact tool or grant effects."},
         "cwd": {
             "type": "string",
             "description": "Optional working directory.",
@@ -56,7 +57,7 @@ def build_bash_tool_definition() -> ToolDefinition:
             "Execute one Bash command on the local host and return stdout/stderr. Use Bash for local file and project work: "
             "search filenames and file contents with find, rg, or grep; read files with cat or sed; create and edit "
             "files with shell redirection or standard command-line editors; and verify changes by reading them back "
-            "or comparing diffs. For a project-associated task, the default directory is that authorized project. "
+            "or comparing diffs. For a registered skill resource, supply artifact_id and use its verified working directory and runtime; the current project is irrelevant to resource resolution. Without artifact_id, a project-associated task defaults to that project directory. "
             "For an ordinary user file lookup, search likely user-accessible locations such as the user's home folder, "
             "Downloads, or a path the user supplied; report the scope actually searched and ask when the intended "
             "location is unclear. Bash replaces dedicated project search, project file read, and exact text edit tools. "
@@ -88,14 +89,32 @@ def execute_bash(arguments: dict[str, Any], *, context: ToolExecutionContext | N
     if not Path(bash_bin).exists():
         raise RuntimeError("bash_executable_missing")
 
-    cwd = _resolve_cwd(arguments.get("cwd"), context=context)
-    timeout_seconds = _coerce_timeout(arguments.get("timeout_seconds"))
+    resource = None
+    artifact_id = str(arguments.get("artifact_id") or "").strip()
+    if artifact_id:
+        if context is None or context.artifact_resources is None:
+            raise ValueError("artifact_resource_context_required")
+        selection = context.task.metadata.get("v3_skill_selection") or {}
+        resource = context.artifact_resources.require_ready(artifact_id, str(context.task.user or ""), selection.get("selected_skill_ids", []))
+        if arguments.get("cwd") and Path(str(arguments["cwd"])).expanduser().resolve() != Path(resource["working_directory"]):
+            raise ValueError("artifact_working_directory_mismatch")
+        cwd = resource["working_directory"]
+    else:
+        cwd = _resolve_cwd(arguments.get("cwd"), context=context)
+    environment = None
+    if resource:
+        environment = dict(os.environ, ALPHONSE_ARTIFACT_ENTRYPOINT=resource["resolved_entrypoint_path"],
+                           ALPHONSE_ARTIFACT_RUNTIME=resource["runtime_path"], ALPHONSE_ARTIFACT_ROOT=resource["storage_root"])
+    timeout_seconds = _coerce_timeout(arguments.get("timeout_seconds", resource["timeout_seconds"] if resource else None))
+    if resource and timeout_seconds is not None:
+        timeout_seconds = min(timeout_seconds, resource["timeout_seconds"])
     started_at = time.monotonic()
 
     try:
         process = subprocess.Popen(
             [bash_bin, "-lc", command],
             cwd=cwd,
+            env=environment,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             start_new_session=True,

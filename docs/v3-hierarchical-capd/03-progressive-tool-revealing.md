@@ -37,7 +37,7 @@ completion prerequisite for that subgoal.
 After the phase is planned, Jev still curates the request-level candidate set for
 that phase. Deterministic authorization and subgoal prerequisites are applied
 before concrete tools are revealed to tactical System Two. This preserves focused
-per-phase tactical contexts. Project-local artifacts are owned by skills and are
+per-phase tactical contexts. Artifacts in shared, skill-package, or legacy storage are owned by skills and are
 not independently listed, curated, or revealed as tools. Their operating
 instructions are maintained in the owning skill and programs are invoked through
 authorized native capabilities when appropriate.
@@ -212,3 +212,25 @@ that phase unless new evidence and the phase contract make them relevant.
   deterministic gates narrow it per subgoal and System Two composes invocations.
 - 2026-09-21 — Moved out-of-the-box tool relevance questions into a versioned,
   reviewed Jev registry template. Artifact programs do not contribute tool questions.
+
+
+## Skill-owned resource resolution
+
+Selecting a skill loads only that user's authorized artifact sections, along with
+catalog-derived resource manifests. Resolution is independent of the current
+conversation's project and does not require selecting the legacy storage project
+as optional Jev context. Manifests contain verified storage, entrypoint, runtime,
+working-directory and declared-file paths, plus availability issues. They never
+read configuration values. Missing resources are reported as registration/runtime
+problems rather than triggering a search in the task project.
+
+`native.bash` accepts an optional `artifact_id` as a resource reference, not as a
+dedicated artifact tool. Deterministic checks require an authorized user, selected
+owning skill, enabled registration and ready resource before creating a process.
+The native tool supplies the registered cwd and explicit runtime/entrypoint
+variables. The phase must still authorize the native capability and effects.
+Generic Bash continues to be trusted host access, not an OS filesystem sandbox.
+`native.artifact_metadata_update` validates manager-authorized changes to a verified
+location and synchronizes the skill definition without changing program/data files.
+
+See [artifact resource storage and migration](../skill-artifact-resources.md).

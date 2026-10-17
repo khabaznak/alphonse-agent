@@ -132,7 +132,8 @@ def test_checkpoint_omits_ledger_and_resumes_actionable_state(tmp_path) -> None:
         project_id="project-one",
         goal="Continue the work",
         facts_md="- durable fact",
-        conversation_history_md=ledger,
+        conversation_history_md="- User: Continue the work",
+        memory_context_md=ledger,
     )
     question = store.create_question(task=task, question="Continue?", kind="yes_no")
 
@@ -151,6 +152,7 @@ def test_checkpoint_omits_ledger_and_resumes_actionable_state(tmp_path) -> None:
     assert "important context" not in payload
     assert restored is not None
     assert restored.conversation_history_md == EMPTY_MARKDOWN
+    assert restored.memory_context_md == EMPTY_MARKDOWN
     assert restored.facts_md == "- durable fact"
     assert answered.resumed_task is not None
 

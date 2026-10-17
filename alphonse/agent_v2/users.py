@@ -172,6 +172,10 @@ class V2UserStore:
         configured = str(os.getenv("ALPHONSE_SKILLS_DIR") or "").strip()
         return Path(configured).expanduser() if configured else Path.home() / ".alphonse" / "skills"
 
+    def artifacts_root(self) -> Path:
+        workspace = self.workspace_root()
+        return workspace / "artifacts" if workspace is not None else Path.home() / ".alphonse" / "artifacts"
+
     def agent_config_root(self) -> Path:
         workspace = self.workspace_root()
         if workspace is not None:
