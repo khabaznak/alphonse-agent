@@ -12,6 +12,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from alphonse.agent_v2.database import connect_database, default_database_path
+from alphonse.agent_v2.workspace import copy_tree_missing
 from uuid import uuid4
 
 USER_CONTEXT_FILENAME = "user_context.md"
@@ -83,6 +84,9 @@ class V2UserStore:
     def status(self) -> dict[str, object]:
         admin = self.admin_user()
         return {"onboarded": admin is not None, "admin_user": admin.to_dict() if admin else None,
+                "workspace_root": str(self.workspace_root() or ""),
+                "workspace_configured": self.workspace_root() is not None,
+                "legacy_users_root": str(self._legacy_users_root()),
                 "users_root": str(self.users_root()), "timezone": self.timezone(),
                 "mirror_automation_messages_to_preferred_channel": self.mirror_automation_messages_to_preferred_channel()}
 
@@ -97,21 +101,87 @@ class V2UserStore:
         self._set_setting("mirror_automation_messages_to_preferred_channel", "true" if value else "false")
         return value
 
-    def timezone(self) -> str:
+    def timezone(self, user_id: str = "") -> str:
+        user = str(user_id or "").strip()
+        if user:
+            with self._connect() as conn:
+                row = conn.execute("SELECT timezone FROM v2_user_timezones WHERE user_id=?", (user,)).fetchone()
+            if row is not None and str(row[0] or "").strip():
+                return str(row[0])
         return self._setting("timezone") or "UTC"
 
-    def set_timezone(self, value: str) -> str:
+    def set_timezone(self, value: str, user_id: str = "") -> str:
         rendered = str(value or "").strip() or "UTC"
         try:
             ZoneInfo(rendered)
         except Exception as exc:
             raise ValueError(f"invalid_timezone: {rendered}") from exc
-        self._set_setting("timezone", rendered)
+        user = str(user_id or "").strip()
+        if user:
+            with self._connect() as conn:
+                conn.execute("INSERT INTO v2_user_timezones(user_id,timezone,updated_at) VALUES (?,?,?) ON CONFLICT(user_id) DO UPDATE SET timezone=excluded.timezone,updated_at=excluded.updated_at", (user, rendered, _now()))
+        else:
+            self._set_setting("timezone", rendered)
         return rendered
 
     def users_root(self) -> Path:
+        workspace = self.workspace_root()
+        if workspace is not None:
+            return workspace / "users"
+        return self._legacy_users_root()
+
+    def _legacy_users_root(self) -> Path:
         value = self._setting("users_root")
         return Path(value) if value else Path.home() / ".alphonse" / "users"
+
+    def workspace_root(self) -> Path | None:
+        value = self._setting("workspace_root").strip()
+        return Path(value).expanduser().resolve() if value else None
+
+    def set_workspace_root(self, root: str | Path) -> str:
+        rendered = str(root or "").strip()
+        if not rendered:
+            raise ValueError("workspace_root_required")
+        path = Path(rendered).expanduser().resolve()
+        path.mkdir(parents=True, exist_ok=True)
+        # When an administrator changes Workspace later, migrate from the
+        # currently active root (which may itself be an earlier Workspace).
+        old_users_root = self.users_root().expanduser().resolve()
+        new_users_root = path / "users"
+        if old_users_root != new_users_root.resolve():
+            for user in self.list_users():
+                source = old_users_root / user.user_id
+                target = new_users_root / user.user_id
+                if source.is_dir():
+                    target.mkdir(parents=True, exist_ok=True)
+                    for child in source.iterdir():
+                        destination = target / child.name
+                        if child.is_file() and not destination.exists():
+                            shutil.copy2(child, destination)
+                        elif child.is_dir() and child.name in {"assets", "memory"}:
+                            copy_tree_missing(child, destination)
+        self._set_setting("workspace_root", str(path))
+        for user in self.list_users():
+            self.ensure_profile(user.user_id)
+        return str(path)
+
+    def skills_root(self) -> Path:
+        workspace = self.workspace_root()
+        if workspace is not None:
+            return workspace / "skills"
+        configured = str(os.getenv("ALPHONSE_SKILLS_DIR") or "").strip()
+        return Path(configured).expanduser() if configured else Path.home() / ".alphonse" / "skills"
+
+    def artifacts_root(self) -> Path:
+        workspace = self.workspace_root()
+        return workspace / "artifacts" if workspace is not None else Path.home() / ".alphonse" / "artifacts"
+
+    def agent_config_root(self) -> Path:
+        workspace = self.workspace_root()
+        if workspace is not None:
+            return workspace / "agent-config"
+        configured = str(os.getenv("ALPHONSE_V2_AGENT_CONFIG_DIR") or "").strip()
+        return Path(configured).expanduser() if configured else Path.home() / ".alphonse" / "agent-config"
 
     def set_users_root(self, root: str | Path) -> str:
         path = Path(root).expanduser().resolve()
@@ -199,6 +269,11 @@ class V2UserStore:
         return str(path)
 
     def managed_project_root(self, user_id: str) -> Path:
+        workspace = self.workspace_root()
+        if workspace is not None:
+            root = workspace / "projects" / str(user_id)
+            root.mkdir(parents=True, exist_ok=True)
+            return root
         return self.ensure_profile(user_id)
 
     def bind_address(self, *, user_id: str, integration_id: str, provider_key: str, provider_user_id: str, channel_target: str = "", is_preferred: bool = True, is_active: bool = True) -> UserAddress:
@@ -454,6 +529,7 @@ class V2UserStore:
             conn.executescript("""
             CREATE TABLE IF NOT EXISTS v2_users (user_id TEXT PRIMARY KEY, display_name TEXT NOT NULL, role TEXT NOT NULL, is_active INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL) STRICT;
             CREATE TABLE IF NOT EXISTS v2_user_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT NOT NULL) STRICT;
+            CREATE TABLE IF NOT EXISTS v2_user_timezones (user_id TEXT PRIMARY KEY, timezone TEXT NOT NULL, updated_at TEXT NOT NULL) STRICT;
             CREATE TABLE IF NOT EXISTS v2_user_addresses (address_id TEXT PRIMARY KEY, user_id TEXT NOT NULL, integration_id TEXT NOT NULL, provider_key TEXT NOT NULL, provider_user_id TEXT NOT NULL, channel_target TEXT NOT NULL, is_preferred INTEGER NOT NULL DEFAULT 0, is_active INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, UNIQUE(integration_id, provider_user_id)) STRICT;
             CREATE INDEX IF NOT EXISTS idx_v2_user_addresses_user ON v2_user_addresses(user_id, is_preferred);
             CREATE TABLE IF NOT EXISTS v2_access_requests (request_id TEXT PRIMARY KEY, integration_id TEXT NOT NULL, provider_key TEXT NOT NULL, provider_user_id TEXT NOT NULL, channel_target TEXT NOT NULL, display_name TEXT NOT NULL DEFAULT '', status TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, UNIQUE(integration_id, provider_user_id, channel_target)) STRICT;

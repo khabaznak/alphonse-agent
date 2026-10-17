@@ -12,8 +12,10 @@ from alphonse.agent_v2.core.core import ProcessingResult
 from alphonse.agent_v2.core.core import ProcessingStatus
 from alphonse.agent_v2.core.core import StateSnapshot
 from alphonse.agent_v2.core.intelligence import TaskState
+from alphonse.agent_v2.core.intelligence.acceptance_contract import contract_from_markdown
 from alphonse.agent_v2.core.messages import InMemoryMessageQueue
 from alphonse.agent_v2.core.messages import MessageSelector
+from alphonse.agent_v2.core.questions import SQLiteQuestionStore
 from alphonse.agent_v2.core.state import AVAILABLE
 from alphonse.agent_v2.core.state import ERROR
 from alphonse.agent_v2.core.state import WAITING
@@ -49,6 +51,113 @@ def test_available_state_consumes_message_and_returns_available_on_completion() 
     assert processor.processed == ["first"]
     assert processor.received_message_ids == [result.queued_message_id]
     assert queue.size() == 0
+
+
+def test_v3_retry_restores_checkpoint_and_keeps_acceptance_contract(tmp_path) -> None:
+    reset_state()
+    queue = InMemoryMessageQueue()
+    message_id = "stable-v3-message"
+    queue.enqueue(
+        CoreMessage(
+            timestamp=datetime.now().astimezone(),
+            prompt="Change exactly one record",
+            user="alex",
+            metadata={"intelligence_engine": "hierarchical_v3", "intelligence_schema_version": 3},
+        ),
+        message_id=message_id,
+    )
+    questions = SQLiteQuestionStore(tmp_path / "questions.sqlite3")
+    checkpoint = TaskState(
+        task_id=message_id,
+        message_id=message_id,
+        user="alex",
+        goal="Change exactly one record",
+        intelligence_engine="hierarchical_v3",
+        intelligence_schema_version=3,
+        acceptance_criteria_md="1.- [ ] The exact record is updated",
+        acceptance_contract=contract_from_markdown(
+            "1.- [ ] The exact record is updated", source_message_id=message_id
+        ),
+    )
+    questions.save_task_checkpoint(checkpoint, status="running")
+
+    class CaptureProcessor:
+        received = None
+
+        def process(self, task, context):
+            self.received = task
+            return ProcessingResult(snapshot=StateSnapshot(current_work=task.goal))
+
+    processor = CaptureProcessor()
+    core = AlphonseCore(
+        intelligence=processor,
+        messages=queue,
+        tools=_NullTools(),
+        prompts=_NullPrompts(),
+        state=_RecordingState(),
+        memory=_NullMemory(),
+        question_store=questions,
+    )
+
+    result = core.step()
+
+    assert result.status == LoopStepStatus.PROCESSED
+    assert processor.received is not None
+    assert processor.received.task_id == message_id
+    assert processor.received.acceptance_contract == checkpoint.acceptance_contract
+    assert processor.received.acceptance_criteria_md == checkpoint.acceptance_criteria_md
+
+
+def test_v3_correlated_answer_preserves_original_task_identity() -> None:
+    reset_state()
+    queue = InMemoryMessageQueue()
+    original = TaskState(
+        task_id="original-v3-task",
+        message_id="original-v3-message",
+        user="alex",
+        project_id="home",
+        goal="Qué temperatura tenemos en el estudio?",
+        intelligence_engine="hierarchical_v3",
+        intelligence_schema_version=3,
+    )
+    queue.enqueue(
+        CoreMessage(
+            timestamp=datetime.now().astimezone(),
+            prompt="usa el artifact de LG",
+            user="alex",
+            project_id="home",
+            metadata={
+                "intelligence_engine": "hierarchical_v3",
+                "intelligence_schema_version": 3,
+                "routing_disposition": "correlated_response",
+                "task_state": original.to_dict(),
+            },
+        ),
+        message_id="answer-message",
+    )
+
+    class CaptureProcessor:
+        received = None
+
+        def process(self, task, context):
+            self.received = task
+            return ProcessingResult(snapshot=StateSnapshot(current_work=task.goal))
+
+    processor = CaptureProcessor()
+    core = AlphonseCore(
+        intelligence=processor,
+        messages=queue,
+        tools=_NullTools(),
+        prompts=_NullPrompts(),
+        state=_RecordingState(),
+        memory=_NullMemory(),
+    )
+
+    core.step()
+
+    assert processor.received is not None
+    assert processor.received.task_id == "original-v3-task"
+    assert 'usa el artifact de LG' in processor.received.recent_conversation_md
 
 
 def test_working_state_does_not_let_outer_loop_consume_message() -> None:
@@ -259,3 +368,49 @@ class _NullPrompts:
 
 class _NullMemory:
     pass
+
+
+def test_task_context_separates_recorded_conversation_from_audit_memory(tmp_path) -> None:
+    from alphonse.agent_v2.conversations import SQLiteConversationStore
+    from alphonse.agent_v2.core.core import _task_progress_snapshot
+    from alphonse.agent_v2.core.memory import LedgerMemory
+    from alphonse.agent_v2.memory_settings import SQLiteMemorySettingsStore
+
+    memory = LedgerMemory(users_root=lambda: tmp_path / "users", settings_store=SQLiteMemorySettingsStore(":memory:"))
+    old = TaskState(task_id="old", user="alex", goal="Old ledger question")
+    memory.start_task(old)
+    memory.event(old, "Acceptance Criteria", "Old mission criterion")
+    memory.event(old, "Plan", "Old proposed answer")
+    store = SQLiteConversationStore(":memory:")
+    store.record(owner_user_id="alex", project_id="", role="assistant", content="Actual previous reply", source="desktop", source_message_id="prior")
+    prompt = "Please, revisa la temperatura del estudio"
+    store.record(owner_user_id="alex", project_id="", role="user", content=prompt, source="desktop", source_message_id="current")
+
+    class CaptureProcessor:
+        received = None
+
+        def process(self, task, context):
+            self.received = task
+            return ProcessingResult(snapshot=StateSnapshot(current_work=task.goal))
+
+    processor = CaptureProcessor()
+    core, queue, _ = _core(processor)
+    core.memory = memory
+    core.conversation_store = store
+    queue.enqueue(_message(prompt))
+    core.step()
+
+    task = processor.received
+    assert task is not None
+    assert task.goal == prompt
+    assert prompt in task.conversation_history_md
+    assert "Actual previous reply" in task.conversation_history_md
+    assert "Old ledger question" not in task.conversation_history_md
+    assert "Old mission criterion" not in task.to_markdown_prompt()
+    assert "Old proposed answer" not in task.to_markdown_prompt()
+    assert "Old ledger question" in task.memory_context_md
+    progress = _task_progress_snapshot(task)
+    assert prompt in progress["conversation_history"]
+    assert "Old ledger question" not in progress["conversation_history"]
+    restored = TaskState.from_dict(task.to_dict())
+    assert restored.memory_context_md == task.memory_context_md

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any
+from typing import Any, Callable
 
 from alphonse.agent_v2.core.core import ToolDescriptor
 
@@ -15,6 +15,11 @@ class InferencePurpose(str, Enum):
     ACCEPTANCE_CRITERIA = "acceptance_criteria"
     CRITERIA_REVIEW = "criteria_review"
     TOOL_PLANNING = "tool_planning"
+    TACTICAL_ACTION = "tactical_action"
+    PHASE_REVIEW = "phase_review"
+    STRATEGIC_ACT = "strategic_act"
+    FINAL_RESPONSE = "final_response"
+    PHASE_PLANNING = "phase_planning"
     MEMORY_COMPACTION = "memory_compaction"
 
 
@@ -44,6 +49,7 @@ class InferenceRequest:
     tools: tuple[ToolDescriptor, ...] = ()
     model_profile: ModelProfile | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    cancel_checker: Callable[[], bool] | None = field(default=None, repr=False, compare=False)
 
 
 @dataclass(frozen=True)
@@ -55,3 +61,4 @@ class InferenceResult:
     tool_call: dict[str, Any] | None = None
     model_profile: ModelProfile | None = None
     raw_response: Any = None
+    usage: dict[str, Any] = field(default_factory=dict)

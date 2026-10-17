@@ -33,6 +33,7 @@ class MessageSelector:
     project_id: str | None = None
     tag: str | None = None
     correlation_id: str | None = None
+    message_id: str | None = None
 
 
 class InMemoryMessageQueue:
@@ -64,6 +65,11 @@ class InMemoryMessageQueue:
     def size(self, selector: MessageSelector | None = None) -> int:
         with self._lock:
             return sum(1 for message in self._messages if _matches(message, selector))
+
+    def list_pending(self, selector: MessageSelector | None = None, *, limit: int = 1000) -> list[QueuedMessage]:
+        with self._lock:
+            matches = sorted((message for message in self._messages if _matches(message, selector)), key=_selection_key)
+            return matches[:max(0, int(limit))]
 
     def turns_ahead(self, message_id: str) -> int:
         with self._lock:
@@ -102,5 +108,7 @@ def _matches(queued: QueuedMessage, selector: MessageSelector | None) -> bool:
     if selector.tag is not None and message.tag != selector.tag:
         return False
     if selector.correlation_id is not None and message.correlation_id != selector.correlation_id:
+        return False
+    if selector.message_id is not None and queued.message_id != selector.message_id:
         return False
     return True

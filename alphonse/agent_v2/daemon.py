@@ -8,13 +8,14 @@ import fcntl
 import logging
 import mimetypes
 import os
+import re
 import sqlite3
 import shutil
 import threading
 import time
 import traceback
 from dataclasses import dataclass, replace
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 from pathlib import Path
 from typing import Any
@@ -64,6 +65,8 @@ from alphonse.agent_v2.code_mode_settings import CodeModeSettings
 from alphonse.agent_v2.code_mode_settings import SQLiteCodeModeSettingsStore
 from alphonse.agent_v2.memory_settings import MemorySettings
 from alphonse.agent_v2.memory_settings import SQLiteMemorySettingsStore
+from alphonse.agent_v2.intelligence_engine_settings import IntelligenceEngineSettings
+from alphonse.agent_v2.intelligence_engine_settings import SQLiteIntelligenceEngineSettingsStore
 from alphonse.agent_v2.memory_sessions import SQLiteMemorySessionStore
 from alphonse.agent_v2.memory_sessions import MemorySessionBindingKey
 from alphonse.agent_v2.web_tools_settings import SQLiteWebToolsSettingsStore
@@ -72,13 +75,17 @@ from alphonse.agent_v2.core.tools.registry.native.media import verify_ocr, verif
 from alphonse.agent_v2.runtime import refresh_runtime_web_tools
 from alphonse.agent_v2.runtime import refresh_runtime_media_tools
 from alphonse.agent_v2.runtime import refresh_runtime_artifacts
+from alphonse.agent_v2.runtime import refresh_runtime_system_one
 from alphonse.agent_v2.core.tools.registry.native.web import execute_web_fetch, execute_web_search
 from alphonse.agent_v2.assets import SQLiteAssetStore
 from alphonse.agent_v2.artifacts import SQLiteArtifactStore
 from alphonse.agent_v2.conversations import SQLiteConversationStore, legacy_ledger_events
 from alphonse.agent_v2.automations import EventAutomationStore
 from alphonse.agent_v2.storage_migration import migrate_legacy_databases
+from alphonse.agent_v2.workspace import copy_tree_missing
 from alphonse.agent_v2.retention import prune_operational_data
+from alphonse.agent_v2.system_one import SQLiteSystemOneSettingsStore
+from alphonse.agent_v2.system_one import validate_and_save_system_one_settings
 
 
 logger = logging.getLogger(__name__)
@@ -108,7 +115,7 @@ def _claim_single_instance_lock(daemon_id: str) -> Any:
 class V2Daemon:
     runtime: V2RuntimeHost
     poll_interval_sec: float = 0.05
-    inbound_max_attempts: int = 5
+    inbound_max_attempts: int | None = None
     event_store: EventAutomationStore | None = None
     daemon_id: str = ""
 
@@ -173,6 +180,8 @@ class V2Daemon:
         try:
             self._stop.clear()
             self._ensure_home_projects()
+            family_users = [user.user_id for user in self.runtime.user_store.list_users() if user.is_active]
+            self.runtime.project_store.migrate_legacy_shared_access(family_users)
             self._migrate_blank_project_records()
             self._memory_migration_thread = threading.Thread(target=self._migrate_project_memories, name="alphonse-v2-memory-migration", daemon=True)
             self._memory_migration_thread.start()
@@ -327,12 +336,24 @@ class V2Daemon:
     def onboarding_status(self) -> dict[str, object]:
         return self.runtime.user_store.status()
 
-    def onboard(self, *, display_name: str, users_root: str, import_v1: bool = False) -> dict[str, object]:
+    def onboard(self, *, display_name: str, workspace_root: str = "", users_root: str = "", import_v1: bool = False) -> dict[str, object]:
         store = self.runtime.user_store
         # Kept as an ignored IPC parameter so an already-installed desktop client
         # can complete onboarding after the v1 code has been removed.
         del import_v1
-        admin = store.onboard(display_name=display_name, users_root=users_root)
+        if str(workspace_root or "").strip():
+            old_skills_root = Path(self.runtime.skill_store.skills_dir).expanduser().resolve()
+            store.set_workspace_root(workspace_root)
+            new_skills_root = store.skills_root()
+            if old_skills_root != new_skills_root.resolve():
+                copy_tree_missing(old_skills_root, new_skills_root)
+            new_skills_root.mkdir(parents=True, exist_ok=True)
+            self.runtime.skill_store.skills_dir = new_skills_root
+            admin = store.onboard(display_name=display_name)
+        else:
+            # Compatibility for existing clients. New Desktop setup always
+            # asks for the canonical Workspace directory.
+            admin = store.onboard(display_name=display_name, users_root=users_root)
         imported = {}
         self.runtime.user = admin.user_id
         self._ensure_home_projects()
@@ -344,7 +365,10 @@ class V2Daemon:
         self._migrate_blank_project_records()
         self.runtime.asset_store.migrate_to_user_directories()
         refresh_runtime_identity_resolver(self.runtime)
-        return {"admin_user": admin.to_dict(), "migration": {**imported, **migrated}, "users_root": str(store.users_root())}
+        if store.workspace_root() is not None:
+            self.runtime.core.artifact_resources.ensure_repository()
+        self.runtime.artifact_store.capture_legacy_roots(self.runtime.project_store)
+        return {"admin_user": admin.to_dict(), "migration": {**imported, **migrated}, "users_root": str(store.users_root()), "workspace_root": str(store.workspace_root() or "")}
 
     def _migrate_legacy_local(self, admin_user_id: str) -> dict[str, int]:
         """Idempotently claim records created before canonical-user onboarding."""
@@ -366,7 +390,9 @@ class V2Daemon:
 
     def current_user(self) -> dict[str, object]:
         admin = self.runtime.user_store.admin_user()
-        return {"user": admin.to_dict() if admin else None, "onboarded": admin is not None}
+        workspace = self.runtime.user_store.workspace_root()
+        return {"user": admin.to_dict() if admin else None, "onboarded": admin is not None,
+                "workspace_root": str(workspace or ""), "workspace_configured": workspace is not None}
 
     def _admin_user_id(self, requested: str = "") -> str:
         admin = self.runtime.user_store.admin_user()
@@ -555,43 +581,41 @@ class V2Daemon:
             project = self.runtime.project_store.ensure_home_project(user.user_id, root_path=str(root))
             migrate = getattr(self.runtime.core.memory, "migrate_legacy_project_ledgers", None)
             if callable(migrate):
-                migrate(project.project_id, include_generic=True)
+                migrate(project.project_id)
+            if not self.runtime.conversation_store.legacy_import_completed(owner_user_id=user.user_id, project_id=""):
+                legacy = self.runtime.core.memory.latest_content(user_id=user.user_id, project_id="")
+                self.runtime.conversation_store.import_legacy_events(
+                    owner_user_id=user.user_id,
+                    project_id="",
+                    events=legacy_ledger_events(legacy, owner_user_id=user.user_id, project_id="", limit=10_000),
+                )
         migrate = getattr(self.runtime.core.memory, "migrate_legacy_project_ledgers", None)
         if callable(migrate):
             for project in self.runtime.project_store.list_manageable_projects("", requester_is_admin=True):
                 migrate(project.project_id)
+                if not self.runtime.conversation_store.legacy_import_completed(owner_user_id=project.owner_user_id, project_id=project.project_id):
+                    legacy = self.runtime.core.memory.latest_content(user_id=project.owner_user_id, project_id=project.project_id)
+                    if project.is_system_home:
+                        # Older releases copied the generic user ledger into Home's
+                        # project ledger. It is imported separately above with no project.
+                        marker = re.search(r"(?ms)^## Migrated legacy Home ledger:.*\Z", legacy)
+                        if marker:
+                            legacy = legacy[:marker.start()]
+                    self.runtime.conversation_store.import_legacy_events(
+                        owner_user_id=project.owner_user_id,
+                        project_id=project.project_id,
+                        events=legacy_ledger_events(legacy, owner_user_id=project.owner_user_id, project_id=project.project_id, limit=10_000),
+                    )
 
     def _migrate_blank_project_records(self) -> None:
-        """Assign legacy unscoped records to their known owner's Home project."""
+        """Preserve optional project provenance on unscoped records."""
         path = str(getattr(self.runtime.queue, "db_path", ":memory:"))
         if path == ":memory:":
             return
-        homes = {user.user_id: self.runtime.project_store.home_project(user.user_id) for user in self.runtime.user_store.list_users()}
-        ids = {user: project.project_id for user, project in homes.items() if project is not None}
-        if not ids:
-            return
         with connect_database(path) as conn:
             tables = {str(row[0]) for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
-            def update(table: str, owner_column: str) -> None:
-                if table not in tables:
-                    return
-                for owner, project_id in ids.items():
-                    conn.execute(
-                        f"UPDATE {table} SET project_id=? WHERE (project_id='' OR project_id IS NULL) AND {owner_column}=?",
-                        (project_id, owner),
-                    )
-            update("v2_inbound_messages", "user_id")
-            update("v2_conversation_events", "owner_user_id")
-            update("v2_scheduled_tasks", "owner_user_id")
-            update("v2_automations", "owner_user_id")
-            update("v2_task_checkpoints", "owner_id")
-            update("v2_outbox", "audience_user_id")
             if "v2_project_sessions" in tables:
-                for owner, project_id in ids.items():
-                    conn.execute(
-                        "UPDATE v2_project_sessions SET active_project_id=?, project_name='Home' WHERE active_project_id='' AND alphonse_user_id=?",
-                        (project_id, owner),
-                    )
+                conn.execute("DELETE FROM v2_project_sessions WHERE active_project_id='' OR active_project_id IS NULL")
             if "v2_scheduled_task_executions" in tables:
                 conn.execute("UPDATE v2_scheduled_task_executions SET project_id=(SELECT project_id FROM v2_scheduled_tasks t WHERE t.scheduled_task_id=v2_scheduled_task_executions.scheduled_task_id) WHERE project_id='' OR project_id IS NULL")
             if "v2_automation_executions" in tables:
@@ -604,19 +628,6 @@ class V2Daemon:
                     "UPDATE v2_inbound_messages SET metadata_json=json_set(COALESCE(metadata_json, '{}'), '$.routing_disposition', 'pdca_task') "
                     "WHERE json_extract(COALESCE(metadata_json, '{}'), '$.routing_disposition') IS NULL"
                 )
-            unresolved: dict[str, int] = {}
-            for table in (
-                "v2_inbound_messages", "v2_conversation_events", "v2_scheduled_tasks",
-                "v2_automations", "v2_task_checkpoints", "v2_outbox", "v2_questions",
-            ):
-                if table in tables:
-                    count = conn.execute(
-                        f"SELECT COUNT(*) FROM {table} WHERE project_id='' OR project_id IS NULL"
-                    ).fetchone()[0]
-                    if count:
-                        unresolved[table] = int(count)
-            if unresolved:
-                logger.warning("project provenance migration left rows unresolved: %s", unresolved)
 
     def reject_access_request(self, *, request_id: str) -> dict[str, object]:
         return self.runtime.user_store.reject_access_request(request_id).to_dict()
@@ -627,31 +638,66 @@ class V2Daemon:
     def save_settings(
         self,
         *,
-        users_root: str,
+        actor_user_id: str,
+        workspace_root: str,
         timezone_name: str = "",
         mirror_automation_messages_to_preferred_channel: bool | None = None,
     ) -> dict[str, object]:
+        self._require_admin(actor_user_id)
+        root = Path(str(workspace_root or "").strip()).expanduser().resolve()
+        if not str(workspace_root or "").strip():
+            raise ValueError("workspace_root_required")
+        root.mkdir(parents=True, exist_ok=True)
+        user_store = self.runtime.user_store
+        previous_project_roots = {
+            user.user_id: user_store.managed_project_root(user.user_id)
+            for user in user_store.list_users()
+        }
+        old_artifacts_root = self.runtime.user_store.artifacts_root()
+        old_skills_root = Path(self.runtime.skill_store.skills_dir).expanduser().resolve()
+        old_agent_config_root = Path(self.runtime.agent_config_store.config_dir).expanduser().resolve()
+        new_skills_root = root / "skills"
+        new_agent_config_root = root / "agent-config"
+        if old_skills_root != new_skills_root.resolve():
+            copy_tree_missing(old_skills_root, new_skills_root)
+        if old_agent_config_root != new_agent_config_root.resolve():
+            copy_tree_missing(old_agent_config_root, new_agent_config_root)
+        if old_artifacts_root.resolve() != (root / "artifacts").resolve():
+            if (root / "artifacts").exists() and any((root / "artifacts").iterdir()):
+                raise ValueError("artifact_repository_destination_not_empty")
+            if old_artifacts_root.is_dir():
+                shutil.copytree(old_artifacts_root, root / "artifacts", dirs_exist_ok=True, symlinks=True)
+        migrated_projects = self.runtime.project_store.migrate_managed_roots(previous_project_roots, root)
+        self.runtime.artifact_store.capture_legacy_roots(self.runtime.project_store, refresh=True)
+        saved_workspace_root = user_store.set_workspace_root(root)
+        self.runtime.skill_store.skills_dir = new_skills_root
+        self.runtime.core.artifact_resources.ensure_repository()
+        self.runtime.agent_config_store.config_dir = new_agent_config_root
+        self.runtime.agent_config_store._ensure_seeded()
         timezone_value = self.runtime.user_store.set_timezone(timezone_name) if str(timezone_name).strip() else self.runtime.user_store.timezone()
         if mirror_automation_messages_to_preferred_channel is not None:
             self.runtime.user_store.set_mirror_automation_messages_to_preferred_channel(
                 mirror_automation_messages_to_preferred_channel
             )
-        saved_users_root = self.runtime.user_store.set_users_root(users_root)
         self.runtime.asset_store.migrate_to_user_directories()
         return {
-            "users_root": saved_users_root,
+            "workspace_root": saved_workspace_root,
+            "users_root": str(self.runtime.user_store.users_root()),
+            "migrated_projects": migrated_projects,
             "timezone": timezone_value,
             "mirror_automation_messages_to_preferred_channel": self.runtime.user_store.mirror_automation_messages_to_preferred_channel(),
-            "warning_repository_path": "/Alphonse/" in str(users_root),
+            "warning_repository_path": "/Alphonse/" in str(root),
         }
 
     def timezone_settings(self, *, actor_user_id: str) -> dict[str, str]:
         self._require_admin(actor_user_id)
-        return {"timezone": self.runtime.user_store.timezone()}
+        actor = self._admin_user_id(actor_user_id)
+        return {"timezone": self.runtime.user_store.timezone(actor)}
 
     def save_timezone_settings(self, *, actor_user_id: str, timezone_name: str) -> dict[str, str]:
         self._require_admin(actor_user_id)
-        return {"timezone": self.runtime.user_store.set_timezone(timezone_name)}
+        actor = self._admin_user_id(actor_user_id)
+        return {"timezone": self.runtime.user_store.set_timezone(timezone_name, user_id=actor)}
 
     def memory_settings(self, *, actor_user_id: str) -> dict[str, object]:
         self._require_admin(actor_user_id)
@@ -667,17 +713,56 @@ class V2Daemon:
         ))
         return saved.to_dict()
 
+    def system_one_settings(self, *, actor_user_id: str) -> dict[str, object]:
+        self._require_admin(actor_user_id)
+        return self.runtime.system_one_settings_store.get().to_dict()
+
+    def save_system_one_settings(self, *, actor_user_id: str, values: dict[str, Any]) -> dict[str, object]:
+        self._require_admin(actor_user_id)
+        saved = validate_and_save_system_one_settings(self.runtime.system_one_settings_store, values=values)
+        refresh_runtime_system_one(self.runtime, saved)
+        return saved.to_dict()
+
+    def intelligence_engine_settings(self, *, actor_user_id: str) -> dict[str, object]:
+        self._require_admin(actor_user_id)
+        return self.runtime.intelligence_engine_settings_store.get().to_dict()
+
+    def save_intelligence_engine_settings(self, *, actor_user_id: str, values: dict[str, Any]) -> dict[str, object]:
+        self._require_admin(actor_user_id)
+        current = self.runtime.intelligence_engine_settings_store.get()
+        saved = self.runtime.intelligence_engine_settings_store.save(IntelligenceEngineSettings(
+            default_engine=str(values.get("default_engine") or current.default_engine),
+            v3_project_ids=tuple(str(item) for item in values.get("v3_project_ids", current.v3_project_ids)),
+        ))
+        return saved.to_dict()
+
     def list_artifacts(self, *, actor_user_id: str) -> list[dict[str, Any]]:
         actor = str(actor_user_id or "").strip()
         if not actor: raise PermissionError("artifact_manager_required")
-        owner = "" if self.runtime.user_store.is_admin(actor) else actor
-        return [item.to_dict() for item in self.runtime.artifact_store.list(owner_user_id=owner)]
+        resources = self.runtime.core.artifact_resources
+        return [{**item.to_dict(), "resource": resources.describe(item, actor)}
+                for item in self.runtime.artifact_store.list() if resources.can_use(item, actor)]
 
     def update_artifact(self, *, actor_user_id: str, artifact_id: str, name: str, description: str) -> dict[str, Any]:
         self._require_artifact_manager(actor_user_id, self.runtime.artifact_store.get(artifact_id))
-        saved = self.runtime.artifact_store.update_metadata(artifact_id, name=name, description=description)
+        saved = self.runtime.core.artifact_resources.update_metadata(artifact_id, actor_user_id, name=name, description=description)
         refresh_runtime_artifacts(self.runtime)
         return saved.to_dict()
+
+    def relocate_artifact(self, *, actor_user_id: str, artifact_id: str, storage_kind: str, entrypoint_path: str, execution: dict[str, Any], shared_with_user_ids: list[str] | None = None) -> dict[str, Any]:
+        resources = self.runtime.core.artifact_resources
+        saved = resources.relocate(artifact_id, actor_user_id, storage_kind=storage_kind, entrypoint_path=entrypoint_path,
+                                   execution=execution, shared_with_user_ids=shared_with_user_ids)
+        refresh_runtime_artifacts(self.runtime)
+        return {**saved.to_dict(), "resource": resources.describe(saved, actor_user_id)}
+
+    def reconcile_artifacts(self, *, actor_user_id: str) -> list[dict[str, Any]]:
+        actor = str(actor_user_id or "").strip()
+        if not actor:
+            raise PermissionError("artifact_manager_required")
+        resources = self.runtime.core.artifact_resources
+        return [resources.reconcile(item, actor) for item in self.runtime.artifact_store.list()
+                if item.owner_user_id == actor or resources.is_admin(actor)]
 
     def set_artifact_enabled(self, *, actor_user_id: str, artifact_id: str, enabled: bool) -> dict[str, Any]:
         self._require_artifact_manager(actor_user_id, self.runtime.artifact_store.get(artifact_id))
@@ -686,10 +771,112 @@ class V2Daemon:
         return saved.to_dict()
 
     def delete_artifact(self, *, actor_user_id: str, artifact_id: str) -> dict[str, Any]:
-        self._require_artifact_manager(actor_user_id, self.runtime.artifact_store.get(artifact_id))
+        record = self.runtime.artifact_store.get(artifact_id)
+        self._require_artifact_manager(actor_user_id, record)
+        if record and record.skill_id:
+            skill = self.runtime.skill_store.get(record.skill_id)
+            if skill and Path(skill.directory).resolve().is_relative_to(self.runtime.skill_store.skills_dir.resolve()):
+                self.runtime.skill_store.remove_artifact_instructions(skill.skill_id, record.artifact_id)
         self.runtime.artifact_store.delete(artifact_id)
         refresh_runtime_artifacts(self.runtime)
         return {"deleted": artifact_id}
+
+    def list_skills(self, *, actor_user_id: str) -> list[dict[str, Any]]:
+        return self.list_skills_workspace(actor_user_id=actor_user_id)["skills"]
+
+    def list_skills_workspace(self, *, actor_user_id: str) -> dict[str, list[dict[str, Any]]]:
+        self._require_admin(actor_user_id)
+        artifacts = self.runtime.artifact_store.list()
+        return {
+            "skills": [
+                {**item.candidate(), "directory": item.directory, "editable": Path(item.directory).resolve().is_relative_to(self.runtime.skill_store.skills_dir.resolve()), "instructions": item.instructions,
+                 "files": self.runtime.skill_store.files(item.skill_id),
+                 "artifacts": [{**record.to_dict(), "resource": self.runtime.core.artifact_resources.describe(record, actor_user_id)} for record in artifacts if record.skill_id == item.skill_id]}
+                for item in self.runtime.skill_store.list_skills()
+            ],
+            "unassigned_artifacts": [record.to_dict() for record in artifacts if not record.skill_id],
+            "artifact_repository_root": str(self.runtime.core.artifact_resources.repository_root),
+        }
+
+    def attach_artifact_to_skill(self, *, actor_user_id: str, artifact_id: str, skill_id: str, instructions: str) -> dict[str, Any]:
+        self._require_admin(actor_user_id)
+        record = self.runtime.artifact_store.get(artifact_id)
+        if record is None:
+            raise KeyError("artifact_not_found")
+        skill = self.runtime.skill_store.get(skill_id)
+        if skill is None or not Path(skill.directory).resolve().is_relative_to(self.runtime.skill_store.skills_dir.resolve()):
+            raise ValueError("installed_skill_required")
+        detail = str(instructions or "").strip()
+        if not detail:
+            raise ValueError("artifact_instructions_required")
+        if record.skill_id and record.skill_id != skill.skill_id:
+            raise ValueError("artifact_already_assigned")
+        assigned = self.runtime.artifact_store.assign_to_skill(artifact_id, skill.skill_id)
+        try:
+            self.runtime.skill_store.add_artifact_instructions(skill.skill_id, assigned.artifact_id, assigned.name, detail, assigned.skill_definition())
+            self.runtime.skill_store.update_artifact_definition(skill.skill_id, assigned.artifact_id, assigned.name, assigned.skill_definition())
+        except Exception:
+            if not record.skill_id:
+                self.runtime.artifact_store.set_skill(artifact_id, "")
+            raise
+        saved = self.runtime.artifact_store.get(artifact_id)
+        if saved is None:
+            raise KeyError("artifact_not_found")
+        return saved.to_dict()
+
+    def list_unassigned_artifacts(self, *, actor_user_id: str) -> list[dict[str, Any]]:
+        self._require_admin(actor_user_id)
+        return [record.to_dict() for record in self.runtime.artifact_store.list() if not record.skill_id]
+
+    def create_skill(self, *, actor_user_id: str, name: str, description: str, instructions: str) -> dict[str, str]:
+        self._require_admin(actor_user_id)
+        return self.runtime.skill_store.create_skill(name, description, instructions).candidate()
+
+    def update_skill(self, *, actor_user_id: str, skill_id: str, description: str) -> dict[str, str]:
+        self._require_admin(actor_user_id)
+        return self.runtime.skill_store.update_description(skill_id, description).candidate()
+
+    def read_skill_file(self, *, actor_user_id: str, skill_id: str, path: str) -> dict[str, str]:
+        self._require_admin(actor_user_id)
+        return {"content": self.runtime.skill_store.read_file(skill_id, path)}
+
+    def write_skill_file(self, *, actor_user_id: str, skill_id: str, path: str, content: str) -> dict[str, str]:
+        self._require_admin(actor_user_id)
+        self.runtime.skill_store.write_file(skill_id, path, content)
+        return {"saved": path}
+
+    def delete_skill_file(self, *, actor_user_id: str, skill_id: str, path: str) -> dict[str, str]:
+        self._require_admin(actor_user_id)
+        self.runtime.skill_store.delete_file(skill_id, path)
+        return {"deleted": path}
+
+    def add_skill_file(self, *, actor_user_id: str, skill_id: str, source_path: str) -> dict[str, str]:
+        self._require_admin(actor_user_id)
+        return {"path": self.runtime.skill_store.add_file_from_path(skill_id, source_path)}
+
+    def install_skill(self, *, actor_user_id: str, source_directory: str) -> dict[str, str]:
+        self._require_admin(actor_user_id)
+        installed = self.runtime.skill_store.install_directory(source_directory)
+        return installed.candidate()
+
+    def replace_skill(self, *, actor_user_id: str, skill_id: str, source_directory: str) -> dict[str, str]:
+        self._require_admin(actor_user_id)
+        canonical_id = "skill:" + str(skill_id).removeprefix("skill:")
+        if any(item.skill_id == canonical_id for item in self.runtime.artifact_store.list()):
+            raise ValueError("skill_has_registered_artifacts: preserve and unregister its artifacts before replacing the package")
+        replaced = self.runtime.skill_store.replace_directory(skill_id, source_directory)
+        return replaced.candidate()
+
+    def delete_skill(self, *, actor_user_id: str, skill_id: str) -> dict[str, str]:
+        self._require_admin(actor_user_id)
+        canonical_id = "skill:" + str(skill_id).removeprefix("skill:")
+        if any(item.skill_id == canonical_id for item in self.runtime.artifact_store.list()):
+            raise ValueError("skill_has_registered_artifacts: unregister its artifacts first; program and data files must be preserved")
+        deleted = self.runtime.skill_store.uninstall(skill_id)
+        for artifact in self.runtime.artifact_store.list():
+            if artifact.skill_id == deleted:
+                self.runtime.artifact_store.set_skill(artifact.artifact_id, "")
+        return {"deleted": deleted}
 
     def web_tools_settings(self, *, actor_user_id: str) -> dict[str, object]:
         self._require_admin(actor_user_id)
@@ -862,6 +1049,7 @@ class V2Daemon:
         client_id: str,
         user: str,
         project_id: str = "",
+        local_date: str = "",
         after_sequence: int = 0,
         after_ui_sequence: int = 0,
         daemon_id: str = "",
@@ -870,7 +1058,12 @@ class V2Daemon:
     ) -> dict[str, Any]:
         """Collect Desktop activity and atomically lease its pending messages."""
         normalized_user = self._admin_user_id(user)
-        normalized_project = str(project_id or "").strip()
+        # Desktop polling is user scoped. Project IDs remain on tasks and events
+        # but never constrain the main conversation or its pending surfaces.
+        normalized_project = ""
+        zone = ZoneInfo(self.runtime.user_store.timezone(normalized_user))
+        day = _conversation_day(local_date, zone)
+        day_start, day_end = _conversation_day_bounds(day, zone)
         normalized_client = str(client_id or "desktop").strip() or "desktop"
         client_daemon_id = str(daemon_id or "").strip()
         daemon_changed = bool(client_daemon_id and client_daemon_id != self.daemon_id)
@@ -902,7 +1095,7 @@ class V2Daemon:
         questions = []
         for question in self.runtime.question_store.list_pending_for_respondent(
             normalized_user,
-            project_id=normalized_project,
+            project_id=None,
         ):
             event = self._record_question_conversation_event(question)
             questions.append({
@@ -943,7 +1136,7 @@ class V2Daemon:
             "ui_events": ui_events,
             "next_ui_sequence": next_ui_sequence,
             "server_capabilities": self._a2ui.server_capabilities(),
-            "project_attention": self._desktop_project_attention(normalized_user),
+            "conversation_has_unseen_messages": self.runtime.conversation_store.user_has_unseen_messages(owner_user_id=normalized_user, local_date=day.isoformat(), start_utc=day_start.isoformat(), end_utc=day_end.isoformat()),
             "status": {"active_work": self.active_work(), "activity": self.activity_status(), "queue": self._inbound_queue_status()},
         }
 
@@ -953,41 +1146,33 @@ class V2Daemon:
         if delivery is None or delivery.integration_id != "desktop" or delivery.lease_owner != expected_owner:
             return False
         acknowledged = self.runtime.outbox.mark_delivered(outbox_message_id)
-        if acknowledged and delivery.task_id:
+        if acknowledged and delivery.task_id and delivery.kind != "task_acknowledgement":
             key = (str(client_id or "desktop").strip() or "desktop", str(delivery.audience_user_id or "").strip())
             self._desktop_progress_closures.setdefault(key, set()).add(str(delivery.task_id))
         return acknowledged
 
-    def desktop_conversation_history(self, *, user: str, project_id: str = "", limit: int = 100) -> list[dict[str, Any]]:
+    def desktop_conversation_history(self, *, user: str, project_id: str = "", local_date: str = "", limit: int = 100) -> list[dict[str, Any]]:
         normalized_user = self._admin_user_id(user)
-        normalized_project = str(project_id or "").strip()
+        # project_id remains accepted for old clients, but Desktop history is owner scoped.
+        zone = ZoneInfo(self.runtime.user_store.timezone(normalized_user))
+        day = _conversation_day(local_date, zone)
+        start, end = _conversation_day_bounds(day, zone)
+        legacy_project = str(project_id or "").strip()
+        if legacy_project and not self.runtime.conversation_store.legacy_import_completed(owner_user_id=normalized_user, project_id=legacy_project):
+            project = self.runtime.project_store.get_project(legacy_project, requester_user_id=normalized_user, requester_is_admin=self.runtime.user_store.is_admin(normalized_user))
+            if project is not None:
+                legacy = self.runtime.core.memory.latest_content(user_id=normalized_user, project_id=legacy_project)
+                self.runtime.conversation_store.import_legacy_events(
+                    owner_user_id=normalized_user,
+                    project_id=legacy_project,
+                    events=legacy_ledger_events(legacy, owner_user_id=normalized_user, project_id=legacy_project, limit=10_000),
+                )
         for question in self.runtime.question_store.list_for_conversation(
             normalized_user,
-            project_id=normalized_project,
+            project_id=None,
         ):
             self._record_question_conversation_event(question)
-        timeline = self.runtime.conversation_store.list(owner_user_id=normalized_user, project_id=normalized_project, limit=limit)
-        if not timeline and not self.runtime.conversation_store.legacy_import_completed(
-            owner_user_id=normalized_user,
-            project_id=normalized_project,
-        ):
-            legacy = self.runtime.core.memory.latest_content(user_id=normalized_user, project_id=normalized_project)
-            recovered = legacy_ledger_events(
-                legacy,
-                owner_user_id=normalized_user,
-                project_id=normalized_project,
-                limit=limit,
-            )
-            self.runtime.conversation_store.import_legacy_events(
-                owner_user_id=normalized_user,
-                project_id=normalized_project,
-                events=recovered,
-            )
-            timeline = self.runtime.conversation_store.list(
-                owner_user_id=normalized_user,
-                project_id=normalized_project,
-                limit=limit,
-            )
+        timeline = self.runtime.conversation_store.list_between(owner_user_id=normalized_user, start_utc=start.isoformat(), end_utc=end.isoformat())
         return [
             {
                 "id": _conversation_message_id(event.source_message_id, event.event_id),
@@ -1001,27 +1186,13 @@ class V2Daemon:
             for event in timeline
         ]
 
-    def mark_desktop_project_seen(self, *, user: str, project_id: str, through_sequence: int | None = None) -> dict[str, Any]:
+    def mark_desktop_project_seen(self, *, user: str, project_id: str = "", local_date: str = "", through_sequence: int | None = None) -> dict[str, Any]:
         normalized_user = self._admin_user_id(user)
-        normalized_project = str(project_id or "").strip()
-        sequence = self.runtime.conversation_store.mark_project_seen(
-            owner_user_id=normalized_user,
-            project_id=normalized_project,
-            through_sequence=through_sequence,
-        )
-        return {"project_id": normalized_project, "seen_through_sequence": sequence}
-
-    def _desktop_project_attention(self, user: str) -> dict[str, dict[str, int]]:
-        unread = self.runtime.conversation_store.project_unread_counts(owner_user_id=user)
-        questions = self.runtime.question_store.pending_counts_by_project(user)
-        return {
-            project_id: {
-                "unread_messages": int(unread.get(project_id, 0)),
-                "pending_questions": int(questions.get(project_id, 0)),
-                "total": int(unread.get(project_id, 0)) + int(questions.get(project_id, 0)),
-            }
-            for project_id in sorted(set(unread) | set(questions))
-        }
+        zone = ZoneInfo(self.runtime.user_store.timezone(normalized_user))
+        day = _conversation_day(local_date, zone)
+        start, end = _conversation_day_bounds(day, zone)
+        sequence = self.runtime.conversation_store.mark_user_seen(owner_user_id=normalized_user, local_date=day.isoformat(), through_sequence=through_sequence, start_utc=start.isoformat(), end_utc=end.isoformat())
+        return {"local_date": day.isoformat(), "seen_through_sequence": sequence}
 
     def list_projects(self, *, user: str) -> list[dict[str, str]]:
         normalized = self._admin_user_id(user)
@@ -1062,6 +1233,45 @@ class V2Daemon:
         entries.sort(key=lambda item: item[0], reverse=True)
         bounded_limit = max(1, min(int(limit or 4), 4))
         return [entry for _, entry in entries[:bounded_limit]]
+
+    def project_files(self, *, user: str, project_id: str) -> list[dict[str, str]]:
+        actor = self._admin_user_id(user)
+        project = self.runtime.project_store.get_project(project_id, requester_user_id=actor, requester_is_admin=True)
+        if project is None:
+            raise ValueError("project_not_found")
+        root = Path(project.root_path).resolve()
+        if not root.is_dir():
+            return []
+        rows: list[dict[str, str]] = []
+        for current, directories, filenames in os.walk(root, followlinks=False):
+            directories[:] = [name for name in directories if not name.startswith(".") and not (Path(current) / name).is_symlink()]
+            for filename in filenames:
+                child = Path(current) / filename
+                if filename.startswith(".") or filename in {"project_config.json", "project_context.md"} or child.is_symlink():
+                    continue
+                relative = child.relative_to(root).as_posix()
+                rows.append({"name": relative, "kind": "file"})
+                if len(rows) >= 1000:
+                    return sorted(rows, key=lambda item: item["name"].casefold())
+        return sorted(rows, key=lambda item: item["name"].casefold())
+
+    def remove_project_file(self, *, user: str, project_id: str, name: str) -> dict[str, Any]:
+        actor = self._admin_user_id(user)
+        project = self.runtime.project_store.get_project(project_id, requester_user_id=actor, requester_is_admin=True)
+        if project is None:
+            raise ValueError("project_not_found")
+        file_name = str(name or "").strip()
+        relative = Path(file_name)
+        if not file_name or relative.is_absolute() or ".." in relative.parts or any(part.startswith(".") for part in relative.parts) or relative.name in {"project_config.json", "project_context.md"}:
+            raise ValueError("project_file_removal_not_allowed")
+        root = Path(project.root_path).resolve()
+        target = root / relative
+        if any((root / Path(*relative.parts[:index])).is_symlink() for index in range(1, len(relative.parts))):
+            raise ValueError("project_file_not_found")
+        if not target.resolve().is_relative_to(root) or target.is_symlink() or not target.is_file():
+            raise ValueError("project_file_not_found")
+        target.unlink()
+        return {"removed": True, "name": file_name}
 
     def copy_desktop_project_files(self, *, user: str, project_id: str, source_paths: list[str]) -> list[dict[str, Any]]:
         """Copy user-selected Desktop files into an authorized project root at send time."""
@@ -1187,9 +1397,27 @@ class V2Daemon:
         self.runtime.memory_session_store.ensure_general(project_id=project.project_id, created_by_user_id=owner)
         return project.to_dict()
 
-    def update_project(self, *, user: str, project_id: str, name: str, description: str, visibility: str) -> dict[str, Any]:
+    def update_project(self, *, user: str, project_id: str, name: str, description: str, visibility: str, member_user_ids: list[str] | None = None) -> dict[str, Any]:
         actor = self._admin_user_id(user)
-        return self.runtime.project_store.update_project(project_id, name=name, description=description, visibility=visibility, requester_user_id=actor, requester_is_admin=True).to_dict()  # type: ignore[arg-type]
+        members = member_user_ids
+        for member in members or []:
+            if self.runtime.user_store.get_user(str(member)) is None:
+                raise KeyError("user_not_found")
+        return self.runtime.project_store.update_project(project_id, name=name, description=description, visibility=visibility, requester_user_id=actor, requester_is_admin=True, member_user_ids=members).to_dict()  # type: ignore[arg-type]
+
+    def set_project_status(self, *, user: str, project_id: str, status: str) -> dict[str, Any]:
+        actor = self._admin_user_id(user)
+        if status == "archived":
+            self._ensure_project_has_no_live_schedules(project_id)
+        return self.runtime.project_store.set_status(project_id, status, requester_user_id=actor, requester_is_admin=True).to_dict()  # type: ignore[arg-type]
+
+    def project_config(self, *, user: str, project_id: str) -> dict[str, Any]:
+        actor = self._admin_user_id(user)
+        return self.runtime.project_store.read_project_config(project_id, requester_user_id=actor, requester_is_admin=True)
+
+    def save_project_config(self, *, user: str, project_id: str, config: dict[str, Any]) -> dict[str, Any]:
+        actor = self._admin_user_id(user)
+        return self.runtime.project_store.write_project_config(project_id, config, requester_user_id=actor, requester_is_admin=True).to_dict()
 
     def archive_project(self, *, user: str, project_id: str) -> dict[str, Any]:
         actor = self._admin_user_id(user)
@@ -1400,7 +1628,7 @@ class V2Daemon:
             try:
                 parsed = datetime.fromisoformat(raw)
                 if parsed.tzinfo is None:
-                    payload = {**payload, "datetime": _local_datetime_to_utc(parsed, timezone_name=self.runtime.user_store.timezone())}
+                    payload = {**payload, "datetime": _local_datetime_to_utc(parsed, timezone_name=self.runtime.user_store.timezone(normalized_user))}
             except (ValueError, TypeError):
                 pass
         result = self.runtime.question_store.route_answer(
@@ -1537,7 +1765,7 @@ class V2Daemon:
                 local = datetime.fromisoformat(raw)
                 if local.tzinfo is not None:
                     raise ValueError
-                converted = _local_datetime_to_utc(local, timezone_name=self.runtime.user_store.timezone())
+                converted = _local_datetime_to_utc(local, timezone_name=self.runtime.user_store.timezone(str(question.respondent_user_id or "")))
             except (ValueError, TypeError):
                 raise ValueError("a2ui_datetime_invalid") from None
             if source != "submit":
@@ -1561,7 +1789,7 @@ class V2Daemon:
                 continue
             payload = event.get("value") if isinstance(event.get("value"), dict) else {}
             task = payload.get("scheduled_task") if isinstance(payload.get("scheduled_task"), dict) else {}
-            if str(task.get("project_id") or "").strip() != project_id:
+            if project_id and str(task.get("project_id") or "").strip() != project_id:
                 continue
             try:
                 rendered.extend({"event": _a2ui_custom(envelope)} for envelope in self._a2ui.scheduled_task_created(task, project_name=str(payload.get("project_name") or "")))
@@ -1671,6 +1899,7 @@ class V2Daemon:
                     "integration_id": event.integration_id,
                     "channel_target": event.channel_target,
                     "progress": dict(event.progress),
+                    "occurred_at": event.occurred_at,
                 }
             )
         if len(self._activity_event_journal) > 2000:
@@ -1701,15 +1930,9 @@ class V2Daemon:
                 continue
             task_id = str(event.get("task_id") or "").strip()
             progress = event.get("progress") if isinstance(event.get("progress"), dict) else {}
-            if not task_id or not progress or str(progress.get("project_id") or "").strip() != project_id:
+            if not task_id or not progress or (project_id and str(progress.get("project_id") or "").strip() != project_id):
                 continue
-            payload = {
-                **progress,
-                "phase": str(event.get("phase") or "working"),
-                "label": str(event.get("label") or "Working"),
-                "message": str(event.get("message") or ""),
-            }
-            rendered.extend({"event": _a2ui_custom(envelope)} for envelope in self._a2ui.task_progress(task_id, payload))
+            rendered.extend({"event": _a2ui_custom(envelope)} for envelope in self._a2ui.task_progress(task_id, progress))
             known.add(task_id)
         return rendered
 
@@ -1758,14 +1981,14 @@ class V2Daemon:
         """
         key = (client_id, user, project_id)
         known = self._desktop_surfaces.setdefault(key, set())
-        pending = self.runtime.question_store.list_pending_for_respondent(user, project_id=project_id)
+        pending = self.runtime.question_store.list_pending_for_respondent(user, project_id=project_id or None)
         expected = {surface_id_for_question(question.question_id): question for question in pending}
         events: list[dict[str, Any]] = []
         for surface_id in sorted(known - set(expected)):
             events.append({"event": _a2ui_custom(self._a2ui.question_closed(question_id_from_surface(surface_id)))})
         for surface_id, question in expected.items():
             if surface_id not in known:
-                events.extend({"event": _a2ui_custom(message)} for message in self._a2ui.question_opened(question, timezone=self.runtime.user_store.timezone()))
+                events.extend({"event": _a2ui_custom(message)} for message in self._a2ui.question_opened(question, timezone=self.runtime.user_store.timezone(user)))
         self._desktop_surfaces[key] = set(expected)
         return events
 
@@ -1846,11 +2069,13 @@ class V2Daemon:
                 )
             status_for = getattr(self.runtime.queue, "status_for", None)
             terminal = non_retryable or (callable(status_for) and status_for(step.queued_message_id) == "failed")
+            if terminal:
+                self._close_terminal_task_progress(snapshot)
             if scheduled_occurrence and terminal:
                 self.runtime.schedule_store.mark_occurrence_processing_failed(scheduled_occurrence, error=error)
                 self._notify_scheduled_task_failure(metadata, error=error)
             elif terminal and queued is not None:
-                self._notify_inbound_failure(queued, error=error)
+                self._notify_inbound_failure(queued, error=error, task_state=snapshot.metadata.get("task_state"))
             self.runtime.core.clear_failure()
         if step.status != LoopStepStatus.BUSY:
             self.kill_switch.clear(str(step.queued_message_id or ""))
@@ -1910,37 +2135,52 @@ class V2Daemon:
         """Deliver notification-only schedules without starting an LLM/PDCA run."""
         task = occurrence.task
         memory_session = self.runtime.memory_session_store.ensure_system(project_id=task.project_id, identity=task.scheduled_task_id, created_by_user_id=task.owner_user_id) if task.project_id else None
+        raw_channels = task.origin_channel.get("delivery_channels") if isinstance(task.origin_channel, dict) else None
+        origins = [channel_address_from_metadata({"channel": channel}) for channel in raw_channels if isinstance(channel, dict)] if isinstance(raw_channels, list) else []
+        origins = [address for address in origins if address is not None]
         origin = channel_address_from_metadata({"channel": dict(task.origin_channel)})
-        if origin is None:
+        if origin is not None and origin not in origins:
+            origins.insert(0, origin)
+        if not origins:
             resolved = self.runtime.identity_resolver.resolve_outbound_address(
                 alphonse_user_id=task.owner_user_id,
             )
-            origin = resolved.address if resolved.resolved else None
-        if origin is None:
+            if resolved.resolved and resolved.address is not None:
+                origins.append(resolved.address)
+        if not origins:
             raise RuntimeError("scheduled_reminder_delivery_unresolved")
         message = str(task.description or task.name or "Reminder").strip()
-        outbound = self.runtime.outbox.enqueue(
-            address=origin,
-            message=f"Reminder: {message}",
-            kind="scheduled_reminder",
-            audience_user_id=task.owner_user_id,
-            project_id=task.project_id,
-            metadata={
-                "source": "scheduled_reminder",
-                "scheduled_task_id": task.scheduled_task_id,
-                "occurrence_key": occurrence.occurrence_key,
-            },
-        )
-        self.runtime.conversation_store.record(
-            owner_user_id=task.owner_user_id,
-            project_id=task.project_id,
-            memory_session_id=memory_session.session_id if memory_session is not None else "",
-            role="assistant",
-            content=outbound.message,
-            source=origin.integration_id,
-            source_message_id=f"outbound:{outbound.outbox_message_id}",
-        )
-        return outbound.outbox_message_id
+        outbounds = []
+        seen: set[tuple[str, str, str]] = set()
+        for destination in origins:
+            identity = (destination.integration_id, destination.provider_key, destination.channel_target)
+            if identity in seen:
+                continue
+            seen.add(identity)
+            outbound = self.runtime.outbox.enqueue(
+                address=destination,
+                message=f"Reminder: {message}",
+                kind="scheduled_reminder",
+                audience_user_id=task.owner_user_id,
+                project_id=task.project_id,
+                metadata={
+                    "source": "scheduled_reminder",
+                    "scheduled_task_id": task.scheduled_task_id,
+                    "occurrence_key": occurrence.occurrence_key,
+                },
+                idempotency_key=f"scheduled-reminder:{occurrence.occurrence_key}:{destination.integration_id}:{destination.channel_target}",
+            )
+            outbounds.append(outbound)
+            self.runtime.conversation_store.record(
+                owner_user_id=task.owner_user_id,
+                project_id=task.project_id,
+                memory_session_id=memory_session.session_id if memory_session is not None else "",
+                role="assistant",
+                content=outbound.message,
+                source=destination.integration_id,
+                source_message_id=f"outbound:{outbound.outbox_message_id}",
+            )
+        return outbounds[0].outbox_message_id
 
     def _notify_scheduled_task_failure(self, metadata: dict[str, Any], *, error: str) -> None:
         """Notify the owner when scheduled work cannot run, without involving the model."""
@@ -1973,7 +2213,7 @@ class V2Daemon:
             source_message_id=f"outbound:{outbound.outbox_message_id}",
         )
 
-    def _notify_inbound_failure(self, queued: Any, *, error: str) -> None:
+    def _notify_inbound_failure(self, queued: Any, *, error: str, task_state: Any = None) -> None:
         """Tell the originating user when ordinary work has terminally failed."""
         inbound = getattr(queued, "message", None)
         metadata = getattr(inbound, "metadata", {}) or {}
@@ -1987,6 +2227,17 @@ class V2Daemon:
             logger.error("inbound failure could not be delivered message_id=%s error=%s", getattr(queued, "message_id", ""), error)
             return
         message = _inbound_failure_message(error, self.runtime.inference_settings_store.get().model_id)
+        if (
+            _scheduled_failure_code(error) == "v3_task_failed"
+            and isinstance(task_state, dict)
+            and task_state.get("status") == "failed"
+            and str(task_state.get("user") or "") == user_id
+            and str(task_state.get("message_id") or "") == str(getattr(queued, "message_id", ""))
+        ):
+            task_metadata = task_state.get("metadata")
+            response = task_metadata.get("v3_failure_response") if isinstance(task_metadata, dict) else None
+            if isinstance(response, dict) and str(response.get("message") or "").strip():
+                message = str(response["message"]).strip()
         outbound = self.runtime.outbox.enqueue(
             address=origin,
             message=message,
@@ -2184,6 +2435,19 @@ def _without_sequence(event: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in event.items() if key != "sequence"}
 
 
+def _conversation_day(value: str, zone: ZoneInfo) -> date:
+    try:
+        return datetime.strptime(str(value or "").strip(), "%Y-%m-%d").date() if str(value or "").strip() else datetime.now(zone).date()
+    except ValueError as exc:
+        raise ValueError("invalid_conversation_day") from exc
+
+
+def _conversation_day_bounds(day: date, zone: ZoneInfo) -> tuple[datetime, datetime]:
+    start = datetime.combine(day, datetime.min.time(), tzinfo=zone).astimezone(timezone.utc)
+    end = datetime.combine(day + timedelta(days=1), datetime.min.time(), tzinfo=zone).astimezone(timezone.utc)
+    return start, end
+
+
 def _conversation_message_id(source_message_id: str, fallback_event_id: str) -> str:
     value = str(source_message_id or "").strip()
     for prefix in ("inbound:", "outbound:"):
@@ -2237,10 +2501,14 @@ def _scheduled_failure_code(error: str) -> str:
 
 def _scheduled_failure_is_non_retryable(error: str) -> bool:
     return _scheduled_failure_code(error) in {
+        "capd_processing_failed",
+        "inference_cancelled",
         "openai_codex_auth_required",
         "openai_codex_cli_missing",
         "openai_codex_cli_upgrade_required",
         "openai_codex_model_not_configured",
+        "v3_task_failed",
+        "system_one_unavailable",
     }
 
 
@@ -2254,7 +2522,9 @@ def _model_access_rejection(error: str) -> bool:
 
 def _scheduled_failure_message(task_name: str, error: str) -> str:
     code = _scheduled_failure_code(error)
-    if code == "openai_codex_auth_required":
+    if code == "system_one_unavailable":
+        detail = "A required service is temporarily unavailable. Please try again later."
+    elif code == "openai_codex_auth_required":
         detail = "Codex needs to be signed in again before I can run it."
     elif code == "openai_codex_cli_missing":
         detail = "The Codex command-line tool is unavailable on this machine."
@@ -2270,6 +2540,13 @@ def _scheduled_failure_message(task_name: str, error: str) -> str:
 def _inbound_failure_message(error: str, model_id: str) -> str:
     code = _scheduled_failure_code(error)
     model = str(model_id or "").strip()
+    if code == "system_one_unavailable":
+        return "I couldn't complete this task because a required service is temporarily unavailable. Please try again later."
+    if code == "v3_task_failed":
+        reason = str(error or "").partition(":")[2].strip() or "V3 reported a terminal task failure."
+        if reason.startswith("v3_phase_plan_invalid:"):
+            return "I couldn't form a workable plan for this task. Please try rephrasing it or breaking it into smaller steps."
+        return "I couldn't complete this task. Execution stopped before I could verify the requested result."
     if code == "openai_codex_auth_required":
         return "I couldn't complete this task because Codex needs to be signed in again."
     if code == "openai_codex_cli_missing":
@@ -2386,10 +2663,12 @@ def main() -> None:
                 artifact_store=SQLiteArtifactStore.default(),
                 conversation_store=SQLiteConversationStore.default(),
                 memory_settings_store=SQLiteMemorySettingsStore.default(),
+                system_one_settings_store=SQLiteSystemOneSettingsStore.default(),
+                intelligence_engine_settings_store=SQLiteIntelligenceEngineSettingsStore.default(),
                 outbox=SQLiteOutboundStore.default(),
                 integration_store=SQLiteIntegrationStore.default(),
                 inference_settings_store=SQLiteInferenceSettingsStore.default(),
-                agent_config_store=AgentConfigStore.default(),
+                agent_config_store=AgentConfigStore(user_store.agent_config_root()),
                 project_session_store=SQLiteProjectSessionStore.default(),
                 memory_session_store=SQLiteMemorySessionStore.default(),
                 communication_thread_store=SQLiteCommunicationThreadStore.default(),

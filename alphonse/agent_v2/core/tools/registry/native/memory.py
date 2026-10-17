@@ -1,4 +1,4 @@
-"""Bounded read-only recall from the current project's archived memory."""
+"""Bounded read-only recall from the user's conversation and authorized memory."""
 
 from __future__ import annotations
 
@@ -16,6 +16,19 @@ def execute_search_memory(arguments: dict[str, Any], *, context: ToolExecutionCo
     if not query: raise ValueError("memory_search_query_required")
     if context is None or context.memory is None: raise RuntimeError("memory_unavailable")
     task = context.task
+    conversation_store = getattr(context, "conversation_store", None)
+    conversation_search = getattr(conversation_store, "search", None)
+    if callable(conversation_search):
+        try:
+            events = conversation_search(owner_user_id=str(task.user or ""), query=query, limit=8)
+        except Exception:
+            events = []
+        if events:
+            excerpts = "\n".join(
+                f"- [{event.created_at}; project={event.project_id or 'conversation'}; {event.role}] {event.content[:900]}"
+                for event in events
+            )
+            return {"query": query, "project_id": task.project_id, "matches_markdown": excerpts}
     search = getattr(context.memory, "search", None)
     if not callable(search): raise RuntimeError("memory_search_unavailable")
     result = str(search(user_id=str(task.user or ""), project_id=str(task.project_id or ""), query=query) or "")
@@ -25,7 +38,7 @@ def execute_search_memory(arguments: dict[str, Any], *, context: ToolExecutionCo
 def build_search_memory_tool_definition() -> ToolDefinition:
     schema = {
         "type": "object",
-        "properties": {"query": {"type": "string", "description": "Words or phrase to find in closed sessions and legacy project memory."}},
+        "properties": {"query": {"type": "string", "description": "Words or phrase to find in the user's conversation history and archived memory."}},
         "required": ["query"],
         "additionalProperties": False,
     }
@@ -34,7 +47,10 @@ def build_search_memory_tool_definition() -> ToolDefinition:
             tool_id=SEARCH_MEMORY_TOOL_ID,
             name=SEARCH_MEMORY_TOOL_NAME,
             kind=ToolKind.NATIVE,
-            description="Search archived memory in the current project and return bounded cited excerpts.",
+            description=(
+                "Search the user's conversation history across projects and bounded archived memory in the "
+                "current task's authorized scope; return cited excerpts."
+            ),
             argument_schema=schema,
             capabilities=("memory", "search"),
             read_only=True,

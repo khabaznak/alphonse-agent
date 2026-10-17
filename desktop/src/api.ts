@@ -13,7 +13,21 @@ export async function getDesktopDiagnosticProjectId(): Promise<string> {
 }
 
 export async function daemonRequest<T>(method: string, params: Record<string, unknown> = {}): Promise<T> {
-  return invoke<T>("daemon_request", { method, params });
+  try {
+    return await invoke<T>("daemon_request", { method, params });
+  } catch (cause) {
+    // Tauri command failures are commonly rejected as plain strings, while
+    // callers display details only for Error instances. Normalize them here
+    // so the daemon's validation or filesystem error reaches the UI.
+    const message = cause instanceof Error
+      ? cause.message
+      : typeof cause === "string"
+        ? cause
+        : cause && typeof cause === "object" && "message" in cause
+          ? String((cause as { message: unknown }).message)
+          : String(cause || "Daemon request failed");
+    throw new Error(message);
+  }
 }
 
 export async function stopDaemon(): Promise<void> {

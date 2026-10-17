@@ -1,0 +1,117 @@
+{
+  "schema_version": 1,
+  "questions": {
+    "native.respond": {
+      "type": "noul",
+      "instructions": "Does this phase need to send a direct response to the requester?",
+      "criteria": {
+        "true": "The phase includes a user-visible answer, greeting, status update, clarification, or presentation of completed work. Select this when the task completes and needs to inform the user of the results, or when the task fails and needs to communicate the reason for failure to the requester.",
+        "false": "The phase only performs or verifies work and does not need to send the requester an answer, status update, result summary, or explanation of failure."
+      }
+    },
+    "native.bash": {
+      "type": "noul",
+      "instructions": "Does this phase need Bash for local shell, project-file, or artifact work, including direct work with a relevant CLI-backed artifact?",
+      "criteria": {
+        "true": "The phase needs any local command or project-file operation: discover files or search contents with find, rg, or grep; inspect or read files with cat or sed; create or edit files with shell commands; verify edits by reading them back or comparing diffs; run local processes, builds, tests, or diagnostics; or create, inspect, repair, or invoke an artifact or its CLI. Select Bash for these tasks even when the file path or CLI is already known. Favor Bash alongside a relevant CLI-backed artifact when either route may be needed.",
+        "false": "The phase is conversational or can be completed entirely by a relevant non-shell tool without local commands, filesystem access, project-file changes, or artifact CLI work."
+      }
+    },
+    "native.deliver_message": {
+      "type": "noul",
+      "instructions": "Does this phase need to send a message to another registered Alphonse user?",
+      "criteria": {
+        "true": "The requested outcome requires delivering information or a question to a person other than the current requester.",
+        "false": "The phase only needs to reply to the requester, perform local work, or does not require person-to-person delivery."
+      }
+    },
+    "native.send_attachment": {
+      "type": "noul",
+      "instructions": "Does this phase need to send an existing durable attachment to a registered person?",
+      "criteria": {
+        "true": "The requested outcome requires delivering a specific known asset to a registered recipient.",
+        "false": "No attachment must be delivered, the asset has not been identified, or a text-only response is sufficient."
+      }
+    },
+    "native.ask_question": {
+      "type": "noul",
+      "instructions": "Does this phase need information or a decision that only a user can provide?",
+      "criteria": {
+        "true": "A required fact, choice, approval, or clarification is missing and the task must pause until the appropriate user answers.",
+        "false": "Available tools or evidence can continue the work, or the phase can answer without requesting user input."
+      }
+    },
+    "native.scheduled_task": {
+      "type": "noul",
+      "instructions": "Does this phase need to create or change future or recurring work?",
+      "criteria": {
+        "true": "The user requested a reminder, delayed action, recurring action, or another task that must be queued at a specified time or cadence.",
+        "false": "The work should happen now, has no time-based recurrence, or only needs an immediate response."
+      }
+    },
+    "native.skill_artifact_register": {
+      "type": "noul",
+      "instructions": "Does this phase need to register an existing skill-owned artifact in shared storage (or an explicit legacy location), with its schema, execution metadata and operating instructions?",
+      "criteria": {
+        "true": "The requester asks to register an artifact under an installed skill. The executable, schema, skill ID, explicit runtime and operating instructions are ready, or will be ready when Bash will create it earlier in the same phase. No active project is needed for shared or skill-package storage.",
+        "false": "The phase only uses an existing artifact, repairs an existing registration, or creates a program without registering it under a skill."
+      }
+    },
+    "native.skill_install": {
+      "type": "noul",
+      "instructions": "Does this phase need to install a new reusable Alphonse skill that the requester has already reviewed and approved?",
+      "criteria": {
+        "true": "The requester explicitly asked to create a reusable skill, its complete draft has been shown, and the requester approved installing it.",
+        "false": "The phase is drafting or revising a skill proposal, the requester has not approved installation, or the task only needs to use an existing skill."
+      }
+    },
+    "native.analyze_image": {
+      "type": "noul",
+      "instructions": "Does this phase need to inspect or extract text from an image attached to the task?",
+      "criteria": {
+        "true": "An attached image contains visual or textual information required for the current phase, including OCR of receipts or documents.",
+        "false": "There is no relevant image attachment, the source is already text, or image contents are unnecessary."
+      }
+    },
+    "native.web_search": {
+      "type": "noul",
+      "instructions": "Does this phase need to discover current or external information on the public web?",
+      "criteria": {
+        "true": "The phase needs web sources or current external information and does not yet have a specific authoritative page to fetch.",
+        "false": "The answer is available locally, a known URL can be fetched directly, or no public-web research is needed."
+      }
+    },
+    "native.web_fetch": {
+      "type": "noul",
+      "instructions": "Does this phase need readable text from a specific public web page?",
+      "criteria": {
+        "true": "The phase has a known public URL whose page contents are needed as evidence or input.",
+        "false": "A URL has not been identified, web search is needed first, or no web-page contents are required."
+      }
+    },
+    "native.search_memory": {
+      "type": "noul",
+      "instructions": "Does this request need to search archived conversation memory for information from this project?",
+      "criteria": {
+        "true": "The answer depends on details from older or closed conversations that are not present in the current conversation or supplied project context.",
+        "false": "The current conversation, project files, or other available tools provide the needed information without searching archived memory."
+      }
+    },
+    "native.scheduled_task_delivery": {
+      "type": "noul",
+      "instructions": "Does this request need to find an active reminder or change where a pending reminder is delivered?",
+      "criteria": {
+        "true": "The user asks what reminders are active, asks whether a reminder exists, or asks to add or change a delivery channel for an existing reminder.",
+        "false": "The user is creating or changing the reminder's schedule or content, or the request does not concern an existing reminder or its delivery destinations."
+      }
+    },
+    "native.artifact_metadata_update": {
+      "type": "noul",
+      "instructions": "Does this phase need to update or repair the catalog metadata, verified resource location, execution configuration paths, or explicit sharing of an existing skill-owned artifact?",
+      "criteria": {
+        "true": "The requester asks to correct an existing artifact registration's name, description, storage location, runtime/working directory, declared configuration paths, or sharing. Select this when a verified replacement location has been identified or Bash will verify it earlier in the same phase. It changes catalog and skill-definition metadata, never program/data files. The current task does not need to belong to the artifact's legacy storage project.",
+        "false": "The phase only invokes a working artifact, edits its program or data, repairs dependencies, or registers a new artifact; no existing catalog metadata needs updating. Relevance is not authorization to change another household member's registration."
+      }
+    }
+  }
+}

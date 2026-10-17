@@ -19,6 +19,15 @@ def test_user_timezone_persists_when_store_is_reopened(tmp_path) -> None:
     assert reopened.timezone() == "America/Mexico_City"
 
 
+def test_timezone_can_be_configured_per_user_with_global_fallback() -> None:
+    store = V2UserStore(":memory:")
+    store.set_timezone("UTC")
+    store.set_timezone("America/Mexico_City", user_id="member-a")
+
+    assert store.timezone("member-a") == "America/Mexico_City"
+    assert store.timezone("member-b") == "UTC"
+
+
 def test_automation_preferred_channel_copy_setting_defaults_off_and_persists(tmp_path) -> None:
     database = tmp_path / "users.sqlite3"
     store = V2UserStore(database)
@@ -38,6 +47,53 @@ def test_onboarding_creates_uuid_admin_profile_and_context(tmp_path: Path) -> No
     assert admin.user_id not in {"local", "admin"}
     assert (tmp_path / "profiles" / admin.user_id / "user_context.md").exists()
     assert store.status()["onboarded"] is True
+
+
+def test_workspace_root_is_required_state_and_migrates_user_data_idempotently(tmp_path: Path) -> None:
+    legacy = tmp_path / "legacy-users"
+    store = V2UserStore(":memory:")
+    admin = store.onboard(display_name="Alex", users_root=legacy, user_id="alex")
+    (legacy / admin.user_id / "user_context.md").write_text("Family context", encoding="utf-8")
+    (legacy / admin.user_id / "memory" / "daily" / "2026-10-13.jsonl").parent.mkdir(parents=True)
+    (legacy / admin.user_id / "memory" / "daily" / "2026-10-13.jsonl").write_text("ledger", encoding="utf-8")
+
+    assert store.status()["workspace_configured"] is False
+    workspace = tmp_path / "Workspace"
+    store.set_workspace_root(workspace)
+    store.set_workspace_root(workspace)
+    second_workspace = tmp_path / "Workspace 2"
+    store.set_workspace_root(second_workspace)
+
+    assert store.workspace_root() == second_workspace.resolve()
+    assert store.users_root() == second_workspace / "users"
+    assert store.skills_root() == second_workspace / "skills"
+    assert store.agent_config_root() == second_workspace / "agent-config"
+    assert (second_workspace / "users" / admin.user_id / "user_context.md").read_text(encoding="utf-8") == "Family context"
+    assert (second_workspace / "users" / admin.user_id / "memory" / "daily" / "2026-10-13.jsonl").read_text(encoding="utf-8") == "ledger"
+    assert (legacy / admin.user_id / "user_context.md").exists()
+
+
+def test_workspace_migration_moves_managed_projects_and_keeps_imported_roots(tmp_path: Path) -> None:
+    users = V2UserStore(":memory:")
+    admin = users.onboard(display_name="Alex", users_root=tmp_path / "legacy-users", user_id="alex")
+    projects = ProjectStore(tmp_path / "projects.sqlite3")
+    managed = projects.create_project(
+        name="Managed", root_path=str(users.managed_project_root(admin.user_id) / "managed"), owner_user_id=admin.user_id,
+    )
+    (Path(managed.root_path) / "notes.txt").write_text("keep", encoding="utf-8")
+    imported_root = tmp_path / "external" / "Imported"
+    imported = projects.create_project(name="Imported", root_path=str(imported_root), owner_user_id=admin.user_id)
+    old_managed_root = users.managed_project_root(admin.user_id)
+    workspace = tmp_path / "Workspace"
+
+    for _ in range(2):
+        projects.migrate_managed_roots({admin.user_id: old_managed_root}, workspace)
+
+    migrated = projects.get_project(managed.project_id)
+    untouched = projects.get_project(imported.project_id)
+    assert migrated is not None and Path(migrated.root_path) == workspace / "projects" / admin.user_id / managed.project_id
+    assert (Path(migrated.root_path) / "notes.txt").read_text(encoding="utf-8") == "keep"
+    assert untouched is not None and Path(untouched.root_path) == imported_root.resolve()
 
 
 def test_v2_address_mapping_resolves_without_v1_identity(tmp_path: Path) -> None:

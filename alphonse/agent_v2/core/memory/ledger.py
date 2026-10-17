@@ -35,8 +35,6 @@ class LedgerMemory:
             path = self._current_path(task, rollover=True)
             task_id = str(task.task_id or task.message_id or "task").strip()
             self._append(path, f"\n### Task {task_id}\n- User: {task.user or ''}\n- Project ID: {task.project_id or 'generic'}\n\n#### Conversation\n- User: {task.goal}\n")
-            if not session_id:
-                return path.read_text(encoding="utf-8")
             context, metrics = self._bounded_context(task, path)
             metadata = getattr(task, "metadata", None)
             if isinstance(metadata, dict):
@@ -245,7 +243,7 @@ class LedgerMemory:
         recent_budget += max(0, project_budget - estimate_tokens(p)) + max(0, session_budget - estimate_tokens(s))
         r, rt = _truncate_tokens_from_end(recent or "- (none)", recent_budget)
         rendered = f"# Durable Project Memory\n{p}\n\n# Active Session Summary\n{s}\n\n# Recent Session Events\n{r}".strip()
-        rendered, final_truncated = _truncate_tokens(rendered, budget)
+        rendered, final_truncated = _truncate_tokens_balanced(rendered, budget)
         return rendered, {
             "memory_context_estimated_tokens": estimate_tokens(rendered),
             "memory_context_token_budget": budget,
@@ -315,6 +313,21 @@ def _truncate_tokens_from_end(value: str, budget: int) -> tuple[str, bool]:
         return str(value or ""), False
     marker = b"- (earlier events omitted)\n"
     return marker.decode() + raw[-max(0, maximum - len(marker)):].decode("utf-8", errors="ignore").lstrip(), True
+
+
+def _truncate_tokens_balanced(value: str, budget: int) -> tuple[str, bool]:
+    """Preserve durable context at the front and current conversation at the end."""
+    raw = str(value or "").encode("utf-8")
+    maximum = max(1, int(budget)) * 3
+    if len(raw) <= maximum:
+        return str(value or ""), False
+    marker = b"\n- (middle context omitted)\n"
+    available = max(2, maximum - len(marker))
+    front_size = available // 2
+    tail_size = available - front_size
+    front = raw[:front_size].decode("utf-8", errors="ignore").rstrip()
+    tail = raw[-tail_size:].decode("utf-8", errors="ignore").lstrip()
+    return f"{front}{marker.decode()}{tail}", True
 
 
 def _compaction_summary(content: str) -> str:

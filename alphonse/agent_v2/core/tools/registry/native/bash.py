@@ -18,8 +18,6 @@ from alphonse.agent_v2.core.tools.registry import ToolDefinition
 
 BASH_TOOL_ID = "native.bash"
 BASH_TOOL_NAME = "bash"
-DEFAULT_TIMEOUT_SECONDS = 10.0
-MAX_TIMEOUT_SECONDS = 120.0
 MAX_OUTPUT_CHARS = 12000
 TERMINATION_GRACE_SECONDS = 0.25
 
@@ -31,16 +29,18 @@ BASH_ARGUMENT_SCHEMA: dict[str, Any] = {
             "type": "string",
             "description": "Shell command to execute with bash.",
         },
+        "artifact_id": {"type": "string", "description": "Optional registered resource from a selected skill. Validates access and availability, supplies its working directory, and exposes ALPHONSE_ARTIFACT_ENTRYPOINT and ALPHONSE_ARTIFACT_RUNTIME. Does not invoke a dedicated artifact tool or grant effects."},
         "cwd": {
             "type": "string",
             "description": "Optional working directory.",
         },
         "timeout_seconds": {
             "type": "number",
-            "minimum": 0.01,
-            "maximum": MAX_TIMEOUT_SECONDS,
-            "default": DEFAULT_TIMEOUT_SECONDS,
-            "description": "Optional total timeout in seconds. Defaults to 10; use a longer explicit value only for expected long-running commands.",
+            "exclusiveMinimum": 0,
+            "description": (
+                "Optional total timeout in seconds. Omit it to let the command run until it exits; "
+                "set it only when the command itself warrants a deadline."
+            ),
         },
     },
     "required": ["command"],
@@ -54,9 +54,17 @@ def build_bash_tool_definition() -> ToolDefinition:
         name=BASH_TOOL_NAME,
         kind=ToolKind.NATIVE,
         description=(
-            "Execute one bounded Bash command on the local host and return stdout/stderr. "
-            "Use for direct filesystem, process, build, test, or diagnostic work; do not use "
-            "for multi-tool orchestration or aggregation of tool results."
+            "Execute one Bash command on the local host and return stdout/stderr. Use Bash for local file and project work: "
+            "search filenames and file contents with find, rg, or grep; read files with cat or sed; create and edit "
+            "files with shell redirection or standard command-line editors; and verify changes by reading them back "
+            "or comparing diffs. For a registered skill resource, supply artifact_id and use its verified working directory and runtime; the current project is irrelevant to resource resolution. Without artifact_id, a project-associated task defaults to that project directory. "
+            "For an ordinary user file lookup, search likely user-accessible locations such as the user's home folder, "
+            "Downloads, or a path the user supplied; report the scope actually searched and ask when the intended "
+            "location is unclear. Bash replaces dedicated project search, project file read, and exact text edit tools. "
+            "Use it for direct filesystem, process, build, test, diagnostic, and artifact creation or repair work. "
+            "Favor Bash alongside a relevant CLI-backed artifact when the phase may need to invoke its CLI directly, "
+            "inspect or repair its implementation, or verify behavior outside the registered artifact adapter. "
+            "Do not use Bash for multi-tool orchestration or aggregation of tool results."
         ),
         argument_schema=dict(BASH_ARGUMENT_SCHEMA),
         capabilities=("shell", "local_execution"),
@@ -81,14 +89,32 @@ def execute_bash(arguments: dict[str, Any], *, context: ToolExecutionContext | N
     if not Path(bash_bin).exists():
         raise RuntimeError("bash_executable_missing")
 
-    cwd = _resolve_cwd(arguments.get("cwd"), context=context)
-    timeout_seconds = _coerce_timeout(arguments.get("timeout_seconds"))
+    resource = None
+    artifact_id = str(arguments.get("artifact_id") or "").strip()
+    if artifact_id:
+        if context is None or context.artifact_resources is None:
+            raise ValueError("artifact_resource_context_required")
+        selection = context.task.metadata.get("v3_skill_selection") or {}
+        resource = context.artifact_resources.require_ready(artifact_id, str(context.task.user or ""), selection.get("selected_skill_ids", []))
+        if arguments.get("cwd") and Path(str(arguments["cwd"])).expanduser().resolve() != Path(resource["working_directory"]):
+            raise ValueError("artifact_working_directory_mismatch")
+        cwd = resource["working_directory"]
+    else:
+        cwd = _resolve_cwd(arguments.get("cwd"), context=context)
+    environment = None
+    if resource:
+        environment = dict(os.environ, ALPHONSE_ARTIFACT_ENTRYPOINT=resource["resolved_entrypoint_path"],
+                           ALPHONSE_ARTIFACT_RUNTIME=resource["runtime_path"], ALPHONSE_ARTIFACT_ROOT=resource["storage_root"])
+    timeout_seconds = _coerce_timeout(arguments.get("timeout_seconds", resource["timeout_seconds"] if resource else None))
+    if resource and timeout_seconds is not None:
+        timeout_seconds = min(timeout_seconds, resource["timeout_seconds"])
     started_at = time.monotonic()
 
     try:
         process = subprocess.Popen(
             [bash_bin, "-lc", command],
             cwd=cwd,
+            env=environment,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             start_new_session=True,
@@ -139,7 +165,7 @@ def _stop_process_group(
 
 def _collect_output_until_exit(
     process: subprocess.Popen[bytes],
-    timeout_seconds: float,
+    timeout_seconds: float | None,
 ) -> tuple[str, str]:
     """Read available output until the shell exits, without awaiting orphaned pipe writers."""
     stdout_chunks: list[bytes] = []
@@ -148,7 +174,7 @@ def _collect_output_until_exit(
         process.stdout: stdout_chunks,
         process.stderr: stderr_chunks,
     }
-    deadline = time.monotonic() + timeout_seconds
+    deadline = None if timeout_seconds is None else time.monotonic() + timeout_seconds
 
     with selectors.DefaultSelector() as selector:
         for stream in streams:
@@ -159,16 +185,20 @@ def _collect_output_until_exit(
 
         while True:
             exited = process.poll() is not None
-            remaining = deadline - time.monotonic()
-            if not exited and remaining <= 0:
-                raise subprocess.TimeoutExpired(
-                    process.args,
-                    timeout_seconds,
-                    output=b"".join(stdout_chunks),
-                    stderr=b"".join(stderr_chunks),
-                )
-
-            wait_seconds = 0 if exited else min(remaining, 0.02)
+            if exited:
+                wait_seconds = 0
+            elif deadline is None:
+                wait_seconds = 0.02
+            else:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise subprocess.TimeoutExpired(
+                        process.args,
+                        timeout_seconds,
+                        output=b"".join(stdout_chunks),
+                        stderr=b"".join(stderr_chunks),
+                    )
+                wait_seconds = min(remaining, 0.02)
             ready = selector.select(wait_seconds)
             for key, _ in ready:
                 stream = key.fileobj
@@ -260,16 +290,16 @@ def _project_root_from_context(context: ToolExecutionContext | None) -> str:
     return str(root)
 
 
-def _coerce_timeout(raw_timeout: Any) -> float:
+def _coerce_timeout(raw_timeout: Any) -> float | None:
     if raw_timeout is None or raw_timeout == "":
-        return DEFAULT_TIMEOUT_SECONDS
+        return None
     try:
         timeout = float(raw_timeout)
     except (TypeError, ValueError) as exc:
         raise ValueError("bash_timeout_invalid") from exc
     if timeout <= 0:
         raise ValueError("bash_timeout_must_be_positive")
-    return min(timeout, MAX_TIMEOUT_SECONDS)
+    return timeout
 
 
 def _coerce_output(value: Any) -> str:

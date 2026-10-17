@@ -24,6 +24,7 @@ from alphonse.agent_v2.core.tools.registry.native import SCHEDULED_TASK_TOOL_ID
 from alphonse.agent_v2.core.tools.registry.native import SCHEDULED_TASK_TOOL_NAME
 from alphonse.agent_v2.core.tools.registry.native import build_native_tool_registry
 from alphonse.agent_v2.core.tools.registry.native import execute_scheduled_task
+from alphonse.agent_v2.core.tools.registry.native.scheduled_task_delivery import execute_scheduled_task_delivery
 from alphonse.agent_v2.interfaces.tui import _latest_tool_result_response
 
 
@@ -230,6 +231,44 @@ def test_native_scheduled_task_tool_rejects_missing_required_fields() -> None:
             {"name": "Missing", "prompt": "", "schedule_kind": "once", "run_at": "2026-07-10T09:00:00+00:00"},
             context=context,
         )
+
+
+def test_scheduled_task_delivery_lists_and_adds_registered_telegram_address() -> None:
+    from alphonse.agent_v2.core.io import ChannelAddress
+
+    class Resolver:
+        def integration_for(self, *, provider_key: str):
+            assert provider_key == "telegram"
+            return type("Integration", (), {"integration_id": "telegram-home"})()
+
+        def resolve_outbound_address(self, *, alphonse_user_id: str, preferred_integration_id: str):
+            assert alphonse_user_id == "alex"
+            assert preferred_integration_id == "telegram-home"
+            return type("Resolution", (), {
+                "resolved": True,
+                "address": ChannelAddress("telegram-home", "telegram", "123", "alex", "123"),
+            })()
+
+    store = ScheduledTaskStore()
+    task = store.create_task(
+        owner_user_id="alex", project_id="home", name="Meet link", prompt="Send the meet link",
+        schedule_kind="once", run_at="2026-10-02T01:30:00+00:00", timezone_name="America/Mexico_City",
+        delivery_mode="direct", origin_channel={"integration_id": "desktop", "provider_key": "desktop", "channel_target": "alex", "alphonse_user_id": "alex"},
+    )
+    context = ToolExecutionContext(
+        task=TaskState(user="alex", project_id="home"), messages=InMemoryMessageQueue(),
+        schedule_store=store, identity_resolver=Resolver(),
+    )
+
+    assert execute_scheduled_task_delivery({"operation": "list"}, context=context)["tasks"][0]["scheduled_task_id"] == task.scheduled_task_id
+    result = execute_scheduled_task_delivery(
+        {"operation": "add_delivery_channel", "scheduled_task_id": task.scheduled_task_id, "provider_key": "telegram"},
+        context=context,
+    )
+
+    assert result["status"] == "updated"
+    assert [item["provider_key"] for item in result["delivery_channels"]] == ["desktop", "telegram"]
+    assert store.get_task(task.scheduled_task_id).origin_channel["delivery_channels"][-1]["channel_target"] == "123"
 
 
 def test_do_node_records_scheduled_task_result_in_execution_result_not_metadata() -> None:

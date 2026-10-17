@@ -74,7 +74,7 @@ def _route_after_do(task: TaskState) -> str:
         return END
     if str(task.status or "").strip().lower() == "waiting_user" or task.metadata.get("task_parked") is True:
         return END
-    if task.metadata.get("terminal_after_do") is True or str(task.status or "").strip().lower() == "completed":
+    if task.metadata.get("terminal_after_do") is True or str(task.status or "").strip().lower() in {"completed", "failed"}:
         return END
     return CHECK_NODE
 

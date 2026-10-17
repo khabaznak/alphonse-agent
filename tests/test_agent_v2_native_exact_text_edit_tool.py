@@ -79,8 +79,7 @@ def test_exact_text_edit_rejects_path_outside_authorized_project(tmp_path: Path)
         outside.unlink(missing_ok=True)
 
 
-def test_exact_text_edit_is_registered_as_native_tool() -> None:
+def test_exact_text_edit_is_not_registered_as_native_tool() -> None:
     descriptor = build_native_tool_registry().get(EXACT_TEXT_EDIT_TOOL_ID)
 
-    assert descriptor is not None
-    assert "verified post-write read-back" in descriptor.description
+    assert descriptor is None

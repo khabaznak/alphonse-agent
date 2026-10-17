@@ -21,13 +21,13 @@ def test_queue_message_requires_project_provenance() -> None:
     assert queue.size() == 1
 
 
-def test_queue_message_rejects_blank_project_id() -> None:
-    with pytest.raises(ValueError, match="project_id_required"):
-        CommunicationChannel(InMemoryMessageQueue()).queue_message(prompt="hello", user="alex")
+def test_queue_message_accepts_unassociated_conversation_message() -> None:
+    queued = CommunicationChannel(InMemoryMessageQueue()).queue_message(prompt="hello", user="alex")
+    assert queued.message.project_id == ""
 
 
 def test_queue_message_generates_timezone_aware_local_timestamp() -> None:
-    queued = CommunicationChannel(InMemoryMessageQueue()).queue_message(prompt="hello", user="alex", project_id="home")
+    queued = CommunicationChannel(InMemoryMessageQueue()).queue_message(prompt="hello", user="alex")
 
     assert queued.message.timestamp.tzinfo is not None
     assert queued.message.timestamp.utcoffset() is not None

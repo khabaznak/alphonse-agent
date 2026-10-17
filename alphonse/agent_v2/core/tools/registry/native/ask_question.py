@@ -98,6 +98,10 @@ def execute_ask_question(
         if isinstance(context.task.metadata.get("channel"), dict)
         else {},
     }
+    # The question is part of the dialogue the planner must see when the task
+    # resumes. Store it on the task before the interrupt checkpoint is written.
+    context.task.append_conversation_message("Alphonse", question)
+    context.record_memory_event(context.task, "Conversation", f"- Alphonse: {question}")
     interrupt = store.create_question(
         task=context.task,
         question=question,

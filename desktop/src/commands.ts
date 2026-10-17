@@ -8,6 +8,7 @@ export const DESKTOP_COMMANDS = [
   "/scheduled-tasks",
   "/settings",
   "/users",
+  "/killswitch",
   "/stop",
   "/exit",
   "/quit",

@@ -35,6 +35,7 @@ class SQLiteConversationStore:
     def __init__(self, db_path: str | Path = ":memory:") -> None:
         self.db_path = str(db_path)
         self._memory = sqlite3.connect(":memory:", check_same_thread=False) if self.db_path == ":memory:" else None
+        self._daily_ledger_projector: Any | None = None
         if self._memory is not None:
             self._memory.row_factory = sqlite3.Row
         self._ensure_schema()
@@ -67,7 +68,7 @@ class SQLiteConversationStore:
         source_id = str(source_message_id or "").strip()
         timestamp = _canonical_timestamp(created_at or _now())
         if connection is not None:
-            return self._record(
+            event = self._record(
                 connection,
                 event_id=event_id,
                 owner=owner,
@@ -79,8 +80,9 @@ class SQLiteConversationStore:
                 source_id=source_id,
                 timestamp=timestamp,
             )
+            return event
         with self._connect() as conn:
-            return self._record(
+            event = self._record(
                 conn,
                 event_id=event_id,
                 owner=owner,
@@ -92,6 +94,22 @@ class SQLiteConversationStore:
                 source_id=source_id,
                 timestamp=timestamp,
             )
+        self._project_daily_ledger(event)
+        return event
+
+    def set_daily_ledger_projector(self, projector: Any | None) -> None:
+        self._daily_ledger_projector = projector
+
+    def _project_daily_ledger(self, event: ConversationEvent | None) -> None:
+        if event is None or self._daily_ledger_projector is None:
+            return
+        try:
+            self._daily_ledger_projector.refresh_for_event(event)
+        except Exception:
+            # The event store is authoritative; a failed generated view can be
+            # rebuilt on the next conversation write without blocking chat.
+            import logging
+            logging.getLogger(__name__).exception("daily conversation ledger projection failed")
 
     @staticmethod
     def _record(
@@ -129,6 +147,87 @@ class SQLiteConversationStore:
                 rows = conn.execute("SELECT * FROM v2_conversation_events WHERE owner_user_id=? AND project_id=? AND memory_session_id=? ORDER BY sequence DESC LIMIT ?", (str(owner_user_id or "").strip(), str(project_id or "").strip(), str(memory_session_id or "").strip(), max(1, min(int(limit or 100), 500)))).fetchall()
         return [_event(row) for row in reversed(rows)]
 
+    def list_recent(self, *, owner_user_id: str, limit: int = 30) -> list[ConversationEvent]:
+        """Return the account's recent conversation flow across project boundaries."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM v2_conversation_events WHERE owner_user_id=? ORDER BY sequence DESC LIMIT ?",
+                (str(owner_user_id or "").strip(), max(1, min(int(limit or 30), 200))),
+            ).fetchall()
+        return [_event(row) for row in reversed(rows)]
+
+    def list_between(self, *, owner_user_id: str, start_utc: str, end_utc: str) -> list[ConversationEvent]:
+        """List all events in a UTC half-open interval, ordered by conversation sequence."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM v2_conversation_events WHERE owner_user_id=? AND created_at>=? AND created_at<? ORDER BY sequence",
+                (str(owner_user_id or "").strip(), str(start_utc), str(end_utc)),
+            ).fetchall()
+        return [_event(row) for row in rows]
+
+    def list_owner(self, *, owner_user_id: str, limit: int = 100) -> list[ConversationEvent]:
+        """Return the user's conversation across all project associations."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM v2_conversation_events WHERE owner_user_id=? ORDER BY sequence DESC LIMIT ?",
+                (str(owner_user_id or "").strip(), max(1, min(int(limit or 100), 500))),
+            ).fetchall()
+        return [_event(row) for row in reversed(rows)]
+
+    def mark_user_seen(self, *, owner_user_id: str, local_date: str = "", through_sequence: int | None = None, start_utc: str = "", end_utc: str = "") -> int:
+        owner = str(owner_user_id or "").strip()
+        day = str(local_date or "").strip()
+        with self._connect() as conn:
+            if through_sequence is None:
+                query = "SELECT COALESCE(MAX(sequence),0) AS latest FROM v2_conversation_events WHERE owner_user_id=?"
+                values: tuple[Any, ...] = (owner,)
+                if start_utc and end_utc:
+                    query += " AND created_at>=? AND created_at<?"
+                    values += (start_utc, end_utc)
+                row = conn.execute(query, values).fetchone()
+                through_sequence = int(row["latest"] or 0)
+            applied = max(0, int(through_sequence or 0))
+            conn.execute(
+                """INSERT INTO v2_desktop_user_cursors(owner_user_id,local_date,last_seen_sequence,updated_at) VALUES (?,?,?,?)
+                   ON CONFLICT(owner_user_id,local_date) DO UPDATE SET last_seen_sequence=MAX(last_seen_sequence,excluded.last_seen_sequence),updated_at=excluded.updated_at""",
+                (owner, day, applied, _now()),
+            )
+        return applied
+
+    def user_has_unseen_messages(self, *, owner_user_id: str, local_date: str = "", start_utc: str = "", end_utc: str = "") -> bool:
+        with self._connect() as conn:
+            interval = " AND e.created_at>=? AND e.created_at<?" if start_utc and end_utc else ""
+            values: tuple[Any, ...] = (str(owner_user_id or "").strip(), str(local_date or "").strip())
+            if interval:
+                values += (start_utc, end_utc)
+            row = conn.execute(
+                f"""SELECT 1 FROM v2_conversation_events e LEFT JOIN v2_desktop_user_cursors c ON c.owner_user_id=e.owner_user_id AND c.local_date=?
+                   WHERE e.owner_user_id=? AND e.sequence>COALESCE(c.last_seen_sequence,0){interval} LIMIT 1""",
+                (values[1], values[0], *values[2:]),
+            ).fetchone()
+        return row is not None
+
+    def search(self, *, owner_user_id: str, query: str, limit: int = 8) -> list[ConversationEvent]:
+        """Search an account's full event history using FTS5 BM25 when available."""
+        owner = str(owner_user_id or "").strip()
+        terms = [term for term in re.findall(r"[\w'-]+", str(query or "")) if len(term) > 1][:12]
+        if not owner or not terms:
+            return []
+        with self._connect() as conn:
+            try:
+                match = " AND ".join('"' + term.replace('"', '""') + '"' for term in terms)
+                rows = conn.execute(
+                    """SELECT e.* FROM v2_conversation_fts f JOIN v2_conversation_events e ON e.event_id=f.event_id
+                       WHERE f.owner_user_id=? AND v2_conversation_fts MATCH ? ORDER BY bm25(v2_conversation_fts) LIMIT ?""",
+                    (owner, match, max(1, min(int(limit or 8), 30))),
+                ).fetchall()
+            except sqlite3.OperationalError:
+                rows = conn.execute(
+                    "SELECT * FROM v2_conversation_events WHERE owner_user_id=? AND lower(content) LIKE ? ORDER BY sequence DESC LIMIT ?",
+                    (owner, f"%{terms[0].lower()}%", max(1, min(int(limit or 8), 30))),
+                ).fetchall()
+        return [_event(row) for row in rows]
+
     def sequence_for_source_message_id(self, source_message_id: str) -> int:
         with self._connect() as conn:
             row = conn.execute(
@@ -159,21 +258,21 @@ class SQLiteConversationStore:
             )
         return applied
 
-    def project_unread_counts(self, *, owner_user_id: str) -> dict[str, int]:
-        owner = str(owner_user_id or "").strip()
+    def project_has_unseen_messages(self, *, owner_user_id: str, project_id: str) -> bool:
+        owner, project = str(owner_user_id or "").strip(), str(project_id or "").strip()
         with self._connect() as conn:
-            rows = conn.execute(
+            row = conn.execute(
                 """
-                SELECT e.project_id, COUNT(*) AS unread
+                SELECT 1
                 FROM v2_conversation_events e
                 LEFT JOIN v2_desktop_project_cursors c
                   ON c.owner_user_id=e.owner_user_id AND c.project_id=e.project_id
-                WHERE e.owner_user_id=? AND e.sequence>COALESCE(c.last_seen_sequence,0)
-                GROUP BY e.project_id
+                WHERE e.owner_user_id=? AND e.project_id=? AND e.sequence>COALESCE(c.last_seen_sequence,0)
+                LIMIT 1
                 """,
-                (owner,),
-            ).fetchall()
-        return {str(row["project_id"] or ""): int(row["unread"] or 0) for row in rows}
+                (owner, project),
+            ).fetchone()
+        return row is not None
 
     def legacy_import_completed(self, *, owner_user_id: str, project_id: str) -> bool:
         with self._connect() as conn:
@@ -268,6 +367,12 @@ class SQLiteConversationStore:
             else:
                 self._create_events_table(conn)
             conn.execute("CREATE INDEX IF NOT EXISTS idx_v2_conversation_events_scope ON v2_conversation_events(owner_user_id, project_id, sequence)")
+            try:
+                conn.execute("CREATE VIRTUAL TABLE IF NOT EXISTS v2_conversation_fts USING fts5(event_id UNINDEXED, owner_user_id UNINDEXED, content, tokenize='unicode61')")
+                conn.execute("CREATE TRIGGER IF NOT EXISTS v2_conversation_fts_insert AFTER INSERT ON v2_conversation_events BEGIN INSERT INTO v2_conversation_fts(event_id,owner_user_id,content) VALUES (new.event_id,new.owner_user_id,new.content); END")
+                conn.execute("INSERT INTO v2_conversation_fts(event_id,owner_user_id,content) SELECT e.event_id,e.owner_user_id,e.content FROM v2_conversation_events e LEFT JOIN v2_conversation_fts f ON f.event_id=e.event_id WHERE f.event_id IS NULL")
+            except sqlite3.OperationalError:
+                pass
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS v2_desktop_project_cursors (
@@ -279,6 +384,7 @@ class SQLiteConversationStore:
                 ) STRICT
                 """
             )
+            conn.execute("CREATE TABLE IF NOT EXISTS v2_desktop_user_cursors (owner_user_id TEXT NOT NULL,local_date TEXT NOT NULL DEFAULT '',last_seen_sequence INTEGER NOT NULL DEFAULT 0,updated_at TEXT NOT NULL,PRIMARY KEY(owner_user_id,local_date)) STRICT")
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS v2_conversation_imports (
@@ -345,7 +451,7 @@ def legacy_ledger_events(content: str, *, owner_user_id: str, project_id: str, l
         for assistant_index, match in enumerate(re.finditer(r"^#### Conversation\n- Alphonse: (.*?)(?=\n#### |\Z)", block, flags=re.MULTILINE | re.DOTALL)):
             if match.group(1).strip():
                 events.append({"id": f"legacy:{owner_user_id}:{project_id}:{index}:assistant:{assistant_index}", "role": "assistant", "content": match.group(1).strip(), "source": "telegram", "created_at": ""})
-    return events[-max(1, min(int(limit or 100), 500)):]
+    return events[-max(1, min(int(limit or 100), 10_000)):]
 
 
 class _Connection:

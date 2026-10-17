@@ -33,7 +33,8 @@ def test_rollover_links_previous_ledger_and_bounds_summary_words(tmp_path: Path)
     memory.start_task(first)
     memory.event(first, "Conversation", "word1 word2 word3 word4 " + "x" * 1100)
     second = _task(task_id="task-2")
-    rendered = memory.start_task(second)
+    memory.start_task(second)
+    rendered = memory.latest_content(user_id="alex")
     assert "[ledger-0001.md](ledger-0001.md)" in rendered
     summary = rendered.split("## Compaction Summary\n", 1)[1].split("\n\n## Memory", 1)[0]
     assert len(summary.split()) <= 3
@@ -58,3 +59,27 @@ def test_concurrent_ledger_appends_do_not_interleave_or_drop_events(tmp_path: Pa
 
     for index in range(100):
         assert content.count(f"event-{index:03d}") == 1
+
+
+def test_generic_prompt_context_is_bounded_and_excludes_audit_plans(tmp_path: Path) -> None:
+    from alphonse.agent_v2.core.memory.ledger import estimate_tokens
+
+    memory = _memory(tmp_path)
+    old = _task(task_id="old")
+    old.goal = "An old unrelated question"
+    memory.start_task(old)
+    memory.event(old, "Acceptance Criteria", "Answer the unrelated question")
+    memory.event(old, "Plan", "obsolete planned response " * 10_000)
+    for index in range(100):
+        memory.event(old, "Conversation", f"- User: prior message {index} " + "x" * 300)
+    current = _task(task_id="current")
+    current.goal = "Please, revisa la temperatura del estudio"
+
+    rendered = memory.start_task(current)
+
+    assert current.goal in rendered
+    assert "An old unrelated question" not in rendered
+    assert "obsolete planned response" not in rendered
+    assert "Answer the unrelated question" not in rendered
+    assert estimate_tokens(rendered) <= 4096
+    assert "obsolete planned response" in memory.latest_content(user_id="alex")

@@ -308,6 +308,7 @@ def refresh_tui_identity_resolver(runtime: TuiRuntime) -> None:
     runtime.core.delivery_sink = build_outbox_delivery_sink(
         outbox=runtime.outbox,
         identity_resolver=runtime.identity_resolver,
+        conversation_store=runtime.conversation_store,
     )
 
 
@@ -897,13 +898,14 @@ def _build_textual_app_class() -> type[Any]:
         def compose(self) -> ComposeResult:
             with Vertical(id="project-context-dialog"):
                 yield Static("Projects", classes="dialog-title")
-                yield Select([("All projects", ""), ("Active", "active"), ("Archived", "archived")], value="", id="project-manager-status", allow_blank=False)
+                yield Select([("All projects", ""), ("Active", "active"), ("Paused", "paused"), ("Completed", "completed"), ("Archived", "archived")], value="", id="project-manager-status", allow_blank=False)
                 yield Select([], id="project-manager-select", prompt="Choose a project", allow_blank=True)
                 yield Static("", id="project-manager-details")
                 yield Input(placeholder="Name", id="project-manager-name")
                 yield Input(placeholder="Description", id="project-manager-description")
                 yield Select([("Private", "private"), ("Shared", "shared")], value="private", id="project-manager-visibility", allow_blank=False)
                 yield Input(placeholder="Parent directory (new) or existing folder (import)", id="project-manager-root")
+                yield Static("Project config JSON (legacy project_context.md is preserved)")
                 yield TextArea("", id="project-manager-context")
                 yield Input(placeholder="Type project ID to remove", id="project-manager-confirmation")
                 yield Static("", id="project-manager-notice")
@@ -1012,7 +1014,8 @@ def _build_textual_app_class() -> type[Any]:
         def compose(self) -> ComposeResult:
             with Vertical(id="project-dialog"):
                 yield Static("Settings", classes="dialog-title")
-                yield Input(value=str(self.settings.get("users_root") or ""), id="users-root")
+                yield Static("Workspace directory (root for users, projects, skills, and agent configuration)")
+                yield Input(value=str(self.settings.get("workspace_root") or ""), id="users-root")
                 yield Static("Memory context budget limits project/session memory injected into model prompts; it does not include instructions, tools, or the current request.")
                 yield Input(value=str(self.settings.get("memory_context_token_budget") or 4096), id="memory-context-token-budget")
                 migration = self.settings.get("memory_migration") if isinstance(self.settings.get("memory_migration"), dict) else {}
@@ -1119,8 +1122,10 @@ def _build_textual_app_class() -> type[Any]:
                 yield Input(placeholder="Name", id="artifact-name")
                 yield Input(placeholder="Description", id="artifact-description")
                 yield Static("", id="artifact-details")
+                yield Input(placeholder="Location JSON: storage_kind, entrypoint_path, execution, shared_with_user_ids", id="artifact-location")
                 with Horizontal(classes="dialog-actions"):
                     yield Button("Save", id="save-artifact", variant="primary")
+                    yield Button("Save location", id="relocate-artifact")
                     yield Button("Turn On/Off", id="toggle-artifact")
                     yield Button("Unregister", id="delete-artifact")
                     yield Button("Close", id="close-artifacts")
@@ -1136,7 +1141,9 @@ def _build_textual_app_class() -> type[Any]:
             if item is None: return
             self.query_one("#artifact-name", Input).value = str(item.get("name") or "")
             self.query_one("#artifact-description", Input).value = str(item.get("description") or "")
-            self.query_one("#artifact-details", Static).update(f"Project: {item.get('project_id')} | Entry point: {item.get('entrypoint_path')} | {'enabled' if item.get('enabled') else 'disabled'}")
+            resource = item.get("resource") or {}
+            self.query_one("#artifact-details", Static).update(f"Skill: {item.get('skill_id')} | Storage: {item.get('storage_kind', 'project')} | Entry point: {resource.get('resolved_entrypoint_path', item.get('entrypoint_path'))} | {resource.get('status', 'unknown')} | {', '.join(resource.get('issues', []))}")
+            self.query_one("#artifact-location", Input).value = json.dumps({"storage_kind": item.get("storage_kind", "project"), "entrypoint_path": item.get("entrypoint_path"), "execution": item.get("execution", {}), "shared_with_user_ids": item.get("shared_with_user_ids", [])})
         def on_button_pressed(self, event: Button.Pressed) -> None:
             if event.button.id == "close-artifacts": self.dismiss(True); return
             item = self._selected()
@@ -1144,6 +1151,7 @@ def _build_textual_app_class() -> type[Any]:
             try:
                 action = str(event.button.id or "")
                 if action == "save-artifact": payload = {"artifact_id": item["artifact_id"], "name": self.query_one("#artifact-name", Input).value, "description": self.query_one("#artifact-description", Input).value}
+                elif action == "relocate-artifact": payload = {**json.loads(self.query_one("#artifact-location", Input).value), "artifact_id": item["artifact_id"]}
                 elif action == "toggle-artifact": payload = {"artifact_id": item["artifact_id"], "enabled": not bool(item.get("enabled"))}
                 else: payload = {"artifact_id": item["artifact_id"]}
                 self.items = self.action(action, payload)
@@ -1354,13 +1362,13 @@ def _build_textual_app_class() -> type[Any]:
             with Vertical(id="project-dialog"):
                 yield Static("Set up Alphonse", classes="dialog-title")
                 yield Input(placeholder="Administrator name", id="admin-name")
-                yield Input(value="~/.alphonse/users", id="onboarding-root")
+                yield Input(placeholder="Workspace directory, e.g. ~/Workspace", id="onboarding-root")
                 yield Button("Create administrator", id="complete-onboarding", variant="primary")
                 yield Static("", id="onboarding-error")
 
         def on_button_pressed(self, event: Button.Pressed) -> None:
             if event.button.id == "complete-onboarding":
-                self.dismiss({"display_name": self.query_one("#admin-name", Input).value, "users_root": self.query_one("#onboarding-root", Input).value})
+                self.dismiss({"display_name": self.query_one("#admin-name", Input).value, "workspace_root": self.query_one("#onboarding-root", Input).value})
 
     class IntegrationsScreen(ModalScreen[str | None]):
         def __init__(self, runtime: TuiRuntime) -> None:
@@ -1593,6 +1601,13 @@ def _build_textual_app_class() -> type[Any]:
         def compose(self) -> ComposeResult:
             with Vertical(id="agent-config-editor-dialog"):
                 yield Static(str(self.document.get("display_name") or "Agent Configuration"), classes="dialog-title")
+                if str(self.document.get("file_name") or "") == "GlobalContext.md":
+                    yield Static(
+                        "Use the household sections in GlobalContext.md. Keep language, accessibility, "
+                        "and communication preferences per member in user_context.md or user settings. "
+                        "This document remains editable here.",
+                        id="global-context-editor-help",
+                    )
                 yield TextArea(str(self.document.get("content") or ""), id="agent-config-editor")
                 yield Static("", id="agent-config-notice")
                 with Horizontal(classes="dialog-actions", id="agent-config-actions"):
@@ -1902,7 +1917,7 @@ def _build_textual_app_class() -> type[Any]:
             super().__init__()
             integration_store = SQLiteIntegrationStore.default()
             inference_settings_store = SQLiteInferenceSettingsStore.default()
-            agent_config_store = AgentConfigStore.default()
+            agent_config_store = AgentConfigStore(V2UserStore.default().agent_config_root())
             project_session_store = SQLiteProjectSessionStore.default()
             self.daemon_client = V2DaemonClient()
             self.external_daemon = _daemon_is_available(self.daemon_client)
@@ -1988,8 +2003,12 @@ def _build_textual_app_class() -> type[Any]:
                         admin = result.get("admin_user") if isinstance(result, dict) else None
                         if isinstance(admin, dict): self.runtime.user = str(admin.get("user_id") or self.runtime.user)
                     else:
-                        admin = self.runtime.user_store.onboard(**values)
+                        workspace_root = str(values.get("workspace_root") or "")
+                        self.runtime.user_store.set_workspace_root(workspace_root)
+                        admin = self.runtime.user_store.onboard(display_name=str(values.get("display_name") or ""))
                         self.runtime.user = admin.user_id
+                        if self.daemon is not None:
+                            self.daemon.save_settings(actor_user_id=admin.user_id, workspace_root=workspace_root)
                 except Exception as exc:
                     self.query_one("#activity", Static).update(f"Onboarding failed: {exc}")
             self.push_screen(OnboardingScreen(), callback=_complete)
@@ -2128,14 +2147,18 @@ def _build_textual_app_class() -> type[Any]:
                 return self.daemon.list_users() if self.daemon is not None else []
             def _context(project_id: str) -> str:
                 if self.external_daemon:
-                    return str(self.daemon_client.project_context(user=self.runtime.user, project_id=project_id).get("content") or "")
-                return str(self.daemon.read_project_context(user=self.runtime.user, project_id=project_id).get("content") or "")
+                    result = self.daemon_client.project_config(user=self.runtime.user, project_id=project_id)
+                    return json.dumps(result.get("config") or {}, ensure_ascii=False, indent=2)
+                return json.dumps(self.daemon.project_config(user=self.runtime.user, project_id=project_id), ensure_ascii=False, indent=2)
             def _save(project_id: str, name: str, description: str, visibility: str, content: str) -> None:
                 values = {"user": self.runtime.user, "project_id": project_id, "name": name, "description": description, "visibility": visibility}
+                config = json.loads(content or "{}")
+                if not isinstance(config, dict):
+                    raise ValueError("project_config_invalid")
                 if self.external_daemon:
-                    self.daemon_client.request("update_project", **values); self.daemon_client.save_project_context(user=self.runtime.user, project_id=project_id, content=content)
+                    self.daemon_client.request("update_project", **values); self.daemon_client.save_project_config(user=self.runtime.user, project_id=project_id, config=config)
                 else:
-                    self.daemon.update_project(**values); self.daemon.save_project_context(user=self.runtime.user, project_id=project_id, content=content)
+                    self.daemon.update_project(**values); self.daemon.save_project_config(user=self.runtime.user, project_id=project_id, config=config)
             def _create_or_import(importing: bool, name: str, description: str, root_path: str, visibility: str) -> dict[str, Any]:
                 values = {"user": self.runtime.user, "name": name, "description": description, "root_path": root_path, "visibility": visibility}
                 method = "import_project" if importing else "create_project"
@@ -2221,12 +2244,17 @@ def _build_textual_app_class() -> type[Any]:
                 if self.external_daemon:
                     self.daemon_client.request(
                         "save_settings",
-                        users_root=root,
+                        actor_user_id=self.runtime.user,
+                        workspace_root=root,
                         mirror_automation_messages_to_preferred_channel=mirror_automation_messages,
                     )
                     return self.daemon_client.request("save_memory_settings", actor_user_id=self.runtime.user, values={"memory_context_token_budget": context_tokens, "max_ledger_bytes": max_bytes, "compaction_summary_max_words": max_words})
-                self.runtime.user_store.set_users_root(root)
-                self.runtime.user_store.set_mirror_automation_messages_to_preferred_channel(mirror_automation_messages)
+                assert self.daemon is not None
+                self.daemon.save_settings(
+                    actor_user_id=self.runtime.user,
+                    workspace_root=root,
+                    mirror_automation_messages_to_preferred_channel=mirror_automation_messages,
+                )
                 from alphonse.agent_v2.memory_settings import MemorySettings
                 return self.runtime.memory_settings_store.save(MemorySettings(max_ledger_bytes=max_bytes, compaction_summary_max_words=max_words, memory_context_token_budget=context_tokens)).to_dict()
             try:
@@ -2252,11 +2280,13 @@ def _build_textual_app_class() -> type[Any]:
             def action(action_name: str, values: dict[str, Any]) -> list[dict[str, Any]]:
                 if self.external_daemon:
                     if action_name == "save-artifact": self.daemon_client.request("update_artifact", actor_user_id=self.runtime.user, **values)
+                    elif action_name == "relocate-artifact": self.daemon_client.request("relocate_artifact", actor_user_id=self.runtime.user, **values)
                     elif action_name == "toggle-artifact": self.daemon_client.request("set_artifact_enabled", actor_user_id=self.runtime.user, **values)
                     else: self.daemon_client.request("delete_artifact", actor_user_id=self.runtime.user, **values)
                     return list(self.daemon_client.request("artifacts", actor_user_id=self.runtime.user).get("artifacts", []))
                 if self.daemon is None: return []
                 if action_name == "save-artifact": self.daemon.update_artifact(actor_user_id=self.runtime.user, **values)
+                elif action_name == "relocate-artifact": self.daemon.relocate_artifact(actor_user_id=self.runtime.user, **values)
                 elif action_name == "toggle-artifact": self.daemon.set_artifact_enabled(actor_user_id=self.runtime.user, **values)
                 else: self.daemon.delete_artifact(actor_user_id=self.runtime.user, **values)
                 return self.daemon.list_artifacts(actor_user_id=self.runtime.user)

@@ -41,6 +41,7 @@ def build_respond_tool_definition() -> ToolDefinition:
         argument_schema=dict(RESPOND_ARGUMENT_SCHEMA),
         capabilities=("conversation", "user_response"),
         tags=("native", "conversation"),
+        metadata={"side_effect_class": "user_response"},
     )
     return ToolDefinition(
         descriptor=descriptor,

@@ -127,10 +127,10 @@ def test_multiple_pending_questions_are_ambiguous_without_direct_reference() -> 
 
 
 def test_pdca_processor_returns_parked_status_for_waiting_question(monkeypatch) -> None:
-    act_module = import_module("alphonse.agent_v2.core.intelligence.pdca.nodes.act_node")
+    acceptance_planning = import_module("alphonse.agent_v2.core.intelligence.acceptance_planning")
     plan_module = import_module("alphonse.agent_v2.core.intelligence.pdca.nodes.plan_node")
 
-    monkeypatch.setattr(act_module, "_call_acceptance_criteria_llm", lambda prompt: "1.- [ ] Confirmation received")
+    monkeypatch.setattr(acceptance_planning, "_call_acceptance_criteria_llm", lambda prompt: "1.- [ ] Confirmation received")
     monkeypatch.setattr(
         plan_module,
         "_call_tool_planning_llm",
@@ -166,9 +166,9 @@ def test_core_parked_result_leaves_loop_available(monkeypatch) -> None:
     from alphonse.agent_v2.core.state import reset_state
     from alphonse.agent_v2.interfaces.tui import InMemoryInternalState, NullMemory, NullPromptLoader
 
-    act_module = import_module("alphonse.agent_v2.core.intelligence.pdca.nodes.act_node")
+    acceptance_planning = import_module("alphonse.agent_v2.core.intelligence.acceptance_planning")
     plan_module = import_module("alphonse.agent_v2.core.intelligence.pdca.nodes.plan_node")
-    monkeypatch.setattr(act_module, "_call_acceptance_criteria_llm", lambda prompt: "1.- [ ] Confirmation received")
+    monkeypatch.setattr(acceptance_planning, "_call_acceptance_criteria_llm", lambda prompt: "1.- [ ] Confirmation received")
     monkeypatch.setattr(
         plan_module,
         "_call_tool_planning_llm",

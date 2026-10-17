@@ -56,6 +56,9 @@ class V2DaemonClient:
     def stop(self) -> dict[str, Any]:
         return self.request("stop")
 
+    def trigger_killswitch(self, *, actor_user_id: str) -> dict[str, Any]:
+        return self.request("trigger_killswitch", actor_user_id=actor_user_id)
+
     def queue_message(self, **message: Any) -> dict[str, Any]:
         return self.request("queue_message", **message)
 
@@ -73,6 +76,7 @@ class V2DaemonClient:
         client_id: str,
         user: str,
         project_id: str = "",
+        local_date: str = "",
         after_sequence: int = 0,
         after_ui_sequence: int = 0,
         daemon_id: str = "",
@@ -84,6 +88,7 @@ class V2DaemonClient:
             client_id=client_id,
             user=user,
             project_id=project_id,
+            local_date=local_date,
             after_sequence=after_sequence,
             after_ui_sequence=after_ui_sequence,
             daemon_id=daemon_id,
@@ -94,8 +99,8 @@ class V2DaemonClient:
     def acknowledge_desktop_delivery(self, *, client_id: str, outbox_message_id: str) -> dict[str, Any]:
         return self.request("desktop_ack_delivery", client_id=client_id, outbox_message_id=outbox_message_id)
 
-    def desktop_conversation_history(self, *, user: str, project_id: str = "", limit: int = 100) -> dict[str, Any]:
-        return self.request("desktop_conversation_history", user=user, project_id=project_id, limit=limit)
+    def desktop_conversation_history(self, *, user: str, project_id: str = "", local_date: str = "", limit: int = 100) -> dict[str, Any]:
+        return self.request("desktop_conversation_history", user=user, project_id=project_id, local_date=local_date, limit=limit)
 
     def mark_desktop_project_seen(self, *, user: str, project_id: str, through_sequence: int | None = None) -> dict[str, Any]:
         return self.request(
@@ -104,6 +109,9 @@ class V2DaemonClient:
             project_id=project_id,
             through_sequence=through_sequence,
         )
+
+    def mark_desktop_conversation_seen(self, *, user: str, local_date: str = "", through_sequence: int | None = None) -> dict[str, Any]:
+        return self.request("desktop_mark_conversation_seen", user=user, local_date=local_date, through_sequence=through_sequence)
 
     def projects(self, *, user: str) -> dict[str, Any]:
         return self.request("projects", user=user)
@@ -121,6 +129,12 @@ class V2DaemonClient:
 
     def save_project_context(self, *, user: str, project_id: str, content: str) -> dict[str, Any]:
         return self.request("save_project_context", user=user, project_id=project_id, content=content)
+
+    def project_config(self, *, user: str, project_id: str) -> dict[str, Any]:
+        return self.request("project_config", user=user, project_id=project_id)
+
+    def save_project_config(self, *, user: str, project_id: str, config: dict[str, Any]) -> dict[str, Any]:
+        return self.request("save_project_config", user=user, project_id=project_id, config=config)
 
     def select_project_session(self, **values: Any) -> dict[str, Any]:
         return self.request("select_project_session", **values)
@@ -198,6 +212,13 @@ class V2DaemonClient:
         client = V2DaemonClient(self.socket_path, timeout_sec=max(self.timeout_sec, 35.0))
         return client.request("set_inference_settings", provider_key=provider_key, model_id=model_id)
 
+    def system_one_settings(self, *, actor_user_id: str) -> dict[str, Any]:
+        return self.request("system_one_settings", actor_user_id=actor_user_id)
+
+    def save_system_one_settings(self, *, actor_user_id: str, values: dict[str, Any]) -> dict[str, Any]:
+        client = V2DaemonClient(self.socket_path, timeout_sec=max(self.timeout_sec, 105.0))
+        return client.request("save_system_one_settings", actor_user_id=actor_user_id, values=values)
+
     def web_tools_settings(self, *, actor_user_id: str) -> dict[str, Any]:
         return self.request("web_tools_settings", actor_user_id=actor_user_id)
 
@@ -236,6 +257,18 @@ class V2DaemonClient:
 
     def save_agent_config(self, *, file_name: str, content: str) -> dict[str, Any]:
         return self.request("save_agent_config", file_name=file_name, content=content)
+
+    def skills(self, *, actor_user_id: str) -> dict[str, Any]:
+        return self.request("skills", actor_user_id=actor_user_id)
+
+    def install_skill(self, *, actor_user_id: str, source_directory: str) -> dict[str, Any]:
+        return self.request("install_skill", actor_user_id=actor_user_id, source_directory=source_directory)
+
+    def replace_skill(self, *, actor_user_id: str, skill_id: str, source_directory: str) -> dict[str, Any]:
+        return self.request("replace_skill", actor_user_id=actor_user_id, skill_id=skill_id, source_directory=source_directory)
+
+    def delete_skill(self, *, actor_user_id: str, skill_id: str) -> dict[str, Any]:
+        return self.request("delete_skill", actor_user_id=actor_user_id, skill_id=skill_id)
 
     def scheduled_tasks(self, **filters: Any) -> dict[str, Any]:
         return self.request("scheduled_tasks", **filters)
@@ -371,10 +404,16 @@ class V2DaemonServer:
                 "status_error": status_error,
                 "scheduler": self.daemon.scheduler.stats.__dict__,
                 "persistence": persistence,
+                "intelligence_engine": runtime.intelligence_engine_settings_store.get().to_dict(),
             }
         if method == "stop":
             threading.Thread(target=self.daemon.stop, name="alphonse-v2-stop", daemon=True).start()
             return {"status": "stopping"}
+        if method == "trigger_killswitch":
+            return self.daemon.trigger_killswitch(
+                actor_user_id=str(params.get("actor_user_id") or ""),
+                source={"integration_id": "desktop", "provider_key": "tui"},
+            )
         if method == "events":
             return {"events": self.daemon.pop_activity_events()}
         if method == "desktop_poll":
@@ -382,6 +421,7 @@ class V2DaemonServer:
                 client_id=str(params.get("client_id") or "desktop"),
                 user=str(params.get("user") or "local"),
                 project_id=str(params.get("project_id") or ""),
+                local_date=str(params.get("local_date") or ""),
                 after_sequence=int(params.get("after_sequence") or 0),
                 after_ui_sequence=int(params.get("after_ui_sequence") or 0),
                 daemon_id=str(params.get("daemon_id") or ""),
@@ -400,6 +440,7 @@ class V2DaemonServer:
                 "messages": self.daemon.desktop_conversation_history(
                     user=str(params.get("user") or "local"),
                     project_id=str(params.get("project_id") or ""),
+                    local_date=str(params.get("local_date") or ""),
                     limit=int(params.get("limit") or 100),
                 )
             }
@@ -408,6 +449,13 @@ class V2DaemonServer:
             return self.daemon.mark_desktop_project_seen(
                 user=str(params.get("user") or "local"),
                 project_id=str(params.get("project_id") or ""),
+                through_sequence=int(through) if through is not None else None,
+            )
+        if method == "desktop_mark_conversation_seen":
+            through = params.get("through_sequence")
+            return self.daemon.mark_desktop_project_seen(
+                user=str(params.get("user") or "local"),
+                local_date=str(params.get("local_date") or ""),
                 through_sequence=int(through) if through is not None else None,
             )
         if method == "restart_integrations":
@@ -450,7 +498,7 @@ class V2DaemonServer:
         if method == "onboarding_status":
             return self.daemon.onboarding_status()
         if method == "onboard":
-            return self.daemon.onboard(display_name=str(params.get("display_name") or ""), users_root=str(params.get("users_root") or ""), import_v1=bool(params.get("import_v1")))
+            return self.daemon.onboard(display_name=str(params.get("display_name") or ""), workspace_root=str(params.get("workspace_root") or ""), users_root=str(params.get("users_root") or ""), import_v1=bool(params.get("import_v1")))
         if method == "current_user":
             return self.daemon.current_user()
         if method == "settings":
@@ -458,7 +506,8 @@ class V2DaemonServer:
         if method == "save_settings":
             mirror = params.get("mirror_automation_messages_to_preferred_channel")
             return self.daemon.save_settings(
-                users_root=str(params.get("users_root") or ""),
+                actor_user_id=str(params.get("actor_user_id") or ""),
+                workspace_root=str(params.get("workspace_root") or ""),
                 timezone_name=str(params.get("timezone") or ""),
                 mirror_automation_messages_to_preferred_channel=bool(mirror) if mirror is not None else None,
             )
@@ -470,14 +519,54 @@ class V2DaemonServer:
             return {"settings": self.daemon.memory_settings(actor_user_id=str(params.get("actor_user_id") or ""))}
         if method == "save_memory_settings":
             return {"settings": self.daemon.save_memory_settings(actor_user_id=str(params.get("actor_user_id") or ""), values=dict(params.get("values") or {}))}
+        if method == "system_one_settings":
+            return {"settings": self.daemon.system_one_settings(actor_user_id=str(params.get("actor_user_id") or ""))}
+        if method == "save_system_one_settings":
+            return {"settings": self.daemon.save_system_one_settings(actor_user_id=str(params.get("actor_user_id") or ""), values=dict(params.get("values") or {}))}
+        if method == "intelligence_engine_settings":
+            return {"settings": self.daemon.intelligence_engine_settings(actor_user_id=str(params.get("actor_user_id") or ""))}
+        if method == "save_intelligence_engine_settings":
+            return {"settings": self.daemon.save_intelligence_engine_settings(actor_user_id=str(params.get("actor_user_id") or ""), values=dict(params.get("values") or {}))}
         if method == "artifacts":
             return {"artifacts": self.daemon.list_artifacts(actor_user_id=str(params.get("actor_user_id") or ""))}
+        if method == "relocate_artifact":
+            execution = params.get("execution", {})
+            sharing = params.get("shared_with_user_ids")
+            if not isinstance(execution, dict) or (sharing is not None and not isinstance(sharing, list)):
+                raise ValueError("artifact_execution_or_sharing_invalid")
+            return {"artifact": self.daemon.relocate_artifact(actor_user_id=str(params.get("actor_user_id") or ""), artifact_id=str(params.get("artifact_id") or ""), storage_kind=str(params.get("storage_kind") or ""), entrypoint_path=str(params.get("entrypoint_path") or ""), execution=execution, shared_with_user_ids=sharing)}
+        if method == "reconcile_artifacts":
+            return {"artifacts": self.daemon.reconcile_artifacts(actor_user_id=str(params.get("actor_user_id") or ""))}
         if method == "update_artifact":
             return {"artifact": self.daemon.update_artifact(actor_user_id=str(params.get("actor_user_id") or ""), artifact_id=str(params.get("artifact_id") or ""), name=str(params.get("name") or ""), description=str(params.get("description") or ""))}
         if method == "set_artifact_enabled":
             return {"artifact": self.daemon.set_artifact_enabled(actor_user_id=str(params.get("actor_user_id") or ""), artifact_id=str(params.get("artifact_id") or ""), enabled=bool(params.get("enabled")))}
         if method == "delete_artifact":
             return self.daemon.delete_artifact(actor_user_id=str(params.get("actor_user_id") or ""), artifact_id=str(params.get("artifact_id") or ""))
+        if method == "skills":
+            return self.daemon.list_skills_workspace(actor_user_id=str(params.get("actor_user_id") or ""))
+        if method == "unassigned_artifacts":
+            return {"artifacts": self.daemon.list_unassigned_artifacts(actor_user_id=str(params.get("actor_user_id") or ""))}
+        if method == "attach_artifact_to_skill":
+            return {"artifact": self.daemon.attach_artifact_to_skill(actor_user_id=str(params.get("actor_user_id") or ""), artifact_id=str(params.get("artifact_id") or ""), skill_id=str(params.get("skill_id") or ""), instructions=str(params.get("instructions") or ""))}
+        if method == "create_skill":
+            return {"skill": self.daemon.create_skill(actor_user_id=str(params.get("actor_user_id") or ""), name=str(params.get("name") or ""), description=str(params.get("description") or ""), instructions=str(params.get("instructions") or ""))}
+        if method == "update_skill":
+            return {"skill": self.daemon.update_skill(actor_user_id=str(params.get("actor_user_id") or ""), skill_id=str(params.get("skill_id") or ""), description=str(params.get("description") or ""))}
+        if method == "read_skill_file":
+            return self.daemon.read_skill_file(actor_user_id=str(params.get("actor_user_id") or ""), skill_id=str(params.get("skill_id") or ""), path=str(params.get("path") or ""))
+        if method == "write_skill_file":
+            return self.daemon.write_skill_file(actor_user_id=str(params.get("actor_user_id") or ""), skill_id=str(params.get("skill_id") or ""), path=str(params.get("path") or ""), content=str(params.get("content") or ""))
+        if method == "delete_skill_file":
+            return self.daemon.delete_skill_file(actor_user_id=str(params.get("actor_user_id") or ""), skill_id=str(params.get("skill_id") or ""), path=str(params.get("path") or ""))
+        if method == "add_skill_file":
+            return self.daemon.add_skill_file(actor_user_id=str(params.get("actor_user_id") or ""), skill_id=str(params.get("skill_id") or ""), source_path=str(params.get("source_path") or ""))
+        if method == "install_skill":
+            return {"skill": self.daemon.install_skill(actor_user_id=str(params.get("actor_user_id") or ""), source_directory=str(params.get("source_directory") or ""))}
+        if method == "replace_skill":
+            return {"skill": self.daemon.replace_skill(actor_user_id=str(params.get("actor_user_id") or ""), skill_id=str(params.get("skill_id") or ""), source_directory=str(params.get("source_directory") or ""))}
+        if method == "delete_skill":
+            return self.daemon.delete_skill(actor_user_id=str(params.get("actor_user_id") or ""), skill_id=str(params.get("skill_id") or ""))
         if method == "web_tools_settings":
             return {"settings": self.daemon.web_tools_settings(actor_user_id=str(params.get("actor_user_id") or ""))}
         if method == "code_mode_settings":
@@ -542,6 +631,10 @@ class V2DaemonServer:
                     limit=int(params.get("limit") or 4),
                 )
             }
+        if method == "project_files":
+            return {"files": self.daemon.project_files(user=str(params.get("user") or "local"), project_id=str(params.get("project_id") or ""))}
+        if method == "remove_project_file":
+            return self.daemon.remove_project_file(user=str(params.get("user") or "local"), project_id=str(params.get("project_id") or ""), name=str(params.get("name") or ""))
         if method == "copy_desktop_project_files":
             source_paths = params.get("source_paths") if isinstance(params.get("source_paths"), list) else []
             return {
@@ -566,7 +659,15 @@ class V2DaemonServer:
         if method == "import_project":
             return {"project": self.daemon.import_project(user=str(params.get("user") or "local"), name=str(params.get("name") or ""), description=str(params.get("description") or ""), root_path=str(params.get("root_path") or ""), visibility=str(params.get("visibility") or "private"))}
         if method == "update_project":
-            return {"project": self.daemon.update_project(user=str(params.get("user") or "local"), project_id=str(params.get("project_id") or ""), name=str(params.get("name") or ""), description=str(params.get("description") or ""), visibility=str(params.get("visibility") or "private"))}
+            members = params.get("member_user_ids")
+            return {"project": self.daemon.update_project(user=str(params.get("user") or "local"), project_id=str(params.get("project_id") or ""), name=str(params.get("name") or ""), description=str(params.get("description") or ""), visibility=str(params.get("visibility") or "private"), member_user_ids=[str(item) for item in members] if isinstance(members, list) else None)}
+        if method == "set_project_status":
+            return {"project": self.daemon.set_project_status(user=str(params.get("user") or "local"), project_id=str(params.get("project_id") or ""), status=str(params.get("status") or ""))}
+        if method == "project_config":
+            return {"config": self.daemon.project_config(user=str(params.get("user") or "local"), project_id=str(params.get("project_id") or ""))}
+        if method == "save_project_config":
+            config = params.get("config")
+            return {"project": self.daemon.save_project_config(user=str(params.get("user") or "local"), project_id=str(params.get("project_id") or ""), config=config if isinstance(config, dict) else {})}
         if method == "archive_project":
             return {"project": self.daemon.archive_project(user=str(params.get("user") or "local"), project_id=str(params.get("project_id") or ""))}
         if method == "restore_project":
