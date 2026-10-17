@@ -58,7 +58,7 @@ from alphonse.agent_v2.skills import SkillStore
 from alphonse.agent_v2.memory_settings import SQLiteMemorySettingsStore
 from alphonse.agent_v2.core.memory import LedgerMemory
 from alphonse.agent_v2.core.memory.daily_ledger import DailyLedgerProjector
-from alphonse.agent_v2.core.tools.registry.native.memory import build_search_memory_tool_definition
+from alphonse.agent_v2.core.tools.registry.native.memory import build_search_memory_tool_definition, build_read_memory_source_tool_definition
 from alphonse.agent_v2.conversations import SQLiteConversationStore
 from alphonse.agent_v2.memory_sessions import SQLiteMemorySessionStore
 from alphonse.agent_v2.system_one import SQLiteSystemOneSettingsStore
@@ -290,6 +290,8 @@ def build_runtime_host(
     register_tool = getattr(tools, "register", None)
     if callable(register_tool) and getattr(tools, "get_definition", lambda _name: None)("native.search_memory") is None:
         register_tool(build_search_memory_tool_definition())
+    if callable(register_tool) and getattr(tools, "get_definition", lambda _name: None)("native.read_memory_source") is None:
+        register_tool(build_read_memory_source_tool_definition())
     integration_registry = integration_registry or build_default_integration_registry()
     presence_projector = PresenceProjector()
     presence_projector.register("tui", TuiPresenceAdapter())

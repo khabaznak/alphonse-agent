@@ -64,6 +64,15 @@ def assemble(case: dict[str, Any]) -> dict[str, Any]:
             def list_recent(self, **kwargs):
                 return store.list_recent(**kwargs)
 
+            def recall_items(self, requester):
+                mode = case.get("search_mode", "available")
+                search_calls.append(mode)
+                if mode == "unavailable":
+                    raise OSError("synthetic_search_unavailable")
+                if mode == "empty":
+                    return []
+                return store.recall_items(requester)
+
             def search(self, **kwargs):
                 mode = case.get("search_mode", "available")
                 search_calls.append(mode)
@@ -74,6 +83,9 @@ def assemble(case: dict[str, Any]) -> dict[str, Any]:
                 return store.search(**kwargs)
 
         class EmptyLedger:
+            def recall_items(self, *, user_id, project_id):
+                return []
+
             def search(self, **kwargs):
                 return ""
 
@@ -144,7 +156,7 @@ def run(corpus: dict[str, Any], *, responder=None, timing: bool = False, rubric:
     encoded = json.dumps(corpus, ensure_ascii=False, sort_keys=True).encode()
     report = {"schema_version": 1, "corpus_version": corpus["version"],
             "corpus_sha256": hashlib.sha256(encoded).hexdigest(),
-            "adapter": "current-v3-context-and-native-search-v2",
+            "adapter": "current-v3-context-and-native-search-v3",
             "mode": "live-response" if responder else "offline-context-only", "cases": rows}
     if responder is not None:
         from alphonse.agent_v2.evaluation.memory_scoring import content_hash

@@ -191,6 +191,7 @@ def _has_analyzable_attachment(task: "TaskState", state: TacticalState) -> bool:
 _TOOL_CAPABILITIES: dict[str, tuple[str, ...]] = {
     "native.bash": (Capability.LOCAL_SHELL.value,),
     "native.search_memory": (Capability.MEMORY_RECALL.value,),
+    "native.read_memory_source": (Capability.MEMORY_RECALL.value,),
     "native.skill_artifact_register": (Capability.ARTIFACT_REGISTRATION.value,),
     "native.artifact_metadata_update": (Capability.ARTIFACT_REGISTRATION.value,),
     "native.analyze_image": (Capability.ATTACHMENT_ANALYSIS.value,),

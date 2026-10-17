@@ -268,6 +268,26 @@ class SQLiteConversationStore:
                 ).fetchall()
         return [_event(row) for row in rows]
 
+    def recall_items(self, requester: str):
+        """Current audience snapshot, before recall ranking or excerpting."""
+        from alphonse.agent_v2.core.memory.contracts import conversation_item
+        with self._connect() as conn:
+            rows = conn.execute("SELECT * FROM v2_conversation_events WHERE owner_user_id=? OR visibility='shared' ORDER BY sequence", (requester,)).fetchall()
+        return [item for row in rows if (item := conversation_item(_event(row), requester)) is not None]
+
+    def read_neighbors(self, *, event_id: str, requester_user_id: str, neighbors: int = 2):
+        """Neighbors in the same owner's continuous timeline, across project/day boundaries."""
+        anchor = self.read(event_id=event_id, requester_user_id=requester_user_id)
+        if anchor is None:
+            return []
+        from alphonse.agent_v2.core.memory.contracts import conversation_item
+        with self._connect() as conn:
+            rows = conn.execute("SELECT * FROM v2_conversation_events WHERE owner_user_id=? ORDER BY sequence", (anchor.owner_user_id,)).fetchall()
+        items = [item for row in rows if (item := conversation_item(_event(row), requester_user_id)) is not None]
+        index = next(i for i, item in enumerate(items) if item.source.source_id == f"conversation:{event_id}")
+        width = max(0, min(neighbors, 5))
+        return items[max(0, index-width):index+width+1]
+
     def read(self, *, event_id: str, requester_user_id: str) -> ConversationEvent | None:
         """Resolve a historical ID using current access, never historical permission."""
         from alphonse.agent_v2.core.memory.contracts import conversation_item

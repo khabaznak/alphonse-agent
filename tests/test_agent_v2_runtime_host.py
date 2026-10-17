@@ -44,6 +44,12 @@ def test_runtime_host_builds_core_and_shared_stores() -> None:
     assert runtime.channel.messages is runtime.queue
     assert runtime.core.schedule_store is runtime.schedule_store
     assert runtime.presence_projector is not None
+    assert runtime.core.tools.get("native.search_memory").read_only
+    assert runtime.core.tools.get("native.read_memory_source").read_only
+    from alphonse.agent_v2.runtime import refresh_runtime_artifacts
+    refresh_runtime_artifacts(runtime)
+    assert runtime.core.tools.get("native.search_memory").read_only
+    assert runtime.core.tools.get("native.read_memory_source").read_only
 
 
 def test_scheduled_worker_dispatches_due_task_and_records_stats() -> None:

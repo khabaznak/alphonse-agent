@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from alphonse.agent_v2.core.core import ToolDescriptor, ToolKind
 from alphonse.agent_v2.core.intelligence.task_state import TaskState
 from alphonse.agent_v2.core.intelligence.v3 import Capability
@@ -96,18 +98,19 @@ def test_plain_markdown_record_does_not_satisfy_ocr_prerequisite() -> None:
     assert result.tools == ()
 
 
-def test_memory_recall_is_available_for_unassociated_conversation() -> None:
+@pytest.mark.parametrize("tool_id", ["native.search_memory", "native.read_memory_source"])
+def test_memory_recall_is_available_for_unassociated_conversation(tool_id) -> None:
     subgoal = PhaseSubgoal(
         "recall", "Recall treatment", "memory_matches",
         allowed_capabilities=(Capability.MEMORY_RECALL.value,),
     )
-    tool = _descriptor("native.search_memory", Capability.MEMORY_RECALL)
+    tool = _descriptor(tool_id, Capability.MEMORY_RECALL)
 
     unassociated = ToolRevealPolicy().reveal(TaskState(), _state(subgoal), subgoal, (tool,))
     visible = ToolRevealPolicy().reveal(TaskState(project_id="health"), _state(subgoal), subgoal, (tool,))
 
-    assert [item.tool_id for item in unassociated.tools] == ["native.search_memory"]
-    assert [item.tool_id for item in visible.tools] == ["native.search_memory"]
+    assert [item.tool_id for item in unassociated.tools] == [tool_id]
+    assert [item.tool_id for item in visible.tools] == [tool_id]
 
 
 def test_exact_mutation_requires_scope_and_subgoal_authorization() -> None:

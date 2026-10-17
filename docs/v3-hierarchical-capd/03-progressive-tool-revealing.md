@@ -78,7 +78,7 @@ Tool reveal must enforce prerequisites before model choice:
   discovery or shell inspection is not OCR evidence. If analysis fails, report
   the tool failure; do not characterize the image as illegible without an actual
   extraction result.
-- Memory search covers authorized person/audience knowledge and conversation history across projects, including when no project is selected. Project association is optional metadata, not a knowledge boundary. Raw legacy task-audit fallback retains the task's existing project authorization scope. See [durable knowledge](09-durable-knowledge.md).
+- Memory search and source expansion (`native.search_memory`, `native.read_memory_source`) share the read-only `memory_recall` capability. Search covers authorized person/audience knowledge, conversation history and captured task evidence across projects, including when no project is selected. Both operations recheck visibility; Jev relevance never widens access. See [structured recall](10-memory-recall.md). Project association is optional metadata, not a knowledge boundary. Raw legacy task-audit fallback retains the task's existing project authorization scope. See [durable knowledge](09-durable-knowledge.md).
 - Mutating native operations require the matching side-effect authorization. Bash is
   a trusted local-shell capability for project-file reads and writes; its work is
   described to Jev and System Two and verified from command output/read-back.

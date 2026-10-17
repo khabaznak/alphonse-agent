@@ -327,7 +327,7 @@ def test_history_flag_and_backend_outage_are_explicit(setup, tmp_path):
     with pytest.raises(ValueError):
         execute_search_memory({"query": "filter", "historical": "yes"}, context=context)
     knowledge.recall = lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("offline"))
-    conversations.search = lambda **kw: []
+    conversations.recall_items = lambda requester: []
     assert execute_search_memory({"query": "filter"}, context=context)["recall"]["status"] == "unavailable"
 
 

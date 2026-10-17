@@ -199,6 +199,26 @@ class LedgerMemory:
             _atomic_write(directory / "summary.md", "# Session Summary\n\n" + (session_summary.strip() or "- (none)") + "\n")
             return session_summary
 
+    def recall_items(self, *, user_id: str, project_id: str):
+        """Legacy audit snapshots only; IDs never encode an arbitrary read path."""
+        import hashlib
+        from .contracts import AccessScope, ContextItem, SourceReference
+        root = self._project_memory_dir(user_id, project_id).resolve()
+        paths = list((root / "sessions").glob("*/ledger-*.md"))
+        if self._closed_session_ids_provider is not None:
+            closed = self._closed_session_ids_provider(project_id)
+            paths = [path for path in paths if path.parent.name in closed]
+        paths += list((root / "legacy").glob("ledger-*.md"))
+        items = []
+        for path in sorted(paths):
+            if not path.resolve().is_relative_to(root) or not path.is_file():
+                continue
+            identity = "\0".join((user_id, project_id, str(path.relative_to(root))))
+            reference = SourceReference("legacy-ledger:" + hashlib.sha256(identity.encode()).hexdigest(),
+                                        "legacy_ledger", AccessScope(user_id), provenance="legacy_unverified")
+            items.append(ContextItem(reference, path.read_text(encoding="utf-8"), "audit"))
+        return items
+
     def search(self, *, user_id: str, project_id: str, query: str, max_tokens: int | None = None) -> str:
         root = self._project_memory_dir(user_id, project_id)
         terms = [term.casefold() for term in re.findall(r"[\w'-]+", str(query or "")) if len(term) > 1]

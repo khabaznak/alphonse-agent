@@ -25,9 +25,9 @@ def test_offline_replay_is_reproducible_without_network(monkeypatch):
     monkeypatch.setattr(socket, 'socket', no_network)
     corpus = load_corpus(CORPUS)
     first = run(corpus)
-    candidate = BASELINE.parent.parent / 'memory-knowledge-v2/results.json'
+    candidate = BASELINE.parent.parent / 'memory-search-v3/results.json'
     assert first == run(corpus) == json.loads(candidate.read_text())
-    assert first['adapter'] == 'current-v3-context-and-native-search-v2'
+    assert first['adapter'] == 'current-v3-context-and-native-search-v3'
     # Preserve the frozen characterization evidence; do not overwrite it to
     # accommodate intentional runtime prompt changes.
     assert hashlib.sha256(BASELINE.read_bytes()).hexdigest() == '5306f97c018da232af46cd511c532306662685ac659d793683a04a08e5c4be99'
@@ -53,7 +53,7 @@ def test_unavailable_search_is_distinct_from_missing_results():
     assert empty['search_backend_states'] == ['empty']
     assert unavailable['search_backend_states'] == ['unavailable']
     assert empty['retrieved_sources'] == unavailable['retrieved_sources'] == []
-    # Current native search swallows the error: retain this known gap in baseline.
+    # Compatibility Markdown remains empty; structured v2 status carries coverage errors.
     assert empty['search_error'] == unavailable['search_error'] == ''
 
 

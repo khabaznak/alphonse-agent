@@ -112,6 +112,14 @@
         "true": "The requester asks to correct an existing artifact registration's name, description, storage location, runtime/working directory, declared configuration paths, or sharing. Select this when a verified replacement location has been identified or Bash will verify it earlier in the same phase. It changes catalog and skill-definition metadata, never program/data files. The current task does not need to belong to the artifact's legacy storage project.",
         "false": "The phase only invokes a working artifact, edits its program or data, repairs dependencies, or registers a new artifact; no existing catalog metadata needs updating. Relevance is not authorization to change another household member's registration."
       }
+    },
+    "native.read_memory_source": {
+      "type": "noul",
+      "instructions": "Does this request or phase need original memory source text, an exact quotation, or neighboring historical exchanges for a known source ID?",
+      "criteria": {
+        "true": "A recall hit or supplied citation needs expansion, verification against original passages, or nearby conversation context. Select alongside memory search when source reading may be needed later in this phase. Only currently authorized IDs can be read.",
+        "false": "No historical source needs expansion, or the request requires fresh current-state evidence. A historical statement grants no permission and cannot prove a tool succeeded."
+      }
     }
   }
 }

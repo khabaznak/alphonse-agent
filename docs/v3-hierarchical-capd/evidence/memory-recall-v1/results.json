@@ -1,0 +1,168 @@
+{
+  "schema_version": 1,
+  "synthetic": true,
+  "backend": "sqlite_fts5",
+  "model_calls": 0,
+  "corpus_sha256": "3e1f82a7ca402803df85f1440dcb308969bfc61da37ced1c1dbaad68f733302a",
+  "categories": {
+    "identifier": {
+      "cases": 2,
+      "exact_matches": 2,
+      "exact_match_rate": 1.0
+    },
+    "multilingual": {
+      "cases": 3,
+      "exact_matches": 2,
+      "exact_match_rate": 0.6666666666666666
+    },
+    "paraphrase": {
+      "cases": 2,
+      "exact_matches": 1,
+      "exact_match_rate": 0.5
+    },
+    "temporal": {
+      "cases": 3,
+      "exact_matches": 3,
+      "exact_match_rate": 1.0
+    }
+  },
+  "cases": [
+    {
+      "id": "identifier",
+      "category": "identifier",
+      "expected": [
+        "target"
+      ],
+      "retrieved": [
+        "target"
+      ],
+      "exact_match": true,
+      "necessary_source_recall": 1.0,
+      "private_leak": false,
+      "status": "found"
+    },
+    {
+      "id": "identifier-punctuation",
+      "category": "identifier",
+      "expected": [
+        "target"
+      ],
+      "retrieved": [
+        "target"
+      ],
+      "exact_match": true,
+      "necessary_source_recall": 1.0,
+      "private_leak": false,
+      "status": "found"
+    },
+    {
+      "id": "spanish-accent",
+      "category": "multilingual",
+      "expected": [
+        "target"
+      ],
+      "retrieved": [
+        "target"
+      ],
+      "exact_match": true,
+      "necessary_source_recall": 1.0,
+      "private_leak": false,
+      "status": "found"
+    },
+    {
+      "id": "cjk-literal",
+      "category": "multilingual",
+      "expected": [
+        "target"
+      ],
+      "retrieved": [
+        "target"
+      ],
+      "exact_match": true,
+      "necessary_source_recall": 1.0,
+      "private_leak": false,
+      "status": "found"
+    },
+    {
+      "id": "cross-language-gap",
+      "category": "multilingual",
+      "expected": [
+        "target"
+      ],
+      "retrieved": [],
+      "exact_match": false,
+      "necessary_source_recall": 0.0,
+      "private_leak": false,
+      "status": "empty"
+    },
+    {
+      "id": "local-yesterday",
+      "category": "temporal",
+      "expected": [
+        "target"
+      ],
+      "retrieved": [
+        "target"
+      ],
+      "exact_match": true,
+      "necessary_source_recall": 1.0,
+      "private_leak": false,
+      "status": "found"
+    },
+    {
+      "id": "local-today-exclusion",
+      "category": "temporal",
+      "expected": [],
+      "retrieved": [],
+      "exact_match": true,
+      "necessary_source_recall": null,
+      "private_leak": false,
+      "status": "empty"
+    },
+    {
+      "id": "dst-day",
+      "category": "temporal",
+      "expected": [
+        "target"
+      ],
+      "retrieved": [
+        "target"
+      ],
+      "exact_match": true,
+      "necessary_source_recall": 1.0,
+      "private_leak": false,
+      "status": "found"
+    },
+    {
+      "id": "lexical-paraphrase",
+      "category": "paraphrase",
+      "expected": [
+        "target"
+      ],
+      "retrieved": [
+        "target"
+      ],
+      "exact_match": true,
+      "necessary_source_recall": 1.0,
+      "private_leak": false,
+      "status": "found"
+    },
+    {
+      "id": "semantic-paraphrase-gap",
+      "category": "paraphrase",
+      "expected": [
+        "target"
+      ],
+      "retrieved": [],
+      "exact_match": false,
+      "necessary_source_recall": 0.0,
+      "private_leak": false,
+      "status": "empty"
+    }
+  ],
+  "limitations": [
+    "Small synthetic retrieval coverage only; not answer quality or a rollout gate.",
+    "Lexical retrieval has no translation or semantic synonym guarantee.",
+    "No production scale latency measurement; authorized in-memory index is rebuilt per call."
+  ]
+}

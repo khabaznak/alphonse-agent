@@ -185,7 +185,7 @@ class KnowledgeStore:
             return None
 
     def records(self, requester: str, resolver: Callable, *, historical: bool = False,
-                query: str = "", limit: int = 32, at: str | None = None) -> list[KnowledgeRecord]:
+                query: str = "", limit: int | None = 32, at: str | None = None) -> list[KnowledgeRecord]:
         """Access and live source resolution precede ranking and result budgets."""
         terms = set(re.findall(r"[\w'-]+", query.casefold()))
         current_time = instant(at or now())
@@ -385,6 +385,12 @@ class KnowledgeStore:
             row = conn.execute("SELECT payload FROM memory_task_sources WHERE source_id=? AND owner=?",
                                (reference.source_id, requester)).fetchone()
         return ContextItem.from_dict(json.loads(row[0])) if row else None
+
+    def recall_task_items(self, requester: str) -> list[ContextItem]:
+        with self._connect() as conn:
+            rows = conn.execute("SELECT payload FROM memory_task_sources WHERE owner=? ORDER BY source_id", (requester,)).fetchall()
+        items = [ContextItem.from_dict(json.loads(row[0])) for row in rows]
+        return [item for item in items if item.visible_to(requester)]
 
     def task_status(self, task_id: str, requester: str) -> dict[str, str] | None:
         with self._connect() as conn:
@@ -637,7 +643,7 @@ class KnowledgeMemory:
         self._check_cancelled(cancel_checker)
         self.store.commit(owner, source.source_id, records, resolver=self.resolve, comparisons=comparisons)
 
-    def recall(self, requester: str, *, query: str = "", historical: bool = False, limit: int = 16) -> list[KnowledgeRecord]:
+    def recall(self, requester: str, *, query: str = "", historical: bool = False, limit: int | None = 16) -> list[KnowledgeRecord]:
         return self.store.records(requester, self.resolve, query=query, historical=historical, limit=limit)
 
     def render(self, record: KnowledgeRecord, requester: str) -> str:

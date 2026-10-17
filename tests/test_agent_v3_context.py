@@ -47,7 +47,8 @@ def test_memory_recall_searches_user_history_without_project_scope() -> None:
 
     class _Memory:
         def search(self, **_kwargs):
-            raise AssertionError("conversation history should be searched first")
+            self.searched = True
+            return ""
 
     context = SimpleNamespace(
         task=TaskState(user="alex"),
@@ -57,6 +58,7 @@ def test_memory_recall_searches_user_history_without_project_scope() -> None:
 
     result = execute_search_memory({"query": "Adrian"}, context=context)
 
+    assert context.memory.searched
     assert result["project_id"] == ""
     assert "appointment is Friday" in result["matches_markdown"]
 

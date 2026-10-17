@@ -29,7 +29,7 @@ def test_native_registry_exposes_native_tools() -> None:
 
     assert names == {
         "respond", "bash", "ask_question", "deliver_message", "send_attachment",
-        "scheduled_task", "scheduled_task_delivery",
+        "scheduled_task", "scheduled_task_delivery", "search_memory", "read_memory_source",
     }
 
 

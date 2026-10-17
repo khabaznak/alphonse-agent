@@ -9,6 +9,11 @@ version 3 knowledge records and persistence while retaining these version 1 sour
 contracts. It replaces project-summary promotion and task-context use of prose
 summaries. The scope descriptions below describe the original #12 delivery.
 
+Follow-up #14: [structured recall](10-memory-recall.md) adds version 2 search/read
+responses while preserving the version 1 source references and compatibility
+recall envelope below. It replaces the first-hit-source short circuit with combined
+ranking and explicit coverage states.
+
 ## Decision and ownership
 
 SQLite `v2_conversation_events` owns canonical user/assistant messages. Its

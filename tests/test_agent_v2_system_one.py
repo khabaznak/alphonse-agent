@@ -353,6 +353,7 @@ def test_jev_native_registry_template_covers_every_out_of_box_tool() -> None:
         "native.web_search",
         "native.web_fetch",
         "native.search_memory",
+        "native.read_memory_source",
     }
     bash_question = registry["native.bash"]
     assert "find, rg, or grep" in bash_question["criteria"]["true"]
