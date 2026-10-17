@@ -974,3 +974,5 @@ html[data-alphonse-style="modern"] .modal-backdrop { background: #10282788; }
   .brand-mascot,
   .queue-chart-current { animation: none; }
 }
+
+.task-progress-log > summary { padding: 12px 16px; cursor: pointer; font-size: 13px; font-weight: 600; }
