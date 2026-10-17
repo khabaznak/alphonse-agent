@@ -74,6 +74,11 @@ Every case includes:
 Run V2 and V3 on the same corpus where semantics permit. Store machine-readable
 results and a concise human review report.
 
+The focused memory baseline, synthetic corpus, optional live-response runner, and
+numeric memory rollout thresholds are documented in
+[Memory context evaluation](07-memory-evaluation.md). These supplement the
+end-to-end engine replay; offline context scores do not establish answer quality.
+
 ## Rollout gates
 
 ### Gate A: developer opt-in
