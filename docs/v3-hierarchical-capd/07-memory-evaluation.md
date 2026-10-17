@@ -27,7 +27,9 @@ All 22 cases are invented. Never substitute local household history, ledgers,
 credentials, configuration, or artifact programs. Each source has a stable ID,
 owner, visibility, timestamp and text. Expectations name necessary and forbidden
 source IDs, forbidden actions, allowed historical assertions, and required/forbidden
-answer fragments. Bump the corpus version and retain old results when changing
+answer fragments. The original answer fields are retained as v1 evidence; v2
+response checks are versioned separately in
+`tests/fixtures/memory_replay/response_rubric_v2.json`. Bump the corpus version and retain old results when changing
 expectations; do not rewrite old expectations to improve a candidate's score.
 
 The cases cover current-state reads, retry, pronouns, clarification, steering,
@@ -62,8 +64,10 @@ Each result separates:
   Recall is 1 for cases with no required history; search recall is null there.
 - **Answer:** null offline. Opt-in responses get mechanical completion checks,
   counts of unsupported declared historical assertions, and forbidden proposed
-  actions. Historical assertions must quote allowed fixture text and cite sources
-  actually included. These checks are proxies: omissions from a provider's claim
+  actions. V2 checks historical quotations against the sources actually cited
+  and included, independently of whether those sources belonged in the prompt.
+  Role labels, whitespace and safe partial quotations are accepted; omitted
+  negations/qualifiers, changed identifiers and wrong citations are rejected. These checks are proxies: omissions from a provider's claim
   list, semantic paraphrases, temporal reasoning, and uncatalogued unsafe actions
   require human review. Never interpret an empty claim list as proven factuality.
 - **Cost:** estimated assembled prompt tokens using the existing characters/4
@@ -82,11 +86,13 @@ that no historical record exists.
 
 ## Optional live response evaluation
 
-The separate `memory_replay_live` entrypoint requires both flags; the module is not even imported otherwise:
+The separate `memory_replay_live` entrypoint requires an explicit versioned rubric
+and both live flags. The offline entrypoint never imports the provider adapter:
 
 ```bash
 python -m alphonse.agent_v2.evaluation.memory_replay_live \
   --corpus tests/fixtures/memory_replay/v1.json \
+  --rubric tests/fixtures/memory_replay/response_rubric_v2.json \
   --output /tmp/memory-live.json \
   --live --responder my_evaluation_provider:respond
 ```
@@ -123,8 +129,44 @@ Live evaluation is response-only shadow evaluation. Current-state or scheduling
 cases cannot demonstrate verified task completion without a fixture-local tool
 execution adapter. Their required response properties are readiness/continuity
 checks. Use the existing V2/V3 replay harness for verified effects and terminal
-state tests; report end-to-end completion separately. No live-provider baseline
-has been captured or claimed for v1.
+state tests; report end-to-end completion separately. The initial committed snapshot is offline-only. A subsequent
+[2026-10-17 live response run](evidence/memory-live-2026-10-17/README.md)
+records 22 provider responses, known scoring limitations, and agent review. It
+does not pass the rollout gates or substitute for independent human review.
+
+## Rescore saved responses without provider calls
+
+```bash
+python -m alphonse.agent_v2.evaluation.memory_scoring \
+  --corpus tests/fixtures/memory_replay/v1.json \
+  --rubric tests/fixtures/memory_replay/response_rubric_v2.json \
+  --input docs/v3-hierarchical-capd/evidence/memory-live-2026-10-17/results.json \
+  --output /tmp/memory-rescored-v2.json
+```
+
+The rescorer verifies the corpus hash and complete case coverage, preserves original
+scores alongside v2 scores, and records canonical-JSON hashes of the original
+report and rubric. It refuses to overwrite its inputs. No assembly, retrieval,
+provider calls, or tool calls occur. The original v1 response report and offline
+baseline remain unchanged.
+
+V2 requirements are explicit fixture-specific regex alternatives and prohibitions,
+not general natural-language understanding. Diagnostic negation exceptions cover
+only the matched denial, so a separate contradictory assertion still fails. Retry,
+steering, clarification and resume checks reject the observed deferrals and
+unfinished-summary response instead of rewarding a keyword. Independent positive
+and adversarial negative response pairs test those boundaries. Rubric v2 was
+written after inspecting the initial live run: use a held-out corpus and human
+review before claiming generalization or ranking a candidate by answer quality.
+
+`unsupported_historical_claims` counts failed quote/citation checks; it does not
+prove that every flagged paraphrase is fabricated. Likewise an undeclared claim,
+novel negation, or novel evasion can escape these bounded checks. Every score retains
+`semantic_review_required=true` and `verified_task_completion=null`. These checks
+never substitute for verified effects or the separate privacy/authorization gates.
+No additional LLM or Jev calls are needed for these deterministic checks. A future
+optional bounded semantic grader should use Jev and retain deterministic authority
+boundaries.
 
 ## Frozen rollout thresholds before candidate comparison
 

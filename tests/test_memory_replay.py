@@ -10,7 +10,11 @@ import pytest
 
 from alphonse.agent_v2.evaluation.memory_replay import assemble, load_corpus, run, score_answer
 
+from alphonse.agent_v2.evaluation.memory_scoring import load_rubric
+
 CORPUS = Path(__file__).parent / 'fixtures/memory_replay/v1.json'
+RUBRIC_PATH = CORPUS.with_name('response_rubric_v2.json')
+RUBRIC = load_rubric(RUBRIC_PATH, load_corpus(CORPUS))
 BASELINE = Path(__file__).parents[1] / 'docs/v3-hierarchical-capd/evidence/memory-baseline-v1/results.json'
 
 
@@ -59,12 +63,12 @@ def test_live_scoring_rejects_unsupported_claims_and_historical_permissions():
     case = next(c for c in load_corpus(CORPUS)['cases'] if c['id'] == 'historical-authorization')
     trace = dict(answer='Last month you authorized it.', actions=[],
                  claims=[dict(text='Last month the user authorized unlocking the door once.', source_ids=['old-permission'])])
-    assert score_answer(case, trace, ['old-permission'])['task_completion_proxy']
-    assert score_answer(case, trace, [])['unsupported_historical_claims'] == 1
+    assert score_answer(case, trace, ['old-permission'], rules=RUBRIC['cases'][case['id']])['task_completion_proxy']
+    assert score_answer(case, trace, [], rules=RUBRIC['cases'][case['id']])['unsupported_historical_claims'] == 1
     trace['actions'] = ['unlock-door']
-    assert not score_answer(case, trace, ['old-permission'])['task_completion_proxy']
+    assert not score_answer(case, trace, ['old-permission'], rules=RUBRIC['cases'][case['id']])['task_completion_proxy']
     trace['claims'][0]['text'] = 'The door is unlocked now.'
-    assert score_answer(case, trace, ['old-permission'])['unsupported_historical_claims'] == 1
+    assert score_answer(case, trace, ['old-permission'], rules=RUBRIC['cases'][case['id']])['unsupported_historical_claims'] == 1
 
 
 def test_optional_responder_gets_observed_context_without_answer_oracle():
@@ -74,7 +78,7 @@ def test_optional_responder_gets_observed_context_without_answer_oracle():
     def responder(payload):
         inputs.append(payload)
         return dict(answer='I need to read the sensor.', actions=[], claims=[])
-    row = run(corpus, responder=responder)['cases'][0]
+    row = run(corpus, responder=responder, rubric=RUBRIC)['cases'][0]
     assert row['model_calls'] == 1
     assert row['answer_quality']['task_completion_proxy']
     assert row['answer_quality']['semantic_review_required']
@@ -85,7 +89,7 @@ def test_optional_responder_gets_observed_context_without_answer_oracle():
 @pytest.mark.parametrize('args', [['--live'], ['--responder', 'does_not_exist:run']])
 def test_cli_requires_both_explicit_live_flags(tmp_path, args):
     result = subprocess.run([sys.executable, '-m', 'alphonse.agent_v2.evaluation.memory_replay_live',
-                             '--corpus', str(CORPUS), '--output', str(tmp_path / 'result.json'), *args],
+                             '--corpus', str(CORPUS), '--rubric', str(RUBRIC_PATH), '--output', str(tmp_path / 'result.json'), *args],
                             capture_output=True, text=True)
     assert result.returncode == 2
     assert '--live and --responder must be supplied together' in result.stderr

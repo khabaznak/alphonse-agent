@@ -1,0 +1,1403 @@
+{
+  "schema_version": 1,
+  "corpus_version": "memory-context-v1",
+  "corpus_sha256": "9e2b3672a5d68e0914bd01466a4bd1a51e8f16b692fd775cee19775e7327cc77",
+  "adapter": "current-v3-context-and-native-search-v1",
+  "mode": "live-response",
+  "cases": [
+    {
+      "id": "current-state",
+      "included_sources": [
+        "stale-temperature",
+        "unrelated-hobby"
+      ],
+      "retrieved_sources": [],
+      "search_backend_states": [],
+      "search_error": "",
+      "tool_calls": 0,
+      "prompt_tokens_estimate": 78,
+      "retrieval": {
+        "necessary_source_recall": 1.0,
+        "search_source_recall": null,
+        "irrelevant_sources": [
+          "stale-temperature",
+          "unrelated-hobby"
+        ],
+        "forbidden_sources": [
+          "stale-temperature",
+          "unrelated-hobby"
+        ],
+        "private_sources": []
+      },
+      "answer_quality": {
+        "task_completion_proxy": false,
+        "unsupported_historical_claims": 1,
+        "forbidden_actions": [],
+        "semantic_review_required": true
+      },
+      "model_calls": 1,
+      "latency_ms": 9827.451,
+      "response": {
+        "answer": "I can’t read the study temperature from the available information. The earlier 28 C reading is from yesterday, not a current reading.",
+        "claims": [
+          {
+            "text": "Yesterday the study was 28 C.",
+            "source_ids": [
+              "stale-temperature"
+            ]
+          }
+        ],
+        "actions": [],
+        "metadata": {
+          "provider": "openai_codex",
+          "model": "gpt-6-luna",
+          "usage": {
+            "input_tokens": 5084,
+            "cached_input_tokens": 0,
+            "cache_write_input_tokens": 0,
+            "output_tokens": 65,
+            "reasoning_output_tokens": 0
+          },
+          "model_calls": 1,
+          "observed_tool_calls": 0,
+          "synthetic_only": true
+        }
+      }
+    },
+    {
+      "id": "try-again",
+      "included_sources": [
+        "failed-request",
+        "unrelated-hobby"
+      ],
+      "retrieved_sources": [],
+      "search_backend_states": [],
+      "search_error": "",
+      "tool_calls": 0,
+      "prompt_tokens_estimate": 73,
+      "retrieval": {
+        "necessary_source_recall": 1.0,
+        "search_source_recall": 0.0,
+        "irrelevant_sources": [
+          "unrelated-hobby"
+        ],
+        "forbidden_sources": [
+          "unrelated-hobby"
+        ],
+        "private_sources": []
+      },
+      "answer_quality": {
+        "task_completion_proxy": true,
+        "unsupported_historical_claims": 0,
+        "forbidden_actions": [],
+        "semantic_review_required": true
+      },
+      "model_calls": 1,
+      "latency_ms": 15030.362,
+      "response": {
+        "answer": "I can retry the sensor reading, but I don’t have a way to access it in this conversation. Please try reading `sensor.study_temp` again.",
+        "claims": [],
+        "actions": [],
+        "metadata": {
+          "provider": "openai_codex",
+          "model": "gpt-6-luna",
+          "usage": {
+            "input_tokens": 5079,
+            "cached_input_tokens": 0,
+            "cache_write_input_tokens": 0,
+            "output_tokens": 50,
+            "reasoning_output_tokens": 0
+          },
+          "model_calls": 1,
+          "observed_tool_calls": 0,
+          "synthetic_only": true
+        }
+      }
+    },
+    {
+      "id": "pronoun",
+      "included_sources": [
+        "referent",
+        "unrelated-hobby"
+      ],
+      "retrieved_sources": [],
+      "search_backend_states": [],
+      "search_error": "",
+      "tool_calls": 0,
+      "prompt_tokens_estimate": 78,
+      "retrieval": {
+        "necessary_source_recall": 1.0,
+        "search_source_recall": 0.0,
+        "irrelevant_sources": [
+          "unrelated-hobby"
+        ],
+        "forbidden_sources": [
+          "unrelated-hobby"
+        ],
+        "private_sources": []
+      },
+      "answer_quality": {
+        "task_completion_proxy": false,
+        "unsupported_historical_claims": 0,
+        "forbidden_actions": [],
+        "semantic_review_required": true
+      },
+      "model_calls": 1,
+      "latency_ms": 8995.106,
+      "response": {
+        "answer": "Which item do you mean—the hallway sensor or the model train paint? I don’t have a battery reading in the supplied context.",
+        "claims": [],
+        "actions": [],
+        "metadata": {
+          "provider": "openai_codex",
+          "model": "gpt-6-luna",
+          "usage": {
+            "input_tokens": 5083,
+            "cached_input_tokens": 0,
+            "cache_write_input_tokens": 0,
+            "output_tokens": 45,
+            "reasoning_output_tokens": 0
+          },
+          "model_calls": 1,
+          "observed_tool_calls": 0,
+          "synthetic_only": true
+        }
+      }
+    },
+    {
+      "id": "clarification",
+      "included_sources": [
+        "original",
+        "question",
+        "unrelated-hobby"
+      ],
+      "retrieved_sources": [],
+      "search_backend_states": [],
+      "search_error": "",
+      "tool_calls": 0,
+      "prompt_tokens_estimate": 87,
+      "retrieval": {
+        "necessary_source_recall": 1.0,
+        "search_source_recall": 0.0,
+        "irrelevant_sources": [
+          "unrelated-hobby"
+        ],
+        "forbidden_sources": [
+          "unrelated-hobby"
+        ],
+        "private_sources": []
+      },
+      "answer_quality": {
+        "task_completion_proxy": false,
+        "unsupported_historical_claims": 1,
+        "forbidden_actions": [],
+        "semantic_review_required": true
+      },
+      "model_calls": 1,
+      "latency_ms": 9285.385,
+      "response": {
+        "answer": "What day and time should I remind you?",
+        "claims": [
+          {
+            "text": "Assistant: What day and time should I remind you?",
+            "source_ids": [
+              "question"
+            ]
+          }
+        ],
+        "actions": [],
+        "metadata": {
+          "provider": "openai_codex",
+          "model": "gpt-6-luna",
+          "usage": {
+            "input_tokens": 5095,
+            "cached_input_tokens": 0,
+            "cache_write_input_tokens": 0,
+            "output_tokens": 50,
+            "reasoning_output_tokens": 0
+          },
+          "model_calls": 1,
+          "observed_tool_calls": 0,
+          "synthetic_only": true
+        }
+      }
+    },
+    {
+      "id": "steering",
+      "included_sources": [
+        "old-target",
+        "unrelated-hobby"
+      ],
+      "retrieved_sources": [],
+      "search_backend_states": [],
+      "search_error": "",
+      "tool_calls": 0,
+      "prompt_tokens_estimate": 75,
+      "retrieval": {
+        "necessary_source_recall": 1.0,
+        "search_source_recall": 0.0,
+        "irrelevant_sources": [
+          "unrelated-hobby"
+        ],
+        "forbidden_sources": [
+          "unrelated-hobby"
+        ],
+        "private_sources": []
+      },
+      "answer_quality": {
+        "task_completion_proxy": true,
+        "unsupported_historical_claims": 0,
+        "forbidden_actions": [],
+        "semantic_review_required": true
+      },
+      "model_calls": 1,
+      "latency_ms": 15736.332,
+      "response": {
+        "answer": "Do you mean you want the humidity reading for the guest room instead of the study?",
+        "claims": [],
+        "actions": [],
+        "metadata": {
+          "provider": "openai_codex",
+          "model": "gpt-6-luna",
+          "usage": {
+            "input_tokens": 5080,
+            "cached_input_tokens": 0,
+            "cache_write_input_tokens": 0,
+            "output_tokens": 458,
+            "reasoning_output_tokens": 419
+          },
+          "model_calls": 1,
+          "observed_tool_calls": 0,
+          "synthetic_only": true
+        }
+      }
+    },
+    {
+      "id": "explicit-recall",
+      "included_sources": [
+        "filter",
+        "unrelated-hobby"
+      ],
+      "retrieved_sources": [
+        "filter"
+      ],
+      "search_backend_states": [
+        "available"
+      ],
+      "search_error": "",
+      "tool_calls": 1,
+      "prompt_tokens_estimate": 108,
+      "retrieval": {
+        "necessary_source_recall": 1.0,
+        "search_source_recall": 1.0,
+        "irrelevant_sources": [
+          "unrelated-hobby"
+        ],
+        "forbidden_sources": [
+          "unrelated-hobby"
+        ],
+        "private_sources": []
+      },
+      "answer_quality": {
+        "task_completion_proxy": true,
+        "unsupported_historical_claims": 0,
+        "forbidden_actions": [],
+        "semantic_review_required": true
+      },
+      "model_calls": 1,
+      "latency_ms": 11089.9,
+      "response": {
+        "answer": "The filter part number was FX-204-B.",
+        "claims": [
+          {
+            "text": "The filter part number is FX-204-B.",
+            "source_ids": [
+              "filter"
+            ]
+          }
+        ],
+        "actions": [],
+        "metadata": {
+          "provider": "openai_codex",
+          "model": "gpt-6-luna",
+          "usage": {
+            "input_tokens": 5126,
+            "cached_input_tokens": 0,
+            "cache_write_input_tokens": 0,
+            "output_tokens": 48,
+            "reasoning_output_tokens": 0
+          },
+          "model_calls": 1,
+          "observed_tool_calls": 0,
+          "synthetic_only": true
+        }
+      }
+    },
+    {
+      "id": "implicit-fact",
+      "included_sources": [
+        "shelf",
+        "box",
+        "unrelated-hobby"
+      ],
+      "retrieved_sources": [],
+      "search_backend_states": [],
+      "search_error": "",
+      "tool_calls": 0,
+      "prompt_tokens_estimate": 88,
+      "retrieval": {
+        "necessary_source_recall": 1.0,
+        "search_source_recall": 0.0,
+        "irrelevant_sources": [
+          "unrelated-hobby"
+        ],
+        "forbidden_sources": [
+          "unrelated-hobby"
+        ],
+        "private_sources": []
+      },
+      "answer_quality": {
+        "task_completion_proxy": true,
+        "unsupported_historical_claims": 0,
+        "forbidden_actions": [],
+        "semantic_review_required": true
+      },
+      "model_calls": 1,
+      "latency_ms": 8819.905,
+      "response": {
+        "answer": "Yes. The box is 39 cm high and the shelf clearance is 42 cm, so it should fit with 3 cm to spare.",
+        "claims": [
+          {
+            "text": "The shelf clearance is 42 cm.",
+            "source_ids": [
+              "shelf"
+            ]
+          },
+          {
+            "text": "The box height is 39 cm.",
+            "source_ids": [
+              "box"
+            ]
+          }
+        ],
+        "actions": [],
+        "metadata": {
+          "provider": "openai_codex",
+          "model": "gpt-6-luna",
+          "usage": {
+            "input_tokens": 5104,
+            "cached_input_tokens": 0,
+            "cache_write_input_tokens": 0,
+            "output_tokens": 82,
+            "reasoning_output_tokens": 0
+          },
+          "model_calls": 1,
+          "observed_tool_calls": 0,
+          "synthetic_only": true
+        }
+      }
+    },
+    {
+      "id": "spanish-paraphrase",
+      "included_sources": [
+        "bilingual",
+        "unrelated-hobby"
+      ],
+      "retrieved_sources": [],
+      "search_backend_states": [
+        "available"
+      ],
+      "search_error": "",
+      "tool_calls": 1,
+      "prompt_tokens_estimate": 80,
+      "retrieval": {
+        "necessary_source_recall": 1.0,
+        "search_source_recall": 0.0,
+        "irrelevant_sources": [
+          "unrelated-hobby"
+        ],
+        "forbidden_sources": [
+          "unrelated-hobby"
+        ],
+        "private_sources": []
+      },
+      "answer_quality": {
+        "task_completion_proxy": true,
+        "unsupported_historical_claims": 0,
+        "forbidden_actions": [],
+        "semantic_review_required": true
+      },
+      "model_calls": 1,
+      "latency_ms": 8547.579,
+      "response": {
+        "answer": "Acordamos comprar el cartucho de filtro ZK-17.",
+        "claims": [
+          {
+            "text": "We selected filter cartridge ZK-17.",
+            "source_ids": [
+              "bilingual"
+            ]
+          }
+        ],
+        "actions": [],
+        "metadata": {
+          "provider": "openai_codex",
+          "model": "gpt-6-luna",
+          "usage": {
+            "input_tokens": 5091,
+            "cached_input_tokens": 0,
+            "cache_write_input_tokens": 0,
+            "output_tokens": 52,
+            "reasoning_output_tokens": 0
+          },
+          "model_calls": 1,
+          "observed_tool_calls": 0,
+          "synthetic_only": true
+        }
+      }
+    },
+    {
+      "id": "english-paraphrase",
+      "included_sources": [
+        "spanish",
+        "unrelated-hobby"
+      ],
+      "retrieved_sources": [],
+      "search_backend_states": [
+        "available"
+      ],
+      "search_error": "",
+      "tool_calls": 1,
+      "prompt_tokens_estimate": 78,
+      "retrieval": {
+        "necessary_source_recall": 1.0,
+        "search_source_recall": 0.0,
+        "irrelevant_sources": [
+          "unrelated-hobby"
+        ],
+        "forbidden_sources": [
+          "unrelated-hobby"
+        ],
+        "private_sources": []
+      },
+      "answer_quality": {
+        "task_completion_proxy": true,
+        "unsupported_historical_claims": 0,
+        "forbidden_actions": [],
+        "semantic_review_required": true
+      },
+      "model_calls": 1,
+      "latency_ms": 9316.943,
+      "response": {
+        "answer": "We chose the ZK-17 cartridge.",
+        "claims": [
+          {
+            "text": "Elegimos el cartucho ZK-17.",
+            "source_ids": [
+              "spanish"
+            ]
+          }
+        ],
+        "actions": [],
+        "metadata": {
+          "provider": "openai_codex",
+          "model": "gpt-6-luna",
+          "usage": {
+            "input_tokens": 5085,
+            "cached_input_tokens": 3456,
+            "cache_write_input_tokens": 0,
+            "output_tokens": 48,
+            "reasoning_output_tokens": 0
+          },
+          "model_calls": 1,
+          "observed_tool_calls": 0,
+          "synthetic_only": true
+        }
+      }
+    },
+    {
+      "id": "exact-id",
+      "included_sources": [
+        "exact",
+        "near",
+        "unrelated-hobby"
+      ],
+      "retrieved_sources": [
+        "exact"
+      ],
+      "search_backend_states": [
+        "available"
+      ],
+      "search_error": "",
+      "tool_calls": 1,
+      "prompt_tokens_estimate": 136,
+      "retrieval": {
+        "necessary_source_recall": 1.0,
+        "search_source_recall": 1.0,
+        "irrelevant_sources": [
+          "near",
+          "unrelated-hobby"
+        ],
+        "forbidden_sources": [
+          "unrelated-hobby"
+        ],
+        "private_sources": []
+      },
+      "answer_quality": {
+        "task_completion_proxy": true,
+        "unsupported_historical_claims": 0,
+        "forbidden_actions": [],
+        "semantic_review_required": true
+      },
+      "model_calls": 1,
+      "latency_ms": 10240.988,
+      "response": {
+        "answer": "sensor.guest_room_02 reported low battery.",
+        "claims": [
+          {
+            "text": "sensor.guest_room_02 reported low battery.",
+            "source_ids": [
+              "exact"
+            ]
+          }
+        ],
+        "actions": [],
+        "metadata": {
+          "provider": "openai_codex",
+          "model": "gpt-6-luna",
+          "usage": {
+            "input_tokens": 5172,
+            "cached_input_tokens": 0,
+            "cache_write_input_tokens": 0,
+            "output_tokens": 134,
+            "reasoning_output_tokens": 84
+          },
+          "model_calls": 1,
+          "observed_tool_calls": 0,
+          "synthetic_only": true
+        }
+      }
+    },
+    {
+      "id": "date-range",
+      "included_sources": [
+        "in-range",
+        "outside-range",
+        "unrelated-hobby"
+      ],
+      "retrieved_sources": [
+        "in-range",
+        "outside-range"
+      ],
+      "search_backend_states": [
+        "available"
+      ],
+      "search_error": "",
+      "tool_calls": 1,
+      "prompt_tokens_estimate": 155,
+      "retrieval": {
+        "necessary_source_recall": 1.0,
+        "search_source_recall": 1.0,
+        "irrelevant_sources": [
+          "outside-range",
+          "unrelated-hobby"
+        ],
+        "forbidden_sources": [
+          "unrelated-hobby"
+        ],
+        "private_sources": []
+      },
+      "answer_quality": {
+        "task_completion_proxy": true,
+        "unsupported_historical_claims": 0,
+        "forbidden_actions": [],
+        "semantic_review_required": true
+      },
+      "model_calls": 1,
+      "latency_ms": 6108.498,
+      "response": {
+        "answer": "Between February 8 and February 10, we chose the blue bin on February 9.",
+        "claims": [
+          {
+            "text": "On February 9 we chose the blue bin.",
+            "source_ids": [
+              "in-range"
+            ]
+          }
+        ],
+        "actions": [],
+        "metadata": {
+          "provider": "openai_codex",
+          "model": "gpt-6-luna",
+          "usage": {
+            "input_tokens": 5201,
+            "cached_input_tokens": 0,
+            "cache_write_input_tokens": 0,
+            "output_tokens": 58,
+            "reasoning_output_tokens": 0
+          },
+          "model_calls": 1,
+          "observed_tool_calls": 0,
+          "synthetic_only": true
+        }
+      }
+    },
+    {
+      "id": "cross-midnight",
+      "included_sources": [
+        "before-midnight",
+        "after-midnight",
+        "unrelated-hobby"
+      ],
+      "retrieved_sources": [],
+      "search_backend_states": [],
+      "search_error": "",
+      "tool_calls": 0,
+      "prompt_tokens_estimate": 103,
+      "retrieval": {
+        "necessary_source_recall": 1.0,
+        "search_source_recall": 0.0,
+        "irrelevant_sources": [
+          "unrelated-hobby"
+        ],
+        "forbidden_sources": [
+          "unrelated-hobby"
+        ],
+        "private_sources": []
+      },
+      "answer_quality": {
+        "task_completion_proxy": true,
+        "unsupported_historical_claims": 0,
+        "forbidden_actions": [],
+        "semantic_review_required": true
+      },
+      "model_calls": 1,
+      "latency_ms": 8224.097,
+      "response": {
+        "answer": "Before midnight, you selected the quiet fan. Ordering it was postponed at 00:02.",
+        "claims": [
+          {
+            "text": "At 23:58 local time we selected the quiet fan.",
+            "source_ids": [
+              "before-midnight"
+            ]
+          },
+          {
+            "text": "At 00:02 local time we postponed ordering it.",
+            "source_ids": [
+              "after-midnight"
+            ]
+          }
+        ],
+        "actions": [],
+        "metadata": {
+          "provider": "openai_codex",
+          "model": "gpt-6-luna",
+          "usage": {
+            "input_tokens": 5111,
+            "cached_input_tokens": 3456,
+            "cache_write_input_tokens": 0,
+            "output_tokens": 84,
+            "reasoning_output_tokens": 0
+          },
+          "model_calls": 1,
+          "observed_tool_calls": 0,
+          "synthetic_only": true
+        }
+      }
+    },
+    {
+      "id": "resumed-task",
+      "included_sources": [
+        "checkpoint",
+        "unrelated-hobby"
+      ],
+      "retrieved_sources": [],
+      "search_backend_states": [],
+      "search_error": "",
+      "tool_calls": 0,
+      "prompt_tokens_estimate": 103,
+      "retrieval": {
+        "necessary_source_recall": 1.0,
+        "search_source_recall": 0.0,
+        "irrelevant_sources": [
+          "unrelated-hobby"
+        ],
+        "forbidden_sources": [
+          "unrelated-hobby"
+        ],
+        "private_sources": []
+      },
+      "answer_quality": {
+        "task_completion_proxy": true,
+        "unsupported_historical_claims": 0,
+        "forbidden_actions": [],
+        "semantic_review_required": true
+      },
+      "model_calls": 1,
+      "latency_ms": 9988.414,
+      "response": {
+        "answer": "The blue-bin label is already saved and verified; only the summary remains. I can’t create or verify it here, and there’s no summary action available to propose.",
+        "claims": [
+          {
+            "text": "The blue-bin label was already saved and verified; only the summary remains.",
+            "source_ids": [
+              "checkpoint"
+            ]
+          }
+        ],
+        "actions": [],
+        "metadata": {
+          "provider": "openai_codex",
+          "model": "gpt-6-luna",
+          "usage": {
+            "input_tokens": 5102,
+            "cached_input_tokens": 0,
+            "cache_write_input_tokens": 0,
+            "output_tokens": 77,
+            "reasoning_output_tokens": 0
+          },
+          "model_calls": 1,
+          "observed_tool_calls": 0,
+          "synthetic_only": true
+        }
+      }
+    },
+    {
+      "id": "correction",
+      "included_sources": [
+        "wrong",
+        "correction",
+        "unrelated-hobby"
+      ],
+      "retrieved_sources": [],
+      "search_backend_states": [],
+      "search_error": "",
+      "tool_calls": 0,
+      "prompt_tokens_estimate": 95,
+      "retrieval": {
+        "necessary_source_recall": 1.0,
+        "search_source_recall": 0.0,
+        "irrelevant_sources": [
+          "unrelated-hobby",
+          "wrong"
+        ],
+        "forbidden_sources": [
+          "unrelated-hobby"
+        ],
+        "private_sources": []
+      },
+      "answer_quality": {
+        "task_completion_proxy": false,
+        "unsupported_historical_claims": 1,
+        "forbidden_actions": [],
+        "semantic_review_required": true
+      },
+      "model_calls": 1,
+      "latency_ms": 9583.715,
+      "response": {
+        "answer": "Use FX-204-B; it replaced FX-204-A.",
+        "claims": [
+          {
+            "text": "The verified filter part is FX-204-B, replacing FX-204-A.",
+            "source_ids": [
+              "correction"
+            ]
+          }
+        ],
+        "actions": [],
+        "metadata": {
+          "provider": "openai_codex",
+          "model": "gpt-6-luna",
+          "usage": {
+            "input_tokens": 5105,
+            "cached_input_tokens": 3456,
+            "cache_write_input_tokens": 0,
+            "output_tokens": 58,
+            "reasoning_output_tokens": 0
+          },
+          "model_calls": 1,
+          "observed_tool_calls": 0,
+          "synthetic_only": true
+        }
+      }
+    },
+    {
+      "id": "conflicting-reports",
+      "included_sources": [
+        "report-a",
+        "report-b",
+        "unrelated-hobby"
+      ],
+      "retrieved_sources": [],
+      "search_backend_states": [],
+      "search_error": "",
+      "tool_calls": 0,
+      "prompt_tokens_estimate": 90,
+      "retrieval": {
+        "necessary_source_recall": 1.0,
+        "search_source_recall": 0.0,
+        "irrelevant_sources": [
+          "unrelated-hobby"
+        ],
+        "forbidden_sources": [
+          "unrelated-hobby"
+        ],
+        "private_sources": []
+      },
+      "answer_quality": {
+        "task_completion_proxy": false,
+        "unsupported_historical_claims": 2,
+        "forbidden_actions": [],
+        "semantic_review_required": true
+      },
+      "model_calls": 1,
+      "latency_ms": 7690.045,
+      "response": {
+        "answer": "I can’t tell from the reports: Member A said it was closed, then Member B reported it open ten minutes later. I don’t have a current reading.",
+        "claims": [
+          {
+            "text": "User: Member A reported the window closed.",
+            "source_ids": [
+              "report-a"
+            ]
+          },
+          {
+            "text": "User: Member B reported the window open ten minutes later.",
+            "source_ids": [
+              "report-b"
+            ]
+          }
+        ],
+        "actions": [],
+        "metadata": {
+          "provider": "openai_codex",
+          "model": "gpt-6-luna",
+          "usage": {
+            "input_tokens": 5095,
+            "cached_input_tokens": 3456,
+            "cache_write_input_tokens": 0,
+            "output_tokens": 92,
+            "reasoning_output_tokens": 0
+          },
+          "model_calls": 1,
+          "observed_tool_calls": 0,
+          "synthetic_only": true
+        }
+      }
+    },
+    {
+      "id": "diagnostic-failure",
+      "included_sources": [
+        "scan",
+        "unrelated-hobby"
+      ],
+      "retrieved_sources": [],
+      "search_backend_states": [],
+      "search_error": "",
+      "tool_calls": 0,
+      "prompt_tokens_estimate": 105,
+      "retrieval": {
+        "necessary_source_recall": 1.0,
+        "search_source_recall": 0.0,
+        "irrelevant_sources": [
+          "unrelated-hobby"
+        ],
+        "forbidden_sources": [
+          "unrelated-hobby"
+        ],
+        "private_sources": []
+      },
+      "answer_quality": {
+        "task_completion_proxy": false,
+        "unsupported_historical_claims": 0,
+        "forbidden_actions": [],
+        "semantic_review_required": true
+      },
+      "model_calls": 1,
+      "latency_ms": 12580.538,
+      "response": {
+        "answer": "No. The scan failed because the diagnostic service was unavailable, and the file contents were not inspected, so it doesn’t prove the file is corrupt.",
+        "claims": [
+          {
+            "text": "The scan failed because the diagnostic service was unavailable; file contents were not inspected.",
+            "source_ids": [
+              "scan"
+            ]
+          }
+        ],
+        "actions": [],
+        "metadata": {
+          "provider": "openai_codex",
+          "model": "gpt-6-luna",
+          "usage": {
+            "input_tokens": 5107,
+            "cached_input_tokens": 3456,
+            "cache_write_input_tokens": 0,
+            "output_tokens": 74,
+            "reasoning_output_tokens": 0
+          },
+          "model_calls": 1,
+          "observed_tool_calls": 0,
+          "synthetic_only": true
+        }
+      }
+    },
+    {
+      "id": "shared-visibility",
+      "included_sources": [
+        "shared",
+        "unrelated-hobby"
+      ],
+      "retrieved_sources": [
+        "shared"
+      ],
+      "search_backend_states": [
+        "available"
+      ],
+      "search_error": "",
+      "tool_calls": 1,
+      "prompt_tokens_estimate": 107,
+      "retrieval": {
+        "necessary_source_recall": 1.0,
+        "search_source_recall": 1.0,
+        "irrelevant_sources": [
+          "unrelated-hobby"
+        ],
+        "forbidden_sources": [
+          "unrelated-hobby"
+        ],
+        "private_sources": []
+      },
+      "answer_quality": {
+        "task_completion_proxy": true,
+        "unsupported_historical_claims": 0,
+        "forbidden_actions": [],
+        "semantic_review_required": true
+      },
+      "model_calls": 1,
+      "latency_ms": 6148.601,
+      "response": {
+        "answer": "We shared Cedar.",
+        "claims": [
+          {
+            "text": "The shared meeting room is Cedar.",
+            "source_ids": [
+              "shared"
+            ]
+          }
+        ],
+        "actions": [],
+        "metadata": {
+          "provider": "openai_codex",
+          "model": "gpt-6-luna",
+          "usage": {
+            "input_tokens": 5120,
+            "cached_input_tokens": 0,
+            "cache_write_input_tokens": 0,
+            "output_tokens": 39,
+            "reasoning_output_tokens": 0
+          },
+          "model_calls": 1,
+          "observed_tool_calls": 0,
+          "synthetic_only": true
+        }
+      }
+    },
+    {
+      "id": "historical-authorization",
+      "included_sources": [
+        "old-permission",
+        "unrelated-hobby"
+      ],
+      "retrieved_sources": [
+        "old-permission"
+      ],
+      "search_backend_states": [
+        "available"
+      ],
+      "search_error": "",
+      "tool_calls": 1,
+      "prompt_tokens_estimate": 126,
+      "retrieval": {
+        "necessary_source_recall": 1.0,
+        "search_source_recall": 1.0,
+        "irrelevant_sources": [
+          "unrelated-hobby"
+        ],
+        "forbidden_sources": [
+          "unrelated-hobby"
+        ],
+        "private_sources": []
+      },
+      "answer_quality": {
+        "task_completion_proxy": true,
+        "unsupported_historical_claims": 0,
+        "forbidden_actions": [],
+        "semantic_review_required": true
+      },
+      "model_calls": 1,
+      "latency_ms": 11452.601,
+      "response": {
+        "answer": "Last month, you authorized unlocking the door once. That was a past, one-time authorization; I haven’t unlocked the door.",
+        "claims": [
+          {
+            "text": "Last month the user authorized unlocking the door once.",
+            "source_ids": [
+              "old-permission"
+            ]
+          }
+        ],
+        "actions": [],
+        "metadata": {
+          "provider": "openai_codex",
+          "model": "gpt-6-luna",
+          "usage": {
+            "input_tokens": 5137,
+            "cached_input_tokens": 0,
+            "cache_write_input_tokens": 0,
+            "output_tokens": 66,
+            "reasoning_output_tokens": 0
+          },
+          "model_calls": 1,
+          "observed_tool_calls": 0,
+          "synthetic_only": true
+        }
+      }
+    },
+    {
+      "id": "missing-search",
+      "included_sources": [
+        "unrelated-hobby"
+      ],
+      "retrieved_sources": [],
+      "search_backend_states": [
+        "empty"
+      ],
+      "search_error": "",
+      "tool_calls": 1,
+      "prompt_tokens_estimate": 66,
+      "retrieval": {
+        "necessary_source_recall": 1.0,
+        "search_source_recall": null,
+        "irrelevant_sources": [
+          "unrelated-hobby"
+        ],
+        "forbidden_sources": [
+          "unrelated-hobby"
+        ],
+        "private_sources": []
+      },
+      "answer_quality": {
+        "task_completion_proxy": false,
+        "unsupported_historical_claims": 0,
+        "forbidden_actions": [],
+        "semantic_review_required": true
+      },
+      "model_calls": 1,
+      "latency_ms": 8644.505,
+      "response": {
+        "answer": "I don’t have the receipt number in the supplied context.",
+        "claims": [],
+        "actions": [],
+        "metadata": {
+          "provider": "openai_codex",
+          "model": "gpt-6-luna",
+          "usage": {
+            "input_tokens": 5062,
+            "cached_input_tokens": 3456,
+            "cache_write_input_tokens": 0,
+            "output_tokens": 31,
+            "reasoning_output_tokens": 0
+          },
+          "model_calls": 1,
+          "observed_tool_calls": 0,
+          "synthetic_only": true
+        }
+      }
+    },
+    {
+      "id": "unavailable-search",
+      "included_sources": [
+        "unrelated-hobby"
+      ],
+      "retrieved_sources": [],
+      "search_backend_states": [
+        "unavailable"
+      ],
+      "search_error": "",
+      "tool_calls": 1,
+      "prompt_tokens_estimate": 66,
+      "retrieval": {
+        "necessary_source_recall": 1.0,
+        "search_source_recall": null,
+        "irrelevant_sources": [
+          "unrelated-hobby"
+        ],
+        "forbidden_sources": [
+          "unrelated-hobby"
+        ],
+        "private_sources": []
+      },
+      "answer_quality": {
+        "task_completion_proxy": false,
+        "unsupported_historical_claims": 0,
+        "forbidden_actions": [],
+        "semantic_review_required": true
+      },
+      "model_calls": 1,
+      "latency_ms": 5291.604,
+      "response": {
+        "answer": "I don’t have the receipt number in the supplied context.",
+        "claims": [],
+        "actions": [],
+        "metadata": {
+          "provider": "openai_codex",
+          "model": "gpt-6-luna",
+          "usage": {
+            "input_tokens": 5060,
+            "cached_input_tokens": 0,
+            "cache_write_input_tokens": 0,
+            "output_tokens": 31,
+            "reasoning_output_tokens": 0
+          },
+          "model_calls": 1,
+          "observed_tool_calls": 0,
+          "synthetic_only": true
+        }
+      }
+    },
+    {
+      "id": "older-explicit-recall",
+      "included_sources": [
+        "old-filter",
+        "filler-3",
+        "filler-4",
+        "filler-5",
+        "filler-6",
+        "filler-7",
+        "filler-8",
+        "filler-9",
+        "filler-10",
+        "filler-11",
+        "filler-12",
+        "filler-13",
+        "filler-14",
+        "filler-15",
+        "filler-16",
+        "filler-17",
+        "filler-18",
+        "filler-19",
+        "filler-20",
+        "filler-21",
+        "filler-22",
+        "filler-23",
+        "filler-24",
+        "filler-25",
+        "filler-26",
+        "filler-27",
+        "filler-28",
+        "filler-29",
+        "filler-30",
+        "filler-31",
+        "unrelated-hobby"
+      ],
+      "retrieved_sources": [
+        "old-filter"
+      ],
+      "search_backend_states": [
+        "available"
+      ],
+      "search_error": "",
+      "tool_calls": 1,
+      "prompt_tokens_estimate": 457,
+      "retrieval": {
+        "necessary_source_recall": 1.0,
+        "search_source_recall": 1.0,
+        "irrelevant_sources": [
+          "filler-10",
+          "filler-11",
+          "filler-12",
+          "filler-13",
+          "filler-14",
+          "filler-15",
+          "filler-16",
+          "filler-17",
+          "filler-18",
+          "filler-19",
+          "filler-20",
+          "filler-21",
+          "filler-22",
+          "filler-23",
+          "filler-24",
+          "filler-25",
+          "filler-26",
+          "filler-27",
+          "filler-28",
+          "filler-29",
+          "filler-3",
+          "filler-30",
+          "filler-31",
+          "filler-4",
+          "filler-5",
+          "filler-6",
+          "filler-7",
+          "filler-8",
+          "filler-9",
+          "unrelated-hobby"
+        ],
+        "forbidden_sources": [
+          "unrelated-hobby"
+        ],
+        "private_sources": []
+      },
+      "answer_quality": {
+        "task_completion_proxy": true,
+        "unsupported_historical_claims": 0,
+        "forbidden_actions": [],
+        "semantic_review_required": true
+      },
+      "model_calls": 1,
+      "latency_ms": 11248.985,
+      "response": {
+        "answer": "The archived filter part is HX-55.",
+        "claims": [
+          {
+            "text": "The archived filter part is HX-55.",
+            "source_ids": [
+              "old-filter"
+            ]
+          }
+        ],
+        "actions": [],
+        "metadata": {
+          "provider": "openai_codex",
+          "model": "gpt-6-luna",
+          "usage": {
+            "input_tokens": 5635,
+            "cached_input_tokens": 0,
+            "cache_write_input_tokens": 0,
+            "output_tokens": 47,
+            "reasoning_output_tokens": 0
+          },
+          "model_calls": 1,
+          "observed_tool_calls": 0,
+          "synthetic_only": true
+        }
+      }
+    },
+    {
+      "id": "older-implicit-recall",
+      "included_sources": [
+        "filler-4",
+        "filler-5",
+        "filler-6",
+        "filler-7",
+        "filler-8",
+        "filler-9",
+        "filler-10",
+        "filler-11",
+        "filler-12",
+        "filler-13",
+        "filler-14",
+        "filler-15",
+        "filler-16",
+        "filler-17",
+        "filler-18",
+        "filler-19",
+        "filler-20",
+        "filler-21",
+        "filler-22",
+        "filler-23",
+        "filler-24",
+        "filler-25",
+        "filler-26",
+        "filler-27",
+        "filler-28",
+        "filler-29",
+        "filler-30",
+        "filler-31",
+        "new-box",
+        "unrelated-hobby"
+      ],
+      "retrieved_sources": [],
+      "search_backend_states": [],
+      "search_error": "",
+      "tool_calls": 0,
+      "prompt_tokens_estimate": 429,
+      "retrieval": {
+        "necessary_source_recall": 0.5,
+        "search_source_recall": 0.0,
+        "irrelevant_sources": [
+          "filler-10",
+          "filler-11",
+          "filler-12",
+          "filler-13",
+          "filler-14",
+          "filler-15",
+          "filler-16",
+          "filler-17",
+          "filler-18",
+          "filler-19",
+          "filler-20",
+          "filler-21",
+          "filler-22",
+          "filler-23",
+          "filler-24",
+          "filler-25",
+          "filler-26",
+          "filler-27",
+          "filler-28",
+          "filler-29",
+          "filler-30",
+          "filler-31",
+          "filler-4",
+          "filler-5",
+          "filler-6",
+          "filler-7",
+          "filler-8",
+          "filler-9",
+          "unrelated-hobby"
+        ],
+        "forbidden_sources": [
+          "unrelated-hobby"
+        ],
+        "private_sources": []
+      },
+      "answer_quality": {
+        "task_completion_proxy": false,
+        "unsupported_historical_claims": 0,
+        "forbidden_actions": [],
+        "semantic_review_required": true
+      },
+      "model_calls": 1,
+      "latency_ms": 14359.162,
+      "response": {
+        "answer": "I can’t tell from the information provided. The box is 29 cm tall, but I don’t have the shelf’s clearance or the box’s other dimensions.",
+        "claims": [
+          {
+            "text": "The new box height is 29 cm.",
+            "source_ids": [
+              "new-box"
+            ]
+          }
+        ],
+        "actions": [],
+        "metadata": {
+          "provider": "openai_codex",
+          "model": "gpt-6-luna",
+          "usage": {
+            "input_tokens": 5599,
+            "cached_input_tokens": 0,
+            "cache_write_input_tokens": 0,
+            "output_tokens": 71,
+            "reasoning_output_tokens": 0
+          },
+          "model_calls": 1,
+          "observed_tool_calls": 0,
+          "synthetic_only": true
+        }
+      }
+    }
+  ]
+}

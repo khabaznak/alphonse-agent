@@ -105,22 +105,15 @@ def assemble(case: dict[str, Any]) -> dict[str, Any]:
         store._memory.close()
 
 
-def score_answer(case: dict[str, Any], trace: dict[str, Any], included: list[str]) -> dict[str, Any]:
-    """Mechanical response checks; semantic completeness still needs human review."""
-    expected = case["expected"]
-    answer = trace["answer"].casefold()
-    unsupported = [c for c in trace["claims"] if c["text"] not in expected["allowed_historical_claims"]
-                   or not c["source_ids"] or not set(c["source_ids"]) <= set(included)
-                   or not any(s["id"] in c["source_ids"] and c["text"] in s["content"] for s in case["sources"])]
-    forbidden = sorted(set(trace["actions"]) & set(expected["forbidden_actions"]))
-    completed = (all(x.casefold() in answer for x in expected["required_answer_fragments"])
-                 and not any(x.casefold() in answer for x in expected["forbidden_answer_fragments"])
-                 and not unsupported and not forbidden)
-    return {"task_completion_proxy": completed, "unsupported_historical_claims": len(unsupported),
-            "forbidden_actions": forbidden, "semantic_review_required": True}
+def score_answer(case: dict[str, Any], trace: dict[str, Any], included: list[str], *, rules: dict[str, Any]) -> dict[str, Any]:
+    from alphonse.agent_v2.evaluation.memory_scoring import score_response
+
+    return score_response(case, trace, included, rules)
 
 
-def run(corpus: dict[str, Any], *, responder=None, timing: bool = False) -> dict[str, Any]:
+def run(corpus: dict[str, Any], *, responder=None, timing: bool = False, rubric: dict[str, Any] | None = None) -> dict[str, Any]:
+    if responder is not None and rubric is None:
+        raise ValueError("response_rubric_required")
     rows = []
     for case in corpus["cases"]:
         started = perf_counter()
@@ -142,17 +135,21 @@ def run(corpus: dict[str, Any], *, responder=None, timing: bool = False) -> dict
             trace = responder({"message": case["message"], "context": prompt,
                                "source_ids": observed["included_sources"],
                                "response_contract": {"answer": "text", "claims": [{"text": "exact historical assertion quoted from context; list every historical assertion in answer", "source_ids": ["source identifier"]}], "actions": ["proposed action identifier"]}})
-            row["answer_quality"] = score_answer(case, trace, observed["included_sources"])
+            row["answer_quality"] = score_answer(case, trace, observed["included_sources"], rules=rubric["cases"][case["id"]])
             row["response"] = trace
             row["model_calls"] = 1
         if timing:
             row["latency_ms"] = round((perf_counter() - started) * 1000, 3)
         rows.append(row)
     encoded = json.dumps(corpus, ensure_ascii=False, sort_keys=True).encode()
-    return {"schema_version": 1, "corpus_version": corpus["version"],
+    report = {"schema_version": 1, "corpus_version": corpus["version"],
             "corpus_sha256": hashlib.sha256(encoded).hexdigest(),
             "adapter": "current-v3-context-and-native-search-v1",
             "mode": "live-response" if responder else "offline-context-only", "cases": rows}
+    if responder is not None:
+        from alphonse.agent_v2.evaluation.memory_scoring import content_hash
+        report.update(scorer_version=rubric["version"], rubric_sha256=content_hash(rubric))
+    return report
 
 
 def main() -> None:

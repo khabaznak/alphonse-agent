@@ -11,21 +11,24 @@ import json
 from pathlib import Path
 
 from alphonse.agent_v2.evaluation.memory_replay import load_corpus, run
+from alphonse.agent_v2.evaluation.memory_scoring import load_rubric
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--corpus", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--rubric", type=Path, required=True)
     parser.add_argument("--live", action="store_true")
     parser.add_argument("--responder", help="Explicit provider adapter module:function")
     args = parser.parse_args()
     if not args.live or not args.responder:
         parser.error("--live and --responder must be supplied together")
     corpus = load_corpus(args.corpus)
+    rubric = load_rubric(args.rubric, corpus)
     module, name = args.responder.split(":", 1)
     responder = getattr(importlib.import_module(module), name)
-    report = run(corpus, responder=responder, timing=True)
+    report = run(corpus, responder=responder, timing=True, rubric=rubric)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n")
 
