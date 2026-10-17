@@ -40,7 +40,7 @@ def test_bounded_context_never_loads_full_session_ledger(tmp_path) -> None:
     assert (root / ".alphonse" / "memory" / "sessions" / "session-one" / "ledger-0001.md").stat().st_size > len(context)
 
 
-def test_session_close_promotes_project_memory_atomically(tmp_path) -> None:
+def test_session_close_keeps_historical_view_without_promoting_project_memory(tmp_path) -> None:
     root = tmp_path / "project"
     memory = _memory(tmp_path, root, summarizer=lambda source: "stable preference and unresolved commitment")
     task = _task("session-one")
@@ -50,7 +50,8 @@ def test_session_close_promotes_project_memory_atomically(tmp_path) -> None:
     summary = memory.close_session(user_id="alex", project_id="project", session_id="session-one")
 
     assert "stable preference" in summary
-    assert "stable preference" in (root / ".alphonse" / "memory" / "project-summary.md").read_text()
+    assert not (root / ".alphonse" / "memory" / "project-summary.md").exists()
+    assert "stable preference" not in memory.start_task(_task("session-two"))
     assert (root / ".alphonse" / "memory" / "sessions" / "session-one" / "summary.md").exists()
 
 
@@ -90,7 +91,7 @@ def test_router_stamps_selected_session_before_queueing_and_supports_commands(tm
     assert telegram_routed.queued.message.memory_session_id == shared_session.session_id
 
 
-def test_legacy_ledgers_are_archived_and_summarized_once(tmp_path) -> None:
+def test_legacy_ledgers_are_archived_once_without_promoting_prose(tmp_path) -> None:
     root = tmp_path / "project"
     legacy = root / ".alphonse" / "memory" / "ledger-0001.md"
     legacy.parent.mkdir(parents=True)
@@ -100,7 +101,7 @@ def test_legacy_ledgers_are_archived_and_summarized_once(tmp_path) -> None:
     assert memory.migrate_project_legacy(user_id="alex", project_id="project") == 1
     assert memory.migrate_project_legacy(user_id="alex", project_id="project") == 0
     assert (legacy.parent / "legacy" / "ledger-0001.md").exists()
-    assert "old decision" in (legacy.parent / "project-summary.md").read_text()
+    assert not (legacy.parent / "project-summary.md").exists()
 
 
 def test_memory_session_store_keeps_bindings_per_project_and_rejects_closed_sessions() -> None:

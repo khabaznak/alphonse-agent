@@ -91,10 +91,10 @@
     },
     "native.search_memory": {
       "type": "noul",
-      "instructions": "Does this request need to search archived conversation memory for information from this project?",
+      "instructions": "Does this request need authorized household knowledge or conversation history, regardless of whether a project is selected or where the information was learned?",
       "criteria": {
-        "true": "The answer depends on details from older or closed conversations that are not present in the current conversation or supplied project context.",
-        "false": "The current conversation, project files, or other available tools provide the needed information without searching archived memory."
+        "true": "The answer depends on remembered facts, explicit persistent preferences/instructions, decisions, commitments, corrections, disputed claims, or earlier conversations not already supplied. A project boundary must not exclude relevant authorized memory. Historical observations may be retrieved explicitly as history.",
+        "false": "The supplied context already contains the needed information, or the request requires fresh external current-state evidence that memory cannot provide. Memory is neither authorization nor a scheduler."
       }
     },
     "native.scheduled_task_delivery": {

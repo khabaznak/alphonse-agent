@@ -112,4 +112,4 @@ def test_decision_context_keeps_memory_and_conversation_separate() -> None:
     rendered = task_context_for_decision(task, CoreLoopContext(messages=InMemoryMessageQueue()))
     assert "Current request" in rendered
     assert "Known project file: journal.md" in rendered
-    assert "Durable project/session memory:" in rendered
+    assert "Durable household memory (person/audience scoped; project association is optional):" in rendered

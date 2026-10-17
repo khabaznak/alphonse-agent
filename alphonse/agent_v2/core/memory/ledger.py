@@ -20,22 +20,25 @@ _SCOPE_LOCKS_GUARD = Lock()
 
 
 class LedgerMemory:
-    """Append-only audit ledgers with bounded project/session prompt context."""
+    """Legacy task audits plus person-scoped, source-linked prompt knowledge."""
+    supports_knowledge_cancellation = True
 
-    def __init__(self, *, users_root: Any, settings_store: SQLiteMemorySettingsStore, summarizer: Callable[[str], str] | None = None, project_root_provider: Callable[[str], str | Path | None] | None = None, closed_session_ids_provider: Callable[[str], set[str]] | None = None) -> None:
+    def __init__(self, *, users_root: Any, settings_store: SQLiteMemorySettingsStore, summarizer: Callable[[str], str] | None = None, project_root_provider: Callable[[str], str | Path | None] | None = None, closed_session_ids_provider: Callable[[str], set[str]] | None = None, knowledge: Any | None = None) -> None:
         self._users_root = users_root
         self._settings_store = settings_store
         self._summarizer = summarizer
         self._project_root_provider = project_root_provider
         self._closed_session_ids_provider = closed_session_ids_provider
+        self.knowledge = knowledge
 
-    def start_task(self, task: Any) -> str:
+    def start_task(self, task: Any, *, cancel_checker: Callable | None = None) -> str:
+        self._update_knowledge(task, finishing=False, cancel_checker=cancel_checker)
         session_id = str(getattr(task, "memory_session_id", "") or "")
         with self._scope_lock(str(task.user or "unknown"), str(task.project_id or ""), session_id):
             path = self._current_path(task, rollover=True)
             task_id = str(task.task_id or task.message_id or "task").strip()
             self._append(path, f"\n### Task {task_id}\n- User: {task.user or ''}\n- Project ID: {task.project_id or 'generic'}\n\n#### Conversation\n- User: {task.goal}\n")
-            context, metrics = self._bounded_context(task, path)
+            context, metrics = self._bounded_context(task)
             metadata = getattr(task, "metadata", None)
             if isinstance(metadata, dict):
                 metadata.update(metrics)
@@ -48,9 +51,26 @@ class LedgerMemory:
             text = _render(content)
             self._append(path, f"\n#### {heading}\n{text}\n")
 
-    def finish_task(self, task: Any) -> None:
+    def finish_task(self, task: Any, *, cancel_checker: Callable | None = None) -> None:
         outcome = task.outcome if task.outcome is not None else {"status": task.status}
         self.event(task, "Outcome", outcome)
+        self._update_knowledge(task, finishing=True, cancel_checker=cancel_checker)
+
+    def _update_knowledge(self, task: Any, *, finishing: bool, cancel_checker: Callable | None = None) -> None:
+        if self.knowledge is None or not task.user:
+            return
+        try:
+            if finishing:
+                self.knowledge.process_task(task, cancel_checker=cancel_checker)
+            else:
+                self.knowledge.process_pending(str(task.user), cancel_checker=cancel_checker)
+        except Exception:
+            # Knowledge is derived. Failed extraction remains retryable, never
+            # changes task success, and never falls back to prose promotion.
+            logger.exception("knowledge update failed; source processing remains pending")
+            metadata = getattr(task, "metadata", None)
+            if isinstance(metadata, dict):
+                metadata["knowledge_update_status"] = "pending_retry"
 
     def latest_content(self, *, user_id: str, project_id: str = "") -> str:
         with self._scope_lock(user_id, project_id, ""):
@@ -170,17 +190,12 @@ class LedgerMemory:
         with path.open("a", encoding="utf-8") as handle: handle.write(content)
 
     def close_session(self, *, user_id: str, project_id: str, session_id: str) -> str:
-        """Summarize a session and atomically promote conservative project memory."""
+        """Keep a historical session view without promoting prose to knowledge."""
         with self._scope_lock(user_id, project_id, session_id):
             directory = self._scope_dir(user_id, project_id, session_id)
             sources = [path.read_text(encoding="utf-8") for path in sorted(directory.glob("ledger-*.md"))]
             session_summary = self._summarize("\n\n".join(sources), "Summarize this session. Preserve stable facts, decisions, preferences, and unresolved commitments only.")
             session_summary = _truncate_tokens(session_summary, max(256, self._settings_store.get().memory_context_token_budget // 4))[0]
-            project_summary_path = self._project_memory_dir(user_id, project_id) / "project-summary.md"
-            existing = project_summary_path.read_text(encoding="utf-8") if project_summary_path.exists() else ""
-            merged = self._summarize(existing + "\n\n# Closed session\n" + session_summary, "Merge into a concise durable project memory. Keep only stable facts, decisions, preferences, and unresolved commitments.")
-            merged = _truncate_tokens(merged, max(256, self._settings_store.get().memory_context_token_budget // 4))[0]
-            _atomic_write(project_summary_path, "# Project Memory\n\n" + (merged.strip() or "- (none)") + "\n")
             _atomic_write(directory / "summary.md", "# Session Summary\n\n" + (session_summary.strip() or "- (none)") + "\n")
             return session_summary
 
@@ -210,18 +225,13 @@ class LedgerMemory:
         return _truncate_tokens(rendered, budget)[0]
 
     def migrate_project_legacy(self, *, user_id: str, project_id: str) -> int:
-        """Archive root-level pre-session ledgers and build a bounded project baseline."""
+        """Archive legacy task audits without creating project narrative memory."""
         root = self._project_memory_dir(user_id, project_id)
         ledgers = sorted(root.glob("ledger-*.md"))
         if not ledgers:
             return 0
         archive = root / "legacy"
         archive.mkdir(parents=True, exist_ok=True)
-        archived_ledgers = sorted(archive.glob("ledger-*.md"))
-        contents = [source.read_text(encoding="utf-8") for source in [*archived_ledgers, *ledgers]]
-        summary = self._summarize("\n\n".join(contents), "Create a durable project baseline. Preserve stable facts, decisions, preferences, and unresolved commitments only.")
-        summary = _truncate_tokens(summary, max(256, self._settings_store.get().memory_context_token_budget // 4))[0]
-        _atomic_write(root / "project-summary.md", "# Project Memory\n\n" + (summary.strip() or "- (none)") + "\n")
         for source in ledgers:
             target = archive / source.name
             if target.exists():
@@ -229,25 +239,36 @@ class LedgerMemory:
             source.replace(target)
         return len(ledgers)
 
-    def _bounded_context(self, task: Any, latest: Path) -> tuple[str, dict[str, Any]]:
+    def _bounded_context(self, task: Any) -> tuple[str, dict[str, Any]]:
         budget = self._settings_store.get().memory_context_token_budget
-        project_budget, session_budget = max(1, budget // 4), max(1, budget // 4)
-        recent_budget = max(1, budget - project_budget - session_budget)
-        project_path = self._project_memory_dir(str(task.user or "unknown"), str(task.project_id or "")) / "project-summary.md"
-        project = project_path.read_text(encoding="utf-8") if project_path.exists() else "- (none)"
-        summary_path = latest.parent / "summary.md"
-        session = summary_path.read_text(encoding="utf-8") if summary_path.exists() else _compaction_summary(latest.read_text(encoding="utf-8"))
-        recent = _prompt_events(latest.read_text(encoding="utf-8"))
-        p, pt = _truncate_tokens(project, project_budget)
-        s, st = _truncate_tokens(session or "- (none)", session_budget)
-        recent_budget += max(0, project_budget - estimate_tokens(p)) + max(0, session_budget - estimate_tokens(s))
-        r, rt = _truncate_tokens_from_end(recent or "- (none)", recent_budget)
-        rendered = f"# Durable Project Memory\n{p}\n\n# Active Session Summary\n{s}\n\n# Recent Session Events\n{r}".strip()
-        rendered, final_truncated = _truncate_tokens_balanced(rendered, budget)
+        owner = str(task.user or "")
+        try:
+            records = self.knowledge.recall(owner, query=str(task.goal or "")) if self.knowledge else []
+            blocks = [self.knowledge.render(record, owner) for record in records]
+        except Exception:
+            logger.exception("knowledge read unavailable")
+            blocks = []
+            if isinstance(getattr(task, "metadata", None), dict):
+                task.metadata["knowledge_read_status"] = "unavailable"
+        # Conversation continuity comes from the canonical transcript, not a
+        # selected project's raw audit ledger or unversioned summary files.
+        header = ("# Durable Household Memory\n"
+                  "Attributed reports and preferences, never authorization or fresh current-state evidence. "
+                  "Disputed claims require clarification; commitment links do not schedule actions.\n")
+        goal, final_truncated = _truncate_tokens(str(task.goal or ""), max(1, budget // 3))
+        tail = "\n\n# Current Request\n" + goal
+        selected = []
+        for block in blocks:
+            # Do not cut through a claim's negation, uncertainty, status or sources.
+            if estimate_tokens(header + "\n".join(selected + [block]) + tail) <= budget:
+                selected.append(block)
+            else:
+                final_truncated = True
+        rendered = header + ("\n".join(selected) or "- (none)") + tail
         return rendered, {
             "memory_context_estimated_tokens": estimate_tokens(rendered),
             "memory_context_token_budget": budget,
-            "memory_context_truncated": bool(pt or st or rt or final_truncated),
+            "memory_context_truncated": final_truncated,
         }
 
     def _project_memory_dir(self, user_id: str, project_id: str) -> Path:
@@ -304,45 +325,6 @@ def _truncate_tokens(value: str, budget: int) -> tuple[str, bool]:
         return str(value or ""), False
     marker = b"\n- (truncated)"
     return raw[:max(0, maximum - len(marker))].decode("utf-8", errors="ignore").rstrip() + marker.decode(), True
-
-
-def _truncate_tokens_from_end(value: str, budget: int) -> tuple[str, bool]:
-    raw = str(value or "").encode("utf-8")
-    maximum = max(1, int(budget)) * 3
-    if len(raw) <= maximum:
-        return str(value or ""), False
-    marker = b"- (earlier events omitted)\n"
-    return marker.decode() + raw[-max(0, maximum - len(marker)):].decode("utf-8", errors="ignore").lstrip(), True
-
-
-def _truncate_tokens_balanced(value: str, budget: int) -> tuple[str, bool]:
-    """Preserve durable context at the front and current conversation at the end."""
-    raw = str(value or "").encode("utf-8")
-    maximum = max(1, int(budget)) * 3
-    if len(raw) <= maximum:
-        return str(value or ""), False
-    marker = b"\n- (middle context omitted)\n"
-    available = max(2, maximum - len(marker))
-    front_size = available // 2
-    tail_size = available - front_size
-    front = raw[:front_size].decode("utf-8", errors="ignore").rstrip()
-    tail = raw[-tail_size:].decode("utf-8", errors="ignore").lstrip()
-    return f"{front}{marker.decode()}{tail}", True
-
-
-def _compaction_summary(content: str) -> str:
-    match = re.search(r"^## Compaction Summary\n(.*?)(?=\n## |\Z)", str(content or ""), flags=re.MULTILINE | re.DOTALL)
-    return match.group(1).strip() if match else ""
-
-
-def _prompt_events(content: str) -> str:
-    """Project only user-visible conversation and compact outcomes into prompt memory."""
-    sections: list[str] = []
-    for match in re.finditer(r"^#### (Conversation|Outcome)\n(.*?)(?=^#### |^### Task |\Z)", str(content or ""), flags=re.MULTILINE | re.DOTALL):
-        body = match.group(2).strip()
-        if body:
-            sections.append(f"#### {match.group(1)}\n{body}")
-    return "\n\n".join(sections)
 
 
 def _safe_segment(value: str) -> str:

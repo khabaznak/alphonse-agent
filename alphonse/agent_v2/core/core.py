@@ -293,6 +293,7 @@ _SENSITIVE_PROGRESS_KEYS = ("secret", "token", "password", "authorization", "coo
 
 def _task_progress_snapshot(task: Any) -> dict[str, Any]:
     """Build the Desktop progress view from the current TaskState only."""
+    from alphonse.agent_v2.core.memory.formatting import bound_memory_context
     metadata = getattr(task, "metadata", {}) if isinstance(getattr(task, "metadata", {}), dict) else {}
     planned = metadata.get("planned_tool_call") if isinstance(metadata.get("planned_tool_call"), dict) else None
     latest_call = getattr(task, "get_latest_executed_plan_call", None)
@@ -380,7 +381,7 @@ def _task_progress_snapshot(task: Any) -> dict[str, Any]:
         "memory_facts": _truncate_progress(str(getattr(task, "memory_facts_md", "") or ""), 3000),
         "recent_conversation": _truncate_progress_tail(str(getattr(task, "recent_conversation_md", "") or ""), 3000),
         "conversation_history": _truncate_progress_tail(str(getattr(task, "conversation_history_md", "") or ""), 5000),
-        "durable_memory": _truncate_progress_tail(str(getattr(task, "memory_context_md", "") or ""), 5000),
+        "durable_memory": bound_memory_context(getattr(task, "memory_context_md", ""), 5000),
         "updates": _truncate_progress(str(getattr(task, "updates_md", "") or ""), 3000),
         "evidence": _safe_progress_value(getattr(task, "evidence_journal", [])[-10:], limit=3000),
         "question": _safe_progress_value(metadata.get("question_interrupt")),
@@ -634,8 +635,9 @@ class AlphonseCore:
                 cancellation_checker=(lambda: bool(self.cancellation_checker and self.cancellation_checker(queued.message_id))),
             )
             start_memory = getattr(self.memory, "start_task", None)
+            memory_options = {"cancel_checker": context.is_cancelled} if getattr(self.memory, "supports_knowledge_cancellation", False) else {}
             if callable(start_memory):
-                task.memory_context_md = str(start_memory(task) or "")
+                task.memory_context_md = str(start_memory(task, **memory_options) or "")
             from alphonse.agent_v2.core.memory.transcript import conversation_transcript
             task.conversation_history_md = conversation_transcript(task, self.conversation_store)
             result = self.intelligence.process(task, context)
@@ -643,7 +645,7 @@ class AlphonseCore:
             if callable(finish_memory):
                 serialized_task = result.snapshot.metadata.get("task_state") if isinstance(result.snapshot.metadata, dict) else None
                 finished_task = TaskState.from_dict(serialized_task) if isinstance(serialized_task, dict) else task
-                finish_memory(finished_task)
+                finish_memory(finished_task, **memory_options)
             if result.status not in {ProcessingStatus.FAILED, ProcessingStatus.CANCELLED}:
                 context.acknowledge_consumed_messages()
         except Exception as exc:

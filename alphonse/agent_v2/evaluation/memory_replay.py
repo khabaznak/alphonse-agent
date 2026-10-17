@@ -144,7 +144,7 @@ def run(corpus: dict[str, Any], *, responder=None, timing: bool = False, rubric:
     encoded = json.dumps(corpus, ensure_ascii=False, sort_keys=True).encode()
     report = {"schema_version": 1, "corpus_version": corpus["version"],
             "corpus_sha256": hashlib.sha256(encoded).hexdigest(),
-            "adapter": "current-v3-context-and-native-search-v1",
+            "adapter": "current-v3-context-and-native-search-v2",
             "mode": "live-response" if responder else "offline-context-only", "cases": rows}
     if responder is not None:
         from alphonse.agent_v2.evaluation.memory_scoring import content_hash

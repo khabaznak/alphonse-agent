@@ -427,3 +427,86 @@ def test_jev_tactical_review_sends_acceptance_and_retry_fuse_questions_together(
     assert all(question["type"] == "noul" for question in payload["questions"].values())
     assert result.complete is True
     assert result.retry_approved is False
+
+
+def test_memory_candidate_review_is_parallel_bounded_noul():
+    seen = []
+    def transport(url, key, payload, timeout):
+        seen.append(payload)
+        return {"answers": {qid: {"type": "noul", "noul": 0.95 if qid == "memory_0" else 0.05}
+                            for qid in payload["questions"]}}
+    provider = JevCriterionDecisionProvider(SystemOneSettings(api_key="secret"), transport=transport)
+    assert provider.review_memory_candidates({"source": "bounded"}, [{"content": "one"}, {"content": "two"}]) == [True, False]
+    assert len(seen) == 1
+    assert all(q["type"] == "noul" for q in seen[0]["questions"].values())
+    assert provider.review_memory_candidates({}, []) == []
+    assert len(seen) == 1
+
+
+@pytest.mark.parametrize("probability", [0.5, float("nan"), float("inf"), -1, 2, True, None])
+def test_memory_review_ambiguous_or_malformed_answers_cannot_write(probability):
+    provider = JevCriterionDecisionProvider(SystemOneSettings(api_key="secret"), transport=lambda *args: {
+        "answers": {"memory_0": {"type": "noul", "noul": probability}}})
+    with pytest.raises(ValueError):
+        provider.review_memory_candidates({}, [{"content": "one"}])
+
+
+def test_memory_semantic_comparison_uses_parallel_choices_not_wording():
+    from types import SimpleNamespace
+    from alphonse.agent_v2.core.memory.knowledge import KnowledgeRecord
+    from alphonse.agent_v2.core.memory.contracts import AccessScope, SourceReference
+    source = SourceReference("conversation:one", "conversation", AccessScope("alex"))
+    old = KnowledgeRecord("memory:old", "My filter is FX-204.", AccessScope("alex"), (source,),
+                          "2026-10-17T00:00:00+00:00", "fact", ("filter",), "filter.part", "user_report", ("filter",))
+    captured = []
+    def transport(url, key, payload, timeout):
+        captured.append(payload)
+        return {"answers": {qid: {"type": "choice", "choice": "equivalent", "probabilities": {"equivalent": 0.98, "uncertain": 0.02}}
+                            for qid in payload["questions"]}}
+    provider = JevCriterionDecisionProvider(SystemOneSettings(api_key="secret"), transport=transport)
+    assert provider.compare_memory_claims([(old, old), (old, old)]) == ["equivalent", "equivalent"]
+    assert len(captured) == 1
+    assert all(q["type"] == "choice" and set(q["criteria"]) == {"equivalent", "compatible", "conflicting", "uncertain"}
+               for q in captured[0]["questions"].values())
+    assert "sources" not in captured[0]["state"][0]["old"]
+
+
+@pytest.mark.parametrize("answer", [
+    {"type": "choice", "choice": "uncertain", "probabilities": {"uncertain": 1}},
+    {"type": "choice", "choice": "equivalent", "probabilities": {"equivalent": 0.5, "conflicting": 0.5}},
+    {"type": "choice", "choice": "equivalent", "probabilities": {"equivalent": float("nan")}},
+    {"type": "choice", "choice": "equivalent", "probabilities": {"equivalent": True}},
+    {"type": "noul", "noul": 1},
+])
+def test_memory_comparison_ambiguity_or_invalid_answer_defers_write(answer):
+    from types import SimpleNamespace
+    fields = {key: "value" for key in ("memory_id", "content", "kind", "subjects", "claim_key", "basis", "observed_at", "valid_from", "valid_until", "persistence", "commitment_state")}
+    record = SimpleNamespace(**fields)
+    provider = JevCriterionDecisionProvider(SystemOneSettings(api_key="secret"), transport=lambda *args: {"answers": {"relation_0": answer}})
+    with pytest.raises(ValueError):
+        provider.compare_memory_claims([(record, record)])
+
+
+def test_memory_support_selection_uses_noul_before_exposing_knowledge_to_extractor():
+    from types import SimpleNamespace
+    source = SimpleNamespace(to_dict=lambda: {"content": "Remember that number."})
+    prior = [SimpleNamespace(memory_id="memory:one", to_dict=lambda: {"memory_id": "memory:one", "content": "Filter FX-204."})]
+    captured = []
+    def transport(url, key, payload, timeout):
+        captured.append(payload)
+        return {"answers": {"support_0": {"type": "noul", "noul": 0.98}}}
+    provider = JevCriterionDecisionProvider(SystemOneSettings(api_key="secret"), transport=transport)
+    assert provider.select_memory_support(source, prior) == ["memory:one"]
+    assert captured[0]["questions"]["support_0"]["type"] == "noul"
+    assert provider.select_memory_support(source, []) == []
+    assert len(captured) == 1
+
+
+@pytest.mark.parametrize("probability", [0.5, float("nan"), None, True])
+def test_memory_support_selection_never_guesses_on_ambiguous_or_invalid_answers(probability):
+    from types import SimpleNamespace
+    item = SimpleNamespace(memory_id="memory:one", to_dict=lambda: {"content": "Filter"})
+    provider = JevCriterionDecisionProvider(SystemOneSettings(api_key="secret"), transport=lambda *args: {
+        "answers": {"support_0": {"type": "noul", "noul": probability}}})
+    with pytest.raises(ValueError):
+        provider.select_memory_support(item, [item])

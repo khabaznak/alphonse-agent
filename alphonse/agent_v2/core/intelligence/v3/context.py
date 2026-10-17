@@ -8,6 +8,7 @@ import re
 from typing import TYPE_CHECKING
 
 from alphonse.agent_v2.agent_config import parse_global_context_sections
+from alphonse.agent_v2.core.memory.formatting import bound_memory_context, join_context_sections
 
 if TYPE_CHECKING:
     from alphonse.agent_v2.core.core import CoreLoopContext
@@ -81,17 +82,16 @@ def task_context_for_decision(
     """Render the shared task context used by Jev and System Two."""
     sections = [conversation_context(task, context, selected_context_ids=selected_context_ids)]
     sections.extend(task_context_addenda(task))
-    return "\n\n".join(sections)[:36000]
+    return join_context_sections(sections, 36000)
 
 
 def task_context_addenda(task: "TaskState") -> list[str]:
     """Render task memory and fact sections shared across decision systems."""
     durable_memory = str(task.memory_context_md or "").strip() or "- (none)"
-    if len(durable_memory) > 9000:
-        durable_memory = durable_memory[-8982:].lstrip() + "\n... truncated"
+    durable_memory = bound_memory_context(durable_memory, 9000)
     return [
         f"Current goal:\n{str(task.goal or '').strip() or '- (none)'}",
-        f"Durable project/session memory:\n{durable_memory}",
+        f"Durable household memory (person/audience scoped; project association is optional):\n{durable_memory}",
         f"Known task facts:\n{_bounded_context_value(task.facts_md, 4000)}",
         f"Memory facts:\n{_bounded_context_value(task.memory_facts_md, 3000)}",
     ]

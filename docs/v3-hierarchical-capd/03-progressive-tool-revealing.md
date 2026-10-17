@@ -14,7 +14,7 @@ capabilities undiscoverable.
 Before strategic System Two planning, Jev receives the runtime tool registry after
 the runtime exposure policy has selected tools available to this task, plus the
 Plan instructions, current request, conversation history, bounded authorized
-project-config candidates, and bounded durable project/session memory. This lets
+project-config candidates, and bounded person/audience knowledge across projects. This lets
 request curation recognize when a short or implicit request refers to a
 project-specific record, workflow, or artifact. Jev may select multiple relevant
 projects; equal qualifying relevance probabilities are all retained. Project
@@ -78,7 +78,7 @@ Tool reveal must enforce prerequisites before model choice:
   discovery or shell inspection is not OCR evidence. If analysis fails, report
   the tool failure; do not characterize the image as illegible without an actual
   extraction result.
-- Memory search covers the requester's conversation history across projects and bounded archived memory in the task's authorized scope. Project memory remains scoped to the authorized project.
+- Memory search covers authorized person/audience knowledge and conversation history across projects, including when no project is selected. Project association is optional metadata, not a knowledge boundary. Raw legacy task-audit fallback retains the task's existing project authorization scope. See [durable knowledge](09-durable-knowledge.md).
 - Mutating native operations require the matching side-effect authorization. Bash is
   a trusted local-shell capability for project-file reads and writes; its work is
   described to Jev and System Two and verified from command output/read-back.

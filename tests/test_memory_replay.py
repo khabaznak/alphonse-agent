@@ -1,5 +1,6 @@
 """Offline replay is a characterization of real assembly, not a scripted answer test."""
 import copy
+import hashlib
 import json
 from pathlib import Path
 import socket
@@ -24,7 +25,12 @@ def test_offline_replay_is_reproducible_without_network(monkeypatch):
     monkeypatch.setattr(socket, 'socket', no_network)
     corpus = load_corpus(CORPUS)
     first = run(corpus)
-    assert first == run(corpus) == json.loads(BASELINE.read_text())
+    candidate = BASELINE.parent.parent / 'memory-knowledge-v2/results.json'
+    assert first == run(corpus) == json.loads(candidate.read_text())
+    assert first['adapter'] == 'current-v3-context-and-native-search-v2'
+    # Preserve the frozen characterization evidence; do not overwrite it to
+    # accommodate intentional runtime prompt changes.
+    assert hashlib.sha256(BASELINE.read_bytes()).hexdigest() == '5306f97c018da232af46cd511c532306662685ac659d793683a04a08e5c4be99'
     assert all(c['answer_quality'] is None and c['model_calls'] == 0 and c['latency_ms'] is None
                for c in first['cases'])
 

@@ -240,10 +240,46 @@ def build_runtime_host(
         timezone_provider=user_store.timezone,
         summarizer=_summarize_daily_conversation,
     ))
+    from alphonse.agent_v2.core.memory.knowledge import KnowledgeMemory, KnowledgeStore
+    from alphonse.agent_v2.core.memory.extraction import extraction_prompt
+
+    def _extract_knowledge(payload: dict[str, Any], owner: str, *, cancel_checker: Callable | None = None) -> Any:
+        from alphonse.agent_v2.core.inference import InferencePurpose, InferenceRequest
+        # Do not pay for extraction when bounded review is unavailable/disabled.
+        if core.system_one is None:
+            raise RuntimeError("knowledge_review_unavailable")
+        return core.inference.generate_json(InferenceRequest(
+            prompt=extraction_prompt(payload), purpose=InferencePurpose.MEMORY_EXTRACTION, user=owner,
+            cancel_checker=cancel_checker,
+        )).json_value
+
+    def _review_knowledge(payload: dict[str, Any], candidates: list[dict[str, Any]]) -> list[bool]:
+        provider = core.system_one
+        if provider is None:
+            raise RuntimeError("knowledge_review_unavailable")
+        return provider.review_memory_candidates(payload, candidates)
+
+    def _compare_knowledge(pairs: list[Any]) -> list[str]:
+        if core.system_one is None:
+            raise RuntimeError("knowledge_review_unavailable")
+        return core.system_one.compare_memory_claims(pairs)
+
+    def _select_knowledge_support(source: Any, existing: list[Any]) -> list[str]:
+        if core.system_one is None:
+            raise RuntimeError("knowledge_review_unavailable")
+        return core.system_one.select_memory_support(source, existing)
+
+    knowledge = KnowledgeMemory(
+        store=KnowledgeStore(conversation_store.db_path), conversations=conversation_store,
+        extractor=_extract_knowledge, reviewer=_review_knowledge,
+        schedule_resolver=lambda schedule_id, owner: schedule_store.get_task_for_owner(schedule_id, owner_user_id=owner),
+        comparison_reviewer=_compare_knowledge, support_selector=_select_knowledge_support,
+    )
     memory = LedgerMemory(
         users_root=user_store.users_root,
         settings_store=memory_settings_store,
         summarizer=_compact_memory,
+        knowledge=knowledge,
         project_root_provider=lambda project_id: (
             project.root_path if (project := project_store.get_project(project_id, requester_is_admin=True)) is not None else None
         ),

@@ -4,6 +4,11 @@ Issue: [#11](https://github.com/khabaznak/alphonse-agent/issues/11), under #10.
 This baseline precedes changes to assembly. It is characterization evidence, not
 approval to roll out the memory redesign or evidence of live answer quality.
 
+Issue #13 advances the current context/native-search adapter to v2; its separate
+[candidate snapshot](evidence/memory-knowledge-v2/README.md) preserves the frozen
+v1 corpus, expectations and baseline below. Current commands produce v2 output;
+compare that candidate separately rather than overwriting the original baseline.
+
 ## Reproduce the baseline
 
 From the repository root, with the project's Python dependencies installed:

@@ -20,6 +20,7 @@ from alphonse.agent_v2.system_one import SystemOneUnavailableError
 from alphonse.agent_v2.core.intelligence.v3.context import recent_conversation_for_curation
 from alphonse.agent_v2.core.intelligence.v3.context import selected_project_context
 from alphonse.agent_v2.core.intelligence.v3.context import selected_skill_guidance
+from alphonse.agent_v2.core.memory.formatting import bound_memory_context
 from alphonse.agent_v2.core.intelligence.v3.context import task_context_for_decision
 
 if TYPE_CHECKING:
@@ -40,7 +41,7 @@ def plan_phase(task: "TaskState", context: "CoreLoopContext") -> PhasePlan:
     ) if context.tools is not None else ()
     session_history = recent_conversation_for_curation(task, context)
     project_context = _project_context(task, context)
-    durable_memory = _bounded_context_text(task.memory_context_md, 9000)
+    durable_memory = bound_memory_context(task.memory_context_md, 9000)
     context_selection = task.metadata.get("v3_context_selection")
     selected_context_ids = context_selection.get("selected_context_ids", []) if isinstance(context_selection, dict) else []
     shared_context = task_context_for_decision(
@@ -424,17 +425,6 @@ def _bounded_text(value: object, max_chars: int) -> str:
     if len(rendered) <= max_chars:
         return rendered
     return rendered[-max(1, max_chars - 18):].lstrip() + "\n... truncated"
-
-
-def _bounded_context_text(value: object, max_chars: int) -> str:
-    """Keep durable baseline facts from the front and recent events from the end."""
-    rendered = str(value or "").strip() or "- (none)"
-    if len(rendered) <= max_chars:
-        return rendered
-    marker = "\n... context truncated ...\n"
-    available = max(2, max_chars - len(marker))
-    front = available // 2
-    return rendered[:front].rstrip() + marker + rendered[-(available - front):].lstrip()
 
 
 def _phase_plan_json_schema(capabilities: list[str]) -> dict[str, object]:

@@ -4,6 +4,11 @@ Status: accepted for the contract layer, 2026-10-17. Implements #12 under #10;
 prerequisite #11 is complete. Retrieval/assembly policy changes and rollout remain
 subject to the [evaluation protocol](07-memory-evaluation.md).
 
+Follow-up #13: [durable person/audience knowledge](09-durable-knowledge.md) adds
+version 3 knowledge records and persistence while retaining these version 1 source
+contracts. It replaces project-summary promotion and task-context use of prose
+summaries. The scope descriptions below describe the original #12 delivery.
+
 ## Decision and ownership
 
 SQLite `v2_conversation_events` owns canonical user/assistant messages. Its

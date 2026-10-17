@@ -79,6 +79,9 @@ success.
 4. [Outer completion routing and response](04-outer-routing.md)
 5. [Compatibility, observability, evaluation, and rollout](05-rollout.md)
 6. [System One Do, Check, and Act](06-system-one-check-act.md)
+7. [Memory evaluation and rollout gates](07-memory-evaluation.md)
+8. [Canonical history and source contracts](08-memory-contracts.md)
+9. [Durable person/audience knowledge](09-durable-knowledge.md)
 
 Stages are ordered. A later stage may be prototyped early, but it must not be declared
 complete before its dependencies and exit gates pass.

@@ -189,6 +189,15 @@ class SQLiteConversationStore:
             ).fetchall()
         return [_event(row) for row in rows]
 
+    def list_after(self, *, owner_user_id: str, after_sequence: int = 0, limit: int = 16) -> list[ConversationEvent]:
+        """Bounded chronological processing across optional project associations."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM v2_conversation_events WHERE owner_user_id=? AND sequence>? ORDER BY sequence LIMIT ?",
+                (owner_user_id, after_sequence, max(1, min(limit, 100))),
+            ).fetchall()
+        return [_event(row) for row in rows]
+
     def list_all(self, *, owner_user_id: str) -> list[ConversationEvent]:
         """Unbounded owner export for rebuild/retention, never a prompt API."""
         with self._connect() as conn:

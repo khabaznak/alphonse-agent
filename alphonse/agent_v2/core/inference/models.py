@@ -21,6 +21,7 @@ class InferencePurpose(str, Enum):
     FINAL_RESPONSE = "final_response"
     PHASE_PLANNING = "phase_planning"
     MEMORY_COMPACTION = "memory_compaction"
+    MEMORY_EXTRACTION = "memory_extraction"
 
 
 @dataclass(frozen=True)
