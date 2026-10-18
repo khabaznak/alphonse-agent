@@ -160,3 +160,7 @@ evaluation regressions, and operational recovery under the V3 default.
 
 See [canonical history and source-linked memory](08-memory-contracts.md) for the
 accepted contract layer, provenance, visibility, migration and retention boundaries.
+
+See [decision-specific context](12-decision-context.md) for the opt-in token-budgeted
+projection and bounded hybrid recall candidate (issue #16). The default ledger-tail
+path remains in place pending rollout gates.

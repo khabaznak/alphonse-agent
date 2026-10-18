@@ -16,6 +16,7 @@ from alphonse.agent_v2.core.intelligence.v3.contracts import SideEffectClass
 from alphonse.agent_v2.core.intelligence.v3.contracts import TacticalAction
 from alphonse.agent_v2.core.intelligence.v3.contracts import TacticalState
 from alphonse.agent_v2.core.intelligence.v3.revealing import ToolRevealPolicy
+from alphonse.agent_v2.core.intelligence.v3.projections import enabled as projections_enabled
 from alphonse.agent_v2.core.intelligence.v3.context import selected_skill_guidance
 from alphonse.agent_v2.core.intelligence.v3.context import task_context_for_decision
 from alphonse.agent_v2.core.intelligence.v3.revealing import Capability
@@ -240,15 +241,18 @@ class PhaseExecutor:
             return selected
         if context.inference is None:
             return None
-        skill_guidance, loaded_skill_ids = selected_skill_guidance(task, context)
+        skill_guidance, loaded_skill_ids = ("", []) if projections_enabled() else selected_skill_guidance(task, context)
+        if projections_enabled():
+            selection = task.metadata.get("v3_context_selection", {})
+            skill_guidance = task_context_for_decision(task, context, purpose="execution", selected_context_ids=selection.get("selected_context_ids", []))
         skill_selection = task.metadata.get("v3_skill_selection")
-        if isinstance(skill_selection, dict):
+        if isinstance(skill_selection, dict) and not projections_enabled():
             skill_selection["loaded_skill_ids"] = loaded_skill_ids
         prompt = _tactical_prompt(
             state,
             subgoal,
             tools,
-            goal=task.goal,
+            goal="" if projections_enabled() else task.goal,
             task_project_root=_task_project_root(task, context),
             attachment_manifest=_task_attachment_manifest(task),
             skill_guidance=skill_guidance,
@@ -327,7 +331,7 @@ class PhaseExecutor:
             raise SystemOneUnavailableError("tactical_acceptance_unavailable")
         try:
             review = context.system_one.evaluate_tactical_progress(
-                goal=task.goal,
+                goal="" if projections_enabled() else task.goal,
                 phase=state.phase.to_dict(),
                 subgoal={
                     "subgoal_id": subgoal.subgoal_id,
@@ -343,7 +347,7 @@ class PhaseExecutor:
                 questions=list(action.acceptance_questions),
                 execution_log=[dict(item) for item in state.evidence.entries],
                 task_context=task_context_for_decision(
-                    task, context,
+                    task, context, purpose="review",
                     selected_context_ids=(
                         task.metadata.get("v3_context_selection", {}).get("selected_context_ids", [])
                         if isinstance(task.metadata.get("v3_context_selection"), dict) else []

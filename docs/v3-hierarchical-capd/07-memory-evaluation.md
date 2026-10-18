@@ -179,6 +179,11 @@ boundaries.
 
 ## Frozen rollout thresholds before candidate comparison
 
+The [issue #16 protocol](13-decision-context-evaluation.md) specifies paired
+flag-off/flag-on runtime trials, per-decision attribution, human review and evidence
+requirements for decision-context projections. It distinguishes opt-in issue closure
+from passing these broader default-rollout thresholds; none are waived by closure.
+
 Apply these gates to the same corpus/version and adapter semantics. First retain
 the baseline and candidate raw reports; never average privacy failures away.
 

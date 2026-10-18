@@ -79,8 +79,13 @@ def task_context_for_decision(
     context: "CoreLoopContext",
     *,
     selected_context_ids: list[str] | tuple[str, ...] = (),
+    purpose: str = "planning",
 ) -> str:
     """Render the shared task context used by Jev and System Two."""
+    from .projections import enabled, project
+
+    if enabled():
+        return project(task, context, purpose=purpose, selected_context_ids=selected_context_ids)
     sections = [active_task_continuity(task), conversation_context(task, context, selected_context_ids=selected_context_ids)]
     sections.extend(task_context_addenda(task))
     return join_context_sections(sections, 36000)
@@ -125,7 +130,7 @@ def skill_candidates_for_curation(context: "CoreLoopContext") -> list[dict[str, 
         return []
 
 
-def selected_skill_guidance(task: "TaskState", context: "CoreLoopContext", *, max_chars: int = 16000) -> tuple[str, list[str]]:
+def selected_skill_guidance(task: "TaskState", context: "CoreLoopContext", *, max_chars: int | None = 16000) -> tuple[str, list[str]]:
     """Load selected skill instructions within a deterministic prompt budget."""
     selection = task.metadata.get("v3_skill_selection")
     selected_ids = selection.get("selected_skill_ids", []) if isinstance(selection, dict) else []
@@ -182,10 +187,10 @@ def selected_skill_guidance(task: "TaskState", context: "CoreLoopContext", *, ma
             "Skill selection and resource manifests do not grant permission for effects.\n\n"
             + "\n\n".join(resource_blocks) + "\n\n" + base_instructions + "\n\n" + "\n\n".join(operating_blocks)
         )
-        remaining = max_chars - used_chars
-        if remaining < 300:
+        remaining = max_chars - used_chars if max_chars is not None else None
+        if remaining is not None and remaining < 300:
             break
-        if len(block) > remaining:
+        if remaining is not None and len(block) > remaining:
             marker = "\n(skill guidance truncated; inspect the authorized skill package for remaining instructions)"
             block = block[:remaining - len(marker)] + marker
         blocks.append(block)
@@ -196,7 +201,7 @@ def selected_skill_guidance(task: "TaskState", context: "CoreLoopContext", *, ma
     return "\n\n".join(blocks), loaded_ids
 
 
-def _global_candidates(content: str) -> list[dict[str, str]]:
+def _global_candidates(content: str, *, max_chars: int | None = 6000) -> list[dict[str, str]]:
     parsed = parse_global_context_sections(content)
     candidates: list[dict[str, str]] = []
     if not parsed:
@@ -207,13 +212,13 @@ def _global_candidates(content: str) -> list[dict[str, str]]:
         candidates.append({
             "id": f"global:{_slug(heading)}",
             "title": f"Global context — {heading}",
-            "content": body[:6000],
+            "content": body[:max_chars],
             "snippet": body[:500],
         })
     return candidates
 
 
-def _project_candidate_for_record(project: Any, context: "CoreLoopContext") -> dict[str, str] | None:
+def _project_candidate_for_record(project: Any, context: "CoreLoopContext", *, max_chars: int | None = 8000) -> dict[str, str] | None:
     try:
         config_path = getattr(project, "config_path", "") or str(Path(project.root_path) / "project_config.json")
         content = Path(config_path).read_text(encoding="utf-8").strip()
@@ -234,7 +239,7 @@ def _project_candidate_for_record(project: Any, context: "CoreLoopContext") -> d
     return {
         "id": f"project:{project_id}",
         "title": f"Project — {title}",
-        "content": candidate_content[:8000],
+        "content": candidate_content[:max_chars],
         "snippet": candidate_content[:500],
     }
 

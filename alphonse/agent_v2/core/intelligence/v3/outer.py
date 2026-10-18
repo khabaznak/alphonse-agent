@@ -14,6 +14,7 @@ from alphonse.agent_v2.core.intelligence.acceptance_contract import apply_status
 from alphonse.agent_v2.core.intelligence.v3.contracts import PhaseOutcome, PhaseStatus, SideEffectClass, TacticalState
 from alphonse.agent_v2.system_one import SystemOneUnavailableError
 from alphonse.agent_v2.core.intelligence.v3.context import task_context_for_decision
+from alphonse.agent_v2.core.intelligence.v3.projections import enabled as projections_enabled
 
 if TYPE_CHECKING:
     from alphonse.agent_v2.core.core import CoreLoopContext
@@ -267,7 +268,7 @@ def _recommend_act(task, state, outcome, review: PhaseReview, context):
         "wip" if review.status == PhaseReviewStatus.PHASE_VERIFIED_TASK_INCOMPLETE else "failure"
     )
     input_state = {
-        "goal": task.goal,
+        "goal": "" if projections_enabled() else task.goal,
         "task_id": task.task_id,
         "check_verdict": check_verdict,
         "check_reason": review.reason,
@@ -556,7 +557,7 @@ def _system_two_acceptance_review(
 def _task_context(task, context) -> str:
     selection = task.metadata.get("v3_context_selection")
     selected_ids = selection.get("selected_context_ids", []) if isinstance(selection, dict) else []
-    return task_context_for_decision(task, context, selected_context_ids=selected_ids)
+    return task_context_for_decision(task, context, selected_context_ids=selected_ids, purpose="review")
 
 
 def _evaluate_system_one_with_context(system_one, *, contract, phase, evidence, task_context):

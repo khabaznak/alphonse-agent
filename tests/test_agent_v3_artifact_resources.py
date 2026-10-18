@@ -333,3 +333,18 @@ def test_onboarding_wires_skill_library_and_artifact_repository_to_new_workspace
     assert (workspace / "artifacts").is_dir()
     assert runtime.skill_store.skills_dir == workspace / "skills"
     assert runtime.skill_store.get("skill:sensor").directory == str(workspace / "skills" / "sensor")
+
+
+def test_candidate_projection_keeps_complete_authorized_artifact_instructions(setup, monkeypatch):
+    from alphonse.agent_v2.core.intelligence.v3.projections import project
+    skills, skill, _, _, resources = setup
+    instructions = 'Read this disposable fixture carefully.\n' * 500 + 'ARTIFACT_INSTRUCTION_TAIL'
+    record, root = register(setup, instructions=instructions)
+    task = TaskState(user='alex', goal='Read fixture', metadata={'v3_skill_selection': {'selected_skill_ids': [skill.skill_id]}})
+    context = CoreLoopContext(messages=InMemoryMessageQueue(), skill_store=skills, artifact_resources=resources)
+    monkeypatch.setenv('ALPHONSE_V3_CONTEXT_TOKEN_BUDGET', '60000')
+    text = project(task, context, purpose='execution')
+    assert 'ARTIFACT_INSTRUCTION_TAIL' in text
+    assert str(root / 'reader.py') in text
+    assert 'Registered argument schema' in text
+    assert build_artifact_tool_definitions(resources.store, resources.projects) == []

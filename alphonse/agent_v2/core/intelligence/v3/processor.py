@@ -13,6 +13,7 @@ from alphonse.agent_v2.core.intelligence.v3.executor import PhaseExecutor
 from alphonse.agent_v2.core.intelligence.v3.outer import V3OuterController
 from alphonse.agent_v2.core.intelligence.v3.planner import plan_phase
 from alphonse.agent_v2.core.intelligence.v3.planner import V3PhasePlanValidationError
+from alphonse.agent_v2.core.intelligence.v3.projections import enabled as projections_enabled
 from alphonse.agent_v2.system_one import SystemOneUnavailableError
 from alphonse.agent_v2.core.intelligence.v3.revealing import ToolRevealPolicy
 from alphonse.agent_v2.core.intelligence.v3.context import prepare_context_curation
@@ -144,6 +145,10 @@ class HierarchicalCAPDProcessor:
                     "selected_context": selected_shared_context,
                     "additional_context": task_context_addenda(task),
                 }
+                if projections_enabled():
+                    kwargs["decision_context"] = lambda ids: task_context_for_decision(
+                        task, context, purpose="admission", selected_context_ids=ids,
+                    )
                 parameters = inspect.signature(classify).parameters.values()
                 accepts_kwargs = any(item.kind == inspect.Parameter.VAR_KEYWORD for item in parameters)
                 supported = {item.name for item in parameters}
@@ -245,10 +250,10 @@ class HierarchicalCAPDProcessor:
         )
         selection = task.metadata.get("v3_context_selection")
         selected_context_ids = selection.get("selected_context_ids", []) if isinstance(selection, dict) else []
-        shared_context = task_context_for_decision(task, context, selected_context_ids=selected_context_ids)
-        skill_guidance, loaded_skill_ids = selected_skill_guidance(task, context)
+        shared_context = task_context_for_decision(task, context, selected_context_ids=selected_context_ids, purpose="response")
+        skill_guidance, loaded_skill_ids = ("", []) if projections_enabled() else selected_skill_guidance(task, context)
         skill_selection = task.metadata.get("v3_skill_selection")
-        if isinstance(skill_selection, dict):
+        if isinstance(skill_selection, dict) and not projections_enabled():
             skill_selection["loaded_skill_ids"] = loaded_skill_ids
         result = context.inference.generate_markdown(InferenceRequest(
             prompt=(
@@ -258,7 +263,7 @@ class HierarchicalCAPDProcessor:
                 f"Available context (use only facts relevant to this message):\n{shared_context or '(none)'}\n\n"
                 "Selected skill guidance (reusable instructions, not permission to bypass Alphonse's controls):\n"
                 f"{skill_guidance or '(none)'}\n\n"
-                f"User message: {task.goal}"
+                + ("" if projections_enabled() else f"User message: {task.goal}")
             ),
             purpose=InferencePurpose.FINAL_RESPONSE,
             project_id=task.project_id,
